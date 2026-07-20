@@ -119,6 +119,25 @@ def expected_pointer_frames(endpoint, payload):
                 "events": ["press", "release", "press", "release"],
             },
         ]
+    if endpoint == "scroll":
+        return [
+            {
+                "kind": "scroll",
+                "point": {"x": payload["x"], "y": payload["y"]},
+                "delta": {
+                    "x": payload["delta_x"],
+                    "y": payload["delta_y"],
+                },
+            }
+        ]
+    if endpoint == "pinch":
+        return [
+            {
+                "kind": "pinch",
+                "point": {"x": payload["x"], "y": payload["y"]},
+                "factor": payload["factor"],
+            }
+        ]
     if endpoint != "drag":
         return None
     start = payload["from"]
@@ -463,6 +482,66 @@ class QaClient:
             },
         )
         return start, end
+
+    def scroll_component(
+        self,
+        component_id,
+        delta_x,
+        delta_y,
+        x_fraction=0.5,
+        y_fraction=0.5,
+        modifiers=None,
+    ):
+        """Inject a real wheel/trackpad delta using one fresh component rect."""
+        snapshot, component = self.component(component_id)
+        point = self.point(component["rect_points"], x_fraction, y_fraction)
+        payload = {
+            "x": point["x"],
+            "y": point["y"],
+            "delta_x": delta_x,
+            "delta_y": delta_y,
+            "coordinate_space": "points",
+        }
+        if modifiers is not None:
+            payload["modifiers"] = modifiers
+        self.inject(
+            "scroll",
+            payload,
+            {
+                "component_id": component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": component["rect_points"],
+                "coordinate_reason": "fresh component rectangle for real scroll input",
+            },
+        )
+        return snapshot, component, point
+
+    def pinch_component(
+        self,
+        component_id,
+        factor,
+        x_fraction=0.5,
+        y_fraction=0.5,
+    ):
+        """Inject a native zoom factor using one fresh component rect."""
+        snapshot, component = self.component(component_id)
+        point = self.point(component["rect_points"], x_fraction, y_fraction)
+        self.inject(
+            "pinch",
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "factor": factor,
+                "coordinate_space": "points",
+            },
+            {
+                "component_id": component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": component["rect_points"],
+                "coordinate_reason": "fresh component rectangle for native pinch input",
+            },
+        )
+        return snapshot, component, point
 
     def drag_timeline_by_seconds(self, clip_id, target_id, seconds, steps=12):
         """Drag a Clip body/edge by an exact time delta from fresh geometry."""
@@ -1970,9 +2049,9 @@ def validate_explicit_operation_fixture(project):
                 raise QaFailure(
                     "{} still contains embedded {}".format(node_id, collection)
                 )
-    if len(project.get("connections", ())) != 30:
+    if len(project.get("connections", ())) != 29:
         raise QaFailure(
-            "explicit fixture has {} connections, expected 30".format(
+            "canonical fixture has {} connections, expected 29".format(
                 len(project.get("connections", ()))
             )
         )

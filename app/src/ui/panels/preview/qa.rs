@@ -35,6 +35,13 @@ pub(super) fn register_preview_qa_components(
                 "{:?}",
                 editor_context.interaction.preview_viewport.primary_gesture
             ),
+            "is_moving_selected_entity": editor_context.interaction.is_moving_selected_entity,
+            "selection_drag_active": editor_context
+                .interaction
+                .preview_selection_drag_start
+                .is_some(),
+            "body_drag_active": editor_context.interaction.body_drag_state.is_some(),
+            "gizmo_active": editor_context.interaction.gizmo_state.is_some(),
             "composition_id": preview_content.map(|content| content.0),
             "texture_width": editor_context.preview_texture_width,
             "texture_height": editor_context.preview_texture_height,

@@ -15,9 +15,23 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
+mod waveform;
+
+use waveform::WaveformJobs;
+
 const SCRUB_PREVIEW_SECONDS: f64 = 0.05;
 const MAX_MIX_SAMPLES_PER_PUMP: usize = 16_384;
 const MAX_CONCURRENT_AUDIO_DECODES: usize = 4;
+
+/// Resolve enabled Media leaves for one Clip through the canonical typed
+/// Audio graph. This intentionally exposes only the Timeline's Clip query;
+/// the mixer's generic owner traversal remains crate-internal.
+pub fn routed_audio_media_nodes_for_clip(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
+    crate::core::audio::mixer::routed_audio_media_nodes(
+        project,
+        crate::model::project::PortOwner::Clip(clip_id),
+    )
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct PendingAudioLoad {
@@ -35,6 +49,7 @@ pub struct AudioService {
     active_composition_id: Mutex<Option<Uuid>>,
     generation: Arc<AtomicU64>,
     pending: Arc<Mutex<HashSet<PendingAudioLoad>>>,
+    waveform_jobs: WaveformJobs,
     source_failures: Arc<Mutex<HashSet<SourceFailure>>>,
     next_write_sample: Arc<AtomicU64>,
     is_playing: AtomicBool,
@@ -58,6 +73,7 @@ impl AudioService {
             active_composition_id: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             pending: Arc::new(Mutex::new(HashSet::new())),
+            waveform_jobs: WaveformJobs::default(),
             source_failures: Arc::new(Mutex::new(HashSet::new())),
             next_write_sample: Arc::new(AtomicU64::new(0)),
             is_playing: AtomicBool::new(false),
@@ -130,6 +146,7 @@ impl AudioService {
         if let Ok(mut pending) = self.pending.lock() {
             pending.clear();
         }
+        self.waveform_jobs.clear();
         if let Ok(mut failures) = self.source_failures.lock() {
             failures.clear();
         }
@@ -462,6 +479,7 @@ impl AudioService {
         self.audio_engine.flush_pending()
             || self.pending_scrub.lock().is_ok_and(|scrub| scrub.is_some())
             || self.pending.lock().is_ok_and(|pending| !pending.is_empty())
+            || self.waveform_jobs.has_pending_work()
     }
 }
 

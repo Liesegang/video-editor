@@ -2,7 +2,7 @@ use crate::cache::CacheManager;
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::loader::AudioLoader;
 use crate::model::asset::{Asset, AssetKind};
-use crate::model::project::{Composition, Project};
+use crate::model::project::{Composition, PortOwner, Project};
 use crate::model::{Node, NodeContent};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use lru::LruCache;
@@ -14,6 +14,13 @@ mod graph_evaluation;
 mod property_evaluation;
 
 use graph_evaluation::AudioGraphEvaluator;
+
+/// Resolve enabled Media leaves through the canonical typed Audio routes.
+/// The Timeline uses this for waveform source discovery while mixing retains
+/// distinct route identities for repeated Composition Instance placements.
+pub(crate) fn routed_audio_media_nodes(project: &Project, owner: PortOwner) -> Vec<uuid::Uuid> {
+    graph_evaluation::routed_audio_media_nodes(project, owner)
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AudioSourceSpec {
@@ -327,9 +334,9 @@ pub fn audio_window_requests_for_composition(
             .zip(&sources)
             .zip(&mut route_windows)
         {
-            let Some(source) = source else {
+            if source.is_none() {
                 continue;
-            };
+            }
             let Some(leaf) = evaluator.evaluate_route(route, timeline_time, &mut scope_path) else {
                 continue;
             };

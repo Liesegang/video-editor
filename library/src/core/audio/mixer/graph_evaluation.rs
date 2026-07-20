@@ -74,7 +74,7 @@ impl<'a> AudioGraphEvaluator<'a> {
                 )
             })
             .collect();
-        let routes = plan_audio_routes(project, composition.id);
+        let routes = plan_audio_routes(project, PortOwner::Composition(composition.id));
         Self {
             frame_evaluator: FrameEvaluator::new(
                 project,
@@ -133,20 +133,25 @@ impl<'a> AudioGraphEvaluator<'a> {
     }
 }
 
-fn plan_audio_routes<'a>(
-    project: &'a Project,
-    root_composition_id: Uuid,
-) -> Vec<AudioRoutePlan<'a>> {
+fn plan_audio_routes(project: &Project, root_owner: PortOwner) -> Vec<AudioRoutePlan<'_>> {
     let mut routes = Vec::new();
     collect_audio_routes(
         project,
-        PortOwner::Composition(root_composition_id),
+        root_owner,
         &mut HashSet::new(),
         &mut Vec::new(),
         &mut HashSet::new(),
         &mut routes,
     );
     routes
+}
+
+pub(super) fn routed_audio_media_nodes(project: &Project, owner: PortOwner) -> Vec<Uuid> {
+    let mut emitted = HashSet::new();
+    plan_audio_routes(project, owner)
+        .into_iter()
+        .filter_map(|route| emitted.insert(route.node_id).then_some(route.node_id))
+        .collect()
 }
 
 fn collect_audio_routes<'a>(

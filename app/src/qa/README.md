@@ -94,6 +94,22 @@ curl -s -X POST http://127.0.0.1:39091/v1/input/scroll \
 This is the normal egui mouse-wheel path used by the Node Editor zoom test;
 there is no QA command for setting the canvas transform directly.
 
+Inject a native cursor-centered pinch factor with `/v1/input/pinch`:
+
+```sh
+curl -s -X POST http://127.0.0.1:39091/v1/input/pinch \
+  -d '{
+    "x": 640,
+    "y": 360,
+    "factor": 1.25,
+    "coordinate_space": "points"
+  }'
+```
+
+The factor is multiplicative (`1.0` means no change) and must be between
+`0.01` and `100`. The bridge moves the pointer to the supplied coordinate and
+injects `egui::Event::Zoom`; it does not write Preview camera state directly.
+
 The bridge first moves the pointer to a click/drag origin on its own UI frame,
 then emits press, motion, and release on subsequent frames. This avoids
 counting the synthetic approach to a target as drag motion on drag-only egui
@@ -172,6 +188,18 @@ delta; zoom, Project, selection, Timeline state, and undo history remain
 unchanged, `auto_fit` becomes false, and the owner returns to `Idle`. This suite
 is also part of `python3 scripts/qa-runner.py --mode full`.
 
+Run the focused Preview trackpad suite with:
+
+```sh
+python3 scripts/qa-preview-trackpad-e2e.py --spawn
+```
+
+It re-queries `preview.canvas` before each action, injects a real two-axis
+scroll and native cursor-coordinate pinch, and verifies both camera geometry
+and the cursor's invariant world point. Project, selection, Timeline, undo
+history, content drags, gizmos, and the primary gesture owner must remain
+unchanged. This suite is also part of `python3 scripts/qa-runner.py --mode full`.
+
 Run the focused wire-selection lifecycle suite with:
 
 ```sh
@@ -182,6 +210,24 @@ It clicks a freshly published Bezier hit point with the primary button, then
 re-queries the canvas and clicks an unobstructed coordinate. The suite requires
 the wire selection to clear without changing the Project, undo history, or
 semantic entity selection. It is also part of the full QA runner.
+
+Run the focused inherited-Time presentation suite with:
+
+```sh
+python3 scripts/qa-implicit-time-e2e.py --spawn
+```
+
+It hovers and selects an implicitly timed Node, verifies the dashed context
+wire and Inspector/Node badges without Project or history changes, then creates
+an explicit Time wire by coordinate drag and removes it through the physical
+wire menu. Undo and disconnect must both restore the inherited presentation.
+The suite re-queries component rectangles after every layout-changing tab or
+canvas transition and is also part of the full QA runner. A physical wire
+topology edit can invoke the existing Snarl Clip-layout canonicalization; the
+suite records that `ui_position`/`ui_size` delta separately and still requires
+every semantic Project field to return byte-for-byte. The focused Rust render
+test additionally requires inherited and explicit Time rows to keep identical
+Node geometry.
 
 Run the focused Transform/Preview facade suite with:
 

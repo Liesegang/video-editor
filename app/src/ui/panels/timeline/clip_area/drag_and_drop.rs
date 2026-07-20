@@ -13,6 +13,61 @@ use crate::{
 
 use super::interactions::InteractionGeometry;
 
+fn register_composition_drop_rows(
+    editor_context: &EditorContext,
+    project: &Arc<RwLock<Project>>,
+    geometry: InteractionGeometry,
+) {
+    let Some(composition_id) = editor_context.active_composition_id else {
+        return;
+    };
+    let Ok(project) = project.read() else {
+        return;
+    };
+    let Some(composition) = project.get_composition(composition_id) else {
+        return;
+    };
+    let rows = super::super::utils::flatten::flatten_tracks_to_rows(
+        &project,
+        &composition.track_ids,
+        &editor_context.timeline.expanded_tracks,
+    );
+    let row_stride = geometry.row_height + geometry.track_spacing;
+    for (visible_index, row) in rows.iter().enumerate() {
+        let (target_track_id, row_kind) = match row {
+            super::super::utils::flatten::DisplayRow::TrackHeader { track, .. } => {
+                (track.id, "track")
+            }
+            super::super::utils::flatten::DisplayRow::ClipRow { parent_track, .. } => {
+                (parent_track.id, "clip")
+            }
+        };
+        let top = geometry.content_rect.min.y + visible_index as f32 * row_stride
+            - editor_context.timeline.scroll_offset.y;
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(geometry.content_rect.min.x, top),
+            egui::vec2(geometry.content_rect.width(), geometry.row_height),
+        )
+        .intersect(geometry.content_rect);
+        if !rect.is_positive() {
+            continue;
+        }
+        crate::qa::register_component_with_metadata(
+            format!("timeline.clip_drop_row:{composition_id}:{visible_index}"),
+            "timeline_clip_drop_row",
+            rect,
+            true,
+            Some(serde_json::json!({
+                "composition_id": composition_id,
+                "visible_row_index": visible_index,
+                "row_kind": row_kind,
+                "target_track_id": target_track_id,
+                "accepts_composition": true,
+            })),
+        );
+    }
+}
+
 pub(super) fn handle_drag_and_drop(
     ui: &mut Ui,
     response: &egui::Response,
@@ -22,6 +77,7 @@ pub(super) fn handle_drag_and_drop(
     history_manager: &mut HistoryManager,
     geometry: InteractionGeometry,
 ) {
+    register_composition_drop_rows(editor_context, project, geometry);
     if ui.input(|i| i.pointer.any_released()) {
         if let Some(dragged_item) = &editor_context.interaction.dragged_item {
             if let Some(mouse_pos) = response.hover_pos() {

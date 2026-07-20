@@ -12,7 +12,7 @@ use crate::state::context_types::PreviewViewportRuntimeState;
 #[cfg(test)]
 use crate::state::context_types::SelectionTarget;
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
-use crate::ui::viewport::{ViewportConfig, ViewportController};
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy};
 use crate::{action::HistoryManager, state::context::EditorContext};
 
 mod action;
@@ -199,7 +199,7 @@ pub fn preview_panel(
         let controller_id = ui.make_persistent_id("unique_preview_viewport_controller_id");
         let mut controller = ViewportController::new(ui, controller_id, None)
             .with_config(ViewportConfig {
-                zoom_uniform: true,
+                input_policy: ViewportInputPolicy::Trackpad,
                 min_zoom: PREVIEW_MIN_ZOOM,
                 max_zoom: PREVIEW_MAX_ZOOM,
                 ..Default::default()

@@ -18,7 +18,9 @@ mod audio;
 
 use audio::audio_node;
 
+mod composition_drop;
 mod transform_preview;
+mod waveform;
 
 #[cfg(test)]
 use transform_preview::{
@@ -30,6 +32,8 @@ use transform_preview::{
 pub const QA_FIXTURE_ENV: &str = "RUVIE_QA_FIXTURE";
 pub const NODE_EDITOR_E2E_FIXTURE: &str = "node_editor_e2e";
 pub const TRANSFORM_PREVIEW_E2E_FIXTURE: &str = "transform_preview_e2e";
+pub const AUDIO_WAVEFORM_E2E_FIXTURE: &str = "audio_waveform_e2e";
+pub const COMPOSITION_DROP_E2E_FIXTURE: &str = "composition_drop_e2e";
 
 pub const E2E_COMPOSITION_ID: Uuid = Uuid::from_u128(0x100);
 pub const E2E_TRACK_A_ID: Uuid = Uuid::from_u128(0x201);
@@ -89,7 +93,10 @@ fn install_named(
 ) -> Result<FixtureInfo, String> {
     if !matches!(
         name,
-        NODE_EDITOR_E2E_FIXTURE | TRANSFORM_PREVIEW_E2E_FIXTURE
+        NODE_EDITOR_E2E_FIXTURE
+            | TRANSFORM_PREVIEW_E2E_FIXTURE
+            | AUDIO_WAVEFORM_E2E_FIXTURE
+            | COMPOSITION_DROP_E2E_FIXTURE
     ) {
         return Err(format!("unknown {QA_FIXTURE_ENV} value {name:?}"));
     }
@@ -104,6 +111,12 @@ fn install_named(
         || !project.nodes.is_empty()
     {
         return Err("QA fixture requires an empty shared Project".to_string());
+    }
+    if name == AUDIO_WAVEFORM_E2E_FIXTURE {
+        return waveform::install(&mut project, &factory);
+    }
+    if name == COMPOSITION_DROP_E2E_FIXTURE {
+        return composition_drop::install(&mut project);
     }
 
     project.name = "RuViE QA E2E".to_string();
@@ -468,7 +481,6 @@ fn install_named(
         (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
         (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
         (E2E_CLIP_A1_ID, E2E_SOLID_ID),
-        (E2E_CLIP_A1_ID, E2E_MERGE_ID),
         (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
         (E2E_CLIP_A2_ID, E2E_TEXT_TRANSFORM_ID),
         (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
@@ -869,7 +881,6 @@ mod tests {
             (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
             (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
             (E2E_CLIP_A1_ID, E2E_SOLID_ID),
-            (E2E_CLIP_A1_ID, E2E_MERGE_ID),
             (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
             (E2E_CLIP_A2_ID, E2E_TEXT_TRANSFORM_ID),
             (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
@@ -893,7 +904,10 @@ mod tests {
             );
         }
 
-        assert_eq!(read.connections.len(), 30);
+        assert!(!read.connections.iter().any(|connection| {
+            connection.to == PortAddress::new(PortOwner::Node(E2E_MERGE_ID), TIME_PORT)
+        }));
+        assert_eq!(read.connections.len(), 29);
         assert!(read.validate_connections().is_empty());
     }
 
