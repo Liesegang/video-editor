@@ -1,5 +1,5 @@
 use crate::state::context::EditorContext;
-use crate::state::context_types::SelectionTarget;
+use crate::state::context_types::{PreviewEditTarget, SelectionTarget};
 use crate::ui::panels::preview::{
     action::PreviewAction,
     clip::{visual_for_selection, PreviewClip},
@@ -12,18 +12,19 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct PreviewHit {
+    owner_target: SelectionTarget,
     content_node_id: Uuid,
     editable_spatial_node_id: Option<Uuid>,
     instance_path: Vec<Uuid>,
 }
 
 impl PreviewHit {
-    fn selection_node_id(&self, tool: crate::state::context_types::PreviewTool) -> Uuid {
-        if tool == crate::state::context_types::PreviewTool::Select {
-            self.editable_spatial_node_id
-                .unwrap_or(self.content_node_id)
-        } else {
-            self.content_node_id
+    fn edit_target(&self) -> PreviewEditTarget {
+        PreviewEditTarget {
+            owner: self.owner_target,
+            content_node_id: self.content_node_id,
+            spatial_node_id: self.editable_spatial_node_id,
+            instance_path: self.instance_path.clone(),
         }
     }
 }
@@ -94,14 +95,17 @@ impl<'a> PreviewInteractions<'a> {
                 pending_actions,
             );
         } else if active_tool == crate::state::context_types::PreviewTool::Shape {
-            if let Some(SelectionTarget::Node(id)) = self.editor_context.selection.primary() {
+            if let Some(edit_target) = self
+                .editor_context
+                .interaction
+                .preview_edit_target
+                .as_ref()
+                .filter(|target| self.editor_context.selection.primary() == Some(target.owner))
+            {
                 if let Some(gc) = visual_for_selection(
                     self.gui_clips,
-                    id,
-                    self.editor_context
-                        .interaction
-                        .preview_selected_instance_path
-                        .as_deref(),
+                    edit_target.content_node_id,
+                    Some(edit_target.instance_path.as_slice()),
                 ) {
                     if matches!(
                         gc.content_node.content(),
@@ -179,8 +183,7 @@ impl<'a> PreviewInteractions<'a> {
             // Drag Start Detection
             if response.drag_started_by(PointerButton::Primary) {
                 if let Some(hit) = hovered_hit.as_ref() {
-                    let hovered = hit.selection_node_id(active_tool.clone());
-                    let target = SelectionTarget::Node(hovered);
+                    let target = hit.owner_target;
                     // Started drag on an entity
                     // Ensure it is selected (if not modifier click)
                     // If Shift/Ctrl is held, we might be adding it to selection?
@@ -216,9 +219,8 @@ impl<'a> PreviewInteractions<'a> {
                         && self.editor_context.is_selected(target)
                     {
                         self.editor_context.set_primary_selection(target);
-                        self.editor_context
-                            .interaction
-                            .preview_selected_instance_path = Some(hit.instance_path.clone());
+                        self.editor_context.interaction.preview_edit_target =
+                            Some(hit.edit_target());
                         self.editor_context.interaction.is_moving_selected_entity = true;
                         self.init_drag_state(pointer_pos);
                     }
@@ -308,6 +310,7 @@ impl<'a> PreviewInteractions<'a> {
 
             if !(has_pos && has_neg) {
                 return Some(PreviewHit {
+                    owner_target: gc.owner_target,
                     content_node_id: gc.content_id(),
                     editable_spatial_node_id: gc.editable_spatial_id(),
                     instance_path: gc.instance_path.clone(),
@@ -321,27 +324,43 @@ impl<'a> PreviewInteractions<'a> {
         if let Some(pointer_pos) = pointer_pos {
             let mut original_positions = std::collections::HashMap::new();
             let primary = self.editor_context.selection.primary();
-            for target in self.editor_context.selection.targets() {
-                let SelectionTarget::Node(selected_id) = *target else {
-                    continue;
-                };
-                let instance_path = if Some(*target) == primary {
+            for owner in self.editor_context.selection.targets() {
+                let explicit = if Some(*owner) == primary {
                     self.editor_context
                         .interaction
-                        .preview_selected_instance_path
-                        .as_deref()
+                        .preview_edit_target
+                        .as_ref()
+                        .filter(|target| target.owner == *owner)
                 } else {
                     None
                 };
-                if let Some(gc) = visual_for_selection(self.gui_clips, selected_id, instance_path) {
-                    let Some(spatial_id) = gc.editable_spatial_id() else {
+                let fallback = self
+                    .gui_clips
+                    .iter()
+                    .rev()
+                    .find(|visual| visual.owner_target == *owner)
+                    .map(PreviewClip::edit_target);
+                let target = explicit.cloned().or(fallback);
+                let Some(target) = target else {
+                    continue;
+                };
+                let lookup_id = target.spatial_node_id.unwrap_or(target.content_node_id);
+                if let Some(gc) = visual_for_selection(
+                    self.gui_clips,
+                    lookup_id,
+                    Some(target.instance_path.as_slice()),
+                ) {
+                    let Some(spatial_id) = target.spatial_node_id else {
+                        continue;
+                    };
+                    let Some(layer) = gc.spatial_layer(spatial_id) else {
                         continue;
                     };
                     original_positions.insert(
                         spatial_id,
                         [
-                            gc.spatial_transform.position.x as f32,
-                            gc.spatial_transform.position.y as f32,
+                            layer.transform.position.x as f32,
+                            layer.transform.position.y as f32,
                         ],
                     );
                 }
@@ -355,9 +374,7 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_click_selection(&mut self, hovered_hit: Option<&PreviewHit>) {
-        let active_tool = self.editor_context.view.active_tool.clone();
-        let hovered_target = hovered_hit
-            .map(|hit| SelectionTarget::Node(hit.selection_node_id(active_tool.clone())));
+        let hovered_target = hovered_hit.map(|hit| hit.owner_target);
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
             if let Some(hit) = hovered_hit {
                 let id = hit.content_node_id;
@@ -392,50 +409,36 @@ impl<'a> PreviewInteractions<'a> {
 
         match action {
             crate::ui::selection::ClickAction::Select(target) => {
-                let instance_path = hovered_hit
-                    .filter(|hit| {
-                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
-                    })
-                    .map(|hit| hit.instance_path.clone());
+                let edit_target = hovered_hit
+                    .filter(|hit| target == hit.owner_target)
+                    .map(PreviewHit::edit_target);
                 self.editor_context.select_target(target);
-                self.editor_context
-                    .interaction
-                    .preview_selected_instance_path = instance_path;
+                self.editor_context.interaction.preview_edit_target = edit_target;
             }
             crate::ui::selection::ClickAction::Add(target) => {
-                let instance_path = hovered_hit
-                    .filter(|hit| {
-                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
-                    })
-                    .map(|hit| hit.instance_path.clone());
+                let edit_target = hovered_hit
+                    .filter(|hit| target == hit.owner_target)
+                    .map(PreviewHit::edit_target);
                 if !self.editor_context.is_selected(target) {
                     self.editor_context.add_selection(target);
-                    self.editor_context
-                        .interaction
-                        .preview_selected_instance_path = instance_path;
+                    self.editor_context.interaction.preview_edit_target = edit_target;
                 }
             }
             crate::ui::selection::ClickAction::Remove(target) => {
                 if self.editor_context.is_selected(target) {
                     self.editor_context.remove_selection(target);
                 }
-                self.editor_context
-                    .interaction
-                    .preview_selected_instance_path = None;
+                self.editor_context.interaction.preview_edit_target = None;
             }
             crate::ui::selection::ClickAction::Toggle(target) => {
-                let instance_path = hovered_hit
-                    .filter(|hit| {
-                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
-                    })
-                    .map(|hit| hit.instance_path.clone());
+                let edit_target = hovered_hit
+                    .filter(|hit| target == hit.owner_target)
+                    .map(PreviewHit::edit_target);
                 self.editor_context.toggle_selection(target);
-                self.editor_context
-                    .interaction
-                    .preview_selected_instance_path = self
+                self.editor_context.interaction.preview_edit_target = self
                     .editor_context
                     .is_selected(target)
-                    .then_some(instance_path)
+                    .then_some(edit_target)
                     .flatten();
             }
             crate::ui::selection::ClickAction::Clear => {
@@ -459,16 +462,20 @@ impl<'a> PreviewInteractions<'a> {
                 let current_time = self.editor_context.timeline.current_time as f64;
 
                 for (entity_id, orig_pos) in &drag_state.original_positions {
-                    let local_delta = visual_for_selection(
-                        self.gui_clips,
-                        *entity_id,
-                        self.editor_context
-                            .interaction
-                            .preview_selected_instance_path
-                            .as_deref(),
-                    )
-                    .and_then(|visual| inverse_map_vector(visual.parent_transform, world_delta))
-                    .unwrap_or(world_delta);
+                    let instance_path = self
+                        .editor_context
+                        .interaction
+                        .preview_edit_target
+                        .as_ref()
+                        .filter(|target| target.spatial_node_id == Some(*entity_id))
+                        .map(|target| target.instance_path.as_slice());
+                    let local_delta =
+                        visual_for_selection(self.gui_clips, *entity_id, instance_path)
+                            .and_then(|visual| visual.spatial_layer(*entity_id))
+                            .and_then(|layer| {
+                                inverse_map_vector(layer.parent_transform, world_delta)
+                            })
+                            .unwrap_or(world_delta);
                     let new_x = orig_pos[0] as f64 + local_delta.x as f64;
                     let new_y = orig_pos[1] as f64 + local_delta.y as f64;
 
@@ -511,7 +518,7 @@ impl<'a> PreviewInteractions<'a> {
                     let selection_rect = Rect::from_two_pos(start_pos, current_pos);
                     let modifiers = self.ui.input(|i| i.modifiers);
 
-                    let found_nodes = self.get_nodes_in_box(selection_rect);
+                    let found_nodes = self.get_owners_in_box(selection_rect);
 
                     match crate::ui::selection::get_box_action(&modifiers, found_nodes) {
                         crate::ui::selection::BoxAction::Replace(targets) => {
@@ -535,7 +542,7 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn get_nodes_in_box(&self, selection_rect: Rect) -> Vec<SelectionTarget> {
+    fn get_owners_in_box(&self, selection_rect: Rect) -> Vec<SelectionTarget> {
         let mut found = Vec::new();
         let mut seen = HashSet::new();
 
@@ -568,28 +575,26 @@ impl<'a> PreviewInteractions<'a> {
             let clip_screen_rect =
                 Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
 
-            let selection_id = gc.editable_spatial_id().unwrap_or_else(|| gc.content_id());
-            if selection_rect.intersects(clip_screen_rect) && seen.insert(selection_id) {
-                found.push(SelectionTarget::Node(selection_id));
+            if selection_rect.intersects(clip_screen_rect) && seen.insert(gc.owner_target) {
+                found.push(gc.owner_target);
             }
         }
         found
     }
 
     fn selected_visual(&self, entity_id: Uuid) -> Option<&PreviewClip> {
-        let target = SelectionTarget::Node(entity_id);
-        if !self.editor_context.selection.contains(target) {
-            return None;
-        }
-        let instance_path = if self.editor_context.selection.primary() == Some(target) {
-            self.editor_context
-                .interaction
-                .preview_selected_instance_path
-                .as_deref()
-        } else {
-            None
-        };
-        visual_for_selection(self.gui_clips, entity_id, instance_path)
+        let edit_target = self
+            .editor_context
+            .interaction
+            .preview_edit_target
+            .as_ref()
+            .filter(|target| target.content_node_id == entity_id)
+            .filter(|target| self.editor_context.selection.contains(target.owner))?;
+        visual_for_selection(
+            self.gui_clips,
+            entity_id,
+            Some(edit_target.instance_path.as_slice()),
+        )
     }
 
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {

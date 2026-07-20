@@ -181,6 +181,126 @@ fn register_preview_qa_components(
     }
 }
 
+fn register_preview_tool_component(
+    id: &str,
+    tool: &str,
+    response: &egui::Response,
+    selected: bool,
+) {
+    if !crate::qa::is_enabled() {
+        return;
+    }
+    crate::qa::register_component_with_metadata(
+        id,
+        "preview_tool",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "tool": tool,
+            "selected": selected,
+            "action": "activate_preview_tool",
+        })),
+    );
+}
+
+fn preview_visual_screen_rect(
+    visual: &clip::PreviewClip,
+    to_screen: &impl Fn(egui::Pos2) -> egui::Pos2,
+) -> Option<egui::Rect> {
+    let (x, y, width, height) = visual.content_bounds?;
+    let mut screen_points = [egui::Pos2::ZERO; 4];
+    for (point, (local_x, local_y)) in screen_points.iter_mut().zip([
+        (x, y),
+        (x + width, y),
+        (x + width, y + height),
+        (x, y + height),
+    ]) {
+        let (world_x, world_y) = visual
+            .world_transform
+            .map_point(f64::from(local_x), f64::from(local_y));
+        *point = to_screen(egui::pos2(world_x as f32, world_y as f32));
+    }
+    let rect = egui::Rect::from_points(&screen_points);
+    rect.is_positive().then_some(rect)
+}
+
+fn register_preview_visual_qa_components(
+    visuals: &[clip::PreviewClip],
+    viewport: egui::Rect,
+    to_screen: &impl Fn(egui::Pos2) -> egui::Pos2,
+) {
+    if !crate::qa::is_enabled() {
+        return;
+    }
+    let mut published_content = std::collections::HashSet::new();
+    let mut published_spatial = std::collections::HashSet::new();
+    for (instance_index, visual) in visuals.iter().enumerate().rev() {
+        let Some(unclipped_rect) = preview_visual_screen_rect(visual, to_screen) else {
+            continue;
+        };
+        let rect = unclipped_rect.intersect(viewport);
+        let editable_spatial_node_id = visual.editable_spatial_id();
+        let spatial_layers = visual
+            .spatial_layers
+            .iter()
+            .map(|layer| {
+                serde_json::json!({
+                    "node_id": layer.node.id,
+                    "kind": match layer.kind {
+                        clip::PreviewSpatialKind::Content => "content",
+                        clip::PreviewSpatialKind::ShapeTransform => "shape_transform",
+                        clip::PreviewSpatialKind::ImageTransform => "image_transform",
+                    },
+                    "editable": visual.spatial_layer(layer.node.id).is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let metadata = serde_json::json!({
+            "content_node_id": visual.content_id(),
+            "owner": visual.owner_target,
+            "spatial_node_id": visual.spatial_id(),
+            "editable_spatial_node_id": editable_spatial_node_id,
+            "spatial_layers": spatial_layers,
+            "instance_path": &visual.instance_path,
+            "instance_index": instance_index,
+            "unclipped_rect_points": {
+                "min_x": unclipped_rect.min.x,
+                "min_y": unclipped_rect.min.y,
+                "max_x": unclipped_rect.max.x,
+                "max_y": unclipped_rect.max.y,
+            },
+            "action": "select_or_drag_preview_visual",
+        });
+        crate::qa::register_component_with_metadata(
+            format!("preview.visual.instance:{instance_index}"),
+            "preview_visual_instance",
+            rect,
+            true,
+            Some(metadata.clone()),
+        );
+        if published_content.insert(visual.content_id()) {
+            crate::qa::register_component_with_metadata(
+                format!("preview.visual.content:{}", visual.content_id()),
+                "preview_content_visual",
+                rect,
+                true,
+                Some(metadata.clone()),
+            );
+        }
+        for layer in &visual.spatial_layers {
+            if published_spatial.insert(layer.node.id) {
+                crate::qa::register_component_with_metadata(
+                    format!("preview.visual.spatial:{}", layer.node.id),
+                    "preview_spatial_visual",
+                    rect,
+                    visual.spatial_layer(layer.node.id).is_some(),
+                    Some(metadata.clone()),
+                );
+            }
+        }
+    }
+}
+
 /// Keep the derived Preview camera fitted without putting presentation state
 /// into the authoritative Project.
 ///
@@ -315,7 +435,7 @@ fn invalidate_preview_output(editor_context: &mut EditorContext) {
     editor_context.preview_texture_height = 0;
     editor_context.preview_region = None;
     editor_context.preview_frame_info = None;
-    editor_context.interaction.preview_selected_instance_path = None;
+    editor_context.interaction.preview_edit_target = None;
 }
 
 fn clear_preview_render_error(editor_context: &mut EditorContext) {
@@ -378,13 +498,22 @@ fn preview_result_is_current(
     !frame_evaluation_failed && requested == Some(completed)
 }
 
+fn preview_render_wait_requires_repaint(
+    frame_evaluation_failed: bool,
+    requested: bool,
+    completed_current_request: bool,
+) -> bool {
+    !frame_evaluation_failed && requested && !completed_current_request
+}
+
 fn apply_preview_actions(
     actions: Vec<PreviewAction>,
     project_service: &EditorService,
     project: &Arc<RwLock<Project>>,
     history_manager: &mut HistoryManager,
-) {
+) -> bool {
     let mut history_commit_requested = false;
+    let mut changed = false;
     for action in actions {
         match action {
             PreviewAction::UpdateProperty {
@@ -401,6 +530,8 @@ fn apply_preview_actions(
                     value,
                 ) {
                     log::error!("Failed to update Preview property: {error}");
+                } else {
+                    changed = true;
                 }
             }
             PreviewAction::CommitHistory => history_commit_requested = true,
@@ -415,6 +546,7 @@ fn apply_preview_actions(
             history_manager.push_project_state(project.clone());
         }
     }
+    changed
 }
 
 struct PreviewViewportState<'a> {
@@ -484,6 +616,12 @@ pub fn preview_panel(
                 egui::Button::new(egui::RichText::new(icons::CURSOR).size(18.0))
                     .selected(editor_context.view.active_tool == PreviewTool::Select),
             );
+            register_preview_tool_component(
+                "preview.tool.select",
+                "select",
+                &select_btn,
+                editor_context.view.active_tool == PreviewTool::Select,
+            );
             if select_btn.clicked() {
                 editor_context.view.active_tool = PreviewTool::Select;
             }
@@ -492,6 +630,12 @@ pub fn preview_panel(
             let pan_btn = ui.add(
                 egui::Button::new(egui::RichText::new(icons::HAND).size(18.0))
                     .selected(editor_context.view.active_tool == PreviewTool::Pan),
+            );
+            register_preview_tool_component(
+                "preview.tool.pan",
+                "pan",
+                &pan_btn,
+                editor_context.view.active_tool == PreviewTool::Pan,
             );
             if pan_btn.clicked() {
                 editor_context.view.active_tool = PreviewTool::Pan;
@@ -502,6 +646,12 @@ pub fn preview_panel(
                 egui::Button::new(egui::RichText::new(icons::MAGNIFYING_GLASS).size(18.0))
                     .selected(editor_context.view.active_tool == PreviewTool::Zoom),
             );
+            register_preview_tool_component(
+                "preview.tool.zoom",
+                "zoom",
+                &zoom_btn,
+                editor_context.view.active_tool == PreviewTool::Zoom,
+            );
             if zoom_btn.clicked() {
                 editor_context.view.active_tool = PreviewTool::Zoom;
             }
@@ -511,6 +661,12 @@ pub fn preview_panel(
                 egui::Button::new(egui::RichText::new(icons::TEXT_T).size(18.0))
                     .selected(editor_context.view.active_tool == PreviewTool::Text),
             );
+            register_preview_tool_component(
+                "preview.tool.text",
+                "text",
+                &text_btn,
+                editor_context.view.active_tool == PreviewTool::Text,
+            );
             if text_btn.clicked() {
                 editor_context.view.active_tool = PreviewTool::Text;
             }
@@ -519,6 +675,12 @@ pub fn preview_panel(
             let shape_btn = ui.add(
                 egui::Button::new(egui::RichText::new(icons::SQUARE).size(18.0))
                     .selected(editor_context.view.active_tool == PreviewTool::Shape),
+            );
+            register_preview_tool_component(
+                "preview.tool.shape",
+                "shape",
+                &shape_btn,
+                editor_context.view.active_tool == PreviewTool::Shape,
             );
             if shape_btn.clicked() {
                 editor_context.view.active_tool = PreviewTool::Shape;
@@ -744,6 +906,7 @@ pub fn preview_panel(
         // the Project/time/viewport requested by this UI frame. The worker may
         // finish an older request after the user seeks or edits the Project;
         // applying that result would briefly expose stale pixels as current.
+        let mut completed_current_request = false;
         if let Some(result) = latest_result.filter(|result| {
             preview_result_is_current(
                 frame_evaluation_failed,
@@ -751,6 +914,7 @@ pub fn preview_panel(
                 &result.frame_info,
             )
         }) {
+            completed_current_request = true;
             match result.output {
                 Ok(output) => {
                     clear_preview_render_error(editor_context);
@@ -801,6 +965,14 @@ pub fn preview_panel(
                     report_preview_render_error(&error, editor_context);
                 }
             }
+        }
+        if preview_render_wait_requires_repaint(
+            frame_evaluation_failed,
+            requested_frame_info.is_some(),
+            completed_current_request,
+        ) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
         }
 
         // 3. Draw Texture
@@ -945,6 +1117,63 @@ pub fn preview_panel(
             .as_ref()
             .map(|frame| clip::from_evaluated_frame(&proj_read, frame))
             .unwrap_or_default();
+        let mut ambiguous_facade_candidates = None;
+        if let Some(primary) = editor_context.selection.primary() {
+            let is_owner = !matches!(primary, SelectionTarget::Node(_));
+            let has_matching_explicit_target = editor_context
+                .interaction
+                .preview_edit_target
+                .as_ref()
+                .is_some_and(|target| {
+                    target.owner == primary
+                        && clip::visual_for_selection(
+                            &gui_clips,
+                            target.spatial_node_id.unwrap_or(target.content_node_id),
+                            Some(target.instance_path.as_slice()),
+                        )
+                        .is_some()
+                });
+            if is_owner && !has_matching_explicit_target {
+                match clip::resolve_owner_edit_target(&gui_clips, primary) {
+                    clip::OwnerEditTargetResolution::Resolved(target) => {
+                        editor_context.interaction.preview_edit_target = Some(target);
+                    }
+                    clip::OwnerEditTargetResolution::Ambiguous { candidate_node_ids } => {
+                        editor_context.interaction.preview_edit_target = None;
+                        ambiguous_facade_candidates = Some(candidate_node_ids);
+                    }
+                    clip::OwnerEditTargetResolution::Unavailable => {
+                        editor_context.interaction.preview_edit_target = None;
+                    }
+                }
+            }
+        }
+        register_preview_visual_qa_components(&gui_clips, rect, &to_screen);
+        if let Some(candidate_node_ids) = ambiguous_facade_candidates {
+            let badge_rect = egui::Rect::from_min_size(
+                rect.right_top() + egui::vec2(-260.0, 8.0),
+                egui::vec2(252.0, 24.0),
+            );
+            ui.painter()
+                .rect_filled(badge_rect, 4.0, egui::Color32::from_black_alpha(180));
+            ui.painter().text(
+                badge_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Advanced graph · click a visual to edit",
+                egui::FontId::proportional(12.0),
+                egui::Color32::LIGHT_GRAY,
+            );
+            crate::qa::register_component_with_metadata(
+                "preview.facade.ambiguous",
+                "preview_facade_status",
+                badge_rect,
+                false,
+                Some(serde_json::json!({
+                    "reason": "multiple independent spatial transforms",
+                    "candidate_node_ids": candidate_node_ids,
+                })),
+            );
+        }
 
         // Interactions
         {
@@ -977,14 +1206,16 @@ pub fn preview_panel(
             );
         } else if editor_context.view.active_tool == PreviewTool::Shape {
             if let Some(state) = &editor_context.interaction.vector_editor_state {
-                if let Some(SelectionTarget::Node(id)) = editor_context.selection.primary() {
+                if let Some(edit_target) = editor_context
+                    .interaction
+                    .preview_edit_target
+                    .as_ref()
+                    .filter(|target| editor_context.selection.primary() == Some(target.owner))
+                {
                     if let Some(gc) = clip::visual_for_selection(
                         &gui_clips,
-                        id,
-                        editor_context
-                            .interaction
-                            .preview_selected_instance_path
-                            .as_deref(),
+                        edit_target.content_node_id,
+                        Some(edit_target.instance_path.as_slice()),
                     ) {
                         if let Some(path) = gc.content_node.properties().get_string("path") {
                             match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
@@ -1043,7 +1274,9 @@ pub fn preview_panel(
     // before allocating JSON in normal, QA-disabled builds.
     register_preview_qa_components(preview_rect, current_composition_view, editor_context);
 
-    apply_preview_actions(pending_actions, project_service, project, history_manager);
+    if apply_preview_actions(pending_actions, project_service, project, history_manager) {
+        ui.ctx().request_repaint();
+    }
 
     // Info text
     let info_text = format!(
@@ -1107,6 +1340,10 @@ mod tests {
         assert!(!preview_result_is_current(false, Some(&current), &stale));
         assert!(!preview_result_is_current(false, None, &current));
         assert!(!preview_result_is_current(true, Some(&current), &current));
+        assert!(preview_render_wait_requires_repaint(false, true, false));
+        assert!(!preview_render_wait_requires_repaint(false, true, true));
+        assert!(!preview_render_wait_requires_repaint(false, false, false));
+        assert!(!preview_render_wait_requires_repaint(true, true, false));
     }
 
     #[test]
@@ -1124,6 +1361,40 @@ mod tests {
         assert!(ValidGlPreviewTexture::new(7, 1920, 0).is_none());
         assert!(ValidGlPreviewTexture::new(7, u32::MAX, 1080).is_none());
         assert!(ValidGlPreviewTexture::new(7, 1920, u32::MAX).is_none());
+    }
+
+    #[test]
+    fn preview_visual_qa_rect_uses_evaluated_world_and_camera_coordinates() {
+        use library::model::frame::transform::Transform;
+        use library::rendering::renderer::Affine2D;
+
+        let node = generator_node(
+            "QA visual",
+            GeneratorNodeRequest::SkSL {
+                shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+            },
+        );
+        let visual = clip::PreviewClip {
+            content_node: node.clone(),
+            spatial_layers: vec![clip::PreviewSpatialLayer {
+                node: node.clone(),
+                kind: clip::PreviewSpatialKind::Content,
+                transform: Transform::default(),
+                parent_transform: Affine2D::IDENTITY,
+            }],
+            owner_target: SelectionTarget::Node(node.id),
+            transform: Transform::default(),
+            world_transform: Affine2D::IDENTITY,
+            content_bounds: Some((1.0, 2.0, 30.0, 40.0)),
+            instance_path: vec![node.id],
+        };
+
+        let rect = preview_visual_screen_rect(&visual, &|position| {
+            egui::pos2(10.0 + position.x * 2.0, 20.0 + position.y * 2.0)
+        })
+        .expect("positive content bounds publish a QA rectangle");
+        assert_eq!(rect.min, egui::pos2(12.0, 24.0));
+        assert_eq!(rect.max, egui::pos2(72.0, 104.0));
     }
 
     fn assert_near(actual: f32, expected: f32) {
@@ -1442,7 +1713,7 @@ mod tests {
         let content_id = uuid::Uuid::new_v4();
         content_node.id = content_id;
         let mut spatial_node = PluginManager::default()
-            .create_transform_operation_node()
+            .create_shape_transform_operation_node()
             .expect("native Transform factory must be available");
         let spatial_id = uuid::Uuid::new_v4();
         spatial_node.id = spatial_id;
@@ -1452,25 +1723,27 @@ mod tests {
         };
         let visual = clip::PreviewClip {
             content_node,
-            spatial_node: Some(spatial_node),
-            spatial_transform: spatial_transform.clone(),
+            spatial_layers: vec![clip::PreviewSpatialLayer {
+                node: spatial_node,
+                kind: clip::PreviewSpatialKind::ShapeTransform,
+                transform: spatial_transform.clone(),
+                parent_transform: Affine2D::IDENTITY,
+            }],
+            owner_target: SelectionTarget::Clip(content_id),
             transform: spatial_transform.clone(),
-            parent_transform: Affine2D::IDENTITY,
             world_transform: Affine2D::from(&spatial_transform),
             content_bounds: Some((-40.0, -20.0, 80.0, 40.0)),
             instance_path: vec![content_id, spatial_id],
         };
         let center = egui::pos2(240.0, 160.0);
 
-        // A content-generator selection made in Node Editor still identifies
-        // the rendered visual. A Select-tool body drag transfers the primary
-        // selection to, and writes only, its explicit spatial Transform.
+        // Preview behaves like a conventional NLE: its primary selection is
+        // the Clip facade while the view-local edit target routes the drag to
+        // the explicit spatial Transform behind that facade.
         let context = egui::Context::default();
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.view.zoom = 1.0;
         editor_context.select_target(SelectionTarget::Node(content_id));
-        editor_context.interaction.preview_selected_instance_path =
-            Some(visual.instance_path.clone());
         let mut actions = Vec::new();
         raw_pointer_drag(
             &context,
@@ -1483,7 +1756,15 @@ mod tests {
         );
         assert_eq!(
             editor_context.selection.primary(),
-            Some(SelectionTarget::Node(spatial_id))
+            Some(SelectionTarget::Clip(content_id))
+        );
+        assert_eq!(
+            editor_context
+                .interaction
+                .preview_edit_target
+                .as_ref()
+                .and_then(|target| target.spatial_node_id),
+            Some(spatial_id)
         );
         assert!(actions.iter().any(|action| matches!(
             action,
@@ -1539,7 +1820,7 @@ mod tests {
         );
         assert_eq!(
             editor_context.selection.primary(),
-            Some(SelectionTarget::Node(content_id))
+            Some(SelectionTarget::Clip(content_id))
         );
         assert_eq!(
             editor_context.interaction.editing_text_entity_id,
@@ -1782,10 +2063,14 @@ mod tests {
             });
             clip::PreviewClip {
                 content_node: source.clone(),
-                spatial_node: Some(source.clone()),
-                spatial_transform: source_transform,
+                spatial_layers: vec![clip::PreviewSpatialLayer {
+                    node: source.clone(),
+                    kind: clip::PreviewSpatialKind::Content,
+                    transform: source_transform,
+                    parent_transform,
+                }],
+                owner_target: SelectionTarget::Clip(source.id),
                 world_transform: parent_transform.compose(Affine2D::from(&transform)),
-                parent_transform,
                 transform,
                 content_bounds: Some((-20.0, -20.0, 40.0, 40.0)),
                 instance_path: vec![source.id],
@@ -1827,9 +2112,8 @@ mod tests {
         let context = egui::Context::default();
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.view.zoom = 1.0;
-        editor_context.select_target(SelectionTarget::Node(source.id));
-        editor_context.interaction.preview_selected_instance_path =
-            Some(visual.instance_path.clone());
+        editor_context.select_target(visual.owner_target);
+        editor_context.interaction.preview_edit_target = Some(visual.edit_target());
         let (center_x, center_y) = visual.world_transform.map_point(0.0, 0.0);
         let center = egui::pos2(center_x as f32, center_y as f32);
         let mut actions = Vec::new();
@@ -1876,9 +2160,8 @@ mod tests {
         let context = egui::Context::default();
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.view.zoom = 1.0;
-        editor_context.select_target(SelectionTarget::Node(source.id));
-        editor_context.interaction.preview_selected_instance_path =
-            Some(visual.instance_path.clone());
+        editor_context.select_target(visual.owner_target);
+        editor_context.interaction.preview_edit_target = Some(visual.edit_target());
         let (right_x, right_y) = visual.world_transform.map_point(20.0, 0.0);
         let right_handle = egui::pos2(right_x as f32, right_y as f32);
         let mut actions = Vec::new();
@@ -2138,15 +2421,15 @@ mod tests {
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().unwrap().clone());
 
-        apply_preview_actions(
+        assert!(!apply_preview_actions(
             vec![PreviewAction::CommitHistory],
             &service,
             &project,
             &mut history,
-        );
+        ));
         assert_eq!(history.undo_depth(), 1, "a no-output frame is not an edit");
 
-        apply_preview_actions(
+        assert!(apply_preview_actions(
             vec![
                 PreviewAction::UpdateProperty {
                     node_id: transform_id,
@@ -2162,7 +2445,7 @@ mod tests {
             &service,
             &project,
             &mut history,
-        );
+        ));
 
         let model = project.read().unwrap();
         assert_eq!(

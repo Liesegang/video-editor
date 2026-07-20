@@ -4629,14 +4629,19 @@ pub fn node_editor_panel(
         selection_changed = true;
     }
     if selection_changed {
-        editor_context.interaction.preview_selected_instance_path = None;
+        editor_context.interaction.preview_edit_target = None;
     }
 
     let primary_released = ui.input(|input| input.pointer.primary_released());
 
     let mut layout_changed = false;
     if let Ok(mut project) = project_lock.write() {
-        apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state);
+        if apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state) {
+            // Render completion is asynchronous. Wake the UI immediately so
+            // a paused Preview observes this authoritative graph mutation
+            // without waiting for unrelated pointer input.
+            ui.ctx().request_repaint();
+        }
         for edit in layout_edits {
             layout_changed |= apply_layout_edit(&mut project, edit);
         }

@@ -267,6 +267,20 @@ pub enum SelectionTarget {
     Composition(Uuid),
 }
 
+/// View-local routing for Preview interaction.
+///
+/// The authoritative selection remains the nearest Timeline/Inspector editing
+/// owner (Clip, Track, or Composition). This transient record identifies the
+/// exact rendered branch and graph Node that a gizmo gesture edits directly;
+/// it is never persisted into Project data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewEditTarget {
+    pub owner: SelectionTarget,
+    pub content_node_id: Uuid,
+    pub spatial_node_id: Option<Uuid>,
+    pub instance_path: Vec<Uuid>,
+}
+
 impl SelectionTarget {
     pub const fn node_id(self) -> Option<Uuid> {
         match self {
@@ -420,11 +434,10 @@ pub struct InteractionState {
     #[serde(skip)]
     pub preview_selection_drag_start: Option<egui::Pos2>,
 
-    /// Render-branch path for the primary Preview selection. The persistent
-    /// selection remains a Project Node ID; this transient path distinguishes
-    /// fan-out of that Node through multiple Merge/Reference branches.
+    /// Exact rendered branch and internal Node edited by Preview while primary
+    /// Project selection remains its nearest Clip/Track/Composition owner.
     #[serde(skip)]
-    pub preview_selected_instance_path: Option<Vec<Uuid>>,
+    pub preview_edit_target: Option<PreviewEditTarget>,
 
     // Hand Tool Logic
     #[serde(skip)]

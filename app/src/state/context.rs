@@ -162,7 +162,7 @@ impl EditorContext {
         self.interaction.body_drag_state = None;
         self.interaction.timeline_selection_drag_start = None;
         self.interaction.preview_selection_drag_start = None;
-        self.interaction.preview_selected_instance_path = None;
+        self.interaction.preview_edit_target = None;
         self.interaction.handled_hand_tool_drag = false;
         self.interaction.preview_viewport.request_fit();
         self.interaction.editing_text_entity_id = None;
@@ -202,12 +202,12 @@ impl EditorContext {
 
     pub fn clear_selection(&mut self) {
         self.selection.clear();
-        self.interaction.preview_selected_instance_path = None;
+        self.interaction.preview_edit_target = None;
     }
 
     pub fn select_target(&mut self, target: SelectionTarget) {
         self.selection.replace([target], Some(target));
-        self.interaction.preview_selected_instance_path = None;
+        self.interaction.preview_edit_target = None;
     }
 
     pub fn replace_selection(
@@ -216,18 +216,18 @@ impl EditorContext {
         primary: Option<SelectionTarget>,
     ) {
         self.selection.replace(targets, primary);
-        self.interaction.preview_selected_instance_path = None;
+        self.interaction.preview_edit_target = None;
     }
 
     pub fn add_selection(&mut self, target: SelectionTarget) {
         self.selection.push_primary(target);
-        self.interaction.preview_selected_instance_path = None;
+        self.interaction.preview_edit_target = None;
     }
 
     pub fn set_primary_selection(&mut self, target: SelectionTarget) -> bool {
         let changed = self.selection.make_primary(target);
         if changed {
-            self.interaction.preview_selected_instance_path = None;
+            self.interaction.preview_edit_target = None;
         }
         changed
     }
@@ -235,7 +235,7 @@ impl EditorContext {
     pub fn remove_selection(&mut self, target: SelectionTarget) -> bool {
         let changed = self.selection.remove(target);
         if changed {
-            self.interaction.preview_selected_instance_path = None;
+            self.interaction.preview_edit_target = None;
         }
         changed
     }
@@ -267,7 +267,7 @@ impl EditorContext {
         });
         let changed = self.selection.targets() != before;
         if changed {
-            self.interaction.preview_selected_instance_path = None;
+            self.interaction.preview_edit_target = None;
         }
         changed
     }
@@ -303,7 +303,7 @@ fn selection_target_composition(project: &Project, target: SelectionTarget) -> O
 #[cfg(test)]
 mod tests {
     use super::EditorContext;
-    use crate::state::context_types::{NodeEditorPendingEdit, SelectionTarget};
+    use crate::state::context_types::{NodeEditorPendingEdit, PreviewEditTarget, SelectionTarget};
     use library::model::frame::color::Color;
     use library::model::frame::frame::{FrameInfo, Region};
     use library::model::project::{Composition, NodeContainer, PortOwner, Project};
@@ -330,8 +330,12 @@ mod tests {
         context.timeline.current_time = 9.0;
         context.interaction.editing_text_entity_id = Some(old_clip_id);
         context.interaction.text_edit_buffer = "stale".to_string();
-        context.interaction.preview_selected_instance_path =
-            Some(vec![old_composition_id, old_track_id, old_clip_id]);
+        context.interaction.preview_edit_target = Some(PreviewEditTarget {
+            owner: SelectionTarget::Clip(old_clip_id),
+            content_node_id: old_clip_id,
+            spatial_node_id: Some(old_clip_id),
+            instance_path: vec![old_composition_id, old_track_id, old_clip_id],
+        });
         context.preview_render_revision = 37;
         context.preview_pixel_hash = Some(99);
 
@@ -348,7 +352,7 @@ mod tests {
         assert_eq!(context.timeline.current_time, 2.0);
         assert_eq!(context.interaction.editing_text_entity_id, None);
         assert!(context.interaction.text_edit_buffer.is_empty());
-        assert!(context.interaction.preview_selected_instance_path.is_none());
+        assert!(context.interaction.preview_edit_target.is_none());
         assert_eq!(context.preview_render_revision, 37);
         assert_eq!(context.preview_pixel_hash, None);
     }
@@ -649,7 +653,12 @@ mod tests {
             .insert(node_id, (1, (0.0, 0.0, 10.0, 10.0)));
         context.interaction.timeline_selection_drag_start = Some(egui::Pos2::ZERO);
         context.interaction.preview_selection_drag_start = Some(egui::Pos2::ZERO);
-        context.interaction.preview_selected_instance_path = Some(vec![node_id]);
+        context.interaction.preview_edit_target = Some(PreviewEditTarget {
+            owner: SelectionTarget::Composition(first),
+            content_node_id: node_id,
+            spatial_node_id: Some(node_id),
+            instance_path: vec![node_id],
+        });
         context.interaction.preview_viewport.auto_fit = false;
         context.interaction.preview_viewport.fitted_composition_id = Some(first);
         context.graph_editor.active_entity_id = Some(node_id);
@@ -672,7 +681,7 @@ mod tests {
         assert!(context.interaction.bounds_cache.bounds.is_empty());
         assert!(context.interaction.timeline_selection_drag_start.is_none());
         assert!(context.interaction.preview_selection_drag_start.is_none());
-        assert!(context.interaction.preview_selected_instance_path.is_none());
+        assert!(context.interaction.preview_edit_target.is_none());
         assert!(context.interaction.preview_viewport.auto_fit);
         assert!(context
             .interaction

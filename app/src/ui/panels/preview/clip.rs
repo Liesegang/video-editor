@@ -1,10 +1,37 @@
-use library::model::frame::entity::FrameItem;
+use crate::state::context_types::{PreviewEditTarget, SelectionTarget};
+use library::model::frame::entity::{FrameGroupKind, FrameItem};
 use library::model::frame::frame::FrameInfo;
 use library::model::frame::transform::Transform;
-use library::model::project::Project;
+use library::model::project::{NodeContainer, Project};
 use library::model::Node;
 use library::rendering::renderer::Affine2D;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewSpatialKind {
+    Content,
+    ShapeTransform,
+    ImageTransform,
+}
+
+#[derive(Clone)]
+pub struct PreviewSpatialLayer {
+    pub node: Node,
+    pub kind: PreviewSpatialKind,
+    /// Direct transform owned by this Node, excluding every outer layer.
+    pub transform: Transform,
+    /// Affine stack outside this layer. Pointer deltas are mapped through its
+    /// inverse before writing this Node's direct Project properties.
+    pub parent_transform: Affine2D,
+}
+
+impl PreviewSpatialLayer {
+    fn is_editable(&self) -> bool {
+        ["position", "rotation", "scale", "anchor"]
+            .into_iter()
+            .all(|key| self.node.properties().get(key).is_some())
+    }
+}
 
 /// One interactive visual that actually reached the rendered Composition.
 ///
@@ -15,21 +42,16 @@ use uuid::Uuid;
 pub struct PreviewClip {
     /// Generator that owns the rendered content (text, path, media, shader).
     pub content_node: Node,
-    /// Node that owns absolute position/rotation/scale/anchor. This may be the
-    /// same generator for raster content, an explicit Transform for Shape
-    /// content, or absent for an untransformed Shape value.
-    pub spatial_node: Option<Node>,
-    /// Evaluated transform directly owned by `spatial_node`. Preview edits use this
-    /// baseline so downstream Effectors are not accidentally baked back into
-    /// the generator properties.
-    pub spatial_transform: Transform,
+    /// Ordered outer-to-inner spatial provenance. Image Transform groups are
+    /// explicit layers; the innermost entry is the Shape/content placement.
+    pub spatial_layers: Vec<PreviewSpatialLayer>,
+    /// Nearest authoritative Timeline/Inspector owner for a Preview hit.
+    pub owner_target: SelectionTarget,
     /// Final evaluated visual transform (normalized scale/opacity). This may
     /// include downstream Shape Effector contributions and is used for hit
     /// testing/drawing only.
     pub transform: Transform,
-    /// All evaluated container/group transforms above `node`.
-    pub parent_transform: Affine2D,
-    /// `parent_transform` composed with the Node's evaluated transform.
+    /// Every evaluated group/layer transform composed with the content.
     pub world_transform: Affine2D,
     pub content_bounds: Option<(f32, f32, f32, f32)>,
     /// Stable render-branch identity. Project selection remains the source
@@ -44,30 +66,55 @@ impl PreviewClip {
     }
 
     pub fn spatial_id(&self) -> Option<Uuid> {
-        self.spatial_node.as_ref().map(|node| node.id)
+        self.editable_spatial_id()
     }
 
     /// A stale/malformed spatial owner is never made draggable. Every Preview
     /// spatial gesture writes this complete native property contract.
     pub fn editable_spatial_id(&self) -> Option<Uuid> {
-        self.spatial_node.as_ref().and_then(|node| {
-            ["position", "rotation", "scale", "anchor"]
-                .into_iter()
-                .all(|key| node.properties().get(key).is_some())
-                .then_some(node.id)
-        })
+        self.spatial_layers
+            .iter()
+            .find(|layer| layer.is_editable())
+            .map(|layer| layer.node.id)
     }
 
     pub fn matches_node_id(&self, node_id: Uuid) -> bool {
-        self.content_id() == node_id || self.spatial_id() == Some(node_id)
+        self.content_id() == node_id
+            || self
+                .spatial_layers
+                .iter()
+                .any(|layer| layer.node.id == node_id)
+    }
+
+    pub fn spatial_layer(&self, node_id: Uuid) -> Option<&PreviewSpatialLayer> {
+        self.spatial_layers
+            .iter()
+            .find(|layer| layer.node.id == node_id && layer.is_editable())
+    }
+
+    pub fn edit_target(&self) -> PreviewEditTarget {
+        PreviewEditTarget {
+            owner: self.owner_target,
+            content_node_id: self.content_id(),
+            spatial_node_id: self.editable_spatial_id(),
+            instance_path: self.instance_path.clone(),
+        }
     }
 }
 
 pub fn from_evaluated_frame(project: &Project, frame: &FrameInfo) -> Vec<PreviewClip> {
     let mut visuals = Vec::new();
     let mut path = Vec::new();
+    let mut image_layers = Vec::new();
     for item in &frame.items {
-        collect_visuals(project, item, Affine2D::IDENTITY, &mut path, &mut visuals);
+        collect_visuals(
+            project,
+            item,
+            Affine2D::IDENTITY,
+            &mut path,
+            &mut image_layers,
+            &mut visuals,
+        );
     }
     visuals
 }
@@ -96,11 +143,88 @@ pub fn visual_for_selection<'a>(
         })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OwnerEditTargetResolution {
+    Resolved(PreviewEditTarget),
+    Ambiguous { candidate_node_ids: Vec<Uuid> },
+    Unavailable,
+}
+
+/// Resolve the canonical facade edit behind a Timeline/Inspector owner.
+///
+/// A common outer Image Transform wins, followed by a common innermost
+/// Shape/content transform. Multiple independent candidates are deliberately
+/// ambiguous: Timeline-only editing must never mutate an arbitrary front-most
+/// Node. A direct Preview hit may still choose one exact branch explicitly.
+pub fn resolve_owner_edit_target(
+    visuals: &[PreviewClip],
+    owner: SelectionTarget,
+) -> OwnerEditTargetResolution {
+    let owned = visuals
+        .iter()
+        .filter(|visual| visual.owner_target == owner)
+        .collect::<Vec<_>>();
+    if owned.is_empty() {
+        return OwnerEditTargetResolution::Unavailable;
+    }
+
+    for kind in [
+        PreviewSpatialKind::ImageTransform,
+        PreviewSpatialKind::ShapeTransform,
+        PreviewSpatialKind::Content,
+    ] {
+        let candidates = owned
+            .iter()
+            .filter_map(|visual| {
+                visual
+                    .spatial_layers
+                    .iter()
+                    .find(|layer| layer.kind == kind && layer.is_editable())
+                    .map(|layer| layer.node.id)
+            })
+            .collect::<Vec<_>>();
+        let Some(first) = candidates.first().copied() else {
+            continue;
+        };
+        if candidates.len() == owned.len() && candidates.iter().all(|candidate| *candidate == first)
+        {
+            let Some(visual) = owned
+                .iter()
+                .rev()
+                .find(|visual| visual.spatial_layer(first).is_some())
+            else {
+                return OwnerEditTargetResolution::Unavailable;
+            };
+            return OwnerEditTargetResolution::Resolved(PreviewEditTarget {
+                owner,
+                content_node_id: visual.content_id(),
+                spatial_node_id: Some(first),
+                instance_path: visual.instance_path.clone(),
+            });
+        }
+    }
+
+    let mut candidate_node_ids = owned
+        .iter()
+        .filter_map(|visual| visual.editable_spatial_id())
+        .collect::<Vec<_>>();
+    candidate_node_ids.sort_unstable();
+    candidate_node_ids.dedup();
+    if candidate_node_ids.is_empty() {
+        OwnerEditTargetResolution::Unavailable
+    } else if owned.len() == 1 {
+        OwnerEditTargetResolution::Resolved(owned[0].edit_target())
+    } else {
+        OwnerEditTargetResolution::Ambiguous { candidate_node_ids }
+    }
+}
+
 fn collect_visuals(
     project: &Project,
     item: &FrameItem,
     parent_transform: Affine2D,
     path: &mut Vec<Uuid>,
+    image_layers: &mut Vec<PreviewSpatialLayer>,
     visuals: &mut Vec<PreviewClip>,
 ) {
     match item {
@@ -110,7 +234,7 @@ fn collect_visuals(
                 // replacement. Never make stale frame identity interactive.
                 return;
             };
-            let spatial_node = object
+            let shape_spatial_node = object
                 .spatial_transform_node_id
                 .and_then(|node_id| project.get_node(node_id))
                 .cloned();
@@ -122,12 +246,29 @@ fn collect_visuals(
             if let Some(node_id) = distinct_spatial_id {
                 path.push(node_id);
             }
+            let mut spatial_layers = image_layers.clone();
+            if let Some(node) = shape_spatial_node {
+                spatial_layers.push(PreviewSpatialLayer {
+                    kind: if node.id == object.source_node_id {
+                        PreviewSpatialKind::Content
+                    } else {
+                        PreviewSpatialKind::ShapeTransform
+                    },
+                    node,
+                    transform: object.spatial_transform.as_ref().clone(),
+                    parent_transform,
+                });
+            }
+            let editable_layer = spatial_layers.iter().find(|layer| layer.is_editable());
+            let owner_node_id = editable_layer
+                .map(|layer| layer.node.id)
+                .unwrap_or(object.source_node_id);
             visuals.push(PreviewClip {
                 content_node: content_node.clone(),
-                spatial_node,
-                spatial_transform: object.spatial_transform.as_ref().clone(),
+                spatial_layers,
+                owner_target: selection_owner_for_node(project, owner_node_id)
+                    .unwrap_or(SelectionTarget::Node(owner_node_id)),
                 world_transform: parent_transform.compose(Affine2D::from(&transform)),
-                parent_transform,
                 transform,
                 content_bounds: object.content_bounds.map(|bounds| bounds.as_tuple()),
                 instance_path: path.clone(),
@@ -138,19 +279,46 @@ fn collect_visuals(
             path.pop();
         }
         FrameItem::Group(group) => {
-            let transform = parent_transform.compose(Affine2D::from(&group.transform));
             path.push(group.source_id);
+            let mut pushed_image_layer = false;
+            if group.kind == FrameGroupKind::ImageTransform {
+                if let Some(node) = project.get_node(group.source_id).cloned() {
+                    image_layers.push(PreviewSpatialLayer {
+                        node,
+                        kind: PreviewSpatialKind::ImageTransform,
+                        transform: group.transform.clone(),
+                        parent_transform,
+                    });
+                    pushed_image_layer = true;
+                }
+            }
+            let transform = parent_transform.compose(Affine2D::from(&group.transform));
             for child in &group.items {
-                collect_visuals(project, child, transform, path, visuals);
+                collect_visuals(project, child, transform, path, image_layers, visuals);
+            }
+            if pushed_image_layer {
+                image_layers.pop();
             }
             path.pop();
         }
     }
 }
 
+fn selection_owner_for_node(project: &Project, node_id: Uuid) -> Option<SelectionTarget> {
+    match project.find_node_container(node_id)? {
+        NodeContainer::Clip(id) => Some(SelectionTarget::Clip(id)),
+        NodeContainer::Track(id) => Some(SelectionTarget::Track(id)),
+        NodeContainer::Composition(id) => Some(SelectionTarget::Composition(id)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{from_evaluated_frame, visual_for_selection};
+    use super::{
+        from_evaluated_frame, resolve_owner_edit_target, visual_for_selection,
+        OwnerEditTargetResolution, PreviewSpatialKind,
+    };
+    use crate::state::context_types::SelectionTarget;
     use crate::test_support::generator_node;
     use library::editor::project_service::GeneratorNodeRequest;
     use library::model::frame::color::Color;
@@ -159,7 +327,9 @@ mod tests {
     };
     use library::model::frame::frame::FrameInfo;
     use library::model::frame::transform::{Position, Transform};
+    use library::model::project::{Composition, NodeContainer};
     use library::model::BlendMode;
+    use library::model::Clip;
     use ordered_float::OrderedFloat;
     use uuid::Uuid;
 
@@ -464,8 +634,12 @@ mod tests {
     fn direct_composition_and_track_nodes_project_as_visuals() {
         let composition_node_id = Uuid::new_v4();
         let track_node_id = Uuid::new_v4();
-        let track_id = Uuid::new_v4();
         let mut project = library::model::project::Project::new("direct nodes");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 1.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
         for (id, name) in [
             (composition_node_id, "composition node"),
             (track_node_id, "track node"),
@@ -479,6 +653,15 @@ mod tests {
             node.id = id;
             project.add_node(node);
         }
+        project
+            .attach_node_to_container(
+                NodeContainer::Composition(composition_id),
+                composition_node_id,
+            )
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Track(track_id), track_node_id)
+            .unwrap();
         let frame = FrameInfo {
             width: 1920,
             height: 1080,
@@ -502,6 +685,11 @@ mod tests {
         assert_eq!(visuals.len(), 2);
         assert_eq!(visuals[0].content_id(), composition_node_id);
         assert_eq!(visuals[1].content_id(), track_node_id);
+        assert_eq!(
+            visuals[0].owner_target,
+            SelectionTarget::Composition(composition_id)
+        );
+        assert_eq!(visuals[1].owner_target, SelectionTarget::Track(track_id));
 
         let empty = FrameInfo {
             items: Vec::new(),
@@ -563,8 +751,18 @@ mod tests {
         assert_eq!(visual.editable_spatial_id(), Some(spatial_id));
         assert_eq!(
             (
-                visual.spatial_transform.position.x,
-                visual.spatial_transform.position.y
+                visual
+                    .spatial_layer(spatial_id)
+                    .unwrap()
+                    .transform
+                    .position
+                    .x,
+                visual
+                    .spatial_layer(spatial_id)
+                    .unwrap()
+                    .transform
+                    .position
+                    .y
             ),
             (5.0, 7.0)
         );
@@ -579,5 +777,162 @@ mod tests {
             ),
             (13.0, 10.0)
         );
+    }
+
+    #[test]
+    fn nested_image_transform_layers_preserve_shape_identity_and_clip_facade() {
+        let mut project = library::model::project::Project::new("image transform preview");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 3.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("visual", 0.0, 3.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let mut content = generator_node(
+            "shape",
+            GeneratorNodeRequest::Shape {
+                path: "M0 0 H20 V10 H0 Z".to_string(),
+            },
+        );
+        let content_id = content.id;
+        let plugins = library::plugin::PluginManager::default();
+        let mut shape_transform = plugins.create_shape_transform_operation_node().unwrap();
+        let shape_transform_id = shape_transform.id;
+        let mut inner_image = plugins.create_image_transform_operation_node().unwrap();
+        let inner_image_id = inner_image.id;
+        let mut outer_image = plugins.create_image_transform_operation_node().unwrap();
+        let outer_image_id = outer_image.id;
+        for node in [
+            &mut content,
+            &mut shape_transform,
+            &mut inner_image,
+            &mut outer_image,
+        ] {
+            project.add_node(node.clone());
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), node.id)
+                .unwrap();
+        }
+
+        let mut rendered_object = frame_object(content_id);
+        rendered_object.spatial_transform_node_id = Some(shape_transform_id);
+        rendered_object.spatial_transform = Box::new(Transform {
+            position: Position { x: 40.0, y: 25.0 },
+            ..Transform::default()
+        });
+        rendered_object.content = FrameContent::Shape {
+            path: "M0 0 H20 V10 H0 Z".to_string(),
+            styles: Vec::new(),
+            path_effects: Vec::new(),
+            effects: Vec::new(),
+            ensemble: None,
+            transform: rendered_object.spatial_transform.as_ref().clone(),
+        };
+        let mut inner = frame_group(
+            inner_image_id,
+            FrameGroupKind::ImageTransform,
+            vec![FrameItem::Object(rendered_object)],
+        );
+        inner.transform.position.x = 12.0;
+        let mut outer = frame_group(
+            outer_image_id,
+            FrameGroupKind::ImageTransform,
+            vec![FrameItem::Group(inner)],
+        );
+        outer.transform.rotation = 15.0;
+        let frame = FrameInfo {
+            width: 1920,
+            height: 1080,
+            background_color: Color::black(),
+            color_profile: "sRGB".to_string(),
+            render_scale: OrderedFloat(1.0),
+            now_time: OrderedFloat(0.0),
+            region: None,
+            items: vec![FrameItem::Group(outer)],
+        };
+
+        let visuals = from_evaluated_frame(&project, &frame);
+        let [visual] = visuals.as_slice() else {
+            panic!("nested Image Transform frame must project one visual")
+        };
+        assert_eq!(visual.owner_target, SelectionTarget::Clip(clip_id));
+        assert_eq!(visual.content_id(), content_id);
+        assert_eq!(visual.editable_spatial_id(), Some(outer_image_id));
+        assert_eq!(
+            visual
+                .spatial_layers
+                .iter()
+                .map(|layer| (layer.node.id, layer.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (outer_image_id, PreviewSpatialKind::ImageTransform),
+                (inner_image_id, PreviewSpatialKind::ImageTransform),
+                (shape_transform_id, PreviewSpatialKind::ShapeTransform),
+            ]
+        );
+        assert!(visual.matches_node_id(shape_transform_id));
+        assert!(visual.matches_node_id(inner_image_id));
+        assert_eq!(
+            visual
+                .spatial_layer(inner_image_id)
+                .unwrap()
+                .parent_transform,
+            library::rendering::renderer::Affine2D::from(&visual.spatial_layers[0].transform)
+        );
+        assert!(matches!(
+            resolve_owner_edit_target(&visuals, SelectionTarget::Clip(clip_id)),
+            OwnerEditTargetResolution::Resolved(target)
+                if target.spatial_node_id == Some(outer_image_id)
+                    && target.content_node_id == content_id
+        ));
+    }
+
+    #[test]
+    fn owner_facade_rejects_multiple_independent_spatial_candidates() {
+        let mut project = library::model::project::Project::new("ambiguous facade");
+        let (composition, track) = Composition::new("main", 100, 100, 30.0, 1.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("ambiguous", 0.0, 1.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let mut ids = Vec::new();
+        for name in ["first", "second"] {
+            let node = generator_node(
+                name,
+                GeneratorNodeRequest::SkSL {
+                    shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+                },
+            );
+            ids.push(node.id);
+            project.add_node(node.clone());
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), node.id)
+                .unwrap();
+        }
+        let frame = FrameInfo {
+            width: 100,
+            height: 100,
+            background_color: Color::black(),
+            color_profile: "sRGB".to_string(),
+            render_scale: OrderedFloat(1.0),
+            now_time: OrderedFloat(0.0),
+            region: None,
+            items: ids.iter().copied().map(object).collect(),
+        };
+        let visuals = from_evaluated_frame(&project, &frame);
+        match resolve_owner_edit_target(&visuals, SelectionTarget::Clip(clip_id)) {
+            OwnerEditTargetResolution::Ambiguous { candidate_node_ids } => {
+                assert_eq!(candidate_node_ids.len(), 2);
+                assert!(ids.iter().all(|id| candidate_node_ids.contains(id)));
+            }
+            other => panic!("independent Clip transforms must be ambiguous: {other:?}"),
+        }
     }
 }

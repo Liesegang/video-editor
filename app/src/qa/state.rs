@@ -142,6 +142,14 @@ pub fn snapshot(
                     "{:?}",
                     editor_context.interaction.preview_viewport.primary_gesture
                 ),
+                "edit_target": editor_context.interaction.preview_edit_target.as_ref().map(|target| {
+                    serde_json::json!({
+                        "owner": target.owner,
+                        "content_node_id": target.content_node_id,
+                        "spatial_node_id": target.spatial_node_id,
+                        "instance_path": &target.instance_path,
+                    })
+                }),
                 "modal_error": editor_context.interaction.active_modal_error,
             },
             "node_editor": {
