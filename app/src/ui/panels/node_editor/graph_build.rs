@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::{
     input_definitions, output_definitions, ContainerKind, ContainerVisual, GraphItem,
-    PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
+    PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y,
     MIN_CONTAINER_SIZE,
 };
 
@@ -133,7 +133,7 @@ fn connect_container_output_wires(
                 owner @ (PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_)) => {
                     GraphItem::PortAnchor {
                         owner,
-                        kind: PortAnchorKind::ExternalImage,
+                        kind: PortAnchorKind::ExternalOutputs,
                     }
                 }
             };
@@ -204,7 +204,7 @@ fn insert_container_items(
         },
         GraphItem::PortAnchor {
             owner: visual.owner,
-            kind: PortAnchorKind::ExternalImage,
+            kind: PortAnchorKind::ExternalOutputs,
         },
     ];
 
@@ -240,15 +240,15 @@ pub(super) fn container_item_position(visual: &ContainerVisual, item: GraphItem)
             kind: PortAnchorKind::ImageSink,
             ..
         } => egui::pos2(
-            position.x + size.x - 16.0,
-            position.y + CONTAINER_HEADER_HEIGHT * 0.5,
+            position.x + size.x - 40.0,
+            position.y + CONTAINER_RIGHT_PORT_Y,
         ),
         GraphItem::PortAnchor {
-            kind: PortAnchorKind::ExternalImage,
+            kind: PortAnchorKind::ExternalOutputs,
             ..
         } => egui::pos2(
             position.x + size.x - 2.0,
-            position.y + CONTAINER_HEADER_HEIGHT * 0.5,
+            position.y + CONTAINER_RIGHT_PORT_Y,
         ),
         GraphItem::Node(_) => position,
     }
@@ -265,7 +265,7 @@ fn output_graph_item(project: &Project, address: &PortAddress) -> Option<GraphIt
                 }),
                 PortSide::Right => Some(GraphItem::PortAnchor {
                     owner: address.owner,
-                    kind: PortAnchorKind::ExternalImage,
+                    kind: PortAnchorKind::ExternalOutputs,
                 }),
             }
         }

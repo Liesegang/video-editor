@@ -643,6 +643,11 @@ pub struct NodeEditorState {
     /// uses absolute drag delta and produces one coalesced history entry.
     #[serde(skip)]
     pub container_resize: Option<ContainerResizeState>,
+    /// Most recently rendered Node Editor transform. Custom foreground
+    /// gestures use this one-frame snapshot to capture a press before Snarl's
+    /// background pan handler runs on the next frame.
+    #[serde(skip)]
+    pub node_editor_canvas_transform: Option<egui::emath::TSTransform>,
     /// Dirty inline edit waiting for its gesture/focus boundary. Project
     /// values update on every frame, but history is committed once for this
     /// owner/property pair when the control finishes or the editing context
@@ -773,4 +778,8 @@ pub struct ContainerResizeState {
     pub start_pointer: egui::Pos2,
     pub start_position: [f32; 2],
     pub start_size: [f32; 2],
+    /// Freeze the graph viewport for the complete resize gesture. Otherwise
+    /// Snarl interprets the same primary drag as background pan before the
+    /// custom edge interaction runs.
+    pub canvas_transform: egui::emath::TSTransform,
 }

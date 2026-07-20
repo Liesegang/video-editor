@@ -1,12 +1,11 @@
 use crate::action::HistoryManager;
-#[cfg(test)]
-use crate::state::context_types::{
-    ContainerResizeEdge, ContainerResizeState, NodeEditorEditableWire, NodeEditorWireDragKind,
-    SelectionTarget,
-};
 use crate::state::context_types::{
     ContextMenuState, NodeEditorNodeDragOrigin, NodeEditorPendingEdit, NodeEditorReparentGesture,
     NodeEditorState,
+};
+#[cfg(test)]
+use crate::state::context_types::{
+    NodeEditorEditableWire, NodeEditorWireDragKind, SelectionTarget,
 };
 use crate::ui::widgets::searchable_context_menu::{
     searchable_popup_placement, show_searchable_items_with_qa,
@@ -62,10 +61,11 @@ use types::{
     AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
     AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
     AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP,
-    CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y, DETACHED_GRAPH_NODE_GAP,
+    CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
+    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, DETACHED_GRAPH_NODE_GAP,
     EMBEDDED_PORT_LABEL_INSET, INLINE_CONTROL_WIDTH, MERGE_BODY_WIDTH, MIN_CONTAINER_SIZE,
     NODE_BODY_WIDTH, NODE_HEADER_WIDTH, NODE_REPARENT_DRAG_THRESHOLD,
-    NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
+    NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, PORT_SOCKET_SIZE,
     PROPERTY_LABEL_WIDTH, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH, WIRE_DRAG_THRESHOLD,
     WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS,
 };
@@ -111,8 +111,10 @@ use qa::{
 };
 mod queries;
 
-use interaction::container_resize_interactions;
 use interaction::node_selection_after_snarl_click;
+#[cfg(test)]
+use interaction::resize_regions;
+use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component, segments_intersect};
 use interaction::{edit_for_wire, embedded_pin_center, graph_item_owner};
@@ -124,8 +126,6 @@ use interaction::{
 };
 use interaction::{overview_wire_graph_points, wire_interactions, WireInteractionFrame};
 use interaction::{register_container_chrome, register_rendered_edges};
-#[cfg(test)]
-use interaction::{resize_regions, resized_container_geometry};
 #[cfg(test)]
 use queries::clip_is_active;
 pub(super) use queries::node_timing_drag_config;
@@ -5313,7 +5313,7 @@ mod tests {
             }));
             assert!(items.contains(&GraphItem::PortAnchor {
                 owner,
-                kind: PortAnchorKind::ExternalImage,
+                kind: PortAnchorKind::ExternalOutputs,
             }));
             assert_eq!(
                 input_definitions(
@@ -5474,47 +5474,6 @@ mod tests {
                 .is_some_and(egui::Rect::is_positive),
             "missing evaluator-derived Clip → Track edge"
         );
-    }
-
-    #[test]
-    fn edge_and_corner_resize_geometry_is_absolute_and_preserves_children() {
-        let owner = PortOwner::Clip(Uuid::from_u128(0x99));
-        let base = ContainerResizeState {
-            owner,
-            edge: ContainerResizeEdge::Right,
-            start_pointer: egui::pos2(0.0, 0.0),
-            start_position: [100.0, 120.0],
-            start_size: [500.0, 300.0],
-        };
-        let (position, size) = resized_container_geometry(&base, egui::vec2(40.0, 70.0), None);
-        assert_eq!(position, [100.0, 120.0]);
-        assert_eq!(size, [540.0, 300.0]);
-
-        let corner = ContainerResizeState {
-            edge: ContainerResizeEdge::BottomRight,
-            ..base
-        };
-        let (position, size) = resized_container_geometry(&corner, egui::vec2(40.0, 70.0), None);
-        assert_eq!(position, [100.0, 120.0]);
-        assert_eq!(size, [540.0, 370.0]);
-
-        let children = egui::Rect::from_min_max(egui::pos2(180.0, 230.0), egui::pos2(650.0, 460.0));
-        let shrinking = ContainerResizeState {
-            edge: ContainerResizeEdge::BottomRight,
-            ..base
-        };
-        let (position, size) =
-            resized_container_geometry(&shrinking, egui::vec2(-400.0, -300.0), Some(children));
-        let result = container_rect(position, size);
-        assert!(result.right() >= children.right() + AUTO_LAYOUT_NODE_PADDING - 0.01);
-        assert!(result.bottom() >= children.bottom() + AUTO_LAYOUT_NODE_PADDING - 0.01);
-
-        let regions = resize_regions(egui::Rect::from_min_size(
-            egui::pos2(20.0, 30.0),
-            egui::vec2(500.0, 300.0),
-        ));
-        assert_eq!(regions.len(), 8);
-        assert!(regions.iter().all(|(_, _, rect, _)| rect.is_positive()));
     }
 
     #[test]
@@ -7306,18 +7265,18 @@ mod tests {
             .is_some_and(|(clip, before)| {
                 clip.ui_position[0] < before[0] && clip.ui_position[1] < before[1]
             }));
-        assert!(project
-            .get_track(track_id)
-            .zip(track_before)
-            .is_some_and(|(track, before)| {
-                track.ui_position[0] < before[0] && track.ui_position[1] < before[1]
-            }));
-        assert!(project
-            .get_composition(composition_id)
-            .zip(composition_before)
-            .is_some_and(|(composition, before)| {
-                composition.ui_position[0] < before[0] && composition.ui_position[1] < before[1]
-            }));
+        assert_eq!(
+            project.get_track(track_id).map(|track| track.ui_position),
+            track_before,
+            "the reduced port rail leaves enough track content space to contain the grown clip"
+        );
+        assert_eq!(
+            project
+                .get_composition(composition_id)
+                .map(|composition| composition.ui_position),
+            composition_before,
+            "the composition must not drift when its content already contains the track"
+        );
 
         let Some(clip) = project.get_clip(clip_id) else {
             return;

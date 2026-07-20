@@ -11,6 +11,62 @@ use crate::ui::panels::node_editor::{
     CONTAINER_HEADER_HEIGHT, MIN_CONTAINER_SIZE, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH,
 };
 
+/// Capture a resize press before Snarl gets a chance to treat the same
+/// primary gesture as background pan. Geometry comes from the previous
+/// completed frame, which is also the source of the HTTP QA component rects.
+pub(in crate::ui::panels::node_editor) fn capture_container_resize_before_canvas(
+    ui: &egui::Ui,
+    containers: &[ContainerVisual],
+    to_global: egui::emath::TSTransform,
+    canvas_clip: egui::Rect,
+    state: &mut NodeEditorState,
+) -> bool {
+    if state.container_resize.is_some()
+        || !node_editor_resize_interactions_enabled(to_global.scaling)
+    {
+        return state.container_resize.is_some();
+    }
+    let Some(pointer) = ui.input(|input| {
+        input
+            .pointer
+            .primary_pressed()
+            .then(|| input.pointer.interact_pos())
+            .flatten()
+    }) else {
+        return false;
+    };
+    let Some((container, edge)) = resize_hit(containers, to_global, canvas_clip, pointer) else {
+        return false;
+    };
+    state.container_resize = Some(ContainerResizeState {
+        owner: container.owner,
+        edge,
+        start_pointer: pointer,
+        start_position: container.position,
+        start_size: container.size,
+        canvas_transform: to_global,
+    });
+    true
+}
+
+fn resize_hit(
+    containers: &[ContainerVisual],
+    to_global: egui::emath::TSTransform,
+    canvas_clip: egui::Rect,
+    pointer: egui::Pos2,
+) -> Option<(&ContainerVisual, ContainerResizeEdge)> {
+    containers.iter().rev().find_map(|container| {
+        if container.collapsed {
+            return None;
+        }
+        let global = to_global * container.rect();
+        resize_regions(global)
+            .into_iter()
+            .find(|(_, _, rect, _)| rect.intersect(canvas_clip).contains(pointer))
+            .map(|(edge, _, _, _)| (container, edge))
+    })
+}
+
 pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
     ui: &mut egui::Ui,
     project: &Project,
@@ -84,6 +140,7 @@ pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
                 start_pointer: position,
                 start_position: container.position,
                 start_size: container.size,
+                canvas_transform: to_global,
             });
         }
     }
@@ -303,4 +360,106 @@ pub(in crate::ui::panels::node_editor) fn container_child_bounds(
         PortOwner::Node(_) => return None,
     }
     rect.is_positive().then_some(rect)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::panels::node_editor::{resolve_node_editor_transform, ContainerKind};
+    use uuid::Uuid;
+
+    #[test]
+    fn edge_and_corner_resize_geometry_is_absolute_and_preserves_children() {
+        let base = ContainerResizeState {
+            owner: PortOwner::Clip(Uuid::from_u128(0x99)),
+            edge: ContainerResizeEdge::Right,
+            start_pointer: egui::pos2(0.0, 0.0),
+            start_position: [100.0, 120.0],
+            start_size: [500.0, 300.0],
+            canvas_transform: egui::emath::TSTransform::IDENTITY,
+        };
+        let (position, size) = resized_container_geometry(&base, egui::vec2(40.0, 70.0), None);
+        assert_eq!(position, [100.0, 120.0]);
+        assert_eq!(size, [540.0, 300.0]);
+
+        let corner = ContainerResizeState {
+            edge: ContainerResizeEdge::BottomRight,
+            ..base
+        };
+        let (position, size) = resized_container_geometry(&corner, egui::vec2(40.0, 70.0), None);
+        assert_eq!(position, [100.0, 120.0]);
+        assert_eq!(size, [540.0, 370.0]);
+
+        let children = egui::Rect::from_min_max(egui::pos2(180.0, 230.0), egui::pos2(650.0, 460.0));
+        let shrinking = ContainerResizeState {
+            edge: ContainerResizeEdge::BottomRight,
+            ..base
+        };
+        let (position, size) =
+            resized_container_geometry(&shrinking, egui::vec2(-400.0, -300.0), Some(children));
+        let result = container_rect(position, size);
+        assert!(result.right() >= children.right() + AUTO_LAYOUT_NODE_PADDING - 0.01);
+        assert!(result.bottom() >= children.bottom() + AUTO_LAYOUT_NODE_PADDING - 0.01);
+
+        let regions = resize_regions(egui::Rect::from_min_size(
+            egui::pos2(20.0, 30.0),
+            egui::vec2(500.0, 300.0),
+        ));
+        assert_eq!(regions.len(), 8);
+        assert!(regions.iter().all(|(_, _, rect, _)| rect.is_positive()));
+    }
+
+    #[test]
+    fn resize_press_is_captured_before_canvas_pan_and_freezes_transform() {
+        let visual = ContainerVisual {
+            owner: PortOwner::Track(Uuid::from_u128(0x5151)),
+            kind: ContainerKind::Track,
+            position: [100.0, 80.0],
+            size: [600.0, 420.0],
+            collapsed: false,
+        };
+        let transform = egui::emath::TSTransform::new(egui::vec2(35.0, 21.0), 0.8);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let edge = (transform * visual.rect()).right_center();
+        let context = egui::Context::default();
+        let mut state = NodeEditorState::default();
+
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events: vec![
+                    egui::Event::PointerMoved(edge),
+                    egui::Event::PointerButton {
+                        pos: edge,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    assert!(capture_container_resize_before_canvas(
+                        ui,
+                        std::slice::from_ref(&visual),
+                        transform,
+                        screen,
+                        &mut state,
+                    ));
+                });
+            },
+        );
+        assert!(!output.shapes.is_empty());
+
+        let resize = state.container_resize.expect("captured resize gesture");
+        assert_eq!(resize.edge, ContainerResizeEdge::Right);
+        assert_eq!(resize.canvas_transform, transform);
+        let mut scene_pan = egui::emath::TSTransform::new(
+            transform.translation + egui::vec2(180.0, 90.0),
+            transform.scaling,
+        );
+        resolve_node_editor_transform(&mut scene_pan, Some(resize.canvas_transform));
+        assert_eq!(scene_pan, transform);
+    }
 }
