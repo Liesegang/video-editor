@@ -11548,7 +11548,8 @@ mod tests {
         project
             .get_node_mut(solid_id)
             .unwrap()
-            .set_property("animated".to_string(), animated.clone());
+            .set_property("opacity".to_string(), animated.clone())
+            .expect("solid factory initializes opacity");
 
         let global_time = 6.0;
         let inspector_and_renderer_time =
@@ -11563,7 +11564,7 @@ mod tests {
                 .get_node(solid_id)
                 .unwrap()
                 .properties()
-                .get("animated")
+                .get("opacity")
                 .unwrap()
                 .evaluate_at(node_property_time(&project, solid_id, global_time)),
             PropertyValue::Number(OrderedFloat(42.5))
@@ -11573,7 +11574,7 @@ mod tests {
             &mut project,
             NodeEdit::SetProperty {
                 owner: PortOwner::Node(solid_id),
-                key: "animated".into(),
+                key: "opacity".into(),
                 time: inspector_and_renderer_time,
                 value: PropertyValue::Number(OrderedFloat(91.0)),
             }
@@ -11582,7 +11583,7 @@ mod tests {
             .get_node(solid_id)
             .unwrap()
             .properties()
-            .get("animated")
+            .get("opacity")
             .unwrap();
         assert_eq!(
             clip_node_property.evaluate_at(inspector_and_renderer_time),
@@ -11592,9 +11593,15 @@ mod tests {
         assert!(!clip_node_property.has_keyframe_at(global_time, 0.001));
 
         let root_id = Uuid::from_u128(0x9_101);
-        let mut root = Node::new_merge("Root");
+        let mut root = generator_node(
+            "Root",
+            GeneratorNodeRequest::Solid {
+                color: Color::default(),
+            },
+        );
         root.id = root_id;
-        root.set_property("animated".to_string(), animated);
+        root.set_property("opacity".to_string(), animated)
+            .expect("solid factory initializes opacity");
         project.add_node(root);
         project
             .attach_node_to_container(NodeContainer::Composition(composition_id), root_id)
@@ -11609,7 +11616,7 @@ mod tests {
             &mut project,
             NodeEdit::SetProperty {
                 owner: PortOwner::Node(root_id),
-                key: "animated".into(),
+                key: "opacity".into(),
                 time: root_property_time,
                 value: PropertyValue::Number(OrderedFloat(55.0)),
             }
@@ -11618,7 +11625,7 @@ mod tests {
             .get_node(root_id)
             .unwrap()
             .properties()
-            .get("animated")
+            .get("opacity")
             .unwrap();
         assert!(root_property.has_keyframe_at(global_time, 0.001));
         assert_eq!(

@@ -64,12 +64,12 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let NodeContent::Generator(GeneratorContent::Solid) = &node.content else {
+        let NodeContent::Generator(GeneratorContent::Solid) = node.content() else {
             return None;
         };
         let eval_time = time;
-        let transform = evaluator.build_transform(&node.properties, eval_time);
-        let color = evaluator.require_color(&node.properties, "color", eval_time, "solid")?;
+        let transform = evaluator.build_transform(node.properties(), eval_time);
+        let color = evaluator.require_color(node.properties(), "color", eval_time, "solid")?;
         let (width, height) = evaluator.evaluation_resolution();
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
 

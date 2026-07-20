@@ -33,7 +33,8 @@ const HEIGHT: u32 = 80;
 const FPS: f64 = 10.0;
 
 fn set(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value))
+        .expect("factory initializes the test property");
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {

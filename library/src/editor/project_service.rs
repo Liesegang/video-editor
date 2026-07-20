@@ -296,12 +296,8 @@ impl ProjectManager {
             }
             None => Vec::new(),
         };
-        let mut properties = PropertyMap::from_definitions(&definitions);
-        properties.set(
-            "file_path".to_string(),
-            Property::constant(PropertyValue::String(file_path)),
-        );
-        Ok(Node::new_media(name, content, properties))
+        Node::from_media_converter(name, content, &definitions, file_path)
+            .map_err(LibraryError::Validation)
     }
 
     /// Builds a detached Text -> Fill graph. Text produces only Shape; Fill is
@@ -708,7 +704,7 @@ impl ProjectManager {
         let media_node_ids: Vec<Uuid> = project_write
             .nodes
             .values()
-            .filter_map(|node| match &node.content {
+            .filter_map(|node| match node.content() {
                 NodeContent::Media(media) if media.asset_id == asset_id => Some(node.id),
                 _ => None,
             })
@@ -1298,7 +1294,7 @@ impl ProjectManager {
             };
 
         // Resolve clip dimensions
-        let (clip_width, clip_height): (u64, u64) = match &node.content {
+        let (clip_width, clip_height): (u64, u64) = match node.content() {
             NodeContent::Media(m) => {
                 // If asset is loaded, get dimensions
                 if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
@@ -1311,15 +1307,15 @@ impl ProjectManager {
                 }
             }
             NodeContent::Generator(GeneratorContent::Shape) => {
-                let w = node.properties.get_f64("width").unwrap_or(100.0) as u64;
-                let h = node.properties.get_f64("height").unwrap_or(100.0) as u64;
+                let w = node.properties().get_f64("width").unwrap_or(100.0) as u64;
+                let h = node.properties().get_f64("height").unwrap_or(100.0) as u64;
                 (w, h)
             }
             NodeContent::Generator(GeneratorContent::Text) => {
-                let size = node.properties.get_f64("size").unwrap_or(100.0) as f32;
-                let text = node.properties.get_string("text").unwrap_or_default();
+                let size = node.properties().get_f64("size").unwrap_or(100.0) as f32;
+                let text = node.properties().get_string("text").unwrap_or_default();
                 let font = node
-                    .properties
+                    .properties()
                     .get_string("font_family")
                     .unwrap_or_else(|| DEFAULT_TEXT_FONT.to_string());
                 let (w, h) = measure_text_size(&text, &font, size);
@@ -1332,7 +1328,7 @@ impl ProjectManager {
         // Key for entity converter: "video", "image", "text", "shape", "sksl"
         // In Trinity, LayerContent doesn't store "Kind" string.
         // We infer key from content.
-        let kind_key = match &node.content {
+        let kind_key = match node.content() {
             NodeContent::Media(m) => {
                 if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
                     match asset.kind {
@@ -1354,7 +1350,7 @@ impl ProjectManager {
 
         let converter = self.plugin_manager.get_entity_converter(kind_key);
 
-        let mut definitions = match &node.content {
+        let mut definitions = match node.content() {
             NodeContent::Value(value) => value.property_definitions().to_vec(),
             _ => converter.map_or_else(Vec::new, |converter| {
                 converter.get_property_definitions(
@@ -1396,7 +1392,7 @@ impl ProjectManager {
 #[cfg(test)]
 mod keyframe_tests {
     use super::*;
-    use crate::editor::handlers::property_ops::PropertyOwner;
+    use crate::PropertyOwner;
     use crate::model::project::NodeContainer;
     use crate::model::property::{Property, PropertyValue};
 
@@ -1459,7 +1455,7 @@ mod keyframe_tests {
                 PropertyValue::Number(OrderedFloat(100.0)),
                 Some(crate::animation::EasingFunction::EaseOutQuad),
             )
-            .expect("service should promote a missing property");
+            .expect("service should promote an initialized constant property");
         manager
             .update_keyframe_by_id(
                 owner,
@@ -1566,6 +1562,63 @@ mod keyframe_tests {
         }
     }
 
+    struct InvalidImageMetadataProbe;
+
+    impl crate::plugin::Plugin for InvalidImageMetadataProbe {
+        fn id(&self) -> &str {
+            "test.invalid-image-metadata"
+        }
+
+        fn name(&self) -> String {
+            "Invalid Image Metadata".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Converter".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl crate::plugin::EntityConverterPlugin for InvalidImageMetadataProbe {
+        fn supports_kind(&self, kind: &str) -> bool {
+            kind == "image"
+        }
+
+        fn convert_entity(
+            &self,
+            _evaluator: &crate::plugin::FrameEvaluationContext,
+            _layer: &Node,
+            _time: f64,
+        ) -> Option<crate::model::frame::entity::FrameObject> {
+            None
+        }
+
+        fn get_property_definitions(
+            &self,
+            _canvas_width: u64,
+            _canvas_height: u64,
+            _clip_width: u64,
+            _clip_height: u64,
+        ) -> Vec<PropertyDefinition> {
+            vec![PropertyDefinition::new(
+                "broken_scale",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 10.0,
+                    step: 0.0,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
+                },
+                "Broken Scale",
+                PropertyValue::Number(OrderedFloat(1.0)),
+            )]
+        }
+    }
+
     #[test]
     fn audio_media_factory_materializes_registered_optional_converter_defaults() {
         let plugins = Arc::new(PluginManager::default());
@@ -1600,6 +1653,37 @@ mod keyframe_tests {
             node.properties().get("file_path").and_then(Property::value),
             Some(&PropertyValue::String("sound.wav".to_string()))
         );
+    }
+
+    #[test]
+    fn media_factory_rejects_invalid_converter_property_metadata() {
+        let plugins = Arc::new(PluginManager::new());
+        plugins.register_entity_converter_plugin(Arc::new(InvalidImageMetadataProbe));
+        let manager = ProjectManager::new(
+            Arc::new(RwLock::new(Project::new("invalid media metadata"))),
+            plugins,
+        );
+
+        let error = manager
+            .create_media_node(
+                "Image",
+                MediaNodeRequest::Image {
+                    asset_id: Uuid::new_v4(),
+                    file_path: "broken.png".to_string(),
+                },
+                1920,
+                1080,
+                64,
+                64,
+            )
+            .expect_err("zero Float step must be rejected before Node creation");
+
+        assert!(matches!(
+            error,
+            LibraryError::Validation(message)
+                if message.contains("broken_scale")
+                    && message.contains("step must be greater than zero")
+        ));
     }
 
     #[test]
@@ -1754,11 +1838,11 @@ mod keyframe_tests {
             .graph
             .nodes
             .iter()
-            .find(|node| node.content == direct_text.content)
+            .find(|node| node.content() == direct_text.content())
             .expect("text clip must retain the bare Shape source");
-        assert_eq!(clip_text.properties, direct_text.properties);
+        assert_eq!(clip_text.properties(), direct_text.properties());
         assert!(matches!(
-            text_bundle.primary_node().map(|node| &node.content),
+            text_bundle.primary_node().map(Node::content),
             Some(NodeContent::PluginOperation(_))
         ));
         assert_eq!(text_bundle.graph.nodes.len(), 2);
@@ -1776,11 +1860,11 @@ mod keyframe_tests {
             .graph
             .nodes
             .iter()
-            .find(|node| node.content == direct_shape.content)
+            .find(|node| node.content() == direct_shape.content())
             .expect("shape clip must retain the bare Shape source");
-        assert_eq!(clip_shape.properties, direct_shape.properties);
+        assert_eq!(clip_shape.properties(), direct_shape.properties());
         assert!(matches!(
-            shape_bundle.primary_node().map(|node| &node.content),
+            shape_bundle.primary_node().map(Node::content),
             Some(NodeContent::Merge)
         ));
         assert_eq!(shape_bundle.graph.nodes.len(), 4);
@@ -1803,8 +1887,8 @@ mod keyframe_tests {
         let Some(clip_sksl) = sksl_bundle.primary_node() else {
             panic!("SkSL clip should have one output node");
         };
-        assert_eq!(clip_sksl.content, direct_sksl.content);
-        assert_eq!(clip_sksl.properties, direct_sksl.properties);
+        assert_eq!(clip_sksl.content(), direct_sksl.content());
+        assert_eq!(clip_sksl.properties(), direct_sksl.properties());
     }
 
     fn manager_with_empty_clip() -> (Arc<RwLock<Project>>, ProjectManager, Uuid, Uuid) {
@@ -1845,7 +1929,7 @@ mod keyframe_tests {
             .values()
             .find(|node| {
                 matches!(
-                    &node.content,
+                    node.content(),
                     NodeContent::PluginOperation(operation)
                         if operation.category == "effector" && operation.component_id == "opacity"
                 )
@@ -1875,7 +1959,12 @@ mod keyframe_tests {
         let source_id = graph
             .nodes
             .iter()
-            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::Generator(GeneratorContent::Text)
+                )
+            })
             .unwrap()
             .id;
         let original = graph
@@ -1914,7 +2003,7 @@ mod keyframe_tests {
             .iter()
             .find(|node| {
                 matches!(
-                    node.content,
+                    node.content(),
                     NodeContent::Generator(GeneratorContent::Shape)
                 )
             })
@@ -1990,7 +2079,7 @@ mod keyframe_tests {
             .values()
             .find(|node| {
                 matches!(
-                    &node.content,
+                    node.content(),
                     NodeContent::PluginOperation(operation)
                         if operation.category == "decorator"
                             && operation.component_id == "backplate"

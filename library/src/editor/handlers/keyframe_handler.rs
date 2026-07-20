@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 
-use super::property_ops::{PropertyOwner, property_map, property_map_mut};
+use super::property_ops::{self, PropertyOwner, property_map};
 use crate::model::project::Project;
 use crate::model::property::{KeyframeId, KeyframeUpdate, Property, PropertyValue};
 use std::collections::{HashMap, hash_map::Entry};
@@ -53,13 +53,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner)?;
-
-        prop_map
-            .upsert_keyframe_with_id(property_key, time, value, easing)
-            .ok_or_else(|| {
-                LibraryError::Project(format!("Property {} cannot be keyframed", property_key))
-            })
+        property_ops::upsert_keyframe_with_id(&mut proj, owner, property_key, time, value, easing)
     }
 
     /// Update a keyframe by persistent model identity. Prefer this for any
@@ -75,18 +69,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner)?;
-        let property = prop_map
-            .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-        if !property.update_keyframe_by_id(keyframe_id, update) {
-            return Err(LibraryError::Project(format!(
-                "Failed to update keyframe {keyframe_id} for property {property_key}"
-            )));
-        }
-
-        Ok(())
+        property_ops::update_keyframe_by_id(&mut proj, owner, property_key, keyframe_id, update)
     }
 
     /// Atomically update keyframes across property owners.
@@ -154,12 +137,17 @@ impl KeyframeHandler {
             }
         }
         for (address, property) in staged {
-            let map = property_map_mut(&mut project, address.owner).map_err(|_| {
+            property_ops::replace_property(
+                &mut project,
+                address.owner,
+                &address.property_key,
+                property,
+            )
+            .map_err(|_| {
                 LibraryError::Runtime(
                     "Validated property owner changed while its write lock was held".to_string(),
                 )
             })?;
-            map.set(address.property_key, property);
         }
 
         Ok(())
@@ -176,18 +164,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner)?;
-        let property = prop_map
-            .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-        if !property.remove_keyframe_by_id(keyframe_id) {
-            return Err(LibraryError::Project(format!(
-                "Failed to remove keyframe {keyframe_id} for property {property_key}"
-            )));
-        }
-
-        Ok(())
+        property_ops::remove_keyframe_by_id(&mut proj, owner, property_key, keyframe_id)
     }
 }
 
@@ -197,8 +174,8 @@ mod tests {
     use crate::animation::EasingFunction;
     use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::frame::color::Color;
-    use crate::model::property::{Keyframe, PropertyMap, PropertyValue};
-    use crate::model::{Node, PluginOperationContent};
+    use crate::model::property::{Keyframe, PropertyValue};
+    use crate::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
     fn number(value: f64) -> PropertyValue {
@@ -233,7 +210,7 @@ mod tests {
             number(10.0),
             None,
         )
-        .expect("missing property should be promoted");
+        .expect("initialized constant property should be promoted");
         let stationary_id = KeyframeHandler::add_keyframe_with_id(
             &project,
             owner,
@@ -271,7 +248,7 @@ mod tests {
         let read = project.read().expect("project should remain readable");
         let property = read
             .get_node(node_id)
-            .and_then(|node| node.properties.get("opacity"))
+            .and_then(|node| node.properties().get("opacity"))
             .expect("keyframed property should exist");
         assert_eq!(
             property
@@ -293,52 +270,72 @@ mod tests {
     fn batch_updates_direct_properties_on_operation_nodes_atomically() {
         let mut model = Project::new("atomic keyframe batch");
         let mut addresses = Vec::new();
-        for (category, initial, updated) in [
-            ("effect", 10.0, 11.0),
-            ("style", 20.0, 21.0),
-            ("effector", 30.0, 31.0),
-            ("decorator", 40.0, 41.0),
-        ] {
+        let plugins = PluginManager::default();
+        let cases = [
+            (
+                plugins.create_effect_operation_node("blur"),
+                "sigma_x",
+                10.0,
+                11.0,
+            ),
+            (
+                plugins.create_style_operation_node("fill"),
+                "opacity",
+                20.0,
+                21.0,
+            ),
+            (
+                plugins.create_effector_operation_node("opacity"),
+                "opacity",
+                30.0,
+                31.0,
+            ),
+            (
+                plugins.create_decorator_operation_node("backplate"),
+                "padding",
+                40.0,
+                41.0,
+            ),
+        ];
+        for (node, property_key, initial, updated) in cases {
             let (property, keyframe_id) = keyframed(initial);
-            let mut properties = PropertyMap::new();
-            properties.set("amount".to_string(), property);
-            let node = Node::new_plugin_operation(
-                category,
-                PluginOperationContent {
-                    category: category.to_string(),
-                    component_id: "test".to_string(),
-                    operation: "test.apply.v1".to_string(),
-                    declared_ports: Vec::new(),
-                },
-                properties,
-            );
-            addresses.push((PropertyOwner::Node(node.id), keyframe_id, updated));
+            let mut node = node.expect("registered operation creates a complete Node");
+            node.set_property(property_key.to_string(), property)
+                .expect("registered descriptor initializes its property");
+            addresses.push((
+                PropertyOwner::Node(node.id),
+                property_key,
+                keyframe_id,
+                updated,
+            ));
             model.add_node(node);
         }
         let project = Arc::new(RwLock::new(model));
         let updates = addresses
             .iter()
-            .map(|(owner, keyframe_id, value)| KeyframeBatchUpdate {
-                owner: *owner,
-                property_key: "amount".to_string(),
-                keyframe_id: *keyframe_id,
-                update: KeyframeUpdate {
-                    time: Some(2.0),
-                    value: Some(number(*value)),
-                    ..Default::default()
+            .map(
+                |(owner, property_key, keyframe_id, value)| KeyframeBatchUpdate {
+                    owner: *owner,
+                    property_key: (*property_key).to_string(),
+                    keyframe_id: *keyframe_id,
+                    update: KeyframeUpdate {
+                        time: Some(2.0),
+                        value: Some(number(*value)),
+                        ..Default::default()
+                    },
                 },
-            })
+            )
             .collect::<Vec<_>>();
 
         KeyframeHandler::update_keyframes_batch(&project, &updates)
             .expect("all operation Nodes should update in one batch");
         let read = project.read().unwrap();
-        for (owner, keyframe_id, value) in &addresses {
+        for (owner, property_key, keyframe_id, value) in &addresses {
             let keyframe = read
                 .get_node(owner.id())
                 .unwrap()
-                .properties
-                .get("amount")
+                .properties()
+                .get(property_key)
                 .unwrap()
                 .keyframe_by_id(*keyframe_id)
                 .unwrap();
@@ -348,12 +345,12 @@ mod tests {
         drop(read);
 
         let before_rejected_batch = project.read().unwrap().clone();
-        let (first_owner, first_keyframe_id, _) = addresses[0];
-        let (second_owner, _, _) = addresses[1];
+        let (first_owner, first_property_key, first_keyframe_id, _) = addresses[0];
+        let (second_owner, second_property_key, _, _) = addresses[1];
         let rejected = [
             KeyframeBatchUpdate {
                 owner: first_owner,
-                property_key: "amount".to_string(),
+                property_key: first_property_key.to_string(),
                 keyframe_id: first_keyframe_id,
                 update: KeyframeUpdate {
                     value: Some(number(999.0)),
@@ -362,7 +359,7 @@ mod tests {
             },
             KeyframeBatchUpdate {
                 owner: second_owner,
-                property_key: "amount".to_string(),
+                property_key: second_property_key.to_string(),
                 keyframe_id: KeyframeId::new(),
                 update: KeyframeUpdate {
                     value: Some(number(999.0)),

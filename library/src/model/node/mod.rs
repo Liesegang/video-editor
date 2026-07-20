@@ -304,14 +304,14 @@ impl Clip {
 pub struct Node {
     pub id: Uuid,
     pub name: String,
-    pub(crate) content: NodeContent,
+    content: NodeContent,
     /// Authoritative authored evaluation state. Disabled Nodes produce
     /// NoOutput before resolving descriptors, properties, or upstream values.
     pub enabled: bool,
     #[serde(default)]
     pub blend_mode: BlendMode,
     #[serde(default)]
-    pub(crate) properties: PropertyMap,
+    properties: PropertyMap,
     #[serde(default)]
     pub ui_position: [f32; 2],
     /// Authoritative Node Editor presentation state. These fields deliberately
@@ -326,10 +326,30 @@ impl Node {
         Self::with_properties(name, NodeContent::Merge, PropertyMap::new())
     }
 
-    /// Creates a media source. Converter-backed media properties are populated
-    /// by the editor factory that owns the relevant asset/canvas context.
-    pub(crate) fn new_media(name: &str, content: MediaContent, properties: PropertyMap) -> Self {
-        Self::with_properties(name, NodeContent::Media(content), properties)
+    /// Completion point for converter-backed Media Nodes. Definitions are
+    /// validated and materialized here so no caller can inject or omit a raw
+    /// property map after selecting the Media content variant.
+    pub(crate) fn from_media_converter(
+        name: &str,
+        content: MediaContent,
+        definitions: &[PropertyDefinition],
+        file_path: String,
+    ) -> Result<Self, String> {
+        let mut properties = Self::default_properties("Media converter", definitions, true)?;
+        if properties.get("file_path").is_some() {
+            return Err(
+                "Media converter must not declare reserved property 'file_path'".to_string(),
+            );
+        }
+        properties.set(
+            "file_path".to_string(),
+            Property::constant(PropertyValue::String(file_path)),
+        );
+        Ok(Self::with_properties(
+            name,
+            NodeContent::Media(content),
+            properties,
+        ))
     }
 
     /// Creates a composition/reference source.
@@ -337,15 +357,19 @@ impl Node {
         Self::with_properties(name, NodeContent::Reference(content), PropertyMap::new())
     }
 
-    /// Completion point for descriptor-backed Plugin operations. Downstream
-    /// callers cannot invoke this; `OperationDescriptor::create_node` owns the
-    /// public construction path and immediately materializes its definitions.
-    pub(crate) fn new_plugin_operation(
-        name: &str,
-        content: PluginOperationContent,
-        properties: PropertyMap,
-    ) -> Self {
-        Self::with_properties(name, NodeContent::PluginOperation(content), properties)
+    /// Completion point for descriptor-backed Plugin operations. The property
+    /// map is always derived from the validated definitions; neither external
+    /// nor internal callers can pair arbitrary content with a detached map.
+    pub(crate) fn from_operation_parts(
+        parts: crate::plugin::OperationNodeParts,
+    ) -> Result<Self, String> {
+        let (name, content, definitions) = parts.into_node_data();
+        let properties = Self::default_properties("Plugin operation", &definitions, true)?;
+        Ok(Self::with_properties(
+            &name,
+            NodeContent::PluginOperation(content),
+            properties,
+        ))
     }
 
     /// Validated completion point for converter-backed native Generators.
@@ -424,6 +448,32 @@ impl Node {
         }
     }
 
+    fn default_properties(
+        source: &str,
+        definitions: &[PropertyDefinition],
+        allow_empty: bool,
+    ) -> Result<PropertyMap, String> {
+        if definitions.is_empty() && !allow_empty {
+            return Err(format!("{source} declared no properties"));
+        }
+        let mut names = std::collections::HashSet::with_capacity(definitions.len());
+        for definition in definitions {
+            definition.validate_definition().map_err(|error| {
+                format!(
+                    "{source} property '{}' has invalid metadata: {error}",
+                    definition.name()
+                )
+            })?;
+            if !names.insert(definition.name()) {
+                return Err(format!(
+                    "{source} declared duplicate property '{}'",
+                    definition.name()
+                ));
+            }
+        }
+        Ok(PropertyMap::from_definitions(definitions))
+    }
+
     /// Persisted execution kind. Content is immutable through the public
     /// authoring API; use the typed factories to create a different kind.
     pub fn content(&self) -> &NodeContent {
@@ -436,14 +486,18 @@ impl Node {
         &self.properties
     }
 
-    /// Inserts or replaces one authored value without permitting wholesale
-    /// removal of the factory-materialized property contract.
-    pub fn set_property(&mut self, key: String, property: Property) {
+    /// Replaces one factory-declared authored property. Unknown keys are not
+    /// inserted: adding a key requires a definition-backed factory or an
+    /// explicit persisted Serde payload.
+    pub fn set_property(&mut self, key: String, property: Property) -> Result<(), String> {
+        if self.properties.get(&key).is_none() {
+            return Err(format!(
+                "Node '{}' has no initialized property '{key}'",
+                self.name
+            ));
+        }
         self.properties.set(key, property);
-    }
-
-    pub(crate) fn properties_mut(&mut self) -> &mut PropertyMap {
-        &mut self.properties
+        Ok(())
     }
 
     /// Creates a native scalar node for explicit timeline-time remapping.
@@ -468,8 +522,57 @@ impl Node {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> bool {
+        if self.properties.get(property_key).is_none() {
+            return false;
+        }
         self.properties
             .update_property_or_keyframe(property_key, time, value, easing);
+        true
+    }
+
+    pub(crate) fn upsert_keyframe_with_id(
+        &mut self,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Option<crate::model::property::KeyframeId> {
+        self.properties.get(property_key)?;
+        self.properties
+            .upsert_keyframe_with_id(property_key, time, value, easing)
+    }
+
+    pub(crate) fn update_keyframe_by_id(
+        &mut self,
+        property_key: &str,
+        keyframe_id: crate::model::property::KeyframeId,
+        update: crate::model::property::KeyframeUpdate,
+    ) -> bool {
+        self.properties
+            .get_mut(property_key)
+            .is_some_and(|property| property.update_keyframe_by_id(keyframe_id, update))
+    }
+
+    pub(crate) fn remove_keyframe_by_id(
+        &mut self,
+        property_key: &str,
+        keyframe_id: crate::model::property::KeyframeId,
+    ) -> bool {
+        self.properties
+            .get_mut(property_key)
+            .is_some_and(|property| property.remove_keyframe_by_id(keyframe_id))
+    }
+
+    pub(crate) fn set_property_attribute(
+        &mut self,
+        property_key: &str,
+        attribute_key: String,
+        attribute_value: PropertyValue,
+    ) -> bool {
+        let Some(property) = self.properties.get_mut(property_key) else {
+            return false;
+        };
+        property.properties.insert(attribute_key, attribute_value);
         true
     }
 }
@@ -655,5 +758,30 @@ mod tests {
         );
         assert!(loaded.properties().iter().next().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn authored_edits_cannot_extend_a_factory_property_contract() {
+        let mut node = Node::new_time_modulo("sealed property contract");
+        let unknown = Property::constant(PropertyValue::Number(OrderedFloat(2.0)));
+
+        assert!(node.set_property("unknown".to_string(), unknown).is_err());
+        assert!(!node.update_property_or_keyframe(
+            "unknown",
+            0.0,
+            PropertyValue::Number(OrderedFloat(2.0)),
+            None,
+        ));
+        assert!(
+            node.upsert_keyframe_with_id(
+                "unknown",
+                0.0,
+                PropertyValue::Number(OrderedFloat(2.0)),
+                None,
+            )
+            .is_none()
+        );
+        assert!(node.properties().get("unknown").is_none());
+        assert!(node.properties().get(TIME_MODULO_PERIOD_PROPERTY).is_some());
     }
 }

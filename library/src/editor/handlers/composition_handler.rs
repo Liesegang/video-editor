@@ -99,7 +99,7 @@ impl CompositionHandler {
         if let Ok(proj) = project.read() {
             for node in proj.nodes.values() {
                 if matches!(
-                    &node.content,
+                    node.content(),
                     NodeContent::Reference(ReferenceContent { target_id, .. })
                         if *target_id == comp_id
                 ) {

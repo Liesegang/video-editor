@@ -9,7 +9,7 @@ use crate::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortExposure, PortSide,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
-use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType};
+use crate::model::property::{PropertyDefinition, PropertyUiType};
 use crate::model::{Node, PluginOperationContent};
 use std::collections::HashSet;
 use thiserror::Error;
@@ -48,6 +48,37 @@ pub struct OperationDescriptor {
     label: String,
     declared_ports: Vec<PortDefinition>,
     properties: Vec<PropertyDefinition>,
+}
+
+/// Opaque construction capability produced only from a validated operation
+/// descriptor. Keeping its fields and constructor private prevents other
+/// library modules from pairing arbitrary operation identity with a detached
+/// property map while still letting the model own final Node construction.
+pub(crate) struct OperationNodeParts {
+    label: String,
+    content: PluginOperationContent,
+    properties: Vec<PropertyDefinition>,
+}
+
+impl OperationNodeParts {
+    fn from_descriptor(descriptor: &OperationDescriptor) -> Self {
+        Self {
+            label: descriptor.label.clone(),
+            content: PluginOperationContent {
+                category: descriptor.category.clone(),
+                component_id: descriptor.component_id.clone(),
+                operation: descriptor.operation.clone(),
+                declared_ports: descriptor.declared_ports.clone(),
+            },
+            properties: descriptor.properties.clone(),
+        }
+    }
+
+    pub(crate) fn into_node_data(
+        self,
+    ) -> (String, PluginOperationContent, Vec<PropertyDefinition>) {
+        (self.label, self.content, self.properties)
+    }
 }
 
 impl OperationDescriptor {
@@ -226,19 +257,14 @@ impl OperationDescriptor {
 
     /// Creates a fully initialized graph node. Defaults are always
     /// materialized from the same definitions that produced the input ports.
-    pub fn create_node(&self) -> Result<Node, OperationDescriptorError> {
+    pub(super) fn create_node(&self) -> Result<Node, OperationDescriptorError> {
         self.validate()?;
-        let properties = PropertyMap::from_definitions(&self.properties);
-        Ok(Node::new_plugin_operation(
-            &self.label,
-            PluginOperationContent {
-                category: self.category.clone(),
-                component_id: self.component_id.clone(),
-                operation: self.operation.clone(),
-                declared_ports: self.declared_ports.clone(),
-            },
-            properties,
-        ))
+        Node::from_operation_parts(OperationNodeParts::from_descriptor(self)).map_err(|reason| {
+            OperationDescriptorError::InvalidProperty {
+                name: "<factory>".to_string(),
+                reason,
+            }
+        })
     }
 
     fn validate(&self) -> Result<(), OperationDescriptorError> {

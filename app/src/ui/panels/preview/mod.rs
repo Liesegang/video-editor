@@ -1617,24 +1617,30 @@ mod tests {
                     shader: "half4 main(float2 p) { return half4(1); }".to_string(),
                 },
             );
-            source.set_property(
-                "position".to_string(),
-                Property::constant(PropertyValue::Vec2(PropertyVec2 {
-                    x: OrderedFloat(7.0),
-                    y: OrderedFloat(11.0),
-                })),
-            );
-            source.set_property(
-                "scale".to_string(),
-                Property::constant(PropertyValue::Vec2(PropertyVec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                })),
-            );
-            source.set_property(
-                "rotation".to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-            );
+            source
+                .set_property(
+                    "position".to_string(),
+                    Property::constant(PropertyValue::Vec2(PropertyVec2 {
+                        x: OrderedFloat(7.0),
+                        y: OrderedFloat(11.0),
+                    })),
+                )
+                .expect("SkSL factory initializes position");
+            source
+                .set_property(
+                    "scale".to_string(),
+                    Property::constant(PropertyValue::Vec2(PropertyVec2 {
+                        x: OrderedFloat(100.0),
+                        y: OrderedFloat(100.0),
+                    })),
+                )
+                .expect("SkSL factory initializes scale");
+            source
+                .set_property(
+                    "rotation".to_string(),
+                    Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+                )
+                .expect("SkSL factory initializes rotation");
             source
         }
 
@@ -1956,13 +1962,15 @@ mod tests {
             },
         );
         let source_id = source.id;
-        source.set_property(
-            "position".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(10.0),
-                y: OrderedFloat(20.0),
-            })),
-        );
+        source
+            .set_property(
+                "position".to_string(),
+                Property::constant(PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(10.0),
+                    y: OrderedFloat(20.0),
+                })),
+            )
+            .expect("text factory initializes position");
         let plugins = Arc::new(PluginManager::default());
         let sink = plugins.create_style_operation_node("fill").unwrap();
         let sink_id = sink.id;

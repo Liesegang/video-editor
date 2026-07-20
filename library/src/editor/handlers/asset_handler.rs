@@ -21,7 +21,7 @@ impl AssetHandler {
         if let Ok(proj) = project.read() {
             for node in proj.nodes.values() {
                 if matches!(
-                    &node.content,
+                    node.content(),
                     crate::model::NodeContent::Media(media) if media.asset_id == asset_id
                 ) {
                     return true;

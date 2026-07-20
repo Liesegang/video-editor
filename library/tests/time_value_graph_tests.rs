@@ -165,13 +165,15 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
     let plugins = PluginManager::default();
     let mut effect = plugins.create_effect_operation_node("blur").unwrap();
-    effect.set_property(
-        "sigma_x".to_string(),
-        Property::keyframe(vec![
-            Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
-            Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
-        ]),
-    );
+    effect
+        .set_property(
+            "sigma_x".to_string(),
+            Property::keyframe(vec![
+                Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
+                Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
+            ]),
+        )
+        .expect("blur descriptor initializes sigma_x");
     let effect_id = effect.id;
     let merge = Node::new_merge("Merge");
     let merge_id = merge.id;
@@ -272,7 +274,8 @@ fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() {
             .set_property(
                 TIME_MODULO_PERIOD_PROPERTY.to_string(),
                 Property::constant(PropertyValue::Number(OrderedFloat(period))),
-            );
+            )
+            .expect("time-modulo factory initializes period");
         cases.push((label, fixture));
     }
     let mut disabled = time_graph_fixture(0.0, 0.0, 1.0, true);

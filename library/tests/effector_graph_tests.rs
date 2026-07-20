@@ -39,7 +39,8 @@ const HEIGHT: u64 = 80;
 const FPS: f64 = 10.0;
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value))
+        .expect("operation descriptor initializes the test property");
 }
 
 fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
@@ -398,13 +399,15 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
         .unwrap();
     let mut transform = plugins.create_effector_operation_node("transform").unwrap();
-    transform.set_property(
-        "tx".into(),
-        Property::keyframe(vec![
-            Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
-            Keyframe::new(1.0, 20.0.into(), EasingFunction::Linear),
-        ]),
-    );
+    transform
+        .set_property(
+            "tx".into(),
+            Property::keyframe(vec![
+                Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
+                Keyframe::new(1.0, 20.0.into(), EasingFunction::Linear),
+            ]),
+        )
+        .expect("transform descriptor initializes tx");
     set_constant(
         &mut transform,
         "target",
@@ -620,23 +623,23 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
         "disabled Shape operations must not look up a plugin descriptor"
     );
 
-    let mut broken_time = OperationDescriptor::new(
-        "test",
-        "broken-time",
-        "test.broken-time.v1",
-        "broken time",
-        Vec::new(),
-        [PortDefinition::output(
-            "broken_time",
-            "Broken Time",
-            PortDataType::Number,
-            PortSide::Right,
-            PortExposure::Graph,
-        )],
-    )
-    .unwrap()
-    .create_node()
-    .unwrap();
+    let mut persisted = serde_json::to_value(Node::new_merge("broken time")).unwrap();
+    persisted["content"] = serde_json::json!({
+        "type": "PluginOperation",
+        "data": {
+            "category": "test",
+            "component_id": "broken-time",
+            "operation": "test.broken-time.v1",
+            "declared_ports": [PortDefinition::output(
+                "broken_time",
+                "Broken Time",
+                PortDataType::Number,
+                PortSide::Right,
+                PortExposure::Graph,
+            )],
+        }
+    });
+    let mut broken_time: Node = serde_json::from_value(persisted).unwrap();
     broken_time.ui_position = [-400.0, -200.0];
     let broken_time_id = broken_time.id;
     let container = project.find_node_container(counting_id).unwrap();

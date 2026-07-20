@@ -1475,13 +1475,14 @@ mod tests {
         let mut node = manager
             .create_style_operation_node("evaluated-value-style")
             .expect("test Style descriptor creates a Node");
-        node.properties.set(
+        node.set_property(
             "value".to_string(),
             Property {
                 evaluator: "stateful-test".to_string(),
                 properties: std::collections::HashMap::new(),
             },
-        );
+        )
+        .expect("descriptor initializes the value property");
 
         let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
         let composition_id = composition.id;
@@ -1504,7 +1505,7 @@ mod tests {
             &context,
             "evaluated-value-style",
             node.id,
-            &node.properties,
+            node.properties(),
             0.0,
         );
         let EvalOutput::Produced(StyleConfig {

@@ -132,7 +132,7 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
     let shared = Arc::new(RwLock::new(project));
     ClipHandler::update_property_or_keyframe(
         &shared,
-        library::editor::handlers::property_ops::PropertyOwner::Clip(clip_id),
+        library::PropertyOwner::Clip(clip_id),
         "time_stretch",
         42.0,
         PropertyValue::Number(OrderedFloat(0.0)),
@@ -166,7 +166,7 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
     assert!(
         ClipHandler::update_property_or_keyframe(
             &shared,
-            library::editor::handlers::property_ops::PropertyOwner::Clip(clip_id),
+            library::PropertyOwner::Clip(clip_id),
             "time_stretch",
             0.0,
             PropertyValue::Number(OrderedFloat(-1.0)),
@@ -189,7 +189,8 @@ fn node_properties_are_the_only_generator_value_authority() {
     node.set_property(
         "font_family".to_string(),
         Property::constant(PropertyValue::String("Arial".to_string())),
-    );
+    )
+    .expect("text factory initializes font_family");
     let mut clip = Clip::new("placement", 0.0, 5.0);
 
     assert!(node.update_property_or_keyframe(

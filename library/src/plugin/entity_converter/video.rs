@@ -125,8 +125,8 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &node.properties;
-        let media = match &node.content {
+        let props = node.properties();
+        let media = match node.content() {
             crate::model::NodeContent::Media(media) => Some(media),
             _ => None,
         };

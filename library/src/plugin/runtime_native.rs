@@ -3212,8 +3212,8 @@ mod tests {
         let style_node = style_descriptor
             .create_node()
             .expect("runtime Style descriptor creates a Node");
-        assert_eq!(style_node.properties.iter().count(), 2);
-        let NodeContent::PluginOperation(style_operation) = style_node.content else {
+        assert_eq!(style_node.properties().iter().count(), 2);
+        let NodeContent::PluginOperation(style_operation) = style_node.content() else {
             panic!("Style descriptor must create PluginOperation content")
         };
         assert_eq!(style_operation.category, crate::plugin::STYLE_CATEGORY);
@@ -3243,8 +3243,8 @@ mod tests {
         let decorator_node = decorator_descriptor
             .create_node()
             .expect("runtime Decorator descriptor creates a Node");
-        assert_eq!(decorator_node.properties.iter().count(), 2);
-        let NodeContent::PluginOperation(decorator_operation) = decorator_node.content else {
+        assert_eq!(decorator_node.properties().iter().count(), 2);
+        let NodeContent::PluginOperation(decorator_operation) = decorator_node.content() else {
             panic!("Decorator descriptor must create PluginOperation content")
         };
         assert_eq!(

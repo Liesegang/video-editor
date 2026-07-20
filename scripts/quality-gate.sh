@@ -25,6 +25,9 @@ echo "[quality] cargo check (default features)"
 cargo check --workspace --all-targets --locked
 cargo check --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked
 
+echo "[quality] external Node authoring API boundary"
+"${SCRIPT_DIR}/test-node-authoring-api.sh"
+
 # `--all-features` does not compile branches guarded by
 # `cfg(not(feature = "..."))`. Keep this exact production/default pass even
 # though the maximal-feature, all-target pass below is broader in other ways.

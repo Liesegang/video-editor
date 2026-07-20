@@ -113,8 +113,8 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &node.properties;
-        let asset = match &node.content {
+        let props = node.properties();
+        let asset = match node.content() {
             NodeContent::Media(media) => evaluator.project.get_asset(media.asset_id),
             _ => None,
         };

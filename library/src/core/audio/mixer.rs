@@ -229,7 +229,7 @@ fn mix_global_nodes(
                 accum_buffer,
                 frame,
                 global_time,
-                volume_at(&node.properties, global_time),
+                volume_at(node.properties(), global_time),
                 sample_rate,
                 channels,
             );
@@ -285,7 +285,7 @@ fn mix_clip(
 
             let local_time = clip.local_time(global_time);
             let gain =
-                volume_at(&clip.properties, local_time) * volume_at(&node.properties, local_time);
+                volume_at(&clip.properties, local_time) * volume_at(node.properties(), local_time);
             mix_source_frame(
                 &mut source,
                 accum_buffer,
@@ -305,7 +305,7 @@ fn audio_source_for_node(
     sample_rate: u32,
     channels: usize,
 ) -> Option<AudioSourceKey> {
-    let NodeContent::Media(media) = &node.content else {
+    let NodeContent::Media(media) = node.content() else {
         // Generator, Reference, and Merge Nodes do not directly produce audio.
         return None;
     };
@@ -540,7 +540,7 @@ fn collect_node_windows(
         if !node.enabled {
             continue;
         }
-        let NodeContent::Media(media) = &node.content else {
+        let NodeContent::Media(media) = node.content() else {
             continue;
         };
         let Some(asset) = project.get_asset(media.asset_id) else {
@@ -702,15 +702,17 @@ mod tests {
                 .unwrap(),
             );
         }
-        let mut node = Node::new_media(
+        let mut node = Node::from_media_converter(
             "audio",
             MediaContent {
                 asset_id: asset.id,
                 stream_index: is_video.then_some(0),
                 audio_stream_index,
             },
-            PropertyMap::new(),
-        );
+            &[],
+            asset.path.clone(),
+        )
+        .expect("empty audio converter definition is valid");
         node.enabled = enabled;
         let node_id = node.id;
         let path = asset.path.clone();
@@ -1011,15 +1013,17 @@ mod tests {
         asset.stream_index = Some(0);
         let asset_id = asset.id;
         project.assets.push(asset);
-        let node = Node::new_media(
+        let node = Node::from_media_converter(
             "audio stream two",
             MediaContent {
                 asset_id,
                 stream_index: Some(0),
                 audio_stream_index: Some(2),
             },
-            PropertyMap::new(),
-        );
+            &[],
+            "/fixture/multi_audio.mkv".to_string(),
+        )
+        .expect("empty audio converter definition is valid");
         let node_id = node.id;
         project.add_node(node);
         project

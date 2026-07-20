@@ -16,6 +16,12 @@ use std::sync::{Arc, RwLock};
 
 use support::generator_node_for_canvas;
 
+fn insert_persisted_property(node: &mut Node, key: &str, property: Property) {
+    let mut encoded = serde_json::to_value(&*node).unwrap();
+    encoded["properties"][key] = serde_json::to_value(property).unwrap();
+    *node = serde_json::from_value(encoded).unwrap();
+}
+
 fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
     let mut project = Project::new("authoritative");
     let (composition, track) = Composition::new("main", 320, 180, 30.0, 2.0);
@@ -39,7 +45,8 @@ fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
             x: OrderedFloat(10.0),
             y: OrderedFloat(20.0),
         })),
-    );
+    )
+    .expect("solid factory initializes position");
     let node_id = node.id;
 
     project.add_track(track);
@@ -176,8 +183,9 @@ fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> R
 #[test]
 fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
     let (mut candidate, _, node_id) = project_with_solid();
-    candidate.get_node_mut(node_id).unwrap().set_property(
-        "future_plugin_property".to_string(),
+    insert_persisted_property(
+        candidate.get_node_mut(node_id).unwrap(),
+        "future_plugin_property",
         Property::constant(PropertyValue::String("preserve me".to_string())),
     );
     let NodeContainer::Clip(clip_id) = candidate.find_node_container(node_id).unwrap() else {
@@ -199,11 +207,11 @@ fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
         let mut encoded = serde_json::to_value(&*node).unwrap();
         encoded["content"]["data"]["component_id"] =
             serde_json::Value::String(unavailable_id.to_string());
+        encoded["properties"]["future_vendor_value"] = serde_json::to_value(Property::constant(
+            PropertyValue::String("preserve exactly".to_string()),
+        ))
+        .unwrap();
         *node = serde_json::from_value(encoded).unwrap();
-        node.set_property(
-            "future_vendor_value".to_string(),
-            Property::constant(PropertyValue::String("preserve exactly".to_string())),
-        );
     }
     let shape = generator_node_for_canvas(
         "shape source",
@@ -348,7 +356,7 @@ fn inspector_mutation_immediately_reaches_timeline_preview_save_and_export_snaps
 
     manager
         .update_property_or_keyframe(
-            library::editor::handlers::property_ops::PropertyOwner::Node(node_id),
+            library::PropertyOwner::Node(node_id),
             "position",
             0.0,
             PropertyValue::Vec2(Vec2 {

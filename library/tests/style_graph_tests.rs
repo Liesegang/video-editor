@@ -127,7 +127,8 @@ fn operation_component(node: &Node) -> Option<&str> {
 }
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value))
+        .expect("operation descriptor initializes the test property");
 }
 
 #[test]
@@ -522,13 +523,17 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         }]
     ));
 
-    project.get_node_mut(fill_id).unwrap().set_property(
-        "opacity".into(),
-        Property::keyframe(vec![
-            Keyframe::new(0.0, 0.2.into(), EasingFunction::Linear),
-            Keyframe::new(1.0, 0.8.into(), EasingFunction::Linear),
-        ]),
-    );
+    project
+        .get_node_mut(fill_id)
+        .unwrap()
+        .set_property(
+            "opacity".into(),
+            Property::keyframe(vec![
+                Keyframe::new(0.0, 0.2.into(), EasingFunction::Linear),
+                Keyframe::new(1.0, 0.8.into(), EasingFunction::Linear),
+            ]),
+        )
+        .expect("fill descriptor initializes opacity");
     let at_start = draw_styles(&project, &plugins, 0);
     let at_one_second = draw_styles(&project, &plugins, 10);
     assert!(matches!(
