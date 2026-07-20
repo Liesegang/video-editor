@@ -42,9 +42,15 @@ impl EditorService {
             LibraryError::Runtime(format!("Failed to initialize audio engine: {error}"))
         })?);
 
-        let project_manager = Arc::new(ProjectManager::new(project.clone(), plugin_manager));
+        let project_manager =
+            Arc::new(ProjectManager::new(project.clone(), plugin_manager.clone()));
         // AudioService also needs shared access to Project for mixing
-        let audio_service = Rc::new(AudioService::new(project, audio_engine, cache_manager));
+        let audio_service = Rc::new(AudioService::new(
+            project,
+            audio_engine,
+            cache_manager,
+            plugin_manager,
+        ));
 
         Ok(Self {
             project_manager,
@@ -505,6 +511,19 @@ impl EditorService {
     ) -> Result<PropertyValue, crate::plugin::PropertyEvaluationError> {
         self.project_manager
             .evaluate_property_value(property, context, time, fps, resolution)
+    }
+
+    pub fn evaluate_property_with_diagnostics(
+        &self,
+        property: &crate::model::property::Property,
+        context: &crate::model::property::PropertyMap,
+        time: f64,
+        fps: f64,
+        resolution: (u64, u64),
+    ) -> Result<crate::plugin::PropertyEvaluationOutcome, crate::plugin::PropertyEvaluationError>
+    {
+        self.project_manager
+            .evaluate_property_with_diagnostics(property, context, time, fps, resolution)
     }
 
     pub fn add_keyframe(
