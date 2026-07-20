@@ -1,5 +1,7 @@
+import contextlib
 import importlib.util
 import http.server
+import io
 import pathlib
 import subprocess
 import sys
@@ -481,8 +483,9 @@ class QaRunnerTests(unittest.TestCase):
     def test_runner_bounds_parallelism_with_a_positive_jobs_argument(self):
         self.assertEqual(RUNNER.parse_args([]).jobs, 4)
         self.assertEqual(RUNNER.parse_args(["--jobs", "2"]).jobs, 2)
-        with self.assertRaises(SystemExit):
-            RUNNER.parse_args(["--jobs", "0"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                RUNNER.parse_args(["--jobs", "0"])
 
     def test_blend_suite_covers_every_catalog_mode_group_and_masks_only_target_blend(self):
         expected_catalog = (
@@ -517,6 +520,10 @@ class QaRunnerTests(unittest.TestCase):
             ("luminosity", "Luminosity", "hsl"),
         )
         self.assertEqual(BLEND.CATALOG, expected_catalog)
+        self.assertEqual(
+            RUNNER.BLEND_MODE_NAMES,
+            tuple(serialized for _, serialized, _ in expected_catalog),
+        )
         self.assertEqual(BLEND.MODES, expected_catalog[2:] + expected_catalog[:2])
         sharded = [
             mode
@@ -582,6 +589,52 @@ class QaRunnerTests(unittest.TestCase):
         self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {"ok": False}]))
         self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {}]))
 
+    def test_blend_catalog_validation_aggregates_all_shard_evidence(self):
+        representative_hashes = {
+            mode: index
+            for index, mode in enumerate(RUNNER.BLEND_PREVIEW_REPRESENTATIVES, 1)
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            results = []
+            for shard, catalog in BLEND.MODE_SHARDS.items():
+                evidence = root / shard / "evidence.json"
+                RUNNER.write_json_artifact(
+                    evidence,
+                    {
+                        "modes": [mode for _, mode, _ in catalog],
+                        "preview_hashes": {
+                            mode: representative_hashes[mode]
+                            for _, mode, _ in catalog
+                            if mode in representative_hashes
+                        },
+                    },
+                )
+                results.append(
+                    {
+                        "name": "blend-modes-" + shard,
+                        "evidence": str(evidence),
+                    }
+                )
+
+            validation = RUNNER.blend_catalog_validation(results)
+            self.assertTrue(validation["ok"])
+            self.assertEqual(validation["observed_mode_count"], 29)
+            self.assertEqual(validation["distinct_representative_hashes"], 7)
+
+            for result in results:
+                evidence = RUNNER.read_evidence(pathlib.Path(result["evidence"]))
+                evidence["preview_hashes"] = {
+                    mode: 1 for mode in evidence["preview_hashes"]
+                }
+                RUNNER.write_json_artifact(pathlib.Path(result["evidence"]), evidence)
+            validation = RUNNER.blend_catalog_validation(results)
+            self.assertFalse(validation["ok"])
+            self.assertIn(
+                "representative modes produced fewer than four distinct previews",
+                validation["errors"],
+            )
+
     def test_summary_records_failure_log_without_claiming_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -606,11 +659,37 @@ class QaRunnerTests(unittest.TestCase):
             self.assertEqual(summary["jobs_used"], 1)
             self.assertEqual(summary["suite_wall_seconds"], 0.75)
             self.assertEqual(summary["sum_suite_seconds"], 1.25)
-            self.assertAlmostEqual(summary["parallel_speedup"], 1.667, places=3)
+            self.assertAlmostEqual(summary["concurrency_factor"], 1.667, places=3)
             text = (root / "summary.txt").read_text(encoding="utf-8")
             self.assertIn("timeline: FAIL", text)
             self.assertIn("coordinate drag failed", text)
             self.assertIn("0.750s wall / 1.250s summed, jobs 1/4", text)
+            self.assertNotIn("All suites passed", text)
+
+    def test_summary_fails_when_cross_suite_validation_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            summary = RUNNER.write_summary(
+                root,
+                "blend",
+                {"ok": True},
+                [
+                    {
+                        "name": "blend-modes",
+                        "ok": True,
+                        "duration_seconds": 1.0,
+                        "suite_log": str(root / "suite.log"),
+                    }
+                ],
+                validations={
+                    "blend_catalog": {"ok": False, "errors": ["hash collision"]}
+                },
+            )
+
+            self.assertFalse(summary["ok"])
+            text = (root / "summary.txt").read_text(encoding="utf-8")
+            self.assertIn("blend_catalog validation: FAIL", text)
+            self.assertIn("hash collision", text)
             self.assertNotIn("All suites passed", text)
 
     def test_process_group_cleanup_terminates_a_live_process(self):

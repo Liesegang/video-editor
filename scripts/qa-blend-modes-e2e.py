@@ -231,6 +231,25 @@ def choose_mode(
                     "blend category {} omitted accordion metadata".format(group)
                 )
 
+        # Exercise the grouped browse path once with real screen clicks. The
+        # remaining 29 selections use flat search so every option stays fast
+        # and unambiguous without leaving accordion behavior as metadata-only.
+        category = query + ".category:Normal"
+        client.click_component(category)
+
+        def category_open(expected):
+            _, component = client.component(category)
+            metadata = component.get("metadata") or {}
+            return component if metadata.get("open") is expected else None
+
+        client.wait_until(
+            "Normal blend category expansion", lambda: category_open(True)
+        )
+        client.click_component(category)
+        client.wait_until(
+            "Normal blend category collapse", lambda: category_open(False)
+        )
+
     # The search click and result click are both actual egui coordinate events.
     # Search flattens the otherwise grouped six-accordion catalog.
     search_terms = qa_key if qa_key == group_key else "{} {}".format(qa_key, group_key)
@@ -301,6 +320,7 @@ def choose_unobstructed_merge_wire(client, connections):
         metadata = component.get("metadata") or {}
         hit_point = metadata.get("hit_point")
         overlap_candidates = []
+        overlap_wires = []
         if hit_point is not None:
             overlap_candidates = [
                 item["id"]
@@ -309,12 +329,22 @@ def choose_unobstructed_merge_wire(client, connections):
                 and item["id"].startswith(WIRE_GRAPH_ITEM_PREFIXES)
                 and BASE.point_in_component_rect(hit_point, item["rect_points"])
             ]
+            overlap_wires = [
+                item["id"]
+                for item in snapshot["components"]
+                if item["id"] != edge
+                and item.get("visible", False)
+                and (item.get("metadata") or {}).get("kind")
+                in ("explicit", "output_binding")
+                and BASE.point_near_node_wire(hit_point, item, radius=10.0)
+            ]
         candidate = {
             "connection_id": connection_id,
             "edge_id": edge,
             "component_frame": snapshot["frame"],
             "hit_point": hit_point,
             "overlap_candidates": overlap_candidates,
+            "overlap_wires": overlap_wires,
             "authored_blend_available": metadata.get("authored_blend_available"),
         }
         diagnostics.append(candidate)
@@ -324,6 +354,7 @@ def choose_unobstructed_merge_wire(client, connections):
             and metadata.get("authored_blend_available") is True
             and hit_point is not None
             and not overlap_candidates
+            and not overlap_wires
         ):
             selected = (connection, edge)
     if selected is None:

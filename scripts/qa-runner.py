@@ -33,6 +33,47 @@ SUITE_OUTPUT_NAMES = (
     "failure-components.json",
 )
 
+BLEND_MODE_NAMES = (
+    "Normal",
+    "Dissolve",
+    "Behind",
+    "Clear",
+    "Darken",
+    "Multiply",
+    "ColorBurn",
+    "LinearBurn",
+    "DarkerColor",
+    "Lighten",
+    "Screen",
+    "ColorDodge",
+    "LinearDodge",
+    "LighterColor",
+    "Overlay",
+    "SoftLight",
+    "HardLight",
+    "VividLight",
+    "LinearLight",
+    "PinLight",
+    "HardMix",
+    "Difference",
+    "Exclusion",
+    "Subtract",
+    "Divide",
+    "Hue",
+    "Saturation",
+    "Color",
+    "Luminosity",
+)
+BLEND_PREVIEW_REPRESENTATIVES = (
+    "Clear",
+    "Multiply",
+    "Screen",
+    "Overlay",
+    "Difference",
+    "Hue",
+    "Dissolve",
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class SuiteSpec:
@@ -509,6 +550,93 @@ def aggregate_ok(results: list[dict]) -> bool:
     return bool(results) and all(result.get("ok") is True for result in results)
 
 
+def blend_catalog_validation(results: list[dict]) -> dict:
+    blend_results = [
+        result
+        for result in results
+        if result.get("name", "").startswith("blend-modes-")
+    ]
+    observed_modes = []
+    preview_hashes = {}
+    evidence_errors = []
+    for result in blend_results:
+        evidence = read_evidence(pathlib.Path(result["evidence"]))
+        if not isinstance(evidence, dict):
+            evidence_errors.append("{} omitted evidence".format(result["name"]))
+            continue
+        modes = evidence.get("modes")
+        hashes = evidence.get("preview_hashes")
+        if not isinstance(modes, list) or not all(
+            isinstance(mode, str) for mode in modes
+        ):
+            evidence_errors.append(
+                "{} has invalid modes evidence".format(result["name"])
+            )
+        else:
+            observed_modes.extend(modes)
+        if not isinstance(hashes, dict):
+            evidence_errors.append(
+                "{} has invalid preview hash evidence".format(result["name"])
+            )
+        else:
+            preview_hashes.update(hashes)
+
+    missing_modes = sorted(set(BLEND_MODE_NAMES) - set(observed_modes))
+    unexpected_modes = sorted(set(observed_modes) - set(BLEND_MODE_NAMES))
+    duplicate_modes = sorted(
+        mode for mode in set(observed_modes) if observed_modes.count(mode) != 1
+    )
+    representative_hashes = {
+        mode: preview_hashes.get(mode) for mode in BLEND_PREVIEW_REPRESENTATIVES
+    }
+    invalid_hashes = sorted(
+        mode
+        for mode, pixel_hash in representative_hashes.items()
+        if type(pixel_hash) is not int
+    )
+    distinct_hashes = len(
+        {
+            pixel_hash
+            for pixel_hash in representative_hashes.values()
+            if type(pixel_hash) is int
+        }
+    )
+    errors = list(evidence_errors)
+    if missing_modes:
+        errors.append("missing modes: {}".format(", ".join(missing_modes)))
+    if unexpected_modes:
+        errors.append("unexpected modes: {}".format(", ".join(unexpected_modes)))
+    if duplicate_modes:
+        errors.append("duplicate modes: {}".format(", ".join(duplicate_modes)))
+    if invalid_hashes:
+        errors.append(
+            "missing or invalid representative preview hashes: {}".format(
+                ", ".join(invalid_hashes)
+            )
+        )
+    if distinct_hashes < 4:
+        errors.append("representative modes produced fewer than four distinct previews")
+    if (
+        representative_hashes["Clear"] is not None
+        and representative_hashes["Clear"] == representative_hashes["Dissolve"]
+    ):
+        errors.append("Clear and Dissolve produced the same preview")
+    return {
+        "ok": not errors,
+        "expected_mode_count": len(BLEND_MODE_NAMES),
+        "observed_mode_count": len(observed_modes),
+        "representative_hashes": representative_hashes,
+        "distinct_representative_hashes": distinct_hashes,
+        "errors": errors,
+    }
+
+
+def suite_validations(mode: str, results: list[dict]) -> dict:
+    if mode in ("blend", "full"):
+        return {"blend_catalog": blend_catalog_validation(results)}
+    return {}
+
+
 def write_summary(
     artifact_root: pathlib.Path,
     mode: str,
@@ -517,8 +645,10 @@ def write_summary(
     jobs_requested: int = 1,
     jobs_used=None,
     suite_wall_seconds=None,
+    validations=None,
 ) -> dict:
     results = sorted(results, key=lambda item: item["name"])
+    validations = {} if validations is None else validations
     jobs_used = min(jobs_requested, len(results)) if jobs_used is None else jobs_used
     sum_suite_seconds = round(
         sum(float(result.get("duration_seconds", 0.0)) for result in results), 3
@@ -526,13 +656,15 @@ def write_summary(
     if suite_wall_seconds is None:
         suite_wall_seconds = sum_suite_seconds
     suite_wall_seconds = round(suite_wall_seconds, 3)
-    parallel_speedup = (
+    concurrency_factor = (
         round(sum_suite_seconds / suite_wall_seconds, 3)
         if suite_wall_seconds > 0.0
         else None
     )
     summary = {
-        "ok": build.get("ok") is True and aggregate_ok(results),
+        "ok": build.get("ok") is True
+        and aggregate_ok(results)
+        and all(validation.get("ok") is True for validation in validations.values()),
         "mode": mode,
         "artifact_root": str(artifact_root.resolve()),
         "build": build,
@@ -540,7 +672,9 @@ def write_summary(
         "jobs_used": jobs_used,
         "suite_wall_seconds": suite_wall_seconds,
         "sum_suite_seconds": sum_suite_seconds,
-        "parallel_speedup": parallel_speedup,
+        "concurrency_factor": concurrency_factor,
+        "concurrency_factor_basis": "sum_suite_seconds / suite_wall_seconds within this run",
+        "validations": validations,
         "suites": results,
     }
     artifact_root.mkdir(parents=True, exist_ok=True)
@@ -550,12 +684,12 @@ def write_summary(
     lines = [
         "QA mode: {}".format(mode),
         "Build: {}".format("PASS" if build.get("ok") else "FAIL"),
-        "Suites: {:.3f}s wall / {:.3f}s summed, jobs {}/{}, speedup {}".format(
+        "Suites: {:.3f}s wall / {:.3f}s summed, jobs {}/{}, concurrency {}".format(
             suite_wall_seconds,
             sum_suite_seconds,
             jobs_used,
             jobs_requested,
-            "n/a" if parallel_speedup is None else "{:.3f}x".format(parallel_speedup),
+            "n/a" if concurrency_factor is None else "{:.3f}x".format(concurrency_factor),
         ),
     ]
     for result in results:
@@ -567,7 +701,20 @@ def write_summary(
         if result.get("error"):
             line += " - {}".format(result["error"])
         lines.append(line)
+    for name, validation in sorted(validations.items()):
+        lines.append(
+            "{} validation: {}".format(
+                name, "PASS" if validation.get("ok") is True else "FAIL"
+            )
+        )
+        for error in validation.get("errors", []):
+            lines.append("  - {}".format(error))
     failures = [item for item in results if not item.get("ok")]
+    validation_failures = [
+        name
+        for name, validation in validations.items()
+        if validation.get("ok") is not True
+    ]
     if failures:
         lines.append("Failures:")
         for item in failures:
@@ -579,7 +726,7 @@ def write_summary(
                 "errors", {}
             ).items():
                 lines.append("    {} collection failed: {}".format(artifact_name, error))
-    else:
+    if not failures and not validation_failures:
         lines.append("All suites passed.")
     (artifact_root / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary
@@ -703,6 +850,7 @@ def main(argv=None) -> int:
             ]
             results = [future.result() for future in futures]
         suite_wall_seconds = time.monotonic() - suites_started
+        validations = suite_validations(args.mode, results)
         summary = write_summary(
             artifact_root,
             args.mode,
@@ -711,6 +859,7 @@ def main(argv=None) -> int:
             jobs_requested=args.jobs,
             jobs_used=jobs_used,
             suite_wall_seconds=suite_wall_seconds,
+            validations=validations,
         )
         print((artifact_root / "summary.txt").read_text(encoding="utf-8"), end="")
         print("Artifacts: {}".format(artifact_root.resolve()))
