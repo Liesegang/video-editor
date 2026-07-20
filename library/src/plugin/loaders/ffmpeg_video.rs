@@ -8,10 +8,12 @@ use crate::model::frame::Image;
 use ffmpeg::Rescale;
 use ffmpeg_next as ffmpeg;
 use lru::LruCache;
+use std::collections::HashSet;
+use std::ffi::{CStr, c_void};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 const MAX_FORWARD_DECODE_GAP_FRAMES: i64 = 32;
@@ -830,6 +832,37 @@ impl FfmpegVideoLoader {
         )))
     }
 
+    fn has_cached_reader(&self, path: &str, stream_index: Option<usize>) -> bool {
+        let Ok(identity) = FileIdentity::read(path) else {
+            return false;
+        };
+        let key = ReaderKey {
+            identity,
+            stream_index,
+        };
+        self.readers
+            .lock()
+            .ok()
+            .is_some_and(|readers| readers.peek(&key).is_some())
+    }
+
+    fn claim_video_path(&self, path: &str, stream_index: Option<usize>) -> LoadPluginResult<()> {
+        if self.has_cached_reader(path, stream_index) {
+            return Ok(());
+        }
+        initialize_ffmpeg_for_path(path)?;
+        if has_registered_ffmpeg_media_extension(path) {
+            return Ok(());
+        }
+        match ffmpeg::format::input(path) {
+            Ok(input) => {
+                drop(input);
+                Ok(())
+            }
+            Err(_) => Err(LoadPluginError::Unsupported),
+        }
+    }
+
     fn cache_key(
         reader_key: &ReaderKey,
         input_color_space: Option<&str>,
@@ -927,57 +960,71 @@ impl Plugin for FfmpegVideoLoader {
     }
 }
 
-fn has_known_ffmpeg_media_extension(path: &str) -> bool {
+fn registered_ffmpeg_demuxer_extensions() -> &'static HashSet<String> {
+    static EXTENSIONS: OnceLock<HashSet<String>> = OnceLock::new();
+    EXTENSIONS.get_or_init(|| {
+        let mut extensions = HashSet::new();
+        let mut opaque: *mut c_void = std::ptr::null_mut();
+        loop {
+            // SAFETY: `opaque` starts null and is passed back only to
+            // `av_demuxer_iterate`, as required by the FFmpeg iterator API.
+            // The returned registry entry is static and is read before the
+            // next iteration call.
+            let input_format = unsafe { ffmpeg::ffi::av_demuxer_iterate(&mut opaque) };
+            if input_format.is_null() {
+                break;
+            }
+            // SAFETY: A non-null entry returned by `av_demuxer_iterate` points
+            // to a registered `AVInputFormat` for the lifetime of libavformat.
+            let extension_list = unsafe { (*input_format).extensions };
+            if extension_list.is_null() {
+                continue;
+            }
+            // SAFETY: `AVInputFormat.extensions` is either null or a
+            // null-terminated, comma-separated string owned by libavformat.
+            let extension_list = unsafe { CStr::from_ptr(extension_list) }.to_string_lossy();
+            extensions.extend(
+                extension_list
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|extension| !extension.is_empty())
+                    .map(str::to_ascii_lowercase),
+            );
+        }
+        extensions
+    })
+}
+
+fn has_registered_ffmpeg_media_extension(path: &str) -> bool {
     let extension = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
-    matches!(
-        extension.as_deref(),
-        Some(
-            "mp4"
-                | "mov"
-                | "m4v"
-                | "avi"
-                | "mkv"
-                | "webm"
-                | "mpg"
-                | "mpeg"
-                | "m2v"
-                | "ts"
-                | "m2ts"
-                | "mts"
-                | "wmv"
-                | "flv"
-                | "ogv"
-                | "3gp"
-                | "3g2"
-                | "mxf"
-                | "mp3"
-                | "wav"
-                | "ogg"
-                | "oga"
-                | "aac"
-                | "m4a"
-                | "flac"
-                | "opus"
-                | "aiff"
-                | "aif"
-                | "caf"
-                | "wma"
-        )
-    )
+    extension.is_some_and(|extension| {
+        registered_ffmpeg_demuxer_extensions().contains(extension.as_str())
+    })
+}
+
+fn classify_ffmpeg_probe_failure(path: &str, error: LibraryError) -> LoadPluginError {
+    if has_registered_ffmpeg_media_extension(path) {
+        LoadPluginError::Failed(error)
+    } else {
+        LoadPluginError::Unsupported
+    }
+}
+
+fn initialize_ffmpeg_for_path(path: &str) -> LoadPluginResult<()> {
+    ffmpeg::init().map_err(|error| classify_ffmpeg_probe_failure(path, error.into()))
 }
 
 impl LoadPlugin for FfmpegVideoLoader {
     fn open(&self, path: &str) -> LoadPluginResult<Vec<crate::plugin::AssetMetadata>> {
-        ffmpeg::init().map_err(LibraryError::from)?;
+        initialize_ffmpeg_for_path(path)?;
         let input_context = match ffmpeg::format::input(path) {
             Ok(input) => input,
-            Err(_) if !has_known_ffmpeg_media_extension(path) => {
-                return Err(LoadPluginError::Unsupported);
+            Err(error) => {
+                return Err(classify_ffmpeg_probe_failure(path, error.into()));
             }
-            Err(error) => return Err(LibraryError::from(error).into()),
         };
         let streams = collect_asset_metadata(&input_context);
 
@@ -1011,6 +1058,7 @@ impl LoadPlugin for FfmpegVideoLoader {
             output_color_space,
         } = request
         {
+            self.claim_video_path(path, *stream_index)?;
             Ok(self.load_video_frame(
                 path,
                 *source_time,
@@ -1048,7 +1096,84 @@ mod tests {
     }
 
     #[test]
-    fn unknown_probe_failure_is_unsupported_but_known_media_failure_is_preserved()
+    fn demuxer_registry_claims_a_format_missing_from_the_replaced_legacy_table()
+    -> Result<(), Box<dyn std::error::Error>> {
+        ffmpeg::init()?;
+        assert!(
+            registered_ffmpeg_demuxer_extensions().contains("nut"),
+            "the linked FFmpeg registry must expose its standard NUT demuxer"
+        );
+        let path = std::env::temp_dir().join(format!(
+            "ffmpeg-registry-routing-{}.nut",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"not a NUT stream")?;
+        let result = FfmpegVideoLoader::new().open(&path.to_string_lossy());
+        std::fs::remove_file(path)?;
+        let Err(LoadPluginError::Failed(LibraryError::Ffmpeg(error))) = result else {
+            return Err(std::io::Error::other(
+                "a registry-known NUT path must preserve its concrete FFmpeg probe error",
+            )
+            .into());
+        };
+        assert!(!error.to_string().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn initialization_failure_declines_unknown_extensions_but_claims_registered_ones() {
+        let unknown = classify_ffmpeg_probe_failure(
+            "/fixtures/runtime.rgba-fixture",
+            LibraryError::Plugin("synthetic init failure".to_string()),
+        );
+        assert!(matches!(unknown, LoadPluginError::Unsupported));
+
+        assert!(has_registered_ffmpeg_media_extension(
+            "/fixtures/broken.mp4"
+        ));
+        let known = classify_ffmpeg_probe_failure(
+            "/fixtures/broken.mp4",
+            LibraryError::Plugin("synthetic init failure".to_string()),
+        );
+        assert!(matches!(known, LoadPluginError::Failed(_)));
+    }
+
+    #[test]
+    fn valid_ffmpeg_content_with_an_unknown_extension_is_claimed_by_magic_probe()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/e2e_media/h264_24.mp4");
+        let path = std::env::temp_dir().join(format!(
+            "ffmpeg-renamed-video-{}.asset",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::copy(fixture, &path)?;
+        let path_text = path.to_string_lossy().into_owned();
+        let loader = FfmpegVideoLoader::new();
+        let streams = loader.open(&path_text)?;
+        assert!(
+            streams
+                .iter()
+                .any(|stream| { stream.kind == crate::model::asset::AssetKind::Video })
+        );
+        let loaded = loader.load(
+            &LoadRequest::VideoFrame {
+                path: path_text,
+                source_time: 0.0,
+                stream_index: None,
+                input_color_space: None,
+                output_color_space: None,
+            },
+            &CacheManager::new(),
+        )?;
+        assert!(loaded.image.width > 0);
+        assert!(loaded.image.height > 0);
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_probe_failure_is_unsupported_but_registered_media_failure_is_concrete()
     -> Result<(), Box<dyn std::error::Error>> {
         let stem =
             std::env::temp_dir().join(format!("ffmpeg-probe-routing-{}", uuid::Uuid::new_v4()));
@@ -1056,17 +1181,47 @@ mod tests {
         let media_path = stem.with_extension("mp4");
         std::fs::write(&custom_path, b"not an ffmpeg container")?;
         std::fs::write(&media_path, b"not an ffmpeg container")?;
+        let custom_path_text = custom_path.to_string_lossy().into_owned();
+        let media_path_text = media_path.to_string_lossy().into_owned();
         let loader = FfmpegVideoLoader::new();
         assert!(matches!(
-            loader.open(&custom_path.to_string_lossy()),
+            loader.open(&custom_path_text),
             Err(LoadPluginError::Unsupported)
         ));
         assert!(matches!(
-            loader.open(&media_path.to_string_lossy()),
-            Err(LoadPluginError::Failed(_))
+            loader.load(
+                &LoadRequest::VideoFrame {
+                    path: custom_path_text,
+                    source_time: 0.0,
+                    stream_index: None,
+                    input_color_space: None,
+                    output_color_space: None,
+                },
+                &CacheManager::new(),
+            ),
+            Err(LoadPluginError::Unsupported)
         ));
+        let media_result = loader.open(&media_path_text);
+        let media_load_result = loader.load(
+            &LoadRequest::VideoFrame {
+                path: media_path_text,
+                source_time: 0.0,
+                stream_index: None,
+                input_color_space: None,
+                output_color_space: None,
+            },
+            &CacheManager::new(),
+        );
         std::fs::remove_file(custom_path)?;
         std::fs::remove_file(media_path)?;
+        assert!(matches!(
+            media_result,
+            Err(LoadPluginError::Failed(LibraryError::Ffmpeg(_)))
+        ));
+        assert!(matches!(
+            media_load_result,
+            Err(LoadPluginError::Failed(LibraryError::Ffmpeg(_)))
+        ));
         Ok(())
     }
 }
