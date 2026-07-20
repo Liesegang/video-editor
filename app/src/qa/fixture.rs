@@ -515,7 +515,7 @@ fn root_transform_node(
     ui_position: [f32; 2],
 ) -> Result<Node, String> {
     let mut node = operation_node(
-        plugin_manager.create_transform_operation_node(),
+        plugin_manager.create_shape_transform_operation_node(),
         id,
         name,
         ui_position,

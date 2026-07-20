@@ -151,7 +151,7 @@ fn project_with_shape_graph(
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id)?;
 
-    let mut root_transform = PluginManager::default().create_transform_operation_node()?;
+    let mut root_transform = PluginManager::default().create_shape_transform_operation_node()?;
     set(&mut root_transform, "position", vec2(8.0, 8.0))?;
     set(&mut root_transform, "anchor", vec2(0.0, 0.0))?;
 

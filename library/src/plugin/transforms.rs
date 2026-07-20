@@ -55,8 +55,12 @@ pub fn property_definitions() -> Vec<PropertyDefinition> {
     ]
 }
 
-pub fn descriptor() -> Result<OperationDescriptor, OperationDescriptorError> {
-    OperationDescriptor::transform(property_definitions())
+pub fn shape_descriptor() -> Result<OperationDescriptor, OperationDescriptorError> {
+    OperationDescriptor::shape_transform(property_definitions())
+}
+
+pub fn image_descriptor() -> Result<OperationDescriptor, OperationDescriptorError> {
+    OperationDescriptor::image_transform(property_definitions())
 }
 
 pub fn evaluate_source(

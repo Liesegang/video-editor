@@ -305,7 +305,9 @@ impl ProjectManager {
         position: [f64; 2],
         anchor: [f64; 2],
     ) -> Result<Node, LibraryError> {
-        let mut node = self.plugin_manager.create_transform_operation_node()?;
+        let mut node = self
+            .plugin_manager
+            .create_shape_transform_operation_node()?;
         for (key, value) in [
             (
                 "position",

@@ -208,7 +208,7 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
         8,
     );
     set_declared_property(&mut text, "size", PropertyValue::Number(OrderedFloat(5.0)))?;
-    let mut transform = plugin_manager.create_transform_operation_node()?;
+    let mut transform = plugin_manager.create_shape_transform_operation_node()?;
     set_declared_property(
         &mut transform,
         "position",

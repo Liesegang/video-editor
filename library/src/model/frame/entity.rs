@@ -314,6 +314,10 @@ pub enum FrameGroupKind {
     /// A descriptor-backed Effect operation. Its child image is composited
     /// into one isolated layer before the operation is applied exactly once.
     Effect,
+    /// A native Image -> Image spatial operation. Its complete child image is
+    /// rasterized in local space and transformed as one layer. Nested groups
+    /// preserve the graph's ordered affine stack.
+    ImageTransform,
     /// A Reference layer consuming a canonical image connection. The nested
     /// source item remains in its original Project containment and is only
     /// projected here for this render evaluation.

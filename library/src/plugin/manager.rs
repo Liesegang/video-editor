@@ -35,8 +35,9 @@ use crate::plugin::traits::{Plugin, PropertyPlugin};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
-    OperationDescriptor, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
-    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID,
+    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, SHAPE_TRANSFORM_COMPONENT_ID,
+    STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin, TRANSFORM_APPLY_OPERATION,
+    TRANSFORM_CATEGORY,
 };
 
 fn materialize_validated_operation_properties(
@@ -309,12 +310,16 @@ impl PluginManager {
                 })?
                 .descriptor()
                 .map_err(|error| LibraryError::Plugin(error.to_string()))?,
-            (TRANSFORM_CATEGORY, TRANSFORM_APPLY_OPERATION)
-                if component_id == TRANSFORM_COMPONENT_ID =>
-            {
-                crate::plugin::transforms::descriptor()
-                    .map_err(|error| LibraryError::Plugin(error.to_string()))?
+            (TRANSFORM_CATEGORY, TRANSFORM_APPLY_OPERATION) => match component_id {
+                SHAPE_TRANSFORM_COMPONENT_ID => crate::plugin::transforms::shape_descriptor(),
+                IMAGE_TRANSFORM_COMPONENT_ID => crate::plugin::transforms::image_descriptor(),
+                _ => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Operation {category}/{component_id}/{operation} not found"
+                    )));
+                }
             }
+            .map_err(|error| LibraryError::Plugin(error.to_string()))?,
             _ => {
                 return Err(LibraryError::Plugin(format!(
                     "Operation {category}/{component_id}/{operation} not found"
@@ -376,10 +381,24 @@ impl PluginManager {
     /// Creates the native whole-Shape absolute placement operation. Its four
     /// properties are complete at construction; callers may then author a
     /// context-specific position and anchor through normal Node mutations.
-    pub fn create_transform_operation_node(&self) -> Result<crate::model::Node, LibraryError> {
+    pub fn create_shape_transform_operation_node(
+        &self,
+    ) -> Result<crate::model::Node, LibraryError> {
         self.create_operation_node(
             TRANSFORM_CATEGORY,
-            TRANSFORM_COMPONENT_ID,
+            SHAPE_TRANSFORM_COMPONENT_ID,
+            TRANSFORM_APPLY_OPERATION,
+        )
+    }
+
+    /// Creates the native whole-Image placement operation. Its child may be
+    /// any Image-producing subtree; descendant identities remain unchanged.
+    pub fn create_image_transform_operation_node(
+        &self,
+    ) -> Result<crate::model::Node, LibraryError> {
+        self.create_operation_node(
+            TRANSFORM_CATEGORY,
+            IMAGE_TRANSFORM_COMPONENT_ID,
             TRANSFORM_APPLY_OPERATION,
         )
     }
@@ -1361,7 +1380,12 @@ mod tests {
         let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();
         operation_contracts.push((
             TRANSFORM_CATEGORY,
-            TRANSFORM_COMPONENT_ID.to_string(),
+            SHAPE_TRANSFORM_COMPONENT_ID.to_string(),
+            transform_definitions.len(),
+        ));
+        operation_contracts.push((
+            TRANSFORM_CATEGORY,
+            IMAGE_TRANSFORM_COMPONENT_ID.to_string(),
             transform_definitions.len(),
         ));
         let registered_effect_ids;
@@ -1458,7 +1482,12 @@ mod tests {
                 "effector" => manager.create_effector_operation_node(&component_id),
                 "decorator" => manager.create_decorator_operation_node(&component_id),
                 "style" => manager.create_style_operation_node(&component_id),
-                TRANSFORM_CATEGORY => manager.create_transform_operation_node(),
+                TRANSFORM_CATEGORY if component_id == SHAPE_TRANSFORM_COMPONENT_ID => {
+                    manager.create_shape_transform_operation_node()
+                }
+                TRANSFORM_CATEGORY if component_id == IMAGE_TRANSFORM_COMPONENT_ID => {
+                    manager.create_image_transform_operation_node()
+                }
                 unknown => {
                     failures.push(format!(
                         "operation contract uses unknown category {unknown} for {component_id}"

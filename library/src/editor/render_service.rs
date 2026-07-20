@@ -86,6 +86,9 @@ impl<T: Renderer> RenderService<T> {
         if group.kind == FrameGroupKind::Composition {
             return self.render_composition_group(group, parent_context);
         }
+        if group.kind == FrameGroupKind::ImageTransform {
+            return self.render_image_transform_group(group, parent_context);
+        }
 
         let child_context = parent_context.with_transform(&group.transform);
         if !group_requires_isolation(group) {
@@ -106,6 +109,43 @@ impl<T: Renderer> RenderService<T> {
         self.renderer.draw_layer_affine_with_blend(
             &output,
             &Affine2D::IDENTITY,
+            group.transform.opacity,
+            group.blend_mode,
+        )
+    }
+
+    /// Rasterize the complete upstream Image subtree in its own canvas before
+    /// applying this operation's affine transform. Applying the transform to
+    /// the child context would change graph order for Transform(Effect(...))
+    /// and transform descendants independently instead of as one image.
+    fn render_image_transform_group(
+        &mut self,
+        group: &FrameGroup,
+        parent_context: &RenderContext,
+    ) -> Result<(), LibraryError> {
+        let width = scaled_dimension(group.width as f64, parent_context.render_scale);
+        let height = scaled_dimension(group.height as f64, parent_context.render_scale);
+        let child_context = RenderContext::composition(parent_context.render_scale, width, height);
+
+        self.renderer
+            .begin_group(width, height, &transparent_color())?;
+        let children_result =
+            self.render_items(&group.items, &child_context, group.effect_time.into_inner());
+        let output_result = self.renderer.end_group();
+        children_result?;
+        let output = output_result?;
+
+        let pixel_to_local = Affine2D::scale(
+            1.0 / parent_context.render_scale,
+            1.0 / parent_context.render_scale,
+        );
+        let transform = parent_context
+            .logical_to_target
+            .compose(Affine2D::from(&group.transform))
+            .compose(pixel_to_local);
+        self.renderer.draw_layer_affine_with_blend(
+            &output,
+            &transform,
             group.transform.opacity,
             group.blend_mode,
         )

@@ -288,7 +288,7 @@ mod tests {
         );
         content.id = content_id;
         let mut spatial = library::plugin::PluginManager::default()
-            .create_transform_operation_node()
+            .create_shape_transform_operation_node()
             .unwrap();
         spatial.id = spatial_id;
         project.add_node(content);
@@ -524,7 +524,7 @@ mod tests {
         source.id = source_id;
         project.add_node(source);
         let mut spatial = library::plugin::PluginManager::default()
-            .create_transform_operation_node()
+            .create_shape_transform_operation_node()
             .unwrap();
         spatial.id = spatial_id;
         project.add_node(spatial);

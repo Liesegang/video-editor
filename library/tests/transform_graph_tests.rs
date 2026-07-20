@@ -5,20 +5,21 @@ use library::LibraryError;
 use library::animation::EasingFunction;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
-use library::model::frame::entity::{FrameItem, FrameObject};
+use library::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem, FrameObject};
 use library::model::frame::runtime_shape::RuntimeShapeGeometry;
 use library::model::frame::transform::{Position, Scale, Transform};
 use library::model::project::{
-    Composition, EvalOutput, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle,
-    PortAddress, PortDataType, PortDirection, PortOwner, Project, ProjectConnection,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    Composition, EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
+    NodeGraphBundle, PortAddress, PortDataType, PortDirection, PortOwner, Project,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
 use library::model::{Clip, GeneratorContent, Node, NodeContent};
 use library::plugin::{
-    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext, PluginManager,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext,
+    IMAGE_TRANSFORM_COMPONENT_ID, PluginManager, SHAPE_TRANSFORM_COMPONENT_ID,
     STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
-    TRANSFORM_COMPONENT_ID, property_port_key,
+    property_port_key,
 };
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -102,6 +103,14 @@ fn first_object(items: &[FrameItem]) -> Option<&FrameObject> {
     })
 }
 
+fn group_by_source(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> {
+    items.iter().find_map(|item| match item {
+        FrameItem::Object(_) => None,
+        FrameItem::Group(group) if group.source_id == source_id => Some(group),
+        FrameItem::Group(group) => group_by_source(&group.items, source_id),
+    })
+}
+
 #[test]
 fn transform_and_style_have_one_explicit_property_authority() -> AnyResult<()> {
     let plugins = PluginManager::default();
@@ -123,10 +132,10 @@ fn transform_and_style_have_one_explicit_property_authority() -> AnyResult<()> {
 
     let descriptor = plugins.operation_descriptor(
         TRANSFORM_CATEGORY,
-        TRANSFORM_COMPONENT_ID,
+        SHAPE_TRANSFORM_COMPONENT_ID,
         TRANSFORM_APPLY_OPERATION,
     )?;
-    assert_eq!(descriptor.label(), "Transform");
+    assert_eq!(descriptor.label(), "Shape Transform");
     assert_eq!(
         descriptor
             .properties()
@@ -162,9 +171,33 @@ fn transform_and_style_have_one_explicit_property_authority() -> AnyResult<()> {
                 .any(|port| port.key == property_port_key(definition.name()))
         );
     }
-    let transform = plugins.create_transform_operation_node()?;
-    assert_eq!(transform.name, "Transform");
+    let transform = plugins.create_shape_transform_operation_node()?;
+    assert_eq!(transform.name, "Shape Transform");
     assert_eq!(transform.properties().iter().count(), 4);
+
+    let image_descriptor = plugins.operation_descriptor(
+        TRANSFORM_CATEGORY,
+        IMAGE_TRANSFORM_COMPONENT_ID,
+        TRANSFORM_APPLY_OPERATION,
+    )?;
+    assert_eq!(image_descriptor.label(), "Image Transform");
+    assert_eq!(image_descriptor.properties().len(), 4);
+    assert!(image_descriptor.declared_ports().iter().any(|port| {
+        port.key == library::model::project::IMAGE_INPUT_PORT
+            && port.direction == PortDirection::Input
+            && port.data_type == PortDataType::Image
+    }));
+    assert!(image_descriptor.declared_ports().iter().any(|port| {
+        port.key == IMAGE_OUTPUT_PORT
+            && port.direction == PortDirection::Output
+            && port.data_type == PortDataType::Image
+    }));
+    assert!(
+        image_descriptor
+            .declared_ports()
+            .iter()
+            .all(|port| { port.key != SHAPE_INPUT_PORT && port.key != SHAPE_OUTPUT_PORT })
+    );
 
     for component_id in ["fill", "stroke"] {
         let style =
@@ -212,7 +245,7 @@ fn factories_build_centered_generator_transform_style_topologies() -> AnyResult<
 
     let text = manager.create_text_graph("hello", "Arial", WIDTH, HEIGHT)?;
     let text_id = generator_id(&text, GeneratorContent::Text)?;
-    let text_transform_id = operation_id(&text, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let text_transform_id = operation_id(&text, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let text_fill_id = operation_id(&text, STYLE_CATEGORY, "fill")?;
     assert_eq!(text.output_node_id, Some(text_fill_id));
     assert_eq!(text.nodes.len(), 3);
@@ -247,7 +280,8 @@ fn factories_build_centered_generator_transform_style_topologies() -> AnyResult<
 
     let shape = manager.create_shape_graph("M0 0 H40 V20 H0 Z", WIDTH, HEIGHT, 40, 20)?;
     let shape_id = generator_id(&shape, GeneratorContent::Shape)?;
-    let shape_transform_id = operation_id(&shape, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let shape_transform_id =
+        operation_id(&shape, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let fill_id = operation_id(&shape, STYLE_CATEGORY, "fill")?;
     let stroke_id = operation_id(&shape, STYLE_CATEGORY, "stroke")?;
     let merge_id = shape
@@ -288,6 +322,81 @@ fn factories_build_centered_generator_transform_style_topologies() -> AnyResult<
 }
 
 #[test]
+fn image_transforms_wrap_complete_image_subtrees_and_compose_as_nested_groups() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let mut graph = manager.create_shape_graph("M0 0 H40 V20 H0 Z", WIDTH, HEIGHT, 40, 20)?;
+    let generator_id = generator_id(&graph, GeneratorContent::Shape)?;
+    let shape_transform_id =
+        operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
+    let merge_id = graph
+        .output_node_id
+        .context("Shape graph has no Merge output")?;
+
+    let mut upstream_transform = plugins.create_image_transform_operation_node()?;
+    set_property(
+        &mut upstream_transform,
+        "position",
+        Property::constant(library::plugin::transforms::vec2_value(12.0, 8.0)),
+    )?;
+    let upstream_transform_id = upstream_transform.id;
+    let mut downstream_transform = plugins.create_image_transform_operation_node()?;
+    set_property(
+        &mut downstream_transform,
+        "rotation",
+        Property::constant(15.0.into()),
+    )?;
+    let downstream_transform_id = downstream_transform.id;
+    graph
+        .nodes
+        .extend([upstream_transform, downstream_transform]);
+    graph.connections.extend([
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(upstream_transform_id), IMAGE_INPUT_PORT),
+            0,
+        ),
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(upstream_transform_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(downstream_transform_id), IMAGE_INPUT_PORT),
+            0,
+        ),
+    ]);
+    graph.output_node_id = Some(downstream_transform_id);
+    let project = project_with_graph(graph)?;
+    let frame = evaluate(&project, &plugins, 0)?;
+
+    let downstream = group_by_source(&frame.items, downstream_transform_id)
+        .context("downstream Image Transform group is missing")?;
+    assert_eq!(downstream.kind, FrameGroupKind::ImageTransform);
+    assert_eq!(downstream.transform.rotation, 15.0);
+    assert_eq!((downstream.width, downstream.height), (WIDTH, HEIGHT));
+    let upstream = group_by_source(&downstream.items, upstream_transform_id)
+        .context("upstream Image Transform group is not nested")?;
+    assert_eq!(upstream.kind, FrameGroupKind::ImageTransform);
+    assert_eq!(
+        (upstream.transform.position.x, upstream.transform.position.y),
+        (12.0, 8.0)
+    );
+    assert_eq!(upstream.items.len(), 1);
+    let merge = group_by_source(&upstream.items, merge_id)
+        .context("Image Transform discarded the complete Merge subtree")?;
+    assert_eq!(merge.kind, FrameGroupKind::Merge);
+
+    let object = first_object(&downstream.items).context("nested image has no object")?;
+    assert_eq!(object.source_node_id, generator_id);
+    assert_eq!(
+        object.spatial_transform_node_id,
+        Some(shape_transform_id),
+        "Image Transform must preserve Shape Transform provenance"
+    );
+    Ok(())
+}
+
+#[test]
 fn root_transform_keyframes_drive_the_whole_shape_and_preview_owner() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
@@ -295,7 +404,7 @@ fn root_transform_keyframes_drive_the_whole_shape_and_preview_owner() -> AnyResu
         plugins.clone(),
     );
     let mut graph = manager.create_shape_graph("M0 0 H20 V10 H0 Z", WIDTH, HEIGHT, 20, 10)?;
-    let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let transform = graph
         .nodes
         .iter_mut()
@@ -370,7 +479,7 @@ fn transform_preserves_generator_and_text_group_identity() -> AnyResult<()> {
     );
     let graph = manager.create_text_graph("AA\nAA", "Arial", WIDTH, HEIGHT)?;
     let text_id = generator_id(&graph, GeneratorContent::Text)?;
-    let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let text_node = graph
         .nodes
         .iter()
@@ -445,7 +554,7 @@ fn path_modulation_is_component_wise_and_independent_of_root_wire_order() -> Any
     let make_graph = |modulation_before_root: bool| -> AnyResult<(NodeGraphBundle, Uuid, Uuid)> {
         let mut graph = manager.create_shape_graph("M0 0 H20 V10 H0 Z", WIDTH, HEIGHT, 20, 10)?;
         let shape_id = generator_id(&graph, GeneratorContent::Shape)?;
-        let root_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+        let root_id = operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
         let mut translate = plugins.create_effector_operation_node("transform")?;
         set_property(&mut translate, "tx", Property::constant(8.0.into()))?;
         set_property(&mut translate, "ty", Property::constant(3.0.into()))?;
@@ -558,7 +667,8 @@ fn disabled_transform_is_no_output_without_poisoning_other_merge_inputs() -> Any
         plugins.clone(),
     );
     let mut first = manager.create_text_graph("disabled", "Arial", WIDTH, HEIGHT)?;
-    let first_transform_id = operation_id(&first, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let first_transform_id =
+        operation_id(&first, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     first
         .nodes
         .iter_mut()
@@ -568,7 +678,8 @@ fn disabled_transform_is_no_output_without_poisoning_other_merge_inputs() -> Any
     let first_output = first.output_node_id.context("first graph has no output")?;
 
     let second = manager.create_text_graph("visible", "Arial", WIDTH, HEIGHT)?;
-    let second_transform_id = operation_id(&second, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let second_transform_id =
+        operation_id(&second, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let second_output = second
         .output_node_id
         .context("second graph has no output")?;
@@ -612,9 +723,10 @@ fn multiple_absolute_transforms_are_rejected_instead_of_silently_overwriting() -
         plugins.clone(),
     );
     let mut graph = manager.create_text_graph("double", "Arial", WIDTH, HEIGHT)?;
-    let first_transform_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+    let first_transform_id =
+        operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
     let fill_id = operation_id(&graph, STYLE_CATEGORY, "fill")?;
-    let second_transform = plugins.create_transform_operation_node()?;
+    let second_transform = plugins.create_shape_transform_operation_node()?;
     let second_transform_id = second_transform.id;
     graph.nodes.push(second_transform);
     let downstream = graph
@@ -657,7 +769,7 @@ fn unavailable_transform_identity_is_safe_no_output_and_roundtrips_losslessly() 
         ("operation", "transform.apply.future"),
     ] {
         let mut graph = manager.create_text_graph("future", "Arial", WIDTH, HEIGHT)?;
-        let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+        let transform_id = operation_id(&graph, TRANSFORM_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID)?;
         let index = graph
             .nodes
             .iter()
@@ -680,7 +792,7 @@ fn unavailable_transform_identity_is_safe_no_output_and_roundtrips_losslessly() 
 #[test]
 fn transform_evaluator_rejects_missing_or_scalar_no_output_properties() -> AnyResult<()> {
     let plugins = PluginManager::default();
-    let transform = plugins.create_transform_operation_node()?;
+    let transform = plugins.create_shape_transform_operation_node()?;
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 3.0);
     let project = Project::new("NoOutput");
     let evaluators = plugins.get_property_evaluators();
@@ -694,7 +806,7 @@ fn transform_evaluator_rejects_missing_or_scalar_no_output_properties() -> AnyRe
     assert_eq!(
         plugins.evaluate_transform_operation(
             &context,
-            TRANSFORM_COMPONENT_ID,
+            SHAPE_TRANSFORM_COMPONENT_ID,
             &Default::default(),
             0.0,
         ),
@@ -715,7 +827,7 @@ fn transform_evaluator_rejects_missing_or_scalar_no_output_properties() -> AnyRe
     assert_eq!(
         plugins.evaluate_transform_operation(
             &context,
-            TRANSFORM_COMPONENT_ID,
+            SHAPE_TRANSFORM_COMPONENT_ID,
             transform.properties(),
             0.0,
         ),

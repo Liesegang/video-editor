@@ -1818,8 +1818,8 @@ mod tests {
     use library::model::project::NodeContainer;
     use library::model::property::Property;
     use library::plugin::{
-        EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, TRANSFORM_APPLY_OPERATION,
-        TRANSFORM_COMPONENT_ID,
+        EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
+        TRANSFORM_APPLY_OPERATION,
     };
 
     #[test]
@@ -2298,12 +2298,12 @@ mod tests {
     #[test]
     fn root_transform_has_transform_semantics_and_descriptor_property_controls() {
         let plugins = PluginManager::default();
-        let node = plugins.create_transform_operation_node().unwrap();
+        let node = plugins.create_shape_transform_operation_node().unwrap();
         let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("Transform factory returned a PluginOperation")
         };
         assert_eq!(operation.category, TRANSFORM_CATEGORY);
-        assert_eq!(operation.component_id, TRANSFORM_COMPONENT_ID);
+        assert_eq!(operation.component_id, SHAPE_TRANSFORM_COMPONENT_ID);
         assert_eq!(operation.operation, TRANSFORM_APPLY_OPERATION);
         assert_eq!(operation_category(&node), Some(TRANSFORM_CATEGORY));
         assert_eq!(source_kind(&node), "Transform");

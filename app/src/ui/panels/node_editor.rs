@@ -29,8 +29,8 @@ use library::model::{
 use library::plugin::{
     property_name_from_port, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
-    TRANSFORM_COMPONENT_ID,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
+    TRANSFORM_CATEGORY,
 };
 use library::EditorService;
 use ordered_float::OrderedFloat;
@@ -7032,7 +7032,7 @@ fn transform_operation_menu_item(
 ) -> Option<SearchableItem<NodeCreateRequest>> {
     let descriptor = match plugin_manager.operation_descriptor(
         TRANSFORM_CATEGORY,
-        TRANSFORM_COMPONENT_ID,
+        SHAPE_TRANSFORM_COMPONENT_ID,
         TRANSFORM_APPLY_OPERATION,
     ) {
         Ok(descriptor) => descriptor,
@@ -7230,7 +7230,7 @@ fn create_operation_node_for_request(
     plugin_manager: &PluginManager,
 ) -> Option<Node> {
     let result = match request {
-        NodeCreateRequest::Transform => plugin_manager.create_transform_operation_node(),
+        NodeCreateRequest::Transform => plugin_manager.create_shape_transform_operation_node(),
         NodeCreateRequest::Style(component_id) => {
             plugin_manager.create_style_operation_node(component_id)
         }
@@ -8031,20 +8031,22 @@ fn create_action_for_request(
                 comp_id,
             )
         })),
-        NodeCreateRequest::Transform => match plugin_manager.create_transform_operation_node() {
-            Ok(node) => Some(Box::new(move |project| {
-                insert_prebuilt_graph(
-                    project,
-                    graph_position,
-                    NodeGraphBundle::new(vec![node], Vec::new(), None),
-                    comp_id,
-                )
-            })),
-            Err(error) => {
-                log::error!("Cannot create Transform Node: {error}");
-                None
+        NodeCreateRequest::Transform => {
+            match plugin_manager.create_shape_transform_operation_node() {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Transform Node: {error}");
+                    None
+                }
             }
-        },
+        }
         NodeCreateRequest::Style(component_id) => {
             match plugin_manager.create_style_operation_node(&component_id) {
                 Ok(node) => Some(Box::new(move |project| {
@@ -10397,7 +10399,7 @@ mod tests {
             .iter()
             .find(|item| item.value == NodeCreateRequest::Transform)
             .expect("root Transform is exposed as its own Add request");
-        assert_eq!(root_transform.label, "Transform");
+        assert_eq!(root_transform.label, "Shape Transform");
         assert_eq!(
             root_transform.category.as_deref(),
             Some("Shape Operations / Transform")
@@ -10427,7 +10429,7 @@ mod tests {
             panic!("root Transform factory must create a PluginOperation")
         };
         assert_eq!(root_operation.category, TRANSFORM_CATEGORY);
-        assert_eq!(root_operation.component_id, TRANSFORM_COMPONENT_ID);
+        assert_eq!(root_operation.component_id, SHAPE_TRANSFORM_COMPONENT_ID);
         assert_eq!(root_operation.operation, TRANSFORM_APPLY_OPERATION);
 
         for (component_id, label) in [
