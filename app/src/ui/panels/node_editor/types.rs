@@ -174,7 +174,7 @@ impl ContainerVisual {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PinDefinition {
     pub(super) key: String,
     pub(super) name: String,

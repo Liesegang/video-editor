@@ -195,11 +195,25 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     let from_rect = ports.get(&RenderedPortKey {
         address: edge.from.clone(),
         direction: PortDirection::Output,
+        connection_id: None,
     })?;
-    let to_rect = ports.get(&RenderedPortKey {
-        address: edge.to.clone(),
-        direction: PortDirection::Input,
-    })?;
+    let exact_connection_id = edge
+        .kind
+        .connection_id()
+        .filter(|_| edge.to.port == library::model::project::MERGE_IMAGES_PORT);
+    let to_rect = ports
+        .get(&RenderedPortKey {
+            address: edge.to.clone(),
+            direction: PortDirection::Input,
+            connection_id: exact_connection_id,
+        })
+        .or_else(|| {
+            ports.get(&RenderedPortKey {
+                address: edge.to.clone(),
+                direction: PortDirection::Input,
+                connection_id: None,
+            })
+        })?;
     let start = from_rect.center();
     let end = to_rect.center();
     if ![start, end]
@@ -301,6 +315,7 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "authored_blend_mode": edge.authored_blend_mode,
             "authored_blend_available": edge.authored_blend_available,
             "runtime_first_produced_may_be_normal": edge.authored_blend_available,
+            "physical_variadic_endpoint": exact_connection_id.is_some(),
             "unclipped_rect": qa_rect_metadata(unclipped_bbox),
             "hit_point": {"x": midpoint.x, "y": midpoint.y},
         })),
@@ -312,8 +327,11 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         ] {
             let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
+            let component_id = format!("node_editor.edge:{connection_id}.{suffix}");
+            #[cfg(test)]
+            capture_test_rect(&component_id, rect);
             crate::qa::register_component_with_metadata(
-                format!("node_editor.edge:{connection_id}.{suffix}"),
+                component_id,
                 "node_edge_endpoint",
                 rect,
                 true,

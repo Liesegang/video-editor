@@ -6,9 +6,11 @@ use library::model::{BlendMode, NodeContent, Project};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::ui::panels::node_editor::{
+    canonical_pin_definitions, clipped_qa_rect, qa_container_key, qa_rect_metadata, PinDefinition,
+};
 #[cfg(test)]
 use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
-use crate::ui::panels::node_editor::{clipped_qa_rect, qa_container_key, qa_rect_metadata};
 
 pub(in crate::ui::panels::node_editor) const AUTHORED_BLEND_MODES: [BlendMode; 5] = [
     BlendMode::Normal,
@@ -49,6 +51,19 @@ pub(in crate::ui::panels::node_editor) struct MergeLayerRow {
     pub(in crate::ui::panels::node_editor) authored_blend_available: bool,
     pub(in crate::ui::panels::node_editor) back_to_front_index: usize,
     pub(in crate::ui::panels::node_editor) layer_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::ui::panels::node_editor) enum MergeInputSlotRole {
+    Canonical,
+    Connected(MergeLayerRow),
+    VacantImages,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::ui::panels::node_editor) struct MergeInputSlot {
+    pub(in crate::ui::panels::node_editor) definition: PinDefinition,
+    pub(in crate::ui::panels::node_editor) role: MergeInputSlotRole,
 }
 
 impl MergeLayerRow {
@@ -139,6 +154,61 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
             layer_count,
         })
         .collect()
+}
+
+/// Expand only Merge's variadic `images` definition into one physical input
+/// pin per canonical connection plus one vacant append pin. The Project port
+/// remains a single variadic address; this is a view projection, not a second
+/// graph model.
+pub(in crate::ui::panels::node_editor) fn merge_input_slots(
+    project: &Project,
+    merge_id: Uuid,
+) -> Vec<MergeInputSlot> {
+    let rows = merge_layer_rows(project, merge_id);
+    canonical_pin_definitions(
+        project,
+        PortOwner::Node(merge_id),
+        PortDirection::Input,
+        library::model::project::PortSide::Left,
+    )
+    .into_iter()
+    .flat_map(|definition| {
+        if definition.key != MERGE_IMAGES_PORT {
+            return vec![MergeInputSlot {
+                definition,
+                role: MergeInputSlotRole::Canonical,
+            }];
+        }
+        let mut slots = rows
+            .iter()
+            .cloned()
+            .map(|row| MergeInputSlot {
+                definition: definition.clone(),
+                role: MergeInputSlotRole::Connected(row),
+            })
+            .collect::<Vec<_>>();
+        slots.push(MergeInputSlot {
+            definition,
+            role: MergeInputSlotRole::VacantImages,
+        });
+        slots
+    })
+    .collect()
+}
+
+pub(in crate::ui::panels::node_editor) fn merge_input_index_for_connection(
+    project: &Project,
+    merge_id: Uuid,
+    connection_id: Uuid,
+) -> Option<usize> {
+    merge_input_slots(project, merge_id)
+        .iter()
+        .position(|slot| {
+            matches!(
+                &slot.role,
+                MergeInputSlotRole::Connected(row) if row.connection_id == connection_id
+            )
+        })
 }
 
 #[allow(

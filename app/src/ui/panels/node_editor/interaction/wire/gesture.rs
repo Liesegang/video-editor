@@ -248,6 +248,12 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     state: &mut NodeEditorState,
     frame: WireInteractionFrame<'_>,
 ) -> Vec<QueuedNodeEdit> {
+    if state.merge_layer_reorder.is_some() {
+        state.wire_gesture = None;
+        state.normal_connect_gesture = None;
+        state.normal_wire_drag_active = false;
+        return Vec::new();
+    }
     if state.selected_connection_id.is_some_and(|connection_id| {
         !frame
             .project

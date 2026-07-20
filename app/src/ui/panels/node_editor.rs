@@ -1,7 +1,7 @@
 use crate::action::HistoryManager;
 use crate::state::context_types::{
-    ContextMenuState, NodeEditorNodeDragOrigin, NodeEditorPendingEdit, NodeEditorReparentGesture,
-    NodeEditorState,
+    ContextMenuState, NodeEditorMergeLayerReorderGesture, NodeEditorNodeDragOrigin,
+    NodeEditorPendingEdit, NodeEditorReparentGesture, NodeEditorState,
 };
 #[cfg(test)]
 use crate::state::context_types::{
@@ -39,6 +39,8 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 mod canvas;
+#[cfg(test)]
+mod merge_reorder_tests;
 mod property_evaluation;
 
 use canvas::{
@@ -133,7 +135,8 @@ use queries::{
     canonical_pin_definitions, container_collapsed, container_inactive, container_name_and_size,
     container_output_node_id, container_title, graph_item_inactive, graph_item_inactive_reason,
     graph_item_title, input_definitions, node_property_definition, node_property_time, node_title,
-    output_definitions, GraphItemInactiveReason,
+    output_definitions, parent_container_owner, port_owner_composition,
+    port_owner_for_node_container, GraphItemInactiveReason,
 };
 mod panel;
 pub use panel::node_editor_panel;
@@ -150,9 +153,11 @@ use commands::{insert_node_on_connection, splice_existing_node_on_connection};
 #[cfg(test)]
 use components::WireOrderMenuState;
 use components::{
-    blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend, merge_layer_rows,
+    blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend,
+    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
     register_merge_layer_component, register_merge_layer_popup_component, wire_order_menu_state,
-    wire_order_menu_states, wire_order_qa_metadata, AUTHORED_BLEND_MODES,
+    wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
+    AUTHORED_BLEND_MODES,
 };
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
@@ -1735,39 +1740,6 @@ fn ensure_reparent_hierarchy_contains(
     changed
 }
 
-fn port_owner_for_node_container(container: NodeContainer) -> PortOwner {
-    match container {
-        NodeContainer::Composition(id) => PortOwner::Composition(id),
-        NodeContainer::Track(id) => PortOwner::Track(id),
-        NodeContainer::Clip(id) => PortOwner::Clip(id),
-    }
-}
-
-fn port_owner_composition(project: &Project, owner: PortOwner) -> Option<Uuid> {
-    match owner {
-        PortOwner::Composition(composition_id) => project
-            .get_composition(composition_id)
-            .map(|_| composition_id),
-        PortOwner::Track(track_id) => project.find_composition_for_track(track_id),
-        PortOwner::Clip(clip_id) => project
-            .find_track_for_clip(clip_id)
-            .and_then(|track_id| project.find_composition_for_track(track_id)),
-        PortOwner::Node(node_id) => project.find_node_container(node_id).and_then(|container| {
-            port_owner_composition(project, port_owner_for_node_container(container))
-        }),
-    }
-}
-
-fn parent_container_owner(project: &Project, owner: PortOwner) -> Option<PortOwner> {
-    match owner {
-        PortOwner::Composition(_) | PortOwner::Node(_) => None,
-        PortOwner::Track(track_id) => project
-            .find_composition_for_track(track_id)
-            .map(PortOwner::Composition),
-        PortOwner::Clip(clip_id) => project.find_track_for_clip(clip_id).map(PortOwner::Track),
-    }
-}
-
 fn grow_container_to_rect(project: &mut Project, owner: PortOwner, rect: egui::Rect) -> bool {
     let Some(visual) = container_visual(project, owner) else {
         return false;
@@ -2187,10 +2159,12 @@ mod tests {
         let source_key = RenderedPortKey {
             address: source_address.clone(),
             direction: PortDirection::Output,
+            connection_id: None,
         };
         let target_key = RenderedPortKey {
             address: target_address.clone(),
             direction: PortDirection::Input,
+            connection_id: None,
         };
 
         // Let Snarl finish its initial look-at/layout pass before using the
@@ -2228,6 +2202,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::clone(&rendered_ports),
+                            merge_layer_reorder: &mut state.merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                         };
                         snarl.show(
@@ -2372,6 +2347,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::clone(&rendered_ports),
+                            merge_layer_reorder: &mut state.merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                         };
                         snarl.show(
@@ -3576,6 +3552,7 @@ mod tests {
             RenderedPortKey {
                 address: connection.from.clone(),
                 direction: PortDirection::Output,
+                connection_id: None,
             },
             egui::Rect::from_center_size(source, egui::vec2(13.0, 13.0)),
         )])));
@@ -3708,6 +3685,7 @@ mod tests {
             RenderedPortKey {
                 address: PortAddress::new(PortOwner::Node(alternate_id), IMAGE_OUTPUT_PORT),
                 direction: PortDirection::Output,
+                connection_id: None,
             },
             egui::Rect::from_center_size(alternate_position, egui::vec2(14.0, 14.0)),
         )])));
@@ -4053,6 +4031,7 @@ mod tests {
                     let mut to_global = egui::emath::TSTransform::default();
                     let mut canvas_clip = ui.clip_rect();
                     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
+                    let mut merge_layer_reorder = None;
                     let mut viewer = ProjectNodeViewer {
                         project,
                         plugin_manager: None,
@@ -4068,6 +4047,7 @@ mod tests {
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::clone(&rendered_ports),
+                        merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                     };
                     let style = SnarlStyle {
@@ -4660,6 +4640,7 @@ mod tests {
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project: &project,
                             plugin_manager: Some(&plugins),
@@ -4675,6 +4656,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                         };
                         snarl.show(
@@ -4729,6 +4711,7 @@ mod tests {
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project: &project,
                             plugin_manager: Some(&plugins),
@@ -4744,6 +4727,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                         };
                         snarl.show(
@@ -4877,6 +4861,7 @@ mod tests {
                 RenderedPortKey {
                     address: from.clone(),
                     direction: PortDirection::Output,
+                    connection_id: None,
                 },
                 egui::Rect::from_center_size(start, egui::Vec2::ZERO),
             ),
@@ -4884,6 +4869,7 @@ mod tests {
                 RenderedPortKey {
                     address: to.clone(),
                     direction: PortDirection::Input,
+                    connection_id: None,
                 },
                 egui::Rect::from_center_size(end, egui::Vec2::ZERO),
             ),
@@ -5026,6 +5012,7 @@ mod tests {
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
                         let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project: &project,
                             plugin_manager: None,
@@ -5041,6 +5028,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports,
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                         };
                         snarl.show(
@@ -5132,6 +5120,7 @@ mod tests {
             RenderedPortKey {
                 address: address.clone(),
                 direction: PortDirection::Output,
+                connection_id: None,
             },
             rendered_port_rect,
         )]);
@@ -5147,6 +5136,7 @@ mod tests {
             RenderedPortKey {
                 address: PortAddress::new(PortOwner::Node(Uuid::new_v4()), IMAGE_OUTPUT_PORT),
                 direction: PortDirection::Output,
+                connection_id: None,
             },
             egui::Rect::from_center_size(position, egui::vec2(13.0, 13.0)),
         )]);
@@ -5161,6 +5151,7 @@ mod tests {
             RenderedPortKey {
                 address: PortAddress::new(PortOwner::Node(Uuid::new_v4()), IMAGE_OUTPUT_PORT),
                 direction: PortDirection::Output,
+                connection_id: None,
             },
             offscreen,
         )]);
@@ -5263,6 +5254,7 @@ mod tests {
             address: None,
             direction: PortDirection::Input,
             connected: false,
+            connection_id: None,
             canvas_clip: canvas,
             rendered_ports,
         };
@@ -7663,6 +7655,7 @@ mod tests {
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project,
                             plugin_manager: None,
@@ -7678,6 +7671,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
                         };
                         snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
@@ -8064,6 +8058,7 @@ mod tests {
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project: &project,
                             plugin_manager: None,
@@ -8079,6 +8074,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
                         };
                         snarl.show(
@@ -8152,6 +8148,7 @@ mod tests {
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
+                        let mut merge_layer_reorder = None;
                         let mut viewer = ProjectNodeViewer {
                             project: &project,
                             plugin_manager: None,
@@ -8167,6 +8164,7 @@ mod tests {
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
                         };
                         let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
@@ -8376,6 +8374,7 @@ mod tests {
                     let mut context_menu_exclusion_rects = Vec::new();
                     let mut to_global = egui::emath::TSTransform::default();
                     let mut canvas_clip = ui.clip_rect();
+                    let mut merge_layer_reorder = None;
                     let mut viewer = ProjectNodeViewer {
                         project: &project,
                         plugin_manager: None,
@@ -8391,6 +8390,7 @@ mod tests {
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                        merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                     };
                     let style = SnarlStyle {

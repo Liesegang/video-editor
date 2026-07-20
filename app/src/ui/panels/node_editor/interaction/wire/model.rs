@@ -4,7 +4,8 @@ use library::model::project::{PortAddress, PortDirection, PortOwner};
 use library::model::Project;
 
 use crate::ui::panels::node_editor::{
-    input_definitions, output_definitions, ContainerVisual, GraphItem, NodeEdit, PortAnchorKind,
+    input_definitions, merge_input_slots, output_definitions, ContainerVisual, GraphItem, NodeEdit,
+    PortAnchorKind,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -35,14 +36,43 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
         .get(output_index)?
         .key
         .clone();
-    let input_key = input_definitions(project, target_item)
-        .get(input_index)?
-        .key
-        .clone();
+    let merge_connection = match target_item {
+        GraphItem::Node(merge_id) => merge_input_slots(project, merge_id)
+            .get(input_index)
+            .and_then(|slot| match &slot.role {
+                crate::ui::panels::node_editor::MergeInputSlotRole::Connected(row) => {
+                    Some(row.connection_id)
+                }
+                crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
+                | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
+            }),
+        GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
+    };
+    let input_key = match target_item {
+        GraphItem::Node(merge_id)
+            if project.get_node(merge_id).is_some_and(|node| {
+                matches!(node.content(), library::model::NodeContent::Merge)
+            }) =>
+        {
+            merge_input_slots(project, merge_id)
+                .get(input_index)?
+                .definition
+                .key
+                .clone()
+        }
+        _ => input_definitions(project, target_item)
+            .get(input_index)?
+            .key
+            .clone(),
+    };
     let from = PortAddress::new(graph_item_owner(source_item)?, output_key);
     let to = PortAddress::new(graph_item_owner(target_item)?, input_key);
 
-    if connect {
+    if !connect && merge_connection.is_some() {
+        Some(NodeEdit::DisconnectConnection {
+            connection_id: merge_connection?,
+        })
+    } else if connect {
         Some(NodeEdit::Connect { from, to })
     } else {
         Some(NodeEdit::Disconnect { from, to })

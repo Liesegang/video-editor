@@ -55,6 +55,29 @@ pub fn node_editor_panel(
     if pending_owner_left_composition {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
     }
+    let (primary_down, primary_released) = ui.input(|input| {
+        (
+            input.pointer.primary_down(),
+            input.pointer.primary_released(),
+        )
+    });
+    let stale_merge_reorder =
+        node_editor_state
+            .merge_layer_reorder
+            .as_ref()
+            .is_some_and(|gesture| {
+                let connection_exists = project_lock.read().is_ok_and(|project| {
+                    project.connections.iter().any(|connection| {
+                        connection.id == gesture.connection_id
+                            && connection.to.owner == PortOwner::Node(gesture.merge_id)
+                            && connection.to.port == library::model::project::MERGE_IMAGES_PORT
+                    })
+                });
+                !connection_exists || (!primary_down && !primary_released && !gesture.finished)
+            });
+    if stale_merge_reorder {
+        node_editor_state.merge_layer_reorder = None;
+    }
 
     let mut requested_layout = None;
     let mut selected_nodes = editor_context
@@ -191,7 +214,8 @@ pub fn node_editor_panel(
             wire_context_request: &mut wire_context_request,
             suppress_wire_connect: node_editor_state.wire_gesture.is_some()
                 || node_editor_state.normal_connect_gesture.is_some()
-                || node_editor_state.normal_connect_cancel_pending_release,
+                || node_editor_state.normal_connect_cancel_pending_release
+                || node_editor_state.merge_layer_reorder.is_some(),
             locked_canvas_transform: node_editor_state
                 .container_resize
                 .as_ref()
@@ -207,10 +231,17 @@ pub fn node_editor_panel(
                         .wire_knife
                         .as_ref()
                         .map(|gesture| gesture.canvas_transform)
+                })
+                .or_else(|| {
+                    node_editor_state
+                        .merge_layer_reorder
+                        .as_ref()
+                        .map(|gesture| gesture.canvas_transform)
                 }),
             to_global: &mut to_global,
             canvas_clip: &mut canvas_clip,
             rendered_ports: Arc::clone(&rendered_ports),
+            merge_layer_reorder: &mut node_editor_state.merge_layer_reorder,
             rendered_node_rects: Arc::clone(&rendered_node_rects),
         };
         let snarl_style = node_editor_snarl_style();
@@ -363,7 +394,8 @@ pub fn node_editor_panel(
             && node_editor_state.container_resize.is_none()
             && node_editor_state.wire_gesture.is_none()
             && node_editor_state.normal_connect_gesture.is_none()
-            && node_editor_state.wire_knife.is_none();
+            && node_editor_state.wire_knife.is_none()
+            && node_editor_state.merge_layer_reorder.is_none();
         record_node_reparent_origins(&project, &collected, node_editor_state, gesture_allowed);
         if let (Some(pointer_position), Ok(node_rects)) =
             (pointer_position, rendered_node_rects.lock())
@@ -408,6 +440,9 @@ pub fn node_editor_panel(
         if !primary_down && !primary_released {
             node_editor_state.node_reparent = None;
             node_editor_state.moved_node_ids.clear();
+        }
+        if node_editor_state.merge_layer_reorder.is_some() {
+            collected.clear();
         }
         layout_edits = collected;
     }
@@ -524,6 +559,13 @@ pub fn node_editor_panel(
                 }
             }
         }
+    }
+    if node_editor_state
+        .merge_layer_reorder
+        .as_ref()
+        .is_some_and(|gesture| gesture.finished)
+    {
+        node_editor_state.merge_layer_reorder = None;
     }
     if selection_changed {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);

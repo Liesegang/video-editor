@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::{
-    input_definitions, output_definitions, ContainerKind, ContainerVisual, GraphItem,
-    PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y,
-    MIN_CONTAINER_SIZE,
+    input_definitions, merge_input_index_for_connection, output_definitions, ContainerKind,
+    ContainerVisual, GraphItem, PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y,
+    CONTAINER_RIGHT_PORT_Y, MIN_CONTAINER_SIZE,
 };
 
 pub(super) fn build_snarl(
@@ -89,10 +89,17 @@ pub(super) fn build_snarl(
         else {
             continue;
         };
-        let Some(input_index) = input_definitions(project, target_item)
-            .iter()
-            .position(|input| input.key == connection.to.port)
-        else {
+        let input_index = match connection.to.owner {
+            PortOwner::Node(merge_id)
+                if connection.to.port == library::model::project::MERGE_IMAGES_PORT =>
+            {
+                merge_input_index_for_connection(project, merge_id, connection.id)
+            }
+            _ => input_definitions(project, target_item)
+                .iter()
+                .position(|input| input.key == connection.to.port),
+        };
+        let Some(input_index) = input_index else {
             continue;
         };
         snarl.connect(

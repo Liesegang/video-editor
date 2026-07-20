@@ -1,4 +1,4 @@
-use crate::state::context_types::NodeEditorEditableWire;
+use crate::state::context_types::{NodeEditorEditableWire, NodeEditorMergeLayerReorderGesture};
 use eframe::egui;
 use library::model::project::PortOwner;
 use library::model::Project;
@@ -36,6 +36,8 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     pub(in crate::ui::panels::node_editor) canvas_clip: &'a mut egui::Rect,
     pub(in crate::ui::panels::node_editor) rendered_ports:
         Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+    pub(in crate::ui::panels::node_editor) merge_layer_reorder:
+        &'a mut Option<NodeEditorMergeLayerReorderGesture>,
     /// Exact graph-space rectangles reported by Snarl after layout. These are
     /// the geometry authority for drop targeting; estimated Node sizes are not
     /// precise enough around nested container boundaries.

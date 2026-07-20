@@ -680,6 +680,11 @@ pub struct NodeEditorState {
     /// Persistent right-click menu for a canonical wire.
     #[serde(skip)]
     pub wire_context_menu: Option<NodeEditorWireContextMenu>,
+    /// A physical drag of one Merge variadic input row. The authoritative
+    /// order changes only once, on a valid release target, so one drag is one
+    /// undo/redo transaction.
+    #[serde(skip)]
+    pub merge_layer_reorder: Option<NodeEditorMergeLayerReorderGesture>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -714,6 +719,23 @@ pub struct NodeEditorWireGesture {
     pub kind: NodeEditorWireDragKind,
     pub start: egui::Pos2,
     pub current: egui::Pos2,
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorMergeLayerReorderGesture {
+    pub merge_id: Uuid,
+    pub connection_id: Uuid,
+    pub start_index: usize,
+    pub target_index: Option<usize>,
+    pub layer_count: usize,
+    /// Exact graph-space row geometry sampled from Snarl. Drop resolution
+    /// uses these rectangles instead of assuming a fixed row pitch.
+    pub row_rects: Vec<egui::Rect>,
+    /// Freeze graph navigation while the row owns the pointer.
+    pub canvas_transform: egui::emath::TSTransform,
+    /// Retain ownership through the release frame, until the queued edit and
+    /// competing Snarl gestures have been resolved.
+    pub finished: bool,
 }
 
 #[derive(Clone, Debug)]
