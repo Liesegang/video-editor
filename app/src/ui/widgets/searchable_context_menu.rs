@@ -4,9 +4,13 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
+type TestQaComponent = (Rect, bool, Option<serde_json::Value>);
+#[cfg(test)]
+type TestQaComponents = RefCell<BTreeMap<String, TestQaComponent>>;
+
+#[cfg(test)]
 thread_local! {
-    static TEST_QA_COMPONENTS: RefCell<BTreeMap<String, (Rect, bool, Option<serde_json::Value>)>> =
-        RefCell::new(BTreeMap::new());
+    static TEST_QA_COMPONENTS: TestQaComponents = const { RefCell::new(BTreeMap::new()) };
 }
 
 #[cfg(test)]
@@ -15,9 +19,7 @@ pub(crate) fn reset_searchable_test_components() {
 }
 
 #[cfg(test)]
-pub(crate) fn searchable_test_component(
-    id: &str,
-) -> Option<(Rect, bool, Option<serde_json::Value>)> {
+pub(crate) fn searchable_test_component(id: &str) -> Option<TestQaComponent> {
     TEST_QA_COMPONENTS.with(|components| components.borrow().get(id).cloned())
 }
 

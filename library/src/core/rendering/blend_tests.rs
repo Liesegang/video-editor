@@ -212,7 +212,9 @@ fn blend_rgb(mode: BlendMode, base: Rgb, source: Rgb) -> Rgb {
         BlendMode::Saturation => set_lum(set_sat(base, sat(source)), lum(base)),
         BlendMode::Color => set_lum(source, lum(base)),
         BlendMode::Luminosity => set_lum(base, lum(source)),
-        BlendMode::Behind | BlendMode::Clear => unreachable!("Porter-Duff special mode"),
+        // Porter-Duff modes are handled before this component blend helper.
+        // Keep a harmless total fallback so the reference stays panic-free.
+        BlendMode::Behind | BlendMode::Clear => base,
     }
 }
 
