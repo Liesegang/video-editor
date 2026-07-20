@@ -59,6 +59,68 @@ class NodeWireQaTests(unittest.TestCase):
         self.assertEqual(client.injected[1]["button"], "secondary")
         self.assertEqual(client.injected[2]["component_frame"], 17)
 
+    def test_node_drop_uses_fresh_wire_hit_point_instead_of_bbox_center(self):
+        hit_point = {"x": 84.0, "y": 63.0}
+        snapshot = {
+            "frame": 21,
+            "components": [
+                {
+                    "id": "node_editor.node_header:source",
+                    "enabled": True,
+                    "visible": True,
+                    "rect_points": rect(10.0, 20.0, 50.0, 40.0),
+                },
+                {
+                    "id": "node_editor.edge:wire",
+                    "enabled": True,
+                    "visible": True,
+                    "rect_points": rect(60.0, 40.0, 160.0, 100.0),
+                    "metadata": {"hit_point": hit_point},
+                },
+            ],
+        }
+
+        class Client:
+            injected = None
+            point = staticmethod(QA.QaClient.point)
+
+            def component_snapshot(self):
+                return snapshot
+
+            def inject(self, endpoint, payload, evidence):
+                self.injected = (endpoint, payload, evidence)
+
+        client = Client()
+        start, end = QA.drag_component_to_node_wire_hit_point(
+            client,
+            "node_editor.node_header:source",
+            "node_editor.edge:wire",
+            steps=16,
+        )
+
+        self.assertEqual(start, {"x": 30.0, "y": 30.0})
+        self.assertEqual(end, hit_point)
+        self.assertEqual(client.injected[0], "drag")
+        self.assertEqual(client.injected[1]["to"], hit_point)
+        self.assertEqual(client.injected[1]["steps"], 16)
+        self.assertEqual(client.injected[2]["component_frame"], 21)
+        self.assertEqual(client.injected[2]["target_hit_point"], hit_point)
+
+    def test_reveal_uses_wire_hit_point_when_curve_bbox_crosses_margin(self):
+        component = {
+            "id": "node_editor.edge.derived:track:clip",
+            "rect_points": rect(25.0, 4.0, 180.0, 46.0),
+            "metadata": {
+                "kind": "derived_output",
+                "hit_point": {"x": 92.0, "y": 28.0},
+            },
+        }
+
+        self.assertEqual(
+            QA.node_editor_reveal_rect(component),
+            {"min_x": 92.0, "max_x": 92.0, "min_y": 28.0, "max_y": 28.0},
+        )
+
     def test_free_canvas_wire_distance_uses_rendered_bezier_not_only_midpoint(self):
         wire = {
             "metadata": {
