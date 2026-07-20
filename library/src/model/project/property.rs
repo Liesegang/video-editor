@@ -538,13 +538,17 @@ impl Property {
         }
     }
 
-    pub fn expression(expression: String) -> Self {
+    /// Creates a Python Expression property with an authored, type-defining
+    /// fallback. The Inspector must supply a fallback compatible with the
+    /// property's [`PropertyDefinition`]. Evaluation errors preserve this
+    /// value instead of inventing a numeric zero.
+    pub fn expression(expression: String, fallback: PropertyValue) -> Self {
         Self {
             evaluator: "expression".to_string(),
-            properties: HashMap::from([(
-                "expression".to_string(),
-                PropertyValue::String(expression),
-            )]),
+            properties: HashMap::from([
+                ("expression".to_string(), PropertyValue::String(expression)),
+                ("value".to_string(), fallback),
+            ]),
         }
     }
 
@@ -753,7 +757,7 @@ impl Property {
 
     /// Evaluate the property at a specific time.
     /// If constant, returns the constant value.
-    /// If expression, returns default value (eval not supported here yet).
+    /// If expression or another evaluator, returns its authored fallback.
     /// If keyframes, interpolates between the two nearest keyframes.
     pub fn evaluate_at(&self, time: f64) -> PropertyValue {
         match self.evaluator.as_str() {

@@ -225,11 +225,8 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() -> Result<()> {
 
     let evaluators = manager.get_property_evaluators();
     let sibling_properties = PropertyMap::new();
-    let context = EvaluationContext {
-        property_map: &sibling_properties,
-        fps: 30.0,
-    };
-    let output = evaluators.evaluate(&instance, 0.25, &context);
+    let context = EvaluationContext::new(&sibling_properties, 30.0, (1920, 1080));
+    let output = evaluators.evaluate(&instance, 0.25, &context)?;
     assert!(matches!(
         &output,
         PropertyValue::Number(value) if (-1.0..=1.0).contains(&value.into_inner())
@@ -238,7 +235,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() -> Result<()> {
         evaluator: COMPONENT_ID.to_string(),
         properties: HashMap::new(),
     };
-    assert_eq!(evaluators.evaluate(&sparse, 0.25, &context), output);
+    assert_eq!(evaluators.evaluate(&sparse, 0.25, &context)?, output);
 
     let unavailable = Property {
         evaluator: "not.installed.property".to_string(),
@@ -250,7 +247,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() -> Result<()> {
     let unavailable_json = serde_json::to_string(&unavailable)?;
     let preserved: Property = serde_json::from_str(&unavailable_json)?;
     assert_eq!(preserved, unavailable);
-    let _safe_unknown_output = evaluators.evaluate(&preserved, 0.25, &context);
+    assert!(evaluators.evaluate(&preserved, 0.25, &context).is_err());
     assert!(
         manager
             .invoke_runtime_plugin(

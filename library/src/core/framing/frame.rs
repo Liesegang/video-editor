@@ -1381,11 +1381,16 @@ impl<'a> FrameEvaluator<'a> {
                     .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
                 let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
                 let context = self.context(composition, Some(&inputs));
-                Ok(EvalOutput::Produced(context.evaluate_property_value(
-                    property,
-                    node.properties(),
-                    scope.time,
-                )))
+                match context.evaluate_property_value(property, node.properties(), scope.time) {
+                    Ok(value) => Ok(EvalOutput::Produced(value)),
+                    Err(error) => {
+                        log::error!(
+                            "Node '{}' property '{property_key}' produced no output: {error}",
+                            node.id
+                        );
+                        Ok(EvalOutput::NoOutput)
+                    }
+                }
             }
         }
     }

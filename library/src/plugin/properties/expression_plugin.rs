@@ -1,9 +1,23 @@
-use super::super::{Plugin, PropertyPlugin};
-use crate::model::property::{Property, PropertyValue}; // Added Property and PropertyValue
-use crate::plugin::{EvaluationContext, PropertyEvaluator};
-use log::warn;
+use std::sync::{Arc, OnceLock};
+
 use ordered_float::OrderedFloat;
-use std::sync::Arc;
+
+use super::super::{Plugin, PropertyPlugin};
+use crate::expression::{
+    ExpressionDiagnostic, ExpressionDiagnosticKind, ExpressionEngine, ExpressionEvaluationContext,
+    ExpressionValue,
+};
+use crate::model::frame::color::Color;
+use crate::model::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
+use crate::plugin::{EvaluationContext, PropertyEvaluationError, PropertyEvaluator};
+
+static EXPRESSION_ENGINE: OnceLock<ExpressionEngine> = OnceLock::new();
+
+/// Shared runtime-only compiler/cache used by render evaluation and Inspector
+/// validation. It is intentionally absent from the persisted Project model.
+pub fn expression_engine() -> &'static ExpressionEngine {
+    EXPRESSION_ENGINE.get_or_init(ExpressionEngine::default)
+}
 
 #[derive(Default)]
 pub struct ExpressionPropertyPlugin;
@@ -40,12 +54,141 @@ impl PropertyPlugin for ExpressionPropertyPlugin {
 
 pub struct ExpressionEvaluator;
 
-impl PropertyEvaluator for ExpressionEvaluator {
-    fn evaluate(&self, property: &Property, time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-        warn!(
-            "Expression evaluator not implemented for property '{}' at time {}",
-            property.evaluator, time
-        );
-        PropertyValue::Number(OrderedFloat(0.0))
+impl ExpressionEvaluator {
+    /// Detailed API for Inspector validation and nodes. Property evaluation
+    /// wraps this result with the property's authored, type-defining fallback.
+    pub fn evaluate_detailed(
+        &self,
+        property: &Property,
+        time: f64,
+        context: &EvaluationContext<'_>,
+    ) -> Result<PropertyValue, ExpressionDiagnostic> {
+        if property.evaluator != "expression" {
+            return Err(evaluation_error(
+                ExpressionDiagnosticKind::InvalidContext,
+                format!(
+                    "ExpressionEvaluator cannot evaluate property type '{}'",
+                    property.evaluator
+                ),
+            ));
+        }
+        let source = property.expression_text().ok_or_else(|| {
+            evaluation_error(
+                ExpressionDiagnosticKind::InvalidContext,
+                "Expression property has no string source",
+            )
+        })?;
+        let fallback = property.value().ok_or_else(|| {
+            evaluation_error(
+                ExpressionDiagnosticKind::InvalidContext,
+                "Expression property has no typed fallback",
+            )
+        })?;
+        let expression_fallback = expression_value_from_property(fallback)?;
+        let output_type = expression_fallback.output_type();
+        let evaluation_context =
+            ExpressionEvaluationContext::new(time, context.fps, context.resolution)?
+                .with_value(expression_fallback);
+        let value = expression_engine().evaluate(source, &evaluation_context, output_type)?;
+        Ok(property_value_from_expression(value))
     }
+}
+
+impl PropertyEvaluator for ExpressionEvaluator {
+    fn evaluate(
+        &self,
+        property: &Property,
+        time: f64,
+        context: &EvaluationContext,
+    ) -> Result<PropertyValue, PropertyEvaluationError> {
+        let fallback = property.value().cloned();
+        match self.evaluate_detailed(property, time, context) {
+            Ok(value) => Ok(value),
+            Err(diagnostic) => {
+                log::warn!(
+                    "Expression property failed at local time {time}; using authored fallback: {diagnostic}"
+                );
+                fallback.ok_or_else(|| {
+                    PropertyEvaluationError::new("expression", diagnostic.to_string())
+                })
+            }
+        }
+    }
+}
+
+fn expression_value_from_property(
+    value: &PropertyValue,
+) -> Result<ExpressionValue, ExpressionDiagnostic> {
+    match value {
+        PropertyValue::Number(value) => Ok(ExpressionValue::Number(value.into_inner())),
+        PropertyValue::Integer(value) => Ok(ExpressionValue::Integer(*value)),
+        PropertyValue::Vec2(value) => Ok(ExpressionValue::Vec2([
+            value.x.into_inner(),
+            value.y.into_inner(),
+        ])),
+        PropertyValue::Vec3(value) => Ok(ExpressionValue::Vec3([
+            value.x.into_inner(),
+            value.y.into_inner(),
+            value.z.into_inner(),
+        ])),
+        PropertyValue::Vec4(value) => Ok(ExpressionValue::Vec4([
+            value.x.into_inner(),
+            value.y.into_inner(),
+            value.z.into_inner(),
+            value.w.into_inner(),
+        ])),
+        PropertyValue::Color(value) => Ok(ExpressionValue::Color([
+            f64::from(value.r) / 255.0,
+            f64::from(value.g) / 255.0,
+            f64::from(value.b) / 255.0,
+            f64::from(value.a) / 255.0,
+        ])),
+        PropertyValue::Boolean(value) => Ok(ExpressionValue::Bool(*value)),
+        PropertyValue::String(value) => Ok(ExpressionValue::String(value.clone())),
+        PropertyValue::Array(_) | PropertyValue::Map(_) => Err(evaluation_error(
+            ExpressionDiagnosticKind::TypeMismatch,
+            "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, Color, Bool, or String",
+        )),
+    }
+}
+
+fn property_value_from_expression(value: ExpressionValue) -> PropertyValue {
+    match value {
+        ExpressionValue::Number(value) => PropertyValue::Number(OrderedFloat(value)),
+        ExpressionValue::Integer(value) => PropertyValue::Integer(value),
+        ExpressionValue::Vec2([x, y]) => PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+        }),
+        ExpressionValue::Vec3([x, y, z]) => PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+        }),
+        ExpressionValue::Vec4([x, y, z, w]) => PropertyValue::Vec4(Vec4 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+            w: OrderedFloat(w),
+        }),
+        ExpressionValue::Color([r, g, b, a]) => PropertyValue::Color(Color {
+            r: normalized_channel(r),
+            g: normalized_channel(g),
+            b: normalized_channel(b),
+            a: normalized_channel(a),
+        }),
+        ExpressionValue::Bool(value) => PropertyValue::Boolean(value),
+        ExpressionValue::String(value) => PropertyValue::String(value),
+    }
+}
+
+fn normalized_channel(value: f64) -> u8 {
+    (value * 255.0).round() as u8
+}
+
+fn evaluation_error(
+    kind: ExpressionDiagnosticKind,
+    message: impl Into<String>,
+) -> ExpressionDiagnostic {
+    ExpressionDiagnostic::evaluate(kind, message, None)
 }

@@ -78,16 +78,13 @@ fn main() -> anyhow::Result<()> {
 
     let evaluators = manager.get_property_evaluators();
     let sibling_properties = PropertyMap::new();
-    let context = EvaluationContext {
-        property_map: &sibling_properties,
-        fps: 30.0,
-    };
-    let complete_output = evaluators.evaluate(&property, 0.25, &context);
+    let context = EvaluationContext::new(&sibling_properties, 30.0, (1920, 1080));
+    let complete_output = evaluators.evaluate(&property, 0.25, &context)?;
     let sparse = Property {
         evaluator: component_id.clone(),
         properties: HashMap::new(),
     };
-    let recovered_output = evaluators.evaluate(&sparse, 0.25, &context);
+    let recovered_output = evaluators.evaluate(&sparse, 0.25, &context)?;
     if complete_output != recovered_output {
         bail!("sparse property did not evaluate with descriptor defaults");
     }
@@ -724,10 +721,12 @@ fn verify_unknown_property_is_safe(
         bail!("serialization changed unavailable property configuration");
     }
 
-    // The registry's pre-existing unknown-evaluator fail-safe must not panic;
-    // importantly, the authoritative Property above stays untouched.
+    // Unknown evaluators fail closed without mutating the authoritative
+    // Property or guessing a value of the wrong type.
     let evaluators = manager.get_property_evaluators();
-    let _safe_value = evaluators.evaluate(&preserved, 0.0, context);
+    if evaluators.evaluate(&preserved, 0.0, context).is_ok() {
+        bail!("unknown evaluator unexpectedly produced a value");
+    }
     if manager
         .invoke_runtime_plugin(
             PROPERTY_CATEGORY,

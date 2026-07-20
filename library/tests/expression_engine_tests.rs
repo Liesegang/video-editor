@@ -70,6 +70,44 @@ fn arithmetic_uses_python_division_floor_modulo_and_power_meaning() -> Result<()
 }
 
 #[test]
+fn integer_output_is_strict_while_exact_python_ints_can_widen_to_number() -> Result<()> {
+    assert_eq!(
+        evaluate("7 // 2", ExpressionOutputType::Integer)?,
+        ExpressionValue::Integer(3)
+    );
+    assert_eq!(
+        evaluate("2 ** 8", ExpressionOutputType::Integer)?,
+        ExpressionValue::Integer(256)
+    );
+    assert_eq!(
+        evaluate("7", ExpressionOutputType::Number)?,
+        ExpressionValue::Number(7.0)
+    );
+
+    let engine = ExpressionEngine::default();
+    for source in ["7.0", "True"] {
+        let error =
+            diagnostic(engine.evaluate(source, &context()?, ExpressionOutputType::Integer))?;
+        assert_eq!(
+            error.kind,
+            ExpressionDiagnosticKind::TypeMismatch,
+            "{source}"
+        );
+    }
+
+    let integer_context = context()?.with_value(ExpressionValue::Integer(4));
+    assert_eq!(
+        engine.evaluate(
+            "value + frame_index",
+            &integer_context,
+            ExpressionOutputType::Integer,
+        )?,
+        ExpressionValue::Integer(52)
+    );
+    Ok(())
+}
+
+#[test]
 fn bool_compare_conditional_and_index_follow_the_supported_python_subset() -> Result<()> {
     assert_eq!(
         evaluate("(0 or 4) + (5 and 2)", ExpressionOutputType::Number)?,
@@ -200,6 +238,7 @@ fn deterministic_limits_cover_source_ast_operations_collections_and_strings() ->
         max_ast_nodes: 32,
         max_depth: 2,
         max_operations: 2,
+        max_calls: 1,
         max_collection_items: 2,
         max_string_bytes: 4,
         max_exponent_abs: 4,
@@ -239,6 +278,18 @@ fn deterministic_limits_cover_source_ast_operations_collections_and_strings() ->
     let exponent_error =
         diagnostic(exponent_engine.evaluate("2 ** 5", &context()?, ExpressionOutputType::Number))?;
     assert_eq!(exponent_error.kind, ExpressionDiagnosticKind::ResourceLimit);
+
+    let call_engine = ExpressionEngine::new(
+        ExpressionLimits {
+            max_depth: 32,
+            max_operations: 100,
+            ..engine.limits().clone()
+        },
+        4,
+    );
+    let call_error =
+        diagnostic(call_engine.evaluate("abs(abs(1))", &context()?, ExpressionOutputType::Number))?;
+    assert_eq!(call_error.kind, ExpressionDiagnosticKind::ResourceLimit);
     Ok(())
 }
 
@@ -293,6 +344,10 @@ fn evaluation_is_thread_safe_and_does_not_require_a_python_installation() -> Res
 fn invalid_context_is_rejected_before_evaluation() -> Result<()> {
     let invalid_time = ExpressionEvaluationContext::new(f64::NAN, 24.0, (1920, 1080));
     let error = diagnostic(invalid_time)?;
+    assert_eq!(error.kind, ExpressionDiagnosticKind::InvalidContext);
+
+    let invalid_resolution = ExpressionEvaluationContext::new(0.0, 24.0, (0, 1080));
+    let error = diagnostic(invalid_resolution)?;
     assert_eq!(error.kind, ExpressionDiagnosticKind::InvalidContext);
 
     let mismatched_value = ExpressionEvaluationContext::new(0.0, 24.0, (1920, 1080))?

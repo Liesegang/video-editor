@@ -4,6 +4,7 @@ use super::{ExpressionDiagnostic, ExpressionDiagnosticKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionOutputType {
     Number,
+    Integer,
     Vec2,
     Vec3,
     Vec4,
@@ -16,6 +17,7 @@ pub enum ExpressionOutputType {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExpressionValue {
     Number(f64),
+    Integer(i64),
     Vec2([f64; 2]),
     Vec3([f64; 3]),
     Vec4([f64; 4]),
@@ -29,6 +31,7 @@ impl ExpressionValue {
     pub const fn output_type(&self) -> ExpressionOutputType {
         match self {
             Self::Number(_) => ExpressionOutputType::Number,
+            Self::Integer(_) => ExpressionOutputType::Integer,
             Self::Vec2(_) => ExpressionOutputType::Vec2,
             Self::Vec3(_) => ExpressionOutputType::Vec3,
             Self::Vec4(_) => ExpressionOutputType::Vec4,
@@ -59,6 +62,11 @@ impl ExpressionEvaluationContext {
         }
         if !(time * fps).is_finite() {
             return Err(invalid_context("derived frame value must be finite"));
+        }
+        if resolution.0 == 0 || resolution.1 == 0 {
+            return Err(invalid_context(
+                "resolution width and height must be greater than zero",
+            ));
         }
         Ok(Self {
             time,

@@ -721,7 +721,7 @@ mod tests {
         let mut dynamic = PropertyMap::from_definitions(&definitions);
         dynamic.set(
             "amount".to_string(),
-            Property::expression("time".to_string()),
+            Property::expression("time".to_string(), PropertyValue::from(0.0)),
         );
         let dynamic =
             match Node::new_generator("dynamic", GeneratorContent::Solid, &definitions, dynamic) {

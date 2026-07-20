@@ -2,7 +2,7 @@ use super::super::{Plugin, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
-use crate::plugin::{EvaluationContext, PropertyEvaluator};
+use crate::plugin::{EvaluationContext, PropertyEvaluationError, PropertyEvaluator};
 use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
@@ -42,8 +42,19 @@ impl PropertyPlugin for KeyframePropertyPlugin {
 pub struct KeyframeEvaluator;
 
 impl PropertyEvaluator for KeyframeEvaluator {
-    fn evaluate(&self, property: &Property, time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-        evaluate_keyframes(property, time)
+    fn evaluate(
+        &self,
+        property: &Property,
+        time: f64,
+        _ctx: &EvaluationContext,
+    ) -> Result<PropertyValue, PropertyEvaluationError> {
+        if property.keyframes().is_empty() && property.value().is_none() {
+            return Err(PropertyEvaluationError::new(
+                "keyframe",
+                "property has neither keyframes nor an authored fallback",
+            ));
+        }
+        Ok(evaluate_keyframes(property, time))
     }
 }
 

@@ -206,6 +206,7 @@ pub fn draw_properties(
     project_service: &EditorService,
     actions: &mut Vec<Action>,
     composition_fps: f64,
+    composition_resolution: (u64, u64),
 ) {
     let graph_rect = transform.graph_rect;
     let pixels_per_second = transform.zoom_x;
@@ -318,12 +319,15 @@ pub fn draw_properties(
 
                     let eval_time = time_mapper.to_source_time(global_time as f64);
 
-                    let value_pv = project_service.evaluate_property_value(
+                    let Ok(value_pv) = project_service.evaluate_property_value(
                         property,
                         map,
                         eval_time,
                         composition_fps,
-                    );
+                        composition_resolution,
+                    ) else {
+                        continue;
+                    };
                     // Match *component here too
                     let val_f64 = match component {
                         PropertyComponent::Scalar => value_pv.get_as::<f64>(),
@@ -622,12 +626,15 @@ pub fn draw_properties(
                                 let (t, _) = transform.screen_to_graph(pointer_pos);
 
                                 // Evaluate at pointer time
-                                let value_pv = project_service.evaluate_property_value(
+                                let Ok(value_pv) = project_service.evaluate_property_value(
                                     property,
                                     map,
                                     time_mapper.to_source_time(t),
                                     composition_fps,
-                                );
+                                    composition_resolution,
+                                ) else {
+                                    continue;
+                                };
                                 let val_at_t = match component {
                                     PropertyComponent::Scalar => {
                                         value_pv.get_as::<f64>().unwrap_or(0.0)
