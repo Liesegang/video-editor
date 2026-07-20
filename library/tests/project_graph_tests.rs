@@ -11,11 +11,12 @@ use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameGroupKind, FrameItem};
 use library::model::project::{
-    Composition, CompositionSettingsError, DURATION_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
-    NodeContainer, NodeGraphBundle, PortAddress, PortDataType, PortDefinition, PortDirection,
-    PortExposure, PortMultiplicity, PortOwner, PortSide, Project, ProjectConnection,
-    ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    AUDIO_OUTPUT_PORT, Composition, CompositionSettingsError, DURATION_PORT, FMOD_X_INPUT_PORT,
+    FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    NUMBER_RESULT_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
+    PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, Project,
+    ProjectConnection, ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
@@ -27,7 +28,7 @@ use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-use support::{generator_node_for_canvas, media_node_for_canvas};
+use support::{assert_external_container_output, generator_node_for_canvas, media_node_for_canvas};
 
 fn project_with_composition() -> (Project, Uuid, Uuid) {
     let mut project = Project::new("direct graph");
@@ -1439,7 +1440,7 @@ fn container_ports_separate_authored_inputs_from_read_only_runtime_outputs() -> 
         PortOwner::Clip(clip_id),
     ] {
         let ports = project.port_definitions(owner);
-        assert_eq!(ports.len(), 9);
+        assert_eq!(ports.len(), 10);
         for (key, data_type) in [
             (TIME_PORT, PortDataType::Number),
             (DURATION_PORT, PortDataType::Number),
@@ -1472,13 +1473,8 @@ fn container_ports_separate_authored_inputs_from_read_only_runtime_outputs() -> 
             assert_eq!(output.exposure, PortExposure::Internal);
             assert_eq!(output.data_type, data_type);
         }
-        let image = ports
-            .iter()
-            .find(|port| port.key == IMAGE_OUTPUT_PORT && port.direction == PortDirection::Output)
-            .context("image output port must exist")?;
-        assert_eq!(image.side, PortSide::Right);
-        assert_eq!(image.exposure, PortExposure::External);
-        assert_eq!(image.data_type, PortDataType::Image);
+        assert_external_container_output(&ports, IMAGE_OUTPUT_PORT, PortDataType::Image)?;
+        assert_external_container_output(&ports, AUDIO_OUTPUT_PORT, PortDataType::Audio)?;
     }
     Ok(())
 }

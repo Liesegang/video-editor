@@ -1,8 +1,30 @@
+use anyhow::{Context, Result};
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
-use library::model::project::ProjectGraphError;
+use library::model::project::{
+    PortDataType, PortDefinition, PortDirection, PortExposure, PortSide, ProjectGraphError,
+};
 use library::model::{Node, NodeContainer, Project};
 use library::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn assert_external_container_output(
+    ports: &[PortDefinition],
+    key: &str,
+    data_type: PortDataType,
+) -> Result<()> {
+    let output = ports
+        .iter()
+        .find(|port| port.key == key && port.direction == PortDirection::Output)
+        .with_context(|| format!("{key} output port must exist"))?;
+    assert_eq!(output.side, PortSide::Right);
+    assert_eq!(output.exposure, PortExposure::External);
+    assert_eq!(output.data_type, data_type);
+    Ok(())
+}
 
 #[allow(
     dead_code,
