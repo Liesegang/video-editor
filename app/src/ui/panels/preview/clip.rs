@@ -120,8 +120,8 @@ mod tests {
     use ordered_float::OrderedFloat;
     use uuid::Uuid;
 
-    fn object(node_id: Uuid) -> FrameItem {
-        FrameItem::Object(FrameObject {
+    fn frame_object(node_id: Uuid) -> FrameObject {
+        FrameObject {
             source_node_id: node_id,
             source_transform: Box::new(Transform {
                 position: Position { x: 5.0, y: 7.0 },
@@ -137,11 +137,15 @@ mod tests {
                     ..Transform::default()
                 },
             },
-        })
+        }
     }
 
-    fn group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameItem {
-        FrameItem::Group(FrameGroup {
+    fn object(node_id: Uuid) -> FrameItem {
+        FrameItem::Object(frame_object(node_id))
+    }
+
+    fn frame_group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameGroup {
+        FrameGroup {
             source_id,
             kind,
             width: 1920,
@@ -157,7 +161,11 @@ mod tests {
             effect_time: OrderedFloat(0.0),
             effects: Vec::new(),
             items,
-        })
+        }
+    }
+
+    fn group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameItem {
+        FrameItem::Group(frame_group(source_id, kind, items))
     }
 
     #[test]
@@ -233,15 +241,13 @@ mod tests {
         );
         source.id = source_id;
         project.add_node(source);
-        let mut top_branch = group(
+        let mut top_group = frame_group(
             top_connection_id,
             FrameGroupKind::ConnectedImage,
             vec![object(source_id)],
         );
-        let FrameItem::Group(top_group) = &mut top_branch else {
-            unreachable!()
-        };
         top_group.transform.position.x = 100.0;
+        let top_branch = FrameItem::Group(top_group);
         let frame = FrameInfo {
             width: 1920,
             height: 1080,
@@ -352,10 +358,7 @@ mod tests {
         );
         source.id = source_id;
         project.add_node(source);
-        let mut item = object(source_id);
-        let FrameItem::Object(object) = &mut item else {
-            unreachable!()
-        };
+        let mut object = frame_object(source_id);
         object.content.transform_mut().position = Position { x: 13.0, y: 10.0 };
         let frame = FrameInfo {
             width: 1920,
@@ -370,7 +373,7 @@ mod tests {
             render_scale: OrderedFloat(1.0),
             now_time: OrderedFloat(0.0),
             region: None,
-            items: vec![item],
+            items: vec![FrameItem::Object(object)],
         };
 
         let visuals = from_evaluated_frame(&project, &frame);

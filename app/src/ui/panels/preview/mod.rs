@@ -1236,7 +1236,7 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> PreviewGestureDecision {
         let mut decision = PreviewGestureDecision::default();
-        let _ = context.run(
+        let _output = context.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1323,7 +1323,7 @@ mod tests {
         frame: usize,
         events: Vec<egui::Event>,
     ) {
-        let _ = context.run(
+        let _output = context.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
