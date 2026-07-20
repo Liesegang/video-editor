@@ -414,14 +414,19 @@ impl PropertyMap {
         easing: Option<EasingFunction>,
     ) {
         if let Some(prop) = self.properties.get_mut(key) {
-            if prop.evaluator == "keyframe" {
-                prop.upsert_keyframe(time, value, easing);
-            } else {
-                // If constant, update directly. If we wanted to promote to keyframe auto-magically on "add keyframe" action,
-                // that's handled by add_keyframe calling upsert_keyframe.
-                // But for simple updates (drag value), we just set constant.
-                self.properties
-                    .insert(key.to_string(), Property::constant(value));
+            match prop.evaluator.as_str() {
+                "keyframe" => {
+                    prop.upsert_keyframe(time, value, easing);
+                }
+                "constant" => {
+                    *prop = Property::constant(value);
+                }
+                _ => {
+                    // Expression and plugin evaluators own their authored mode.
+                    // A normal value edit changes the typed `value` input; it
+                    // must not silently replace the evaluator with constant.
+                    prop.properties.insert("value".to_string(), value);
+                }
             }
         } else {
             // New property, default to constant
@@ -915,5 +920,39 @@ mod keyframe_tests {
             vec![first.id, second.id]
         );
         assert_eq!(loaded.evaluate_at(0.5).unwrap(), number(2.5));
+    }
+
+    #[test]
+    fn value_edits_preserve_expression_and_plugin_evaluator_modes() {
+        let mut properties = PropertyMap::new();
+        properties.set(
+            "expression".to_string(),
+            Property::expression("value * 2".to_string(), number(3.0)),
+        );
+        properties.set(
+            "plugin".to_string(),
+            Property {
+                evaluator: "third-party".to_string(),
+                properties: HashMap::from([
+                    ("value".to_string(), number(4.0)),
+                    ("configuration".to_string(), PropertyValue::Boolean(true)),
+                ]),
+            },
+        );
+
+        properties.update_property_or_keyframe("expression", 0.0, number(5.0), None);
+        properties.update_property_or_keyframe("plugin", 0.0, number(6.0), None);
+
+        let expression = properties.get("expression").unwrap();
+        assert_eq!(expression.evaluator, "expression");
+        assert_eq!(expression.expression_text(), Some("value * 2"));
+        assert_eq!(expression.value(), Some(&number(5.0)));
+        let plugin = properties.get("plugin").unwrap();
+        assert_eq!(plugin.evaluator, "third-party");
+        assert_eq!(plugin.value(), Some(&number(6.0)));
+        assert_eq!(
+            plugin.properties.get("configuration"),
+            Some(&PropertyValue::Boolean(true))
+        );
     }
 }
