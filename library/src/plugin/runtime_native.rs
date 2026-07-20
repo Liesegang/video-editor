@@ -24,12 +24,12 @@ use ruvie_plugin_api::{
     PROPERTY_EVALUATE_V1, PROPERTY_VALUE_BOOLEAN_V1, PROPERTY_VALUE_COLOR_V1,
     PROPERTY_VALUE_INTEGER_V1, PROPERTY_VALUE_NUMBER_V1, PROPERTY_VALUE_STRING_V1,
     PROPERTY_VALUE_VEC2_V1, PROPERTY_VALUE_VEC3_V1, PROPERTY_VALUE_VEC4_V1, PluginDescriptorV1,
-    PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1,
-    RUVIE_PLUGIN_ABI_V1, RUVIE_PLUGIN_ENTRY_V1, RuvieAssetMetadataV1, RuvieBuffer, RuvieBytesView,
-    RuvieCallResult, RuvieEffectCpuRgba8ApiV1, RuvieExtensionResultV1, RuvieLoaderCpuRgba8ApiV1,
-    RuvieLoaderRequestV1, RuvieOwnedRgba8FrameV1, RuviePluginApiV1, RuviePropertyMapViewV1,
-    RuviePropertyValueViewV1, RuvieRgba8FrameViewV1, STATUS_OK, STATUS_UNSUPPORTED, STYLE_CATEGORY,
-    STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
+    PropertyUiV1, PropertyValueV1, RUVIE_PLUGIN_ABI_V1, RUVIE_PLUGIN_ENTRY_V1,
+    RuvieAssetMetadataV1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuvieEffectCpuRgba8ApiV1,
+    RuvieExtensionResultV1, RuvieLoaderCpuRgba8ApiV1, RuvieLoaderRequestV1, RuvieOwnedRgba8FrameV1,
+    RuviePluginApiV1, RuviePropertyMapViewV1, RuviePropertyValueViewV1, RuvieRgba8FrameViewV1,
+    STATUS_OK, STATUS_UNSUPPORTED, STYLE_CATEGORY, STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1,
+    StyleEvaluateRequestV1, StyleOutputV1,
 };
 use serde::Deserialize;
 
@@ -38,9 +38,7 @@ use crate::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
 };
 use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::evaluator::{
-    EvaluationContext, PropertyEvaluationError, PropertyEvaluator, PropertyEvaluatorRegistry,
-};
+use crate::plugin::evaluator::{PropertyEvaluator, PropertyEvaluatorRegistry};
 use crate::plugin::loaders::ffmpeg_video::FileIdentity;
 use crate::plugin::repository::PluginRepository;
 use crate::plugin::{
@@ -48,6 +46,8 @@ use crate::plugin::{
     LoadPluginResult, LoadRepository, LoadRequest, LoadResponse, Plugin, PluginCategory,
     StylePlugin,
 };
+
+mod property_evaluation;
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -2252,67 +2252,6 @@ impl RuntimePropertyEvaluator {
     }
 }
 
-impl PropertyEvaluator for RuntimePropertyEvaluator {
-    fn evaluate(
-        &self,
-        property: &Property,
-        time: f64,
-        context: &EvaluationContext,
-    ) -> Result<PropertyValue, PropertyEvaluationError> {
-        let mut properties = BTreeMap::new();
-        for definition in &self.definitions {
-            let value = property
-                .properties
-                .get(definition.name())
-                .unwrap_or_else(|| definition.default_value());
-            if let Err(error) = definition.validate_value(value) {
-                return Ok(self.fallback(format!(
-                    "property '{}' is invalid: {error}",
-                    definition.name()
-                )));
-            }
-            let value = match property_value_to_wire(value) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(self.fallback(format!(
-                        "property '{}' cannot cross ABI v1: {error}",
-                        definition.name()
-                    )));
-                }
-            };
-            properties.insert(definition.name().to_string(), value);
-        }
-        let payload = match serde_json::to_value(PropertyEvaluateRequestV1 {
-            time,
-            fps: context.fps,
-            properties,
-        }) {
-            Ok(payload) => payload,
-            Err(error) => {
-                return Ok(self.fallback(format!("request encoding failed: {error}")));
-            }
-        };
-        let response = match self.component.invoke(PROPERTY_EVALUATE_V1, payload) {
-            Ok(response) => response,
-            Err(error) => return Ok(self.fallback(error)),
-        };
-        let response: PropertyEvaluateResponseV1 = match serde_json::from_value(response) {
-            Ok(response) => response,
-            Err(error) => return Ok(self.fallback(format!("invalid response: {error}"))),
-        };
-        let value = match property_value_from_wire(&response.value) {
-            Ok(value) => value,
-            Err(error) => {
-                return Ok(self.fallback(format!("invalid response value: {error}")));
-            }
-        };
-        if std::mem::discriminant(&value) != std::mem::discriminant(&self.output_default) {
-            return Ok(self.fallback("response type differs from output_default"));
-        }
-        Ok(value)
-    }
-}
-
 fn property_value_to_wire(value: &PropertyValue) -> Result<PropertyValueV1, &'static str> {
     match value {
         PropertyValue::Number(value) if value.is_finite() => Ok(PropertyValueV1::Number {
@@ -2841,6 +2780,7 @@ fn strict_vector(value: &serde_json::Value, keys: &[&str]) -> Option<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::EvaluationContext;
     use ruvie_plugin_api::PropertyDefinitionV1;
 
     fn component(ui: PropertyUiV1, default: serde_json::Value) -> ComponentDescriptorV1 {
