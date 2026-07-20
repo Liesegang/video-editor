@@ -154,8 +154,12 @@ mod tests {
         let mut project = Project::new("typed Node Editor binding");
         let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let clip = Clip::new("Video", 0.0, 2.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -251,10 +255,23 @@ mod tests {
         let composition_id = project.compositions[0].id;
         let (snarl, _) = crate::ui::panels::node_editor::build_snarl(&project, composition_id);
 
-        for (owner, source) in [
-            (PortOwner::Clip(clip_id), GraphItem::Node(node_id)),
+        let track_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_merge_node_id;
+        let composition_merge_id = project
+            .get_composition(composition_id)
+            .unwrap()
+            .structural_merge_node_id;
+        for (owner, image_source, audio_source) in [
+            (
+                PortOwner::Clip(clip_id),
+                GraphItem::Node(node_id),
+                GraphItem::Node(node_id),
+            ),
             (
                 PortOwner::Track(track_id),
+                GraphItem::Node(track_merge_id),
                 GraphItem::PortAnchor {
                     owner: PortOwner::Clip(clip_id),
                     kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
@@ -262,6 +279,7 @@ mod tests {
             ),
             (
                 PortOwner::Composition(composition_id),
+                GraphItem::Node(composition_merge_id),
                 GraphItem::PortAnchor {
                     owner: PortOwner::Track(track_id),
                     kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
@@ -276,23 +294,24 @@ mod tests {
                 .nodes_ids_data()
                 .find_map(|(id, node)| (node.value == sink).then_some(id))
                 .unwrap();
-            let source_id = snarl
-                .nodes_ids_data()
-                .find_map(|(id, node)| (node.value == source).then_some(id))
-                .unwrap();
-
-            for (data_type, binding_port, output_port) in [
+            for (source, data_type, binding_port, output_port) in [
                 (
+                    image_source,
                     PortDataType::Image,
                     IMAGE_OUTPUT_BINDING_PORT,
                     IMAGE_OUTPUT_PORT,
                 ),
                 (
+                    audio_source,
                     PortDataType::Audio,
                     AUDIO_OUTPUT_BINDING_PORT,
                     AUDIO_OUTPUT_PORT,
                 ),
             ] {
+                let source_id = snarl
+                    .nodes_ids_data()
+                    .find_map(|(id, node)| (node.value == source).then_some(id))
+                    .unwrap();
                 let input = input_definitions(&project, sink)
                     .iter()
                     .position(|pin| pin.key == binding_port && pin.data_type == data_type)

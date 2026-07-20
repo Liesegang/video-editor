@@ -19,8 +19,12 @@ fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
     track.ui_size = [1250.0, 760.0];
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let mut clip = Clip::new("Layers", 0.0, 4.0);
     clip.ui_position = [180.0, 220.0];

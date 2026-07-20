@@ -359,8 +359,12 @@ fn install_named(
     shape_merge.id = E2E_SHAPE_MERGE_ID;
     shape_merge.ui_position = [1250.0, 980.0];
 
-    project.add_track(track_a);
-    project.add_track(track_b);
+    project
+        .add_track(track_a)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_track(track_b)
+        .expect("container structural Merge insertion must succeed");
     project.add_clip(clip_a1);
     project.add_clip(clip_a2);
     project.add_clip(clip_b1);
@@ -382,7 +386,9 @@ fn install_named(
     project.add_node(shape_fill);
     project.add_node(shape_stroke);
     project.add_node(shape_merge);
-    project.add_composition(composition);
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     for (source_owner, source_port, target_node, target_port) in [
         (
@@ -694,8 +700,14 @@ mod tests {
         assert_eq!(info.composition_id, E2E_COMPOSITION_ID);
         let composition = &read.compositions[0];
         assert_eq!(composition.track_ids, info.expanded_tracks);
-        assert!(composition.node_ids.is_empty());
-        assert!(composition.output_node_id.is_none());
+        assert_eq!(
+            composition.node_ids,
+            vec![composition.structural_merge_node_id]
+        );
+        assert_eq!(
+            composition.output_node_id,
+            Some(composition.structural_merge_node_id)
+        );
         assert_eq!(
             read.get_track(E2E_TRACK_A_ID).unwrap().clip_ids,
             vec![E2E_CLIP_A1_ID, E2E_CLIP_A2_ID]
@@ -809,10 +821,10 @@ mod tests {
             assert_operation(&read, &plugin_manager, node_id, category, component_id);
         }
 
-        assert_eq!(read.nodes.len(), 16);
+        assert_eq!(read.nodes.len(), 19);
         for track in read.tracks.values() {
-            assert!(track.output_node_id.is_none());
-            assert!(track.node_ids.is_empty());
+            assert_eq!(track.node_ids, vec![track.structural_merge_node_id]);
+            assert_eq!(track.output_node_id, Some(track.structural_merge_node_id));
         }
         assert!(read.validate_connections().is_empty());
         assert!(read.validate_containment().is_empty());
@@ -907,7 +919,32 @@ mod tests {
         assert!(!read.connections.iter().any(|connection| {
             connection.to == PortAddress::new(PortOwner::Node(E2E_MERGE_ID), TIME_PORT)
         }));
-        assert_eq!(read.connections.len(), 29);
+        let track_a_merge = read
+            .get_track(E2E_TRACK_A_ID)
+            .unwrap()
+            .structural_merge_node_id;
+        let track_b_merge = read
+            .get_track(E2E_TRACK_B_ID)
+            .unwrap()
+            .structural_merge_node_id;
+        let composition_merge = read.compositions[0].structural_merge_node_id;
+        for (source, target, order) in [
+            (PortOwner::Clip(E2E_CLIP_A1_ID), track_a_merge, 0),
+            (PortOwner::Clip(E2E_CLIP_A2_ID), track_a_merge, 1),
+            (PortOwner::Clip(E2E_CLIP_B1_ID), track_b_merge, 0),
+            (PortOwner::Track(E2E_TRACK_A_ID), composition_merge, 0),
+            (PortOwner::Track(E2E_TRACK_B_ID), composition_merge, 1),
+        ] {
+            assert_connection(
+                &read,
+                source,
+                IMAGE_OUTPUT_PORT,
+                PortOwner::Node(target),
+                MERGE_IMAGES_PORT,
+                order,
+            );
+        }
+        assert_eq!(read.connections.len(), 34);
         assert!(read.validate_connections().is_empty());
     }
 

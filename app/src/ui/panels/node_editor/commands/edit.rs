@@ -123,7 +123,13 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
             apply_container_output_node(project, owner, node_id, PortDataType::Audio)
         }
         NodeEdit::Delete { owner } => match owner {
-            PortOwner::Node(id) => project.remove_node(id).is_some(),
+            PortOwner::Node(id) => match project.remove_node(id) {
+                Ok(removed) => removed.is_some(),
+                Err(error) => {
+                    log::warn!("Cannot delete Node {id}: {error}");
+                    false
+                }
+            },
             PortOwner::Clip(id) => project.remove_clip(id).is_some(),
             PortOwner::Track(id) => project.remove_track(id).is_some(),
             PortOwner::Composition(_) => false,

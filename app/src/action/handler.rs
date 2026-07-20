@@ -225,9 +225,21 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                 SelectionTarget::Node(node_id) => {
                     let project = context.project_service.get_project();
                     project.write().is_ok_and(|mut project| {
-                        let removed = project.remove_node(node_id).is_some();
+                        let removed = match project.remove_node(node_id) {
+                            Ok(Some(_)) => true,
+                            Ok(None) => {
+                                error!("Failed to remove Node {node_id}: Node was not found");
+                                false
+                            }
+                            Err(error) => {
+                                error!("Failed to remove Node {node_id}: {error}");
+                                false
+                            }
+                        };
                         if !removed {
-                            error!("Failed to remove Node {node_id}: Node was not found");
+                            context.editor_context.interaction.active_modal_error = Some(
+                                format!("Cannot remove Node: structural Merge nodes belong to their Timeline container"),
+                            );
                         }
                         removed
                     })
@@ -340,8 +352,12 @@ mod tests {
         clip.id = shared_id;
         let mut node = Node::new_merge("same UUID Node");
         node.id = shared_id;
-        project_model.add_track(track);
-        project_model.add_composition(composition);
+        project_model
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project_model
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         project_model.add_clip(clip);
         project_model.add_node(node);
         project_model.attach_clip_to_track(track_id, shared_id)?;
@@ -436,8 +452,12 @@ mod tests {
         let mut initial = Project::new("old project");
         let (composition, track) = Composition::new("old", 320, 180, 30.0, 2.0);
         let old_composition_id = composition.id;
-        initial.add_track(track);
-        initial.add_composition(composition);
+        initial
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        initial
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let project = Arc::new(RwLock::new(initial.clone()));
         let mut service = EditorService::new(
             Arc::clone(&project),

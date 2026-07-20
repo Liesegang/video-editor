@@ -95,15 +95,21 @@ pub(super) fn install(
         .map_err(|error| format!("cannot create waveform Video node: {error}"))?;
     video_node.id = VIDEO_NODE_ID;
 
-    project.add_track(audio_track);
-    project.add_track(video_track);
+    project
+        .add_track(audio_track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_track(video_track)
+        .expect("container structural Merge insertion must succeed");
     project.add_clip(audio_clip);
     project.add_clip(video_clip);
     project.assets.push(audio_asset);
     project.assets.push(video_asset);
     project.add_node(audio_node);
     project.add_node(video_node);
-    project.add_composition(composition);
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     for (clip_id, node_id) in [
         (AUDIO_CLIP_ID, AUDIO_NODE_ID),

@@ -175,8 +175,12 @@ mod tests {
         let mut project = Project::new("node expression");
         let (composition, track) = Composition::new("main", 100, 50, 24.0, 10.0);
         let composition_id = composition.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let node = Node::new_fmod("value");
         let node_id = node.id;
         project.add_node(node);

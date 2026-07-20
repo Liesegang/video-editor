@@ -1488,7 +1488,9 @@ mod tests {
         for clip in clips {
             project.add_clip(clip);
         }
-        project.add_track(track);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
         (project, track_id, clip_ids)
     }
 

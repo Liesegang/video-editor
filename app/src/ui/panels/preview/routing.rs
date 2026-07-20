@@ -287,7 +287,9 @@ mod tests {
         let mut track = library::model::Track::new("track");
         track.id = track_id;
         track.clip_ids = vec![clip_id, reference_clip_id];
-        project.add_track(track);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
         let mut owner = library::model::Clip::new("owner", 0.0, 1.0);
         owner.id = clip_id;
         owner.node_ids = vec![content_id, spatial_id];

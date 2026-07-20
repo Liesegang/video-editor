@@ -458,8 +458,9 @@ fn create_startup_project(
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("startup project lock poisoned".to_string()))?;
-        proj.add_track(root_track);
-        proj.add_composition(default_comp);
+        proj.add_track(root_track)
+            .and_then(|()| proj.add_composition(default_comp))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
     }
     Ok((project, default_comp_id, None))
 }
