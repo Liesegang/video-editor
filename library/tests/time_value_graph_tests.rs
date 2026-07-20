@@ -9,9 +9,10 @@ use library::framing::get_frame_from_project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameItem, FrameObject};
 use library::model::project::{
-    Composition, EvalOutput, FPS_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-    NodeContainer, PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDirection, PortExposure,
-    PortOwner, Project, ProjectGraphError, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
+    Composition, EvalOutput, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, NodeContainer, PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDirection,
+    PortExposure, PortOwner, Project, ProjectGraphError, TIME_PORT, VALUE_INPUT_PORT,
+    VALUE_OUTPUT_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{Clip, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent};
@@ -391,6 +392,33 @@ fn time_modulo_factory_ports_and_roundtrip_are_authoritative() -> Result<()> {
         loaded.port_definitions(PortOwner::Node(fixture.modulo_id)),
         ports
     );
+    Ok(())
+}
+
+#[test]
+fn media_factory_requires_time_but_not_authored_frame_or_fps() -> Result<()> {
+    let fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    let media = fixture
+        .project
+        .get_node(fixture.media_id)
+        .context("Media Node must exist")?;
+    let ports = fixture
+        .project
+        .port_definitions(PortOwner::Node(fixture.media_id));
+    let time = ports
+        .iter()
+        .find(|port| port.key == TIME_PORT && port.direction == PortDirection::Input)
+        .context("Media Node must expose its explicit Time input")?;
+    assert_eq!(time.data_type, PortDataType::Number);
+    assert_eq!(time.exposure, PortExposure::Graph);
+    assert!(
+        ports
+            .iter()
+            .all(|port| !matches!(port.key.as_str(), FRAME_PORT | FPS_PORT)),
+        "Frame and FPS remain inherited read-only context, never Media authoring ports"
+    );
+    assert!(media.properties().get(FRAME_PORT).is_none());
+    assert!(media.properties().get(FPS_PORT).is_none());
     Ok(())
 }
 

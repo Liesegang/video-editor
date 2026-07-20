@@ -40,6 +40,14 @@ pub enum OperationDescriptorError {
     EmptyPortLabel { key: String },
     #[error("operation descriptor derived timing port {key:?} is read-only and cannot be an input")]
     ReadOnlyDerivedTimingInput { key: String },
+    #[error(
+        "operation descriptor derived timing output {key:?} must use {expected:?}, got {actual:?}"
+    )]
+    InvalidDerivedTimingOutputType {
+        key: String,
+        expected: PortDataType,
+        actual: PortDataType,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -327,12 +335,24 @@ impl OperationDescriptor {
                     key: port.key.clone(),
                 });
             }
-            if port.direction == PortDirection::Input
-                && matches!(port.key.as_str(), FRAME_PORT | FPS_PORT)
-            {
-                return Err(OperationDescriptorError::ReadOnlyDerivedTimingInput {
-                    key: port.key.clone(),
-                });
+            let derived_type = match port.key.as_str() {
+                FRAME_PORT => Some(PortDataType::Integer),
+                FPS_PORT => Some(PortDataType::Number),
+                _ => None,
+            };
+            if let Some(expected) = derived_type {
+                if port.direction == PortDirection::Input {
+                    return Err(OperationDescriptorError::ReadOnlyDerivedTimingInput {
+                        key: port.key.clone(),
+                    });
+                }
+                if port.data_type != expected {
+                    return Err(OperationDescriptorError::InvalidDerivedTimingOutputType {
+                        key: port.key.clone(),
+                        expected,
+                        actual: port.data_type,
+                    });
+                }
             }
         }
         Ok(())

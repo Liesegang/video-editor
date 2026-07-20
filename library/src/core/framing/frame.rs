@@ -1248,6 +1248,19 @@ impl<'a> FrameEvaluator<'a> {
         {
             return self.evaluate_value_node_output(node_id, &source.port, global_time, path);
         }
+        if let Some(NodeContent::PluginOperation(operation)) = source_node.map(Node::content) {
+            let descriptor = match self.plugin_manager.operation_descriptor(
+                &operation.category,
+                &operation.component_id,
+                &operation.operation,
+            ) {
+                Ok(descriptor) => descriptor,
+                Err(_) => return Ok(EvalOutput::NoOutput),
+            };
+            if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
+                return Ok(EvalOutput::NoOutput);
+            }
+        }
         match self.scope_for_owner(source.owner, global_time, path)? {
             EvalOutput::Produced(scope) => scope
                 .value(&source.port)
