@@ -64,6 +64,11 @@ fi
 checked=0
 violations=0
 while IFS= read -r -d '' rust_file; do
+    # Audited upstream snapshots live under third_party and retain their source
+    # layout. First-party Rust remains subject to the 1,000-line ratchet.
+    case "${rust_file}" in
+        third_party/*) continue ;;
+    esac
     absolute_path="${SCAN_ROOT}/${rust_file}"
     [[ -f "${absolute_path}" ]] || continue
     current_lines="$(awk 'END { print NR + 0 }' "${absolute_path}")"

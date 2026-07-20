@@ -5,6 +5,10 @@ members = [
     "library",
     "app",
 ]
+exclude = ["third_party/rustpython-parser"]
+
+[patch.crates-io]
+rustpython-parser = { path = "third_party/rustpython-parser" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

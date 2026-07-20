@@ -1,0 +1,96 @@
+---
+source: parser/src/parser.rs
+expression: parse_ast
+---
+[
+    FunctionDef(
+        StmtFunctionDef {
+            range: 1..49,
+            name: Identifier(
+                "args_to_tuple",
+            ),
+            args: Arguments {
+                range: 19..29,
+                posonlyargs: [],
+                args: [],
+                vararg: Some(
+                    Arg {
+                        range: 20..29,
+                        arg: Identifier(
+                            "args",
+                        ),
+                        annotation: Some(
+                            Starred(
+                                ExprStarred {
+                                    range: 26..29,
+                                    value: Name(
+                                        ExprName {
+                                            range: 27..29,
+                                            id: Identifier(
+                                                "Ts",
+                                            ),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    ctx: Load,
+                                },
+                            ),
+                        ),
+                        type_comment: None,
+                    },
+                ),
+                kwonlyargs: [],
+                kwarg: None,
+            },
+            body: [
+                Expr(
+                    StmtExpr {
+                        range: 46..49,
+                        value: Constant(
+                            ExprConstant {
+                                range: 46..49,
+                                value: Ellipsis,
+                                kind: None,
+                            },
+                        ),
+                    },
+                ),
+            ],
+            decorator_list: [],
+            returns: Some(
+                Subscript(
+                    ExprSubscript {
+                        range: 34..44,
+                        value: Name(
+                            ExprName {
+                                range: 34..39,
+                                id: Identifier(
+                                    "Tuple",
+                                ),
+                                ctx: Load,
+                            },
+                        ),
+                        slice: Starred(
+                            ExprStarred {
+                                range: 40..43,
+                                value: Name(
+                                    ExprName {
+                                        range: 41..43,
+                                        id: Identifier(
+                                            "Ts",
+                                        ),
+                                        ctx: Load,
+                                    },
+                                ),
+                                ctx: Load,
+                            },
+                        ),
+                        ctx: Load,
+                    },
+                ),
+            ),
+            type_comment: None,
+            type_params: [],
+        },
+    ),
+]
