@@ -1,8 +1,10 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use library::model::project::Project;
+use library::model::project::{PortOwner, Project};
+use library::model::{Clip, NodeContent};
 use library::EditorService as ProjectService;
 use log::error;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -104,6 +106,25 @@ fn destination_index_for_slot(
     })
 }
 
+fn expanded_clip_label(
+    project: &Project,
+    clip: &Clip,
+    asset_names: &HashMap<Uuid, String>,
+) -> String {
+    project
+        .container_graph_semantics(PortOwner::Clip(clip.id))
+        .authored_source_node_id()
+        .and_then(|node_id| project.get_node(node_id))
+        .map(|node| match node.content() {
+            NodeContent::Media(media) => asset_names
+                .get(&media.asset_id)
+                .cloned()
+                .unwrap_or_else(|| node.name.clone()),
+            _ => node.name.clone(),
+        })
+        .unwrap_or_else(|| clip.name.clone())
+}
+
 pub fn show_track_list(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
@@ -127,8 +148,6 @@ pub fn show_track_list(
         0.0,
         ui_content.style().visuals.window_fill(),
     );
-
-    use std::collections::HashMap;
 
     let mut track_ids: Vec<uuid::Uuid> = Vec::new();
     let mut asset_names: HashMap<uuid::Uuid, String> = HashMap::new();
@@ -521,25 +540,10 @@ pub fn show_track_list(
                 let indent = *depth as f32 * 10.0;
                 let text_offset_x = 5.0 + indent + 16.0; // Extra indent for clip (no folder icon)
 
-                let clip_name = proj_read
-                    .as_ref()
-                    .and_then(|project| {
-                        clip.output_node_id
-                            .and_then(|node_id| project.get_node(node_id))
-                            .or_else(|| {
-                                clip.node_ids
-                                    .iter()
-                                    .find_map(|node_id| project.get_node(*node_id))
-                            })
-                    })
-                    .map(|node| match node.content() {
-                        library::model::NodeContent::Media(media) => asset_names
-                            .get(&media.asset_id)
-                            .cloned()
-                            .unwrap_or_else(|| node.name.clone()),
-                        _ => node.name.clone(),
-                    })
-                    .unwrap_or_else(|| clip.name.clone());
+                let clip_name = proj_read.as_ref().map_or_else(
+                    || clip.name.clone(),
+                    |project| expanded_clip_label(project, clip, &asset_names),
+                );
 
                 track_list_painter.text(
                     row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
@@ -716,7 +720,65 @@ pub fn show_track_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::model::Track;
+    use crate::test_support::generator_node;
+    use library::editor::project_service::GeneratorNodeRequest;
+    use library::model::frame::color::Color;
+    use library::model::project::{
+        NodeContainer, PortAddress, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    };
+    use library::model::{Node, Track};
+    use library::plugin::PluginManager;
+
+    #[test]
+    fn expanded_clip_label_uses_source_instead_of_terminal_effect_or_merge(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = Project::new("timeline label");
+        let clip = Clip::new("Clip fallback", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        let container = NodeContainer::Clip(clip_id);
+
+        let source = generator_node(
+            "Authored source",
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
+        );
+        let source_id = source.id;
+        project.add_node(source);
+        project.attach_node_to_container(container, source_id)?;
+        let effect = PluginManager::default().create_effect_operation_node("blur")?;
+        let effect_id = effect.id;
+        project.add_node(effect);
+        project.attach_node_to_container(container, effect_id)?;
+        let merge = Node::new_merge("Terminal Merge");
+        let merge_id = merge.id;
+        project.add_node(merge);
+        project.attach_node_to_container(container, merge_id)?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+
+        let clip = project.get_clip(clip_id).cloned().ok_or(
+            library::model::project::ProjectGraphError::ClipNotFound(clip_id),
+        )?;
+        project.set_output_node(container, Some(effect_id))?;
+        assert_eq!(
+            expanded_clip_label(&project, &clip, &HashMap::new()),
+            "Authored source"
+        );
+        project.set_output_node(container, Some(merge_id))?;
+        assert_eq!(
+            expanded_clip_label(&project, &clip, &HashMap::new()),
+            "Authored source"
+        );
+        Ok(())
+    }
 
     #[test]
     fn insertion_slots_cover_first_last_and_follow_vertical_scroll() {

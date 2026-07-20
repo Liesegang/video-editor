@@ -3,10 +3,7 @@ use egui_phosphor::regular as icons;
 use library::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::audio::mixer::audio_stream_index_for_media;
 use library::model::asset::AssetKind;
-use library::model::project::{
-    PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
-};
+use library::model::project::{PortOwner, Project};
 use library::model::{Clip, Node, NodeContent, Track};
 use library::EditorService as ProjectService;
 use std::collections::HashSet;
@@ -170,72 +167,23 @@ struct ClipGraphNodes<'a> {
     /// The authored Clip result binding. This can be a Style, Effect, or
     /// Merge and is deliberately not used as the Timeline's semantic label.
     output: Option<&'a Node>,
-    /// The first active direct source feeding `output`, following canonical
-    /// content connections back through operations and Merge inputs.
+    /// The first authored visual source feeding `output`, following canonical
+    /// typed connections while ignoring runtime enabled/range state.
     semantic_source: Option<&'a Node>,
 }
 
 fn clip_graph_nodes<'a>(clip: &Clip, project: &'a Project) -> ClipGraphNodes<'a> {
-    let output = clip
-        .output_node_id
-        .filter(|node_id| clip.node_ids.contains(node_id))
+    let semantics = project.container_graph_semantics(PortOwner::Clip(clip.id));
+    let output = semantics
+        .explicit_output_node_id()
         .and_then(|node_id| project.get_node(node_id));
-    let semantic_source = output
-        .and_then(|output| semantic_source_for_result(project, output.id, &mut HashSet::new()));
+    let semantic_source = semantics
+        .authored_source_node_id()
+        .and_then(|node_id| project.get_node(node_id));
     ClipGraphNodes {
         output,
         semantic_source,
     }
-}
-
-fn semantic_source_for_result<'a>(
-    project: &'a Project,
-    node_id: Uuid,
-    path: &mut HashSet<Uuid>,
-) -> Option<&'a Node> {
-    let node = project.get_node(node_id)?;
-    if !node.enabled || !path.insert(node_id) {
-        return None;
-    }
-
-    let result = match node.content() {
-        NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_) => Some(node),
-        NodeContent::PluginOperation(_) | NodeContent::Merge => {
-            let mut incoming = project
-                .connections
-                .iter()
-                .filter(|connection| {
-                    connection.to.owner == PortOwner::Node(node_id)
-                        && is_content_flow_connection(connection)
-                })
-                .collect::<Vec<_>>();
-            // Merge order is the canonical layer authority. The UUID
-            // tie-breaker keeps malformed equal-order projects deterministic
-            // without adopting Clip.node_ids storage order as a second model.
-            incoming.sort_by(|left, right| {
-                left.order
-                    .cmp(&right.order)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
-            incoming.into_iter().find_map(|connection| {
-                let PortOwner::Node(source_id) = connection.from.owner else {
-                    return None;
-                };
-                semantic_source_for_result(project, source_id, path)
-            })
-        }
-        NodeContent::Value(_) => None,
-    };
-    path.remove(&node_id);
-    result
-}
-
-fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
-    matches!(
-        (connection.from.port.as_str(), connection.to.port.as_str()),
-        (IMAGE_OUTPUT_PORT, IMAGE_INPUT_PORT | MERGE_IMAGES_PORT)
-            | (SHAPE_OUTPUT_PORT, SHAPE_INPUT_PORT)
-    )
 }
 
 fn semantic_source_kind(node: &Node) -> &'static str {
@@ -1384,7 +1332,10 @@ mod tests {
     use crate::test_support::{generator_node, media_node_for_canvas};
     use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest};
     use library::model::frame::color::Color;
-    use library::model::project::{NodeContainer, PortAddress};
+    use library::model::project::{
+        NodeContainer, PortAddress, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+        SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    };
     use library::model::Asset;
     use library::plugin::PluginManager;
 
@@ -1480,12 +1431,12 @@ mod tests {
             project.get_node_mut(source_id).unwrap().enabled = false;
             let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
             assert_eq!(graph.output.map(|node| node.id), Some(style_id));
-            assert!(graph.semantic_source.is_none());
+            assert_eq!(graph.semantic_source.map(|node| node.id), Some(source_id));
         }
     }
 
     #[test]
-    fn effect_result_preserves_media_audio_stream_and_rejects_disabled_paths() {
+    fn effect_result_preserves_media_identity_while_nodes_are_disabled() {
         let (mut project, clip_id) = project_with_clip("effect media");
         let mut asset = Asset::new("dialog", "dialog.mov", AssetKind::Video);
         asset.stream_index = Some(2);
@@ -1537,19 +1488,20 @@ mod tests {
         project.get_node_mut(effect_id).unwrap().enabled = false;
         let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
         assert_eq!(graph.output.map(|node| node.id), Some(effect_id));
-        assert!(graph.semantic_source.is_none());
+        assert_eq!(graph.semantic_source.map(|node| node.id), Some(media_id));
 
         project.get_node_mut(effect_id).unwrap().enabled = true;
         project.get_node_mut(media_id).unwrap().enabled = false;
-        assert!(
+        assert_eq!(
             clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project)
                 .semantic_source
-                .is_none()
+                .map(|node| node.id),
+            Some(media_id)
         );
     }
 
     #[test]
-    fn merge_semantic_source_follows_canonical_order_and_skips_disabled_inputs() {
+    fn merge_semantic_source_follows_canonical_order_independent_of_enabled_state() {
         let (mut project, clip_id) = project_with_clip("multi input");
         let unreachable_id = attach_node(
             &mut project,
@@ -1610,9 +1562,9 @@ mod tests {
         project.reorder_connection(second_connection, 0).unwrap();
         assert_eq!(semantic_id(&project), Some(second_id));
         project.get_node_mut(second_id).unwrap().enabled = false;
-        assert_eq!(semantic_id(&project), Some(first_id));
+        assert_eq!(semantic_id(&project), Some(second_id));
         project.get_node_mut(first_id).unwrap().enabled = false;
-        assert_eq!(semantic_id(&project), None);
+        assert_eq!(semantic_id(&project), Some(second_id));
 
         assert!(project.disconnect_connection(first_connection));
     }
