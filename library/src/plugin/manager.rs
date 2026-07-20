@@ -1300,11 +1300,15 @@ mod tests {
             crate::model::Clip::timing_property_definitions(),
             &mut failures,
         );
-        check_definitions(
-            "native Fmod",
-            crate::model::ValueContent::Fmod.property_definitions(),
-            &mut failures,
-        );
+        for (label, value) in [
+            ("native Fmod", crate::model::ValueContent::Fmod),
+            ("native Add", crate::model::ValueContent::Add),
+            ("native Subtract", crate::model::ValueContent::Subtract),
+            ("native Multiply", crate::model::ValueContent::Multiply),
+            ("native Divide", crate::model::ValueContent::Divide),
+        ] {
+            check_definitions(label, value.property_definitions(), &mut failures);
+        }
         let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();
         let registered_effect_ids;
         {

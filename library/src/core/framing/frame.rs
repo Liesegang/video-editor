@@ -1549,37 +1549,40 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::project::{Composition, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT};
+    use crate::model::project::{Composition, FMOD_X_INPUT_PORT};
     use crate::model::property::Property;
     use crate::model::{Clip, Node};
 
-    fn evaluate_fmod_output(x: f64, divisor: f64) -> EvalOutput<PropertyValue> {
+    fn evaluate_numeric_output(mut node: Node, left: f64, right: f64) -> EvalOutput<PropertyValue> {
         let mut project = Project::new("fmod semantics");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 2.0);
         let track_id = track.id;
         project.add_track(track);
         project.add_composition(composition);
         let mut clip = Clip::new("clip", 0.0, 1.0);
-        clip.trim_in = OrderedFloat(x - 0.5);
+        clip.trim_in = OrderedFloat(left - 0.5);
         let clip_id = clip.id;
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let mut fmod = Node::new_fmod("Fmod");
-        fmod.set_property(
-            FMOD_DIVISOR_INPUT_PORT.to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(divisor))),
+        let NodeContent::Value(value) = node.content() else {
+            return EvalOutput::NoOutput;
+        };
+        let value = *value;
+        node.set_property(
+            value.secondary_input().to_string(),
+            Property::constant(PropertyValue::Number(OrderedFloat(right))),
         )
         .unwrap();
-        let fmod_id = fmod.id;
-        project.add_node(fmod);
+        let node_id = node.id;
+        project.add_node(node);
         project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), fmod_id)
+            .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
             .unwrap();
         project
             .connect_ports(
                 PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
-                PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
+                PortAddress::new(PortOwner::Node(node_id), value.primary_input()),
             )
             .unwrap();
 
@@ -1592,11 +1595,15 @@ mod tests {
         );
         evaluator
             .resolve_metadata_value(
-                &PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+                &PortAddress::new(PortOwner::Node(node_id), NUMBER_RESULT_OUTPUT_PORT),
                 0.5,
                 &mut HashSet::new(),
             )
             .unwrap()
+    }
+
+    fn evaluate_fmod_output(x: f64, divisor: f64) -> EvalOutput<PropertyValue> {
+        evaluate_numeric_output(Node::new_fmod("Fmod"), x, divisor)
     }
 
     #[test]
@@ -1623,6 +1630,25 @@ mod tests {
         for divisor in [0.0, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(evaluate_fmod_output(5.5, divisor), EvalOutput::NoOutput);
         }
+    }
+
+    #[test]
+    fn basic_numeric_nodes_execute_through_the_shared_graph_evaluator() {
+        for (node, expected) in [
+            (Node::new_add("Add"), 8.0),
+            (Node::new_subtract("Subtract"), 4.0),
+            (Node::new_multiply("Multiply"), 12.0),
+            (Node::new_divide("Divide"), 3.0),
+        ] {
+            assert_eq!(
+                evaluate_numeric_output(node, 6.0, 2.0),
+                EvalOutput::Produced(PropertyValue::Number(OrderedFloat(expected)))
+            );
+        }
+        assert_eq!(
+            evaluate_numeric_output(Node::new_divide("Divide"), 6.0, -0.0),
+            EvalOutput::NoOutput
+        );
     }
 
     #[test]

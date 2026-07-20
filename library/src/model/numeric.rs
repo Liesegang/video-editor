@@ -10,6 +10,10 @@ use crate::model::property::{PropertyValue, Vec2, Vec3, Vec4};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericBinaryOperation {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
     Fmod,
 }
 
@@ -136,10 +140,18 @@ pub(crate) fn evaluate_numeric_binary(
     for (index, value) in values.iter_mut().take(dimension).enumerate() {
         let left = left.component(index);
         let right = right.component(index);
-        if operation == NumericBinaryOperation::Fmod && right == 0.0 {
+        if matches!(
+            operation,
+            NumericBinaryOperation::Divide | NumericBinaryOperation::Fmod
+        ) && right == 0.0
+        {
             return Err(NumericEvaluationError::ZeroDivisor);
         }
         *value = match operation {
+            NumericBinaryOperation::Add => left + right,
+            NumericBinaryOperation::Subtract => left - right,
+            NumericBinaryOperation::Multiply => left * right,
+            NumericBinaryOperation::Divide => left / right,
             NumericBinaryOperation::Fmod => left % right,
         };
         if !value.is_finite() {
@@ -213,6 +225,37 @@ mod tests {
                 &vec2(2.0, 1.0),
             ),
             Err(NumericEvaluationError::NonFiniteInput)
+        );
+    }
+
+    #[test]
+    fn basic_arithmetic_uses_the_same_broadcast_and_atomic_failure_rules() {
+        for (operation, expected) in [
+            (NumericBinaryOperation::Add, vec2(8.0, 10.0)),
+            (NumericBinaryOperation::Subtract, vec2(2.0, 2.0)),
+            (NumericBinaryOperation::Multiply, vec2(15.0, 24.0)),
+            (NumericBinaryOperation::Divide, vec2(5.0 / 3.0, 1.5)),
+        ] {
+            assert_eq!(
+                evaluate_numeric_binary(operation, &vec2(5.0, 6.0), &vec2(3.0, 4.0)),
+                Ok(expected)
+            );
+        }
+        assert_eq!(
+            evaluate_numeric_binary(
+                NumericBinaryOperation::Divide,
+                &vec2(5.0, 6.0),
+                &vec2(1.0, -0.0),
+            ),
+            Err(NumericEvaluationError::ZeroDivisor)
+        );
+        assert_eq!(
+            evaluate_numeric_binary(
+                NumericBinaryOperation::Multiply,
+                &PropertyValue::Number(OrderedFloat(f64::MAX)),
+                &PropertyValue::Number(OrderedFloat(2.0)),
+            ),
+            Err(NumericEvaluationError::NonFiniteResult)
         );
     }
 }

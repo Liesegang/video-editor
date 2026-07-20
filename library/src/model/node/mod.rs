@@ -1,7 +1,7 @@
 use crate::model::numeric::NumericBinaryOperation;
 use crate::model::project::connection::{
-    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, PortDataType,
-    PortDefinition, PortExposure, PortSide,
+    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
+    NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortExposure, PortSide,
 };
 use crate::model::project::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
@@ -93,6 +93,45 @@ static FMOD_PORT_DEFINITIONS: LazyLock<[PortDefinition; 3]> = LazyLock::new(|| {
     [
         PortDefinition::input(FMOD_X_INPUT_PORT, "X", PortDataType::Numeric),
         PortDefinition::input(FMOD_DIVISOR_INPUT_PORT, "Divisor", PortDataType::Numeric),
+        PortDefinition::output(
+            NUMBER_RESULT_OUTPUT_PORT,
+            "Result",
+            PortDataType::Numeric,
+            PortSide::Right,
+            PortExposure::Graph,
+        ),
+    ]
+});
+
+static ADD_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> =
+    LazyLock::new(|| [numeric_b_property_definition(0.0)]);
+static SUBTRACT_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> =
+    LazyLock::new(|| [numeric_b_property_definition(0.0)]);
+static MULTIPLY_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> =
+    LazyLock::new(|| [numeric_b_property_definition(1.0)]);
+static DIVIDE_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> =
+    LazyLock::new(|| [numeric_b_property_definition(1.0)]);
+
+fn numeric_b_property_definition(default: f64) -> PropertyDefinition {
+    PropertyDefinition::new(
+        NUMERIC_B_INPUT_PORT,
+        PropertyUiType::Float {
+            min: -1_000_000.0,
+            max: 1_000_000.0,
+            step: 0.01,
+            suffix: String::new(),
+            min_hard_limit: false,
+            max_hard_limit: false,
+        },
+        "B",
+        PropertyValue::Number(OrderedFloat(default)),
+    )
+}
+
+static BASIC_NUMERIC_PORT_DEFINITIONS: LazyLock<[PortDefinition; 3]> = LazyLock::new(|| {
+    [
+        PortDefinition::input(NUMERIC_A_INPUT_PORT, "A", PortDataType::Numeric),
+        PortDefinition::input(NUMERIC_B_INPUT_PORT, "B", PortDataType::Numeric),
         PortDefinition::output(
             NUMBER_RESULT_OUTPUT_PORT,
             "Result",
@@ -523,7 +562,26 @@ impl Node {
     /// wiring a container's Time output to `x`. `divisor` remains a normal,
     /// wire-overridable numeric property initialized to `1.0`.
     pub fn new_fmod(name: &str) -> Self {
-        let content = ValueContent::Fmod;
+        Self::new_numeric(name, ValueContent::Fmod)
+    }
+
+    pub fn new_add(name: &str) -> Self {
+        Self::new_numeric(name, ValueContent::Add)
+    }
+
+    pub fn new_subtract(name: &str) -> Self {
+        Self::new_numeric(name, ValueContent::Subtract)
+    }
+
+    pub fn new_multiply(name: &str) -> Self {
+        Self::new_numeric(name, ValueContent::Multiply)
+    }
+
+    pub fn new_divide(name: &str) -> Self {
+        Self::new_numeric(name, ValueContent::Divide)
+    }
+
+    fn new_numeric(name: &str, content: ValueContent) -> Self {
         Self::with_properties(
             name,
             NodeContent::Value(content),
@@ -619,24 +677,34 @@ pub enum ValueContent {
     /// numeric values. Invalid inputs produce graph `NoOutput`; no Time input
     /// or timeline behavior is implicit.
     Fmod,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
 impl ValueContent {
     pub(crate) fn numeric_operation(self) -> NumericBinaryOperation {
         match self {
             Self::Fmod => NumericBinaryOperation::Fmod,
+            Self::Add => NumericBinaryOperation::Add,
+            Self::Subtract => NumericBinaryOperation::Subtract,
+            Self::Multiply => NumericBinaryOperation::Multiply,
+            Self::Divide => NumericBinaryOperation::Divide,
         }
     }
 
     pub fn primary_input(self) -> &'static str {
         match self {
             Self::Fmod => FMOD_X_INPUT_PORT,
+            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => NUMERIC_A_INPUT_PORT,
         }
     }
 
     pub fn secondary_input(self) -> &'static str {
         match self {
             Self::Fmod => FMOD_DIVISOR_INPUT_PORT,
+            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => NUMERIC_B_INPUT_PORT,
         }
     }
 
@@ -645,6 +713,10 @@ impl ValueContent {
     pub fn property_definitions(self) -> &'static [PropertyDefinition] {
         match self {
             Self::Fmod => FMOD_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Add => ADD_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Subtract => SUBTRACT_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Multiply => MULTIPLY_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Divide => DIVIDE_PROPERTY_DEFINITIONS.as_slice(),
         }
     }
 
@@ -652,6 +724,9 @@ impl ValueContent {
     pub fn port_definitions(self) -> &'static [PortDefinition] {
         match self {
             Self::Fmod => FMOD_PORT_DEFINITIONS.as_slice(),
+            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => {
+                BASIC_NUMERIC_PORT_DEFINITIONS.as_slice()
+            }
         }
     }
 
@@ -849,5 +924,39 @@ mod tests {
             ValueContent::Fmod.bypass_input_for_output(NUMBER_RESULT_OUTPUT_PORT),
             Some(FMOD_X_INPUT_PORT)
         );
+    }
+
+    #[test]
+    fn basic_numeric_factories_share_ports_and_use_safe_identity_defaults() {
+        for (node, content, default_b) in [
+            (Node::new_add("Add"), ValueContent::Add, 0.0),
+            (Node::new_subtract("Subtract"), ValueContent::Subtract, 0.0),
+            (Node::new_multiply("Multiply"), ValueContent::Multiply, 1.0),
+            (Node::new_divide("Divide"), ValueContent::Divide, 1.0),
+        ] {
+            assert_eq!(node.content(), &NodeContent::Value(content));
+            assert_eq!(
+                node.properties()
+                    .get(NUMERIC_B_INPUT_PORT)
+                    .and_then(Property::value),
+                Some(&PropertyValue::Number(OrderedFloat(default_b)))
+            );
+            assert_eq!(
+                content
+                    .port_definitions()
+                    .iter()
+                    .map(|port| port.key.as_str())
+                    .collect::<Vec<_>>(),
+                vec![
+                    NUMERIC_A_INPUT_PORT,
+                    NUMERIC_B_INPUT_PORT,
+                    NUMBER_RESULT_OUTPUT_PORT,
+                ]
+            );
+            assert_eq!(
+                content.bypass_input_for_output(NUMBER_RESULT_OUTPUT_PORT),
+                Some(NUMERIC_A_INPUT_PORT)
+            );
+        }
     }
 }

@@ -18,6 +18,8 @@ pub const DURATION_PORT: &str = "duration";
 pub const RESOLUTION_PORT: &str = "resolution";
 pub const FMOD_X_INPUT_PORT: &str = "x";
 pub const FMOD_DIVISOR_INPUT_PORT: &str = "divisor";
+pub const NUMERIC_A_INPUT_PORT: &str = "a";
+pub const NUMERIC_B_INPUT_PORT: &str = "b";
 pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
 
 /// The normal result of evaluating a graph port. `NoOutput` is not an error
@@ -490,7 +492,11 @@ fn canonical_node_port_rank(node: &crate::model::Node, port: &PortDefinition) ->
     }
     if matches!(
         port.key.as_str(),
-        IMAGE_INPUT_PORT | SHAPE_INPUT_PORT | MERGE_IMAGES_PORT | FMOD_X_INPUT_PORT
+        IMAGE_INPUT_PORT
+            | SHAPE_INPUT_PORT
+            | MERGE_IMAGES_PORT
+            | FMOD_X_INPUT_PORT
+            | NUMERIC_A_INPUT_PORT
     ) {
         return 1;
     }
@@ -1673,6 +1679,20 @@ mod tests {
                 NUMBER_RESULT_OUTPUT_PORT,
             ],
             "Fmod is generic and must not gain an implicit Time port"
+        );
+
+        let add_id = attach_authored_node(&mut project, container, Node::new_add("Add"))?;
+        assert_eq!(
+            project
+                .port_definitions(PortOwner::Node(add_id))
+                .into_iter()
+                .map(|port| port.key)
+                .collect::<Vec<_>>(),
+            vec![
+                NUMERIC_A_INPUT_PORT,
+                NUMERIC_B_INPUT_PORT,
+                NUMBER_RESULT_OUTPUT_PORT,
+            ]
         );
         Ok(())
     }
