@@ -9,7 +9,7 @@ use super::builtins::{
 use super::engine::ExpressionLimits;
 use super::semantics::{
     ast_name, compare, expression_span, float_to_integer, integer, is_math_constant, math_constant,
-    python_index, runtime_from_public, truthy, u64_to_integer,
+    python_index, runtime_from_public, truthy, u64_to_integer, validate_runtime_value,
 };
 use super::{
     ExpressionDiagnostic, ExpressionDiagnosticKind, ExpressionEvaluationContext,
@@ -76,7 +76,7 @@ impl<'a> EvaluationState<'a> {
             ));
         }
         let child_depth = depth.saturating_add(1);
-        match expression {
+        let result = match expression {
             ast::Expr::Constant(node) => self.evaluate_constant(&node.value, expression),
             ast::Expr::Name(node) => self.evaluate_name(node.id.as_str(), expression),
             ast::Expr::BinOp(node) => {
@@ -143,7 +143,11 @@ impl<'a> EvaluationState<'a> {
                 format!("{} is not supported", ast_name(expression)),
                 expression,
             )),
-        }
+        };
+        result.and_then(|value| {
+            validate_runtime_value(value, self.limits)
+                .map_err(|failure| self.failure(failure, expression))
+        })
     }
 
     fn consume(
