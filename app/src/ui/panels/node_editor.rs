@@ -132,7 +132,9 @@ use interaction::resize_regions;
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
-use interaction::{edit_for_wire, embedded_pin_center, graph_item_owner};
+use interaction::{
+    disconnect_context_target, edit_for_wire, embedded_pin_center, graph_item_owner,
+};
 use interaction::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
     editable_wire_stable_key, knife_segment_hits_edge, rendered_edge_at_position,

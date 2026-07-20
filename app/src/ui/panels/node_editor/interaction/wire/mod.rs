@@ -19,7 +19,7 @@ pub(in crate::ui::panels::node_editor) use hit::{
 };
 pub(in crate::ui::panels::node_editor) use menu::show_wire_context_menu;
 pub(in crate::ui::panels::node_editor) use model::{
-    edit_for_wire, embedded_pin_center, graph_item_owner,
+    disconnect_context_target, edit_for_wire, embedded_pin_center, graph_item_owner,
 };
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use render::register_edge_component;

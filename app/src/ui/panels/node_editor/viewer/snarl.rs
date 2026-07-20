@@ -1,5 +1,4 @@
 use super::ProjectNodeViewer;
-use crate::state::context_types::NodeEditorEditableWire;
 use crate::ui::panels::node_editor::*;
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
@@ -864,43 +863,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             to.id.input,
             false,
         );
-        let context_target =
-            match &edit {
-                Some(NodeEdit::DisconnectConnection { connection_id }) => {
-                    Some(NodeEditorEditableWire::ProjectConnection {
-                        connection_id: *connection_id,
-                    })
-                }
-                Some(NodeEdit::Disconnect { from, to }) => self
-                    .project
-                    .connections
-                    .iter()
-                    .find(|connection| connection.from == *from && connection.to == *to)
-                    .map(|connection| NodeEditorEditableWire::ProjectConnection {
-                        connection_id: connection.id,
-                    }),
-                Some(NodeEdit::SetOutputNode {
-                    owner,
-                    node_id: None,
-                }) => container_output_node_id(self.project, *owner, PortDataType::Image).map(
-                    |node_id| NodeEditorEditableWire::OutputBinding {
-                        owner: *owner,
-                        node_id,
-                        data_type: PortDataType::Image,
-                    },
-                ),
-                Some(NodeEdit::SetAudioOutputNode {
-                    owner,
-                    node_id: None,
-                }) => container_output_node_id(self.project, *owner, PortDataType::Audio).map(
-                    |node_id| NodeEditorEditableWire::OutputBinding {
-                        owner: *owner,
-                        node_id,
-                        data_type: PortDataType::Audio,
-                    },
-                ),
-                _ => None,
-            };
+        let context_target = edit
+            .as_ref()
+            .and_then(|edit| disconnect_context_target(self.project, edit));
         if let Some(target) = context_target {
             *self.wire_context_request = Some(target);
             return;

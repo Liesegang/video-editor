@@ -14,7 +14,7 @@ pub(in crate::ui::panels::node_editor) use wire::cubic_bezier_point;
 pub(in crate::ui::panels::node_editor) use wire::register_edge_component;
 pub(in crate::ui::panels::node_editor) use wire::show_wire_context_menu;
 pub(in crate::ui::panels::node_editor) use wire::{
-    edit_for_wire, embedded_pin_center, graph_item_owner,
+    disconnect_context_target, edit_for_wire, embedded_pin_center, graph_item_owner,
 };
 pub(in crate::ui::panels::node_editor) use wire::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
