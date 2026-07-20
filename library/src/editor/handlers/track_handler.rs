@@ -19,12 +19,12 @@ impl TrackHandler {
 
         let new_track = Track::new(track_name);
         let new_track_id = new_track.id;
-        proj.add_track(new_track);
-
-        if let Err(error) = proj.attach_track_to_composition(composition_id, new_track_id) {
-            proj.remove_track(new_track_id);
-            return Err(LibraryError::Project(error.to_string()));
-        }
+        let mut candidate = proj.clone();
+        candidate
+            .add_track(new_track)
+            .and_then(|()| candidate.attach_track_to_composition(composition_id, new_track_id))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
+        *proj = candidate;
 
         Ok(new_track_id)
     }
@@ -40,12 +40,12 @@ impl TrackHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let track_id = track.id;
-        proj.add_track(track);
-
-        if let Err(error) = proj.attach_track_to_composition(composition_id, track_id) {
-            proj.remove_track(track_id);
-            return Err(LibraryError::Project(error.to_string()));
-        }
+        let mut candidate = proj.clone();
+        candidate
+            .add_track(track)
+            .and_then(|()| candidate.attach_track_to_composition(composition_id, track_id))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
+        *proj = candidate;
 
         Ok(track_id)
     }

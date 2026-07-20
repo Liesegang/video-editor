@@ -62,8 +62,12 @@ impl CompositionHandler {
         let (composition, root_track) = Composition::new(name, width, height, fps, duration);
         let id = composition.id;
 
-        proj.add_track(root_track);
-        proj.add_composition(composition);
+        let mut candidate = proj.clone();
+        candidate
+            .add_track(root_track)
+            .and_then(|()| candidate.add_composition(composition))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
+        *proj = candidate;
 
         Ok(id)
     }
@@ -155,8 +159,12 @@ mod tests {
         let mut project = Project::new("composition handler");
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         (project, composition_id)
     }
 

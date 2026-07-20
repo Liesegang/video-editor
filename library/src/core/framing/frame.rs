@@ -1672,8 +1672,12 @@ mod tests {
         let mut project = Project::new("fmod semantics");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 2.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let mut clip = Clip::new("clip", 0.0, 1.0);
         clip.trim_in = OrderedFloat(left - 0.5);
         let clip_id = clip.id;
@@ -1771,8 +1775,12 @@ mod tests {
         let mut project = Project::new("direct value resolver cycle");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 1.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let clip = Clip::new("clip", 0.0, 1.0);
         let clip_id = clip.id;
         project.add_clip(clip);

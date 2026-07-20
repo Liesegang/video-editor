@@ -182,8 +182,12 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
     if !matches!(scope, TestNodeScope::Composition) {
         set_volume(&mut track.properties, 0.5);
     }
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let container = match scope {
         TestNodeScope::Composition => NodeContainer::Composition(composition_id),
@@ -331,12 +335,18 @@ fn mixes_every_top_level_track_and_all_audio_nodes() {
     let (composition, first_track) = Composition::new("main", 1920, 1080, 30.0, 1.0);
     let composition_id = composition.id;
     let first_track_id = first_track.id;
-    project.add_track(first_track);
-    project.add_composition(composition);
+    project
+        .add_track(first_track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project.add_track(second_track);
+    project
+        .add_track(second_track)
+        .expect("container structural Merge insertion must succeed");
     project
         .attach_track_to_composition(composition_id, second_track_id)
         .unwrap();
@@ -372,14 +382,21 @@ fn mixes_every_top_level_track_and_all_audio_nodes() {
 #[test]
 fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
     let mut project = Project::new("duplicate audio reachability");
-    let (mut composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    // A directly loaded malformed pre-v1 Project can repeat a child identity.
-    // Runtime traversal must still not amplify the same Media leaf.
-    composition.track_ids.push(track_id);
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
+    // A directly loaded malformed Project can repeat a child identity. The
+    // authoring API rejects it, so reproduce the persisted corruption only
+    // after materializing the required structural Merge state.
+    let mut persisted = serde_json::to_value(project).unwrap();
+    persisted["compositions"][0]["track_ids"] = serde_json::json!([track_id, track_id]);
+    let mut project: Project = serde_json::from_value(persisted).unwrap();
     let clip = Clip::new("audio", 0.0, 1.0);
     let clip_id = clip.id;
     project.add_clip(clip);
@@ -409,8 +426,12 @@ fn applies_clip_timing_trim_and_stretch_per_output_frame() {
     let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let mut clip = Clip::new("retimed", 0.5, 1.0);
     clip.trim_in = OrderedFloat(0.25);
@@ -459,8 +480,12 @@ fn explicit_parent_audio_bindings_override_derived_children() {
     let composition_id = composition.id;
     let track_id = track.id;
     set_volume(&mut track.properties, 0.5);
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let cache_manager = CacheManager::new();
     let mut files = TestAudioFiles::default();
@@ -525,8 +550,12 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let clip = Clip::new("audio clip", 0.0, 1.0);
     let clip_id = clip.id;
@@ -599,8 +628,12 @@ fn source_window_uses_clip_local_time_and_explicit_audio_stream() {
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 200.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let mut clip = Clip::new("late retimed clip", 100.0, 2.0);
     clip.trim_in = OrderedFloat(0.25);
@@ -674,8 +707,12 @@ fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
     let mut project = Project::new("composition audio range");
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     let node_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 8]);

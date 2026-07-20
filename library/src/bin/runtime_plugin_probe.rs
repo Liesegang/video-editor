@@ -174,8 +174,12 @@ fn verify_config_operations(
     let (composition, track) = Composition::new("Runtime config proof", 640, 360, 30.0, 1.0);
     let composition_id = composition.id;
     let mut project = Project::new("Runtime config proof");
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     let composition = project
         .get_composition(composition_id)
         .context("test composition disappeared")?;
@@ -540,8 +544,12 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     };
     let track_id = track.id;
     let mut project = Project::new("Runtime graph");
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     let clip = Clip::new("Runtime graph", 0.0, 1.0);
     let clip_id = clip.id;
     project.add_clip(clip);

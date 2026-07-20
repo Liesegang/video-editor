@@ -656,19 +656,33 @@ mod tests {
         composition.background_color = Color::black();
         let composition_id = composition.id;
         let first_track_id = first_track.id;
-        project.add_track(first_track);
-        project.add_composition(composition);
+        project
+            .add_track(first_track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
 
         let mut second_track = Track::new("second");
         let second_track_id = second_track.id;
-        second_track.blend_mode = BlendMode::Add;
         second_track.properties.set(
             "opacity".into(),
             Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
         );
-        project.add_track(second_track);
+        project
+            .add_track(second_track)
+            .expect("container structural Merge insertion must succeed");
         project
             .attach_track_to_composition(composition_id, second_track_id)
+            .unwrap();
+        let second_track_edge_id = project
+            .connections
+            .iter()
+            .find(|connection| connection.from.owner == PortOwner::Track(second_track_id))
+            .expect("Track insertion must create a structural Merge edge")
+            .id;
+        project
+            .set_connection_blend_mode(second_track_edge_id, BlendMode::Add)
             .unwrap();
 
         let _ = add_solid(
@@ -681,7 +695,7 @@ mod tests {
                 a: 255,
             },
         );
-        let (second_clip_id, _) = add_solid(
+        let (_second_clip_id, _) = add_solid(
             &mut project,
             second_track_id,
             Color {
@@ -701,7 +715,15 @@ mod tests {
             .unwrap();
         project
             .connect_ports(
-                PortAddress::new(PortOwner::Clip(second_clip_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(
+                    PortOwner::Node(
+                        project
+                            .get_track(second_track_id)
+                            .unwrap()
+                            .structural_merge_node_id,
+                    ),
+                    IMAGE_OUTPUT_PORT,
+                ),
                 PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
             )
             .unwrap();
@@ -757,8 +779,12 @@ mod tests {
         let (mut parent, parent_track) = Composition::new("parent", 1, 1, 30.0, 1.0);
         parent.background_color = Color::black();
         let parent_track_id = parent_track.id;
-        project.add_track(parent_track);
-        project.add_composition(parent);
+        project
+            .add_track(parent_track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(parent)
+            .expect("container structural Merge insertion must succeed");
 
         let (mut nested, nested_track) = Composition::new("nested", 1, 1, 30.0, 1.0);
         nested.background_color = Color {
@@ -769,8 +795,12 @@ mod tests {
         };
         let nested_id = nested.id;
         let nested_track_id = nested_track.id;
-        project.add_track(nested_track);
-        project.add_composition(nested);
+        project
+            .add_track(nested_track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(nested)
+            .expect("container structural Merge insertion must succeed");
         let _ = add_solid(
             &mut project,
             nested_track_id,
@@ -839,8 +869,12 @@ mod tests {
         let mut project = Project::new("texture path test");
         let (composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
         let _ = add_solid(&mut project, track_id, Color::white());
 
         let plugin_manager = Arc::new(PluginManager::default());
@@ -872,8 +906,12 @@ mod tests {
         let (mut composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
         composition.background_color = Color::black();
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        project
+            .add_track(track)
+            .expect("container structural Merge insertion must succeed");
+        project
+            .add_composition(composition)
+            .expect("container structural Merge insertion must succeed");
 
         let clip = Clip::new("merge clip", 0.0, 1.0);
         let clip_id = clip.id;
