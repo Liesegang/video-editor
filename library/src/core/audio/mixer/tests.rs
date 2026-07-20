@@ -1,4 +1,7 @@
 use super::*;
+use crate::model::project::{
+    AUDIO_OUTPUT_PORT, PortAddress, PortDefinition, PortExposure, PortSide,
+};
 use crate::model::property::{Property, PropertyMap, PropertyValue};
 use crate::model::{MediaContent, NodeContainer, Track};
 use ordered_float::OrderedFloat;
@@ -514,6 +517,80 @@ fn explicit_parent_audio_bindings_override_derived_children() {
         .unwrap();
     // Explicit Composition output replaces all derived Tracks.
     assert_eq!(mix(&project), vec![1.0; 4]);
+}
+
+#[test]
+fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrough() {
+    let mut project = Project::new("unsupported audio operation");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    project.add_track(track);
+    project.add_composition(composition);
+
+    let clip = Clip::new("audio clip", 0.0, 1.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 8]);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), media_id)
+        .unwrap();
+
+    let mut persisted = serde_json::to_value(Node::new_merge("unsupported audio effect")).unwrap();
+    persisted["content"] = serde_json::json!({
+        "type": "PluginOperation",
+        "data": {
+            "category": "audio_effect",
+            "component_id": "not-installed",
+            "operation": "audio.effect.v1",
+            "declared_ports": [
+                PortDefinition::input("audio_in", "Audio", PortDataType::Audio),
+                PortDefinition::output(
+                    AUDIO_OUTPUT_PORT,
+                    "Audio",
+                    PortDataType::Audio,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        },
+    });
+    let operation: Node = serde_json::from_value(persisted).unwrap();
+    let operation_id = operation.id;
+    project.add_node(operation);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), operation_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(operation_id), "audio_in"),
+        )
+        .unwrap();
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(operation_id))
+        .unwrap();
+
+    let composition = project.get_composition(composition_id).unwrap();
+    assert_eq!(
+        mix_samples(
+            &project.assets,
+            &project,
+            composition,
+            &cache,
+            0,
+            4,
+            4,
+            1,
+            &PluginManager::default(),
+        ),
+        vec![0.0; 4]
+    );
+    assert!(audio_window_requests_for_composition(&project, composition, 0, 4, 4).is_empty());
 }
 
 #[test]

@@ -239,33 +239,52 @@ fn collect_routed_audio_media_nodes(
                 path.remove(&owner);
                 return;
             }
-            if matches!(node.content(), NodeContent::Media(_)) {
-                if emitted.insert(node_id) {
-                    nodes.push(node_id);
+            match node.content() {
+                NodeContent::Media(_) => {
+                    if emitted.insert(node_id) {
+                        nodes.push(node_id);
+                    }
                 }
-            } else {
-                let mut inputs = project
-                    .connections
-                    .iter()
-                    .filter(|connection| connection.to.owner == owner)
-                    .filter(|connection| {
-                        project
-                            .port_definition(&connection.from, PortDirection::Output)
-                            .is_some_and(|port| port.data_type == PortDataType::Audio)
-                            && project
-                                .port_definition(&connection.to, PortDirection::Input)
-                                .is_some_and(|port| port.data_type == PortDataType::Audio)
-                    })
-                    .collect::<Vec<_>>();
-                inputs.sort_by_key(|connection| (connection.order, connection.id));
-                for connection in inputs {
-                    collect_routed_audio_media_nodes(
-                        project,
-                        connection.from.owner,
-                        path,
-                        emitted,
-                        nodes,
+                NodeContent::PluginOperation(operation) => {
+                    // Audio PluginOperation evaluation is not implemented by
+                    // the mixer yet. Treating its Audio inputs as an implicit
+                    // sum/pass-through would silently change plugin semantics,
+                    // so an authored operation output is NoOutput until the
+                    // matching runtime evaluation contract exists.
+                    log::trace!(
+                        "audio mixer skipped unsupported PluginOperation {} ({}/{})",
+                        node.id,
+                        operation.category,
+                        operation.component_id
                     );
+                }
+                NodeContent::Generator(_)
+                | NodeContent::Reference(_)
+                | NodeContent::Value(_)
+                | NodeContent::Merge => {
+                    let mut inputs = project
+                        .connections
+                        .iter()
+                        .filter(|connection| connection.to.owner == owner)
+                        .filter(|connection| {
+                            project
+                                .port_definition(&connection.from, PortDirection::Output)
+                                .is_some_and(|port| port.data_type == PortDataType::Audio)
+                                && project
+                                    .port_definition(&connection.to, PortDirection::Input)
+                                    .is_some_and(|port| port.data_type == PortDataType::Audio)
+                        })
+                        .collect::<Vec<_>>();
+                    inputs.sort_by_key(|connection| (connection.order, connection.id));
+                    for connection in inputs {
+                        collect_routed_audio_media_nodes(
+                            project,
+                            connection.from.owner,
+                            path,
+                            emitted,
+                            nodes,
+                        );
+                    }
                 }
             }
         }
