@@ -984,6 +984,8 @@ unsafe extern "C" fn query_extension(
     extension_name: RuvieBytesView,
 ) -> *const c_void {
     // This callback cannot report an error, so invalid views simply decline.
+    // SAFETY: `extension_name` is borrowed only for this callback invocation;
+    // `bytes_from_view` validates the pointer/length pair before exposing it.
     let Ok(name) = (unsafe { bytes_from_view(extension_name) }) else {
         return std::ptr::null();
     };
