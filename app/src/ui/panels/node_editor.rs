@@ -11814,11 +11814,9 @@ mod tests {
         let mut project = project_lock.read().unwrap().clone();
         apply_queued_node_edits(
             &mut project,
-            vec![QueuedNodeEdit::Atomic(NodeEdit::SetProperty {
-                owner: PortOwner::Node(node_id),
-                key: "enabled".into(),
-                time: 0.0,
-                value: PropertyValue::Boolean(false),
+            vec![QueuedNodeEdit::Atomic(NodeEdit::SetEnabled {
+                node_id,
+                enabled: false,
             })],
             &mut history,
             &mut state,
