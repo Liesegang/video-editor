@@ -8,7 +8,7 @@ use crate::state::context_types::{
     NodeEditorEditableWire, NodeEditorWireDragKind, SelectionTarget,
 };
 use crate::ui::widgets::searchable_context_menu::{
-    searchable_popup_placement, show_searchable_items_with_qa,
+    searchable_menu_click_is_outside, searchable_popup_placement, show_searchable_items_with_qa,
 };
 use eframe::egui::{self, Color32};
 #[cfg(test)]
@@ -401,6 +401,7 @@ fn handle_context_menu(
         let graph_position = from_global * position;
         let popup =
             searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
+        let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
         let response = egui::Area::new(egui::Id::new("node_ctx_menu"))
             .fixed_pos(popup.position)
             .show(ui.ctx(), |ui| {
@@ -409,7 +410,6 @@ fn handle_context_menu(
                     ui.set_width(popup.width);
                     ui.set_max_height(popup.max_height);
                     let items = node_create_menu_items(plugin_manager.as_ref());
-                    let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
                     if let Some(request) = show_searchable_items_with_qa(
                         ui,
                         &menu_id,
@@ -430,12 +430,9 @@ fn handle_context_menu(
 
         if ui.input(|input| input.pointer.any_click())
             && ui.input(|input| input.time) - context.open_time > 0.2
+            && searchable_menu_click_is_outside(ui.ctx(), &menu_id, response.response.rect)
         {
-            if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
-                if !response.response.rect.contains(pointer) {
-                    should_close = true;
-                }
-            }
+            should_close = true;
         }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             should_close = true;

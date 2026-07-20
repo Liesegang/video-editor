@@ -1,6 +1,6 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorState};
 use crate::ui::widgets::searchable_context_menu::{
-    searchable_popup_placement, show_searchable_items_with_qa,
+    searchable_menu_click_is_outside, searchable_popup_placement, show_searchable_items_with_qa,
 };
 use eframe::egui;
 use library::model::project::{PortDataType, PortOwner};
@@ -54,6 +54,10 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
     let graph_position = to_global.inverse() * position;
     let popup =
         searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
+    let searchable_menu_id = format!(
+        "node_editor_wire_insert_menu:{connection_id}:{}",
+        context.open_time.to_bits()
+    );
     let mut edit = None;
     let mut should_close = false;
     let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", connection_id)))
@@ -69,10 +73,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                         non_selectable_label(ui, "No compatible operations");
                     } else if let Some(request) = show_searchable_items_with_qa(
                         ui,
-                        &format!(
-                            "node_editor_wire_insert_menu:{connection_id}:{}",
-                            context.open_time.to_bits()
-                        ),
+                        &searchable_menu_id,
                         Some("node_editor.wire_menu.search"),
                         &items,
                     ) {
@@ -314,9 +315,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
 
     if ui.input(|input| input.pointer.any_click())
         && ui.input(|input| input.time) - context.open_time > 0.2
-        && ui
-            .input(|input| input.pointer.interact_pos())
-            .is_some_and(|pointer| !response.response.rect.contains(pointer))
+        && searchable_menu_click_is_outside(ui.ctx(), &searchable_menu_id, response.response.rect)
     {
         should_close = true;
     }
