@@ -18,7 +18,7 @@ use egui_snarl::{
 };
 use library::model::project::{
     ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortMultiplicity,
-    PortOwner, PortSide,
+    PortOwner, PortSide, MERGE_IMAGES_PORT,
 };
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::model::{
@@ -51,6 +51,7 @@ const EMBEDDED_PORT_LABEL_INSET: f32 = 18.0;
 const RESIZE_HIT_WIDTH: f32 = 7.0;
 const RESIZE_CORNER_SIZE: f32 = 15.0;
 const NODE_BODY_WIDTH: f32 = 200.0;
+const MERGE_BODY_WIDTH: f32 = 230.0;
 const NODE_HEADER_WIDTH: f32 = 190.0;
 const PORT_LABEL_WIDTH: f32 = 96.0;
 const PORT_ROW_HEIGHT: f32 = 22.0;
@@ -972,8 +973,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn has_body(&mut self, item: &GraphItem) -> bool {
-        let _ = item;
-        false
+        matches!(
+            item,
+            GraphItem::Node(node_id)
+                if self
+                    .project
+                    .get_node(*node_id)
+                    .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
+        )
     }
 
     fn show_body(
@@ -997,6 +1004,17 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let GraphItem::Node(project_node_id) = item else {
             return;
         };
+        if self
+            .project
+            .get_node(project_node_id)
+            .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
+        {
+            ui.vertical(|ui| {
+                ui.set_width(MERGE_BODY_WIDTH);
+                self.show_merge_layers(project_node_id, ui);
+            });
+            return;
+        }
         ui.vertical(|ui| {
             ui.set_width(NODE_BODY_WIDTH);
             let Some(node) = self.project.get_node(project_node_id) else {
@@ -1435,6 +1453,257 @@ fn resolve_node_editor_transform(
 }
 
 impl ProjectNodeViewer<'_> {
+    fn show_merge_layers(&mut self, merge_id: Uuid, ui: &mut egui::Ui) {
+        let rows = merge_layer_rows(self.project, merge_id);
+        let to_global = *self.to_global;
+        let canvas_clip = *self.canvas_clip;
+        let header = non_selectable_label(
+            ui,
+            egui::RichText::new("Layers · Back → Front")
+                .small()
+                .strong(),
+        )
+        .on_hover_text("Each row is one authored Merge input wire.");
+        register_merge_layer_component(
+            format!("node_editor.merge_layers.header:{merge_id}"),
+            "node_editor_merge_layers_header",
+            header.rect,
+            true,
+            to_global,
+            canvas_clip,
+            serde_json::json!({
+                "merge_id": merge_id,
+                "layer_count": rows.len(),
+                "order_semantics": "back_to_front",
+                "blend_ownership": "connection",
+            }),
+        );
+
+        if rows.is_empty() {
+            let empty = non_selectable_label(
+                ui,
+                egui::RichText::new("No image inputs")
+                    .small()
+                    .color(Color32::from_gray(135)),
+            );
+            register_merge_layer_component(
+                format!("node_editor.merge_layers.empty:{merge_id}"),
+                "node_editor_merge_layers_empty",
+                empty.rect,
+                false,
+                to_global,
+                canvas_clip,
+                serde_json::json!({
+                    "merge_id": merge_id,
+                    "layer_count": 0,
+                    "order_semantics": "back_to_front",
+                }),
+            );
+            return;
+        }
+
+        for row in rows {
+            let mut selected_blend = None;
+            let mut requested_order = None;
+            let row_response = egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(7, 5))
+                .corner_radius(5)
+                .fill(Color32::from_black_alpha(32))
+                .show(ui, |ui| {
+                    ui.set_width(216.0);
+                    ui.horizontal(|ui| {
+                        non_selectable_label(
+                            ui,
+                            egui::RichText::new(format!(
+                                "{} / {}",
+                                row.back_to_front_index + 1,
+                                row.layer_count
+                            ))
+                            .small()
+                            .strong(),
+                        )
+                        .on_hover_text("Layer position in Back → Front order");
+                        bounded_non_selectable_label(
+                            ui,
+                            row.source_label.clone(),
+                            158.0,
+                            egui::Align::LEFT,
+                        )
+                        .on_hover_text(format!(
+                            "{} output · {}",
+                            row.source_label, row.source.port
+                        ));
+                    });
+
+                    ui.horizontal(|ui| {
+                        let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
+                            egui::ComboBox::from_id_salt((
+                                "merge_layer_authored_blend",
+                                merge_id,
+                                row.connection_id,
+                            ))
+                            .selected_text(format!(
+                                "Wire · {}",
+                                blend_mode_label(row.authored_blend_mode)
+                            ))
+                            .width(178.0)
+                            .show_ui(ui, |ui| {
+                                for blend_mode in AUTHORED_BLEND_MODES {
+                                    let selected = blend_mode == row.authored_blend_mode;
+                                    let option = ui
+                                        .add_enabled(
+                                            !selected,
+                                            egui::Button::selectable(
+                                                selected,
+                                                blend_mode_label(blend_mode),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .on_hover_text(
+                                            "Authored on this input wire, not on the Merge Node.",
+                                        );
+                                    register_merge_layer_popup_component(
+                                        format!(
+                                            "node_editor.merge_layer.blend.{}:{merge_id}:{}",
+                                            blend_mode_qa_key(blend_mode),
+                                            row.connection_id
+                                        ),
+                                        "node_editor_merge_layer_blend_option",
+                                        option.rect,
+                                        option.enabled(),
+                                        canvas_clip,
+                                        row.qa_metadata(Some(serde_json::json!({
+                                            "action": "set_authored_blend",
+                                            "blend_mode": blend_mode_qa_key(blend_mode),
+                                            "selected": selected,
+                                        }))),
+                                    );
+                                    if option.clicked() {
+                                        selected_blend = Some(blend_mode);
+                                        ui.close();
+                                    }
+                                }
+                            })
+                            .response
+                        });
+                        let combo_response = combo.inner;
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.blend_select:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_blend_select",
+                            combo_response.rect,
+                            combo_response.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "open_authored_blend",
+                            }))),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        let back_index = row.back_to_front_index.checked_sub(1);
+                        let back = ui
+                            .add_enabled(back_index.is_some(), egui::Button::new("← Back"))
+                            .on_hover_text("Move this wire one layer toward the back");
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.order_back:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_order_button",
+                            back.rect,
+                            back.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "reorder",
+                                "direction": "back",
+                                "target_back_to_front_index": back_index,
+                            }))),
+                        );
+                        if back.clicked() {
+                            requested_order = back_index;
+                        }
+
+                        let front_index = (row.back_to_front_index + 1 < row.layer_count)
+                            .then_some(row.back_to_front_index + 1);
+                        let front = ui
+                            .add_enabled(front_index.is_some(), egui::Button::new("Front →"))
+                            .on_hover_text("Move this wire one layer toward the front");
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.order_front:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_order_button",
+                            front.rect,
+                            front.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "reorder",
+                                "direction": "front",
+                                "target_back_to_front_index": front_index,
+                            }))),
+                        );
+                        if front.clicked() {
+                            requested_order = front_index;
+                        }
+                    });
+                })
+                .response;
+
+            register_merge_layer_component(
+                format!("node_editor.merge_layer:{merge_id}:{}", row.connection_id),
+                "node_editor_merge_layer",
+                row_response.rect,
+                true,
+                to_global,
+                canvas_clip,
+                row.qa_metadata(None),
+            );
+            if let Some(blend_mode) = selected_blend {
+                self.edits
+                    .push(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                        connection_id: row.connection_id,
+                        blend_mode,
+                    }));
+            }
+            if let Some(new_order) = requested_order {
+                self.edits
+                    .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                        connection_id: row.connection_id,
+                        new_order: new_order as i64,
+                    }));
+            }
+        }
+
+        let runtime_note = non_selectable_label(
+            ui,
+            egui::RichText::new(
+                "Runtime: first produced layer composites as Normal; authored wire modes remain.",
+            )
+            .small()
+            .weak(),
+        );
+        register_merge_layer_component(
+            format!("node_editor.merge_layers.runtime_note:{merge_id}"),
+            "node_editor_merge_layers_runtime_note",
+            runtime_note.rect,
+            false,
+            to_global,
+            canvas_clip,
+            serde_json::json!({
+                "merge_id": merge_id,
+                "runtime_first_produced_may_be_normal": true,
+                "authored_blend_ownership": "connection",
+            }),
+        );
+    }
+
     fn queue_continuous_edit(
         &mut self,
         owner: PortOwner,
@@ -5526,6 +5795,7 @@ fn compute_full_composition_layout(
     // membership may move a Node vertically, but can never reverse an edge by
     // giving two sibling Clips or Tracks unrelated local x origins.
     let column_origin_x = track_x + AUTO_LAYOUT_TRACK_LEFT * 2.0;
+    let rank_columns = node_rank_columns(project, &nodes, &ranks, column_origin_x);
     let mut track_y = composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP;
     let mut composition_right = track_x;
     let mut composition_bottom = track_y;
@@ -5559,7 +5829,7 @@ fn compute_full_composition_layout(
             let Some(clip) = project.get_clip(clip_id) else {
                 continue;
             };
-            let band = node_band_bounds(project, &clip.node_ids, &ranks, column_origin_x);
+            let band = node_band_bounds(project, &clip.node_ids, &ranks, &rank_columns);
             let clip_x = band.map_or(default_clip_x, |bounds| {
                 bounds.min_x - AUTO_LAYOUT_TRACK_LEFT
             });
@@ -5586,7 +5856,7 @@ fn compute_full_composition_layout(
                 project,
                 &clip.node_ids,
                 &ranks,
-                column_origin_x,
+                &rank_columns,
                 clip_y + AUTO_LAYOUT_CLIP_TOP,
                 &mut plan.node_positions,
             );
@@ -5602,7 +5872,7 @@ fn compute_full_composition_layout(
             occupied.push(clip_rect);
         }
 
-        if let Some(bounds) = node_band_bounds(project, &track.node_ids, &ranks, column_origin_x) {
+        if let Some(bounds) = node_band_bounds(project, &track.node_ids, &ranks, &rank_columns) {
             let direct_y = first_free_y(
                 bounds.min_x,
                 bounds.width(),
@@ -5615,7 +5885,7 @@ fn compute_full_composition_layout(
                 project,
                 &track.node_ids,
                 &ranks,
-                column_origin_x,
+                &rank_columns,
                 direct_y,
                 &mut plan.node_positions,
             );
@@ -5639,8 +5909,7 @@ fn compute_full_composition_layout(
         track_y += track_size[1] + AUTO_LAYOUT_TRACK_GAP;
     }
 
-    if let Some(bounds) = node_band_bounds(project, &composition.node_ids, &ranks, column_origin_x)
-    {
+    if let Some(bounds) = node_band_bounds(project, &composition.node_ids, &ranks, &rank_columns) {
         let direct_y = if composition.track_ids.is_empty() {
             composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP
         } else {
@@ -5650,7 +5919,7 @@ fn compute_full_composition_layout(
             project,
             &composition.node_ids,
             &ranks,
-            column_origin_x,
+            &rank_columns,
             direct_y,
             &mut plan.node_positions,
         );
@@ -5674,6 +5943,46 @@ struct NodeBandBounds {
     height: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NodeRankColumn {
+    x: f32,
+    width: f32,
+}
+
+fn node_rank_columns(
+    project: &Project,
+    node_ids: &[Uuid],
+    ranks: &HashMap<Uuid, usize>,
+    column_origin_x: f32,
+) -> BTreeMap<usize, NodeRankColumn> {
+    let mut widths = BTreeMap::<usize, f32>::new();
+    for node_id in node_ids {
+        if project.get_node(*node_id).is_none() {
+            continue;
+        }
+        let rank = ranks.get(node_id).copied().unwrap_or_default();
+        let width = estimated_node_size(project, *node_id).x;
+        widths
+            .entry(rank)
+            .and_modify(|column_width| *column_width = column_width.max(width))
+            .or_insert(width);
+    }
+    let Some(max_rank) = widths.keys().next_back().copied() else {
+        return BTreeMap::new();
+    };
+    let mut columns = BTreeMap::new();
+    let mut x = column_origin_x;
+    for rank in 0..=max_rank {
+        let width = widths
+            .get(&rank)
+            .copied()
+            .unwrap_or_else(estimated_node_width);
+        columns.insert(rank, NodeRankColumn { x, width });
+        x += width + AUTO_LAYOUT_COLUMN_GAP;
+    }
+    columns
+}
+
 impl NodeBandBounds {
     fn width(self) -> f32 {
         self.max_x - self.min_x
@@ -5684,7 +5993,7 @@ fn node_band_bounds(
     project: &Project,
     node_ids: &[Uuid],
     ranks: &HashMap<Uuid, usize>,
-    column_origin_x: f32,
+    rank_columns: &BTreeMap<usize, NodeRankColumn>,
 ) -> Option<NodeBandBounds> {
     let mut column_heights = BTreeMap::<usize, f32>::new();
     for node_id in node_ids {
@@ -5700,10 +6009,11 @@ fn node_band_bounds(
     }
     let min_rank = column_heights.keys().next().copied()?;
     let max_rank = column_heights.keys().next_back().copied()?;
-    let column_step = estimated_node_width() + AUTO_LAYOUT_COLUMN_GAP;
+    let min_column = rank_columns.get(&min_rank)?;
+    let max_column = rank_columns.get(&max_rank)?;
     Some(NodeBandBounds {
-        min_x: column_origin_x + min_rank as f32 * column_step,
-        max_x: column_origin_x + max_rank as f32 * column_step + estimated_node_width(),
+        min_x: min_column.x,
+        max_x: max_column.x + max_column.width,
         height: column_heights
             .values()
             .copied()
@@ -5716,7 +6026,7 @@ fn layout_node_band(
     project: &Project,
     node_ids: &[Uuid],
     ranks: &HashMap<Uuid, usize>,
-    column_origin_x: f32,
+    rank_columns: &BTreeMap<usize, NodeRankColumn>,
     origin_y: f32,
     positions: &mut BTreeMap<Uuid, [f32; 2]>,
 ) -> Option<NodeBandBounds> {
@@ -5741,10 +6051,9 @@ fn layout_node_band(
         });
     }
 
-    let column_step = estimated_node_width() + AUTO_LAYOUT_COLUMN_GAP;
-    let bounds = node_band_bounds(project, node_ids, ranks, column_origin_x)?;
+    let bounds = node_band_bounds(project, node_ids, ranks, rank_columns)?;
     for (rank, group) in groups {
-        let x = column_origin_x + rank as f32 * column_step;
+        let x = rank_columns.get(&rank)?.x;
         let mut y = origin_y;
         for node_id in group {
             let size = estimated_node_size(project, node_id);
@@ -5954,6 +6263,10 @@ fn estimated_node_width() -> f32 {
     (NODE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 70.0).max(NODE_HEADER_WIDTH + 30.0)
 }
 
+fn estimated_merge_node_width() -> f32 {
+    (MERGE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 84.0).max(NODE_HEADER_WIDTH + 30.0)
+}
+
 fn estimated_node_size(project: &Project, node_id: Uuid) -> egui::Vec2 {
     let item = GraphItem::Node(node_id);
     let pin_rows = input_definitions(project, item)
@@ -5962,22 +6275,26 @@ fn estimated_node_size(project: &Project, node_id: Uuid) -> egui::Vec2 {
     // These are conservative graph-space bounds for the complete rendered
     // card (header, pin rows and body controls), not just the body widget.
     // The extra pin term keeps plugin Nodes with unusually many ports safe.
-    let base_height = match project.get_node(node_id).map(Node::content) {
+    let content = project.get_node(node_id).map(Node::content);
+    let base_height = match content {
         Some(NodeContent::Generator(GeneratorContent::Text)) => 330.0,
         Some(NodeContent::Generator(GeneratorContent::Shape))
         | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
         Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
         Some(NodeContent::PluginOperation(_)) => 260.0,
-        Some(
-            NodeContent::Media(_)
-            | NodeContent::Reference(_)
-            | NodeContent::Value(_)
-            | NodeContent::Merge,
-        ) => 220.0,
+        Some(NodeContent::Merge) => {
+            let layer_count = merge_layer_rows(project, node_id).len();
+            (166.0 + layer_count as f32 * 82.0).max(220.0)
+        }
+        Some(NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Value(_)) => 220.0,
         None => 220.0,
     };
     egui::vec2(
-        estimated_node_width(),
+        if matches!(content, Some(NodeContent::Merge)) {
+            estimated_merge_node_width()
+        } else {
+            estimated_node_width()
+        },
         base_height + pin_rows.saturating_sub(4) as f32 * PORT_ROW_HEIGHT,
     )
 }
@@ -7007,6 +7324,158 @@ fn blend_mode_qa_key(blend_mode: BlendMode) -> &'static str {
         BlendMode::Screen => "screen",
         BlendMode::Overlay => "overlay",
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MergeLayerRow {
+    merge_id: Uuid,
+    connection_id: Uuid,
+    source: PortAddress,
+    source_label: String,
+    authored_order: i64,
+    authored_blend_mode: BlendMode,
+    authored_blend_available: bool,
+    back_to_front_index: usize,
+    layer_count: usize,
+}
+
+impl MergeLayerRow {
+    fn qa_metadata(&self, extra: Option<serde_json::Value>) -> serde_json::Value {
+        let source_kind = match self.source.owner {
+            PortOwner::Composition(_) => "composition",
+            PortOwner::Track(_) => "track",
+            PortOwner::Clip(_) => "clip",
+            PortOwner::Node(_) => "node",
+        };
+        let mut metadata = serde_json::json!({
+            "merge_id": self.merge_id,
+            "connection_id": self.connection_id,
+            "back_to_front_index": self.back_to_front_index,
+            "layer_count": self.layer_count,
+            "authored_order": self.authored_order,
+            "authored_blend_mode": blend_mode_qa_key(self.authored_blend_mode),
+            "authored_blend_available": self.authored_blend_available,
+            "source": {
+                "owner": qa_container_key(self.source.owner),
+                "kind": source_kind,
+                "port": self.source.port,
+                "label": self.source_label,
+                "full_name_available_on_hover": true,
+            },
+            "order_semantics": "back_to_front",
+            "blend_ownership": "connection",
+            "control_lane": "merge_body",
+            "runtime_first_produced_may_be_normal": true,
+        });
+        if let (Some(target), Some(serde_json::Value::Object(extra))) =
+            (metadata.as_object_mut(), extra)
+        {
+            target.extend(extra);
+        }
+        metadata
+    }
+}
+
+fn merge_layer_source_label(project: &Project, owner: PortOwner) -> String {
+    match owner {
+        PortOwner::Composition(id) => project
+            .get_composition(id)
+            .map(|composition| format!("Composition · {}", composition.name))
+            .unwrap_or_else(|| "Missing Composition".to_string()),
+        PortOwner::Track(id) => project
+            .get_track(id)
+            .map(|track| format!("Track · {}", track.name))
+            .unwrap_or_else(|| "Missing Track".to_string()),
+        PortOwner::Clip(id) => project
+            .get_clip(id)
+            .map(|clip| format!("Clip · {}", clip.name))
+            .unwrap_or_else(|| "Missing Clip".to_string()),
+        PortOwner::Node(id) => project
+            .get_node(id)
+            .map(|node| format!("Node · {}", node.name))
+            .unwrap_or_else(|| "Missing Node".to_string()),
+    }
+}
+
+fn merge_layer_rows(project: &Project, merge_id: Uuid) -> Vec<MergeLayerRow> {
+    let target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
+    let mut connections = project
+        .connections
+        .iter()
+        .filter(|connection| connection.to == target)
+        .collect::<Vec<_>>();
+    connections.sort_by_key(|connection| (connection.order, connection.id));
+    let layer_count = connections.len();
+    connections
+        .into_iter()
+        .enumerate()
+        .map(|(back_to_front_index, connection)| MergeLayerRow {
+            merge_id,
+            connection_id: connection.id,
+            source: connection.from.clone(),
+            source_label: merge_layer_source_label(project, connection.from.owner),
+            authored_order: connection.order,
+            authored_blend_mode: connection.blend_mode,
+            authored_blend_available: connection_supports_authored_blend(project, connection),
+            back_to_front_index,
+            layer_count,
+        })
+        .collect()
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "QA registration keeps semantic identity and transformed geometry explicit"
+)]
+fn register_merge_layer_component(
+    id: String,
+    component_type: &str,
+    graph_rect: egui::Rect,
+    enabled: bool,
+    to_global: egui::emath::TSTransform,
+    canvas_clip: egui::Rect,
+    mut metadata: serde_json::Value,
+) {
+    let unclipped_rect = to_global * graph_rect;
+    let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
+    if let Some(metadata) = metadata.as_object_mut() {
+        metadata.insert(
+            "unclipped_rect".to_string(),
+            qa_rect_metadata(unclipped_rect),
+        );
+        metadata.insert(
+            "visible_in_canvas".to_string(),
+            serde_json::Value::Bool(rect.is_positive()),
+        );
+    }
+    #[cfg(test)]
+    capture_test_rect(&id, rect);
+    crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
+}
+
+fn register_merge_layer_popup_component(
+    id: String,
+    component_type: &str,
+    screen_rect: egui::Rect,
+    enabled: bool,
+    canvas_clip: egui::Rect,
+    mut metadata: serde_json::Value,
+) {
+    let rect = clipped_qa_rect(screen_rect, canvas_clip);
+    if let Some(metadata) = metadata.as_object_mut() {
+        metadata.insert("unclipped_rect".to_string(), qa_rect_metadata(screen_rect));
+        metadata.insert(
+            "visible_in_canvas".to_string(),
+            serde_json::Value::Bool(rect.is_positive()),
+        );
+        metadata.insert(
+            "coordinate_space".to_string(),
+            serde_json::Value::String("screen_points".to_string()),
+        );
+    }
+    #[cfg(test)]
+    capture_test_rect(&id, rect);
+    crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
 }
 
 fn connection_supports_authored_blend(
@@ -10229,6 +10698,199 @@ mod tests {
     }
 
     #[test]
+    fn merge_body_rows_are_back_to_front_and_keep_per_wire_blend_and_source_identity() {
+        let (mut project, composition_id, _, clip_id, solid_id, merge_id) = fixture();
+        let single_layer_estimated = estimated_node_size(&project, merge_id);
+        let first_connection_id = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to
+                        == PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT)
+            })
+            .expect("fixture Merge connection")
+            .id;
+        project
+            .set_connection_blend_mode(first_connection_id, BlendMode::Add)
+            .expect("first wire Add");
+
+        let mut middle = generator_node(
+            "Middle Green",
+            GeneratorNodeRequest::Solid {
+                color: Color {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    a: 255,
+                },
+            },
+        );
+        middle.ui_position = [490.0, 520.0];
+        let middle_id = middle.id;
+        project.add_node(middle);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), middle_id)
+            .expect("attach middle source");
+        let middle_connection_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(middle_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )
+            .expect("connect middle source");
+        project
+            .set_connection_blend_mode(middle_connection_id, BlendMode::Multiply)
+            .expect("middle wire Multiply");
+
+        let mut front = generator_node(
+            "Front Blue",
+            GeneratorNodeRequest::Solid {
+                color: Color {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    a: 255,
+                },
+            },
+        );
+        front.ui_position = [530.0, 650.0];
+        let front_id = front.id;
+        project.add_node(front);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), front_id)
+            .expect("attach front source");
+        let front_connection_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(front_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )
+            .expect("connect front source");
+        project
+            .set_connection_blend_mode(front_connection_id, BlendMode::Screen)
+            .expect("front wire Screen");
+
+        let rows = merge_layer_rows(&project, merge_id);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.connection_id,
+                    row.back_to_front_index,
+                    row.authored_order,
+                    row.authored_blend_mode,
+                    row.source.owner,
+                    row.source_label.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    first_connection_id,
+                    0,
+                    0,
+                    BlendMode::Add,
+                    PortOwner::Node(solid_id),
+                    "Node · Solid",
+                ),
+                (
+                    middle_connection_id,
+                    1,
+                    1,
+                    BlendMode::Multiply,
+                    PortOwner::Node(middle_id),
+                    "Node · Middle Green",
+                ),
+                (
+                    front_connection_id,
+                    2,
+                    2,
+                    BlendMode::Screen,
+                    PortOwner::Node(front_id),
+                    "Node · Front Blue",
+                ),
+            ]
+        );
+        assert!(rows.iter().all(|row| {
+            row.merge_id == merge_id && row.layer_count == 3 && row.authored_blend_available
+        }));
+
+        let estimated = estimated_node_size(&project, merge_id);
+        assert_eq!(estimated.x, 506.0);
+        assert_eq!(estimated.x, estimated_merge_node_width());
+        assert_eq!(estimated_node_size(&project, solid_id).x, 462.0);
+        assert_eq!(estimated_node_width(), 462.0);
+        assert!(estimated.y > single_layer_estimated.y);
+        let (rects, _, rendered_transform, _) =
+            render_test_graph_with_context_menu_exclusions(&project, composition_id);
+        let rendered_merge = rects
+            .get(&format!("node_editor.node:{merge_id}"))
+            .expect("rendered Merge card");
+        assert!(rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0);
+        assert!(rendered_merge.height() <= estimated.y * rendered_transform.scaling + 1.0);
+        let port_rects = [
+            qa_port_id(
+                &project,
+                Some(GraphItem::Node(merge_id)),
+                "input",
+                MERGE_IMAGES_PORT,
+            ),
+            qa_port_id(
+                &project,
+                Some(GraphItem::Node(merge_id)),
+                "output",
+                IMAGE_OUTPUT_PORT,
+            ),
+        ]
+        .map(|component_id| {
+            *rects
+                .get(&component_id)
+                .unwrap_or_else(|| panic!("missing Merge port {component_id}"))
+        });
+        for row in &rows {
+            for component_id in [
+                format!("node_editor.merge_layer:{merge_id}:{}", row.connection_id),
+                format!(
+                    "node_editor.merge_layer.blend_select:{merge_id}:{}",
+                    row.connection_id
+                ),
+                format!(
+                    "node_editor.merge_layer.order_back:{merge_id}:{}",
+                    row.connection_id
+                ),
+                format!(
+                    "node_editor.merge_layer.order_front:{merge_id}:{}",
+                    row.connection_id
+                ),
+            ] {
+                let control = rects
+                    .get(&component_id)
+                    .unwrap_or_else(|| panic!("missing Merge body component {component_id}"));
+                assert!(control.is_positive(), "empty Merge control {component_id}");
+                assert!(
+                    port_rects
+                        .iter()
+                        .all(|port_rect| !control.intersects(*port_rect)),
+                    "Merge control {component_id} overlaps a left/right port: {control:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_merge_body_has_a_stable_empty_state_and_minimum_estimated_height() {
+        let (mut project, composition_id, _, _, _, merge_id) = fixture();
+        project.connections.retain(|connection| {
+            connection.to != PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT)
+        });
+
+        assert!(merge_layer_rows(&project, merge_id).is_empty());
+        assert_eq!(estimated_node_size(&project, merge_id).y, 220.0);
+        let rects = render_test_graph(&project, composition_id);
+        assert!(rects
+            .get(&format!("node_editor.merge_layers.empty:{merge_id}"))
+            .is_some_and(egui::Rect::is_positive));
+    }
+
+    #[test]
     fn real_egui_wire_hit_selects_and_dragging_the_body_queues_disconnect() {
         let (project, _, _, _, solid_id, merge_id) = fixture();
         let connection = project
@@ -13064,11 +13726,13 @@ mod tests {
                 let estimated = estimated_node_size(&project, *node_id);
                 assert!(
                     rect.width() <= estimated.x * scale + 1.0,
-                    "{node_id}: {rect:?}"
+                    "{} ({node_id}): {rect:?}, estimated={estimated:?}, scale={scale}",
+                    node_title(&project, *node_id),
                 );
                 assert!(
                     rect.height() <= estimated.y * scale + 1.0,
-                    "{node_id}: {rect:?}"
+                    "{} ({node_id}): {rect:?}, estimated={estimated:?}, scale={scale}",
+                    node_title(&project, *node_id),
                 );
                 (*node_id, rect)
             })
