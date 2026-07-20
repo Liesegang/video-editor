@@ -5,7 +5,9 @@ use crate::model::asset::{Asset, AssetKind};
 use crate::model::project::{Composition, Project};
 use crate::model::property::PropertyMap;
 use crate::model::{Clip, Node, NodeContent, Track};
+use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 use lru::LruCache;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -47,7 +49,9 @@ pub fn mix_samples(
     frames_to_mix: usize,
     sample_rate: u32,
     channels: u32,
+    plugin_manager: &PluginManager,
 ) -> Vec<f32> {
+    let property_evaluators = plugin_manager.get_property_evaluators();
     mix_samples_with_policy(
         assets,
         project,
@@ -58,6 +62,7 @@ pub fn mix_samples(
         sample_rate,
         channels,
         DecodePolicy::CacheOnly,
+        property_evaluators.as_ref(),
     )
 }
 
@@ -75,6 +80,7 @@ fn mix_samples_with_policy(
     sample_rate: u32,
     channels: u32,
     decode_policy: DecodePolicy,
+    property_evaluators: &PropertyEvaluatorRegistry,
 ) -> Vec<f32> {
     let channels = channels as usize;
     let mut mix_buffer = vec![0.0; frames_to_mix.saturating_mul(channels)];
@@ -93,6 +99,11 @@ fn mix_samples_with_policy(
     }
 
     let start_time = start_sample as f64 / sample_rate as f64;
+    let property_context = AudioPropertyContext::new(
+        property_evaluators,
+        composition.fps,
+        (composition.width, composition.height),
+    );
 
     // Direct Composition Nodes live in the global composition time scope.
     mix_global_nodes(
@@ -106,6 +117,7 @@ fn mix_samples_with_policy(
         sample_rate,
         channels,
         decode_policy,
+        &property_context,
     );
 
     for track_id in &composition.track_ids {
@@ -124,6 +136,7 @@ fn mix_samples_with_policy(
             sample_rate,
             channels,
             decode_policy,
+            &property_context,
         );
     }
 
@@ -145,6 +158,7 @@ fn mix_track(
     sample_rate: u32,
     channels: usize,
     decode_policy: DecodePolicy,
+    property_context: &AudioPropertyContext<'_>,
 ) {
     let mut track_buffer = vec![0.0; accum_buffer.len()];
 
@@ -160,6 +174,7 @@ fn mix_track(
         sample_rate,
         channels,
         decode_policy,
+        property_context,
     );
 
     for clip_id in &track.clip_ids {
@@ -178,13 +193,15 @@ fn mix_track(
             sample_rate,
             channels,
             decode_policy,
+            property_context,
         );
     }
 
     // Track gain applies exactly once to the sum of direct and Clip audio.
+    let scope = format!("track:{}", track.id);
     for frame in 0..frames {
         let global_time = start_time + frame as f64 / sample_rate as f64;
-        let volume = volume_at(&track.properties, global_time);
+        let volume = volume_at(&track.properties, global_time, property_context, &scope);
         let base = frame * channels;
         for channel in 0..channels {
             accum_buffer[base + channel] += track_buffer[base + channel] * volume;
@@ -207,6 +224,7 @@ fn mix_global_nodes(
     sample_rate: u32,
     channels: usize,
     decode_policy: DecodePolicy,
+    property_context: &AudioPropertyContext<'_>,
 ) {
     for node_id in node_ids {
         let Some(node) = project.get_node(*node_id) else {
@@ -221,6 +239,7 @@ fn mix_global_nodes(
             continue;
         };
         let mut source = CachedAudioSource::new(source_key, cache_manager, decode_policy);
+        let scope = format!("node:{}", node.id);
 
         for frame in 0..frames {
             let global_time = start_time + frame as f64 / sample_rate as f64;
@@ -229,7 +248,7 @@ fn mix_global_nodes(
                 accum_buffer,
                 frame,
                 global_time,
-                volume_at(node.properties(), global_time),
+                volume_at(node.properties(), global_time, property_context, &scope),
                 sample_rate,
                 channels,
             );
@@ -252,6 +271,7 @@ fn mix_clip(
     sample_rate: u32,
     channels: usize,
     decode_policy: DecodePolicy,
+    property_context: &AudioPropertyContext<'_>,
 ) {
     if clip.duration.into_inner() <= 0.0 {
         return;
@@ -276,6 +296,8 @@ fn mix_clip(
             continue;
         };
         let mut source = CachedAudioSource::new(source_key, cache_manager, decode_policy);
+        let clip_scope = format!("clip:{}", clip.id);
+        let node_scope = format!("{clip_scope}/node:{}", node.id);
 
         for frame in 0..frames {
             let global_time = start_time + frame as f64 / sample_rate as f64;
@@ -284,8 +306,8 @@ fn mix_clip(
             }
 
             let local_time = clip.local_time(global_time);
-            let gain =
-                volume_at(&clip.properties, local_time) * volume_at(node.properties(), local_time);
+            let gain = volume_at(&clip.properties, local_time, property_context, &clip_scope)
+                * volume_at(node.properties(), local_time, property_context, &node_scope);
             mix_source_frame(
                 &mut source,
                 accum_buffer,
@@ -352,12 +374,76 @@ pub fn audio_stream_index_for_media(
     })
 }
 
-fn volume_at(properties: &PropertyMap, time: f64) -> f32 {
-    properties
-        .get("volume")
-        .and_then(|property| property.evaluate_at(time).ok())
-        .and_then(|value| value.get_as::<f64>())
-        .unwrap_or(1.0) as f32
+struct AudioPropertyContext<'a> {
+    evaluators: &'a PropertyEvaluatorRegistry,
+    fps: f64,
+    resolution: (u64, u64),
+    reported_diagnostics: RefCell<HashSet<String>>,
+}
+
+impl<'a> AudioPropertyContext<'a> {
+    fn new(evaluators: &'a PropertyEvaluatorRegistry, fps: f64, resolution: (u64, u64)) -> Self {
+        Self {
+            evaluators,
+            fps,
+            resolution,
+            reported_diagnostics: RefCell::new(HashSet::new()),
+        }
+    }
+
+    fn report_once(&self, diagnostic: String) {
+        if self
+            .reported_diagnostics
+            .borrow_mut()
+            .insert(diagnostic.clone())
+        {
+            log::warn!("{diagnostic}");
+        }
+    }
+}
+
+fn volume_at(
+    properties: &PropertyMap,
+    time: f64,
+    context: &AudioPropertyContext<'_>,
+    scope: &str,
+) -> f32 {
+    let Some(property) = properties.get("volume") else {
+        return 1.0;
+    };
+    let evaluation_context = EvaluationContext::new(properties, context.fps, context.resolution);
+    match context
+        .evaluators
+        .evaluate_with_diagnostics(property, time, &evaluation_context)
+    {
+        Ok(outcome) => {
+            if let Some(diagnostic) = outcome.diagnostic() {
+                context.report_once(format!(
+                    "Recovered audio property {scope}.volume ({}) with authored value: {}; source={:?}",
+                    diagnostic.evaluator(),
+                    diagnostic.message(),
+                    property.expression_text(),
+                ));
+            }
+            outcome.value().get_as::<f64>().map_or_else(
+                || {
+                    context.report_once(format!(
+                        "Audio property {scope}.volume returned a non-numeric value; source={:?}",
+                        property.expression_text(),
+                    ));
+                    0.0
+                },
+                |value| value as f32,
+            )
+        }
+        Err(error) => {
+            context.report_once(format!(
+                "Audio property {scope}.volume failed closed: {error}; source={:?}",
+                property.expression_text(),
+            ));
+            0.0
+        }
+    }
 }
 
 fn mix_source_frame(
@@ -608,7 +694,9 @@ pub fn render_samples(
     frames_to_render: usize,
     sample_rate: u32,
     channels: u32,
+    plugin_manager: &PluginManager,
 ) -> Vec<f32> {
+    let property_evaluators = plugin_manager.get_property_evaluators();
     mix_samples_with_policy(
         assets,
         project,
@@ -619,6 +707,7 @@ pub fn render_samples(
         sample_rate,
         channels,
         DecodePolicy::DecodeMissing,
+        property_evaluators.as_ref(),
     )
 }
 
@@ -728,6 +817,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn audio_properties_use_composition_expression_context_and_recover_typed_values() {
+        let plugin_manager = PluginManager::default();
+        let evaluators = plugin_manager.get_property_evaluators();
+        let context = AudioPropertyContext::new(evaluators.as_ref(), 24.0, (100, 50));
+        let mut properties = PropertyMap::new();
+        properties.set(
+            "volume".to_string(),
+            Property::expression(
+                "value + time + fps + width / 100".to_string(),
+                PropertyValue::Number(OrderedFloat(0.5)),
+            ),
+        );
+        assert_eq!(volume_at(&properties, 2.0, &context, "node:test"), 27.5);
+
+        properties.set(
+            "volume".to_string(),
+            Property::expression(
+                "1 / 0".to_string(),
+                PropertyValue::Number(OrderedFloat(0.25)),
+            ),
+        );
+        assert_eq!(volume_at(&properties, 2.0, &context, "node:test"), 0.25);
+    }
+
+    #[test]
+    fn malformed_or_unregistered_audio_properties_are_silent() {
+        let plugin_manager = PluginManager::default();
+        let evaluators = plugin_manager.get_property_evaluators();
+        let context = AudioPropertyContext::new(evaluators.as_ref(), 24.0, (100, 50));
+        for property in [
+            Property {
+                evaluator: "expression".to_string(),
+                properties: std::collections::HashMap::from([(
+                    "expression".to_string(),
+                    PropertyValue::String("1".to_string()),
+                )]),
+            },
+            Property {
+                evaluator: "not-installed".to_string(),
+                properties: std::collections::HashMap::from([(
+                    "value".to_string(),
+                    PropertyValue::Number(OrderedFloat(1.0)),
+                )]),
+            },
+        ] {
+            let mut properties = PropertyMap::new();
+            properties.set("volume".to_string(), property);
+            assert_eq!(volume_at(&properties, 0.0, &context, "node:test"), 0.0);
+        }
+    }
+
     #[derive(Clone, Copy, Debug)]
     enum TestNodeScope {
         Composition,
@@ -736,6 +877,7 @@ mod tests {
     }
 
     fn assert_disabled_media_contract(scope: TestNodeScope) {
+        let plugin_manager = PluginManager::default();
         let mut project = Project::new("disabled audio contract");
         let (composition, mut track) = Composition::new("main", 16, 16, 4.0, 1.0);
         let composition_id = composition.id;
@@ -800,11 +942,31 @@ mod tests {
             TestNodeScope::Clip => vec![0.0, 0.75, 0.75, 0.0],
         };
         assert_eq!(
-            mix_samples(&project.assets, &project, composition, &cache, 0, 4, 4, 1),
+            mix_samples(
+                &project.assets,
+                &project,
+                composition,
+                &cache,
+                0,
+                4,
+                4,
+                1,
+                &plugin_manager,
+            ),
             expected
         );
         assert_eq!(
-            render_samples(&project.assets, &project, composition, &cache, 0, 4, 4, 1),
+            render_samples(
+                &project.assets,
+                &project,
+                composition,
+                &cache,
+                0,
+                4,
+                4,
+                1,
+                &plugin_manager,
+            ),
             expected
         );
 
@@ -895,6 +1057,7 @@ mod tests {
             4,
             4,
             1,
+            &PluginManager::default(),
         );
 
         assert_eq!(mixed, vec![0.75; 4]);
@@ -938,6 +1101,7 @@ mod tests {
             6,
             4,
             1,
+            &PluginManager::default(),
         );
 
         // t=0.5 maps to source 0.25 (sample 1), then advances two source
@@ -987,6 +1151,7 @@ mod tests {
             4,
             4,
             1,
+            &PluginManager::default(),
         );
 
         // Composition direct: 1. Track direct + Clip: (2 + 4) * 0.5.
@@ -1081,7 +1246,17 @@ mod tests {
             .unwrap();
         let composition = project.get_composition(composition_id).unwrap();
 
-        let mixed = mix_samples(&project.assets, &project, composition, &cache, 2, 4, 4, 1);
+        let mixed = mix_samples(
+            &project.assets,
+            &project,
+            composition,
+            &cache,
+            2,
+            4,
+            4,
+            1,
+            &PluginManager::default(),
+        );
         assert_eq!(mixed, vec![1.0, 1.0, 0.0, 0.0]);
         assert!(audio_window_requests_for_composition(&project, composition, 4, 4, 4).is_empty());
     }

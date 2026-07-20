@@ -734,6 +734,7 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
         .map_err(|error| anyhow!(error))?;
 
     let cache = CacheManager::with_audio_chunk_capacity(2);
+    let plugin_manager = PluginManager::default();
     let rendered = render_samples(
         &project.assets,
         &project,
@@ -745,6 +746,7 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
         10_000,
         8_000,
         2,
+        &plugin_manager,
     );
 
     assert_eq!(rendered.len(), 20_000);
@@ -855,6 +857,7 @@ fn assert_nonzero_mix(
         (sample_rate / 4) as usize,
         sample_rate,
         2,
+        service.get_plugin_manager().as_ref(),
     );
     assert!(
         mixed.iter().any(|sample| sample.abs() > 0.001),
