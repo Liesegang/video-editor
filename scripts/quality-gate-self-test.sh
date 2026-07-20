@@ -137,8 +137,16 @@ awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
 awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
     > "${RUST_RATCHET_FIXTURE}/boundary.rs"
 : > "${RUST_RATCHET_FIXTURE}/empty.rs"
+ODD_RUST_FILE=$'line\nbreak.rs'
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/${ODD_RUST_FILE}"
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/space name.rs"
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/-dash.rs"
 git -C "${RUST_RATCHET_FIXTURE}" add -- '*.rs'
 git -C "${RUST_RATCHET_FIXTURE}" commit -qm baseline
+git -C "${RUST_RATCHET_FIXTURE}" branch -m fixture-head
 RUST_RATCHET_BASELINE="$(git -C "${RUST_RATCHET_FIXTURE}" rev-parse HEAD)"
 
 # An unavailable implicit integration base must fail closed rather than
@@ -217,6 +225,12 @@ git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- empty.rs
 awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
     > "${RUST_RATCHET_FIXTURE}/new.rs"
 expect_ratchet_failure 'new.rs: new oversized file has 4 lines (limit 3)'
+
+# A newline is a valid filename byte. Growing this existing file must still be
+# attributed to one baseline entry rather than being split into two records.
+awk 'BEGIN { for (line = 1; line <= 5; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/${ODD_RUST_FILE}"
+expect_ratchet_failure 'break.rs: oversized file grew from 4 to 5 lines'
 
 # This also catches a stale lockfile after workspace manifests change.
 cargo metadata \

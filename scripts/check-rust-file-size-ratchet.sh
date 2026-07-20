@@ -61,25 +61,24 @@ if ! git -C "${SCAN_ROOT}" merge-base --is-ancestor "${BASELINE_REF}" HEAD; then
     exit 2
 fi
 
-declare -A baseline_lines=()
-while IFS= read -r -d '' rust_file; do
-    [[ "${rust_file}" == *.rs ]] || continue
-    baseline_lines["${rust_file}"]="$(
-        git -C "${SCAN_ROOT}" show "${BASELINE_REF}:${rust_file}" |
-            awk 'END { print NR + 0 }'
-    )"
-done < <(git -C "${SCAN_ROOT}" ls-tree -r --name-only -z "${BASELINE_REF}")
-
 checked=0
 violations=0
 while IFS= read -r -d '' rust_file; do
     absolute_path="${SCAN_ROOT}/${rust_file}"
     [[ -f "${absolute_path}" ]] || continue
     current_lines="$(awk 'END { print NR + 0 }' "${absolute_path}")"
-    baseline_count="${baseline_lines["${rust_file}"]:-0}"
+    baseline_count=0
     baseline_has_file=false
-    if [[ -n "${baseline_lines["${rust_file}"]+present}" ]]; then
+    # Query the exact Git path instead of keeping a Bash associative array.
+    # macOS still ships Bash 3.2, and the NUL-delimited outer loop keeps spaces,
+    # newlines, leading dashes, and other valid filename bytes intact.
+    if git -C "${SCAN_ROOT}" cat-file -e \
+        "${BASELINE_REF}:${rust_file}" 2>/dev/null; then
         baseline_has_file=true
+        baseline_count="$(
+            git -C "${SCAN_ROOT}" show "${BASELINE_REF}:${rust_file}" |
+                awk 'END { print NR + 0 }'
+        )"
     fi
     checked=$((checked + 1))
 
