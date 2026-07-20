@@ -8,7 +8,8 @@ use crate::state::context_types::{
     NodeEditorEditableWire, NodeEditorWireDragKind, SelectionTarget,
 };
 use crate::ui::widgets::searchable_context_menu::{
-    searchable_menu_click_is_outside, searchable_popup_placement, show_searchable_items_with_qa,
+    register_searchable_popup_qa, searchable_menu_click_is_outside, searchable_popup_placement,
+    show_searchable_items_with_qa, show_searchable_popup_frame,
 };
 use eframe::egui::{self, Color32};
 #[cfg(test)]
@@ -379,7 +380,7 @@ fn handle_context_menu(
     let (secondary_clicked, pointer_position, open_time) = ui.input(|input| {
         (
             input.pointer.secondary_clicked(),
-            input.pointer.hover_pos(),
+            input.pointer.interact_pos(),
             input.time,
         )
     });
@@ -392,10 +393,8 @@ fn handle_context_menu(
         frame.to_global,
         open_time,
     );
-
     let mut should_close = false;
     let mut action: Option<CreateAction> = None;
-
     if let Some(context) = state {
         let position = context.position;
         let graph_position = from_global * position;
@@ -403,12 +402,13 @@ fn handle_context_menu(
             searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
         let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
         let response = egui::Area::new(egui::Id::new("node_ctx_menu"))
-            .fixed_pos(popup.position)
+            .order(egui::Order::Foreground)
+            .pivot(popup.pivot)
+            .fixed_pos(popup.area_anchor)
+            .constrain(false)
             .show(ui.ctx(), |ui| {
-                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                show_searchable_popup_frame(ui, popup, |ui| {
                     let plugin_manager = frame.project_service.get_plugin_manager();
-                    ui.set_width(popup.width);
-                    ui.set_max_height(popup.max_height);
                     let items = node_create_menu_items(plugin_manager.as_ref());
                     if let Some(request) = show_searchable_items_with_qa(
                         ui,
@@ -425,12 +425,13 @@ fn handle_context_menu(
                         );
                         should_close = true;
                     }
-                });
+                })
             });
-
+        let root_rect = response.inner.response.rect;
+        register_searchable_popup_qa("node_editor.menu.root", position, popup, root_rect);
         if ui.input(|input| input.pointer.any_click())
             && ui.input(|input| input.time) - context.open_time > 0.2
-            && searchable_menu_click_is_outside(ui.ctx(), &menu_id, response.response.rect)
+            && searchable_menu_click_is_outside(ui.ctx(), &menu_id, root_rect)
         {
             should_close = true;
         }
@@ -438,7 +439,6 @@ fn handle_context_menu(
             should_close = true;
         }
     }
-
     let mut changed = false;
     if let Some(action) = action {
         if let Ok(mut project) = frame.project_lock.write() {
