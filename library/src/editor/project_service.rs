@@ -22,6 +22,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod property_evaluation;
+
 pub const DEFAULT_TEXT_FONT: &str = "Arial";
 pub const DEFAULT_SHAPE_PATH: &str =
     "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
@@ -1047,36 +1049,6 @@ impl ProjectManager {
         } else {
             false
         }
-    }
-
-    // Copied metadata logic from ProjectService
-    pub fn evaluate_property_value(
-        &self,
-        property: &crate::model::property::Property,
-        context: &crate::model::property::PropertyMap,
-        time: f64,
-        fps: f64,
-        resolution: (u64, u64),
-    ) -> Result<PropertyValue, crate::plugin::PropertyEvaluationError> {
-        let eval_ctx = crate::plugin::EvaluationContext::new(context, fps, resolution);
-        self.plugin_manager
-            .get_property_evaluators()
-            .evaluate(property, time, &eval_ctx)
-    }
-
-    pub fn evaluate_property_with_diagnostics(
-        &self,
-        property: &crate::model::property::Property,
-        context: &crate::model::property::PropertyMap,
-        time: f64,
-        fps: f64,
-        resolution: (u64, u64),
-    ) -> Result<crate::plugin::PropertyEvaluationOutcome, crate::plugin::PropertyEvaluationError>
-    {
-        let eval_ctx = crate::plugin::EvaluationContext::new(context, fps, resolution);
-        self.plugin_manager
-            .get_property_evaluators()
-            .evaluate_with_diagnostics(property, time, &eval_ctx)
     }
 
     pub fn add_keyframe(

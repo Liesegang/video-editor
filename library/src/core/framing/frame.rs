@@ -27,6 +27,8 @@ use crate::plugin::{
 };
 use crate::util::timing::ScopedTimer;
 
+mod property_evaluation;
+
 #[derive(Clone, Copy, Debug)]
 struct EvaluationScope {
     time: f64,
@@ -1381,16 +1383,9 @@ impl<'a> FrameEvaluator<'a> {
                     .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
                 let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
                 let context = self.context(composition, Some(&inputs));
-                match context.evaluate_property_value(property, node.properties(), scope.time) {
-                    Ok(value) => Ok(EvalOutput::Produced(value)),
-                    Err(error) => {
-                        log::error!(
-                            "Node '{}' property '{property_key}' produced no output: {error}",
-                            node.id
-                        );
-                        Ok(EvalOutput::NoOutput)
-                    }
-                }
+                let properties = node.properties();
+                let value = context.evaluate_property_value(property, properties, scope.time);
+                Ok(property_evaluation::output(value, node.id, property_key))
             }
         }
     }

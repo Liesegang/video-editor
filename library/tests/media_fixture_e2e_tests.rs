@@ -33,7 +33,9 @@ use ordered_float::OrderedFloat;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use support::{generator_node_for_canvas, media_node_for_canvas};
+use support::{
+    channel_energy, generator_node_for_canvas, media_node_for_canvas, positive_zero_crossings,
+};
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -631,23 +633,6 @@ fn dedicated_audio_loader_decodes_the_tiny_mp3_as_interleaved_stereo() -> Result
             .all(|frame| (frame[0] - frame[1]).abs() < f32::EPSILON)
     );
     Ok(())
-}
-
-fn channel_energy(samples: &[f32], channel: usize) -> f32 {
-    samples
-        .chunks_exact(2)
-        .map(|frame| frame[channel] * frame[channel])
-        .sum::<f32>()
-        / (samples.len() / 2).max(1) as f32
-}
-
-fn positive_zero_crossings(samples: &[f32], channel: usize) -> usize {
-    samples
-        .chunks_exact(2)
-        .map(|frame| frame[channel])
-        .zip(samples.chunks_exact(2).skip(1).map(|frame| frame[channel]))
-        .filter(|(before, after)| *before <= 0.0 && *after > 0.0)
-        .count()
 }
 
 #[test]

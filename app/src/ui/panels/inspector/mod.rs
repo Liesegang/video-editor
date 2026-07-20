@@ -26,10 +26,14 @@ use crate::{
 pub mod action_handler;
 mod evaluation;
 pub mod properties;
+mod property_inference;
 
 use action_handler::ActionContext;
 use evaluation::{evaluate_property_map, render_evaluation_issues};
 use properties::{render_property_rows, PropertyRenderContext};
+use property_inference::inferred_property_definitions;
+#[cfg(test)]
+use property_inference::property_label;
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -1734,78 +1738,6 @@ fn node_display_type(node: &Node) -> String {
         NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo".to_string(),
         NodeContent::Merge => "Merge".to_string(),
     }
-}
-
-fn inferred_property_definitions(
-    properties: &PropertyMap,
-    _current_time: f64,
-) -> Vec<PropertyDefinition> {
-    let mut entries: Vec<_> = properties.iter().collect();
-    entries.sort_by_key(|(name, _)| *name);
-    entries
-        .into_iter()
-        .filter_map(|(name, property)| {
-            let value = property.value()?.clone();
-            let ui_type = match &value {
-                PropertyValue::Number(_) => PropertyUiType::Float {
-                    min: -1_000_000.0,
-                    max: 1_000_000.0,
-                    step: 0.1,
-                    suffix: String::new(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                PropertyValue::Integer(_) => PropertyUiType::Integer {
-                    min: i64::MIN,
-                    max: i64::MAX,
-                    suffix: String::new(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                PropertyValue::String(text) => {
-                    if text.contains('\n')
-                        || matches!(name.as_str(), "text" | "path" | "shader" | "code")
-                    {
-                        PropertyUiType::MultilineText
-                    } else {
-                        PropertyUiType::Text
-                    }
-                }
-                PropertyValue::Boolean(_) => PropertyUiType::Bool,
-                PropertyValue::Vec2(_) => PropertyUiType::Vec2 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec3(_) => PropertyUiType::Vec3 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec4(_) => PropertyUiType::Vec4 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Color(_) => PropertyUiType::Color,
-                PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
-            };
-            Some(PropertyDefinition::new(
-                name,
-                ui_type,
-                &property_label(name),
-                value,
-            ))
-        })
-        .collect()
-}
-
-fn property_label(name: &str) -> String {
-    name.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            match characters.next() {
-                Some(first) => first.to_uppercase().chain(characters).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn is_clip_timing_property(name: &str) -> bool {
