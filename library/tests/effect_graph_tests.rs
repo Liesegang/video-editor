@@ -12,9 +12,9 @@ use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
-    Composition, EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
-    NodeGraphBundle, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
-    Project, ProjectConnection, TIME_PORT,
+    Composition, EvalOutput, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortDataType, PortDefinition,
+    PortExposure, PortOwner, PortSide, Project, ProjectConnection, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
 use library::model::{Clip, Node, NodeContent};
@@ -216,6 +216,36 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() ->
         collision,
         Err(OperationDescriptorError::PortCollision { .. })
     ));
+
+    for (key, data_type) in [
+        (FRAME_PORT, PortDataType::Integer),
+        (FPS_PORT, PortDataType::Number),
+    ] {
+        let authored_input = OperationDescriptor::new(
+            "test",
+            format!("authored-{key}"),
+            format!("authored-{key}.v1"),
+            format!("Authored {key}"),
+            Vec::new(),
+            [PortDefinition::input(key, key, data_type)],
+        );
+        assert_eq!(
+            authored_input.err(),
+            Some(OperationDescriptorError::ReadOnlyDerivedTimingInput {
+                key: key.to_string(),
+            })
+        );
+
+        let readable_output = OperationDescriptor::new(
+            "test",
+            format!("readable-{key}"),
+            format!("readable-{key}.v1"),
+            format!("Readable {key}"),
+            Vec::new(),
+            [output_port(key, data_type)],
+        )?;
+        assert_eq!(readable_output.declared_ports()[0].key, key);
+    }
     Ok(())
 }
 
@@ -311,6 +341,14 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() -> An
     let mut unknown_json = serde_json::to_value(unknown)?;
     unknown_json["content"]["data"]["component_id"] =
         serde_json::Value::String("unavailable-effect".to_string());
+    unknown_json["content"]["data"]["declared_ports"]
+        .as_array_mut()
+        .context("persisted unknown Effect ports must be an array")?
+        .push(serde_json::to_value(PortDefinition::input(
+            FPS_PORT,
+            "Authored legacy FPS",
+            PortDataType::Number,
+        ))?);
     let unknown: Node = serde_json::from_value(unknown_json)?;
     let (project, _) = project_with_graph(
         NodeGraphBundle::new(
@@ -322,7 +360,9 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() -> An
         2.0,
     )?;
     assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
-    assert_eq!(Project::load(&project.save()?)?, project);
+    let loaded = Project::load(&project.save()?)?;
+    assert_eq!(loaded, project);
+    assert!(loaded.validation_issues().is_empty());
 
     let blur = plugins.create_effect_operation_node("blur")?;
     let descriptor = plugins
