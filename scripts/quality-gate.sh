@@ -14,6 +14,9 @@ echo "[quality] shell syntax and policy self-test"
 bash -n "${SCRIPT_DIR}"/*.sh
 "${SCRIPT_DIR}/quality-gate-self-test.sh"
 
+echo "[quality] Rust file size ratchet"
+"${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
+
 echo "[quality] rustfmt"
 cargo fmt --all -- --check
 cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check
