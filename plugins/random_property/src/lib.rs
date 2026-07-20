@@ -244,7 +244,12 @@ fn backplate_descriptor() -> ComponentDescriptorV1 {
                 name: "padding".to_string(),
                 label: "Padding".to_string(),
                 ui: PropertyUiV1::Vec4 {
+                    min: -1_000_000.0,
+                    max: 1_000_000.0,
+                    step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
                 default: serde_json::json!({"x": 4.0, "y": 6.0, "z": 4.0, "w": 6.0}),
             },

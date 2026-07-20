@@ -1054,18 +1054,126 @@ pub enum PropertyUiType {
     MultilineText,
     Bool,
     Vec2 {
+        min: f64,
+        max: f64,
+        step: f64,
         suffix: String,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
     },
     Vec3 {
+        min: f64,
+        max: f64,
+        step: f64,
         suffix: String,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
     },
     Vec4 {
+        min: f64,
+        max: f64,
+        step: f64,
         suffix: String,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
     },
     Dropdown {
         options: Vec<String>,
     },
     Font,
+}
+
+impl PropertyUiType {
+    const DEFAULT_VECTOR_MIN: f64 = -1_000_000.0;
+    const DEFAULT_VECTOR_MAX: f64 = 1_000_000.0;
+    const DEFAULT_VECTOR_STEP: f64 = 0.1;
+
+    pub fn vec2(suffix: impl Into<String>) -> Self {
+        Self::vec2_with_range(
+            Self::DEFAULT_VECTOR_MIN,
+            Self::DEFAULT_VECTOR_MAX,
+            Self::DEFAULT_VECTOR_STEP,
+            suffix,
+            false,
+            false,
+        )
+    }
+
+    pub fn vec2_with_range(
+        min: f64,
+        max: f64,
+        step: f64,
+        suffix: impl Into<String>,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
+    ) -> Self {
+        Self::Vec2 {
+            min,
+            max,
+            step,
+            suffix: suffix.into(),
+            min_hard_limit,
+            max_hard_limit,
+        }
+    }
+
+    pub fn vec3(suffix: impl Into<String>) -> Self {
+        Self::vec3_with_range(
+            Self::DEFAULT_VECTOR_MIN,
+            Self::DEFAULT_VECTOR_MAX,
+            Self::DEFAULT_VECTOR_STEP,
+            suffix,
+            false,
+            false,
+        )
+    }
+
+    pub fn vec3_with_range(
+        min: f64,
+        max: f64,
+        step: f64,
+        suffix: impl Into<String>,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
+    ) -> Self {
+        Self::Vec3 {
+            min,
+            max,
+            step,
+            suffix: suffix.into(),
+            min_hard_limit,
+            max_hard_limit,
+        }
+    }
+
+    pub fn vec4(suffix: impl Into<String>) -> Self {
+        Self::vec4_with_range(
+            Self::DEFAULT_VECTOR_MIN,
+            Self::DEFAULT_VECTOR_MAX,
+            Self::DEFAULT_VECTOR_STEP,
+            suffix,
+            false,
+            false,
+        )
+    }
+
+    pub fn vec4_with_range(
+        min: f64,
+        max: f64,
+        step: f64,
+        suffix: impl Into<String>,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
+    ) -> Self {
+        Self::Vec4 {
+            min,
+            max,
+            step,
+            suffix: suffix.into(),
+            min_hard_limit,
+            max_hard_limit,
+        }
+    }
 }
 
 /// Defines a property with its metadata for UI rendering
@@ -1141,7 +1249,10 @@ impl PropertyDefinition {
             return Err(format!("Property '{}' label must not be empty", self.name));
         }
         match &self.ui_type {
-            PropertyUiType::Float { min, max, step, .. } => {
+            PropertyUiType::Float { min, max, step, .. }
+            | PropertyUiType::Vec2 { min, max, step, .. }
+            | PropertyUiType::Vec3 { min, max, step, .. }
+            | PropertyUiType::Vec4 { min, max, step, .. } => {
                 if !min.is_finite() || !max.is_finite() || !step.is_finite() {
                     return Err(format!(
                         "Property '{}' float bounds and step must be finite",

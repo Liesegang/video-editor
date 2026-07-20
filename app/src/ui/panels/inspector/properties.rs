@@ -577,7 +577,7 @@ where
                     ui.end_row();
                 }
             }
-            PropertyUiType::Vec2 { suffix } => {
+            PropertyUiType::Vec2 { suffix, .. } => {
                 let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
@@ -624,7 +624,7 @@ where
                     ui.end_row();
                 }
             }
-            PropertyUiType::Vec3 { suffix } => {
+            PropertyUiType::Vec3 { suffix, .. } => {
                 let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
@@ -677,7 +677,7 @@ where
                     ui.end_row();
                 }
             }
-            PropertyUiType::Vec4 { suffix } => {
+            PropertyUiType::Vec4 { suffix, .. } => {
                 let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
@@ -821,13 +821,13 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
         PropertyUiType::Dropdown { options } => {
             serde_json::json!({"kind": "dropdown", "options": options})
         }
-        PropertyUiType::Vec2 { suffix } => {
+        PropertyUiType::Vec2 { suffix, .. } => {
             serde_json::json!({"kind": "vec2", "suffix": suffix})
         }
-        PropertyUiType::Vec3 { suffix } => {
+        PropertyUiType::Vec3 { suffix, .. } => {
             serde_json::json!({"kind": "vec3", "suffix": suffix})
         }
-        PropertyUiType::Vec4 { suffix } => {
+        PropertyUiType::Vec4 { suffix, .. } => {
             serde_json::json!({"kind": "vec4", "suffix": suffix})
         }
         PropertyUiType::Color => serde_json::json!({"kind": "color"}),

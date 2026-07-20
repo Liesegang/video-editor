@@ -2624,17 +2624,14 @@ fn property_definitions(
                     min_hard_limit,
                     max_hard_limit,
                 } => {
-                    if !min.is_finite()
-                        || !max.is_finite()
-                        || !step.is_finite()
-                        || min > max
-                        || *step <= 0.0
-                    {
-                        return Err(LibraryError::Plugin(format!(
-                            "Runtime property '{}.{}' has an invalid float range",
-                            component.id, definition.name
-                        )));
-                    }
+                    validate_float_ui_range(
+                        &component.id,
+                        &definition.name,
+                        "float",
+                        *min,
+                        *max,
+                        *step,
+                    )?;
                     PropertyUiType::Float {
                         min: *min,
                         max: *max,
@@ -2669,15 +2666,81 @@ fn property_definitions(
                 PropertyUiV1::Text => PropertyUiType::Text,
                 PropertyUiV1::MultilineText => PropertyUiType::MultilineText,
                 PropertyUiV1::Bool => PropertyUiType::Bool,
-                PropertyUiV1::Vec2 { suffix } => PropertyUiType::Vec2 {
-                    suffix: suffix.clone(),
-                },
-                PropertyUiV1::Vec3 { suffix } => PropertyUiType::Vec3 {
-                    suffix: suffix.clone(),
-                },
-                PropertyUiV1::Vec4 { suffix } => PropertyUiType::Vec4 {
-                    suffix: suffix.clone(),
-                },
+                PropertyUiV1::Vec2 {
+                    min,
+                    max,
+                    step,
+                    suffix,
+                    min_hard_limit,
+                    max_hard_limit,
+                } => {
+                    validate_float_ui_range(
+                        &component.id,
+                        &definition.name,
+                        "vec2 component",
+                        *min,
+                        *max,
+                        *step,
+                    )?;
+                    PropertyUiType::vec2_with_range(
+                        *min,
+                        *max,
+                        *step,
+                        suffix.clone(),
+                        *min_hard_limit,
+                        *max_hard_limit,
+                    )
+                }
+                PropertyUiV1::Vec3 {
+                    min,
+                    max,
+                    step,
+                    suffix,
+                    min_hard_limit,
+                    max_hard_limit,
+                } => {
+                    validate_float_ui_range(
+                        &component.id,
+                        &definition.name,
+                        "vec3 component",
+                        *min,
+                        *max,
+                        *step,
+                    )?;
+                    PropertyUiType::vec3_with_range(
+                        *min,
+                        *max,
+                        *step,
+                        suffix.clone(),
+                        *min_hard_limit,
+                        *max_hard_limit,
+                    )
+                }
+                PropertyUiV1::Vec4 {
+                    min,
+                    max,
+                    step,
+                    suffix,
+                    min_hard_limit,
+                    max_hard_limit,
+                } => {
+                    validate_float_ui_range(
+                        &component.id,
+                        &definition.name,
+                        "vec4 component",
+                        *min,
+                        *max,
+                        *step,
+                    )?;
+                    PropertyUiType::vec4_with_range(
+                        *min,
+                        *max,
+                        *step,
+                        suffix.clone(),
+                        *min_hard_limit,
+                        *max_hard_limit,
+                    )
+                }
                 PropertyUiV1::Dropdown { options } => {
                     let unique = options.iter().collect::<HashSet<_>>();
                     if options.is_empty()
@@ -2722,6 +2785,22 @@ fn property_definitions(
             Ok(property_definition)
         })
         .collect()
+}
+
+fn validate_float_ui_range(
+    component_id: &str,
+    property_name: &str,
+    kind: &str,
+    min: f64,
+    max: f64,
+    step: f64,
+) -> Result<(), LibraryError> {
+    if !min.is_finite() || !max.is_finite() || !step.is_finite() || min > max || step <= 0.0 {
+        return Err(LibraryError::Plugin(format!(
+            "Runtime property '{component_id}.{property_name}' has an invalid {kind} range"
+        )));
+    }
+    Ok(())
 }
 
 fn strict_default_value(
@@ -2990,7 +3069,12 @@ mod tests {
                     name: "padding".to_string(),
                     label: "Padding".to_string(),
                     ui: PropertyUiV1::Vec4 {
+                        min: -1_000_000.0,
+                        max: 1_000_000.0,
+                        step: 0.1,
                         suffix: "px".to_string(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
                     },
                     default: serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0}),
                 },
