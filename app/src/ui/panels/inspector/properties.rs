@@ -8,6 +8,7 @@ use library::model::property::{
 };
 use ordered_float::OrderedFloat;
 
+use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
 pub struct PropertyRenderContext<'a> {
@@ -861,6 +862,14 @@ pub fn render_inspector_properties_grid(
     resolution: (u64, u64),
 ) -> Vec<PropertyAction> {
     let mut pending_actions = Vec::new();
+    let evaluated = evaluate_property_map(
+        project_service,
+        properties,
+        context.current_time,
+        fps,
+        resolution,
+    );
+    render_evaluation_issues(ui, &context.qa_scope, evaluated.issues());
 
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         // Force in_grid to true for this component
@@ -872,19 +881,7 @@ pub fn render_inspector_properties_grid(
         let actions = render_property_rows(
             ui,
             definitions,
-            |name| {
-                properties.get(name).and_then(|p| {
-                    project_service
-                        .evaluate_property_value(
-                            p,
-                            properties,
-                            context.current_time,
-                            fps,
-                            resolution,
-                        )
-                        .ok()
-                })
-            },
+            |name| evaluated.value(name).cloned(),
             |name| properties.get(name).cloned(),
             &grid_context,
         );
