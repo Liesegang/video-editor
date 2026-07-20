@@ -75,7 +75,9 @@ def state(project=None, history=None, selection=None, timeline=None):
         "project": {"name": "qa"} if project is None else project,
         "history": {"undo_depth": 1, "redo_depth": 0} if history is None else history,
         "editor": {
-            "selection": {"selected_entities": []} if selection is None else selection,
+            "selection": {"targets": [], "primary": None}
+            if selection is None
+            else selection,
             "timeline": {"current_time": 2.0, "is_playing": False}
             if timeline is None
             else timeline,
@@ -138,7 +140,12 @@ class PreviewQaTests(unittest.TestCase):
         for changed in (
             state(project={"name": "changed"}),
             state(history={"undo_depth": 2, "redo_depth": 0}),
-            state(selection={"selected_entities": ["node"]}),
+            state(
+                selection={
+                    "targets": [{"kind": "node", "id": "node"}],
+                    "primary": {"kind": "node", "id": "node"},
+                }
+            ),
             state(timeline={"current_time": 2.0, "is_playing": True}),
         ):
             with self.assertRaises(PREVIEW_QA.QaFailure):

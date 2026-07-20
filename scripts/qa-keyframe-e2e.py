@@ -443,7 +443,7 @@ def run_suite(client):
     client.wait_until(
         "Clip A2 coordinate selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
+        if BASE.selection_matches(client.state(), "clip", CLIP_A2)
         else None,
     )
     client.wait_component("inspector.owner.clip:" + CLIP_A2)
@@ -508,8 +508,7 @@ def run_suite(client):
     client.wait_until(
         "Transform operation Node selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"]
-        == TRANSFORM_EFFECTOR
+        if BASE.selection_matches(client.state(), "node", TRANSFORM_EFFECTOR)
         else None,
     )
     client.wait_component("inspector.owner.node:" + TRANSFORM_EFFECTOR)

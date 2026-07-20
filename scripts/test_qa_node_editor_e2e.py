@@ -115,7 +115,7 @@ class NodeEditorQaTests(unittest.TestCase):
             "project": {"nodes": {"node": {"ui_position": [10.0, 20.0]}}},
             "history": {"undo_depth": 1, "redo_depth": 0},
             "editor": {
-                "selection": {"selected_entities": [], "last_selected_entity_id": None},
+                "selection": {"targets": [], "primary": None},
                 "node_editor": {"context_menu_open": False, "pending_navigation": None},
             },
         }
@@ -129,10 +129,13 @@ class NodeEditorQaTests(unittest.TestCase):
         }
         NODE_QA.assert_navigation_state_unchanged(initial, final)
 
-        final["editor"]["selection"]["last_selected_entity_id"] = "node"
+        final["editor"]["selection"]["primary"] = {
+            "kind": "node",
+            "id": "node",
+        }
         with self.assertRaises(NODE_QA.QaFailure):
             NODE_QA.assert_navigation_state_unchanged(initial, final)
-        final["editor"]["selection"]["last_selected_entity_id"] = None
+        final["editor"]["selection"]["primary"] = None
         final["editor"]["node_editor"]["pending_navigation"] = "composition"
         with self.assertRaises(NODE_QA.QaFailure):
             NODE_QA.assert_navigation_state_unchanged(initial, final)

@@ -74,6 +74,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
         return (
             SuiteSpec("all", "qa-e2e.py", ("--suite", "all")),
             SuiteSpec("timeline", "qa-e2e.py", ("--suite", "timeline")),
+            SuiteSpec("selection", "qa-e2e.py", ("--suite", "selection")),
             SuiteSpec("keyframe", "qa-keyframe-e2e.py"),
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-reparent", "qa-reparent-e2e.py"),
