@@ -203,13 +203,20 @@ fn container_owner(container: NodeContainer) -> PortOwner {
     }
 }
 
-fn container_output(project: &Project, container: NodeContainer) -> Option<Uuid> {
+fn container_output(project: &Project, container: NodeContainer) -> Result<Option<Uuid>> {
     match container {
-        NodeContainer::Composition(id) => project
+        NodeContainer::Composition(id) => Ok(project
             .get_composition(id)
-            .and_then(|composition| composition.output_node_id),
-        NodeContainer::Track(id) => project.get_track(id).and_then(|track| track.output_node_id),
-        NodeContainer::Clip(id) => project.get_clip(id).and_then(|clip| clip.output_node_id),
+            .with_context(|| format!("Composition {id} must exist"))?
+            .output_node_id),
+        NodeContainer::Track(id) => Ok(project
+            .get_track(id)
+            .with_context(|| format!("Track {id} must exist"))?
+            .output_node_id),
+        NodeContainer::Clip(id) => Ok(project
+            .get_clip(id)
+            .with_context(|| format!("Clip {id} must exist"))?
+            .output_node_id),
     }
 }
 
@@ -1192,9 +1199,9 @@ fn direct_node_reparent_remaps_metadata_for_every_container_pair() -> Result<()>
             assert_eq!(remapped.id, original.id);
             assert_eq!(remapped.order, original.order);
             assert_eq!(remapped.to, original.to);
-            assert_eq!(container_output(&project, source), None);
+            assert_eq!(container_output(&project, source)?, None);
             assert_eq!(
-                container_output(&project, destination),
+                container_output(&project, destination)?,
                 Some(destination_output_id)
             );
             assert_eq!(
