@@ -390,6 +390,7 @@ pub fn node_editor_panel(
                 position,
                 open_time,
                 inserting: false,
+                actions_armed: false,
             });
             *context_menu_state = None;
         }

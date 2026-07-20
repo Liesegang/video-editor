@@ -17,6 +17,29 @@ use crate::ui::panels::node_editor::{
     QueuedNodeEdit,
 };
 
+fn wire_menu_accepts_actions(
+    actions_armed: &mut bool,
+    new_primary_press: bool,
+    new_keyboard_input: bool,
+) -> bool {
+    if new_primary_press || new_keyboard_input {
+        *actions_armed = true;
+    }
+    *actions_armed
+}
+
+fn wire_menu_action_gesture(ui: &egui::Ui) -> (bool, bool) {
+    ui.input(|input| {
+        let keyboard_input = input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)
+            )
+        });
+        (input.pointer.primary_pressed(), keyboard_input)
+    })
+}
+
 pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
     ui: &mut egui::Ui,
     state: &mut NodeEditorState,
@@ -60,6 +83,12 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
         "node_editor_wire_insert_menu:{connection_id}:{}",
         context.open_time.to_bits()
     );
+    let (new_primary_press, new_keyboard_input) = wire_menu_action_gesture(ui);
+    let accepts_actions = wire_menu_accepts_actions(
+        &mut context.actions_armed,
+        new_primary_press,
+        new_keyboard_input,
+    );
     let mut edit = None;
     let mut should_close = false;
     let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", connection_id)))
@@ -73,23 +102,30 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                     let items = wire_splice_menu_items(project, connection_id, plugin_manager);
                     if items.is_empty() {
                         non_selectable_label(ui, "No compatible operations");
-                    } else if let Some(request) = show_searchable_items_with_qa(
-                        ui,
-                        &searchable_menu_id,
-                        Some("node_editor.wire_menu.search"),
-                        &items,
-                    ) {
-                        if let Some(node) =
-                            create_operation_node_for_request(&request, plugin_manager)
-                        {
-                            edit = Some(QueuedNodeEdit::Atomic(NodeEdit::InsertNodeOnConnection {
-                                connection_id,
-                                node: Box::new(node),
-                                position: graph_position,
-                                composition_id,
-                            }));
+                    } else {
+                        let request = show_searchable_items_with_qa(
+                            ui,
+                            &searchable_menu_id,
+                            Some("node_editor.wire_menu.search"),
+                            &items,
+                        );
+                        if accepts_actions {
+                            if let Some(request) = request {
+                                if let Some(node) =
+                                    create_operation_node_for_request(&request, plugin_manager)
+                                {
+                                    edit = Some(QueuedNodeEdit::Atomic(
+                                        NodeEdit::InsertNodeOnConnection {
+                                            connection_id,
+                                            node: Box::new(node),
+                                            position: graph_position,
+                                            composition_id,
+                                        },
+                                    ));
+                                }
+                                should_close = true;
+                            }
                         }
-                        should_close = true;
                     }
                     return;
                 }
@@ -136,7 +172,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                                 back_index,
                             )),
                         );
-                        if back.clicked() {
+                        if back.clicked() && accepts_actions {
                             edit = back_index.map(|new_order| {
                                 QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
                                     connection_id,
@@ -166,7 +202,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                                 front_index,
                             )),
                         );
-                        if front.clicked() {
+                        if front.clicked() && accepts_actions {
                             edit = front_index.map(|new_order| {
                                 QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
                                     connection_id,
@@ -215,23 +251,29 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                                 "blend_mode": blend_mode_qa_key(blend_mode),
                                 "blend_group": blend_mode.group().qa_key(),
                                 "selected": selected,
+                                "coordinate_space": "screen_points",
                                 "runtime_first_produced_may_be_normal": blend_mode
                                     .can_optimize_empty_backdrop_to_normal(),
                             }));
                     }
-                    if let Some(blend_mode) = show_searchable_items_with_qa(
+                    let selected_blend = show_searchable_items_with_qa(
                         ui,
                         &format!("wire_blend_menu:{connection_id}"),
                         Some(&format!(
                             "node_editor.wire_menu.blend_search:{connection_id}"
                         )),
                         &blend_items,
-                    ) {
-                        edit = Some(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
-                            connection_id,
-                            blend_mode,
-                        }));
-                        should_close = true;
+                    );
+                    if accepts_actions {
+                        if let Some(blend_mode) = selected_blend {
+                            edit = Some(QueuedNodeEdit::Atomic(
+                                NodeEdit::SetConnectionBlendMode {
+                                    connection_id,
+                                    blend_mode,
+                                },
+                            ));
+                            should_close = true;
+                        }
                     }
                     non_selectable_label(
                         ui,
@@ -256,9 +298,10 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                     Some(serde_json::json!({
                         "action": "delete",
                         "connection_id": connection_id,
+                        "actions_armed": accepts_actions,
                     })),
                 );
-                if delete.clicked() {
+                if delete.clicked() && accepts_actions {
                     edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires {
                         wires: vec![NodeEditorEditableWire::ProjectConnection {
                             connection_id,
@@ -278,7 +321,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                         "connection_id": connection_id,
                     })),
                 );
-                if insert.clicked() {
+                if insert.clicked() && accepts_actions {
                     context.inserting = true;
                 }
             });
@@ -291,6 +334,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
         Some(serde_json::json!({
             "connection_id": connection_id,
             "mode": if context.inserting { "insert" } else { "commands" },
+            "actions_armed": accepts_actions,
             "order": order_state.map(|order| serde_json::json!({
                 "back_to_front_index": order.back_to_front_index,
                 "authored_order": connection.order,
@@ -344,6 +388,12 @@ fn show_output_binding_wire_context_menu(
     let context = state.wire_context_menu.as_mut()?;
     let position = context.position;
     let open_time = context.open_time;
+    let (new_primary_press, new_keyboard_input) = wire_menu_action_gesture(ui);
+    let accepts_actions = wire_menu_accepts_actions(
+        &mut context.actions_armed,
+        new_primary_press,
+        new_keyboard_input,
+    );
     let stable_key = editable_wire_stable_key(target);
     let mut edit = None;
     let mut should_close = false;
@@ -368,13 +418,14 @@ fn show_output_binding_wire_context_menu(
                     delete.enabled(),
                     Some(serde_json::json!({
                         "action": "clear_output_binding",
+                        "actions_armed": accepts_actions,
                         "kind": "output_binding",
                         "owner": qa_container_key(owner),
                         "node_id": node_id,
                         "output_type": output_type,
                     })),
                 );
-                if delete.clicked() {
+                if delete.clicked() && accepts_actions {
                     edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires {
                         wires: vec![target],
                     }));
@@ -394,6 +445,7 @@ fn show_output_binding_wire_context_menu(
             "output_type": crate::ui::panels::node_editor::container_output_type_key(data_type),
             "mode": "commands",
             "editable": true,
+            "actions_armed": accepts_actions,
         })),
     );
 
@@ -413,4 +465,31 @@ fn show_output_binding_wire_context_menu(
         state.selected_connection_id = None;
     }
     edit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_menu_arms_only_for_a_new_action_gesture() {
+        let mut armed = false;
+
+        // Opening press, opening release, and later idle frames are all part
+        // of draining the secondary gesture; none may enable commands.
+        assert!(!wire_menu_accepts_actions(&mut armed, false, false));
+        assert!(!wire_menu_accepts_actions(&mut armed, false, false));
+        assert!(!wire_menu_accepts_actions(&mut armed, false, false));
+        // A new primary/touch press arms this and subsequent release frames.
+        assert!(wire_menu_accepts_actions(&mut armed, true, false));
+        assert!(wire_menu_accepts_actions(&mut armed, false, false));
+    }
+
+    #[test]
+    fn wire_menu_keyboard_input_is_an_independent_action_gesture() {
+        let mut armed = false;
+
+        assert!(wire_menu_accepts_actions(&mut armed, false, true));
+        assert!(wire_menu_accepts_actions(&mut armed, false, false));
+    }
 }

@@ -866,6 +866,11 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         );
         let context_target =
             match &edit {
+                Some(NodeEdit::DisconnectConnection { connection_id }) => {
+                    Some(NodeEditorEditableWire::ProjectConnection {
+                        connection_id: *connection_id,
+                    })
+                }
                 Some(NodeEdit::Disconnect { from, to }) => self
                     .project
                     .connections
