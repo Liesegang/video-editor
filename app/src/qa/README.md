@@ -171,3 +171,14 @@ ownership without selecting or moving content. Pan must equal the pointer
 delta; zoom, Project, selection, Timeline state, and undo history remain
 unchanged, `auto_fit` becomes false, and the owner returns to `Idle`. This suite
 is also part of `python3 scripts/qa-runner.py --mode full`.
+
+Run the focused wire-selection lifecycle suite with:
+
+```sh
+python3 scripts/qa-wire-selection-e2e.py --spawn
+```
+
+It clicks a freshly published Bezier hit point with the primary button, then
+re-queries the canvas and clicks an unobstructed coordinate. The suite requires
+the wire selection to clear without changing the Project, undo history, or
+semantic entity selection. It is also part of the full QA runner.
