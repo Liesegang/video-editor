@@ -1246,6 +1246,7 @@ pub struct PluginInfo {
 mod tests {
     use super::*;
     use ordered_float::OrderedFloat;
+    use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::model::frame::color::Color;
@@ -1257,6 +1258,171 @@ mod tests {
         FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, PropertyEvaluator,
         PropertyPlugin,
     };
+
+    #[test]
+    fn every_bundled_property_definition_is_valid_and_operations_are_materialized() {
+        fn check_definitions(
+            scope: &str,
+            definitions: &[PropertyDefinition],
+            failures: &mut Vec<String>,
+        ) {
+            for definition in definitions {
+                if let Err(error) = definition.validate_definition() {
+                    failures.push(format!("{scope} property '{}': {error}", definition.name()));
+                }
+            }
+        }
+
+        let manager = PluginManager::default();
+        let sksl_directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/plugins/sksl");
+        manager
+            .load_sksl_plugins_from_directory(&sksl_directory)
+            .expect("bundled SkSL directory should be readable");
+
+        let expected_sksl_ids = std::fs::read_dir(&sksl_directory)
+            .expect("bundled SkSL directory should exist")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("config.toml"))
+            .filter(|path| path.is_file())
+            .map(|path| {
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+                toml::from_str::<crate::plugin::effects::sksl_plugin::SkslPluginConfig>(&source)
+                    .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()))
+                    .id
+            })
+            .collect::<HashSet<_>>();
+
+        let mut failures = Vec::new();
+        check_definitions(
+            "Clip timing",
+            crate::model::Clip::timing_property_definitions(),
+            &mut failures,
+        );
+        check_definitions(
+            "native Time Modulo",
+            crate::model::ValueContent::TimeModulo.property_definitions(),
+            &mut failures,
+        );
+        let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();
+        let registered_effect_ids;
+        {
+            let registry = manager.read_registry();
+            registered_effect_ids = registry
+                .effect_plugins
+                .values()
+                .map(|plugin| plugin.id().to_string())
+                .collect::<HashSet<_>>();
+
+            for plugin in registry.entity_converter_plugins.values() {
+                let definitions = plugin.get_property_definitions(1920, 1080, 640, 360);
+                check_definitions(
+                    &format!("converter {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+            }
+            for kind in ["video", "image", "text", "shape", "solid", "sksl"] {
+                if !registry
+                    .entity_converter_plugins
+                    .values()
+                    .any(|plugin| plugin.supports_kind(kind))
+                {
+                    failures.push(format!("built-in converter kind {kind} is not registered"));
+                }
+            }
+            for plugin in registry.export_plugins.values() {
+                let definitions = plugin.properties();
+                check_definitions(
+                    &format!("exporter {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+            }
+
+            for plugin in registry.effect_plugins.values() {
+                let definitions = plugin.properties();
+                check_definitions(
+                    &format!("effect {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+                operation_contracts.push(("effect", plugin.id().to_string(), definitions.len()));
+            }
+            for plugin in registry.effector_plugins.values() {
+                let definitions = plugin.properties();
+                check_definitions(
+                    &format!("effector {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+                operation_contracts.push(("effector", plugin.id().to_string(), definitions.len()));
+            }
+            for plugin in registry.decorator_plugins.values() {
+                let definitions = plugin.properties();
+                check_definitions(
+                    &format!("decorator {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+                operation_contracts.push(("decorator", plugin.id().to_string(), definitions.len()));
+            }
+            for plugin in registry.style_plugins.values() {
+                match plugin.descriptor() {
+                    Ok(descriptor) => {
+                        check_definitions(
+                            &format!("style {}", plugin.id()),
+                            descriptor.properties(),
+                            &mut failures,
+                        );
+                        operation_contracts.push((
+                            "style",
+                            plugin.id().to_string(),
+                            descriptor.properties().len(),
+                        ));
+                    }
+                    Err(error) => failures.push(format!(
+                        "style {} descriptor is invalid: {error}",
+                        plugin.id()
+                    )),
+                }
+            }
+        }
+
+        for missing in expected_sksl_ids.difference(&registered_effect_ids) {
+            failures.push(format!("bundled SkSL effect {missing} was not registered"));
+        }
+
+        for (category, component_id, expected_property_count) in operation_contracts {
+            let result = match category {
+                "effect" => manager.create_effect_operation_node(&component_id),
+                "effector" => manager.create_effector_operation_node(&component_id),
+                "decorator" => manager.create_decorator_operation_node(&component_id),
+                "style" => manager.create_style_operation_node(&component_id),
+                _ => unreachable!("test enumerates known operation categories"),
+            };
+            match result {
+                Ok(node) => {
+                    let actual_property_count = node.properties().iter().count();
+                    if actual_property_count != expected_property_count {
+                        failures.push(format!(
+                            "{category} {component_id} initialized {actual_property_count} of {expected_property_count} properties"
+                        ));
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "{category} {component_id} cannot create a complete Node: {error}"
+                )),
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "bundled property definition failures:\n{}",
+            failures.join("\n")
+        );
+    }
 
     struct StatefulEvaluator {
         evaluations: Arc<AtomicUsize>,

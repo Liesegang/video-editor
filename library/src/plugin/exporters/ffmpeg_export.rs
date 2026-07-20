@@ -96,7 +96,6 @@ impl ExportPlugin for FfmpegExportPlugin {
 
     fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
         use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-        use ordered_float::OrderedFloat;
         vec![
             PropertyDefinition::new(
                 "container",
@@ -147,7 +146,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max_hard_limit: false,
                 },
                 "Bitrate (kbps)",
-                PropertyValue::Number(OrderedFloat(5000.0)),
+                PropertyValue::Integer(5000),
             ),
             PropertyDefinition::new(
                 "crf",
@@ -159,7 +158,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max_hard_limit: true,
                 },
                 "CRF (Quality, 0-51)",
-                PropertyValue::Number(OrderedFloat(23.0)),
+                PropertyValue::Integer(23),
             ),
             PropertyDefinition::new(
                 "preset",
@@ -189,7 +188,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max_hard_limit: false,
                 },
                 "Audio Bitrate (kbps)",
-                PropertyValue::Number(OrderedFloat(192.0)),
+                PropertyValue::Integer(192),
             ),
         ]
     }
