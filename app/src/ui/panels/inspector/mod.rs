@@ -648,7 +648,11 @@ fn render_semantic_graph_facade(
         "inspector_output",
         output_response.rect,
         true,
-        Some(facade_output_metadata(owner_kind, output_mode)),
+        Some(facade_output_metadata(
+            owner_kind,
+            output_mode,
+            semantics.explicit_output_is_directly_contained(),
+        )),
     );
 
     if operations.is_empty() && merges.is_empty() {
@@ -1080,10 +1084,12 @@ fn facade_output_text(
 fn facade_output_metadata(
     owner_kind: FacadeOwnerKind,
     output_mode: FacadeOutputMode,
+    explicit_output_is_directly_contained: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "output_node_id": output_mode.explicit_node_id(),
         "explicit": matches!(output_mode, FacadeOutputMode::Explicit(_)),
+        "explicit_output_is_directly_contained": explicit_output_is_directly_contained,
         "owner_kind": owner_kind.qa_value(),
         "output_mode": output_mode.qa_value(),
     })
@@ -2041,11 +2047,12 @@ mod tests {
                 facade_output_text(owner_kind, output_mode, &nodes),
                 "Result: Composite"
             );
-            let metadata = facade_output_metadata(owner_kind, output_mode);
+            let metadata = facade_output_metadata(owner_kind, output_mode, true);
             assert_eq!(metadata["owner_kind"], owner_kind.qa_value());
             assert_eq!(metadata["output_mode"], "explicit");
             assert_eq!(metadata["output_node_id"], serde_json::json!(result.id));
             assert_eq!(metadata["explicit"], true);
+            assert_eq!(metadata["explicit_output_is_directly_contained"], true);
         }
 
         let composition_mode = FacadeOwnerKind::Composition.output_mode(None);
@@ -2056,7 +2063,7 @@ mod tests {
             "Derived from ordered child Tracks"
         );
         let composition_metadata =
-            facade_output_metadata(FacadeOwnerKind::Composition, composition_mode);
+            facade_output_metadata(FacadeOwnerKind::Composition, composition_mode, false);
         assert_eq!(composition_metadata["output_mode"], "derived_children");
         assert_eq!(
             composition_metadata["output_node_id"],
@@ -2071,7 +2078,7 @@ mod tests {
             facade_output_text(FacadeOwnerKind::Track, track_mode, &nodes),
             "Derived from ordered child Clips"
         );
-        let track_metadata = facade_output_metadata(FacadeOwnerKind::Track, track_mode);
+        let track_metadata = facade_output_metadata(FacadeOwnerKind::Track, track_mode, false);
         assert_eq!(track_metadata["owner_kind"], "track");
         assert_eq!(track_metadata["output_mode"], "derived_children");
 
@@ -2082,7 +2089,7 @@ mod tests {
             facade_output_text(FacadeOwnerKind::Clip, clip_mode, &nodes),
             "No output selected (NoOutput)"
         );
-        let clip_metadata = facade_output_metadata(FacadeOwnerKind::Clip, clip_mode);
+        let clip_metadata = facade_output_metadata(FacadeOwnerKind::Clip, clip_mode, false);
         assert_eq!(clip_metadata["owner_kind"], "clip");
         assert_eq!(clip_metadata["output_mode"], "no_output");
         assert_eq!(clip_metadata["output_node_id"], serde_json::Value::Null);

@@ -781,6 +781,47 @@ mod tests {
     }
 
     #[test]
+    fn expanded_clip_label_does_not_escape_through_a_foreign_output_binding(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = Project::new("malformed timeline label");
+        let clip = Clip::new("Clip fallback", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        let foreign_clip = Clip::new("foreign clip", 0.0, 5.0);
+        let foreign_clip_id = foreign_clip.id;
+        project.add_clip(foreign_clip);
+        let foreign_source = generator_node(
+            "Foreign source",
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
+        );
+        let foreign_source_id = foreign_source.id;
+        project.add_node(foreign_source);
+        project
+            .attach_node_to_container(NodeContainer::Clip(foreign_clip_id), foreign_source_id)?;
+        project.set_output_node(
+            NodeContainer::Clip(foreign_clip_id),
+            Some(foreign_source_id),
+        )?;
+
+        project
+            .get_clip_mut(clip_id)
+            .ok_or(library::model::project::ProjectGraphError::ClipNotFound(
+                clip_id,
+            ))?
+            .output_node_id = Some(foreign_source_id);
+        let clip = project.get_clip(clip_id).cloned().ok_or(
+            library::model::project::ProjectGraphError::ClipNotFound(clip_id),
+        )?;
+        assert_eq!(
+            expanded_clip_label(&project, &clip, &HashMap::new()),
+            "Clip fallback"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn insertion_slots_cover_first_last_and_follow_vertical_scroll() {
         let tracks = [Track::new("A"), Track::new("B"), Track::new("C")];
         let rows: Vec<_> = tracks
