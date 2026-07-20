@@ -398,6 +398,7 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
+                "composition-drop",
                 "node-wire",
                 "node-wire-selection",
                 "preview",
@@ -410,6 +411,12 @@ class QaRunnerTests(unittest.TestCase):
             if item.name == "transform-preview"
         )
         self.assertEqual(transform.fixture, "transform_preview_e2e")
+        composition_drop = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "composition-drop"
+        )
+        self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
 

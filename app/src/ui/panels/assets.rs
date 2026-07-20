@@ -316,8 +316,27 @@ pub fn assets_panel(
                                             let is_selected = editor_context.is_selected(
                                                 SelectionTarget::Composition(comp.id),
                                             );
-                                            let response =
-                                                ui.selectable_label(is_selected, &comp.name);
+                                            // Composition rows are timeline sources as well as
+                                            // navigation targets. A click-only selectable never
+                                            // reports `drag_started`, which silently made nested
+                                            // Composition placement impossible.
+                                            let response = ui.add(
+                                                egui::Button::selectable(is_selected, &comp.name)
+                                                    .sense(egui::Sense::click_and_drag()),
+                                            );
+
+                                            crate::qa::register_component_with_metadata(
+                                                format!("assets.composition:{}", comp.id),
+                                                "assets_composition",
+                                                response.rect,
+                                                response.enabled(),
+                                                Some(serde_json::json!({
+                                                    "composition_id": comp.id,
+                                                    "active": editor_context.active_composition_id
+                                                        == Some(comp.id),
+                                                    "draggable_to_timeline": true,
+                                                })),
+                                            );
 
                                             // Interactions (same as before)
                                             response.context_menu(|ui| {
