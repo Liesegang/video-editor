@@ -400,6 +400,7 @@ class QaRunnerTests(unittest.TestCase):
                 "merge-reorder",
                 "node-wire",
                 "node-wire-selection",
+                "implicit-time",
                 "preview",
                 "transform-preview",
             ],

@@ -1970,9 +1970,9 @@ def validate_explicit_operation_fixture(project):
                 raise QaFailure(
                     "{} still contains embedded {}".format(node_id, collection)
                 )
-    if len(project.get("connections", ())) != 30:
+    if len(project.get("connections", ())) != 29:
         raise QaFailure(
-            "explicit fixture has {} connections, expected 30".format(
+            "canonical fixture has {} connections, expected 29".format(
                 len(project.get("connections", ()))
             )
         )

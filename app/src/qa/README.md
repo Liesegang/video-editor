@@ -183,6 +183,24 @@ re-queries the canvas and clicks an unobstructed coordinate. The suite requires
 the wire selection to clear without changing the Project, undo history, or
 semantic entity selection. It is also part of the full QA runner.
 
+Run the focused inherited-Time presentation suite with:
+
+```sh
+python3 scripts/qa-implicit-time-e2e.py --spawn
+```
+
+It hovers and selects an implicitly timed Node, verifies the dashed context
+wire and Inspector/Node badges without Project or history changes, then creates
+an explicit Time wire by coordinate drag and removes it through the physical
+wire menu. Undo and disconnect must both restore the inherited presentation.
+The suite re-queries component rectangles after every layout-changing tab or
+canvas transition and is also part of the full QA runner. A physical wire
+topology edit can invoke the existing Snarl Clip-layout canonicalization; the
+suite records that `ui_position`/`ui_size` delta separately and still requires
+every semantic Project field to return byte-for-byte. The focused Rust render
+test additionally requires inherited and explicit Time rows to keep identical
+Node geometry.
+
 Run the focused Transform/Preview facade suite with:
 
 ```sh

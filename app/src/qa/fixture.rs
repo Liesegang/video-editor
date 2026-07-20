@@ -473,7 +473,6 @@ fn install_named(
         (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
         (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
         (E2E_CLIP_A1_ID, E2E_SOLID_ID),
-        (E2E_CLIP_A1_ID, E2E_MERGE_ID),
         (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
         (E2E_CLIP_A2_ID, E2E_TEXT_TRANSFORM_ID),
         (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
@@ -874,7 +873,6 @@ mod tests {
             (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
             (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
             (E2E_CLIP_A1_ID, E2E_SOLID_ID),
-            (E2E_CLIP_A1_ID, E2E_MERGE_ID),
             (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
             (E2E_CLIP_A2_ID, E2E_TEXT_TRANSFORM_ID),
             (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
@@ -898,7 +896,10 @@ mod tests {
             );
         }
 
-        assert_eq!(read.connections.len(), 30);
+        assert!(!read.connections.iter().any(|connection| {
+            connection.to == PortAddress::new(PortOwner::Node(E2E_MERGE_ID), TIME_PORT)
+        }));
+        assert_eq!(read.connections.len(), 29);
         assert!(read.validate_connections().is_empty());
     }
 
