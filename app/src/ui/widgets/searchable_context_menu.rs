@@ -122,53 +122,34 @@ pub enum SearchNavigation {
 #[derive(Clone, Default)]
 struct MenuState {
     query: String,
-    browse_path: Vec<String>,
-    selected: Option<MenuSelection>,
-    /// A one-shot request. Keeping this separate from `selected` lets a
+    /// Original item index, not an index into a transient filtered list.
+    selected_item: Option<usize>,
+    /// A one-shot request. Keeping this separate from `selected_item` lets a
     /// user scroll freely without the selected row snapping back every frame.
-    scroll_to: Option<MenuSelection>,
+    scroll_to: Option<usize>,
 }
 
 impl MenuState {
-    fn set_selection(&mut self, selection: Option<MenuSelection>, request_scroll: bool) {
-        if self.selected == selection {
+    fn set_selection(&mut self, selection: Option<usize>, request_scroll: bool) {
+        if self.selected_item == selection {
             return;
         }
-        self.selected = selection.clone();
+        self.selected_item = selection;
         self.scroll_to = if request_scroll { selection } else { None };
     }
 
-    fn take_scroll_request(&mut self) -> Option<MenuSelection> {
+    fn take_scroll_request(&mut self) -> Option<usize> {
         self.scroll_to.take()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum MenuSelection {
-    Back,
-    Category(Vec<String>),
-    /// Original item index, not an index into a transient filtered list.
-    Item(usize),
+enum MenuContents {
+    Categories(CategoryNode),
+    FlatSearch(Vec<usize>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum MenuRow {
-    Back { label: String },
-    Category { label: String, path: Vec<String> },
-    Item { index: usize },
-}
-
-impl MenuRow {
-    fn selection(&self) -> MenuSelection {
-        match self {
-            Self::Back { .. } => MenuSelection::Back,
-            Self::Category { path, .. } => MenuSelection::Category(path.clone()),
-            Self::Item { index } => MenuSelection::Item(*index),
-        }
-    }
-}
-
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CategoryNode {
     items: Vec<usize>,
     children: BTreeMap<String, CategoryNode>,
@@ -278,171 +259,90 @@ pub fn show_searchable_items_with_qa<T: Clone>(
 
     ui.separator();
 
-    let filtered = filter_searchable_items(items, &state.query);
-    let browse_mode = state.query.trim().is_empty();
-    if browse_mode && !category_path_exists(items, &filtered, &state.browse_path) {
-        state.browse_path.clear();
-        state.set_selection(None, false);
-    }
-    if browse_mode
-        && !state.browse_path.is_empty()
-        && ui.input(|input| input.key_pressed(Key::ArrowLeft))
-    {
-        state.browse_path.pop();
-        state.set_selection(None, false);
-    }
-
-    let rows = menu_rows(items, &filtered, &state.query, &state.browse_path);
-    let selection_is_invalid = state.selected.as_ref().is_none_or(|selected| {
-        !rows
-            .iter()
-            .any(|row| row.selection() == *selected && row_is_enabled(row, items))
-    });
-    if text_response.changed() {
-        let selection = navigate_menu_rows(items, &rows, None, SearchNavigation::First);
-        state.set_selection(selection, true);
-    } else if selection_is_invalid {
-        let selection = navigate_menu_rows(items, &rows, None, SearchNavigation::First);
-        state.set_selection(selection, false);
-    }
-
-    for (key, navigation) in [
-        (Key::ArrowDown, SearchNavigation::Next),
-        (Key::ArrowUp, SearchNavigation::Previous),
-        (Key::Home, SearchNavigation::First),
-        (Key::End, SearchNavigation::Last),
-    ] {
-        if ui.input(|input| input.key_pressed(key)) {
-            let selection = navigate_menu_rows(items, &rows, state.selected.as_ref(), navigation);
-            state.set_selection(selection, true);
+    let contents = menu_contents(items, &state.query);
+    let keyboard_selection = match &contents {
+        MenuContents::Categories(_) => {
+            // Native `menu_button` owns pointer and keyboard navigation while
+            // browsing. The custom selection state is reserved for flat search.
+            state.set_selection(None, false);
+            None
         }
-    }
+        MenuContents::FlatSearch(displayed) => {
+            let selection_is_invalid = state.selected_item.is_none_or(|selected| {
+                !displayed.contains(&selected)
+                    || items.get(selected).is_none_or(|item| !item.enabled)
+            });
+            if text_response.changed() {
+                let selection =
+                    navigate_searchable_items(items, displayed, None, SearchNavigation::First);
+                state.set_selection(selection, true);
+            } else if selection_is_invalid {
+                let selection =
+                    navigate_searchable_items(items, displayed, None, SearchNavigation::First);
+                state.set_selection(selection, false);
+            }
 
-    let (enter_pressed, right_pressed) = ui.input(|input| {
-        (
-            input.key_pressed(Key::Enter),
-            input.key_pressed(Key::ArrowRight),
-        )
-    });
-    let keyboard_activation = if enter_pressed {
-        state.selected.clone()
-    } else if browse_mode && right_pressed {
-        state
-            .selected
-            .as_ref()
-            .filter(|selection| matches!(selection, MenuSelection::Category(_)))
-            .cloned()
-    } else {
-        None
+            for (key, navigation) in [
+                (Key::ArrowDown, SearchNavigation::Next),
+                (Key::ArrowUp, SearchNavigation::Previous),
+                (Key::Home, SearchNavigation::First),
+                (Key::End, SearchNavigation::Last),
+            ] {
+                if ui.input(|input| input.key_pressed(key)) {
+                    let selection = navigate_searchable_items(
+                        items,
+                        displayed,
+                        state.selected_item,
+                        navigation,
+                    );
+                    state.set_selection(selection, true);
+                }
+            }
+
+            ui.input(|input| input.key_pressed(Key::Enter))
+                .then_some(state.selected_item)
+                .flatten()
+        }
     };
-    let mut clicked_activation = None;
+
+    let mut clicked_selection = None;
     let scroll_to = state.take_scroll_request();
 
     let results_height = DEFAULT_SEARCHABLE_RESULTS_MAX_HEIGHT.min(ui.available_height().max(0.0));
     ScrollArea::vertical()
         .id_salt(("searchable_menu_results", id))
         .max_height(results_height)
-        .show(ui, |ui| {
-            if rows.is_empty() {
+        .show(ui, |ui| match &contents {
+            MenuContents::Categories(root) if root.is_empty() => {
                 ui.label("No results");
-                return;
             }
-
-            for row in &rows {
-                let selection = row.selection();
-                let selected = state.selected.as_ref() == Some(&selection);
-                let response = match row {
-                    MenuRow::Back { label } => {
-                        let response = ui.add(
-                            egui::Button::selectable(selected, format!("← {label}")).frame(false),
-                        );
-                        if let Some(qa_search_id) = qa_search_id {
-                            crate::qa::register_component_with_metadata(
-                                format!("{qa_search_id}.back"),
-                                "searchable_menu_category_back",
-                                response.rect,
-                                response.enabled(),
-                                Some(serde_json::json!({
-                                    "action": "leave_category",
-                                    "category_path": state.browse_path,
-                                })),
-                            );
-                        }
-                        response
+            MenuContents::Categories(root) => {
+                render_category_node(ui, root, &[], items, qa_search_id, &mut clicked_selection)
+            }
+            MenuContents::FlatSearch(displayed) if displayed.is_empty() => {
+                ui.label("No results");
+            }
+            MenuContents::FlatSearch(displayed) => {
+                for index in displayed.iter().copied() {
+                    if render_item_button(
+                        ui,
+                        index,
+                        items,
+                        state.selected_item == Some(index),
+                        scroll_to == Some(index),
+                    ) {
+                        clicked_selection = Some(index);
                     }
-                    MenuRow::Category { label, path } => {
-                        let response = ui.add(
-                            egui::Button::selectable(selected, format!("{label}  ›")).frame(false),
-                        );
-                        if let Some(qa_search_id) = qa_search_id {
-                            crate::qa::register_component_with_metadata(
-                                format!("{qa_search_id}.category:{}", path.join("/")),
-                                "searchable_menu_category",
-                                response.rect,
-                                response.enabled(),
-                                Some(serde_json::json!({
-                                    "action": "enter_category",
-                                    "category_path": path,
-                                })),
-                            );
-                        }
-                        response
-                    }
-                    MenuRow::Item { index } => {
-                        let Some(item) = items.get(*index) else {
-                            continue;
-                        };
-                        let response = ui.add_enabled(
-                            item.enabled,
-                            egui::Button::selectable(selected, &item.label).frame(false),
-                        );
-                        if let Some(qa_id) = &item.qa_id {
-                            let mut metadata = item.qa_metadata.clone().unwrap_or_else(|| {
-                                serde_json::json!({
-                                    "label": item.label,
-                                    "category": item.category,
-                                })
-                            });
-                            if let Some(object) = metadata.as_object_mut() {
-                                object
-                                    .entry("label")
-                                    .or_insert_with(|| serde_json::json!(item.label));
-                                object
-                                    .entry("category")
-                                    .or_insert_with(|| serde_json::json!(item.category));
-                            }
-                            crate::qa::register_component_with_metadata(
-                                qa_id,
-                                "searchable_menu_item",
-                                response.rect,
-                                response.enabled(),
-                                Some(metadata),
-                            );
-                        }
-                        response
-                    }
-                };
-                if response.clicked() {
-                    clicked_activation = Some(selection.clone());
-                }
-                if scroll_to.as_ref() == Some(&selection) {
-                    response.scroll_to_me(Some(egui::Align::Center));
                 }
             }
         });
 
-    let activation = clicked_activation.or(keyboard_activation);
-    let selection = match activation {
-        Some(MenuSelection::Item(index)) => items
+    let selection = clicked_selection.or(keyboard_selection).and_then(|index| {
+        items
             .get(index)
             .filter(|item| item.enabled)
-            .map(|item| item.value.clone()),
-        Some(selection @ (MenuSelection::Category(_) | MenuSelection::Back)) if browse_mode => {
-            enter_browse_selection(&mut state, selection);
-            None
-        }
-        Some(MenuSelection::Category(_) | MenuSelection::Back) | None => None,
-    };
+            .map(|item| item.value.clone())
+    });
 
     if selection.is_some() {
         state = MenuState::default();
@@ -452,32 +352,19 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     selection
 }
 
-fn enter_browse_selection(state: &mut MenuState, selection: MenuSelection) {
-    match selection {
-        MenuSelection::Category(path) => state.browse_path = path,
-        MenuSelection::Back => {
-            state.browse_path.pop();
-        }
-        MenuSelection::Item(_) => return,
+impl CategoryNode {
+    fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.children.is_empty()
     }
-    state.set_selection(None, false);
 }
 
-fn menu_rows<T>(
-    items: &[SearchableItem<T>],
-    filtered: &[usize],
-    query: &str,
-    browse_path: &[String],
-) -> Vec<MenuRow> {
-    if !query.trim().is_empty() {
-        return filtered
-            .iter()
-            .copied()
-            .map(|index| MenuRow::Item { index })
-            .collect();
+fn menu_contents<T>(items: &[SearchableItem<T>], query: &str) -> MenuContents {
+    let filtered = filter_searchable_items(items, query);
+    if query.trim().is_empty() {
+        MenuContents::Categories(category_tree(items, &filtered))
+    } else {
+        MenuContents::FlatSearch(filtered)
     }
-
-    browse_rows(items, filtered, browse_path)
 }
 
 fn category_tree<T>(items: &[SearchableItem<T>], filtered: &[usize]) -> CategoryNode {
@@ -510,116 +397,93 @@ fn normalized_category_path(category: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn category_node_at_path<'a>(root: &'a CategoryNode, path: &[String]) -> Option<&'a CategoryNode> {
-    let mut node = root;
-    for segment in path {
-        node = node.children.get(segment)?;
-    }
-    Some(node)
-}
-
-fn category_path_exists<T>(
-    items: &[SearchableItem<T>],
-    filtered: &[usize],
+fn render_category_node<T>(
+    ui: &mut Ui,
+    node: &CategoryNode,
     path: &[String],
-) -> bool {
-    let root = category_tree(items, filtered);
-    category_node_at_path(&root, path).is_some()
-}
-
-fn browse_rows<T>(
     items: &[SearchableItem<T>],
-    filtered: &[usize],
-    browse_path: &[String],
-) -> Vec<MenuRow> {
-    let root = category_tree(items, filtered);
-    let Some(node) = category_node_at_path(&root, browse_path) else {
-        return Vec::new();
-    };
-    let mut rows = Vec::new();
-    if !browse_path.is_empty() {
-        rows.push(MenuRow::Back {
-            label: browse_path
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "Back".to_owned()),
+    qa_search_id: Option<&str>,
+    clicked_selection: &mut Option<usize>,
+) {
+    for (label, child) in &node.children {
+        let mut child_path = path.to_vec();
+        child_path.push(label.clone());
+        let menu = ui.menu_button(label, |ui| {
+            render_category_node(
+                ui,
+                child,
+                &child_path,
+                items,
+                qa_search_id,
+                clicked_selection,
+            );
         });
-    }
-    rows.extend(node.children.keys().map(|label| {
-        let mut path = browse_path.to_vec();
-        path.push(label.clone());
-        MenuRow::Category {
-            label: label.clone(),
-            path,
+        if let Some(qa_search_id) = qa_search_id {
+            crate::qa::register_component_with_metadata(
+                format!("{qa_search_id}.category:{}", child_path.join("/")),
+                "searchable_menu_category",
+                menu.response.rect,
+                menu.response.enabled(),
+                Some(serde_json::json!({
+                    "action": "enter_category",
+                    "category_path": child_path,
+                })),
+            );
         }
-    }));
-    rows.extend(
-        node.items
-            .iter()
-            .copied()
-            .map(|index| MenuRow::Item { index }),
-    );
-    rows
-}
+    }
+    if !node.children.is_empty() && !node.items.is_empty() {
+        ui.separator();
+    }
 
-fn row_is_enabled<T>(row: &MenuRow, items: &[SearchableItem<T>]) -> bool {
-    match row {
-        MenuRow::Back { .. } | MenuRow::Category { .. } => true,
-        MenuRow::Item { index } => items.get(*index).is_some_and(|item| item.enabled),
+    for index in node.items.iter().copied() {
+        if render_item_button(ui, index, items, false, false) {
+            *clicked_selection = Some(index);
+            ui.close_kind(egui::UiKind::Menu);
+        }
     }
 }
 
-fn navigate_menu_rows<T>(
+fn render_item_button<T>(
+    ui: &mut Ui,
+    index: usize,
     items: &[SearchableItem<T>],
-    rows: &[MenuRow],
-    selected: Option<&MenuSelection>,
-    navigation: SearchNavigation,
-) -> Option<MenuSelection> {
-    if rows.iter().all(|row| matches!(row, MenuRow::Item { .. })) {
-        let visible_indices = rows
-            .iter()
-            .filter_map(|row| match row {
-                MenuRow::Item { index } => Some(*index),
-                MenuRow::Back { .. } | MenuRow::Category { .. } => None,
+    selected: bool,
+    scroll_to: bool,
+) -> bool {
+    let Some(item) = items.get(index) else {
+        return false;
+    };
+    let response = ui.add_enabled(
+        item.enabled,
+        egui::Button::selectable(selected, &item.label).frame(false),
+    );
+    if let Some(qa_id) = &item.qa_id {
+        let mut metadata = item.qa_metadata.clone().unwrap_or_else(|| {
+            serde_json::json!({
+                "label": item.label,
+                "category": item.category,
             })
-            .collect::<Vec<_>>();
-        let selected_item = match selected {
-            Some(MenuSelection::Item(index)) => Some(*index),
-            Some(MenuSelection::Back | MenuSelection::Category(_)) | None => None,
-        };
-        return navigate_searchable_items(items, &visible_indices, selected_item, navigation)
-            .map(MenuSelection::Item);
+        });
+        if let Some(object) = metadata.as_object_mut() {
+            object
+                .entry("label")
+                .or_insert_with(|| serde_json::json!(item.label));
+            object
+                .entry("category")
+                .or_insert_with(|| serde_json::json!(item.category));
+        }
+        crate::qa::register_component_with_metadata(
+            qa_id,
+            "searchable_menu_item",
+            response.rect,
+            response.enabled(),
+            Some(metadata),
+        );
     }
-
-    let selectable = rows
-        .iter()
-        .filter(|row| row_is_enabled(row, items))
-        .map(MenuRow::selection)
-        .collect::<Vec<_>>();
-    let first = selectable.first()?.clone();
-    let last = selectable.last()?.clone();
-    let current = selected.and_then(|selected| {
-        selectable
-            .iter()
-            .position(|candidate| candidate == selected)
-    });
-
-    match navigation {
-        SearchNavigation::First => Some(first),
-        SearchNavigation::Last => Some(last),
-        SearchNavigation::Next => current.map_or(Some(first), |index| {
-            selectable
-                .get(index.saturating_add(1))
-                .cloned()
-                .or(Some(last))
-        }),
-        SearchNavigation::Previous => current.map_or(Some(last), |index| {
-            index
-                .checked_sub(1)
-                .and_then(|index| selectable.get(index).cloned())
-                .or(Some(first))
-        }),
+    if scroll_to {
+        response.scroll_to_me(Some(egui::Align::Center));
     }
+    response.clicked()
 }
 
 #[cfg(test)]
@@ -685,77 +549,39 @@ mod tests {
     }
 
     #[test]
-    fn browse_mode_is_a_sorted_navigable_hierarchy_and_hides_descendants() {
+    fn empty_query_builds_sorted_recursive_category_submenus() {
         let items = fixture();
-        let filtered = filter_searchable_items(&items, "");
-        assert_eq!(
-            menu_rows(&items, &filtered, "", &[]),
-            vec![
-                MenuRow::Category {
-                    label: "Compositing".to_owned(),
-                    path: vec!["Compositing".to_owned()],
-                },
-                MenuRow::Category {
-                    label: "Effect".to_owned(),
-                    path: vec!["Effect".to_owned()],
-                },
-                MenuRow::Item { index: 3 },
-            ]
-        );
+        let MenuContents::Categories(root) = menu_contents(&items, "") else {
+            panic!("an empty query must browse native category submenus")
+        };
 
-        let effect_path = vec!["Effect".to_owned()];
-        let mut state = MenuState::default();
-        enter_browse_selection(&mut state, MenuSelection::Category(effect_path.clone()));
-        assert_eq!(state.browse_path, effect_path);
+        assert_eq!(root.items, vec![3]);
         assert_eq!(
-            menu_rows(&items, &filtered, "", &state.browse_path),
-            vec![
-                MenuRow::Back {
-                    label: "Effect".to_owned(),
-                },
-                MenuRow::Category {
-                    label: "Image".to_owned(),
-                    path: vec!["Effect".to_owned(), "Image".to_owned()],
-                },
-            ]
+            root.children.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["Compositing", "Effect"]
         );
-
-        let image_path = vec!["Effect".to_owned(), "Image".to_owned()];
-        enter_browse_selection(&mut state, MenuSelection::Category(image_path.clone()));
-        assert_eq!(state.browse_path, image_path);
         assert_eq!(
-            menu_rows(&items, &filtered, "", &state.browse_path),
-            vec![
-                MenuRow::Back {
-                    label: "Image".to_owned(),
-                },
-                MenuRow::Item { index: 0 },
-                MenuRow::Item { index: 2 },
-            ]
+            root.children["Compositing"].children["Merge"].items,
+            vec![1]
         );
+        assert_eq!(root.children["Effect"].children["Image"].items, vec![0, 2]);
 
-        enter_browse_selection(&mut state, MenuSelection::Back);
-        assert_eq!(state.browse_path, effect_path);
+        assert_eq!(
+            menu_contents(&items, "  \t"),
+            MenuContents::Categories(root)
+        );
     }
 
     #[test]
     fn non_empty_query_flattens_matches_in_catalog_order() {
         let items = fixture();
-        let filtered = filter_searchable_items(&items, "e");
-        assert_eq!(filtered, vec![0, 1, 2, 3]);
         assert_eq!(
-            menu_rows(
-                &items,
-                &filtered,
-                "e",
-                &["Effect".to_owned(), "Image".to_owned()],
-            ),
-            vec![
-                MenuRow::Item { index: 0 },
-                MenuRow::Item { index: 1 },
-                MenuRow::Item { index: 2 },
-                MenuRow::Item { index: 3 },
-            ]
+            menu_contents(&items, "e"),
+            MenuContents::FlatSearch(vec![0, 1, 2, 3])
+        );
+        assert_eq!(
+            menu_contents(&items, "defocus"),
+            MenuContents::FlatSearch(vec![0])
         );
     }
 
@@ -798,18 +624,18 @@ mod tests {
     #[test]
     fn scroll_request_is_only_emitted_once_for_an_actual_selection_change() {
         let mut state = MenuState {
-            selected: Some(MenuSelection::Item(0)),
+            selected_item: Some(0),
             ..MenuState::default()
         };
 
-        state.set_selection(Some(MenuSelection::Item(1)), true);
-        assert_eq!(state.take_scroll_request(), Some(MenuSelection::Item(1)));
+        state.set_selection(Some(1), true);
+        assert_eq!(state.take_scroll_request(), Some(1));
         assert_eq!(state.take_scroll_request(), None);
 
-        state.set_selection(Some(MenuSelection::Item(1)), true);
+        state.set_selection(Some(1), true);
         assert_eq!(state.take_scroll_request(), None);
 
-        state.set_selection(Some(MenuSelection::Item(0)), false);
+        state.set_selection(Some(0), false);
         assert_eq!(state.take_scroll_request(), None);
     }
 

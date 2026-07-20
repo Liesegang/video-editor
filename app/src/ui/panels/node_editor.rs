@@ -424,6 +424,7 @@ fn handle_context_menu(
 
         if ui.input(|input| input.pointer.any_click())
             && ui.input(|input| input.time) - context.open_time > 0.2
+            && !ui.ctx().is_popup_open()
         {
             if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
                 if !response.response.rect.contains(pointer) {

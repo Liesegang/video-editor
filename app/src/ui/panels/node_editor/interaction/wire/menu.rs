@@ -307,6 +307,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
 
     if ui.input(|input| input.pointer.any_click())
         && ui.input(|input| input.time) - context.open_time > 0.2
+        && !ui.ctx().is_popup_open()
         && ui
             .input(|input| input.pointer.interact_pos())
             .is_some_and(|pointer| !response.response.rect.contains(pointer))
