@@ -7,7 +7,7 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
-use library::model::project::Project;
+use library::model::project::{NodeContainer, Project};
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
 use std::sync::{Arc, RwLock};
@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use crate::action::HistoryManager;
 use crate::command::CommandRegistry;
 use crate::state::context::EditorContext;
+use crate::state::context_types::SelectionTarget;
 
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
@@ -84,31 +85,24 @@ pub fn graph_editor_panel(
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
-    let (comp_id, selected_entity_id) = match (
-        editor_context.selection.composition_id,
-        editor_context.selection.last_selected_entity_id,
-    ) {
-        (Some(c), Some(e)) => (c, e),
-        _ => {
-            ui.label("No entity selected.");
-            return;
-        }
+    let Some(comp_id) = editor_context.active_composition_id else {
+        ui.label("No composition selected.");
+        return;
+    };
+    let Some(selected_node_id) = graph_node_selection(editor_context.selection.primary()) else {
+        ui.label("Select a Node to edit its keyframes.");
+        return;
     };
 
     let (entity_id, track_id) = {
         let Ok(project) = project.read() else {
             return;
         };
-        if project.get_node(selected_entity_id).is_none() {
+        let Some(track_id) = selected_node_track(&project, selected_node_id, comp_id) else {
             ui.label("Select a Node to edit its keyframes.");
             return;
-        }
-        let node_id = selected_entity_id;
-        let track_id = project
-            .find_parent_track(node_id)
-            .or(editor_context.selection.last_selected_track_id)
-            .unwrap_or_else(uuid::Uuid::nil);
-        (node_id, track_id)
+        };
+        (selected_node_id, track_id)
     };
     if editor_context.graph_editor.active_entity_id != Some(entity_id) {
         actions::finish_pending_move(editor_context, project, history_manager);
@@ -365,6 +359,50 @@ pub fn graph_editor_panel(
             project,
             editor_context,
             history_manager,
+        );
+    }
+}
+
+fn graph_node_selection(target: Option<SelectionTarget>) -> Option<uuid::Uuid> {
+    target.and_then(SelectionTarget::node_id)
+}
+
+fn selected_node_track(
+    project: &Project,
+    node_id: uuid::Uuid,
+    comp_id: uuid::Uuid,
+) -> Option<uuid::Uuid> {
+    project.get_node(node_id)?;
+    match project.find_node_container(node_id)? {
+        NodeContainer::Composition(id) if id == comp_id => Some(uuid::Uuid::nil()),
+        NodeContainer::Track(track_id)
+            if project.find_composition_for_track(track_id) == Some(comp_id) =>
+        {
+            Some(track_id)
+        }
+        NodeContainer::Clip(clip_id) => project
+            .find_track_for_clip(clip_id)
+            .filter(|track_id| project.find_composition_for_track(*track_id) == Some(comp_id)),
+        NodeContainer::Composition(_) | NodeContainer::Track(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{graph_node_selection, SelectionTarget};
+    use uuid::Uuid;
+
+    #[test]
+    fn same_uuid_clip_target_is_not_accepted_as_graph_node() {
+        let shared_id = Uuid::new_v4();
+
+        assert_eq!(
+            graph_node_selection(Some(SelectionTarget::Node(shared_id))),
+            Some(shared_id)
+        );
+        assert_eq!(
+            graph_node_selection(Some(SelectionTarget::Clip(shared_id))),
+            None
         );
     }
 }

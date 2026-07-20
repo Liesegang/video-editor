@@ -10,7 +10,10 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::{
+    action::HistoryManager,
+    state::{context::EditorContext, context_types::SelectionTarget},
+};
 
 use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
 
@@ -461,17 +464,12 @@ fn apply_timing_update_result(
 
 fn apply_move_clip_result(
     clip_id: Uuid,
-    target_track_id: Uuid,
     result: Result<(), library::LibraryError>,
-    editor_context: &mut EditorContext,
     commit: &mut ClipMutationCommit,
 ) {
     match result {
         Ok(()) => {
             commit.persistent_change = true;
-            if editor_context.selection.last_selected_entity_id == Some(clip_id) {
-                editor_context.selection.last_selected_track_id = Some(target_track_id);
-            }
         }
         Err(error) => log::error!("Failed to move timeline Clip {clip_id}: {error}"),
     }
@@ -545,7 +543,10 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
         // Calculate Reorder State if dragging
         let mut reorder_state = None;
         if let (Some(dragged_id), Some(hovered_tid)) = (
-            editor_context.selection.last_selected_entity_id,
+            editor_context
+                .selection
+                .primary()
+                .and_then(SelectionTarget::clip_id),
             editor_context.interaction.dragged_entity_hovered_track_id,
         ) {
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
@@ -723,7 +724,6 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
                 target_index,
             } => apply_move_clip_result(
                 clip_id,
-                target_track_id,
                 project_service.move_clip_to_track_at_index(
                     composition_id,
                     source_track_id,
@@ -732,7 +732,6 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
                     new_start_time,
                     target_index,
                 ),
-                editor_context,
                 &mut commit,
             ),
 
@@ -752,11 +751,7 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
 
     // Update selection for removed clips
     for clip_id in &removed_clip_ids {
-        editor_context.selection.selected_entities.remove(clip_id);
-        if editor_context.selection.last_selected_entity_id == Some(*clip_id) {
-            editor_context.selection.last_selected_entity_id = None;
-            editor_context.selection.last_selected_track_id = None;
-        }
+        editor_context.remove_selection(SelectionTarget::Clip(*clip_id));
     }
 
     if commit.timing_update_failed {
@@ -903,15 +898,13 @@ fn draw_single_clip(
                 "timeline_menu_item",
                 response.rect,
             );
-            if response.clicked() {
-                if let Some(_comp_id) = editor_context.selection.composition_id {
-                    deferred_actions.push(DeferredClipAction::RemoveClip {
-                        track_id: track.id,
-                        clip_id: clip.id,
-                    });
-                    ui.ctx().request_repaint();
-                    ui.close();
-                }
+            if response.clicked() && editor_context.active_composition_id.is_some() {
+                deferred_actions.push(DeferredClipAction::RemoveClip {
+                    track_id: track.id,
+                    clip_id: clip.id,
+                });
+                ui.ctx().request_repaint();
+                ui.close();
             }
         });
     }
@@ -963,12 +956,12 @@ fn draw_single_clip(
     if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
         if left.drag_started() || right.drag_started() {
             begin_resize_gesture(editor_context);
-            editor_context.select_clip(clip.id, track.id);
+            editor_context.select_target(SelectionTarget::Clip(clip.id));
         }
     }
 
     if editor_context.interaction.is_resizing_entity
-        && editor_context.selection.last_selected_entity_id == Some(clip.id)
+        && editor_context.selection.primary() == Some(SelectionTarget::Clip(clip.id))
         && !is_summary_clip
     {
         if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
@@ -1001,22 +994,18 @@ fn draw_single_clip(
                 }
             }
 
-            if new_start_time != clip.start_time.into_inner()
+            if (new_start_time != clip.start_time.into_inner()
                 || new_duration != clip.duration.into_inner()
-                || new_trim_in != clip.trim_in.into_inner()
+                || new_trim_in != clip.trim_in.into_inner())
+                && editor_context.active_composition_id.is_some()
             {
-                if let (Some(_comp_id), Some(_tid)) = (
-                    editor_context.selection.composition_id,
-                    editor_context.selection.last_selected_track_id,
-                ) {
-                    deferred_actions.push(DeferredClipAction::UpdateClipTiming {
-                        clip_id: clip.id,
-                        new_start_time,
-                        new_duration,
-                        new_trim_in,
-                    });
-                    mark_resize_timing_changed(editor_context);
-                }
+                deferred_actions.push(DeferredClipAction::UpdateClipTiming {
+                    clip_id: clip.id,
+                    new_start_time,
+                    new_duration,
+                    new_trim_in,
+                });
+                mark_resize_timing_changed(editor_context);
             }
         }
     }
@@ -1037,8 +1026,8 @@ fn draw_single_clip(
             .is_some_and(|response| response.dragged());
 
     if clip_resp.drag_started() && !edge_is_dragging && !is_summary_clip {
-        if !editor_context.is_selected(clip.id) {
-            editor_context.select_clip(clip.id, track.id);
+        if !editor_context.is_selected(SelectionTarget::Clip(clip.id)) {
+            editor_context.select_target(SelectionTarget::Clip(clip.id));
         }
         editor_context.interaction.is_moving_selected_entity = true;
         editor_context.interaction.dragged_entity_original_track_id = Some(track.id);
@@ -1047,7 +1036,7 @@ fn draw_single_clip(
     }
 
     if editor_context.interaction.is_moving_selected_entity
-        && editor_context.selection.last_selected_entity_id == Some(clip.id)
+        && editor_context.selection.primary() == Some(SelectionTarget::Clip(clip.id))
         && clip_resp.dragged()
         && !edge_is_dragging
     {
@@ -1077,7 +1066,7 @@ fn draw_single_clip(
 
     if clip_resp.drag_stopped()
         && editor_context.interaction.is_moving_selected_entity
-        && editor_context.selection.last_selected_entity_id == Some(clip.id)
+        && editor_context.selection.primary() == Some(SelectionTarget::Clip(clip.id))
         && !edge_is_dragging
         && !is_summary_clip
     {
@@ -1115,7 +1104,7 @@ fn draw_single_clip(
             )
         });
 
-        if let Some(composition_id) = editor_context.selection.composition_id {
+        if let Some(composition_id) = editor_context.active_composition_id {
             deferred_actions.push(DeferredClipAction::MoveClip {
                 composition_id,
                 source_track_id,
@@ -1135,7 +1124,10 @@ fn draw_single_clip(
     let mut display_x = initial_clip_rect.min.x;
     let display_y = initial_clip_rect.min.y;
 
-    if editor_context.is_selected(clip.id) && clip_resp.dragged() && !is_summary_clip {
+    if editor_context.is_selected(SelectionTarget::Clip(clip.id))
+        && clip_resp.dragged()
+        && !is_summary_clip
+    {
         display_x += clip_resp.drag_delta().x;
     }
 
@@ -1145,7 +1137,7 @@ fn draw_single_clip(
     );
 
     // --- Drawing ---
-    let is_sel_entity = editor_context.is_selected(clip.id);
+    let is_sel_entity = editor_context.is_selected(SelectionTarget::Clip(clip.id));
     let mut transparent_color =
         egui::Color32::from_rgba_premultiplied(clip_color.r(), clip_color.g(), clip_color.b(), 150);
 
@@ -1243,16 +1235,20 @@ fn draw_single_clip(
 
         match action {
             crate::ui::selection::ClickAction::Select(id) => {
-                editor_context.select_clip(id, track.id);
+                editor_context.select_target(SelectionTarget::Clip(id));
             }
-            crate::ui::selection::ClickAction::Add(id) if !editor_context.is_selected(id) => {
-                editor_context.toggle_selection(id, track.id);
+            crate::ui::selection::ClickAction::Add(id)
+                if !editor_context.is_selected(SelectionTarget::Clip(id)) =>
+            {
+                editor_context.toggle_selection(SelectionTarget::Clip(id));
             }
-            crate::ui::selection::ClickAction::Remove(id) if editor_context.is_selected(id) => {
-                editor_context.toggle_selection(id, track.id);
+            crate::ui::selection::ClickAction::Remove(id)
+                if editor_context.is_selected(SelectionTarget::Clip(id)) =>
+            {
+                editor_context.toggle_selection(SelectionTarget::Clip(id));
             }
             crate::ui::selection::ClickAction::Toggle(id) => {
-                editor_context.toggle_selection(id, track.id);
+                editor_context.toggle_selection(SelectionTarget::Clip(id));
             }
             _ => {}
         }
@@ -1726,51 +1722,32 @@ mod tests {
     }
 
     #[test]
-    fn successful_cross_track_move_updates_selection_owner_but_failure_does_not() {
+    fn clip_move_result_preserves_typed_clip_selection() {
         let composition_id = Uuid::new_v4();
-        let source_track_id = Uuid::new_v4();
-        let target_track_id = Uuid::new_v4();
         let clip_id = Uuid::new_v4();
         let mut editor_context = EditorContext::new(composition_id);
-        editor_context.select_clip(clip_id, source_track_id);
+        editor_context.select_target(SelectionTarget::Clip(clip_id));
         let mut commit = ClipMutationCommit::default();
 
-        apply_move_clip_result(
-            clip_id,
-            target_track_id,
-            Ok(()),
-            &mut editor_context,
-            &mut commit,
-        );
+        apply_move_clip_result(clip_id, Ok(()), &mut commit);
 
         assert!(commit.persistent_change);
         assert_eq!(
-            editor_context.selection.last_selected_track_id,
-            Some(target_track_id)
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Clip(clip_id))
         );
-        assert_eq!(
-            editor_context.selection.last_selected_entity_id,
-            Some(clip_id)
-        );
-        assert!(editor_context
-            .selection
-            .selected_entities
-            .contains(&clip_id));
 
-        editor_context.select_clip(clip_id, source_track_id);
         let mut failed_commit = ClipMutationCommit::default();
         apply_move_clip_result(
             clip_id,
-            target_track_id,
             Err(library::LibraryError::Project("rejected move".to_string())),
-            &mut editor_context,
             &mut failed_commit,
         );
 
         assert!(!failed_commit.persistent_change);
         assert_eq!(
-            editor_context.selection.last_selected_track_id,
-            Some(source_track_id)
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Clip(clip_id))
         );
     }
 

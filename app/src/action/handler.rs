@@ -10,6 +10,7 @@ use crate::action::HistoryManager;
 use crate::command::CommandId;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
+use crate::state::context_types::SelectionTarget;
 use crate::utils::lock::read_or_recover;
 
 pub struct ActionContext<'a> {
@@ -65,10 +66,9 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
     match action {
         CommandId::NewProject => match context.project_service.create_new_project() {
             Ok(new_comp_id) => {
-                context.editor_context.selection.composition_id = Some(new_comp_id);
-                context.editor_context.selection.last_selected_track_id = None;
-                context.editor_context.selection.last_selected_entity_id = None;
-                context.editor_context.selection.selected_entities.clear();
+                context
+                    .editor_context
+                    .activate_composition(Some(new_comp_id));
                 context.editor_context.timeline.current_time = 0.0;
 
                 context.history_manager.clear();
@@ -189,29 +189,70 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
             }
         }
         CommandId::Delete => {
-            if let Some(_comp_id) = context.editor_context.selection.composition_id {
-                if let Some(track_id) = context.editor_context.selection.last_selected_track_id {
-                    if let Some(entity_id) =
-                        context.editor_context.selection.last_selected_entity_id
-                    {
-                        if let Err(e) = context
+            let Some(target) = context.editor_context.selection.primary() else {
+                return;
+            };
+            let removed = match target {
+                SelectionTarget::Clip(clip_id) => {
+                    let project = context.project_service.get_project();
+                    let track_id = project
+                        .read()
+                        .ok()
+                        .and_then(|project| project.find_track_for_clip(clip_id));
+                    track_id.is_some_and(|track_id| {
+                        context
                             .project_service
-                            .remove_clip_from_track(track_id, entity_id)
-                        {
-                            error!("Failed to remove entity: {:?}", e);
-                        } else {
-                            context
-                                .editor_context
-                                .selection
-                                .selected_entities
-                                .remove(&entity_id);
-                            context.editor_context.selection.last_selected_entity_id = None;
-                            let project = context.project_service.get_project();
-                            let current_state = read_or_recover(project.as_ref()).clone();
-                            context.history_manager.push_project_state(current_state);
-                        }
-                    }
+                            .remove_clip_from_track(track_id, clip_id)
+                            .inspect_err(|error| {
+                                error!("Failed to remove Clip {clip_id}: {error:?}");
+                            })
+                            .is_ok()
+                    })
                 }
+                SelectionTarget::Node(node_id) => {
+                    let project = context.project_service.get_project();
+                    project.write().is_ok_and(|mut project| {
+                        let removed = project.remove_node(node_id).is_some();
+                        if !removed {
+                            error!("Failed to remove Node {node_id}: Node was not found");
+                        }
+                        removed
+                    })
+                }
+                SelectionTarget::Track(track_id) => {
+                    let project = context.project_service.get_project();
+                    let composition_id = project
+                        .read()
+                        .ok()
+                        .and_then(|project| project.find_composition_for_track(track_id));
+                    composition_id.is_some_and(|composition_id| {
+                        context
+                            .project_service
+                            .remove_track(composition_id, track_id)
+                            .inspect_err(|error| {
+                                error!("Failed to remove Track {track_id}: {error:?}");
+                            })
+                            .is_ok()
+                    })
+                }
+                SelectionTarget::Composition(composition_id) => {
+                    let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
+                    dialog.open(
+                        "Delete Composition",
+                        "Are you sure you want to delete this composition?",
+                        crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(
+                            composition_id,
+                        ),
+                    );
+                    context.editor_context.interaction.active_confirmation = Some(dialog);
+                    false
+                }
+            };
+            if removed {
+                context.editor_context.remove_selection(target);
+                let project = context.project_service.get_project();
+                let current_state = read_or_recover(project.as_ref()).clone();
+                context.history_manager.push_project_state(current_state);
             }
         }
         _ => {}
@@ -254,5 +295,104 @@ fn handle_view_command(action: CommandId, context: ActionContext) {
             // Handled by ViewportController logic elsewhere usually
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{handle_edit_command, ActionContext};
+    use crate::action::HistoryManager;
+    use crate::command::CommandId;
+    use crate::state::context::EditorContext;
+    use crate::state::context_types::SelectionTarget;
+    use crate::ui::tab_viewer::create_initial_dock_state;
+    use library::cache::CacheManager;
+    use library::model::project::{NodeContainer, Project};
+    use library::model::{Clip, Composition, Node};
+    use library::plugin::PluginManager;
+    use library::EditorService;
+    use std::sync::{Arc, RwLock};
+    use uuid::Uuid;
+
+    #[test]
+    fn delete_dispatches_same_uuid_node_and_clip_by_target_kind(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let shared_id = Uuid::new_v4();
+        let mut project_model = Project::new("typed delete");
+        let (composition, track) = Composition::new("main", 320, 180, 30.0, 2.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let mut clip = Clip::new("same UUID Clip", 0.0, 1.0);
+        clip.id = shared_id;
+        let mut node = Node::new_merge("same UUID Node");
+        node.id = shared_id;
+        project_model.add_track(track);
+        project_model.add_composition(composition);
+        project_model.add_clip(clip);
+        project_model.add_node(node);
+        project_model.attach_clip_to_track(track_id, shared_id)?;
+        project_model
+            .attach_node_to_container(NodeContainer::Composition(composition_id), shared_id)?;
+
+        let project = Arc::new(RwLock::new(project_model));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )?;
+        let mut editor_context = EditorContext::new(composition_id);
+        let mut history = HistoryManager::new();
+        history.push_project_state(
+            project
+                .read()
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+                .clone(),
+        );
+        let mut dock_state = create_initial_dock_state();
+
+        editor_context.select_target(SelectionTarget::Node(shared_id));
+        handle_edit_command(
+            CommandId::Delete,
+            ActionContext {
+                editor_context: &mut editor_context,
+                project_service: &mut service,
+                history_manager: &mut history,
+                dock_state: &mut dock_state,
+            },
+        );
+        {
+            let project = project
+                .read()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            assert!(project.get_node(shared_id).is_none());
+            assert!(project.get_clip(shared_id).is_some());
+        }
+
+        {
+            let mut project = project
+                .write()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let mut node = Node::new_merge("restored same UUID Node");
+            node.id = shared_id;
+            project.add_node(node);
+            project
+                .attach_node_to_container(NodeContainer::Composition(composition_id), shared_id)?;
+        }
+        editor_context.select_target(SelectionTarget::Clip(shared_id));
+        handle_edit_command(
+            CommandId::Delete,
+            ActionContext {
+                editor_context: &mut editor_context,
+                project_service: &mut service,
+                history_manager: &mut history,
+                dock_state: &mut dock_state,
+            },
+        );
+        let project = project
+            .read()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        assert!(project.get_clip(shared_id).is_none());
+        assert!(project.get_node(shared_id).is_some());
+        Ok(())
     }
 }

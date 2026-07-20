@@ -1,5 +1,6 @@
 use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
+use crate::state::context_types::SelectionTarget;
 use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::property::{PropertyValue, Vec2 as PropVec2};
@@ -14,6 +15,10 @@ pub fn handle_gizmo_interaction(
     to_world: impl Fn(Pos2) -> Pos2,
     pending_actions: &mut Vec<PreviewAction>,
 ) -> bool {
+    let Some(SelectionTarget::Node(selected_id)) = editor_context.selection.primary() else {
+        editor_context.interaction.gizmo_state = None;
+        return false;
+    };
     let Some(state) = editor_context.interaction.gizmo_state.as_ref() else {
         return false;
     };
@@ -52,9 +57,6 @@ pub fn handle_gizmo_interaction(
     }
 
     let Some(mouse_pos) = pointer_pos else {
-        return true;
-    };
-    let Some(selected_id) = editor_context.selection.last_selected_entity_id else {
         return true;
     };
     let Some(visual) = crate::ui::panels::preview::clip::visual_for_selection(
@@ -180,12 +182,16 @@ pub fn draw_gizmo(
     to_screen: impl Fn(Pos2) -> Pos2,
     interaction_enabled: bool,
 ) {
-    for selected_id in &editor_context.selection.selected_entities {
-        if Some(*selected_id) == editor_context.selection.last_selected_entity_id {
+    let primary = editor_context.selection.primary();
+    for target in editor_context.selection.targets() {
+        let SelectionTarget::Node(selected_id) = *target else {
+            continue;
+        };
+        if Some(*target) == primary {
             continue;
         }
         if let Some(visual) =
-            crate::ui::panels::preview::clip::visual_for_selection(gui_clips, *selected_id, None)
+            crate::ui::panels::preview::clip::visual_for_selection(gui_clips, selected_id, None)
         {
             let _ = draw_clip_box(
                 ui,
@@ -197,7 +203,7 @@ pub fn draw_gizmo(
         }
     }
 
-    let Some(selected_id) = editor_context.selection.last_selected_entity_id else {
+    let Some(SelectionTarget::Node(selected_id)) = primary else {
         return;
     };
     let Some(visual) = crate::ui::panels::preview::clip::visual_for_selection(
@@ -348,5 +354,75 @@ fn handle_sign(handle: GizmoHandle) -> (f32, f32) {
         GizmoHandle::Bottom => (0.0, 1.0),
         GizmoHandle::BottomRight => (1.0, 1.0),
         GizmoHandle::Rotation => (0.0, 0.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{handle_gizmo_interaction, PreviewClip};
+    use crate::model::ui_types::GizmoHandle;
+    use crate::state::context::EditorContext;
+    use crate::state::context_types::{GizmoState, SelectionTarget};
+    use library::model::frame::transform::Transform;
+    use library::model::Node;
+    use library::rendering::renderer::Affine2D;
+    use uuid::Uuid;
+
+    #[test]
+    fn clip_target_with_same_uuid_cannot_drive_node_gizmo() {
+        let shared_id = Uuid::new_v4();
+        let mut node = Node::new_merge("same UUID visual");
+        node.id = shared_id;
+        let visual = PreviewClip {
+            node,
+            source_transform: Transform::default(),
+            transform: Transform::default(),
+            parent_transform: Affine2D::IDENTITY,
+            world_transform: Affine2D::IDENTITY,
+            content_bounds: Some((0.0, 0.0, 100.0, 100.0)),
+            instance_path: vec![shared_id],
+        };
+        let mut editor_context = EditorContext::new(Uuid::new_v4());
+        editor_context.select_target(SelectionTarget::Clip(shared_id));
+        editor_context.interaction.gizmo_state = Some(GizmoState {
+            start_mouse_pos: egui::pos2(10.0, 10.0),
+            active_handle: GizmoHandle::Right,
+            original_position: [0.0, 0.0],
+            original_scale_x: 100.0,
+            original_scale_y: 100.0,
+            original_rotation: 0.0,
+            original_visual_position: [0.0, 0.0],
+            original_visual_scale_x: 100.0,
+            original_visual_scale_y: 100.0,
+            original_visual_rotation: 0.0,
+            original_anchor_x: 0.0,
+            original_anchor_y: 0.0,
+            original_width: 100.0,
+            original_height: 100.0,
+        });
+
+        let context = egui::Context::default();
+        let mut pending_actions = Vec::new();
+        let mut handled = true;
+        let _ = context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                handled = handle_gizmo_interaction(
+                    ui,
+                    &mut editor_context,
+                    std::slice::from_ref(&visual),
+                    Some(egui::pos2(20.0, 10.0)),
+                    |position| position,
+                    &mut pending_actions,
+                );
+            });
+        });
+
+        assert!(!handled);
+        assert!(pending_actions.is_empty());
+        assert!(editor_context.interaction.gizmo_state.is_none());
+        assert_eq!(
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Clip(shared_id))
+        );
     }
 }

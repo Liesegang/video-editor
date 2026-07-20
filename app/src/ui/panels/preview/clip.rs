@@ -1,4 +1,4 @@
-use library::model::frame::entity::{FrameGroupKind, FrameItem};
+use library::model::frame::entity::FrameItem;
 use library::model::frame::frame::FrameInfo;
 use library::model::frame::transform::Transform;
 use library::model::project::Project;
@@ -14,7 +14,6 @@ use uuid::Uuid;
 /// Node that produced the `FrameObject`.
 pub struct PreviewClip {
     pub node: Node,
-    pub track_id: Option<Uuid>,
     /// Evaluated transform directly owned by `node`. Preview edits use this
     /// baseline so downstream Effectors are not accidentally baked back into
     /// the generator properties.
@@ -44,14 +43,7 @@ pub fn from_evaluated_frame(project: &Project, frame: &FrameInfo) -> Vec<Preview
     let mut visuals = Vec::new();
     let mut path = Vec::new();
     for item in &frame.items {
-        collect_visuals(
-            project,
-            item,
-            Affine2D::IDENTITY,
-            None,
-            &mut path,
-            &mut visuals,
-        );
+        collect_visuals(project, item, Affine2D::IDENTITY, &mut path, &mut visuals);
     }
     visuals
 }
@@ -79,7 +71,6 @@ fn collect_visuals(
     project: &Project,
     item: &FrameItem,
     parent_transform: Affine2D,
-    track_id: Option<Uuid>,
     path: &mut Vec<Uuid>,
     visuals: &mut Vec<PreviewClip>,
 ) {
@@ -94,7 +85,6 @@ fn collect_visuals(
             path.push(object.source_node_id);
             visuals.push(PreviewClip {
                 node: node.clone(),
-                track_id: track_id.or_else(|| project.find_parent_track(node.id)),
                 source_transform: object.source_transform.as_ref().clone(),
                 world_transform: parent_transform.compose(Affine2D::from(&transform)),
                 parent_transform,
@@ -105,15 +95,10 @@ fn collect_visuals(
             path.pop();
         }
         FrameItem::Group(group) => {
-            let track_id = if group.kind == FrameGroupKind::Track {
-                Some(group.source_id)
-            } else {
-                track_id
-            };
             let transform = parent_transform.compose(Affine2D::from(&group.transform));
             path.push(group.source_id);
             for child in &group.items {
-                collect_visuals(project, child, transform, track_id, path, visuals);
+                collect_visuals(project, child, transform, path, visuals);
             }
             path.pop();
         }
@@ -306,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_composition_and_track_nodes_project_without_fake_track_ids() {
+    fn direct_composition_and_track_nodes_project_as_visuals() {
         let composition_node_id = Uuid::new_v4();
         let track_node_id = Uuid::new_v4();
         let track_id = Uuid::new_v4();
@@ -346,9 +331,7 @@ mod tests {
         let visuals = from_evaluated_frame(&project, &frame);
         assert_eq!(visuals.len(), 2);
         assert_eq!(visuals[0].id(), composition_node_id);
-        assert_eq!(visuals[0].track_id, None);
         assert_eq!(visuals[1].id(), track_node_id);
-        assert_eq!(visuals[1].track_id, Some(track_id));
 
         let empty = FrameInfo {
             items: Vec::new(),

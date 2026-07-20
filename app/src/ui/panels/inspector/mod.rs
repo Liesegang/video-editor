@@ -18,7 +18,10 @@ use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
-use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::{
+    action::HistoryManager,
+    state::{context::EditorContext, context_types::SelectionTarget},
+};
 
 pub mod action_handler;
 pub mod properties;
@@ -149,17 +152,14 @@ fn inspector_panel_content(
     project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
 ) {
-    let Some(composition_id) = editor_context.selection.composition_id else {
+    let Some(composition_id) = editor_context.active_composition_id else {
         ui.label("No composition selected.");
         return;
     };
     let selection = match project.read() {
-        Ok(project) => resolve_selection(
-            &project,
-            editor_context.selection.last_selected_entity_id,
-            editor_context.selection.last_selected_track_id,
-            composition_id,
-        ),
+        Ok(project) => {
+            resolve_selection(&project, editor_context.selection.primary(), composition_id)
+        }
         Err(error) => {
             log::error!("Failed to read Project for Inspector: {error}");
             ui.label("Project is temporarily unavailable.");
@@ -169,8 +169,7 @@ fn inspector_panel_content(
 
     let Some(selection) = selection else {
         ui.label("The selected Timeline item was not found (it may have been deleted).");
-        editor_context.selection.last_selected_entity_id = None;
-        editor_context.selection.selected_entities.clear();
+        editor_context.clear_selection();
         return;
     };
 
@@ -357,47 +356,63 @@ fn inspector_panel_content(
 
 fn resolve_selection(
     project: &Project,
-    selected_entity_id: Option<Uuid>,
-    selected_track_id: Option<Uuid>,
+    selected_target: Option<SelectionTarget>,
     composition_id: Uuid,
 ) -> Option<InspectorSelection> {
-    if let Some(selected_id) = selected_entity_id {
-        if project.find_containing_composition(selected_id) == Some(composition_id) {
-            if let Some(clip) = project.get_clip(selected_id) {
+    match selected_target {
+        Some(SelectionTarget::Clip(clip_id))
+            if project
+                .find_track_for_clip(clip_id)
+                .and_then(|track_id| project.find_composition_for_track(track_id))
+                == Some(composition_id) =>
+        {
+            if let Some(clip) = project.get_clip(clip_id) {
                 let nodes = nodes_for_ids(project, &clip.node_ids);
                 return Some(InspectorSelection::Clip {
                     clip: clip.clone(),
                     connections: connections_for_nodes(project, &clip.node_ids),
                     nodes,
                     semantics: project.container_graph_semantics(PortOwner::Clip(clip.id)),
-                    track_id: project.find_track_for_clip(selected_id),
+                    track_id: project.find_track_for_clip(clip_id),
                 });
             }
-
-            if let Some(node) = project.get_node(selected_id) {
+        }
+        Some(SelectionTarget::Node(node_id))
+            if node_containing_composition(project, node_id) == Some(composition_id) =>
+        {
+            if let Some(node) = project.get_node(node_id) {
                 let containing_clip = project
-                    .find_parent_clip(selected_id)
+                    .find_parent_clip(node_id)
                     .and_then(|clip_id| project.get_clip(clip_id))
                     .cloned();
                 return Some(InspectorSelection::Node {
                     node: node.clone(),
-                    track_id: project.find_parent_track(selected_id),
+                    track_id: node_containing_track(project, node_id),
                     containing_clip,
                 });
             }
         }
-    }
-
-    if let Some(track) = selected_track_id
-        .filter(|id| project.find_composition_for_track(*id) == Some(composition_id))
-        .and_then(|id| project.get_track(id))
-    {
-        return Some(InspectorSelection::Track {
-            track: track.clone(),
-            nodes: nodes_for_ids(project, &track.node_ids),
-            connections: connections_for_nodes(project, &track.node_ids),
-            semantics: project.container_graph_semantics(PortOwner::Track(track.id)),
-        });
+        Some(SelectionTarget::Track(track_id))
+            if project.find_composition_for_track(track_id) == Some(composition_id) =>
+        {
+            if let Some(track) = project.get_track(track_id) {
+                return Some(InspectorSelection::Track {
+                    track: track.clone(),
+                    nodes: nodes_for_ids(project, &track.node_ids),
+                    connections: connections_for_nodes(project, &track.node_ids),
+                    semantics: project.container_graph_semantics(PortOwner::Track(track.id)),
+                });
+            }
+        }
+        Some(SelectionTarget::Composition(selected_composition_id))
+            if selected_composition_id == composition_id => {}
+        Some(
+            SelectionTarget::Node(_)
+            | SelectionTarget::Clip(_)
+            | SelectionTarget::Track(_)
+            | SelectionTarget::Composition(_),
+        ) => return None,
+        None => {}
     }
 
     let composition = project.get_composition(composition_id)?;
@@ -407,6 +422,24 @@ fn resolve_selection(
         connections: connections_for_nodes(project, &composition.node_ids),
         semantics: project.container_graph_semantics(PortOwner::Composition(composition.id)),
     })
+}
+
+fn node_containing_composition(project: &Project, node_id: Uuid) -> Option<Uuid> {
+    match project.find_node_container(node_id)? {
+        library::model::NodeContainer::Composition(id) => Some(id),
+        library::model::NodeContainer::Track(id) => project.find_composition_for_track(id),
+        library::model::NodeContainer::Clip(id) => project
+            .find_track_for_clip(id)
+            .and_then(|track_id| project.find_composition_for_track(track_id)),
+    }
+}
+
+fn node_containing_track(project: &Project, node_id: Uuid) -> Option<Uuid> {
+    match project.find_node_container(node_id)? {
+        library::model::NodeContainer::Composition(_) => None,
+        library::model::NodeContainer::Track(track_id) => Some(track_id),
+        library::model::NodeContainer::Clip(clip_id) => project.find_track_for_clip(clip_id),
+    }
 }
 
 fn nodes_for_ids(project: &Project, node_ids: &[Uuid]) -> Vec<Node> {
@@ -430,7 +463,7 @@ fn connections_for_nodes(project: &Project, node_ids: &[Uuid]) -> Vec<ProjectCon
 }
 
 fn render_multi_selection_notice(ui: &mut Ui, editor_context: &EditorContext) {
-    let selected_count = editor_context.selection.selected_entities.len();
+    let selected_count = editor_context.selection.len();
     if selected_count <= 1 {
         return;
     }
@@ -1799,9 +1832,11 @@ mod tests {
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let Some(InspectorSelection::Clip { nodes, .. }) =
-            resolve_selection(&project, Some(clip_id), None, composition_id)
-        else {
+        let Some(InspectorSelection::Clip { nodes, .. }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Clip(clip_id)),
+            composition_id,
+        ) else {
             panic!("Clip selection should resolve");
         };
         assert_eq!(
@@ -1833,12 +1868,57 @@ mod tests {
             node,
             containing_clip,
             ..
-        }) = resolve_selection(&project, Some(node_id), None, composition_id)
+        }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Node(node_id)),
+            composition_id,
+        )
         else {
             panic!("Node selection should resolve");
         };
         assert_eq!(node.id, node_id);
         assert_eq!(containing_clip.unwrap().id, clip_id);
+    }
+
+    #[test]
+    fn same_uuid_node_and_clip_resolve_by_explicit_target_kind() {
+        let mut project = Project::new("same UUID inspector");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let shared_id = Uuid::new_v4();
+        let mut clip = Clip::new("clip with shared UUID", 0.0, 5.0);
+        clip.id = shared_id;
+        let mut node = Node::new_merge("node with shared UUID");
+        node.id = shared_id;
+
+        project.add_track(track);
+        project.add_composition(composition);
+        project.add_clip(clip);
+        project.add_node(node);
+        project.attach_clip_to_track(track_id, shared_id).unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Composition(composition_id), shared_id)
+            .unwrap();
+
+        let Some(InspectorSelection::Clip { clip, .. }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Clip(shared_id)),
+            composition_id,
+        ) else {
+            panic!("typed Clip target should resolve the Clip registry");
+        };
+        assert_eq!(clip.name, "clip with shared UUID");
+
+        let Some(InspectorSelection::Node { node, track_id, .. }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Node(shared_id)),
+            composition_id,
+        ) else {
+            panic!("typed Node target should resolve the Node registry");
+        };
+        assert_eq!(node.name, "node with shared UUID");
+        assert_eq!(track_id, None);
     }
 
     #[test]
@@ -1850,15 +1930,17 @@ mod tests {
         project.add_track(track);
         project.add_composition(composition);
 
-        let Some(InspectorSelection::Track { track, .. }) =
-            resolve_selection(&project, None, Some(track_id), composition_id)
-        else {
+        let Some(InspectorSelection::Track { track, .. }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Track(track_id)),
+            composition_id,
+        ) else {
             panic!("Track selection should resolve");
         };
         assert_eq!(track.id, track_id);
 
         let Some(InspectorSelection::Composition { composition, .. }) =
-            resolve_selection(&project, None, None, composition_id)
+            resolve_selection(&project, None, composition_id)
         else {
             panic!("Composition selection should resolve");
         };
@@ -1866,7 +1948,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_selection_from_another_composition_falls_back_to_the_active_composition() {
+    fn explicit_selection_from_another_composition_does_not_fall_back() {
         let mut project = Project::new("composition scoped inspector");
         let (active, active_track) = Composition::new("active", 1920, 1080, 30.0, 5.0);
         let active_id = active.id;
@@ -1888,15 +1970,12 @@ mod tests {
             .attach_clip_to_track(other_track_id, other_clip_id)
             .unwrap();
 
-        let Some(InspectorSelection::Composition { composition, .. }) = resolve_selection(
+        assert!(resolve_selection(
             &project,
-            Some(other_node_id),
-            Some(other_track_id),
+            Some(SelectionTarget::Node(other_node_id)),
             active_id,
-        ) else {
-            panic!("stale selections must resolve to the active Composition");
-        };
-        assert_eq!(composition.id, active_id);
+        )
+        .is_none());
     }
 
     #[test]
@@ -1978,7 +2057,11 @@ mod tests {
             semantics,
             connections,
             ..
-        }) = resolve_selection(&project, Some(clip_id), None, composition_id)
+        }) = resolve_selection(
+            &project,
+            Some(SelectionTarget::Clip(clip_id)),
+            composition_id,
+        )
         else {
             return Err(std::io::Error::other("Clip selection should resolve").into());
         };
