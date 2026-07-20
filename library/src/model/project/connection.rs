@@ -82,6 +82,44 @@ pub struct ContainerImageSource {
     pub kind: ContainerImageSourceKind,
 }
 
+/// On-demand authored identity for one container's visual graph.
+///
+/// This is a pure query result containing stable Project identities only. It is
+/// never serialized or stored as an editing model: callers recompute it from
+/// the authoritative containment, output binding, ports, and connections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContainerGraphSemantics {
+    explicit_output_node_id: Option<Uuid>,
+    authored_source: Option<PortOwner>,
+    reaches_output: HashSet<PortOwner>,
+}
+
+impl ContainerGraphSemantics {
+    /// The direct Node selected by the container's authored output binding.
+    /// This remains distinct from the upstream semantic source.
+    pub fn explicit_output_node_id(&self) -> Option<Uuid> {
+        self.explicit_output_node_id
+    }
+
+    /// The first deterministic visual source upstream of the container output.
+    /// Runtime enabled/range/availability state deliberately does not affect it.
+    pub fn authored_source(&self) -> Option<PortOwner> {
+        self.authored_source
+    }
+
+    pub fn authored_source_node_id(&self) -> Option<Uuid> {
+        match self.authored_source {
+            Some(PortOwner::Node(node_id)) => Some(node_id),
+            _ => None,
+        }
+    }
+
+    /// Whether an authored visual path connects `owner` to this result.
+    pub fn structurally_reaches_output(&self, owner: PortOwner) -> bool {
+        self.reaches_output.contains(&owner)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct PortAddress {
     pub owner: PortOwner,
@@ -428,6 +466,40 @@ fn humanize_port_key(key: &str) -> String {
 }
 
 impl Project {
+    /// Query the semantic identity and visual membership of a container graph.
+    ///
+    /// Image and Shape port types define visual flow. Variadic order followed
+    /// by persistent connection identity defines deterministic source choice.
+    /// Explicit output bindings take precedence over derived child composition.
+    /// Disabled Nodes and Clip timing are authored/runtime state orthogonal to
+    /// identity, so neither is consulted here.
+    pub fn container_graph_semantics(&self, owner: PortOwner) -> ContainerGraphSemantics {
+        let image_sources = self.container_image_sources(owner);
+        let explicit_output_node_id = image_sources.iter().find_map(|source| {
+            (source.kind == ContainerImageSourceKind::OutputBinding)
+                .then_some(source.source)
+                .and_then(|owner| match owner {
+                    PortOwner::Node(node_id) => Some(node_id),
+                    _ => None,
+                })
+        });
+
+        let authored_source = image_sources.iter().find_map(|source| {
+            self.first_authored_visual_source(source.source, &mut HashSet::new())
+        });
+        let mut reaches_output = HashSet::new();
+        let mut visited = HashSet::new();
+        for source in image_sources {
+            self.collect_visual_ancestors(source.source, &mut reaches_output, &mut visited);
+        }
+
+        ContainerGraphSemantics {
+            explicit_output_node_id,
+            authored_source,
+            reaches_output,
+        }
+    }
+
     /// Return the authoritative, ordered image dependencies for a container.
     ///
     /// An explicit output binding always replaces fallback composition. Without
@@ -529,6 +601,89 @@ impl Project {
         let address = PortAddress::new(owner, IMAGE_OUTPUT_PORT);
         self.port_definition(&address, PortDirection::Output)
             .is_some_and(|port| port.data_type == PortDataType::Image)
+    }
+
+    fn first_authored_visual_source(
+        &self,
+        owner: PortOwner,
+        path: &mut HashSet<PortOwner>,
+    ) -> Option<PortOwner> {
+        if !path.insert(owner) {
+            return None;
+        }
+        let source = match owner {
+            PortOwner::Node(node_id) => {
+                if let Some(node) = self.get_node(node_id) {
+                    match node.content() {
+                        NodeContent::Media(_)
+                        | NodeContent::Generator(_)
+                        | NodeContent::Reference(_) => Some(owner),
+                        NodeContent::PluginOperation(_) | NodeContent::Merge => self
+                            .visual_inputs(owner)
+                            .into_iter()
+                            .find_map(|connection| {
+                                self.first_authored_visual_source(connection.from.owner, path)
+                            }),
+                        NodeContent::Value(_) => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => self
+                .container_image_sources(owner)
+                .into_iter()
+                .find_map(|source| self.first_authored_visual_source(source.source, path)),
+        };
+        path.remove(&owner);
+        source
+    }
+
+    fn collect_visual_ancestors(
+        &self,
+        owner: PortOwner,
+        reaches_output: &mut HashSet<PortOwner>,
+        visited: &mut HashSet<PortOwner>,
+    ) {
+        if !visited.insert(owner) {
+            return;
+        }
+        reaches_output.insert(owner);
+        match owner {
+            PortOwner::Node(_) => {
+                for connection in self.visual_inputs(owner) {
+                    self.collect_visual_ancestors(connection.from.owner, reaches_output, visited);
+                }
+            }
+            PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => {
+                for source in self.container_image_sources(owner) {
+                    self.collect_visual_ancestors(source.source, reaches_output, visited);
+                }
+            }
+        }
+    }
+
+    fn visual_inputs(&self, owner: PortOwner) -> Vec<&ProjectConnection> {
+        let mut inputs = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.to.owner == owner && self.is_visual_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        inputs.sort_by_key(|connection| (connection.order, connection.id));
+        inputs
+    }
+
+    fn is_visual_connection(&self, connection: &ProjectConnection) -> bool {
+        let Some(source) = self.port_definition(&connection.from, PortDirection::Output) else {
+            return false;
+        };
+        let Some(target) = self.port_definition(&connection.to, PortDirection::Input) else {
+            return false;
+        };
+        matches!(source.data_type, PortDataType::Image | PortDataType::Shape)
+            && source.data_type == target.data_type
     }
 
     pub fn port_definition(
@@ -1229,8 +1384,10 @@ fn is_reachable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::project::Composition;
     use crate::model::{Clip, Node, ReferenceContent};
+    use crate::plugin::PluginManager;
 
     fn add_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
         let node = Node::new_merge(name);
@@ -1256,6 +1413,329 @@ mod tests {
             .attach_node_to_container(container, node_id)
             .unwrap();
         node_id
+    }
+
+    fn attach_authored_node(
+        project: &mut Project,
+        container: NodeContainer,
+        node: Node,
+    ) -> Result<Uuid, ProjectGraphError> {
+        let node_id = node.id;
+        project.add_node(node);
+        project.attach_node_to_container(container, node_id)?;
+        Ok(node_id)
+    }
+
+    fn project_with_detached_clip(name: &str, start_time: f64, duration: f64) -> (Project, Uuid) {
+        let mut project = Project::new("semantic graph");
+        let clip = Clip::new(name, start_time, duration);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        (project, clip_id)
+    }
+
+    #[test]
+    fn container_graph_semantics_follow_the_complete_shape_to_image_chain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("title", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let plugins = PluginManager::default();
+        let text_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "Title",
+                GeneratorNodeRequest::Text {
+                    text: "Title".to_string(),
+                    font: "Arial".to_string(),
+                },
+            ),
+        )?;
+        let decorator = plugins.create_decorator_operation_node("backplate")?;
+        let decorator_id = attach_authored_node(&mut project, container, decorator)?;
+        let effector = plugins.create_effector_operation_node("transform")?;
+        let effector_id = attach_authored_node(&mut project, container, effector)?;
+        let style = plugins.create_style_operation_node("fill")?;
+        let style_id = attach_authored_node(&mut project, container, style)?;
+        let effect = plugins.create_effect_operation_node("blur")?;
+        let effect_id = attach_authored_node(&mut project, container, effect)?;
+        let merge_id = attach_authored_node(&mut project, container, Node::new_merge("Result"))?;
+
+        for (from, from_port, to, to_port) in [
+            (text_id, SHAPE_OUTPUT_PORT, decorator_id, SHAPE_INPUT_PORT),
+            (
+                decorator_id,
+                SHAPE_OUTPUT_PORT,
+                effector_id,
+                SHAPE_INPUT_PORT,
+            ),
+            (effector_id, SHAPE_OUTPUT_PORT, style_id, SHAPE_INPUT_PORT),
+            (style_id, IMAGE_OUTPUT_PORT, effect_id, IMAGE_INPUT_PORT),
+            (effect_id, IMAGE_OUTPUT_PORT, merge_id, MERGE_IMAGES_PORT),
+        ] {
+            project.connect_ports(
+                PortAddress::new(PortOwner::Node(from), from_port),
+                PortAddress::new(PortOwner::Node(to), to_port),
+            )?;
+        }
+        project.set_output_node(container, Some(merge_id))?;
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.explicit_output_node_id(), Some(merge_id));
+        assert_eq!(semantics.authored_source(), Some(PortOwner::Node(text_id)));
+        for node_id in [
+            text_id,
+            decorator_id,
+            effector_id,
+            style_id,
+            effect_id,
+            merge_id,
+        ] {
+            assert!(semantics.structurally_reaches_output(PortOwner::Node(node_id)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn container_graph_semantics_include_every_reachable_fan_out_branch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("shape", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let plugins = PluginManager::default();
+        let shape_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "Shape",
+                GeneratorNodeRequest::Shape {
+                    path: "M 0 0 H 100 V 100 Z".to_string(),
+                },
+            ),
+        )?;
+        let fill = plugins.create_style_operation_node("fill")?;
+        let fill_id = attach_authored_node(&mut project, container, fill)?;
+        let stroke = plugins.create_style_operation_node("stroke")?;
+        let stroke_id = attach_authored_node(&mut project, container, stroke)?;
+        let merge_id = attach_authored_node(&mut project, container, Node::new_merge("Result"))?;
+
+        for style_id in [fill_id, stroke_id] {
+            project.connect_ports(
+                PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
+            )?;
+            project.connect_ports(
+                PortAddress::new(PortOwner::Node(style_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )?;
+        }
+        project.set_output_node(container, Some(merge_id))?;
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.authored_source(), Some(PortOwner::Node(shape_id)));
+        for node_id in [shape_id, fill_id, stroke_id, merge_id] {
+            assert!(semantics.structurally_reaches_output(PortOwner::Node(node_id)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_output_binding_selects_identity_instead_of_storage_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("two sources", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let first_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "First",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let second_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "Second",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+
+        project.set_output_node(container, Some(second_id))?;
+        let second = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(second.explicit_output_node_id(), Some(second_id));
+        assert_eq!(second.authored_source_node_id(), Some(second_id));
+        assert!(!second.structurally_reaches_output(PortOwner::Node(first_id)));
+
+        project.set_output_node(container, Some(first_id))?;
+        let first = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(first.explicit_output_node_id(), Some(first_id));
+        assert_eq!(first.authored_source_node_id(), Some(first_id));
+        assert!(!first.structurally_reaches_output(PortOwner::Node(second_id)));
+        Ok(())
+    }
+
+    #[test]
+    fn authored_identity_ignores_disabled_state_and_clip_time_range()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("late clip", 100.0, 0.25);
+        let container = NodeContainer::Clip(clip_id);
+        let source_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "Late source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let effect = PluginManager::default().create_effect_operation_node("blur")?;
+        let effect_id = attach_authored_node(&mut project, container, effect)?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+        )?;
+        project.set_output_node(container, Some(effect_id))?;
+
+        project
+            .get_node_mut(source_id)
+            .ok_or(ProjectGraphError::NodeNotFound(source_id))?
+            .enabled = false;
+        project
+            .get_node_mut(effect_id)
+            .ok_or(ProjectGraphError::NodeNotFound(effect_id))?
+            .enabled = false;
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.explicit_output_node_id(), Some(effect_id));
+        assert_eq!(semantics.authored_source_node_id(), Some(source_id));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(source_id)));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_track_and_composition_nodes_follow_cross_container_image_wires()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = Project::new("direct container nodes");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let plugins = PluginManager::default();
+
+        let track_source_id = attach_authored_node(
+            &mut project,
+            NodeContainer::Track(track_id),
+            test_generator_node(
+                "Track source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let track_effect = plugins.create_effect_operation_node("blur")?;
+        let track_effect_id =
+            attach_authored_node(&mut project, NodeContainer::Track(track_id), track_effect)?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(track_source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(track_effect_id), IMAGE_INPUT_PORT),
+        )?;
+        project.set_output_node(NodeContainer::Track(track_id), Some(track_effect_id))?;
+
+        let composition_effect = plugins.create_effect_operation_node("blur")?;
+        let composition_effect_id = attach_authored_node(
+            &mut project,
+            NodeContainer::Composition(composition_id),
+            composition_effect,
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Track(track_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(composition_effect_id), IMAGE_INPUT_PORT),
+        )?;
+        project.set_output_node(
+            NodeContainer::Composition(composition_id),
+            Some(composition_effect_id),
+        )?;
+
+        let track = project.container_graph_semantics(PortOwner::Track(track_id));
+        assert_eq!(track.explicit_output_node_id(), Some(track_effect_id));
+        assert_eq!(track.authored_source_node_id(), Some(track_source_id));
+
+        let composition = project.container_graph_semantics(PortOwner::Composition(composition_id));
+        assert_eq!(
+            composition.explicit_output_node_id(),
+            Some(composition_effect_id)
+        );
+        assert_eq!(composition.authored_source_node_id(), Some(track_source_id));
+        for owner in [
+            PortOwner::Node(composition_effect_id),
+            PortOwner::Track(track_id),
+            PortOwner::Node(track_effect_id),
+            PortOwner::Node(track_source_id),
+        ] {
+            assert!(composition.structurally_reaches_output(owner));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dead_cycle_and_missing_owner_do_not_poison_a_later_authored_source()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("damaged branches", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let cycle_a = attach_authored_node(&mut project, container, Node::new_merge("cycle a"))?;
+        let cycle_b = attach_authored_node(&mut project, container, Node::new_merge("cycle b"))?;
+        let valid_source = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "valid source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let result = attach_authored_node(&mut project, container, Node::new_merge("result"))?;
+        project.set_output_node(container, Some(result))?;
+
+        // Normal mutations reject this state. Insert it directly to prove the
+        // read-only query remains finite and continues to a valid later input.
+        project.connections.extend([
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(cycle_b), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(cycle_a), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(cycle_a), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(cycle_b), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(cycle_a), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(result), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(Uuid::new_v4()), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(result), MERGE_IMAGES_PORT),
+                1,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(valid_source), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(result), MERGE_IMAGES_PORT),
+                2,
+            ),
+        ]);
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.authored_source_node_id(), Some(valid_source));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(valid_source)));
+        Ok(())
     }
 
     #[test]

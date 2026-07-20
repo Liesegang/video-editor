@@ -15,11 +15,12 @@ pub mod connection;
 pub mod property;
 
 pub use connection::{
-    ContainerImageSource, ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult,
-    EvaluationError, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-    PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDefinition, PortDirection, PortExposure,
-    PortMultiplicity, PortOwner, PortSide, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
+    ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
+    EvalOutput, EvalResult, EvaluationError, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PERIOD_INPUT_PORT, PortAddress, PortDataType,
+    PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide,
+    ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
