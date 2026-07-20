@@ -176,6 +176,7 @@ fn clip_graph_nodes<'a>(clip: &Clip, project: &'a Project) -> ClipGraphNodes<'a>
     let semantics = project.container_graph_semantics(PortOwner::Clip(clip.id));
     let output = semantics
         .explicit_output_node_id()
+        .filter(|_| semantics.explicit_output_is_directly_contained())
         .and_then(|node_id| project.get_node(node_id));
     let semantic_source = semantics
         .authored_source_node_id()

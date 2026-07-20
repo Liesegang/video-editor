@@ -90,19 +90,31 @@ pub struct ContainerImageSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContainerGraphSemantics {
     explicit_output_node_id: Option<Uuid>,
+    explicit_output_is_directly_contained: bool,
     authored_source: Option<PortOwner>,
     reaches_output: HashSet<PortOwner>,
 }
 
 impl ContainerGraphSemantics {
-    /// The direct Node selected by the container's authored output binding.
-    /// This remains distinct from the upstream semantic source.
+    /// The raw Node UUID stored in the container's authored output binding.
+    /// This remains distinct from the upstream semantic source and can name a
+    /// foreign or missing Node in a malformed, directly loaded Project.
     pub fn explicit_output_node_id(&self) -> Option<Uuid> {
         self.explicit_output_node_id
     }
 
+    /// Whether the raw output binding names a direct Node of this container.
+    /// A malformed foreign binding remains observable through
+    /// [`Self::explicit_output_node_id`] but is never traversed as content.
+    pub fn explicit_output_is_directly_contained(&self) -> bool {
+        self.explicit_output_is_directly_contained
+    }
+
     /// The first deterministic visual source upstream of the container output.
     /// Runtime enabled/range/availability state deliberately does not affect it.
+    /// For compatibility with the pre-v1 Timeline resolver, Reference Nodes
+    /// are identity terminals and all declared visual input ports share the
+    /// `(connection order, connection UUID)` tie-break until port roles exist.
     pub fn authored_source(&self) -> Option<PortOwner> {
         self.authored_source
     }
@@ -474,29 +486,74 @@ impl Project {
     /// Disabled Nodes and Clip timing are authored/runtime state orthogonal to
     /// identity, so neither is consulted here.
     pub fn container_graph_semantics(&self, owner: PortOwner) -> ContainerGraphSemantics {
-        let image_sources = self.container_image_sources(owner);
-        let explicit_output_node_id = image_sources.iter().find_map(|source| {
-            (source.kind == ContainerImageSourceKind::OutputBinding)
-                .then_some(source.source)
-                .and_then(|owner| match owner {
-                    PortOwner::Node(node_id) => Some(node_id),
-                    _ => None,
-                })
-        });
+        let explicit_output_node_id = self.container_output_node_id(owner);
+        let explicit_output_is_directly_contained = explicit_output_node_id
+            .is_some_and(|node_id| self.container_directly_contains_node(owner, node_id));
+        let image_sources = self.semantic_container_image_sources(owner);
+        let visual_inputs = if image_sources.is_empty() {
+            HashMap::new()
+        } else {
+            self.visual_input_index()
+        };
 
         let authored_source = image_sources.iter().find_map(|source| {
-            self.first_authored_visual_source(source.source, &mut HashSet::new())
+            self.first_authored_visual_source(source.source, &visual_inputs, &mut HashSet::new())
         });
         let mut reaches_output = HashSet::new();
         let mut visited = HashSet::new();
         for source in image_sources {
-            self.collect_visual_ancestors(source.source, &mut reaches_output, &mut visited);
+            self.collect_visual_ancestors(
+                source.source,
+                &visual_inputs,
+                &mut reaches_output,
+                &mut visited,
+            );
         }
 
         ContainerGraphSemantics {
             explicit_output_node_id,
+            explicit_output_is_directly_contained,
             authored_source,
             reaches_output,
+        }
+    }
+
+    fn container_output_node_id(&self, owner: PortOwner) -> Option<Uuid> {
+        match owner {
+            PortOwner::Composition(id) => self
+                .get_composition(id)
+                .and_then(|composition| composition.output_node_id),
+            PortOwner::Track(id) => self.get_track(id).and_then(|track| track.output_node_id),
+            PortOwner::Clip(id) => self.get_clip(id).and_then(|clip| clip.output_node_id),
+            PortOwner::Node(_) => None,
+        }
+    }
+
+    fn container_directly_contains_node(&self, owner: PortOwner, node_id: Uuid) -> bool {
+        match owner {
+            PortOwner::Composition(id) => self
+                .get_composition(id)
+                .is_some_and(|composition| composition.node_ids.contains(&node_id)),
+            PortOwner::Track(id) => self
+                .get_track(id)
+                .is_some_and(|track| track.node_ids.contains(&node_id)),
+            PortOwner::Clip(id) => self
+                .get_clip(id)
+                .is_some_and(|clip| clip.node_ids.contains(&node_id)),
+            PortOwner::Node(_) => false,
+        }
+    }
+
+    fn semantic_container_image_sources(&self, owner: PortOwner) -> Vec<ContainerImageSource> {
+        let output_node_id = self.container_output_node_id(owner);
+        if output_node_id
+            .is_some_and(|node_id| !self.container_directly_contains_node(owner, node_id))
+        {
+            // Preserve malformed authored UUIDs in the public result, but do
+            // not cross ownership or reinterpret them as child fallback.
+            Vec::new()
+        } else {
+            self.container_image_sources(owner)
         }
     }
 
@@ -606,6 +663,7 @@ impl Project {
     fn first_authored_visual_source(
         &self,
         owner: PortOwner,
+        visual_inputs: &HashMap<PortOwner, Vec<&ProjectConnection>>,
         path: &mut HashSet<PortOwner>,
     ) -> Option<PortOwner> {
         if !path.insert(owner) {
@@ -618,12 +676,17 @@ impl Project {
                         NodeContent::Media(_)
                         | NodeContent::Generator(_)
                         | NodeContent::Reference(_) => Some(owner),
-                        NodeContent::PluginOperation(_) | NodeContent::Merge => self
-                            .visual_inputs(owner)
-                            .into_iter()
-                            .find_map(|connection| {
-                                self.first_authored_visual_source(connection.from.owner, path)
-                            }),
+                        NodeContent::PluginOperation(_) | NodeContent::Merge => {
+                            visual_inputs.get(&owner).and_then(|connections| {
+                                connections.iter().find_map(|connection| {
+                                    self.first_authored_visual_source(
+                                        connection.from.owner,
+                                        visual_inputs,
+                                        path,
+                                    )
+                                })
+                            })
+                        }
                         NodeContent::Value(_) => None,
                     }
                 } else {
@@ -631,9 +694,11 @@ impl Project {
                 }
             }
             PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => self
-                .container_image_sources(owner)
+                .semantic_container_image_sources(owner)
                 .into_iter()
-                .find_map(|source| self.first_authored_visual_source(source.source, path)),
+                .find_map(|source| {
+                    self.first_authored_visual_source(source.source, visual_inputs, path)
+                }),
         };
         path.remove(&owner);
         source
@@ -642,6 +707,7 @@ impl Project {
     fn collect_visual_ancestors(
         &self,
         owner: PortOwner,
+        visual_inputs: &HashMap<PortOwner, Vec<&ProjectConnection>>,
         reaches_output: &mut HashSet<PortOwner>,
         visited: &mut HashSet<PortOwner>,
     ) {
@@ -651,27 +717,43 @@ impl Project {
         reaches_output.insert(owner);
         match owner {
             PortOwner::Node(_) => {
-                for connection in self.visual_inputs(owner) {
-                    self.collect_visual_ancestors(connection.from.owner, reaches_output, visited);
+                if let Some(connections) = visual_inputs.get(&owner) {
+                    for connection in connections {
+                        self.collect_visual_ancestors(
+                            connection.from.owner,
+                            visual_inputs,
+                            reaches_output,
+                            visited,
+                        );
+                    }
                 }
             }
             PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => {
-                for source in self.container_image_sources(owner) {
-                    self.collect_visual_ancestors(source.source, reaches_output, visited);
+                for source in self.semantic_container_image_sources(owner) {
+                    self.collect_visual_ancestors(
+                        source.source,
+                        visual_inputs,
+                        reaches_output,
+                        visited,
+                    );
                 }
             }
         }
     }
 
-    fn visual_inputs(&self, owner: PortOwner) -> Vec<&ProjectConnection> {
-        let mut inputs = self
-            .connections
-            .iter()
-            .filter(|connection| {
-                connection.to.owner == owner && self.is_visual_connection(connection)
-            })
-            .collect::<Vec<_>>();
-        inputs.sort_by_key(|connection| (connection.order, connection.id));
+    fn visual_input_index(&self) -> HashMap<PortOwner, Vec<&ProjectConnection>> {
+        let mut inputs = HashMap::<PortOwner, Vec<&ProjectConnection>>::new();
+        for connection in &self.connections {
+            if self.is_visual_connection(connection) {
+                inputs
+                    .entry(connection.to.owner)
+                    .or_default()
+                    .push(connection);
+            }
+        }
+        for connections in inputs.values_mut() {
+            connections.sort_by_key(|connection| (connection.order, connection.id));
+        }
         inputs
     }
 
@@ -1567,6 +1649,7 @@ mod tests {
         project.set_output_node(container, Some(second_id))?;
         let second = project.container_graph_semantics(PortOwner::Clip(clip_id));
         assert_eq!(second.explicit_output_node_id(), Some(second_id));
+        assert!(second.explicit_output_is_directly_contained());
         assert_eq!(second.authored_source_node_id(), Some(second_id));
         assert!(!second.structurally_reaches_output(PortOwner::Node(first_id)));
 
@@ -1575,6 +1658,79 @@ mod tests {
         assert_eq!(first.explicit_output_node_id(), Some(first_id));
         assert_eq!(first.authored_source_node_id(), Some(first_id));
         assert!(!first.structurally_reaches_output(PortOwner::Node(second_id)));
+        Ok(())
+    }
+
+    #[test]
+    fn foreign_output_binding_remains_observable_without_crossing_container_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, first_clip_id) = project_with_detached_clip("first clip", 0.0, 5.0);
+        let second_clip = Clip::new("second clip", 0.0, 5.0);
+        let second_clip_id = second_clip.id;
+        project.add_clip(second_clip);
+        let foreign_source_id = attach_authored_node(
+            &mut project,
+            NodeContainer::Clip(second_clip_id),
+            test_generator_node(
+                "foreign source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        project.set_output_node(NodeContainer::Clip(second_clip_id), Some(foreign_source_id))?;
+
+        // Normal mutations reject this cross-owner binding. Retain the raw
+        // authored UUID while proving the read-only facade cannot escape its
+        // requested container in a malformed, directly loaded Project.
+        project
+            .get_clip_mut(first_clip_id)
+            .ok_or(ProjectGraphError::ClipNotFound(first_clip_id))?
+            .output_node_id = Some(foreign_source_id);
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(first_clip_id));
+        assert_eq!(semantics.explicit_output_node_id(), Some(foreign_source_id));
+        assert!(!semantics.explicit_output_is_directly_contained());
+        assert_eq!(semantics.authored_source(), None);
+        assert!(!semantics.structurally_reaches_output(PortOwner::Node(foreign_source_id)));
+        Ok(())
+    }
+
+    #[test]
+    fn reference_remains_the_authored_identity_terminal_with_a_connected_image()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("reference", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let source_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "connected source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let reference_id = attach_authored_node(
+            &mut project,
+            container,
+            Node::new_reference(
+                "reference",
+                ReferenceContent {
+                    target_id: Uuid::new_v4(),
+                    sync_global_time: false,
+                },
+            ),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
+        )?;
+        project.set_output_node(container, Some(reference_id))?;
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.authored_source_node_id(), Some(reference_id));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(source_id)));
         Ok(())
     }
 
@@ -1735,6 +1891,54 @@ mod tests {
         let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
         assert_eq!(semantics.authored_source_node_id(), Some(valid_source));
         assert!(semantics.structurally_reaches_output(PortOwner::Node(valid_source)));
+        Ok(())
+    }
+
+    #[test]
+    fn container_graph_semantics_scale_deterministically_over_a_long_visual_chain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut project, clip_id) = project_with_detached_clip("long chain", 0.0, 5.0);
+        let container = NodeContainer::Clip(clip_id);
+        let source_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "source",
+                GeneratorNodeRequest::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+            ),
+        )?;
+        let mut previous_id = source_id;
+        let mut chain_ids = Vec::new();
+        let mut connections = Vec::new();
+        for index in 0..256 {
+            let merge_id = attach_authored_node(
+                &mut project,
+                container,
+                Node::new_merge(&format!("merge {index}")),
+            )?;
+            connections.push(ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(previous_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                0,
+            ));
+            chain_ids.push(merge_id);
+            previous_id = merge_id;
+        }
+        project.set_output_node(container, Some(previous_id))?;
+        project.connections.extend(connections);
+
+        let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+        assert_eq!(semantics.authored_source_node_id(), Some(source_id));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(source_id)));
+        for node_id in chain_ids {
+            assert!(semantics.structurally_reaches_output(PortOwner::Node(node_id)));
+        }
+        assert_eq!(
+            semantics,
+            project.container_graph_semantics(PortOwner::Clip(clip_id))
+        );
         Ok(())
     }
 
