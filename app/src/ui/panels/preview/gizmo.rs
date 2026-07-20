@@ -404,7 +404,7 @@ mod tests {
         let context = egui::Context::default();
         let mut pending_actions = Vec::new();
         let mut handled = true;
-        let _ = context.run(egui::RawInput::default(), |context| {
+        drop(context.run(egui::RawInput::default(), |context| {
             egui::CentralPanel::default().show(context, |ui| {
                 handled = handle_gizmo_interaction(
                     ui,
@@ -415,7 +415,7 @@ mod tests {
                     &mut pending_actions,
                 );
             });
-        });
+        }));
 
         assert!(!handled);
         assert!(pending_actions.is_empty());
