@@ -1,9 +1,10 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
+use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
-use library::model::project::PortOwner;
+use library::model::project::{PortOwner, TIME_PORT};
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -376,6 +377,13 @@ impl ProjectNodeViewer<'_> {
         property_definition: Option<&PropertyDefinition>,
         connected: bool,
     ) {
+        if definition.key == TIME_PORT {
+            if let Some(state) = time_source_state(self.project, PortOwner::Node(node_id)) {
+                self.show_node_time_source_row(ui, node_id, definition, connected, &state);
+                return;
+            }
+        }
+
         let property_time = node_property_time(self.project, node_id, self.current_time);
         let evaluated = self
             .project
@@ -598,6 +606,58 @@ impl ProjectNodeViewer<'_> {
                 "unclipped_rect": qa_rect_metadata(unclipped_rect),
                 "visible_in_canvas": rect.is_positive(),
             })),
+        );
+    }
+
+    fn show_node_time_source_row(
+        &self,
+        ui: &mut egui::Ui,
+        node_id: Uuid,
+        definition: &PinDefinition,
+        connected: bool,
+        state: &TimeSourceState,
+    ) {
+        let presentation = state.presentation(self.project);
+        let row = ui.horizontal(|ui| {
+            bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
+            ui.add_sized(
+                [164.0, PORT_ROW_HEIGHT - 2.0],
+                egui::Label::new(
+                    egui::RichText::new(&presentation.label)
+                        .small()
+                        .color(Color32::from_gray(145)),
+                )
+                .selectable(false)
+                .truncate(),
+            )
+            .on_hover_text(&presentation.tooltip)
+        });
+
+        let component_id = format!("node_editor.time_source.node:{node_id}");
+        let unclipped_rect = *self.to_global * row.inner.rect;
+        let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
+        let mut metadata = state.qa_metadata(PortOwner::Node(node_id));
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.insert("label".to_string(), presentation.label.into());
+            metadata.insert("tooltip".to_string(), presentation.tooltip.into());
+            metadata.insert("connected".to_string(), connected.into());
+            metadata.insert(
+                "unclipped_rect".to_string(),
+                qa_rect_metadata(unclipped_rect),
+            );
+            metadata.insert("visible_in_canvas".to_string(), rect.is_positive().into());
+        }
+        #[cfg(test)]
+        {
+            capture_test_rect(&component_id, rect);
+            capture_test_metadata(&component_id, &metadata);
+        }
+        crate::qa::register_component_with_metadata(
+            component_id,
+            "node_time_source",
+            rect,
+            true,
+            Some(metadata),
         );
     }
 

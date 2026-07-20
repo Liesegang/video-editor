@@ -25,11 +25,16 @@ use crate::{
 
 pub mod action_handler;
 mod evaluation;
+mod presentation;
 pub mod properties;
 mod property_inference;
 
 use action_handler::ActionContext;
 use evaluation::{evaluate_property_map, render_evaluation_issues};
+use presentation::{
+    render_multi_selection_notice, render_node_time_source, resolve_node_time_source,
+    NodeTimeSource,
+};
 use properties::{render_property_rows, PropertyRenderContext};
 use property_inference::inferred_property_definitions;
 #[cfg(test)]
@@ -64,6 +69,7 @@ enum InspectorSelection {
         node: Node,
         track_id: Option<Uuid>,
         containing_clip: Option<Clip>,
+        time_source: Option<NodeTimeSource>,
     },
 }
 
@@ -339,6 +345,7 @@ fn inspector_panel_content(
             node,
             track_id,
             containing_clip,
+            time_source,
         } => {
             let heading = ui.heading(format!("Node: {}", node.name));
             crate::qa::register_component_with_metadata(
@@ -349,6 +356,9 @@ fn inspector_panel_content(
                 Some(serde_json::json!({"owner": "node", "id": node.id})),
             );
             ui.separator();
+            if let Some(time_source) = time_source.as_ref() {
+                render_node_time_source(ui, node.id, time_source);
+            }
             let evaluation_time = containing_clip
                 .as_ref()
                 .map_or(global_time, |clip| clip.local_time(global_time));
@@ -408,6 +418,7 @@ fn resolve_selection(
                     node: node.clone(),
                     track_id: node_containing_track(project, node_id),
                     containing_clip,
+                    time_source: resolve_node_time_source(project, node_id),
                 });
             }
         }
@@ -479,20 +490,6 @@ fn connections_for_nodes(project: &Project, node_ids: &[Uuid]) -> Vec<ProjectCon
         })
         .cloned()
         .collect()
-}
-
-fn render_multi_selection_notice(ui: &mut Ui, editor_context: &EditorContext) {
-    let selected_count = editor_context.selection.len();
-    if selected_count <= 1 {
-        return;
-    }
-    ui.heading(format!("{selected_count} Items Selected"));
-    ui.label(
-        egui::RichText::new("(Editing Primary Item)")
-            .italics()
-            .small(),
-    );
-    ui.separator();
 }
 
 #[allow(
@@ -1800,7 +1797,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_node_selection_stays_node_owned_and_finds_clip_time_scope() {
+    fn direct_node_selection_stays_node_owned() {
         let mut project = Project::new("inspector");
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
