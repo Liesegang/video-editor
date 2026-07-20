@@ -128,6 +128,27 @@ fn expanded_clip_label(
         .unwrap_or_else(|| clip.name.clone())
 }
 
+fn track_for_selection(project: &Project, target: SelectionTarget) -> Option<Uuid> {
+    match target {
+        SelectionTarget::Track(track_id) => project.get_track(track_id).map(|_| track_id),
+        SelectionTarget::Clip(clip_id) => project
+            .get_clip(clip_id)
+            .and_then(|_| project.find_track_for_clip(clip_id)),
+        SelectionTarget::Node(node_id) => project.get_node(node_id).and_then(|_| {
+            project
+                .find_node_container(node_id)
+                .and_then(|container| match container {
+                    library::model::NodeContainer::Track(track_id) => Some(track_id),
+                    library::model::NodeContainer::Clip(clip_id) => {
+                        project.find_track_for_clip(clip_id)
+                    }
+                    library::model::NodeContainer::Composition(_) => None,
+                })
+        }),
+        SelectionTarget::Composition(_) => None,
+    }
+}
+
 pub fn show_track_list(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
@@ -139,7 +160,6 @@ pub fn show_track_list(
     let row_height = 30.0;
     let track_spacing = 2.0;
     let mut deferred_actions: Vec<DeferredTrackAction> = Vec::new();
-    let mut tracks_to_deselect: Vec<Uuid> = Vec::new();
 
     let (track_list_rect, track_list_response) = ui_content.allocate_exact_size(
         egui::vec2(sidebar_width, ui_content.available_height()),
@@ -180,6 +200,12 @@ pub fn show_track_list(
     } else {
         Vec::new()
     };
+    let selected_track_id = proj_read.as_ref().and_then(|project| {
+        editor_context
+            .selection
+            .primary()
+            .and_then(|target| track_for_selection(project, target))
+    });
     let num_rows = display_rows.len();
 
     // A composition switch or an externally removed Track cancels the
@@ -370,10 +396,6 @@ pub fn show_track_list(
                                 comp_id,
                                 track_id: track.id,
                             });
-                            // Mark for deselection if this track was selected
-                            if editor_context.is_selected(SelectionTarget::Track(track.id)) {
-                                tracks_to_deselect.push(track.id);
-                            }
                             ui.close();
                         }
                     }
@@ -403,7 +425,7 @@ pub fn show_track_list(
                 track_list_painter.rect_filled(
                     row_rect,
                     0.0,
-                    if editor_context.is_selected(SelectionTarget::Track(track.id)) {
+                    if selected_track_id == Some(track.id) {
                         egui::Color32::from_rgb(50, 80, 120)
                     } else if visible_row_index.is_multiple_of(2) {
                         egui::Color32::from_gray(50)
@@ -703,13 +725,9 @@ pub fn show_track_list(
         }
     }
 
-    // Apply deferred state changes
-    for track_id in tracks_to_deselect {
-        editor_context.remove_selection(SelectionTarget::Track(track_id));
-    }
-
     if needs_history_push {
         if let Ok(proj) = project.read() {
+            editor_context.reconcile_selection(&proj);
             history_manager.push_project_state(proj.clone());
         }
     }
@@ -728,6 +746,54 @@ mod tests {
     };
     use library::model::{Node, Track};
     use library::plugin::PluginManager;
+
+    #[test]
+    fn track_highlight_is_derived_from_typed_primary_owner() {
+        let mut project = Project::new("typed track highlight");
+        let (composition, clip_track) =
+            library::model::Composition::new("composition", 320, 180, 30.0, 2.0);
+        let composition_id = composition.id;
+        let clip_track_id = clip_track.id;
+        let node_track = Track::new("node track");
+        let node_track_id = node_track.id;
+        let shared_id = Uuid::new_v4();
+        let mut clip = Clip::new("same UUID Clip", 0.0, 1.0);
+        clip.id = shared_id;
+        let mut node = Node::new_merge("same UUID Node");
+        node.id = shared_id;
+
+        project.add_track(clip_track);
+        project.add_track(node_track);
+        project.add_clip(clip);
+        project.add_node(node);
+        project.add_composition(composition);
+        project
+            .attach_track_to_composition(composition_id, node_track_id)
+            .unwrap();
+        project
+            .attach_clip_to_track(clip_track_id, shared_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Track(node_track_id), shared_id)
+            .unwrap();
+
+        assert_eq!(
+            track_for_selection(&project, SelectionTarget::Clip(shared_id)),
+            Some(clip_track_id)
+        );
+        assert_eq!(
+            track_for_selection(&project, SelectionTarget::Node(shared_id)),
+            Some(node_track_id)
+        );
+        assert_eq!(
+            track_for_selection(&project, SelectionTarget::Track(node_track_id)),
+            Some(node_track_id)
+        );
+        assert_eq!(
+            track_for_selection(&project, SelectionTarget::Composition(composition_id)),
+            None
+        );
+    }
 
     #[test]
     fn expanded_clip_label_uses_source_instead_of_terminal_effect_or_merge(

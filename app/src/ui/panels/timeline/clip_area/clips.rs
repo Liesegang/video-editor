@@ -749,9 +749,10 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
         }
     }
 
-    // Update selection for removed clips
-    for clip_id in &removed_clip_ids {
-        editor_context.remove_selection(SelectionTarget::Clip(*clip_id));
+    if !removed_clip_ids.is_empty() {
+        if let Ok(project) = project.read() {
+            editor_context.reconcile_selection(&project);
+        }
     }
 
     if commit.timing_update_failed {

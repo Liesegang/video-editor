@@ -112,8 +112,7 @@ impl EditorContext {
             });
         self.active_composition_id = composition_id;
 
-        self.selection
-            .retain(|target| selection_target_composition(project, target) == composition_id);
+        self.reconcile_selection(project);
 
         self.timeline
             .expanded_tracks
@@ -250,16 +249,42 @@ impl EditorContext {
     pub fn is_selected(&self, target: SelectionTarget) -> bool {
         self.selection.contains(target)
     }
+
+    /// Remove selection targets that no longer resolve to an exact Project
+    /// entity in the active Composition.
+    ///
+    /// Unlike [`Self::reconcile_project_replacement`], this is intentionally a
+    /// light-weight post-mutation check: normal delete operations must not
+    /// reset view state or invalidate unrelated editor gestures. Target kind
+    /// is part of identity, so a surviving Clip never keeps a deleted Node
+    /// with the same UUID alive (or vice versa).
+    pub fn reconcile_selection(&mut self, project: &Project) -> bool {
+        let before = self.selection.targets().to_vec();
+        let composition_id = self.active_composition_id;
+        self.selection.retain(|target| {
+            composition_id
+                .is_some_and(|active| selection_target_composition(project, target) == Some(active))
+        });
+        let changed = self.selection.targets() != before;
+        if changed {
+            self.interaction.preview_selected_instance_path = None;
+        }
+        changed
+    }
 }
 
 fn selection_target_composition(project: &Project, target: SelectionTarget) -> Option<Uuid> {
     match target {
         SelectionTarget::Composition(id) => project.get_composition(id).map(|_| id),
-        SelectionTarget::Track(id) => project.find_composition_for_track(id),
-        SelectionTarget::Clip(id) => project
-            .find_track_for_clip(id)
-            .and_then(|track_id| project.find_composition_for_track(track_id)),
-        SelectionTarget::Node(id) => {
+        SelectionTarget::Track(id) => project
+            .get_track(id)
+            .and_then(|_| project.find_composition_for_track(id)),
+        SelectionTarget::Clip(id) => project.get_clip(id).and_then(|_| {
+            project
+                .find_track_for_clip(id)
+                .and_then(|track_id| project.find_composition_for_track(track_id))
+        }),
+        SelectionTarget::Node(id) => project.get_node(id).and_then(|_| {
             project
                 .find_node_container(id)
                 .and_then(|container| match container {
@@ -271,7 +296,7 @@ fn selection_target_composition(project: &Project, target: SelectionTarget) -> O
                         .find_track_for_clip(id)
                         .and_then(|track_id| project.find_composition_for_track(track_id)),
                 })
-        }
+        }),
     }
 }
 
@@ -281,8 +306,8 @@ mod tests {
     use crate::state::context_types::{NodeEditorPendingEdit, SelectionTarget};
     use library::model::frame::color::Color;
     use library::model::frame::frame::{FrameInfo, Region};
-    use library::model::project::{Composition, PortOwner, Project};
-    use library::model::Clip;
+    use library::model::project::{Composition, NodeContainer, PortOwner, Project};
+    use library::model::{Clip, Node, Track};
     use ordered_float::OrderedFloat;
 
     #[test]
@@ -356,6 +381,227 @@ mod tests {
         context.toggle_selection(SelectionTarget::Node(shared_id));
         assert!(context.is_selected(SelectionTarget::Node(shared_id)));
         assert!(context.is_selected(SelectionTarget::Clip(shared_id)));
+    }
+
+    #[test]
+    fn selection_reconciliation_removes_cascade_deleted_track_children() {
+        let mut project = Project::new("cascade selection");
+        let (composition, deleted_track) = Composition::new("composition", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let deleted_track_id = deleted_track.id;
+        let surviving_track = Track::new("surviving track");
+        let surviving_track_id = surviving_track.id;
+        let deleted_clip = Clip::new("deleted clip", 0.0, 5.0);
+        let deleted_clip_id = deleted_clip.id;
+        let surviving_clip = Clip::new("surviving clip", 0.0, 5.0);
+        let surviving_clip_id = surviving_clip.id;
+        let deleted_node = Node::new_merge("deleted node");
+        let deleted_node_id = deleted_node.id;
+        let surviving_node = Node::new_merge("surviving node");
+        let surviving_node_id = surviving_node.id;
+
+        project.add_track(deleted_track);
+        project.add_track(surviving_track);
+        project.add_clip(deleted_clip);
+        project.add_clip(surviving_clip);
+        project.add_node(deleted_node);
+        project.add_node(surviving_node);
+        project.add_composition(composition);
+        project
+            .attach_track_to_composition(composition_id, surviving_track_id)
+            .unwrap();
+        project
+            .attach_clip_to_track(deleted_track_id, deleted_clip_id)
+            .unwrap();
+        project
+            .attach_clip_to_track(surviving_track_id, surviving_clip_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(deleted_clip_id), deleted_node_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(surviving_clip_id), surviving_node_id)
+            .unwrap();
+
+        let mut context = EditorContext::new(composition_id);
+        context.replace_selection(
+            [
+                SelectionTarget::Clip(surviving_clip_id),
+                SelectionTarget::Node(surviving_node_id),
+                SelectionTarget::Track(deleted_track_id),
+                SelectionTarget::Clip(deleted_clip_id),
+                SelectionTarget::Node(deleted_node_id),
+            ],
+            Some(SelectionTarget::Node(deleted_node_id)),
+        );
+
+        assert!(project.remove_track(deleted_track_id).is_some());
+        assert!(context.reconcile_selection(&project));
+        assert_eq!(
+            context.selection.targets(),
+            &[
+                SelectionTarget::Clip(surviving_clip_id),
+                SelectionTarget::Node(surviving_node_id),
+            ]
+        );
+        assert_eq!(
+            context.selection.primary(),
+            Some(SelectionTarget::Node(surviving_node_id))
+        );
+    }
+
+    #[test]
+    fn selection_reconciliation_uses_exact_kind_for_same_uuid() {
+        let mut project = Project::new("same UUID selection");
+        let (composition, track) = Composition::new("composition", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let shared_id = uuid::Uuid::new_v4();
+        let mut clip = Clip::new("surviving clip", 0.0, 5.0);
+        clip.id = shared_id;
+        let mut node = Node::new_merge("deleted node");
+        node.id = shared_id;
+
+        project.add_track(track);
+        project.add_clip(clip);
+        project.add_node(node);
+        project.add_composition(composition);
+        project.attach_clip_to_track(track_id, shared_id).unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(shared_id), shared_id)
+            .unwrap();
+
+        let mut context = EditorContext::new(composition_id);
+        context.replace_selection(
+            [
+                SelectionTarget::Clip(shared_id),
+                SelectionTarget::Node(shared_id),
+            ],
+            Some(SelectionTarget::Node(shared_id)),
+        );
+
+        assert!(project.remove_node(shared_id).is_some());
+        assert!(context.reconcile_selection(&project));
+        assert_eq!(
+            context.selection.targets(),
+            &[SelectionTarget::Clip(shared_id)]
+        );
+        assert_eq!(
+            context.selection.primary(),
+            Some(SelectionTarget::Clip(shared_id))
+        );
+    }
+
+    #[test]
+    fn selection_reconciliation_removes_cascade_deleted_clip_children() {
+        let mut project = Project::new("clip cascade selection");
+        let (composition, track) = Composition::new("composition", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let deleted_clip = Clip::new("deleted clip", 0.0, 5.0);
+        let deleted_clip_id = deleted_clip.id;
+        let surviving_clip = Clip::new("surviving clip", 0.0, 5.0);
+        let surviving_clip_id = surviving_clip.id;
+        let deleted_node = Node::new_merge("deleted node");
+        let deleted_node_id = deleted_node.id;
+        let surviving_node = Node::new_merge("surviving node");
+        let surviving_node_id = surviving_node.id;
+        project.add_track(track);
+        project.add_clip(deleted_clip);
+        project.add_clip(surviving_clip);
+        project.add_node(deleted_node);
+        project.add_node(surviving_node);
+        project.add_composition(composition);
+        project
+            .attach_clip_to_track(track_id, deleted_clip_id)
+            .unwrap();
+        project
+            .attach_clip_to_track(track_id, surviving_clip_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(deleted_clip_id), deleted_node_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(surviving_clip_id), surviving_node_id)
+            .unwrap();
+
+        let mut context = EditorContext::new(composition_id);
+        context.replace_selection(
+            [
+                SelectionTarget::Node(surviving_node_id),
+                SelectionTarget::Clip(deleted_clip_id),
+                SelectionTarget::Node(deleted_node_id),
+            ],
+            Some(SelectionTarget::Node(deleted_node_id)),
+        );
+
+        assert!(project.remove_clip(deleted_clip_id).is_some());
+        assert!(context.reconcile_selection(&project));
+        assert_eq!(
+            context.selection.targets(),
+            &[SelectionTarget::Node(surviving_node_id)]
+        );
+        assert_eq!(
+            context.selection.primary(),
+            Some(SelectionTarget::Node(surviving_node_id))
+        );
+    }
+
+    #[test]
+    fn selection_reconciliation_removes_deleted_active_composition_tree() {
+        let mut project = Project::new("composition cascade selection");
+        let (composition, track) = Composition::new("composition", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let clip = Clip::new("clip", 0.0, 5.0);
+        let clip_id = clip.id;
+        let node = Node::new_merge("node");
+        let node_id = node.id;
+        project.add_track(track);
+        project.add_clip(clip);
+        project.add_node(node);
+        project.add_composition(composition);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
+            .unwrap();
+
+        let mut context = EditorContext::new(composition_id);
+        context.replace_selection(
+            [
+                SelectionTarget::Composition(composition_id),
+                SelectionTarget::Track(track_id),
+                SelectionTarget::Clip(clip_id),
+                SelectionTarget::Node(node_id),
+            ],
+            Some(SelectionTarget::Node(node_id)),
+        );
+
+        assert!(project.remove_composition(composition_id).is_some());
+        assert!(context.reconcile_selection(&project));
+        assert!(context.selection.targets().is_empty());
+        assert_eq!(context.selection.primary(), None);
+    }
+
+    #[test]
+    fn selection_reconciliation_with_no_active_composition_clears_missing_targets() {
+        let project = Project::new("empty");
+        let missing = uuid::Uuid::new_v4();
+        let mut context = EditorContext::new(missing);
+        context.replace_selection(
+            [
+                SelectionTarget::Node(missing),
+                SelectionTarget::Clip(missing),
+                SelectionTarget::Track(missing),
+                SelectionTarget::Composition(missing),
+            ],
+            Some(SelectionTarget::Node(missing)),
+        );
+        context.active_composition_id = None;
+
+        assert!(context.reconcile_selection(&project));
+        assert!(context.selection.targets().is_empty());
+        assert_eq!(context.selection.primary(), None);
     }
 
     #[test]

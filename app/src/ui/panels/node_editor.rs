@@ -3933,6 +3933,62 @@ fn container_child_bounds(project: &Project, owner: PortOwner) -> Option<egui::R
     rect.is_positive().then_some(rect)
 }
 
+fn node_selection_after_snarl_click(
+    current_targets: &[SelectionTarget],
+    current_primary: Option<SelectionTarget>,
+    snarl_selected_node_ids: &[Uuid],
+    clicked_node_id: Uuid,
+    modifiers: egui::Modifiers,
+) -> (Vec<SelectionTarget>, Option<SelectionTarget>) {
+    // egui-snarl applies Shift/Cmd selection changes before `Snarl::show`
+    // returns. Cmd without Shift is its deselect gesture. In that case the
+    // clicked Node is intentionally absent from the post-show snapshot; do
+    // not mistake that absence for an update race and select it again.
+    if modifiers.shift {
+        let mut targets = current_targets
+            .iter()
+            .copied()
+            .filter(|target| !matches!(target, SelectionTarget::Node(_)))
+            .collect::<Vec<_>>();
+        for node_id in snarl_selected_node_ids {
+            let target = SelectionTarget::Node(*node_id);
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+        let clicked = SelectionTarget::Node(clicked_node_id);
+        if !targets.contains(&clicked) {
+            targets.push(clicked);
+        }
+        return (targets, Some(clicked));
+    }
+
+    if modifiers.command {
+        let clicked = SelectionTarget::Node(clicked_node_id);
+        let targets = current_targets
+            .iter()
+            .copied()
+            .filter(|target| *target != clicked)
+            .collect::<Vec<_>>();
+        let primary = current_primary
+            .filter(|target| targets.contains(target))
+            .or_else(|| targets.last().copied());
+        return (targets, primary);
+    }
+
+    if snarl_selected_node_ids.contains(&clicked_node_id) {
+        let targets = snarl_selected_node_ids
+            .iter()
+            .copied()
+            .map(SelectionTarget::Node)
+            .collect::<Vec<_>>();
+        return (targets, Some(SelectionTarget::Node(clicked_node_id)));
+    }
+
+    let target = SelectionTarget::Node(clicked_node_id);
+    (vec![target], Some(target))
+}
+
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
     project_lock: &Arc<RwLock<Project>>,
@@ -4299,23 +4355,20 @@ pub fn node_editor_panel(
         layout_edits = collected;
     }
 
+    let selection_modifiers = ui.input(|input| input.modifiers);
     let mut selection_changed = false;
     if let Some(owner) = pending_selection {
         if let Ok(project) = project_lock.read() {
             match owner {
                 PortOwner::Node(node_id) if project.get_node(node_id).is_some() => {
-                    let targets = if snarl_selected_node_ids.contains(&node_id) {
-                        snarl_selected_node_ids
-                            .iter()
-                            .copied()
-                            .map(SelectionTarget::Node)
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![SelectionTarget::Node(node_id)]
-                    };
-                    editor_context
-                        .selection
-                        .replace(targets, Some(SelectionTarget::Node(node_id)));
+                    let (targets, primary) = node_selection_after_snarl_click(
+                        editor_context.selection.targets(),
+                        editor_context.selection.primary(),
+                        &snarl_selected_node_ids,
+                        node_id,
+                        selection_modifiers,
+                    );
+                    editor_context.selection.replace(targets, primary);
                     selection_changed = true;
                 }
                 PortOwner::Clip(clip_id) if project.get_clip(clip_id).is_some() => {
@@ -4414,19 +4467,6 @@ pub fn node_editor_panel(
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
     }
 
-    let stale_primary = editor_context.selection.primary().is_some_and(|target| {
-        project_lock.read().map_or(true, |project| match target {
-            SelectionTarget::Node(id) => project.get_node(id).is_none(),
-            SelectionTarget::Clip(id) => project.get_clip(id).is_none(),
-            SelectionTarget::Track(id) => project.get_track(id).is_none(),
-            SelectionTarget::Composition(id) => project.get_composition(id).is_none(),
-        })
-    });
-    if stale_primary {
-        editor_context.selection.clear();
-        editor_context.interaction.preview_selected_instance_path = None;
-    }
-
     node_editor_state.layout_changed_during_drag |= layout_changed;
     if ui.input(|input| input.pointer.secondary_clicked()) {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
@@ -4456,6 +4496,9 @@ pub fn node_editor_panel(
     }
     if automatic_layout_changed || explicit_layout_changed || created || layout_finished {
         push_history_snapshot(project_lock, history_manager);
+    }
+    if let Ok(project) = project_lock.read() {
+        editor_context.reconcile_selection(&project);
     }
 }
 
@@ -14511,6 +14554,55 @@ mod tests {
             "upper selection missing from {selected:?}"
         );
         let upper_header_center = upper_header.center();
+        let command = egui::Modifiers {
+            command: true,
+            mac_cmd: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            ..Default::default()
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(upper_header_center)],
+            vec![egui::Event::PointerButton {
+                pos: upper_header_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: command,
+            }],
+            vec![egui::Event::PointerButton {
+                pos: upper_header_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: command,
+            }],
+        ] {
+            render_frame(&project, &mut snarl, frame, events, command);
+            frame += 1;
+        }
+        let selected_after_command =
+            egui_snarl::ui::get_selected_nodes(persistent_snarl_id, &context);
+        assert!(selected_after_command.contains(&lower_snarl_id));
+        assert!(!selected_after_command.contains(&upper_snarl_id));
+        let post_show_project_ids = selected_after_command
+            .iter()
+            .filter_map(|snarl_id| match snarl.get_node(*snarl_id) {
+                Some(GraphItem::Node(node_id)) => Some(*node_id),
+                Some(GraphItem::Container(_) | GraphItem::PortAnchor { .. }) | None => None,
+            })
+            .collect::<Vec<_>>();
+        let (typed_targets, typed_primary) = node_selection_after_snarl_click(
+            &[
+                SelectionTarget::Node(lower_id),
+                SelectionTarget::Node(upper_id),
+            ],
+            Some(SelectionTarget::Node(upper_id)),
+            &post_show_project_ids,
+            upper_id,
+            command,
+        );
+        assert_eq!(typed_targets, vec![SelectionTarget::Node(lower_id)]);
+        assert_eq!(typed_primary, Some(SelectionTarget::Node(lower_id)));
+
+        // Restore the group for the overlapping multi-drag assertion below.
         for events in [
             vec![egui::Event::PointerMoved(upper_header_center)],
             vec![egui::Event::PointerButton {
@@ -14615,6 +14707,58 @@ mod tests {
                 .and_then(|gesture| gesture.primary_node_id),
             Some(upper_id)
         );
+    }
+
+    #[test]
+    fn cmd_deselect_uses_post_snarl_state_without_reselecting_clicked_node() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let current = [SelectionTarget::Node(first), SelectionTarget::Node(second)];
+        let command = egui::Modifiers {
+            command: true,
+            mac_cmd: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            ..Default::default()
+        };
+
+        let (targets, primary) = node_selection_after_snarl_click(
+            &current,
+            Some(SelectionTarget::Node(second)),
+            &[first],
+            second,
+            command,
+        );
+
+        assert_eq!(targets, vec![SelectionTarget::Node(first)]);
+        assert_eq!(primary, Some(SelectionTarget::Node(first)));
+    }
+
+    #[test]
+    fn shift_node_selection_keeps_same_uuid_non_node_target() {
+        let shared_id = Uuid::from_u128(1);
+        let other_node_id = Uuid::from_u128(2);
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+
+        let (targets, primary) = node_selection_after_snarl_click(
+            &[SelectionTarget::Clip(shared_id)],
+            Some(SelectionTarget::Clip(shared_id)),
+            &[other_node_id, shared_id, shared_id],
+            shared_id,
+            shift,
+        );
+
+        assert_eq!(
+            targets,
+            vec![
+                SelectionTarget::Clip(shared_id),
+                SelectionTarget::Node(other_node_id),
+                SelectionTarget::Node(shared_id),
+            ]
+        );
+        assert_eq!(primary, Some(SelectionTarget::Node(shared_id)));
     }
 
     #[test]
