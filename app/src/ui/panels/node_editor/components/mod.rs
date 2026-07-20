@@ -10,8 +10,6 @@ mod merge_layers;
 mod theme;
 
 #[cfg(test)]
-pub(in crate::ui::panels::node_editor) use merge_layers::register_merge_layer_popup_component;
-#[cfg(test)]
 pub(in crate::ui::panels::node_editor) use merge_layers::WireOrderMenuState;
 pub(in crate::ui::panels::node_editor) use merge_layers::{
     blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,

@@ -1,5 +1,67 @@
 use egui::{Key, Pos2, Rect, ScrollArea, TextEdit, Ui, Vec2};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_QA_COMPONENTS: RefCell<BTreeMap<String, (Rect, bool, Option<serde_json::Value>)>> =
+        RefCell::new(BTreeMap::new());
+}
+
+#[cfg(test)]
+pub(crate) fn reset_searchable_test_components() {
+    TEST_QA_COMPONENTS.with(|components| components.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn searchable_test_component(
+    id: &str,
+) -> Option<(Rect, bool, Option<serde_json::Value>)> {
+    TEST_QA_COMPONENTS.with(|components| components.borrow().get(id).cloned())
+}
+
+fn register_searchable_component(
+    id: impl Into<String>,
+    component_type: impl Into<String>,
+    rect: Rect,
+    enabled: bool,
+    metadata: Option<serde_json::Value>,
+) {
+    let id = id.into();
+    #[cfg(test)]
+    TEST_QA_COMPONENTS.with(|components| {
+        components
+            .borrow_mut()
+            .insert(id.clone(), (rect, enabled, metadata.clone()));
+    });
+    crate::qa::register_component_with_metadata(id, component_type, rect, enabled, metadata);
+}
+
+fn clipped_searchable_rect(rect: Rect, clip_rect: Rect) -> Rect {
+    let intersection = rect.intersect(clip_rect);
+    if intersection.is_positive() {
+        intersection
+    } else {
+        let point = Pos2::new(
+            rect.center().x.clamp(clip_rect.left(), clip_rect.right()),
+            rect.center().y.clamp(clip_rect.top(), clip_rect.bottom()),
+        );
+        Rect::from_min_max(point, point)
+    }
+}
+
+fn register_clipped_searchable_component(
+    id: impl Into<String>,
+    component_type: impl Into<String>,
+    rect: Rect,
+    clip_rect: Rect,
+    enabled: bool,
+    metadata: Option<serde_json::Value>,
+) {
+    let rect = clipped_searchable_rect(rect, clip_rect);
+    register_searchable_component(id, component_type, rect, enabled, metadata);
+}
 
 pub const DEFAULT_SEARCHABLE_RESULTS_MAX_HEIGHT: f32 = 300.0;
 pub const SEARCHABLE_POPUP_VIEWPORT_MARGIN: f32 = 8.0;
@@ -198,7 +260,7 @@ pub fn register_searchable_popup_qa(
     } else {
         actual_root_rect.top()
     };
-    crate::qa::register_component_with_metadata(
+    register_searchable_component(
         qa_id,
         "searchable_context_menu",
         actual_root_rect,
@@ -310,10 +372,11 @@ pub fn show_searchable_items_with_qa<T: Clone>(
 
     let text_response = ui.add(TextEdit::singleline(&mut state.query).hint_text("Search..."));
     if let Some(qa_search_id) = qa_search_id {
-        crate::qa::register_component_with_metadata(
+        register_clipped_searchable_component(
             qa_search_id,
             "searchable_menu_query",
             text_response.rect,
+            ui.clip_rect(),
             text_response.enabled(),
             Some(serde_json::json!({"action": "filter"})),
         );
@@ -501,10 +564,11 @@ fn render_category_node<T>(
                 );
             });
         if let Some(qa_search_id) = qa_search_id {
-            crate::qa::register_component_with_metadata(
+            register_clipped_searchable_component(
                 format!("{qa_search_id}.category:{}", child_path.join("/")),
                 "searchable_menu_category",
                 accordion.header_response.rect,
+                ui.clip_rect(),
                 accordion.header_response.enabled(),
                 Some(serde_json::json!({
                     "action": "toggle_category",
@@ -555,10 +619,11 @@ fn render_item_button<T>(
                 .entry("category")
                 .or_insert_with(|| serde_json::json!(item.category));
         }
-        crate::qa::register_component_with_metadata(
+        register_clipped_searchable_component(
             qa_id,
             "searchable_menu_item",
             response.rect,
+            ui.clip_rect(),
             response.enabled(),
             Some(metadata),
         );
@@ -787,6 +852,50 @@ mod tests {
             .offset
             .y;
         assert!((second_offset - 120.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn scroll_clipped_item_is_not_registered_as_a_positive_visible_target() {
+        let items = (0_u8..40)
+            .map(|value| {
+                let mut item = SearchableItem::new(format!("Item {value:02}"), value);
+                item.qa_id = Some(format!("searchable-test.item:{value}"));
+                item
+            })
+            .collect::<Vec<_>>();
+        let context = egui::Context::default();
+        reset_searchable_test_components();
+
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 180.0))),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let _selection = show_searchable_items_with_qa(
+                        ui,
+                        "scroll-clipping-test",
+                        Some("searchable-test.query"),
+                        &items,
+                    );
+                });
+            },
+        ));
+
+        let (first_rect, first_enabled, _) = searchable_test_component("searchable-test.item:0")
+            .expect("the first result is registered");
+        assert!(first_rect.is_positive());
+        assert!(first_enabled);
+
+        let (last_rect, last_enabled, _) = searchable_test_component("searchable-test.item:39")
+            .expect("the clipped result keeps a stable, non-clickable QA identity");
+        assert!(!last_rect.is_positive());
+        assert!(
+            last_enabled,
+            "visibility must not rewrite semantic enabled state"
+        );
     }
 
     #[test]

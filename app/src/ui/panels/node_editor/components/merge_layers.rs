@@ -6,11 +6,11 @@ use library::model::{BlendMode, NodeContent, Project};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[cfg(test)]
+use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     canonical_pin_definitions, clipped_qa_rect, qa_container_key, qa_rect_metadata, PinDefinition,
 };
-#[cfg(test)]
-use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
 
 const AUTHORED_BLEND_MODES: [BlendMode; 29] = BlendMode::ALL;
@@ -273,36 +273,6 @@ pub(in crate::ui::panels::node_editor) fn register_merge_layer_component(
     }
     #[cfg(test)]
     capture_test_rect(&id, rect);
-    crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
-}
-
-#[cfg(test)]
-pub(in crate::ui::panels::node_editor) fn register_merge_layer_popup_component(
-    id: String,
-    component_type: &str,
-    screen_rect: egui::Rect,
-    enabled: bool,
-    popup_clip: egui::Rect,
-    mut metadata: serde_json::Value,
-) {
-    let rect = clipped_qa_rect(screen_rect, popup_clip);
-    if let Some(metadata) = metadata.as_object_mut() {
-        metadata.insert("unclipped_rect".to_string(), qa_rect_metadata(screen_rect));
-        metadata.insert("popup_clip_rect".to_string(), qa_rect_metadata(popup_clip));
-        metadata.insert(
-            "visible_in_popup".to_string(),
-            serde_json::Value::Bool(rect.is_positive()),
-        );
-        metadata.insert(
-            "coordinate_space".to_string(),
-            serde_json::Value::String("screen_points".to_string()),
-        );
-    }
-    #[cfg(test)]
-    {
-        capture_test_rect(&id, rect);
-        capture_test_metadata(&id, &metadata);
-    }
     crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
 }
 
