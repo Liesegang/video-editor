@@ -8,6 +8,8 @@ use eframe::egui;
 use egui_snarl::ui::{BackgroundPattern, PinPlacement, SnarlStyle, WireLayer, WireStyle};
 use uuid::Uuid;
 
+use super::PORT_SOCKET_SIZE;
+
 /// The previous 0.65 lower bound made an overview of a large graph impossible.
 /// 0.0065 is exactly two orders of magnitude farther out while remaining far
 /// enough above zero for stable inverse transforms.
@@ -75,7 +77,7 @@ pub(super) fn node_editor_snarl_style() -> SnarlStyle {
     SnarlStyle {
         collapsible: Some(false),
         pin_placement: Some(PinPlacement::Edge),
-        pin_size: Some(13.0),
+        pin_size: Some(PORT_SOCKET_SIZE),
         wire_width: Some(3.0),
         wire_style: Some(WireStyle::Bezier3),
         wire_layer: Some(WireLayer::BehindNodes),

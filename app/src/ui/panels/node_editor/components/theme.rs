@@ -8,7 +8,8 @@ use uuid::Uuid;
 use crate::ui::panels::node_editor::{
     canonical_pin_definitions, node_editor_details_visible, screen_stroke_in_graph_units,
     ContainerKind, ContainerVisual, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
-    EMBEDDED_PORT_LABEL_INSET, PORT_ROW_HEIGHT,
+    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, EMBEDDED_PORT_LABEL_INSET,
+    PORT_ROW_HEIGHT,
 };
 
 #[derive(Clone, Copy)]
@@ -248,18 +249,6 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
         ],
         egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.82)),
     );
-    painter.text(
-        rect.right_top() + egui::vec2(-12.0, 10.0),
-        egui::Align2::RIGHT_TOP,
-        match container.kind {
-            ContainerKind::Composition => "COMPOSITION",
-            ContainerKind::Track => "TRACK",
-            ContainerKind::Clip => "CLIP",
-        },
-        egui::FontId::proportional(11.0),
-        Color32::from_white_alpha(155),
-    );
-
     if !container.collapsed {
         for (index, definition) in canonical_pin_definitions(
             project,
@@ -281,16 +270,28 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
                 pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
             );
         }
-        painter.text(
-            egui::pos2(
-                rect.right() - EMBEDDED_PORT_LABEL_INSET,
-                rect.top() + CONTAINER_HEADER_HEIGHT * 0.5,
-            ),
-            egui::Align2::RIGHT_CENTER,
-            "IMAGE OUT",
-            egui::FontId::proportional(10.0),
-            pin_color(PortDataType::Image).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
-        );
+        for (index, definition) in canonical_pin_definitions(
+            project,
+            container.owner,
+            PortDirection::Output,
+            PortSide::Right,
+        )
+        .iter()
+        .enumerate()
+        {
+            painter.text(
+                egui::pos2(
+                    rect.right() - 42.0,
+                    rect.top()
+                        + CONTAINER_RIGHT_PORT_Y
+                        + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT,
+                ),
+                egui::Align2::RIGHT_CENTER,
+                definition.name.to_uppercase(),
+                egui::FontId::proportional(10.0),
+                pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
+            );
+        }
     }
 
     if let PortOwner::Clip(clip_id) = container.owner {

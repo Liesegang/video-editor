@@ -182,6 +182,7 @@ impl EditorContext {
         self.node_editor_state.node_reparent = None;
         self.node_editor_state.moved_node_ids.clear();
         self.node_editor_state.container_resize = None;
+        self.node_editor_state.node_editor_canvas_transform = None;
         self.node_editor_state.selected_connection_id = None;
         self.node_editor_state.wire_gesture = None;
         self.node_editor_state.normal_wire_drag_active = false;

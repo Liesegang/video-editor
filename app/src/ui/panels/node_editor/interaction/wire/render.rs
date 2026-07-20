@@ -25,8 +25,13 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
     current_time: f64,
 ) {
     let owner = qa_container_key(container.owner);
-    let unclipped_main = to_global * container.rect();
+    let graph_main = container.rect();
+    let unclipped_main = to_global * graph_main;
     let main = clipped_qa_rect(unclipped_main, canvas_clip);
+    let graph_content = container.content_rect();
+    let content_ratio = graph_content.map(|content| {
+        content.width() * content.height() / (graph_main.width() * graph_main.height())
+    });
     let main_id = format!("node_editor.container.{owner}");
     #[cfg(test)]
     capture_test_rect(&main_id, main);
@@ -44,10 +49,34 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
             "collapsed": container.collapsed,
             "inactive": container_inactive(project, container.owner, current_time),
             "output_node_id": container_output_node_id(project, container.owner),
+            "content_rect": graph_content.map(qa_rect_metadata),
+            "content_area_ratio": content_ratio,
+            "port_hit_policy": "localized_socket",
             "unclipped_rect": qa_rect_metadata(unclipped_main),
             "visible_in_canvas": main.is_positive(),
         })),
     );
+
+    if let Some(graph_content) = graph_content {
+        let unclipped_content = to_global * graph_content;
+        let content = clipped_qa_rect(unclipped_content, canvas_clip);
+        let content_id = format!("node_editor.container_content.{owner}");
+        #[cfg(test)]
+        capture_test_rect(&content_id, content);
+        crate::qa::register_component_with_metadata(
+            content_id,
+            "node_container_content",
+            content,
+            true,
+            Some(serde_json::json!({
+                "owner": owner,
+                "accepts_node_placement": true,
+                "port_hit_policy": "localized_socket",
+                "unclipped_rect": qa_rect_metadata(unclipped_content),
+                "visible_in_canvas": content.is_positive(),
+            })),
+        );
+    }
 }
 
 pub(in crate::ui::panels::node_editor) fn register_rendered_edges(

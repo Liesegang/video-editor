@@ -2,9 +2,11 @@ mod resize;
 mod selection;
 mod wire;
 
-pub(in crate::ui::panels::node_editor) use resize::container_resize_interactions;
 #[cfg(test)]
-pub(in crate::ui::panels::node_editor) use resize::{resize_regions, resized_container_geometry};
+pub(in crate::ui::panels::node_editor) use resize::resize_regions;
+pub(in crate::ui::panels::node_editor) use resize::{
+    capture_container_resize_before_canvas, container_resize_interactions,
+};
 pub(in crate::ui::panels::node_editor) use selection::node_selection_after_snarl_click;
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::register_edge_component;

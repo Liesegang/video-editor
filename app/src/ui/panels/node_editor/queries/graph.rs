@@ -252,7 +252,7 @@ pub(in crate::ui::panels::node_editor) fn output_definitions(
         } => (owner, PortSide::Left),
         GraphItem::PortAnchor {
             owner,
-            kind: PortAnchorKind::ExternalImage,
+            kind: PortAnchorKind::ExternalOutputs,
         } => (owner, PortSide::Right),
         GraphItem::Container(_) | GraphItem::PortAnchor { .. } => return Vec::new(),
     };

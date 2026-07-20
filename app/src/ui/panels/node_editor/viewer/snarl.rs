@@ -734,16 +734,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let graph_rect = rect;
         let unclipped_rect = *self.to_global * graph_rect;
         let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
-        // Snarl owns secondary-click interaction on every rendered graph item,
-        // including the otherwise transparent container and port-anchor
-        // nodes. Keep these hit rectangles in graph space: the global Create
-        // menu applies the inverse canvas transform before consulting them.
-        // Container backdrops are painted separately and deliberately are not
-        // included, so right-clicking an empty container body still creates a
-        // Node in that container.
-        self.context_menu_exclusion_rects.push(graph_rect);
         match item {
             GraphItem::Node(id) => {
+                self.context_menu_exclusion_rects.push(graph_rect);
                 if let Ok(mut node_rects) = self.rendered_node_rects.lock() {
                     node_rects.insert(id, graph_rect);
                 }
@@ -771,7 +764,37 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     })),
                 )
             }
-            GraphItem::Container(_) | GraphItem::PortAnchor { .. } => {}
+            GraphItem::Container(_) => {
+                // Only the integrated header/control card is a Snarl item;
+                // the separately painted container body remains available to
+                // the global Create menu and Node placement.
+                self.context_menu_exclusion_rects.push(graph_rect);
+            }
+            GraphItem::PortAnchor { owner, kind } => {
+                // Transparent Snarl anchor frames can be wider than the
+                // sockets they carry. Exclude only each projected socket hit
+                // from the Create menu so the rest of the edge rail and the
+                // entire body remain usable.
+                let Some(container) = self
+                    .containers
+                    .iter()
+                    .find(|container| container.owner == owner)
+                else {
+                    return;
+                };
+                let pin_count = input_definitions(self.project, item)
+                    .len()
+                    .max(output_definitions(self.project, item).len());
+                for index in 0..pin_count {
+                    let socket = egui::Rect::from_center_size(
+                        container.embedded_port_center(kind, index),
+                        egui::Vec2::splat(PORT_SOCKET_SIZE),
+                    );
+                    let screen_hit = (*self.to_global * socket).expand(WIRE_PORT_DROP_RADIUS);
+                    self.context_menu_exclusion_rects
+                        .push(self.to_global.inverse() * screen_hit);
+                }
+            }
         }
     }
 
