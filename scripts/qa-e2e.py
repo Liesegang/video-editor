@@ -32,6 +32,8 @@ SOLID = "00000000-0000-0000-0000-000000000401"
 MERGE = "00000000-0000-0000-0000-000000000402"
 TEXT = "00000000-0000-0000-0000-000000000403"
 SHAPE = "00000000-0000-0000-0000-000000000404"
+AUDIO_A = "00000000-0000-0000-0000-000000000405"
+AUDIO_B = "00000000-0000-0000-0000-000000000406"
 TRANSFORM_EFFECTOR = "00000000-0000-0000-0000-000000000501"
 OPACITY_EFFECTOR = "00000000-0000-0000-0000-000000000502"
 BACKPLATE_DECORATOR = "00000000-0000-0000-0000-000000000503"
@@ -49,6 +51,8 @@ EXPECTED_FIXTURE_NODES = frozenset(
         MERGE,
         TEXT,
         SHAPE,
+        AUDIO_A,
+        AUDIO_B,
         TEXT_TRANSFORM,
         SHAPE_TRANSFORM,
         TRANSFORM_EFFECTOR,
@@ -62,7 +66,7 @@ EXPECTED_FIXTURE_NODES = frozenset(
     }
 )
 EXPECTED_CLIP_NODES = {
-    CLIP_A1: [SOLID, MERGE],
+    CLIP_A1: [AUDIO_A, AUDIO_B, SOLID, MERGE],
     CLIP_A2: [
         TEXT,
         TEXT_TRANSFORM,
@@ -1899,7 +1903,7 @@ def validate_explicit_operation_fixture(project):
         missing = sorted(EXPECTED_FIXTURE_NODES - actual_nodes)
         extra = sorted(actual_nodes - EXPECTED_FIXTURE_NODES)
         raise QaFailure(
-            "fixture must contain the 14 explicit Nodes; missing={}, extra={}".format(
+            "fixture must contain the 16 explicit Nodes; missing={}, extra={}".format(
                 missing, extra
             )
         )
@@ -1966,9 +1970,9 @@ def validate_explicit_operation_fixture(project):
                 raise QaFailure(
                     "{} still contains embedded {}".format(node_id, collection)
                 )
-    if len(project.get("connections", ())) != 28:
+    if len(project.get("connections", ())) != 30:
         raise QaFailure(
-            "explicit fixture has {} connections, expected 28".format(
+            "explicit fixture has {} connections, expected 30".format(
                 len(project.get("connections", ()))
             )
         )
