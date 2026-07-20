@@ -80,6 +80,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-reparent", "qa-reparent-e2e.py"),
             SuiteSpec("merge-reorder", "qa-merge-reorder-e2e.py"),
+            SuiteSpec("blend-modes", "qa-blend-modes-e2e.py"),
             SuiteSpec(
                 "composition-drop",
                 "qa-composition-drop-e2e.py",

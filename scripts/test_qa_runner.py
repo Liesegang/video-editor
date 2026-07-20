@@ -35,6 +35,16 @@ KEYFRAME = importlib.util.module_from_spec(KEYFRAME_SPEC)
 sys.modules[KEYFRAME_SPEC.name] = KEYFRAME
 KEYFRAME_SPEC.loader.exec_module(KEYFRAME)
 
+BLEND_PATH = pathlib.Path(__file__).with_name("qa-blend-modes-e2e.py")
+BLEND_SPEC = importlib.util.spec_from_file_location(
+    "ruvie_qa_blend_modes_e2e", BLEND_PATH
+)
+if BLEND_SPEC is None or BLEND_SPEC.loader is None:
+    raise RuntimeError("cannot load qa-blend-modes-e2e.py")
+BLEND = importlib.util.module_from_spec(BLEND_SPEC)
+sys.modules[BLEND_SPEC.name] = BLEND
+BLEND_SPEC.loader.exec_module(BLEND)
+
 
 class EmptyCaptureHandler(http.server.BaseHTTPRequestHandler):
     bodies = []
@@ -425,6 +435,7 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
+                "blend-modes",
                 "composition-drop",
                 "node-wire",
                 "node-wire-selection",
@@ -448,6 +459,49 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
+
+    def test_blend_suite_samples_all_catalog_groups_and_masks_only_target_blend(self):
+        self.assertEqual(
+            BLEND.MODES,
+            (
+                ("linear_burn", "LinearBurn", "darken"),
+                ("vivid_light", "VividLight", "contrast"),
+                ("divide", "Divide", "comparative"),
+                ("hue", "Hue", "hsl"),
+                ("clear", "Clear", "normal"),
+                ("dissolve", "Dissolve", "normal"),
+            ),
+        )
+        before = {
+            "name": "fixture",
+            "connections": [
+                {"id": "target", "blend_mode": "Normal", "order": 1},
+                {"id": "other", "blend_mode": "Multiply", "order": 2},
+            ],
+        }
+        after = {
+            "name": "fixture",
+            "connections": [
+                {"id": "target", "blend_mode": "LinearBurn", "order": 1},
+                {"id": "other", "blend_mode": "Multiply", "order": 2},
+            ],
+        }
+        BLEND.assert_only_target_blend_changed(
+            before, after, "target", "Normal", "LinearBurn", "test"
+        )
+        changed_other = {
+            **after,
+            "connections": [after["connections"][0], {**after["connections"][1], "order": 3}],
+        }
+        with self.assertRaises(BLEND.QaFailure):
+            BLEND.assert_only_target_blend_changed(
+                before,
+                changed_other,
+                "target",
+                "Normal",
+                "LinearBurn",
+                "test",
+            )
 
     def test_published_endpoint_accepts_only_a_real_ipv4_loopback_port(self):
         self.assertEqual(
