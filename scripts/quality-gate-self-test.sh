@@ -226,6 +226,16 @@ awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
     > "${RUST_RATCHET_FIXTURE}/new.rs"
 expect_ratchet_failure 'new.rs: new oversized file has 4 lines (limit 3)'
 
+# Vendored upstream source is explicitly separated from first-party size
+# policy; the failures above prove ordinary source cannot use this exemption.
+rm -- "${RUST_RATCHET_FIXTURE}/new.rs"
+mkdir -p "${RUST_RATCHET_FIXTURE}/third_party/upstream"
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/third_party/upstream/generated.rs"
+"${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
+    --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/rust-file-size-ratchet-third-party-pass.log"
+
 # A newline is a valid filename byte. Growing this existing file must still be
 # attributed to one baseline entry rather than being split into two records.
 awk 'BEGIN { for (line = 1; line <= 5; line += 1) print "// line" }' \

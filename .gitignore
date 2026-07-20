@@ -58,6 +58,7 @@ flycheck_*.el
 # Created by git for backups. To disable backups in Git:
 # $ git config --global mergetool.keepBackup false
 *.orig
+!/third_party/rustpython-parser/Cargo.toml.orig
 
 # Created by git when using merge tools for conflicts
 *.BACKUP.*

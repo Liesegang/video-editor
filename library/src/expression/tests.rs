@@ -272,6 +272,20 @@ fn unavailable_python_capabilities_fail_with_structured_compile_diagnostics() ->
 }
 
 #[test]
+fn maintained_unicode_tables_preserve_python_lexer_classification() -> Result<()> {
+    let engine = ExpressionEngine::default();
+    for source in ["変数", "🔥"] {
+        let error = diagnostic(engine.compile(source))?;
+        assert_eq!(
+            error.kind,
+            ExpressionDiagnosticKind::UnknownName,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn deterministic_limits_cover_source_ast_operations_collections_and_strings() -> Result<()> {
     let limits = ExpressionLimits {
         max_source_bytes: 32,
