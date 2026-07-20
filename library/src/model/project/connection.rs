@@ -876,7 +876,7 @@ impl Project {
             .filter(|item| item.to == target)
             .map(|item| (item.order, item.id))
             .collect::<Vec<_>>();
-        ids.sort_by_key(|item| item.0);
+        ids.sort_by_key(|(order, id)| (*order, *id));
         let mut ids = ids.into_iter().map(|item| item.1).collect::<Vec<_>>();
         ids.retain(|id| *id != connection_id);
         let insert_at = new_order.max(0) as usize;
@@ -1086,7 +1086,7 @@ impl Project {
                 .filter(|item| item.to == *target)
                 .map(|item| (item.order, item.id))
                 .collect::<Vec<_>>();
-            ids.sort_by_key(|item| item.0);
+            ids.sort_by_key(|(order, id)| (*order, *id));
             for (order, (_, id)) in ids.into_iter().enumerate() {
                 if let Some(connection) = self.connections.iter_mut().find(|item| item.id == id) {
                     connection.order = order as i64;
