@@ -14,9 +14,9 @@ use crate::ui::panels::node_editor::{
     container_output_binding_port, container_output_port, editable_wire_is_current,
     editable_wire_qa_value, editable_wire_sort_key, editable_wire_stable_key,
     knife_segment_hits_edge, node_editor_port_interactions_enabled, qa_container_key,
-    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
-    rendered_wire_drag_kind, NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey, WIRE_DRAG_THRESHOLD,
+    rendered_container_output_at_position, rendered_edge_at_position,
+    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind, NodeEdit,
+    QueuedNodeEdit, RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_DRAG_THRESHOLD,
 };
 
 pub(in crate::ui::panels::node_editor) struct WireInteractionFrame<'a> {
@@ -379,11 +379,10 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         }
         if !primary_released
             || gesture.current.distance(gesture.start) < WIRE_DRAG_THRESHOLD
-            || !frame
+            || frame
                 .project
-                .connections
-                .iter()
-                .any(|connection| connection.from == gesture.from)
+                .port_definition(&gesture.from, PortDirection::Output)
+                .is_none()
         {
             return Vec::new();
         }
@@ -437,15 +436,31 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         }
     }
 
-    let normal_port = node_editor_port_interactions_enabled(frame.to_global.scaling)
+    let priority_container_output = node_editor_port_interactions_enabled(frame.to_global.scaling)
         .then(|| {
             pointer.and_then(|position| {
                 frame.rendered_ports.lock().ok().and_then(|ports| {
-                    rendered_normal_port_at_position(&ports, position, frame.canvas_clip)
+                    rendered_container_output_at_position(
+                        frame.project,
+                        &ports,
+                        position,
+                        frame.canvas_clip,
+                    )
                 })
             })
         })
         .flatten();
+    let normal_port = priority_container_output.clone().or_else(|| {
+        node_editor_port_interactions_enabled(frame.to_global.scaling)
+            .then(|| {
+                pointer.and_then(|position| {
+                    frame.rendered_ports.lock().ok().and_then(|ports| {
+                        rendered_normal_port_at_position(&ports, position, frame.canvas_clip)
+                    })
+                })
+            })
+            .flatten()
+    });
     let binding_on_normal_port = normal_port
         .as_ref()
         .filter(|port| {
@@ -477,13 +492,25 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     }
     if primary_pressed && binding_on_normal_port.is_none() {
         if let (Some(port), Some(position)) = (normal_port.as_ref(), pointer) {
-            if port.direction == PortDirection::Output
-                && frame
-                    .project
-                    .connections
-                    .iter()
-                    .any(|connection| connection.from == port.address)
-            {
+            let custom_connect = port.direction == PortDirection::Output
+                && (priority_container_output.is_some()
+                    || frame
+                        .project
+                        .connections
+                        .iter()
+                        .any(|connection| connection.from == port.address));
+            if custom_connect {
+                // Snarl registers its broad node/container frame before it
+                // renders the pin. Explicitly replace that potential drag ID
+                // so the complete physical press/drag/release belongs to the
+                // wire even when the press lands in the socket's QA/drop
+                // padding rather than its smaller normal-start rectangle.
+                ui.ctx().set_dragged_id(ui.make_persistent_id((
+                    "node_editor_port_wire_owner",
+                    qa_container_key(port.address.owner),
+                    port.address.port.as_str(),
+                )));
+                state.container_resize = None;
                 state.normal_connect_gesture = Some(NodeEditorNormalConnectGesture {
                     from: port.address.clone(),
                     start: position,
@@ -547,6 +574,11 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
             hovered.is_some_and(|hovered_edge| hovered_edge.kind.editable_wire() == Some(wire));
         if primary_pressed && pointer_started_on_edge {
             if let Some(position) = pointer_position {
+                ui.ctx().set_dragged_id(ui.make_persistent_id((
+                    "node_editor_wire_pointer_owner",
+                    editable_wire_stable_key(wire),
+                )));
+                state.container_resize = None;
                 state.selected_connection_id = match wire {
                     NodeEditorEditableWire::ProjectConnection { connection_id } => {
                         Some(connection_id)

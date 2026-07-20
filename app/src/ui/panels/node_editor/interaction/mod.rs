@@ -18,9 +18,9 @@ pub(in crate::ui::panels::node_editor) use wire::{
 };
 pub(in crate::ui::panels::node_editor) use wire::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
-    editable_wire_stable_key, knife_segment_hits_edge, rendered_edge_at_position,
-    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
-    wire_secondary_click_hit,
+    editable_wire_stable_key, knife_segment_hits_edge, rendered_container_output_at_position,
+    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
+    rendered_wire_drag_kind, wire_secondary_click_hit,
 };
 pub(in crate::ui::panels::node_editor) use wire::{
     overview_wire_graph_points, wire_interactions, WireInteractionFrame,

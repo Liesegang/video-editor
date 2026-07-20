@@ -1,7 +1,7 @@
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::state::context_types::{
-    NodeEditorEditableWire, NodeEditorWireContextMenu, SelectionTarget,
+    NodeEditorEditableWire, NodeEditorState, NodeEditorWireContextMenu, SelectionTarget,
 };
 use eframe::egui;
 use library::model::project::PortOwner;
@@ -28,6 +28,13 @@ use super::{
     OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome, TimeContextNode,
     WireInteractionFrame, WireSecondaryClickHit,
 };
+
+fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
+    state.wire_gesture.is_some()
+        || state.normal_connect_gesture.is_some()
+        || state.normal_wire_drag_active
+        || state.normal_connect_cancel_pending_release
+}
 
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
@@ -196,6 +203,7 @@ pub fn node_editor_panel(
         if let Some(previous_transform) = node_editor_state.node_editor_canvas_transform {
             capture_container_resize_before_canvas(
                 ui,
+                &project,
                 &containers,
                 previous_transform,
                 canvas_rect,
@@ -394,6 +402,7 @@ pub fn node_editor_panel(
             });
             *context_menu_state = None;
         }
+        let wire_owned_layout_before = wire_pointer_owns_layout(node_editor_state);
         edits.extend(wire_interactions(
             ui,
             node_editor_state,
@@ -406,6 +415,8 @@ pub fn node_editor_panel(
                 to_global,
             },
         ));
+        let wire_owned_layout =
+            wire_owned_layout_before || wire_pointer_owns_layout(node_editor_state);
         if let Some(edit) = show_wire_context_menu(
             ui,
             node_editor_state,
@@ -418,6 +429,13 @@ pub fn node_editor_panel(
         }
 
         let mut collected = collect_layout_edits(&project, &snarl);
+        // Pointer ownership above prevents movement on normal multi-frame
+        // input. If a backend batches press and motion into one RawInput,
+        // Snarl may already have calculated a container delta earlier in this
+        // same frame; never commit that stale competing edit.
+        if wire_owned_layout {
+            collected.clear();
+        }
         collected.extend(container_resize_interactions(
             ui,
             &project,

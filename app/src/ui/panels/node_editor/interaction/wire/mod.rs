@@ -3,6 +3,8 @@ mod gesture;
 mod hit;
 mod menu;
 mod model;
+#[cfg(test)]
+mod priority_tests;
 mod render;
 mod types;
 
@@ -13,9 +15,9 @@ pub(in crate::ui::panels::node_editor) use gesture::{
 pub(in crate::ui::panels::node_editor) use hit::cubic_bezier_point;
 pub(in crate::ui::panels::node_editor) use hit::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
-    editable_wire_stable_key, knife_segment_hits_edge, rendered_edge_at_position,
-    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
-    wire_secondary_click_hit,
+    editable_wire_stable_key, knife_segment_hits_edge, rendered_container_output_at_position,
+    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
+    rendered_wire_drag_kind, wire_secondary_click_hit,
 };
 pub(in crate::ui::panels::node_editor) use menu::show_wire_context_menu;
 pub(in crate::ui::panels::node_editor) use model::{
