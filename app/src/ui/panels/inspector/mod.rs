@@ -12,7 +12,7 @@ use library::model::project::{
 };
 use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent};
-use library::plugin::PluginManager;
+use library::plugin::{PluginManager, TRANSFORM_CATEGORY};
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -73,6 +73,14 @@ enum FacadeOwnerKind {
     Track,
     Clip,
 }
+
+const OPERATION_CATEGORY_SECTIONS: [(&str, &str, &str); 5] = [
+    (TRANSFORM_CATEGORY, "Transform", "Root placement"),
+    ("decorator", "Decorator", "Shape modifier"),
+    ("effector", "Effector", "Shape modifier"),
+    ("style", "Style", "Appearance"),
+    ("effect", "Effect", "Image effect"),
+];
 
 impl FacadeOwnerKind {
     fn qa_value(self) -> &'static str {
@@ -600,14 +608,8 @@ fn render_semantic_graph_facade(
         needs_refresh,
     );
 
-    let category_sections = [
-        ("decorator", "Decorator", "Shape modifier"),
-        ("effector", "Effector", "Shape modifier"),
-        ("style", "Style", "Appearance"),
-        ("effect", "Effect", "Image effect"),
-    ];
     let mut rendered_categories = HashSet::new();
-    for (category, title, meaning) in category_sections {
+    for (category, title, meaning) in OPERATION_CATEGORY_SECTIONS {
         let matching = operations
             .iter()
             .copied()
@@ -1245,6 +1247,7 @@ fn source_kind(node: &Node) -> &'static str {
         NodeContent::Generator(GeneratorContent::SkSL) => "Shader",
         NodeContent::Reference(_) => "Reference",
         NodeContent::PluginOperation(operation) => match operation.category.as_str() {
+            TRANSFORM_CATEGORY => "Transform",
             "decorator" => "Decorator",
             "effector" => "Effector",
             "style" => "Style",
@@ -1731,6 +1734,11 @@ fn node_display_type(node: &Node) -> String {
             GeneratorContent::SkSL => "SkSL Shader".to_string(),
         },
         NodeContent::Reference(_) => "Reference".to_string(),
+        NodeContent::PluginOperation(operation)
+            if operation.category.as_str() == TRANSFORM_CATEGORY =>
+        {
+            "Transform".to_string()
+        }
         NodeContent::PluginOperation(operation) => format!(
             "Plugin Operation · {} / {}",
             operation.category, operation.operation
@@ -1752,7 +1760,10 @@ mod tests {
     use library::model::frame::color::Color;
     use library::model::project::NodeContainer;
     use library::model::property::Property;
-    use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
+    use library::plugin::{
+        EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
+        TRANSFORM_APPLY_OPERATION,
+    };
 
     #[test]
     fn clip_selection_keeps_every_contained_node_in_order() {
@@ -2225,6 +2236,68 @@ mod tests {
 
         let inferred = inferred_property_definitions(node.properties(), 0.0);
         assert_ne!(inferred[0].ui_type(), period.ui_type());
+    }
+
+    #[test]
+    fn root_transform_has_transform_semantics_and_descriptor_property_controls() {
+        let plugins = PluginManager::default();
+        let node = plugins.create_shape_transform_operation_node().unwrap();
+        let NodeContent::PluginOperation(operation) = node.content() else {
+            panic!("Transform factory returned a PluginOperation")
+        };
+        assert_eq!(operation.category, TRANSFORM_CATEGORY);
+        assert_eq!(operation.component_id, SHAPE_TRANSFORM_COMPONENT_ID);
+        assert_eq!(operation.operation, TRANSFORM_APPLY_OPERATION);
+        assert_eq!(operation_category(&node), Some(TRANSFORM_CATEGORY));
+        assert_eq!(source_kind(&node), "Transform");
+        assert_eq!(node_display_type(&node), "Transform");
+        assert!(OPERATION_CATEGORY_SECTIONS.contains(&(
+            TRANSFORM_CATEGORY,
+            "Transform",
+            "Root placement"
+        )));
+
+        let definitions = plugin_operation_property_definitions(&plugins, &node)
+            .expect("installed Transform descriptor drives generic Inspector controls");
+        assert_eq!(
+            definitions
+                .iter()
+                .map(PropertyDefinition::name)
+                .collect::<Vec<_>>(),
+            vec!["position", "rotation", "scale", "anchor"]
+        );
+        assert_eq!(definitions.len(), node.properties().iter().count());
+        for definition in &definitions {
+            assert_eq!(
+                node.properties()
+                    .get(definition.name())
+                    .and_then(|property| property.evaluate_at(0.0).ok()),
+                Some(definition.default_value().clone())
+            );
+        }
+        let position = definitions
+            .iter()
+            .find(|definition| definition.name() == "position")
+            .unwrap();
+        assert!(matches!(
+            position.ui_type(),
+            PropertyUiType::Vec2 { suffix } if suffix == "px"
+        ));
+        let rotation = definitions
+            .iter()
+            .find(|definition| definition.name() == "rotation")
+            .unwrap();
+        assert!(matches!(
+            rotation.ui_type(),
+            PropertyUiType::Float {
+                min: -360.0,
+                max: 360.0,
+                step: 1.0,
+                suffix,
+                min_hard_limit: false,
+                max_hard_limit: false,
+            } if suffix == "deg"
+        ));
     }
 
     #[test]

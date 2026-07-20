@@ -39,76 +39,15 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
 
     fn get_property_definitions(
         &self,
-        canvas_width: u64,
-        canvas_height: u64,
-        clip_width: u64,
-        clip_height: u64,
+        _canvas_width: u64,
+        _canvas_height: u64,
+        _clip_width: u64,
+        _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
         use ordered_float::OrderedFloat;
 
         vec![
-            // Transform Properties
-            PropertyDefinition::new(
-                "position",
-                PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
-                "Position",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "scale",
-                PropertyUiType::Vec2 {
-                    suffix: "%".to_string(),
-                },
-                "Scale",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "rotation",
-                PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Rotation",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "anchor",
-                PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
-                "Anchor",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(clip_width as f64 / 2.0),
-                    y: OrderedFloat(clip_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "opacity",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Opacity",
-                PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-            // Text Properties
             PropertyDefinition::new(
                 "text",
                 PropertyUiType::Text,
@@ -167,7 +106,6 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             );
             return None;
         }
-        let transform = evaluator.build_transform(props, time);
         Some(RuntimeShape {
             source_id: node.id,
             geometry: RuntimeShapeGeometry::Text(layout_runtime_text_shape(
@@ -175,8 +113,10 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
                 &font,
                 size as f32,
             )),
-            source_transform: transform.clone(),
-            transform,
+            spatial_transform_node_id: None,
+            spatial_transform: Default::default(),
+            modulation_transform: Default::default(),
+            transform: Default::default(),
             effects: Vec::new(),
             effector_configs: Vec::new(),
             decorator_configs: Vec::new(),

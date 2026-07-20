@@ -22,6 +22,18 @@ pub const EFFECTOR_CATEGORY: &str = "effector";
 pub const EFFECTOR_APPLY_OPERATION: &str = "effector.apply.v1";
 pub const DECORATOR_CATEGORY: &str = "decorator";
 pub const DECORATOR_APPLY_OPERATION: &str = "decorator.apply.v1";
+/// Native whole-Shape spatial placement. This is intentionally distinct from
+/// `EFFECTOR_CATEGORY`: Effectors modulate grouped elements, while this
+/// operation owns the absolute root transform edited by Preview/Inspector.
+pub const TRANSFORM_CATEGORY: &str = "transform";
+/// Native whole-Shape placement. The persisted value remains `transform`
+/// because it already identifies the pre-v1 Shape operation; the Rust name
+/// makes its type boundary explicit next to Image Transform.
+pub const SHAPE_TRANSFORM_COMPONENT_ID: &str = "transform";
+/// Native whole-Image placement. Unlike Shape Transform, this operation wraps
+/// and transforms the complete raster subtree connected to its Image input.
+pub const IMAGE_TRANSFORM_COMPONENT_ID: &str = "image";
+pub const TRANSFORM_APPLY_OPERATION: &str = "transform.apply.v1";
 pub const PROPERTY_PORT_PREFIX: &str = "property:";
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -219,6 +231,52 @@ impl OperationDescriptor {
                     SHAPE_OUTPUT_PORT,
                     "Shape",
                     PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    pub fn shape_transform(
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            TRANSFORM_CATEGORY,
+            SHAPE_TRANSFORM_COMPONENT_ID,
+            TRANSFORM_APPLY_OPERATION,
+            "Shape Transform",
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    pub fn image_transform(
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            TRANSFORM_CATEGORY,
+            IMAGE_TRANSFORM_COMPONENT_ID,
+            TRANSFORM_APPLY_OPERATION,
+            "Image Transform",
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(IMAGE_INPUT_PORT, "Image", PortDataType::Image),
+                PortDefinition::output(
+                    IMAGE_OUTPUT_PORT,
+                    "Image",
+                    PortDataType::Image,
                     PortSide::Right,
                     PortExposure::Graph,
                 ),

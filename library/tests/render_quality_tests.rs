@@ -327,7 +327,8 @@ fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) ->
     };
     FrameItem::Object(FrameObject {
         source_node_id: Uuid::new_v4(),
-        source_transform: Box::new(content.transform().clone()),
+        spatial_transform_node_id: None,
+        spatial_transform: Box::new(content.transform().clone()),
         content_bounds: None,
         content,
     })

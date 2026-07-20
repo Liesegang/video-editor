@@ -318,7 +318,7 @@ impl InputSequencer {
             self.prepare_next(pixels_per_point);
         }
 
-        if let Some(step) = self.steps.pop_front() {
+        let injected_step = if let Some(step) = self.steps.pop_front() {
             // egui widgets read modifiers from `InputState`, not necessarily
             // from the PointerButton/Key event that triggered them. Mirror a
             // real held modifier in RawInput for every frame of the gesture.
@@ -327,9 +327,17 @@ impl InputSequencer {
             if step.final_step {
                 self.tracker.set(step.action_id, ActionPhase::Injected);
             }
-        }
+            true
+        } else {
+            false
+        };
 
-        if !self.steps.is_empty() || !self.commands.is_empty() {
+        // Always schedule a frame after an injected event, including the final
+        // release. Widgets can apply a click at the end of the current pass
+        // while their resulting popup or dock contents are only registered in
+        // the following pass. Without this wake-up a background QA process can
+        // publish the pre-click component frame indefinitely.
+        if injected_step || !self.steps.is_empty() || !self.commands.is_empty() {
             ctx.request_repaint();
         }
     }
@@ -746,6 +754,40 @@ mod tests {
         sequencer.inject_for_frame(&context, &mut raw_input, 1.0);
         assert_eq!(raw_input.events.len(), 1);
         assert_eq!(tracker.get(9).unwrap().phase, ActionPhase::Injected);
+    }
+
+    #[test]
+    fn final_input_step_requests_a_follow_up_frame() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (sender, receiver) = mpsc::channel();
+        let tracker = Arc::new(ActionTracker::default());
+        let mut sequencer = InputSequencer::new(receiver, tracker);
+        sender
+            .send(InputCommand {
+                id: 22,
+                action: InputAction::Move(pointer_request(1.0, 2.0)),
+            })
+            .unwrap();
+
+        let context = egui::Context::default();
+        let repaint_requests = Arc::new(AtomicUsize::new(0));
+        let observed_requests = Arc::clone(&repaint_requests);
+        context.set_request_repaint_callback(move |_| {
+            observed_requests.fetch_add(1, Ordering::Relaxed);
+        });
+        // Drain egui's initial two-pass repaint request so the callback below
+        // observes only the sequencer's explicit wake-up.
+        for _ in 0..3 {
+            drop(context.run(egui::RawInput::default(), |_| {}));
+        }
+        repaint_requests.store(0, Ordering::Relaxed);
+
+        let mut raw_input = egui::RawInput::default();
+        sequencer.inject_for_frame(&context, &mut raw_input, 1.0);
+
+        assert_eq!(raw_input.events.len(), 1);
+        assert!(repaint_requests.load(Ordering::Relaxed) > 0);
     }
 
     #[test]

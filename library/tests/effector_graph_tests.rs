@@ -1,7 +1,10 @@
+#[path = "effector_graph_tests/graph_support.rs"]
+mod graph_support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Context, Result as AnyResult, anyhow, bail, ensure};
+use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::core::ensemble::effectors::OpacityMode;
@@ -19,7 +22,7 @@ use library::model::frame::runtime_shape::{
 use library::model::project::{
     Composition, EvalOutput, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
-    PortSide, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    PortSide, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
@@ -35,6 +38,8 @@ use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
+use graph_support::{insert_effector_chain, root_transform_id};
+
 const WIDTH: u64 = 128;
 const HEIGHT: u64 = 80;
 const FPS: f64 = 10.0;
@@ -45,55 +50,6 @@ fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
             .is_ok(),
         "operation descriptor must initialize {key}"
     );
-}
-
-fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
-    ProjectConnection::new(
-        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
-        0,
-    )
-}
-
-fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) -> AnyResult<()> {
-    let source_id = graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(
-                    library::model::GeneratorContent::Text
-                        | library::model::GeneratorContent::Shape
-                )
-            )
-        })
-        .context("graph has no Shape source")?
-        .id;
-    let mut targets = Vec::new();
-    graph.connections.retain(|connection| {
-        let is_shape_fanout = connection.from
-            == PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT)
-            && connection.to.port == SHAPE_INPUT_PORT;
-        if is_shape_fanout {
-            targets.push(connection.to.clone());
-        }
-        !is_shape_fanout
-    });
-    ensure!(!targets.is_empty(), "factory must expose a Shape consumer");
-    let mut upstream = source_id;
-    for effector_id in effector_ids {
-        graph.connections.push(shape_wire(upstream, *effector_id));
-        upstream = *effector_id;
-    }
-    for target in targets {
-        graph.connections.push(ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(upstream), SHAPE_OUTPUT_PORT),
-            target,
-            0,
-        ));
-    }
-    Ok(())
 }
 
 fn setup_project() -> (Project, Uuid, Uuid) {
@@ -854,24 +810,14 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
     let mut graph = manager
         .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
         .context("create Shape graph")?;
-    let source_id = graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(library::model::GeneratorContent::Shape)
-            )
-        })
-        .context("Shape graph has no Shape source")?
-        .id;
-    let source = graph
+    let transform_id = root_transform_id(&graph)?;
+    let transform = graph
         .nodes
         .iter_mut()
-        .find(|node| node.id == source_id)
-        .context("Shape source is missing")?;
+        .find(|node| node.id == transform_id)
+        .context("root Transform is missing")?;
     set_constant(
-        source,
+        transform,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(62.0),
@@ -879,7 +825,7 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
         }),
     );
     set_constant(
-        source,
+        transform,
         "anchor",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(15.0),
@@ -887,14 +833,14 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
         }),
     );
     set_constant(
-        source,
+        transform,
         "scale",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(125.0),
             y: OrderedFloat(80.0),
         }),
     );
-    set_constant(source, "rotation", 21.0.into());
+    set_constant(transform, "rotation", 21.0.into());
 
     for node in &mut graph.nodes {
         let NodeContent::PluginOperation(operation) = node.content() else {
@@ -1001,14 +947,23 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<
         })
         .context("Text graph has no Text source")?
         .id;
-    let text = text_graph
+    let text_transform_id = root_transform_id(&text_graph)?;
+    set_constant(
+        text_graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == text_id)
+            .context("Text source is missing")?,
+        "size",
+        18.0.into(),
+    );
+    let text_transform = text_graph
         .nodes
         .iter_mut()
-        .find(|node| node.id == text_id)
-        .context("Text source is missing")?;
-    set_constant(text, "size", 18.0.into());
+        .find(|node| node.id == text_transform_id)
+        .context("Text root Transform is missing")?;
     set_constant(
-        text,
+        text_transform,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(34.0),
@@ -1016,7 +971,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<
         }),
     );
     set_constant(
-        text,
+        text_transform,
         "anchor",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(0.0),
@@ -1083,6 +1038,12 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<
             .source_node_id,
         text_id
     );
+    assert_eq!(
+        first_object(&text_frame.items)
+            .context("Text frame has no object")?
+            .spatial_transform_node_id,
+        Some(text_transform_id)
+    );
     let text_image = render_frame(&text_frame, &plugins)?;
     assert_alpha_inside_preview_bounds(&text_frame, &text_image)?;
     for target in ["Line", "Block"] {
@@ -1101,25 +1062,15 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<
     let mut path_graph = manager
         .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
         .context("create Shape graph")?;
-    let path_id = path_graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(library::model::GeneratorContent::Shape)
-            )
-        })
-        .context("Shape graph has no Shape source")?
-        .id;
-    let path = path_graph
+    let path_transform_id = root_transform_id(&path_graph)?;
+    let path_transform = path_graph
         .nodes
         .iter_mut()
-        .find(|node| node.id == path_id)
-        .context("Shape source is missing")?;
-    set_constant(path, "rotation", 23.0.into());
+        .find(|node| node.id == path_transform_id)
+        .context("Shape root Transform is missing")?;
+    set_constant(path_transform, "rotation", 23.0.into());
     set_constant(
-        path,
+        path_transform,
         "scale",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(115.0),
@@ -1182,6 +1133,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() -> AnyResult<()> {
         })
         .context("Text graph has no Text source")?
         .id;
+    let transform_id = root_transform_id(&graph)?;
     let style_id = graph
         .nodes
         .iter()
@@ -1193,14 +1145,22 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() -> AnyResult<()> {
         })
         .context("Text graph has no Style operation")?
         .id;
-    let source = graph
+    set_constant(
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == source_id)
+            .context("Text source is missing")?,
+        "size",
+        18.0.into(),
+    );
+    let transform = graph
         .nodes
         .iter_mut()
-        .find(|node| node.id == source_id)
-        .context("Text source is missing")?;
-    set_constant(source, "size", 18.0.into());
+        .find(|node| node.id == transform_id)
+        .context("Text root Transform is missing")?;
     set_constant(
-        source,
+        transform,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(20.0),
@@ -1208,7 +1168,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() -> AnyResult<()> {
         }),
     );
     set_constant(
-        source,
+        transform,
         "anchor",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(0.0),
@@ -1292,15 +1252,16 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
         })
         .context("Shape graph has no Shape source")?
         .id;
-    let mut transform = plugins.create_effector_operation_node("transform")?;
-    set_constant(&mut transform, "tx", 8.0.into());
-    set_constant(&mut transform, "ty", 3.0.into());
-    let transform_id = transform.id;
+    let root_transform_id = root_transform_id(&graph)?;
+    let mut modulation = plugins.create_effector_operation_node("transform")?;
+    set_constant(&mut modulation, "tx", 8.0.into());
+    set_constant(&mut modulation, "ty", 3.0.into());
+    let modulation_id = modulation.id;
     let mut opacity = plugins.create_effector_operation_node("opacity")?;
     set_constant(&mut opacity, "opacity", 50.0.into());
     let opacity_id = opacity.id;
-    graph.nodes.extend([transform, opacity]);
-    insert_effector_chain(&mut graph, &[transform_id, opacity_id])?;
+    graph.nodes.extend([modulation, opacity]);
+    insert_effector_chain(&mut graph, &[modulation_id, opacity_id])?;
     let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
 
     let rendered = evaluate(&project, &plugins, 0)?;
@@ -1309,21 +1270,22 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
         bail!("Shape graph did not render Shape content");
     };
     assert_eq!(object.source_node_id, shape_id);
+    assert_eq!(object.spatial_transform_node_id, Some(root_transform_id));
     assert_eq!(
         (
-            object.source_transform.position.x,
-            object.source_transform.position.y
+            object.spatial_transform.position.x,
+            object.spatial_transform.position.y
         ),
         (64.0, 40.0),
-        "Preview edits the evaluated generator transform, not the downstream Effector"
+        "Preview edits the root Transform, not the downstream Transform Modulation"
     );
     assert_eq!((transform.position.x, transform.position.y), (72.0, 43.0));
     assert!((transform.opacity - 0.5).abs() < f64::EPSILON);
     let before = preview(&project, &plugins, 0)?;
     set_constant(
         project
-            .get_node_mut(shape_id)
-            .context("Shape source is missing")?,
+            .get_node_mut(root_transform_id)
+            .context("Shape root Transform is missing")?,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(70.0),
@@ -1334,8 +1296,8 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
     let moved_object = first_object(&moved.items).context("moved frame has no object")?;
     assert_eq!(
         (
-            moved_object.source_transform.position.x,
-            moved_object.source_transform.position.y
+            moved_object.spatial_transform.position.x,
+            moved_object.spatial_transform.position.y
         ),
         (70.0, 44.0)
     );
@@ -1345,12 +1307,12 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
             moved_object.content.transform().position.y
         ),
         (78.0, 47.0),
-        "the unchanged Effector remains composed after the source edit"
+        "the unchanged Transform Modulation remains composed after the root Transform edit"
     );
     assert_ne!(
         before.data,
         preview(&project, &plugins, 0)?.data,
-        "editing the direct source transform must change real rendered pixels"
+        "editing the root Transform must change real rendered pixels"
     );
     Ok(())
 }

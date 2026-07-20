@@ -267,6 +267,20 @@ pub enum SelectionTarget {
     Composition(Uuid),
 }
 
+/// View-local routing for Preview interaction.
+///
+/// The authoritative selection remains the nearest Timeline/Inspector editing
+/// owner (Clip, Track, or Composition). This transient record identifies the
+/// exact rendered branch and graph Node that a gizmo gesture edits directly;
+/// it is never persisted into Project data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewEditTarget {
+    pub owner: SelectionTarget,
+    pub content_node_id: Uuid,
+    pub spatial_node_id: Option<Uuid>,
+    pub instance_path: Vec<Uuid>,
+}
+
 impl SelectionTarget {
     pub const fn node_id(self) -> Option<Uuid> {
         match self {
@@ -420,11 +434,10 @@ pub struct InteractionState {
     #[serde(skip)]
     pub preview_selection_drag_start: Option<egui::Pos2>,
 
-    /// Render-branch path for the primary Preview selection. The persistent
-    /// selection remains a Project Node ID; this transient path distinguishes
-    /// fan-out of that Node through multiple Merge/Reference branches.
+    /// Exact rendered branch and internal Node edited by Preview while primary
+    /// Project selection remains its nearest Clip/Track/Composition owner.
     #[serde(skip)]
-    pub preview_selected_instance_path: Option<Vec<Uuid>>,
+    pub preview_edit_target: Option<PreviewEditTarget>,
 
     // Hand Tool Logic
     #[serde(skip)]
@@ -532,8 +545,24 @@ pub type CachedPreviewBounds = (u64, PreviewBounds);
 pub struct BodyDragState {
     #[serde(with = "crate::model::ui_types::Pos2Def")]
     pub start_mouse_pos: egui::Pos2,
-    // Map of Entity ID -> Original Position [x, y]
+    /// Legacy Timeline/asset drag positions. Preview must not use this
+    /// UUID-only map because a rendered Node can have multiple branch paths.
     pub original_positions: std::collections::HashMap<Uuid, [f32; 2]>,
+    /// Exact transient Preview routes. This is view state only and is rebuilt
+    /// from the evaluated frame for every gesture.
+    #[serde(skip)]
+    pub(crate) preview_targets: Vec<PreviewBodyDragTarget>,
+    #[serde(default)]
+    pub(crate) has_changed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewBodyDragTarget {
+    pub(crate) edit_target: PreviewEditTarget,
+    pub(crate) original_position: [f32; 2],
+    /// Primary direct hits already have an explicit branch. Secondary facade
+    /// targets must remain the owner's canonical resolution throughout drag.
+    pub(crate) requires_canonical_owner: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -556,6 +585,10 @@ pub struct GizmoState {
     pub original_anchor_y: f32,
     pub original_width: f32,
     pub original_height: f32,
+    /// Set only after at least one authoritative Project update is queued.
+    /// Releases of stale or non-invertible gestures must not create history.
+    #[serde(default)]
+    pub has_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

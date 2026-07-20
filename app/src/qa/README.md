@@ -182,3 +182,17 @@ It clicks a freshly published Bezier hit point with the primary button, then
 re-queries the canvas and clicks an unobstructed coordinate. The suite requires
 the wire selection to clear without changing the Project, undo history, or
 semantic entity selection. It is also part of the full QA runner.
+
+Run the focused Transform/Preview facade suite with:
+
+```sh
+python3 scripts/qa-transform-preview-e2e.py --spawn
+```
+
+It coordinate-clicks a rendered Text visual while keeping Clip/Inspector
+ownership, selects a Clip from Timeline and drags its canonical Transform
+gizmo, verifies that a Clip with two independent spatial roots exposes an
+advanced ambiguity instead of mutating either branch, preserves direct Node
+selection in Node Editor, and proves a queued Node edit advances the Preview
+render revision. Per-action rectangles and injection evidence are written to
+`target/qa-transform-preview-e2e-evidence.json`.

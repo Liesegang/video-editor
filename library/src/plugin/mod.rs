@@ -20,6 +20,7 @@ pub mod exporters;
 pub mod loaders;
 pub mod properties;
 pub mod styles;
+pub mod transforms;
 
 // Re-export from submodules
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, ResolvedNodeInputs};
@@ -31,9 +32,10 @@ pub use manager::{PluginInfo, PluginManager};
 pub(crate) use operation::OperationNodeParts;
 pub use operation::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
-    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, OperationDescriptor, OperationDescriptorError,
-    PROPERTY_PORT_PREFIX, STYLE_APPLY_OPERATION, STYLE_CATEGORY, property_name_from_port,
-    property_port_key, property_ui_type_to_port_data_type,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor,
+    OperationDescriptorError, PROPERTY_PORT_PREFIX, SHAPE_TRANSFORM_COMPONENT_ID,
+    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    property_name_from_port, property_port_key, property_ui_type_to_port_data_type,
 };
 pub use repository::PluginRepository;
 pub use runtime_native::{RuntimePluginDescriptor, RuntimePluginScanReport};

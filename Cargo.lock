@@ -274,7 +274,6 @@ dependencies = [
  "once_cell",
  "ordered-float",
  "raw-window-handle",
- "regex",
  "rfd",
  "serde",
  "serde_json",

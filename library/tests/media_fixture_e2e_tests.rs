@@ -1,4 +1,6 @@
 mod support;
+#[path = "media_fixture_e2e_tests/text_overlay.rs"]
+mod text_overlay;
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashSet;
@@ -16,9 +18,7 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
-use library::model::project::{
-    NodeGraphBundle, PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
-};
+use library::model::project::NodeGraphBundle;
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
     Asset, AssetKind, Clip, Composition, Node, NodeContainer, NodeContent, Project, Track,
@@ -36,6 +36,7 @@ use uuid::Uuid;
 use support::{
     channel_energy, generator_node_for_canvas, media_node_for_canvas, positive_zero_crossings,
 };
+use text_overlay::text_overlay_graph;
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -198,42 +199,11 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     let text_track_id = text_track.id;
     project.add_track(text_track);
     project.attach_track_to_composition(composition_id, text_track_id)?;
-    let mut text = generator_node_for_canvas(
-        "text",
-        GeneratorNodeRequest::Text {
-            text: "E2E".to_string(),
-            font: "Arial".to_string(),
-        },
-        12,
-        8,
-        12,
-        8,
-    );
-    set_declared_property(&mut text, "size", PropertyValue::Number(OrderedFloat(5.0)))?;
-    set_declared_property(
-        &mut text,
-        "position",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(1.0),
-            y: OrderedFloat(5.0),
-        }),
-    )?;
-    let fill = plugin_manager.create_style_operation_node("fill")?;
-    let text_id = text.id;
-    let fill_id = fill.id;
     add_clip_graph(
         &mut project,
         text_track_id,
         "text clip",
-        NodeGraphBundle::new(
-            vec![text, fill],
-            vec![ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
-                0,
-            )],
-            Some(fill_id),
-        ),
+        text_overlay_graph(plugin_manager)?,
     )?;
 
     // Keep a real, time-dependent shader in the same Preview/Export matrix.

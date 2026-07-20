@@ -173,8 +173,8 @@ class QaRunnerTests(unittest.TestCase):
         self.assertFalse(E2E.selection_matches(state, "node", "shared"))
         E2E.assert_selection(state, "shared", "track", "typed Clip")
 
-    def test_e2e_fixture_contract_names_all_twelve_explicit_nodes(self):
-        self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 12)
+    def test_e2e_fixture_contract_names_all_fourteen_explicit_nodes(self):
+        self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 14)
         self.assertEqual(
             E2E.EXPECTED_CLIP_OUTPUTS,
             {
@@ -186,6 +186,8 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(
             set(E2E.EXPECTED_OPERATIONS),
             {
+                E2E.TEXT_TRANSFORM,
+                E2E.SHAPE_TRANSFORM,
                 E2E.TRANSFORM_EFFECTOR,
                 E2E.OPACITY_EFFECTOR,
                 E2E.BACKPLATE_DECORATOR,
@@ -205,7 +207,7 @@ class QaRunnerTests(unittest.TestCase):
             "clips": {},
             "connections": [],
         }
-        with self.assertRaisesRegex(E2E.QaFailure, "12 explicit Nodes"):
+        with self.assertRaisesRegex(E2E.QaFailure, "14 explicit Nodes"):
             E2E.validate_explicit_operation_fixture(project)
 
     def test_keyframe_suite_uses_direct_operation_node_ids_only(self):
@@ -394,8 +396,15 @@ class QaRunnerTests(unittest.TestCase):
                 "node-wire",
                 "node-wire-selection",
                 "preview",
+                "transform-preview",
             ],
         )
+        transform = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "transform-preview"
+        )
+        self.assertEqual(transform.fixture, "transform_preview_e2e")
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
 

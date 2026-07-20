@@ -29,7 +29,8 @@ use library::model::{
 use library::plugin::{
     property_name_from_port, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
+    TRANSFORM_CATEGORY,
 };
 use library::EditorService;
 use ordered_float::OrderedFloat;
@@ -4666,14 +4667,19 @@ pub fn node_editor_panel(
         selection_changed = true;
     }
     if selection_changed {
-        editor_context.interaction.preview_selected_instance_path = None;
+        editor_context.interaction.preview_edit_target = None;
     }
 
     let primary_released = ui.input(|input| input.pointer.primary_released());
 
     let mut layout_changed = false;
     if let Ok(mut project) = project_lock.write() {
-        apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state);
+        if apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state) {
+            // Render completion is asynchronous. Wake the UI immediately so
+            // a paused Preview observes this authoritative graph mutation
+            // without waiting for unrelated pointer input.
+            ui.ctx().request_repaint();
+        }
         for edit in layout_edits {
             layout_changed |= apply_layout_edit(&mut project, edit);
         }
@@ -6949,6 +6955,7 @@ enum NodeCreateRequest {
     Shape,
     SkSL,
     TimeModulo,
+    Transform,
     Style(String),
     Effector(String),
     Decorator(String),
@@ -6967,6 +6974,7 @@ impl NodeCreateRequest {
             Self::Shape => "shape",
             Self::SkSL => "sksl",
             Self::TimeModulo => "time_modulo",
+            Self::Transform => "transform",
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
             Self::Decorator(_) => "decorator",
@@ -7062,6 +7070,49 @@ fn plugin_operation_menu_item(
     Some(item)
 }
 
+fn transform_operation_menu_item(
+    plugin_manager: &PluginManager,
+) -> Option<SearchableItem<NodeCreateRequest>> {
+    let descriptor = match plugin_manager.operation_descriptor(
+        TRANSFORM_CATEGORY,
+        SHAPE_TRANSFORM_COMPONENT_ID,
+        TRANSFORM_APPLY_OPERATION,
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            log::warn!("Cannot expose Transform operation in the Node Editor: {error}");
+            return None;
+        }
+    };
+    let mut item = node_create_menu_item(
+        descriptor.label(),
+        "Shape Operations / Transform",
+        [
+            "root",
+            "placement",
+            "position",
+            "rotation",
+            "scale",
+            "anchor",
+            "shape",
+            descriptor.category(),
+            descriptor.component_id(),
+            descriptor.operation(),
+        ],
+        "node_editor.menu.create.transform",
+        NodeCreateRequest::Transform,
+    );
+    item.qa_metadata = Some(serde_json::json!({
+        "action": "create",
+        "kind": item.value.qa_kind(),
+        "component_id": descriptor.component_id(),
+        "operation_category": descriptor.category(),
+        "operation": descriptor.operation(),
+        "label": descriptor.label(),
+    }));
+    Some(item)
+}
+
 fn node_create_menu_items(
     plugin_manager: &PluginManager,
 ) -> Vec<SearchableItem<NodeCreateRequest>> {
@@ -7130,6 +7181,10 @@ fn node_create_menu_items(
             NodeCreateRequest::Composition,
         ),
     ];
+
+    if let Some(transform) = transform_operation_menu_item(plugin_manager) {
+        items.push(transform);
+    }
 
     let mut styles = plugin_manager.get_available_styles();
     styles.sort();
@@ -7218,6 +7273,7 @@ fn create_operation_node_for_request(
     plugin_manager: &PluginManager,
 ) -> Option<Node> {
     let result = match request {
+        NodeCreateRequest::Transform => plugin_manager.create_shape_transform_operation_node(),
         NodeCreateRequest::Style(component_id) => {
             plugin_manager.create_style_operation_node(component_id)
         }
@@ -8018,6 +8074,22 @@ fn create_action_for_request(
                 comp_id,
             )
         })),
+        NodeCreateRequest::Transform => {
+            match plugin_manager.create_shape_transform_operation_node() {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Transform Node: {error}");
+                    None
+                }
+            }
+        }
         NodeCreateRequest::Style(component_id) => {
             match plugin_manager.create_style_operation_node(&component_id) {
                 Ok(node) => Some(Box::new(move |project| {
@@ -10366,6 +10438,56 @@ mod tests {
             .iter()
             .any(|item| matches!(item.value, NodeCreateRequest::SkSL)));
 
+        let root_transform = items
+            .iter()
+            .find(|item| item.value == NodeCreateRequest::Transform)
+            .expect("root Transform is exposed as its own Add request");
+        assert_eq!(root_transform.label, "Shape Transform");
+        assert_eq!(
+            root_transform.category.as_deref(),
+            Some("Shape Operations / Transform")
+        );
+        assert_eq!(
+            root_transform.qa_id.as_deref(),
+            Some("node_editor.menu.create.transform")
+        );
+        assert_eq!(
+            root_transform.qa_metadata.as_ref().unwrap()["operation_category"],
+            TRANSFORM_CATEGORY
+        );
+        assert_eq!(
+            root_transform.qa_metadata.as_ref().unwrap()["operation"],
+            TRANSFORM_APPLY_OPERATION
+        );
+        let root_matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
+            &items,
+            "root placement",
+        );
+        assert!(root_matches
+            .iter()
+            .any(|index| items[*index] == *root_transform));
+        let root_node = create_operation_node_for_request(&root_transform.value, plugins.as_ref())
+            .expect("root Transform request uses the operation factory");
+        let NodeContent::PluginOperation(root_operation) = root_node.content() else {
+            panic!("root Transform factory must create a PluginOperation")
+        };
+        assert_eq!(root_operation.category, TRANSFORM_CATEGORY);
+        assert_eq!(root_operation.component_id, SHAPE_TRANSFORM_COMPONENT_ID);
+        assert_eq!(root_operation.operation, TRANSFORM_APPLY_OPERATION);
+
+        for (component_id, label) in [
+            ("transform", "Effector · Transform Modulation"),
+            ("opacity", "Effector · Opacity Modulation"),
+        ] {
+            let item = items
+                .iter()
+                .find(|item| {
+                    matches!(&item.value, NodeCreateRequest::Effector(id) if id == component_id)
+                })
+                .expect("built-in modulation Effector is exposed in the Add menu");
+            assert_eq!(item.label, label);
+        }
+
         for component_id in ["fill", "stroke"] {
             let style = items
                 .iter()
@@ -10458,11 +10580,42 @@ mod tests {
             )
             .unwrap();
         let splice_items = wire_splice_menu_items(&project, shape_connection, plugins.as_ref());
+        assert!(splice_items
+            .iter()
+            .any(|item| item.value == NodeCreateRequest::Transform));
         assert!(splice_items.iter().any(|item| {
             matches!(&item.value, NodeCreateRequest::Decorator(id) if id == "backplate")
         }));
         assert!(!splice_items.iter().any(|item| {
             matches!(&item.value, NodeCreateRequest::Style(id) if id == runtime_style_id)
+        }));
+
+        let root =
+            create_operation_node_for_request(&NodeCreateRequest::Transform, plugins.as_ref())
+                .expect("wire insertion uses the root Transform factory");
+        let root_id = root.id;
+        project.add_node(root);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), root_id)
+            .unwrap();
+        assert!(splice_existing_node_on_connection(
+            &mut project,
+            shape_connection,
+            root_id,
+        ));
+        assert!(project.connections.iter().any(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT)
+                && connection.to == PortAddress::new(PortOwner::Node(root_id), SHAPE_INPUT_PORT)
+        }));
+        assert!(project.connections.iter().any(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(root_id), SHAPE_OUTPUT_PORT)
+                && connection.to
+                    == PortAddress::new(PortOwner::Node(transform_id), SHAPE_INPUT_PORT)
+        }));
+        assert!(!project.connections.iter().any(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT)
+                && connection.to
+                    == PortAddress::new(PortOwner::Node(transform_id), SHAPE_INPUT_PORT)
         }));
     }
 
@@ -12191,8 +12344,10 @@ mod tests {
         let factory = style_graph_factory();
         let plugins = factory.get_plugin_manager();
         let menu_entries = available_effector_menu_entries(plugins.as_ref());
-        assert!(menu_entries.contains(&("transform".to_string(), "Transform".to_string())));
-        assert!(menu_entries.contains(&("opacity".to_string(), "Opacity".to_string())));
+        assert!(
+            menu_entries.contains(&("transform".to_string(), "Transform Modulation".to_string()))
+        );
+        assert!(menu_entries.contains(&("opacity".to_string(), "Opacity Modulation".to_string())));
         assert!(menu_entries
             .windows(2)
             .all(|entries| entries[0].1 <= entries[1].1));

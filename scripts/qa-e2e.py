@@ -36,6 +36,8 @@ TRANSFORM_EFFECTOR = "00000000-0000-0000-0000-000000000501"
 OPACITY_EFFECTOR = "00000000-0000-0000-0000-000000000502"
 BACKPLATE_DECORATOR = "00000000-0000-0000-0000-000000000503"
 BLUR_EFFECT = "00000000-0000-0000-0000-000000000504"
+TEXT_TRANSFORM = "00000000-0000-0000-0000-000000000505"
+SHAPE_TRANSFORM = "00000000-0000-0000-0000-000000000506"
 TEXT_FILL = "00000000-0000-0000-0000-000000000601"
 SHAPE_FILL = "00000000-0000-0000-0000-000000000602"
 SHAPE_STROKE = "00000000-0000-0000-0000-000000000603"
@@ -47,6 +49,8 @@ EXPECTED_FIXTURE_NODES = frozenset(
         MERGE,
         TEXT,
         SHAPE,
+        TEXT_TRANSFORM,
+        SHAPE_TRANSFORM,
         TRANSFORM_EFFECTOR,
         OPACITY_EFFECTOR,
         BACKPLATE_DECORATOR,
@@ -61,13 +65,14 @@ EXPECTED_CLIP_NODES = {
     CLIP_A1: [SOLID, MERGE],
     CLIP_A2: [
         TEXT,
+        TEXT_TRANSFORM,
         TRANSFORM_EFFECTOR,
         OPACITY_EFFECTOR,
         BACKPLATE_DECORATOR,
         TEXT_FILL,
         BLUR_EFFECT,
     ],
-    CLIP_B1: [SHAPE, SHAPE_FILL, SHAPE_STROKE, SHAPE_MERGE],
+    CLIP_B1: [SHAPE, SHAPE_TRANSFORM, SHAPE_FILL, SHAPE_STROKE, SHAPE_MERGE],
 }
 EXPECTED_CLIP_OUTPUTS = {
     CLIP_A1: MERGE,
@@ -75,6 +80,8 @@ EXPECTED_CLIP_OUTPUTS = {
     CLIP_B1: SHAPE_MERGE,
 }
 EXPECTED_OPERATIONS = {
+    TEXT_TRANSFORM: ("transform", "transform", "transform.apply.v1"),
+    SHAPE_TRANSFORM: ("transform", "transform", "transform.apply.v1"),
     TRANSFORM_EFFECTOR: ("effector", "transform", "effector.apply.v1"),
     OPACITY_EFFECTOR: ("effector", "opacity", "effector.apply.v1"),
     BACKPLATE_DECORATOR: ("decorator", "backplate", "decorator.apply.v1"),
@@ -1892,7 +1899,7 @@ def validate_explicit_operation_fixture(project):
         missing = sorted(EXPECTED_FIXTURE_NODES - actual_nodes)
         extra = sorted(actual_nodes - EXPECTED_FIXTURE_NODES)
         raise QaFailure(
-            "fixture must contain the 12 explicit Nodes; missing={}, extra={}".format(
+            "fixture must contain the 14 explicit Nodes; missing={}, extra={}".format(
                 missing, extra
             )
         )
@@ -1959,9 +1966,9 @@ def validate_explicit_operation_fixture(project):
                 raise QaFailure(
                     "{} still contains embedded {}".format(node_id, collection)
                 )
-    if len(project.get("connections", ())) != 24:
+    if len(project.get("connections", ())) != 28:
         raise QaFailure(
-            "explicit fixture has {} connections, expected 24".format(
+            "explicit fixture has {} connections, expected 28".format(
                 len(project.get("connections", ()))
             )
         )
