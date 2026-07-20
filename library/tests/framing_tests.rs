@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, anyhow};
 use library::model::Project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::FrameContent;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use support::media_node_for_canvas;
 
 #[test]
-fn video_converter_preserves_clip_local_source_time_and_stream() {
+fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
     let (composition, _first_track) = Composition::new("Test Comp", 1920, 1080, 30.0, 10.0);
     let mut registry = PropertyEvaluatorRegistry::new();
     registry.register("constant", Arc::new(ConstantEvaluator));
@@ -43,7 +44,7 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
             "stale-path-is-not-used.mp4".to_string(),
         )),
     )
-    .expect("media factory initializes file_path");
+    .map_err(|error| anyhow!("media factory must initialize file_path: {error}"))?;
 
     let plugin_manager = Arc::new(library::plugin::PluginManager::new());
     let context = FrameEvaluationContext {
@@ -58,7 +59,7 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
     // unchanged. The loader, not average FPS, maps it to stream PTS.
     let result = VideoEntityConverterPlugin::new()
         .convert_entity(&context, &node, 5.0)
-        .expect("video converter should produce a frame");
+        .context("video converter should produce a frame")?;
     assert!(matches!(
         result.content,
         FrameContent::Video {
@@ -67,6 +68,7 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
             ref surface,
         } if surface.file_path == "test.mp4"
     ));
+    Ok(())
 }
 mod support;
 
