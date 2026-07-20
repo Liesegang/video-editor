@@ -687,6 +687,9 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
     project
         .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
         .map_err(|error| anyhow!(error))?;
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .map_err(|error| anyhow!(error))?;
 
     let cache = CacheManager::with_audio_chunk_capacity(2);
     let plugin_manager = PluginManager::default();
@@ -749,6 +752,9 @@ fn media_project_with_asset(asset: Asset) -> Result<(Project, Uuid)> {
         .map_err(|error| anyhow!(error))?;
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .map_err(|error| anyhow!(error))?;
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(node_id))
         .map_err(|error| anyhow!(error))?;
     Ok((project, asset_id))
 }
