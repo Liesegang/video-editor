@@ -16,6 +16,7 @@ pub mod clips;
 pub mod context_menu;
 pub mod drag_and_drop;
 pub mod interactions;
+mod waveform;
 
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,

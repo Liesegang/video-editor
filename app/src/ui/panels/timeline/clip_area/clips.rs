@@ -1,6 +1,6 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
-use library::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
+#[cfg(test)]
 use library::audio::mixer::audio_stream_index_for_media;
 use library::model::asset::AssetKind;
 use library::model::project::{PortOwner, Project};
@@ -89,72 +89,6 @@ enum DeferredClipAction {
     RemoveClip { track_id: Uuid, clip_id: Uuid },
     /// Push history state after changes
     PushHistory,
-}
-
-struct WaveformSource<'a> {
-    samples: &'a [f32],
-    start_time: f64,
-    trim_in: f64,
-    sample_rate: f64,
-    channels: usize,
-}
-
-fn draw_waveform(
-    painter: &egui::Painter,
-    clip_rect: egui::Rect,
-    pixels_per_unit: f32,
-    source: WaveformSource<'_>,
-) {
-    let rect_w = clip_rect.width();
-    let rect_h = clip_rect.height();
-    let center_y = clip_rect.center().y;
-    let max_amp_height = rect_h * 0.4;
-
-    let samples_per_pixel =
-        (source.sample_rate / f64::from(pixels_per_unit)) * source.channels as f64;
-    let step_width = if samples_per_pixel > 1000.0 { 2.0 } else { 1.0 };
-    let mut x = 0.0;
-
-    while x < rect_w {
-        let time_offset = x / pixels_per_unit;
-        // Source time = Time since start of clip (in source media)
-        // Clip shows [trim_in, trim_in + duration] of source
-        let source_time = source.trim_in + f64::from(time_offset);
-
-        // Map to sample index
-        let start_sample_idx = if source_time >= source.start_time {
-            ((source_time - source.start_time) * source.sample_rate) as usize * source.channels
-        } else {
-            source.samples.len() + 1
-        };
-        let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
-
-        if start_sample_idx < source.samples.len() {
-            let end = end_sample_idx.min(source.samples.len());
-            let mut max_amp = 0.0f32;
-            let stride = if end - start_sample_idx > 100 { 10 } else { 1 };
-
-            for i in (start_sample_idx..end).step_by(stride) {
-                let abs_val = source.samples[i].abs();
-                if abs_val > max_amp {
-                    max_amp = abs_val;
-                }
-            }
-
-            if max_amp > 0.0 {
-                let height = (max_amp * max_amp_height).max(1.0);
-                let x_pos = clip_rect.min.x + x;
-                painter.line_segment(
-                    [
-                        egui::pos2(x_pos, center_y - height),
-                        egui::pos2(x_pos, center_y + height),
-                    ],
-                    egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 100)),
-                );
-            }
-        }
-        x += step_width;
-    }
 }
 
 fn collect_track_clips<'a>(project: &'a Project, track: &'a Track, clips: &mut Vec<&'a Clip>) {
@@ -1154,43 +1088,16 @@ fn draw_single_clip(
     let painter = ui_content.painter_at(geometry.content_rect);
     painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
 
-    // Draw Audio Waveform
-    if let Some(NodeContent::Media(m)) = graph_nodes.semantic_source.map(Node::content) {
-        if let Some(asset) = project.assets.iter().find(|asset| {
-            asset.id == m.asset_id && matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
-        }) {
-            if safe_width > 10.0 {
-                let cache = project_service.get_cache_manager();
-                let engine = project_service.get_audio_service().get_audio_engine();
-                let sample_rate = engine.get_sample_rate();
-                let channels = engine.get_channels();
-                let stream_index = audio_stream_index_for_media(asset, m);
-                let format = AudioDecodeFormat::new(sample_rate, channels);
-                let source = format.and_then(|format| {
-                    AudioSourceKey::read(&asset.path, stream_index, format).ok()
-                });
-                let source_frame = (*clip.trim_in * f64::from(sample_rate)).max(0.0) as u64;
-                let key = source.map(|source| AudioChunkKey::containing(source, source_frame));
-                if let Some(audio_data) = key.as_ref().and_then(|key| cache.get_audio_chunk(key)) {
-                    let audio_start_time =
-                        audio_data.key().start_frame() as f64 / f64::from(sample_rate);
-
-                    draw_waveform(
-                        &painter,
-                        drawing_clip_rect,
-                        geometry.pixels_per_unit,
-                        WaveformSource {
-                            samples: audio_data.samples(),
-                            start_time: audio_start_time,
-                            trim_in: *clip.trim_in,
-                            sample_rate: f64::from(sample_rate),
-                            channels: usize::from(channels),
-                        },
-                    );
-                }
-            }
-        }
-    }
+    super::waveform::draw_clip_waveform(super::waveform::WaveformDrawContext {
+        ctx: ui_content.ctx(),
+        painter: &painter,
+        clip_rect: drawing_clip_rect,
+        viewport_rect: geometry.content_rect,
+        pixels_per_second: geometry.pixels_per_unit,
+        clip,
+        project,
+        project_service,
+    });
 
     if is_sel_entity {
         painter.rect_stroke(
