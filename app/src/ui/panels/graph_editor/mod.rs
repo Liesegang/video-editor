@@ -25,7 +25,7 @@ use crate::state::context_types::SelectionTarget;
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
 use pan_zoom_ui::{AxisMask, CanvasState, NavigationConfig};
-use projection::{container_for_selection, GraphPropertyProjection};
+use projection::{container_for_selection, GraphPropertyProjection, GraphPropertyRow};
 
 fn graph_navigation_config() -> NavigationConfig {
     NavigationConfig {
@@ -245,24 +245,7 @@ fn draw_property_sidebar(
                         "graph_property_visibility",
                         visibility.rect,
                         row.is_plottable(),
-                        Some(serde_json::json!({
-                            "target": projection.target,
-                            "property": row.stable_id,
-                            "property_key": row.property_key,
-                            "label": row.label,
-                            "visible": is_visible,
-                            "plotted": row.is_plottable(),
-                            "editable": row.is_editable(),
-                            "component": row.component.map(|component| format!("{component:?}")),
-                            "owner": format!("{:?}", row.owner),
-                            "access": property_access_metadata(&row.access),
-                            "animation": format!("{:?}", row.animation),
-                            "definition": row.definition.as_ref().map(|definition| serde_json::json!({
-                                "name": definition.name(),
-                                "label": definition.label(),
-                                "ui_type": format!("{:?}", definition.ui_type()),
-                            })),
-                        })),
+                        Some(graph_property_qa_metadata(row, is_visible)),
                     );
                     if visibility.changed() {
                         if is_visible {
@@ -285,6 +268,34 @@ fn draw_property_sidebar(
             ui.label("No properties found.");
         }
     });
+}
+
+fn graph_property_qa_metadata(row: &GraphPropertyRow, visible: bool) -> serde_json::Value {
+    let property_edit_capable = row.is_editable();
+    let canvas_editable = row.is_plottable() && property_edit_capable;
+    serde_json::json!({
+        "target": row.target,
+        "property": row.stable_id,
+        "property_key": row.property_key,
+        "label": row.label,
+        "visible": visible,
+        "plotted": row.is_plottable(),
+        // `editable` remains a compatibility alias for actual canvas
+        // editability; the model-level capability is reported separately.
+        "editable": canvas_editable,
+        "property_edit_capable": property_edit_capable,
+        "canvas_editable": canvas_editable,
+        "projection_read_only": false,
+        "component": row.component.map(|component| format!("{component:?}")),
+        "owner": format!("{:?}", row.owner),
+        "access": property_access_metadata(&row.access),
+        "animation": format!("{:?}", row.animation),
+        "definition": row.definition.as_ref().map(|definition| serde_json::json!({
+            "name": definition.name(),
+            "label": definition.label(),
+            "ui_type": format!("{:?}", definition.ui_type()),
+        })),
+    })
 }
 
 fn property_access_metadata(access: &SemanticPropertyAccess) -> serde_json::Value {
@@ -572,14 +583,19 @@ fn node_belongs_to_composition(
 mod tests {
     use super::{
         finish_graph_drag_if_owner_changed, graph_navigation_config, graph_node_selection,
-        graph_selection_for_composition, GraphViewportState, HistoryManager, SelectionTarget,
+        graph_property_qa_metadata, graph_selection_for_composition, GraphViewportState,
+        HistoryManager, SelectionTarget,
     };
     use crate::state::context::EditorContext;
     use crate::state::context_types::GraphKeyframeDragState;
     use crate::ui::viewport::ViewportController;
-    use library::model::project::Project;
-    use library::model::property::KeyframeId;
+    use library::editor::project_service::{
+        SemanticAnimationSupport, SemanticPropertyAccess, SemanticPropertyOwner,
+    };
+    use library::model::project::{PortAddress, PortOwner, Project};
+    use library::model::property::{KeyframeId, Property, PropertyMap, PropertyValue};
     use library::model::{Clip, Composition};
+    use ordered_float::OrderedFloat;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
 
@@ -764,6 +780,74 @@ mod tests {
             graph_node_selection(Some(SelectionTarget::Clip(shared_id))),
             None
         );
+    }
+
+    fn editable_qa_row(target: SelectionTarget) -> super::projection::GraphPropertyRow {
+        let owner_id = Uuid::new_v4();
+        super::projection::GraphPropertyRow {
+            stable_id: "semantic:opacity".to_string(),
+            section_id: "style".to_string(),
+            target,
+            label: "Opacity".to_string(),
+            property_key: "opacity".to_string(),
+            definition: None,
+            property: Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+            property_map: Arc::new(PropertyMap::new()),
+            component: Some(super::PropertyComponent::Scalar),
+            owner: SemanticPropertyOwner::ExactNode(owner_id),
+            access: SemanticPropertyAccess::Editable,
+            animation: SemanticAnimationSupport::Evaluator,
+            time_mapper: super::TimeMapper::identity(),
+        }
+    }
+
+    #[test]
+    fn property_qa_metadata_matches_semantic_authoring_and_row_guards() {
+        let exact = graph_property_qa_metadata(
+            &editable_qa_row(SelectionTarget::Node(Uuid::new_v4())),
+            true,
+        );
+        let semantic = graph_property_qa_metadata(
+            &editable_qa_row(SelectionTarget::Clip(Uuid::new_v4())),
+            true,
+        );
+        for metadata in [&exact, &semantic] {
+            assert_eq!(metadata["property_edit_capable"], true);
+            assert_eq!(metadata["canvas_editable"], true);
+            assert_eq!(metadata["editable"], metadata["canvas_editable"]);
+            assert_eq!(metadata["projection_read_only"], false);
+        }
+
+        let mut wired = editable_qa_row(SelectionTarget::Clip(Uuid::new_v4()));
+        wired.access = SemanticPropertyAccess::Wired {
+            source: PortAddress::new(PortOwner::Node(Uuid::new_v4()), "result"),
+        };
+        let wired = graph_property_qa_metadata(&wired, true);
+        assert_eq!(wired["property_edit_capable"], false);
+        assert_eq!(wired["canvas_editable"], false);
+        assert_eq!(wired["editable"], false);
+        assert_eq!(wired["projection_read_only"], false);
+
+        let mut read_only = editable_qa_row(SelectionTarget::Track(Uuid::new_v4()));
+        read_only.access = SemanticPropertyAccess::ReadOnly {
+            reason: "ambiguous owner".to_string(),
+            related_nodes: Vec::new(),
+        };
+        let read_only = graph_property_qa_metadata(&read_only, true);
+        assert_eq!(read_only["property_edit_capable"], false);
+        assert_eq!(read_only["canvas_editable"], false);
+
+        let mut constant_only = editable_qa_row(SelectionTarget::Track(Uuid::new_v4()));
+        constant_only.animation = SemanticAnimationSupport::ConstantOnly;
+        let constant_only = graph_property_qa_metadata(&constant_only, true);
+        assert_eq!(constant_only["property_edit_capable"], false);
+        assert_eq!(constant_only["canvas_editable"], false);
+
+        let mut non_numeric = editable_qa_row(SelectionTarget::Composition(Uuid::new_v4()));
+        non_numeric.component = None;
+        let non_numeric = graph_property_qa_metadata(&non_numeric, true);
+        assert_eq!(non_numeric["property_edit_capable"], true);
+        assert_eq!(non_numeric["canvas_editable"], false);
     }
 
     #[test]
