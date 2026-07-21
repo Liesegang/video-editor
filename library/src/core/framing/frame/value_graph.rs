@@ -452,6 +452,12 @@ impl FrameEvaluator<'_> {
         global_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> EvalResult<Vec<f32>> {
+        // TODO(perf/audio-analysis-fanout): add FrameEvaluator-request-local
+        // memoization for mixed PCM windows and FFT results. The shared audio
+        // chunk cache already prevents repeated file decode, but sibling
+        // RMS/Peak/Spectrum branches still remix the same window and multiple
+        // Band Energy consumers recompute the same FFT. Benchmark a fan-out
+        // graph before choosing the cache key and memory bound.
         let target = PortAddress::new(PortOwner::Node(node.id), SOUND_INPUT_PORT);
         let connection = match self.single_connection_to(&target)? {
             EvalOutput::Produced(connection) => connection,
@@ -504,7 +510,7 @@ impl FrameEvaluator<'_> {
             start_sample,
             frames,
             sample_rate,
-            center_time,
+            global_time,
             self.plugin_manager,
         )
         .map_or(EvalOutput::NoOutput, EvalOutput::Produced))

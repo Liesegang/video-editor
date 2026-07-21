@@ -43,6 +43,37 @@ fn attach_time_fmod(
     fmod_id
 }
 
+fn attach_clip_time_fmod(
+    project: &mut Project,
+    clip_id: uuid::Uuid,
+    timed_node_id: uuid::Uuid,
+) -> uuid::Uuid {
+    let mut fmod = Node::new_fmod("half-second Clip-local audio loop");
+    fmod.set_property(
+        FMOD_DIVISOR_INPUT_PORT.to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(0.5))),
+    )
+    .unwrap();
+    let fmod_id = fmod.id;
+    project.add_node(fmod);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), fmod_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
+            PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
+        )
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(timed_node_id), TIME_PORT),
+        )
+        .unwrap();
+    fmod_id
+}
+
 fn bypassed_audio_operation() -> Node {
     let mut persisted = serde_json::to_value(Node::new_merge("bypassed audio operation")).unwrap();
     persisted["content"] = serde_json::json!({
@@ -285,6 +316,124 @@ fn bypassed_audio_plugin_scope_gates_no_output_and_propagates_explicit_time() {
 
     project.get_node_mut(fmod_id).unwrap().enabled = false;
     assert_eq!(mix(&project), vec![0.0; 4]);
+}
+
+#[test]
+fn sound_merge_time_remap_in_nonzero_clip_preserves_composition_activity_space() {
+    let mut project = Project::new("Clip-local Sound Merge time scope");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 4.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let clip = Clip::new("late audio", 2.0, 1.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(
+        &mut project,
+        &cache,
+        &mut files,
+        (0..8).map(|sample| sample as f32).collect(),
+    );
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), media_id)
+        .unwrap();
+    let sound_merge = Node::new_sound_merge("Clip Sound Merge");
+    let sound_merge_id = sound_merge.id;
+    project.add_node(sound_merge);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), sound_merge_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(sound_merge_id), MERGE_SOUNDS_PORT),
+        )
+        .unwrap();
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(sound_merge_id))
+        .unwrap();
+    attach_clip_time_fmod(&mut project, clip_id, sound_merge_id);
+
+    let mixed = mix_samples(
+        &project.assets,
+        &project,
+        project.get_composition(composition_id).unwrap(),
+        &cache,
+        8,
+        4,
+        4,
+        1,
+        &PluginManager::default(),
+    );
+    assert_eq!(
+        mixed,
+        vec![0.0, 1.0, 0.0, 1.0],
+        "Composition time must gate the Clip while explicit Time supplies source-local media time"
+    );
+}
+
+#[test]
+fn bypass_time_remap_in_nonzero_clip_preserves_composition_activity_space() {
+    let mut project = Project::new("Clip-local bypass time scope");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 4.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let clip = Clip::new("late audio", 2.0, 1.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(
+        &mut project,
+        &cache,
+        &mut files,
+        (0..8).map(|sample| sample as f32).collect(),
+    );
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), media_id)
+        .unwrap();
+    let operation = bypassed_audio_operation();
+    let operation_id = operation.id;
+    project.add_node(operation);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), operation_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(operation_id), "audio_in"),
+        )
+        .unwrap();
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(operation_id))
+        .unwrap();
+    attach_clip_time_fmod(&mut project, clip_id, operation_id);
+
+    let mixed = mix_samples(
+        &project.assets,
+        &project,
+        project.get_composition(composition_id).unwrap(),
+        &cache,
+        8,
+        4,
+        4,
+        1,
+        &PluginManager::default(),
+    );
+    assert_eq!(
+        mixed,
+        vec![0.0, 1.0, 0.0, 1.0],
+        "bypass must propagate source time without reinterpreting it as Composition time"
+    );
 }
 
 #[test]

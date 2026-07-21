@@ -513,6 +513,78 @@ fn analysis_window_uses_composition_time_before_clip_stretch_and_explicit_fmod()
 }
 
 #[test]
+fn off_grid_analysis_time_uses_actual_clip_activity_not_quantized_window_center() {
+    const SAMPLE_RATE: u32 = 8_000;
+    let wave = TestWave::sine(1_000.0, 0.8, SAMPLE_RATE, SAMPLE_RATE as usize);
+    let mut project = Project::new("off-grid sound analysis activity");
+    let (composition, track) = Composition::new("main", 32, 32, 30.0, 1.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let clip = Clip::new("off-grid tone", 0.025, 0.5);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+    let mut asset = Asset::new("tone", &wave.path(), AssetKind::Audio);
+    asset.duration = Some(1.0);
+    let media = Node::from_media_converter(
+        "tone",
+        MediaContent {
+            asset_id: asset.id,
+            stream_index: None,
+            audio_stream_index: None,
+        },
+        &[],
+        asset.path.clone(),
+    )
+    .unwrap();
+    project.assets.push(asset);
+    let media_id = add_to_clip(&mut project, clip_id, media);
+    project
+        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(media_id))
+        .unwrap();
+
+    let mut analysis = Node::new_sound_analysis("RMS", SoundAnalysisContent::Rms);
+    for (key, value) in [
+        (ANALYSIS_WINDOW_MS_PROPERTY, 20.0),
+        (ANALYSIS_HOP_MS_PROPERTY, 10.0),
+        (ANALYSIS_SAMPLE_RATE_PROPERTY, f64::from(SAMPLE_RATE)),
+    ] {
+        analysis
+            .set_property(key.to_string(), constant_number(value))
+            .unwrap();
+    }
+    let analysis_id = add_to_clip(&mut project, clip_id, analysis);
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(analysis_id), SOUND_INPUT_PORT),
+        )
+        .unwrap();
+
+    let plugins = Arc::new(PluginManager::default());
+    let evaluator = FrameEvaluator::new(
+        &project,
+        project.get_composition(composition_id).unwrap(),
+        plugins.get_property_evaluators(),
+        plugins.as_ref(),
+    );
+    let EvalOutput::Produced(PropertyValue::Number(observed)) = evaluator
+        .resolve_metadata_value(
+            &PortAddress::new(PortOwner::Node(analysis_id), NUMBER_RESULT_OUTPUT_PORT),
+            0.026,
+            &mut HashSet::new(),
+        )
+        .unwrap()
+    else {
+        panic!("actual time is inside the Clip even though the 10ms hop center is before it");
+    };
+    assert!(observed.into_inner() > 0.1);
+}
+
+#[test]
 fn sound_rms_changes_a_real_image_transform_property_with_audio_level() {
     const SAMPLE_RATE: u32 = 8_000;
     let wave = TestWave::from_samples(

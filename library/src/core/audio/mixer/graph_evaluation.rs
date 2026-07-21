@@ -29,6 +29,7 @@ enum AudioRouteStepKind {
 struct AudioRouteStep<'a> {
     owner: PortOwner,
     kind: AudioRouteStepKind,
+    has_explicit_time: bool,
     properties: Option<&'a PropertyMap>,
     composition_id: Option<Uuid>,
     diagnostic_scope: Option<String>,
@@ -147,12 +148,18 @@ impl<'a> AudioGraphEvaluator<'a> {
         timeline_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> Option<EvaluatedAudioLeaf> {
-        let mut timeline_time = timeline_time;
+        // Keep the current Composition coordinate separate from an authored
+        // Time remap. Scope/activity checks always use Composition time; a
+        // routed source time is applied only after that check. Otherwise a
+        // Clip-local value would be fed back through Clip::local_time and a
+        // non-zero-start Clip would incorrectly become inactive.
+        let mut composition_time = timeline_time;
+        let mut routed_source_time = None;
         let mut gain = 1.0;
         for step in &route.steps {
-            let scope = match self.frame_evaluator.evaluate_owner_scope_with_scratch(
+            let mut scope = match self.frame_evaluator.evaluate_owner_scope_with_scratch(
                 step.owner,
-                timeline_time,
+                composition_time,
                 path,
             ) {
                 Ok(EvalOutput::Produced(scope)) => scope,
@@ -162,6 +169,16 @@ impl<'a> AudioGraphEvaluator<'a> {
                     return None;
                 }
             };
+            // An upstream Node without its own Time wire inherits the routed
+            // source coordinate. An explicit Time input is authoritative and
+            // replaces it. Container scopes continue to use Composition time
+            // so their half-open activity intervals stay well-defined.
+            if matches!(step.owner, PortOwner::Node(_))
+                && !step.has_explicit_time
+                && let Some(source_time) = routed_source_time
+            {
+                scope.time = source_time;
+            }
             if let Some(properties) = step.properties {
                 let composition_id = step.composition_id?;
                 let context = self.property_contexts.get(&composition_id)?;
@@ -174,8 +191,14 @@ impl<'a> AudioGraphEvaluator<'a> {
             }
             match step.kind {
                 AudioRouteStepKind::Scope | AudioRouteStepKind::Gain => {}
-                AudioRouteStepKind::RemappedScope => timeline_time = scope.time,
-                AudioRouteStepKind::CompositionInstance => timeline_time = scope.time,
+                AudioRouteStepKind::RemappedScope => routed_source_time = Some(scope.time),
+                AudioRouteStepKind::CompositionInstance => {
+                    // A Composition Instance intentionally crosses into a new
+                    // Composition coordinate space. Its resolved placement
+                    // time becomes that Composition's timeline exactly once.
+                    composition_time = scope.time;
+                    routed_source_time = None;
+                }
                 AudioRouteStepKind::Media => {
                     return Some(EvaluatedAudioLeaf {
                         source_time: scope.time,
@@ -236,6 +259,7 @@ fn collect_audio_routes<'a>(
                 steps.push(AudioRouteStep {
                     owner,
                     kind: AudioRouteStepKind::Scope,
+                    has_explicit_time: false,
                     properties: None,
                     composition_id: None,
                     diagnostic_scope: None,
@@ -446,6 +470,7 @@ fn audio_gain_step<'a>(
     AudioRouteStep {
         owner,
         kind,
+        has_explicit_time: has_explicit_time_input(project, owner),
         properties: Some(properties),
         composition_id: project.find_containing_composition(owner.id()),
         diagnostic_scope: Some(format!("{prefix}:{}", owner.id())),
@@ -453,10 +478,7 @@ fn audio_gain_step<'a>(
 }
 
 fn audio_node_scope_step(project: &Project, owner: PortOwner) -> AudioRouteStep<'_> {
-    let has_explicit_time = project
-        .connections
-        .iter()
-        .any(|connection| connection.to == PortAddress::new(owner, TIME_PORT));
+    let has_explicit_time = has_explicit_time_input(project, owner);
     AudioRouteStep {
         owner,
         kind: if has_explicit_time {
@@ -464,10 +486,18 @@ fn audio_node_scope_step(project: &Project, owner: PortOwner) -> AudioRouteStep<
         } else {
             AudioRouteStepKind::Scope
         },
+        has_explicit_time,
         properties: None,
         composition_id: None,
         diagnostic_scope: None,
     }
+}
+
+fn has_explicit_time_input(project: &Project, owner: PortOwner) -> bool {
+    project
+        .connections
+        .iter()
+        .any(|connection| connection.to == PortAddress::new(owner, TIME_PORT))
 }
 
 fn valid_audio_output(project: &Project, owner: PortOwner, output: &PortAddress) -> bool {
