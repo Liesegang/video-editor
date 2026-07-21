@@ -1,7 +1,7 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::{
-    RuntimeBounds, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
+    RuntimeBounds, RuntimePathPart, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
     measure_shape_visual_bounds,
 };
 
@@ -191,12 +191,24 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             return None;
         }
         let bounds = parsed.compute_tight_bounds();
+        let runtime_bounds =
+            RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
+        let stable_id = node.id.as_u128() as u64;
         Some(RuntimeShape {
             source_id: node.id,
             geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
-                path,
-                bounds: RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                path: path.clone(),
+                bounds: runtime_bounds,
                 path_effects: evaluator.parse_path_effects(props, time),
+                parts: vec![RuntimePathPart {
+                    path,
+                    bounds: runtime_bounds,
+                    stable_id,
+                    block_group_id: stable_id,
+                    line_group_id: stable_id,
+                    line_index: 0,
+                    opacity: 1.0,
+                }],
             }),
             spatial_transform_node_id: None,
             spatial_transform: Default::default(),

@@ -3,9 +3,7 @@ use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
-use crate::model::frame::runtime_shape::{
-    evaluate_text_element_transforms, transformed_text_element_bounds,
-};
+use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
@@ -25,6 +23,8 @@ use skia_safe::{
     AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
     Paint, PaintStyle, Point, SamplingOptions, Surface,
 };
+
+mod legacy_backplate;
 
 pub struct SkiaRenderer {
     width: u32,
@@ -458,9 +458,8 @@ impl SkiaRenderer {
         request: TextRasterRequest<'_>,
         ensemble_data: &crate::core::ensemble::EnsembleData,
     ) -> Result<RenderOutput, LibraryError> {
-        use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
         use crate::core::ensemble::target::EffectorTarget;
-        use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig};
+        use crate::core::ensemble::types::EffectorConfig;
 
         let TextRasterRequest {
             text,
@@ -492,20 +491,6 @@ impl SkiaRenderer {
                 ));
             }
         }
-        for config in &ensemble_data.decorator_configs {
-            if matches!(
-                config,
-                DecoratorConfig::Backplate {
-                    target: BackplateTarget::Parts,
-                    ..
-                }
-            ) {
-                return Err(LibraryError::Render(
-                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
-                ));
-            }
-        }
-
         let (target_width, target_height) = self.current_target_dimensions();
         let mut layer = self.create_layer_surface()?;
         {
@@ -532,165 +517,12 @@ impl SkiaRenderer {
             let character_transforms =
                 evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
 
-            let transformed_bounds = |element: &crate::model::frame::runtime_shape::RuntimeTextElement,
-                                      character_transform: &crate::core::ensemble::types::TransformData| {
-                let bounds = transformed_text_element_bounds(element, character_transform);
-                skia_safe::Rect::new(bounds.left, bounds.top, bounds.right, bounds.bottom)
-            };
-
-            let union_bounds = |indices: &[usize]| {
-                let mut bounds: Option<skia_safe::Rect> = None;
-                for index in indices {
-                    let rect = transformed_bounds(&elements[*index], &character_transforms[*index]);
-                    bounds = Some(match bounds {
-                        Some(current) => skia_safe::Rect::new(
-                            current.left.min(rect.left),
-                            current.top.min(rect.top),
-                            current.right.max(rect.right),
-                            current.bottom.max(rect.bottom),
-                        ),
-                        None => rect,
-                    });
-                }
-                bounds
-            };
-
-            for decorator_config in &ensemble_data.decorator_configs {
-                match decorator_config {
-                    DecoratorConfig::Backplate {
-                        target,
-                        shape,
-                        color,
-                        padding,
-                        corner_radius,
-                    } => {
-                        let draw_backplate =
-                            |canvas: &Canvas, rect: skia_safe::Rect, opacity: f32| {
-                                let mut paint = Paint::default();
-                                paint.set_color(skia_safe::Color::from_argb(
-                                    (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8,
-                                    color.r,
-                                    color.g,
-                                    color.b,
-                                ));
-                                paint.set_anti_alias(true);
-
-                                match shape {
-                                    BackplateShape::Rect => {
-                                        canvas.draw_rect(rect, &paint);
-                                    }
-                                    BackplateShape::RoundedRect => {
-                                        let rrect = skia_safe::RRect::new_rect_xy(
-                                            rect,
-                                            *corner_radius,
-                                            *corner_radius,
-                                        );
-                                        canvas.draw_rrect(rrect, &paint);
-                                    }
-                                    BackplateShape::Circle => {
-                                        let center_x = rect.center_x();
-                                        let center_y = rect.center_y();
-                                        let radius =
-                                            (rect.width().min(rect.height()) / 2.0).max(0.0);
-                                        canvas.draw_circle((center_x, center_y), radius, &paint);
-                                    }
-                                }
-                            };
-
-                        let padded = |left: f32, top: f32, right: f32, bottom: f32| {
-                            skia_safe::Rect::new(
-                                left - padding.3,
-                                top - padding.0,
-                                right + padding.1,
-                                bottom + padding.2,
-                            )
-                        };
-
-                        match target {
-                            BackplateTarget::Char => {
-                                for (character, character_transform) in
-                                    elements.iter().zip(&character_transforms)
-                                {
-                                    let center = Point::new(
-                                        character.bounds.left + character.advance / 2.0,
-                                        (character.bounds.top + character.bounds.bottom) / 2.0,
-                                    );
-                                    canvas.save();
-                                    canvas.translate((center.x, center.y));
-                                    canvas.translate(character_transform.translate);
-                                    canvas.rotate(character_transform.rotate, None);
-                                    canvas.scale(character_transform.scale);
-                                    canvas.translate((-center.x, -center.y));
-                                    draw_backplate(
-                                        canvas,
-                                        padded(
-                                            character.bounds.left,
-                                            character.bounds.top,
-                                            character.bounds.right,
-                                            character.bounds.bottom,
-                                        ),
-                                        character_transform.opacity,
-                                    );
-                                    canvas.restore();
-                                }
-                            }
-                            BackplateTarget::Line => {
-                                for line_index in 0..text.split('\n').count() {
-                                    let indices = elements
-                                        .iter()
-                                        .enumerate()
-                                        .filter_map(|(index, character)| {
-                                            (character.line_index == line_index).then_some(index)
-                                        })
-                                        .collect::<Vec<_>>();
-                                    if let Some(bounds) = union_bounds(&indices) {
-                                        let opacity = indices
-                                            .iter()
-                                            .map(|index| character_transforms[*index].opacity)
-                                            .sum::<f32>()
-                                            / indices.len() as f32;
-                                        draw_backplate(
-                                            canvas,
-                                            padded(
-                                                bounds.left,
-                                                bounds.top,
-                                                bounds.right,
-                                                bounds.bottom,
-                                            ),
-                                            opacity,
-                                        );
-                                    }
-                                }
-                            }
-                            BackplateTarget::Block => {
-                                let indices = (0..elements.len()).collect::<Vec<_>>();
-                                if let Some(bounds) = union_bounds(&indices) {
-                                    let opacity = character_transforms
-                                        .iter()
-                                        .map(|transform| transform.opacity)
-                                        .sum::<f32>()
-                                        / character_transforms.len() as f32;
-                                    draw_backplate(
-                                        canvas,
-                                        padded(
-                                            bounds.left,
-                                            bounds.top,
-                                            bounds.right,
-                                            bounds.bottom,
-                                        ),
-                                        opacity,
-                                    );
-                                }
-                            }
-                            BackplateTarget::Parts => {
-                                return Err(LibraryError::Render(
-                                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
+            legacy_backplate::draw_text_backplates(
+                canvas,
+                &runtime_text,
+                &character_transforms,
+                &ensemble_data.decorator_configs,
+            )?;
 
             for (character, character_transform) in elements.iter().zip(&character_transforms) {
                 let center = Point::new(
@@ -1038,60 +870,7 @@ impl Renderer for SkiaRenderer {
             if let Some(ensemble) = ensemble
                 && ensemble.enabled
             {
-                use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-                use crate::core::ensemble::types::DecoratorConfig;
-
-                let bounds = path.compute_tight_bounds();
-                for decorator in &ensemble.decorator_configs {
-                    match decorator {
-                        DecoratorConfig::Backplate {
-                            target,
-                            shape,
-                            color,
-                            padding,
-                            corner_radius,
-                        } => {
-                            if *target == BackplateTarget::Parts {
-                                return Err(LibraryError::Render(
-                                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
-                                ));
-                            }
-                            // A RuntimePathShape is one stable element, so
-                            // Char/Line/Block all address the same tight bounds.
-                            let rect = skia_safe::Rect::new(
-                                bounds.left - padding.3,
-                                bounds.top - padding.0,
-                                bounds.right + padding.1,
-                                bounds.bottom + padding.2,
-                            );
-                            let mut paint = Paint::default();
-                            paint.set_color(skia_safe::Color::from_argb(
-                                color.a, color.r, color.g, color.b,
-                            ));
-                            paint.set_anti_alias(true);
-                            match shape {
-                                BackplateShape::Rect => {
-                                    canvas.draw_rect(rect, &paint);
-                                }
-                                BackplateShape::RoundedRect => {
-                                    let rounded = skia_safe::RRect::new_rect_xy(
-                                        rect,
-                                        *corner_radius,
-                                        *corner_radius,
-                                    );
-                                    canvas.draw_rrect(rounded, &paint);
-                                }
-                                BackplateShape::Circle => {
-                                    canvas.draw_circle(
-                                        (rect.center_x(), rect.center_y()),
-                                        (rect.width().min(rect.height()) * 0.5).max(0.0),
-                                        &paint,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+                legacy_backplate::draw_path_backplates(canvas, &path, &ensemble.decorator_configs)?;
             }
             for config in styles {
                 let style = &config.style;

@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use library::cache::CacheManager;
 use library::core::ensemble::target::EffectorTarget;
-use library::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData};
+use library::core::ensemble::types::{EffectorConfig, EnsembleData};
 use library::editor::project_service::GeneratorNodeRequest;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
@@ -46,10 +46,6 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
         x: OrderedFloat(x),
         y: OrderedFloat(y),
     })
-}
-
-fn rgba(r: u8, g: u8, b: u8) -> PropertyValue {
-    PropertyValue::Color(Color { r, g, b, a: 255 })
 }
 
 fn fill(plugins: &PluginManager, color: Color) -> Result<Node> {
@@ -322,24 +318,6 @@ fn assert_round_trip(
 
 fn effector(plugins: &PluginManager, kind: &str) -> Result<Node> {
     Ok(plugins.create_effector_operation_node(kind)?)
-}
-
-fn decorator(plugins: &PluginManager, target: &str) -> Result<Node> {
-    let mut node = plugins.create_decorator_operation_node("backplate")?;
-    set(
-        &mut node,
-        "target",
-        PropertyValue::String(target.to_string()),
-    )?;
-    set(
-        &mut node,
-        "shape",
-        PropertyValue::String("RoundRect".to_string()),
-    )?;
-    set(&mut node, "color", rgba(20, 170, 60))?;
-    set(&mut node, "padding", 2.0.into())?;
-    set(&mut node, "radius", 3.0.into())?;
-    Ok(node)
 }
 
 #[test]
@@ -801,62 +779,6 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() -> 
 }
 
 #[test]
-fn multiline_backplates_cover_char_line_block_and_follow_transforms() -> Result<()> {
-    let plugins = Arc::new(PluginManager::default());
-    let mut hashes = Vec::new();
-    for target in ["Char", "Line", "Block"] {
-        let node = text_node("A\nBBB")?;
-        let (project, _) = project_with_shape_graph(
-            node,
-            vec![decorator(&plugins, target)?],
-            default_text_styles(&plugins)?,
-        )?;
-        let rendered = preview(&project, 0, &plugins)?;
-        assert!(dominant_pixels(&rendered, 1) > 20);
-        hashes.push(hash(&rendered));
-        assert_round_trip(&project, 0, &plugins)?;
-    }
-    hashes.sort_unstable();
-    hashes.dedup();
-    assert_eq!(
-        hashes.len(),
-        3,
-        "Char/Line/Block backplates collapsed to one geometry"
-    );
-
-    for target in ["Line", "Block"] {
-        let base = text_node("A\nBBB")?;
-        let backplate = decorator(&plugins, target)?;
-        let (base_project, _) = project_with_shape_graph(
-            base.clone(),
-            vec![backplate.clone()],
-            vec![fill(&plugins, Color::black())?],
-        )?;
-        let base_image = preview(&base_project, 0, &plugins)?;
-
-        let mut transform = effector(&plugins, "transform")?;
-        set(&mut transform, "tx", 24.0.into())?;
-        set(&mut transform, "ty", 5.0.into())?;
-        set(&mut transform, "rotation", 6.0.into())?;
-        let (moved, _) = project_with_shape_graph(
-            base,
-            vec![backplate, transform],
-            vec![fill(&plugins, Color::black())?],
-        )?;
-        let moved_image = preview(&moved, 0, &plugins)?;
-        let base_center = colored_centroid(&base_image).context("base text must render pixels")?;
-        let moved_center =
-            colored_centroid(&moved_image).context("moved text must render pixels")?;
-        assert!(
-            moved_center.0 > base_center.0 + 15.0,
-            "{target} backplate did not follow the effector transform"
-        );
-        assert_ne!(hash(&base_image), hash(&moved_image));
-    }
-    Ok(())
-}
-
-#[test]
 fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let render_target = |target: &str| -> Result<Image> {
@@ -943,30 +865,5 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() -> 
     };
     assert!(error.to_string().contains("EffectorTarget::Parts"));
 
-    let decorator_parts = EnsembleData {
-        enabled: true,
-        effector_configs: Vec::new(),
-        decorator_configs: vec![DecoratorConfig::Backplate {
-            target: library::core::ensemble::decorators::BackplateTarget::Parts,
-            shape: library::core::ensemble::decorators::BackplateShape::Rect,
-            color: Color::white(),
-            padding: (0.0, 0.0, 0.0, 0.0),
-            corner_radius: 0.0,
-        }],
-        patches: Default::default(),
-    };
-    let error = match renderer.rasterize_text_layer(TextRasterRequest {
-        text: "A",
-        size: 30.0,
-        font_name: "Arial",
-        styles: &styles,
-        ensemble: Some(&decorator_parts),
-        transform: Affine2D::IDENTITY,
-        current_time: 0.0,
-    }) {
-        Ok(_) => bail!("Parts backplate unexpectedly rasterized"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("BackplateTarget::Parts"));
     Ok(())
 }

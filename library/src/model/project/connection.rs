@@ -18,6 +18,9 @@ pub const IMAGE_INPUT_PORT: &str = "image_in";
 pub const MERGE_IMAGES_PORT: &str = "images";
 pub const SHAPE_OUTPUT_PORT: &str = "shape";
 pub const SHAPE_INPUT_PORT: &str = "shape_in";
+/// Separately addressed geometry template used by two-Shape operations such
+/// as Backplate, distinct from their primary target Shape.
+pub const BACKGROUND_SHAPE_INPUT_PORT: &str = "background_shape";
 pub const TIME_PORT: &str = "time";
 pub const FRAME_PORT: &str = "frame";
 pub const FPS_PORT: &str = "fps";
@@ -29,9 +32,7 @@ pub const NUMERIC_A_INPUT_PORT: &str = "a";
 pub const NUMERIC_B_INPUT_PORT: &str = "b";
 pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
 
-/// The normal result of evaluating a graph port. `NoOutput` is not an error
-/// and is deliberately distinct from transparent pixels, zero, false, and
-/// every other valid value in `T`.
+/// A graph result; `NoOutput` is distinct from every valid value in `T`.
 #[derive(Clone, PartialEq, Debug)]
 pub enum EvalOutput<T> {
     Produced(T),
@@ -74,11 +75,8 @@ impl PortOwner {
     }
 }
 
-/// On-demand authored identity for one container's visual graph.
-///
-/// This is a pure query result containing stable Project identities only. It is
-/// never serialized or stored as an editing model: callers recompute it from
-/// the authoritative containment, output binding, ports, and connections.
+/// On-demand stable identities for one container's visual graph, recomputed
+/// from authoritative containment, output bindings, ports, and connections.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContainerGraphSemantics {
     explicit_output_node_id: Option<Uuid>,
@@ -503,6 +501,7 @@ fn canonical_node_port_rank(node: &crate::model::Node, port: &PortDefinition) ->
         port.key.as_str(),
         IMAGE_INPUT_PORT
             | SHAPE_INPUT_PORT
+            | BACKGROUND_SHAPE_INPUT_PORT
             | MERGE_IMAGES_PORT
             | FMOD_X_INPUT_PORT
             | NUMERIC_A_INPUT_PORT

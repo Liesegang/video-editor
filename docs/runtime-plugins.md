@@ -42,8 +42,9 @@ validated and translated into it. Descriptor-backed operation factories
 materialize every declared property in both cases, so callers cannot forget
 fields such as `mode` or `target`. Both then use the same plugin ID + explicit
 operation Node + `PropertyMap` editing model; the Project does not branch on
-implementation tier. Runtime Style and Decorator components use the same
-typed graph ports as their built-in counterparts. Runtime Effect uses the same
+implementation tier. Runtime Style uses the built-in typed ports. A Decorator
+advertising `decorator.evaluate.v2` uses the built-in two-Shape ports, while a
+v1-only Decorator retains its frozen one-Shape appearance contract. Runtime Effect uses the same
 Image input/output operation Node and descriptor-default factory as a built-in
 Effect.
 If the plugin later becomes unavailable, the Project's plugin ID and property
@@ -71,10 +72,12 @@ target directory. That bundle contains Property, Fill/Stroke Style, Backplate
 Decorator, typed CPU RGBA8 Effect, and typed CPU RGBA8 Loader components. The
 script checks the locked dependency tree
 contains neither `app` nor `library`, installs the bundle, and runs the
-unchanged prebuilt probe. The probe executes an explicit
-`Text -> runtime Backplate -> runtime Fill -> runtime Effect -> Clip` Project
-graph through the Frame evaluator and CPU renderer, then verifies the exact
-post-Effect visible pixel family. It also loads image and custom-video fixture
+unchanged prebuilt probe. The probe executes an explicit geometry graph with
+`Text + background Shape -> runtime Backplate -> runtime Fill -> runtime Effect`
+through the Frame evaluator and CPU renderer, then verifies the exact
+post-Effect visible pixel family. Backplate transports fitted Shape geometry
+only; its background Shape and downstream Style remain ordinary editable
+Project Nodes. The probe also loads image and custom-video fixture
 bytes through the post-build Loader by path. The video proof traverses the
 native Image and FFmpeg fallthrough before validating source time, stream
 selection, color-space names, video metadata, and pixels inside the dynamic
@@ -95,9 +98,13 @@ schema version or migration is involved. The JSON invocation envelope remains
 a low-bandwidth control plane. ABI v1 integrates Effector output, property
 evaluation, low-bandwidth Style/Decorator config evaluation, and separately
 typed CPU RGBA8 Effect/Loader hot paths. Runtime Style covers every current
-host `DrawStyle` variant (Fill and Stroke), while Runtime Decorator covers the
-executable Backplate config. Backplate `Parts` is not advertised because the
-renderer does not implement it. Descriptor properties are resolved and
+host `DrawStyle` variant (Fill and Stroke). The frozen
+`decorator.evaluate.v1` Backplate keeps its original target/shape/color/padding/
+corner-radius output and one-Shape paint path. The negotiated
+`decorator.evaluate.v2` Backplate is preferred when advertised and carries
+only target grouping, padding, offset, and fit for the two-Shape geometry path.
+Backplate `Parts` is not advertised until authored path-part semantics are
+standardized. Descriptor properties are resolved and
 validated once, then materialized as constants before plugin evaluation so a
 stateful authored evaluator cannot be invoked twice. Invalid, unknown,
 non-finite, or structurally unsafe config responses produce `NoOutput`.

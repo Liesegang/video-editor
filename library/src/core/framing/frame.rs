@@ -28,6 +28,7 @@ use crate::plugin::{
 use crate::util::timing::ScopedTimer;
 
 mod composition_instances;
+mod decorator;
 mod property_evaluation;
 mod scope;
 
@@ -536,7 +537,7 @@ impl<'a> FrameEvaluator<'a> {
             EvalOutput::Produced(style) => style,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let object = shape.into_styled_object(style, scope.time as f32)?;
+        let objects = shape.into_styled_objects(style, scope.time as f32)?;
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Node,
@@ -547,7 +548,7 @@ impl<'a> FrameEvaluator<'a> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
-            items: vec![FrameItem::Object(object)],
+            items: objects.into_iter().map(FrameItem::Object).collect(),
         })))
     }
 
@@ -695,47 +696,6 @@ impl<'a> FrameEvaluator<'a> {
         Ok(EvalOutput::Produced(shape))
     }
 
-    fn apply_decorator_to_shape(
-        &self,
-        node: &Node,
-        operation: &crate::model::PluginOperationContent,
-        scope: EvaluationScope,
-        global_time: f64,
-        path: &mut HashSet<PortOwner>,
-    ) -> EvalResult<RuntimeShape> {
-        if !self.operation_contract_matches(operation)? {
-            return Ok(EvalOutput::NoOutput);
-        }
-        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
-        if inputs
-            .properties
-            .values()
-            .any(|value| value == &EvalOutput::NoOutput)
-        {
-            return Ok(EvalOutput::NoOutput);
-        }
-        let mut shape = match self.pull_shape_input(node.id, global_time, path)? {
-            EvalOutput::Produced(shape) => shape,
-            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-        };
-        let composition = self
-            .composition_for_owner(PortOwner::Node(node.id))
-            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
-        let context = self.context(composition, Some(&inputs));
-        let config = match self.plugin_manager.evaluate_decorator_operation(
-            &context,
-            &operation.component_id,
-            node.id,
-            node.properties(),
-            scope.time,
-        ) {
-            EvalOutput::Produced(config) => config,
-            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-        };
-        shape.push_decorator(config);
-        Ok(EvalOutput::Produced(shape))
-    }
-
     fn apply_root_transform_to_shape(
         &self,
         node: &Node,
@@ -805,7 +765,17 @@ impl<'a> FrameEvaluator<'a> {
         global_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> EvalResult<RuntimeShape> {
-        let target = PortAddress::new(PortOwner::Node(node_id), SHAPE_INPUT_PORT);
+        self.pull_shape_input_from_port(node_id, SHAPE_INPUT_PORT, global_time, path)
+    }
+
+    fn pull_shape_input_from_port(
+        &self,
+        node_id: Uuid,
+        port: &str,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        let target = PortAddress::new(PortOwner::Node(node_id), port);
         let connection = match self.single_connection_to(&target)? {
             EvalOutput::Produced(connection) => connection,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),

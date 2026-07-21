@@ -806,8 +806,7 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() -> Any
 }
 
 #[test]
-fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds() -> AnyResult<()>
-{
+fn explicit_shape_effector_style_merge_keeps_straight_alpha_and_bounds() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -886,22 +885,8 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
     let mut opacity = plugins.create_effector_operation_node("opacity")?;
     set_constant(&mut opacity, "opacity", 65.0.into());
     set_constant(&mut opacity, "mode", PropertyValue::String("Set".into()));
-    let mut backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Backplate operation")?;
-    set_constant(&mut backplate, "padding", 4.0.into());
-    set_constant(
-        &mut backplate,
-        "color",
-        PropertyValue::Color(Color {
-            r: 35,
-            g: 210,
-            b: 85,
-            a: 96,
-        }),
-    );
-    let chain = [opacity.id, backplate.id];
-    graph.nodes.extend([opacity, backplate]);
+    let chain = [opacity.id];
+    graph.nodes.push(opacity);
     insert_effector_chain(&mut graph, &chain)?;
     let merge_wire = graph
         .connections
@@ -928,193 +913,6 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
 
     let loaded = Project::load(&project.save()?)?;
     assert_eq!(rendered.data, preview(&loaded, &plugins, 0)?.data);
-    Ok(())
-}
-
-#[test]
-fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<()> {
-    let plugins = Arc::new(PluginManager::default());
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-
-    let mut text_graph = manager
-        .create_text_graph("AB\nCD", "Arial", WIDTH, HEIGHT)
-        .context("create Text graph")?;
-    let text_id = text_graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(library::model::GeneratorContent::Text)
-            )
-        })
-        .context("Text graph has no Text source")?
-        .id;
-    let text_transform_id = root_transform_id(&text_graph)?;
-    set_constant(
-        text_graph
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == text_id)
-            .context("Text source is missing")?,
-        "size",
-        18.0.into(),
-    );
-    let text_transform = text_graph
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == text_transform_id)
-        .context("Text root Transform is missing")?;
-    set_constant(
-        text_transform,
-        "position",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(34.0),
-            y: OrderedFloat(12.0),
-        }),
-    );
-    set_constant(
-        text_transform,
-        "anchor",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(0.0),
-            y: OrderedFloat(0.0),
-        }),
-    );
-
-    let mut line_transform = plugins.create_effector_operation_node("transform")?;
-    set_constant(&mut line_transform, "tx", 6.0.into());
-    set_constant(&mut line_transform, "ty", 3.0.into());
-    set_constant(&mut line_transform, "rotation", 12.0.into());
-    set_constant(&mut line_transform, "scale_x", 1.1.into());
-    set_constant(&mut line_transform, "scale_y", 0.9.into());
-    set_constant(
-        &mut line_transform,
-        "target",
-        PropertyValue::String("Line".into()),
-    );
-    let mut char_random = plugins.create_effector_operation_node("randomize")?;
-    set_constant(&mut char_random, "seed", 17.0.into());
-    set_constant(&mut char_random, "translate_range", 5.0.into());
-    set_constant(&mut char_random, "rotate_range", 8.0.into());
-    set_constant(&mut char_random, "scale_range", 0.15.into());
-    set_constant(
-        &mut char_random,
-        "target",
-        PropertyValue::String("Char".into()),
-    );
-    let mut char_backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Backplate operation")?;
-    set_constant(
-        &mut char_backplate,
-        "target",
-        PropertyValue::String("Char".into()),
-    );
-    set_constant(&mut char_backplate, "padding", 5.0.into());
-    set_constant(
-        &mut char_backplate,
-        "color",
-        PropertyValue::Color(Color::white()),
-    );
-    let char_backplate_id = char_backplate.id;
-    let text_chain = [line_transform.id, char_random.id, char_backplate.id];
-    text_graph
-        .nodes
-        .extend([line_transform, char_random, char_backplate]);
-    insert_effector_chain(&mut text_graph, &text_chain)?;
-    let (mut text_project, _) = project_with_graph(text_graph, 0.0, 2.0)?;
-    text_project
-        .compositions
-        .first_mut()
-        .context("Text project has no Composition")?
-        .background_color = Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
-    let text_frame = evaluate(&text_project, &plugins, 0)?;
-    assert_eq!(
-        first_object(&text_frame.items)
-            .context("Text frame has no object")?
-            .source_node_id,
-        text_id
-    );
-    assert_eq!(
-        first_object(&text_frame.items)
-            .context("Text frame has no object")?
-            .spatial_transform_node_id,
-        Some(text_transform_id)
-    );
-    let text_image = render_frame(&text_frame, &plugins)?;
-    assert_alpha_inside_preview_bounds(&text_frame, &text_image)?;
-    for target in ["Line", "Block"] {
-        set_constant(
-            text_project
-                .get_node_mut(char_backplate_id)
-                .context("Text Backplate operation is missing")?,
-            "target",
-            PropertyValue::String(target.into()),
-        );
-        let frame = evaluate(&text_project, &plugins, 0)?;
-        let image = render_frame(&frame, &plugins)?;
-        assert_alpha_inside_preview_bounds(&frame, &image)?;
-    }
-
-    let mut path_graph = manager
-        .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
-        .context("create Shape graph")?;
-    let path_transform_id = root_transform_id(&path_graph)?;
-    let path_transform = path_graph
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == path_transform_id)
-        .context("Shape root Transform is missing")?;
-    set_constant(path_transform, "rotation", 23.0.into());
-    set_constant(
-        path_transform,
-        "scale",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(115.0),
-            y: OrderedFloat(90.0),
-        }),
-    );
-    let mut path_backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Path Backplate operation")?;
-    set_constant(&mut path_backplate, "padding", 11.0.into());
-    set_constant(
-        &mut path_backplate,
-        "color",
-        PropertyValue::Color(Color::white()),
-    );
-    let path_backplate_id = path_backplate.id;
-    path_graph.nodes.push(path_backplate);
-    insert_effector_chain(&mut path_graph, &[path_backplate_id])?;
-    let (mut path_project, _) = project_with_graph(path_graph, 0.0, 2.0)?;
-    path_project
-        .compositions
-        .first_mut()
-        .context("Path project has no Composition")?
-        .background_color = Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
-    let path_frame = evaluate(&path_project, &plugins, 0)?;
-    let path_object = first_object(&path_frame.items).context("Path frame has no object")?;
-    let path_bounds = path_object
-        .content_bounds
-        .context("Path object has no Preview bounds")?;
-    assert!(path_bounds.width.into_inner() >= 52.0);
-    assert!(path_bounds.height.into_inner() >= 42.0);
-    let path_image = render_frame(&path_frame, &plugins)?;
-    assert_alpha_inside_preview_bounds(&path_frame, &path_image)?;
     Ok(())
 }
 

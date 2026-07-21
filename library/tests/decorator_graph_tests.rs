@@ -1,153 +1,77 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Context, Result as AnyResult, anyhow, bail, ensure};
-use library::animation::EasingFunction;
+use anyhow::{Context, Result, anyhow, bail};
 use library::cache::CacheManager;
-use library::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-use library::core::ensemble::types::{DecoratorConfig, EnsembleData};
+use library::core::ensemble::decorators::{BackplateFit, BackplateShape, BackplateTarget};
+use library::core::ensemble::effectors::OpacityMode;
+use library::core::ensemble::target::EffectorTarget;
+use library::core::ensemble::types::{DecoratorConfig, EffectorConfig};
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
+use library::model::frame::draw_type::DrawStyle;
 use library::model::frame::entity::{FrameContent, FrameItem};
-use library::model::frame::frame::FrameInfo;
+use library::model::frame::runtime_shape::{
+    RuntimeBounds, RuntimePathPart, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
+};
+use library::model::frame::transform::Transform;
 use library::model::project::{
-    Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
-    PortDirection, PortMultiplicity, PortOwner, PortSide, Project, ProjectConnection,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    BACKGROUND_SHAPE_INPUT_PORT, Composition, EvalOutput, NodeContainer, NodeGraphBundle,
+    PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner, PortSide, Project,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{
-    Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue,
-};
-use library::model::{Clip, Node, NodeContent};
+use library::model::property::{Property, PropertyValue};
+use library::model::{Clip, Node};
 use library::plugin::{
-    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, FrameEvaluationContext,
-    OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
-    property_port_key, property_ui_type_to_port_data_type,
+    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, FrameEvaluationContext, PluginManager,
+    property_port_key,
 };
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, ShapeRasterRequest};
 use library::{RenderService, SkiaRenderer};
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-const WIDTH: u64 = 128;
-const HEIGHT: u64 = 80;
+const WIDTH: u64 = 180;
+const HEIGHT: u64 = 100;
 const FPS: f64 = 10.0;
+const TRIANGLE: &str = "M 0 0 L 1 0 L 0.5 1 Z";
 
-fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    assert!(
-        node.set_property(key.to_string(), Property::constant(value))
-            .is_ok(),
-        "operation descriptor must initialize {key}"
-    );
+fn set(node: &mut Node, key: &str, value: PropertyValue) -> Result<()> {
+    node.set_property(key.to_string(), Property::constant(value))
+        .map_err(anyhow::Error::msg)
 }
 
-fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
-    ProjectConnection::new(
-        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
-        0,
-    )
+fn first_object(items: &[FrameItem]) -> Option<&library::model::frame::entity::FrameObject> {
+    items.iter().find_map(|item| match item {
+        FrameItem::Object(object) => Some(object),
+        FrameItem::Group(group) => first_object(&group.items),
+    })
 }
 
-fn shape_source_id(graph: &NodeGraphBundle) -> AnyResult<Uuid> {
-    Ok(graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(
-                    library::model::GeneratorContent::Text
-                        | library::model::GeneratorContent::Shape
-                )
-            )
-        })
-        .context("graph has no Shape source")?
-        .id)
-}
-
-fn insert_decorator_chain(graph: &mut NodeGraphBundle, decorator_ids: &[Uuid]) -> AnyResult<()> {
-    let source_id = shape_source_id(graph)?;
-    let mut targets = Vec::new();
-    graph.connections.retain(|connection| {
-        let is_shape_fanout = connection.from
-            == PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT)
-            && connection.to.port == SHAPE_INPUT_PORT;
-        if is_shape_fanout {
-            targets.push(connection.to.clone());
-        }
-        !is_shape_fanout
-    });
-    ensure!(!targets.is_empty(), "factory must expose a Shape consumer");
-
-    let mut upstream = source_id;
-    for decorator_id in decorator_ids {
-        graph.connections.push(shape_wire(upstream, *decorator_id));
-        upstream = *decorator_id;
-    }
-    for target in targets {
-        graph.connections.push(ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(upstream), SHAPE_OUTPUT_PORT),
-            target,
-            0,
-        ));
-    }
-    Ok(())
-}
-
-fn setup_project() -> (Project, Uuid, Uuid) {
-    let mut project = Project::new("decorator graph");
-    let (mut composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 10.0);
-    composition.background_color = Color::black();
-    let composition_id = composition.id;
-    let track_id = track.id;
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    (project, composition_id, track_id)
-}
-
-fn project_with_graph(
-    graph: NodeGraphBundle,
-    start_time: f64,
-    duration: f64,
-) -> AnyResult<(Project, Uuid)> {
-    let (mut project, _composition_id, track_id) = setup_project();
-    let clip = Clip::new("decorator clip", start_time, duration);
-    let clip_id = clip.id;
-    project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id)?;
-    project
-        .insert_node_graph(NodeContainer::Clip(clip_id), graph)
-        .context("insert Decorator graph into Clip")?;
-    Ok((project, clip_id))
-}
-
-fn evaluate(
-    project: &Project,
-    plugins: &Arc<PluginManager>,
-    frame_number: u64,
-) -> AnyResult<FrameInfo> {
-    get_frame_from_project(
+fn evaluate(project: &Project, plugins: &Arc<PluginManager>) -> Result<Vec<FrameItem>> {
+    Ok(get_frame_from_project(
         project,
         0,
-        frame_number,
+        0,
         1.0,
         None,
         &plugins.get_property_evaluators(),
         plugins,
-    )
-    .context("evaluate Decorator graph frame")
+    )?
+    .items)
 }
 
-fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> AnyResult<Image> {
-    let frame = evaluate(project, plugins, frame_number)?;
+fn preview(project: &Project, plugins: &Arc<PluginManager>) -> Result<Image> {
+    let frame = get_frame_from_project(
+        project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugins.get_property_evaluators(),
+        plugins,
+    )?;
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,
@@ -155,210 +79,777 @@ fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -
         false,
         None,
         None,
-    )
-    .context("create CPU renderer")?;
+    )?;
     let mut service = RenderService::new(renderer, plugins.clone(), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
-        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
+        RenderOutput::Texture(_) => bail!("CPU renderer returned a texture"),
     }
 }
 
-fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
-    items.iter().find_map(|item| match item {
-        FrameItem::Object(object) => Some(&object.content),
-        FrameItem::Group(group) => first_content(&group.items),
+struct GraphFixture {
+    project: Project,
+    backplate_id: Uuid,
+    fill_id: Uuid,
+}
+
+fn graph_fixture(plugins: &Arc<PluginManager>, with_background: bool) -> Result<GraphFixture> {
+    let factory = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("backplate factory"))),
+        plugins.clone(),
+    );
+    let mut text = factory.create_text_node("AB", "Arial", WIDTH, HEIGHT)?;
+    let mut background = factory.create_shape_node(TRIANGLE, WIDTH, HEIGHT, 1, 1)?;
+    let mut backplate = plugins.create_decorator_operation_node("backplate")?;
+    set(&mut backplate, "padding", 4.0.into())?;
+    set(
+        &mut backplate,
+        "offset",
+        PropertyValue::Vec2(library::model::property::Vec2 {
+            x: OrderedFloat(3.0),
+            y: OrderedFloat(-2.0),
+        }),
+    )?;
+    let mut fill = plugins.create_style_operation_node("fill")?;
+    let color = Color {
+        r: 12,
+        g: 190,
+        b: 72,
+        a: 255,
+    };
+    set(&mut fill, "color", PropertyValue::Color(color))?;
+
+    text.ui_position = [0.0, 0.0];
+    background.ui_position = [0.0, 180.0];
+    backplate.ui_position = [300.0, 80.0];
+    fill.ui_position = [600.0, 80.0];
+    let text_id = text.id;
+    let background_id = background.id;
+    let backplate_id = backplate.id;
+    let fill_id = fill.id;
+    let mut connections = vec![
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(backplate_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(backplate_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+    ];
+    if with_background {
+        connections.push(ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(background_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(backplate_id), BACKGROUND_SHAPE_INPUT_PORT),
+            0,
+        ));
+    }
+
+    let graph = NodeGraphBundle::new(
+        vec![text, background, backplate, fill],
+        connections,
+        Some(fill_id),
+    );
+    let mut project = Project::new("geometry-only backplate");
+    let (mut composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
+    composition.background_color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let track_id = track.id;
+    project.add_track(track)?;
+    project.add_composition(composition)?;
+    let clip = Clip::new("title", 0.0, 2.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id)?;
+    project.insert_node_graph(NodeContainer::Clip(clip_id), graph)?;
+    Ok(GraphFixture {
+        project,
+        backplate_id,
+        fill_id,
     })
 }
 
-#[test]
-fn descriptor_factory_and_text_shape_sources_have_complete_typed_contracts() -> AnyResult<()> {
-    let plugins = Arc::new(PluginManager::default());
-    assert_eq!(plugins.get_available_decorators(), ["backplate"]);
-    let descriptor = plugins
-        .operation_descriptor(DECORATOR_CATEGORY, "backplate", DECORATOR_APPLY_OPERATION)
-        .context("Backplate descriptor is missing")?;
-    let decorator = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Backplate operation")?;
-    let NodeContent::PluginOperation(operation) = decorator.content() else {
-        bail!("Decorator factory must create a plugin operation");
+fn runtime_shapes(plugins: &Arc<PluginManager>) -> Result<(RuntimeShape, RuntimeShape)> {
+    let factory = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("shape factory"))),
+        plugins.clone(),
+    );
+    let text = factory.create_text_node("A\nBC", "Arial", WIDTH, HEIGHT)?;
+    let background = factory.create_shape_node(TRIANGLE, WIDTH, HEIGHT, 1, 1)?;
+    let project = Project::new("runtime shape");
+    let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
+    let evaluators = plugins.get_property_evaluators();
+    let context = FrameEvaluationContext {
+        project: &project,
+        composition: &composition,
+        property_evaluators: &evaluators,
+        plugin_manager: plugins,
+        resolved_inputs: None,
     };
-    assert_eq!(operation.category, DECORATOR_CATEGORY);
-    assert_eq!(operation.component_id, "backplate");
-    assert_eq!(operation.operation, DECORATOR_APPLY_OPERATION);
-    assert_eq!(operation.declared_ports, descriptor.declared_ports());
+    let text = plugins
+        .get_entity_converter("text")
+        .context("Text converter missing")?
+        .convert_shape(&context, &text, 0.0)
+        .context("Text conversion produced no Shape")?;
+    let background = plugins
+        .get_entity_converter("shape")
+        .context("Shape converter missing")?
+        .convert_shape(&context, &background, 0.0)
+        .context("Path conversion produced no Shape")?;
+    Ok((text, background))
+}
+
+fn runtime_path_shape(path: &str, part_ids: &[u64]) -> Result<RuntimeShape> {
+    let parsed = skia_safe::Path::from_svg(path).context("test path is invalid")?;
+    let bounds = parsed.compute_tight_bounds();
+    let bounds = RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
+    let source_id = Uuid::new_v4();
+    let ids = if part_ids.is_empty() {
+        vec![source_id.as_u128() as u64]
+    } else {
+        part_ids.to_vec()
+    };
+    Ok(RuntimeShape {
+        source_id,
+        geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
+            path: path.to_string(),
+            bounds,
+            path_effects: Vec::new(),
+            parts: ids
+                .into_iter()
+                .map(|stable_id| RuntimePathPart {
+                    path: path.to_string(),
+                    bounds,
+                    stable_id,
+                    block_group_id: 10,
+                    line_group_id: 20,
+                    line_index: 0,
+                    opacity: 1.0,
+                })
+                .collect(),
+        }),
+        spatial_transform_node_id: None,
+        spatial_transform: Transform::default(),
+        modulation_transform: Transform::default(),
+        transform: Transform::default(),
+        effects: Vec::new(),
+        effector_configs: Vec::new(),
+        decorator_configs: Vec::new(),
+    })
+}
+
+fn rasterize_geometry(path: &str) -> Result<Image> {
+    let style = library::model::frame::entity::StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::Fill {
+            color: Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            offset: 0.0,
+        },
+    };
+    let mut renderer = SkiaRenderer::new(
+        64,
+        48,
+        Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        },
+        false,
+        None,
+        None,
+    )?;
+    match renderer.rasterize_shape_layer(ShapeRasterRequest {
+        path_data: path,
+        styles: std::slice::from_ref(&style),
+        path_effects: &[],
+        ensemble: None,
+        transform: Affine2D::IDENTITY,
+    })? {
+        RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Texture(_) => bail!("CPU renderer returned a texture"),
+    }
+}
+
+fn alpha_at(image: &Image, x: usize, y: usize) -> u8 {
+    image.data[(y * image.width as usize + x) * 4 + 3]
+}
+
+#[test]
+fn descriptor_has_two_typed_shape_inputs_and_no_appearance_properties() -> Result<()> {
+    let plugins = PluginManager::default();
+    let descriptor =
+        plugins.operation_descriptor(DECORATOR_CATEGORY, "backplate", DECORATOR_APPLY_OPERATION)?;
     assert_eq!(
         descriptor
             .properties()
             .iter()
-            .map(PropertyDefinition::name)
+            .map(library::model::property::PropertyDefinition::name)
             .collect::<Vec<_>>(),
-        ["target", "shape", "color", "padding", "radius"]
+        ["target", "padding", "offset", "fit"]
     );
-    for definition in descriptor.properties() {
-        assert_eq!(
-            decorator
+    for forbidden in ["color", "opacity", "stroke", "shape", "radius"] {
+        assert!(
+            descriptor
                 .properties()
-                .get(definition.name())
-                .and_then(Property::value),
-            Some(definition.default_value())
-        );
-        let input = operation
-            .declared_ports
-            .iter()
-            .find(|port| port.key == property_port_key(definition.name()))
-            .with_context(|| format!("property {} has no port", definition.name()))?;
-        assert_eq!(input.direction, PortDirection::Input);
-        assert_eq!(
-            input.data_type,
-            property_ui_type_to_port_data_type(definition.ui_type())
+                .iter()
+                .all(|property| property.name() != forbidden),
+            "Backplate must not own appearance property {forbidden}"
         );
     }
-    let input = operation
-        .declared_ports
-        .iter()
-        .find(|port| port.key == SHAPE_INPUT_PORT)
-        .context("Decorator operation has no Shape input")?;
-    assert_eq!(input.direction, PortDirection::Input);
-    assert_eq!(input.data_type, PortDataType::Shape);
-    assert_eq!(input.multiplicity, PortMultiplicity::Single);
-    let output = operation
-        .declared_ports
+    let ports = descriptor.declared_ports();
+    for (key, label) in [
+        (SHAPE_INPUT_PORT, "Target"),
+        (BACKGROUND_SHAPE_INPUT_PORT, "Background"),
+    ] {
+        let port = ports
+            .iter()
+            .find(|port| port.key == key)
+            .with_context(|| format!("missing {key}"))?;
+        assert_eq!(port.label, label);
+        assert_eq!(port.direction, PortDirection::Input);
+        assert_eq!(port.data_type, PortDataType::Shape);
+        assert_eq!(port.multiplicity, PortMultiplicity::Single);
+    }
+    let output = ports
         .iter()
         .find(|port| port.key == SHAPE_OUTPUT_PORT)
-        .context("Decorator operation has no Shape output")?;
+        .context("missing Shape output")?;
     assert_eq!(output.direction, PortDirection::Output);
     assert_eq!(output.side, PortSide::Right);
     assert_eq!(output.data_type, PortDataType::Shape);
 
-    let manager = ProjectManager::new(Arc::new(RwLock::new(Project::new("factory"))), plugins);
-    let text = manager
-        .create_text_node("typed", "Arial", WIDTH, HEIGHT)
-        .context("create Text source")?;
-    let shape = manager
-        .create_shape_node("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
-        .context("create Shape source")?;
-    let (mut project, composition_id, _) = setup_project();
-    let text_id = text.id;
-    let shape_id = shape.id;
-    project.add_node(text);
-    project.add_node(shape);
-    project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), text_id)
-        .context("attach Text source to Composition")?;
-    project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), shape_id)
-        .context("attach Shape source to Composition")?;
-    for source in [text_id, shape_id] {
-        let output = project
-            .port_definition(
-                &PortAddress::new(PortOwner::Node(source), SHAPE_OUTPUT_PORT),
-                PortDirection::Output,
-            )
-            .context("source has no Shape output port")?;
-        assert_eq!(output.data_type, PortDataType::Shape);
-        assert_eq!(output.multiplicity, PortMultiplicity::Single);
-        assert_eq!(output.side, PortSide::Right);
+    let node = plugins.create_decorator_operation_node("backplate")?;
+    for property in descriptor.properties() {
+        assert_eq!(
+            node.properties()
+                .get(property.name())
+                .and_then(Property::value),
+            Some(property.default_value())
+        );
+        assert!(ports.iter().any(|port| {
+            port.key == property_port_key(property.name()) && port.direction == PortDirection::Input
+        }));
     }
     Ok(())
 }
 
 #[test]
-fn graph_order_keyframes_and_scalar_overrides_build_decorators_and_roundtrip() -> AnyResult<()> {
+fn char_line_block_emit_stable_semantic_parts_from_custom_shape() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-    let mut graph = manager
-        .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
-        .context("create Text graph")?;
-    let mut first = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create first Backplate operation")?;
-    first
-        .set_property(
-            "padding".into(),
-            Property::keyframe(vec![
-                Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
-                Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
-            ]),
-        )
-        .map_err(|error| anyhow!("Backplate descriptor must initialize padding: {error}"))?;
-    set_constant(&mut first, "target", PropertyValue::String("Char".into()));
-    set_constant(
-        &mut first,
-        "shape",
-        PropertyValue::String("RoundRect".into()),
-    );
-    let second = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create second Backplate operation")?;
-    let first_id = first.id;
-    let second_id = second.id;
-    graph.nodes.extend([first, second]);
-    insert_decorator_chain(&mut graph, &[first_id, second_id])?;
-    let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0)?;
-    project
-        .connect_ports(
-            PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
-            PortAddress::new(PortOwner::Node(second_id), property_port_key("radius")),
-        )
-        .context("connect Clip time to Backplate radius")?;
-
-    let rendered = evaluate(&project, &plugins, 5)?;
-    let FrameContent::Text {
-        ensemble: Some(ensemble),
-        ..
-    } = first_content(&rendered.items).context("rendered Text content is missing")?
-    else {
-        bail!("Decorator graph did not produce Text EnsembleData");
+    let (text, background) = runtime_shapes(&plugins)?;
+    let RuntimeShapeGeometry::Text(text_metadata) = &text.geometry else {
+        bail!("Text converter returned Path")
     };
-    assert_eq!(ensemble.decorator_configs.len(), 2);
-    assert!(matches!(
-        &ensemble.decorator_configs[0],
-        DecoratorConfig::Backplate {
-            target: BackplateTarget::Char,
-            shape: BackplateShape::RoundedRect,
-            padding,
-            ..
-        } if (padding.0 - 5.0).abs() < f32::EPSILON
-            && padding.0 == padding.1
-            && padding.1 == padding.2
-            && padding.2 == padding.3
-    ));
-    assert!(matches!(
-        &ensemble.decorator_configs[1],
+    let expected_char_ids = text_metadata
+        .elements
+        .iter()
+        .map(|element| element.element_group_id)
+        .collect::<Vec<_>>();
+
+    for (target, expected_count) in [
+        (BackplateTarget::Char, 3),
+        (BackplateTarget::Line, 2),
+        (BackplateTarget::Block, 1),
+    ] {
+        let output = text.clone().into_backplate_geometry(
+            Uuid::new_v4(),
+            background.clone(),
+            DecoratorConfig::Backplate {
+                target,
+                padding: (2.0, 2.0, 2.0, 2.0),
+                offset: (0.0, 0.0),
+                fit: BackplateFit::Stretch,
+            },
+            0.0,
+        )?;
+        let RuntimeShapeGeometry::Path(path) = output.geometry else {
+            bail!("Backplate output was not Path Shape")
+        };
+        assert_eq!(path.parts.len(), expected_count);
+        assert!(path.parts.iter().all(|part| !part.path.is_empty()));
+        if target == BackplateTarget::Char {
+            assert_eq!(
+                path.parts
+                    .iter()
+                    .map(|part| part.stable_id)
+                    .collect::<Vec<_>>(),
+                expected_char_ids
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn arbitrary_triangle_is_fitted_and_offset_without_becoming_a_rectangle() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let (text, background) = runtime_shapes(&plugins)?;
+    let base = text.clone().into_backplate_geometry(
+        Uuid::new_v4(),
+        background.clone(),
         DecoratorConfig::Backplate {
             target: BackplateTarget::Block,
-            shape: BackplateShape::Rect,
-            corner_radius,
-            ..
-        } if (corner_radius - 0.5).abs() < f32::EPSILON
-    ));
-
-    let saved = project.save()?;
-    assert!(!saved.contains("schema_version"));
-    let loaded = Project::load(&saved)?;
-    assert_eq!(loaded, project);
-    assert!(loaded.validation_issues().is_empty());
+            padding: (0.0, 0.0, 0.0, 0.0),
+            offset: (0.0, 0.0),
+            fit: BackplateFit::Contain,
+        },
+        0.0,
+    )?;
+    let shifted = text.into_backplate_geometry(
+        Uuid::new_v4(),
+        background,
+        DecoratorConfig::Backplate {
+            target: BackplateTarget::Block,
+            padding: (4.0, 4.0, 4.0, 4.0),
+            offset: (9.0, -3.0),
+            fit: BackplateFit::Contain,
+        },
+        0.0,
+    )?;
+    let RuntimeShapeGeometry::Path(base) = base.geometry else {
+        bail!("base output was not Path")
+    };
+    let RuntimeShapeGeometry::Path(shifted) = shifted.geometry else {
+        bail!("shifted output was not Path")
+    };
+    let parsed = skia_safe::Path::from_svg(&shifted.path).context("generated path is invalid")?;
     assert_eq!(
-        first_content(&evaluate(&loaded, &plugins, 5)?.items),
-        first_content(&rendered.items)
+        parsed.count_points(),
+        4,
+        "custom triangle contour was replaced by built-in geometry"
+    );
+    assert!(shifted.bounds.width() > base.bounds.width());
+    let base_center = (
+        (base.bounds.left + base.bounds.right) * 0.5,
+        (base.bounds.top + base.bounds.bottom) * 0.5,
+    );
+    let shifted_center = (
+        (shifted.bounds.left + shifted.bounds.right) * 0.5,
+        (shifted.bounds.top + shifted.bounds.bottom) * 0.5,
+    );
+    assert!((shifted_center.0 - base_center.0 - 9.0).abs() < 0.01);
+    assert!((shifted_center.1 - base_center.1 + 3.0).abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn stretch_contain_and_cover_have_distinct_bounds_and_cover_pixels_are_cropped() -> Result<()> {
+    let target = runtime_path_shape("M 10 10 L 50 10 L 50 30 L 10 30 Z", &[])?;
+    let background = runtime_path_shape("M 0 0 L 10 0 L 5 10 Z", &[])?;
+    let evaluate_fit = |fit| -> Result<RuntimePathShape> {
+        let output = target.clone().into_backplate_geometry(
+            Uuid::new_v4(),
+            background.clone(),
+            DecoratorConfig::Backplate {
+                target: BackplateTarget::Block,
+                padding: (0.0, 0.0, 0.0, 0.0),
+                offset: (0.0, 0.0),
+                fit,
+            },
+            0.0,
+        )?;
+        let RuntimeShapeGeometry::Path(path) = output.geometry else {
+            bail!("Backplate output was not Path")
+        };
+        Ok(path)
+    };
+
+    let stretch = evaluate_fit(BackplateFit::Stretch)?;
+    let contain = evaluate_fit(BackplateFit::Contain)?;
+    let cover = evaluate_fit(BackplateFit::Cover)?;
+    assert!((stretch.bounds.width() - 40.0).abs() < 0.01);
+    assert!((stretch.bounds.height() - 20.0).abs() < 0.01);
+    assert!((contain.bounds.width() - 20.0).abs() < 0.01);
+    assert!((contain.bounds.height() - 20.0).abs() < 0.01);
+    assert!(cover.bounds.left >= 10.0 - 0.01);
+    assert!(cover.bounds.top >= 10.0 - 0.01);
+    assert!(cover.bounds.right <= 50.0 + 0.01);
+    assert!(cover.bounds.bottom <= 30.0 + 0.01);
+
+    let stretch_pixels = rasterize_geometry(&stretch.path)?;
+    let contain_pixels = rasterize_geometry(&contain.path)?;
+    let cover_pixels = rasterize_geometry(&cover.path)?;
+    assert!(alpha_at(&stretch_pixels, 14, 12) > 0);
+    assert_eq!(alpha_at(&contain_pixels, 14, 12), 0);
+    assert_eq!(alpha_at(&cover_pixels, 14, 12), 0);
+    assert!(alpha_at(&cover_pixels, 25, 12) > 0);
+    assert_eq!(
+        alpha_at(&cover_pixels, 25, 5),
+        0,
+        "Cover must clip overscaled geometry outside the destination"
     );
     Ok(())
 }
 
 #[test]
-fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators() -> AnyResult<()>
-{
+fn transformed_and_text_background_shapes_are_consumed_as_geometry() -> Result<()> {
+    let target = runtime_path_shape("M 10 10 L 50 10 L 50 30 L 10 30 Z", &[])?;
+    let plain_background = runtime_path_shape("M 0 0 L 10 0 L 5 10 Z", &[])?;
+    let mut transformed_background = plain_background.clone();
+    transformed_background.set_root_transform(
+        Uuid::new_v4(),
+        Transform {
+            rotation: 90.0,
+            ..Transform::default()
+        },
+    )?;
+    let config = DecoratorConfig::Backplate {
+        target: BackplateTarget::Block,
+        padding: (0.0, 0.0, 0.0, 0.0),
+        offset: (0.0, 0.0),
+        fit: BackplateFit::Stretch,
+    };
+    let plain = target.clone().into_backplate_geometry(
+        Uuid::new_v4(),
+        plain_background,
+        config.clone(),
+        0.0,
+    )?;
+    let transformed = target.clone().into_backplate_geometry(
+        Uuid::new_v4(),
+        transformed_background,
+        config.clone(),
+        0.0,
+    )?;
+    let RuntimeShapeGeometry::Path(plain) = plain.geometry else {
+        bail!("plain output was not Path")
+    };
+    let RuntimeShapeGeometry::Path(transformed) = transformed.geometry else {
+        bail!("transformed output was not Path")
+    };
+    assert_ne!(plain.path, transformed.path);
+    assert_ne!(
+        rasterize_geometry(&plain.path)?.data,
+        rasterize_geometry(&transformed.path)?.data,
+        "background spatial Transform must affect emitted geometry"
+    );
+
     let plugins = Arc::new(PluginManager::default());
-    let backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Backplate operation")?;
-    let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
-    let project = Project::new("validation");
+    let (text_background, _) = runtime_shapes(&plugins)?;
+    let text_output =
+        target.into_backplate_geometry(Uuid::new_v4(), text_background, config, 0.0)?;
+    let RuntimeShapeGeometry::Path(text_output) = text_output.geometry else {
+        bail!("Text background was not converted to Path")
+    };
+    assert!(!text_output.path.is_empty());
+    assert!(text_output.bounds.width() > 0.0);
+    assert!(text_output.bounds.height() > 0.0);
+    Ok(())
+}
+
+#[test]
+fn negative_padding_and_overlap_order_are_explicit_and_deterministic() -> Result<()> {
+    let target = runtime_path_shape("M 10 10 L 50 10 L 50 30 L 10 30 Z", &[9, 3])?;
+    let background = runtime_path_shape("M 0 0 L 10 0 L 5 10 Z", &[])?;
+    let config = DecoratorConfig::Backplate {
+        target: BackplateTarget::Char,
+        padding: (-2.0, -4.0, -2.0, -4.0),
+        offset: (0.0, 0.0),
+        fit: BackplateFit::Stretch,
+    };
+    let first = target.clone().into_backplate_geometry(
+        Uuid::new_v4(),
+        background.clone(),
+        config.clone(),
+        0.0,
+    )?;
+    let second = target.into_backplate_geometry(Uuid::new_v4(), background, config, 0.0)?;
+    let RuntimeShapeGeometry::Path(first) = first.geometry else {
+        bail!("first output was not Path")
+    };
+    let RuntimeShapeGeometry::Path(second) = second.geometry else {
+        bail!("second output was not Path")
+    };
+    assert!((first.bounds.left - 14.0).abs() < 0.01);
+    assert!((first.bounds.top - 12.0).abs() < 0.01);
+    assert!(first.bounds.right <= 46.0 + 0.01);
+    assert!(first.bounds.bottom <= 28.0 + 0.01);
+    assert_eq!(
+        first
+            .parts
+            .iter()
+            .map(|part| part.stable_id)
+            .collect::<Vec<_>>(),
+        [9, 3],
+        "authored overlap order is retained"
+    );
+    assert_eq!(first.path, second.path);
+    assert_eq!(first.parts, second.parts);
+    Ok(())
+}
+
+#[test]
+fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
+    let mut target = runtime_path_shape("M 20 20 L 30 20 L 30 30 L 20 30 Z", &[])?;
+    target.push_decorator(DecoratorConfig::LegacyBackplate {
+        target: BackplateTarget::Block,
+        shape: BackplateShape::Rect,
+        color: Color {
+            r: 220,
+            g: 10,
+            b: 20,
+            a: 255,
+        },
+        padding: (10.0, 10.0, 10.0, 10.0),
+        corner_radius: 0.0,
+    });
+    let style = library::model::frame::entity::StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::Fill {
+            color: Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            offset: 0.0,
+        },
+    };
+    let mut objects = target.into_styled_objects(style, 0.0)?;
+    let object = objects
+        .pop()
+        .context("legacy Backplate produced no object")?;
+    let FrameContent::Shape {
+        path,
+        styles,
+        path_effects,
+        ensemble,
+        transform,
+        ..
+    } = object.content
+    else {
+        bail!("legacy Backplate target was not Shape")
+    };
+    let ensemble = ensemble.context("legacy v1 config was not retained on its target Shape")?;
+    let mut renderer = SkiaRenderer::new(
+        48,
+        48,
+        Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        },
+        false,
+        None,
+        None,
+    )?;
+    let RenderOutput::Image(image) = renderer.rasterize_shape_layer(ShapeRasterRequest {
+        path_data: &path,
+        styles: &styles,
+        path_effects: &path_effects,
+        ensemble: Some(&ensemble),
+        transform: Affine2D::from(&transform),
+    })?
+    else {
+        bail!("CPU renderer returned a texture")
+    };
+    let outside = &image.data[(12 * image.width as usize + 12) * 4..][..4];
+    assert!(outside[0] > 180 && outside[1] < 60 && outside[3] > 0);
+    let inside = &image.data[(25 * image.width as usize + 25) * 4..][..4];
+    assert!(inside[0] > 220 && inside[1] > 220 && inside[2] > 220);
+    Ok(())
+}
+
+#[test]
+fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let (mut text, background) = runtime_shapes(&plugins)?;
+    text.effector_configs.push(EffectorConfig::Opacity {
+        target_opacity: 50.0,
+        mode: OpacityMode::Set,
+        target: EffectorTarget::Char,
+    });
+    let output = text.into_backplate_geometry(
+        Uuid::new_v4(),
+        background,
+        DecoratorConfig::Backplate {
+            target: BackplateTarget::Char,
+            padding: (0.0, 0.0, 0.0, 0.0),
+            offset: (0.0, 0.0),
+            fit: BackplateFit::Stretch,
+        },
+        0.0,
+    )?;
+    let objects = output.into_styled_objects(
+        library::model::frame::entity::StyleConfig {
+            id: Uuid::new_v4(),
+            style: DrawStyle::Fill {
+                color: Color {
+                    r: 20,
+                    g: 40,
+                    b: 60,
+                    a: 200,
+                },
+                offset: 0.0,
+            },
+        },
+        0.0,
+    )?;
+    assert_eq!(objects.len(), 3);
+    for object in objects {
+        let FrameContent::Shape { styles, .. } = object.content else {
+            bail!("Backplate Style did not rasterize Shape geometry")
+        };
+        assert!(matches!(
+            styles.as_slice(),
+            [library::model::frame::entity::StyleConfig {
+                style: DrawStyle::Fill {
+                    color: Color { a: 100, .. },
+                    ..
+                },
+                ..
+            }]
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_rasterizes_only_through_downstream_style_and_roundtrips() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let fixture = graph_fixture(&plugins, true)?;
+    assert!(fixture.project.validation_issues().is_empty());
+    let items = evaluate(&fixture.project, &plugins)?;
+    let object = first_object(&items).context("Backplate graph produced no object")?;
+    assert_eq!(object.source_node_id, fixture.backplate_id);
+    let FrameContent::Shape {
+        path,
+        styles,
+        ensemble,
+        ..
+    } = &object.content
+    else {
+        bail!("Backplate did not cross Style as Shape geometry")
+    };
+    assert!(
+        ensemble.is_none(),
+        "Backplate leaked to paint-time decorators"
+    );
+    assert!(!path.is_empty());
+    assert!(styles.iter().any(|style| {
+        style.id == fixture.fill_id
+            && matches!(
+                style.style,
+                DrawStyle::Fill {
+                    color: Color {
+                        r: 12,
+                        g: 190,
+                        b: 72,
+                        a: 255
+                    },
+                    ..
+                }
+            )
+    }));
+
+    let image = preview(&fixture.project, &plugins)?;
+    assert!(
+        image.data.chunks_exact(4).any(|pixel| {
+            pixel[1] > 120 && pixel[1] > pixel[0].saturating_add(60) && pixel[3] > 0
+        })
+    );
+
+    let saved = fixture.project.save()?;
+    assert!(!saved.contains("schema_version"));
+    let loaded = Project::load(&saved)?;
+    assert_eq!(loaded, fixture.project);
+    assert_eq!(preview(&loaded, &plugins)?.data, image.data);
+    Ok(())
+}
+
+#[test]
+fn timeline_backplate_authoring_preserves_foreground_and_adds_background_pixels() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let shared = Arc::new(RwLock::new(Project::new("semantic Backplate")));
+    let manager = ProjectManager::new(shared.clone(), plugins.clone());
+    let graph = manager.create_text_graph("A", "Arial", WIDTH, HEIGHT)?;
+    let text_id = graph
+        .nodes
+        .iter()
+        .find(|node| matches!(node.content(), library::model::NodeContent::Generator(_)))
+        .context("Text graph has no generator")?
+        .id;
+    {
+        let mut project = shared
+            .write()
+            .map_err(|error| anyhow!("test Project lock is poisoned: {error}"))?;
+        let (mut composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
+        composition.background_color = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+        let track_id = track.id;
+        project.add_track(track)?;
+        project.add_composition(composition)?;
+        let clip = Clip::new("title", 0.0, 2.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id)?;
+        project.insert_node_graph(NodeContainer::Clip(clip_id), graph)?;
+    }
+    let before = {
+        let project = shared
+            .read()
+            .map_err(|error| anyhow!("test Project lock is poisoned: {error}"))?;
+        preview(&project, &plugins)?
+    };
+    manager.add_decorator(text_id, "backplate")?;
+    let after = {
+        let project = shared
+            .read()
+            .map_err(|error| anyhow!("test Project lock is poisoned: {error}"))?;
+        preview(&project, &plugins)?
+    };
+    let visible = |image: &Image| {
+        image
+            .data
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] != 0)
+            .count()
+    };
+    assert!(
+        visible(&after) > visible(&before),
+        "semantic Backplate did not add background coverage"
+    );
+    assert!(
+        after
+            .data
+            .chunks_exact(4)
+            .any(|pixel| { pixel[0] > 180 && pixel[1] > 180 && pixel[2] > 180 && pixel[3] > 0 }),
+        "foreground text disappeared behind the Backplate branch"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_background_shape_is_no_output_not_implicit_colored_rect() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let fixture = graph_fixture(&plugins, false)?;
+    assert!(evaluate(&fixture.project, &plugins)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn descriptor_evaluation_rejects_missing_properties_and_accepts_layout_only_config() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let node = plugins.create_decorator_operation_node("backplate")?;
+    let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 1.0);
+    let project = Project::new("config");
     let evaluators = plugins.get_property_evaluators();
     let context = FrameEvaluationContext {
         project: &project,
@@ -371,400 +862,26 @@ fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators
         plugins.evaluate_decorator_operation(
             &context,
             "backplate",
-            backplate.id,
-            &PropertyMap::new(),
-            0.0
+            node.id,
+            &Default::default(),
+            0.0,
         ),
         EvalOutput::NoOutput
-    );
-
-    let mut invalid_shape = backplate.properties().clone();
-    invalid_shape.set(
-        "shape".into(),
-        Property::keyframe(vec![Keyframe::new(
-            0.0,
-            PropertyValue::String("outside-options".into()),
-            EasingFunction::Linear,
-        )]),
     );
     assert_eq!(
         plugins.evaluate_decorator_operation(
             &context,
             "backplate",
-            backplate.id,
-            &invalid_shape,
-            0.0
+            node.id,
+            node.properties(),
+            0.0,
         ),
-        EvalOutput::NoOutput
-    );
-
-    let mut scalar = ResolvedNodeInputs::default();
-    scalar
-        .properties
-        .insert("padding".into(), EvalOutput::NoOutput);
-    let scalar_context = FrameEvaluationContext {
-        resolved_inputs: Some(&scalar),
-        ..context
-    };
-    assert_eq!(
-        plugins.evaluate_decorator_operation(
-            &scalar_context,
-            "backplate",
-            backplate.id,
-            backplate.properties(),
-            0.0
-        ),
-        EvalOutput::NoOutput
-    );
-
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-    let mut graph = manager
-        .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
-        .context("create Text graph")?;
-    let unknown = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create unknown Backplate operation")?;
-    let unknown_id = unknown.id;
-    let mut unknown_json = serde_json::to_value(unknown)?;
-    unknown_json["content"]["data"]["component_id"] =
-        serde_json::Value::String("unavailable-decorator".to_string());
-    let unknown: Node = serde_json::from_value(unknown_json)?;
-    graph.nodes.push(unknown);
-    insert_decorator_chain(&mut graph, &[unknown_id])?;
-    let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
-    let rendered = evaluate(&project, &plugins, 0)?;
-    assert!(
-        rendered.items.is_empty(),
-        "a required unknown Shape operation must make the branch NoOutput"
-    );
-    assert_eq!(Project::load(&project.save()?)?, project);
-    Ok(())
-}
-
-struct CountingDecoratorPlugin {
-    evaluations: Arc<AtomicUsize>,
-    descriptors: Arc<AtomicUsize>,
-}
-
-impl Plugin for CountingDecoratorPlugin {
-    fn id(&self) -> &str {
-        "counting"
-    }
-
-    fn name(&self) -> String {
-        "Counting".into()
-    }
-
-    fn category(&self) -> String {
-        "Test".into()
-    }
-
-    fn version(&self) -> (u32, u32, u32) {
-        (0, 1, 0)
-    }
-}
-
-impl DecoratorPlugin for CountingDecoratorPlugin {
-    fn properties(&self) -> Vec<PropertyDefinition> {
-        Vec::new()
-    }
-
-    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
-        self.descriptors.fetch_add(1, Ordering::SeqCst);
-        OperationDescriptor::decorator(self.id(), self.name(), self.properties())
-    }
-
-    fn evaluate_source(
-        &self,
-        _context: &FrameEvaluationContext,
-        _source_id: Uuid,
-        _properties: &PropertyMap,
-        _eval_time: f64,
-    ) -> Option<DecoratorConfig> {
-        self.evaluations.fetch_add(1, Ordering::SeqCst);
-        Some(DecoratorConfig::Backplate {
+        EvalOutput::Produced(DecoratorConfig::Backplate {
             target: BackplateTarget::Block,
-            shape: BackplateShape::Rect,
-            color: Color::black(),
             padding: (0.0, 0.0, 0.0, 0.0),
-            corner_radius: 0.0,
+            offset: (0.0, 0.0),
+            fit: BackplateFit::Stretch,
         })
-    }
-}
-
-#[test]
-fn disabled_and_inactive_decorator_operations_short_circuit_before_plugin_work() -> AnyResult<()> {
-    let evaluations = Arc::new(AtomicUsize::new(0));
-    let descriptors = Arc::new(AtomicUsize::new(0));
-    let plugins = Arc::new(PluginManager::default());
-    plugins.register_decorator_plugin(Arc::new(CountingDecoratorPlugin {
-        evaluations: evaluations.clone(),
-        descriptors: descriptors.clone(),
-    }));
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
     );
-    let mut graph = manager
-        .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
-        .context("create Text graph")?;
-    let mut counting = plugins.create_decorator_operation_node("counting")?;
-    counting.enabled = false;
-    let counting_id = counting.id;
-    graph.nodes.push(counting);
-    insert_decorator_chain(&mut graph, &[counting_id])?;
-    let descriptor_baseline = descriptors.load(Ordering::SeqCst);
-    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
-
-    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
-    assert_eq!(evaluations.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        descriptors.load(Ordering::SeqCst),
-        descriptor_baseline,
-        "disabled Shape operations must not look up a plugin descriptor"
-    );
-
-    project
-        .get_node_mut(counting_id)
-        .context("Counting Decorator operation is missing")?
-        .enabled = true;
-    assert!(first_content(&evaluate(&project, &plugins, 0)?.items).is_some());
-    assert_eq!(evaluations.load(Ordering::SeqCst), 1);
-
-    let inactive_graph = {
-        let mut graph = manager
-            .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
-            .context("create inactive Text graph")?;
-        let counting = plugins.create_decorator_operation_node("counting")?;
-        let counting_id = counting.id;
-        graph.nodes.push(counting);
-        insert_decorator_chain(&mut graph, &[counting_id])?;
-        graph
-    };
-    let (inactive, _) = project_with_graph(inactive_graph, 5.0, 2.0)?;
-    assert!(evaluate(&inactive, &plugins, 0)?.items.is_empty());
-    assert_eq!(evaluations.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[test]
-fn graph_backplate_pixels_are_stable_across_project_roundtrip() -> AnyResult<()> {
-    let plugins = Arc::new(PluginManager::default());
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-    let configure = |node: &mut Node| -> AnyResult<()> {
-        node.set_property(
-            "target".into(),
-            Property::constant(PropertyValue::String("Char".into())),
-        )
-        .map_err(|error| anyhow!("Backplate descriptor must initialize target: {error}"))?;
-        node.set_property(
-            "shape".into(),
-            Property::constant(PropertyValue::String("RoundRect".into())),
-        )
-        .map_err(|error| anyhow!("Backplate descriptor must initialize shape: {error}"))?;
-        node.set_property(
-            "color".into(),
-            Property::constant(PropertyValue::Color(Color {
-                r: 20,
-                g: 180,
-                b: 60,
-                a: 255,
-            })),
-        )
-        .map_err(|error| anyhow!("Backplate descriptor must initialize color: {error}"))?;
-        node.set_property("padding".into(), Property::constant(3.0.into()))
-            .map_err(|error| anyhow!("Backplate descriptor must initialize padding: {error}"))?;
-        node.set_property("radius".into(), Property::constant(2.0.into()))
-            .map_err(|error| anyhow!("Backplate descriptor must initialize radius: {error}"))?;
-        Ok(())
-    };
-
-    let mut graph = manager
-        .create_text_graph("PARITY", "Arial", WIDTH, HEIGHT)
-        .context("create Text graph")?;
-    let mut backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .context("create Backplate operation")?;
-    configure(&mut backplate)?;
-    let backplate_id = backplate.id;
-    graph.nodes.push(backplate);
-    insert_decorator_chain(&mut graph, &[backplate_id])?;
-    let (graph_project, _) = project_with_graph(graph, 0.0, 2.0)?;
-
-    let graph_frame = evaluate(&graph_project, &plugins, 0)?;
-    let FrameContent::Text {
-        ensemble: Some(graph_ensemble),
-        ..
-    } = first_content(&graph_frame.items).context("rendered Text content is missing")?
-    else {
-        bail!("Decorator graph did not produce Text EnsembleData");
-    };
-    assert_eq!(graph_ensemble.decorator_configs.len(), 1);
-    let expected = preview(&graph_project, &plugins, 0)?;
-    assert!(expected.data.iter().any(|channel| *channel != 0));
-
-    let loaded = Project::load(&graph_project.save()?)?;
-    assert_eq!(loaded, graph_project);
-    assert_eq!(
-        preview(&loaded, &plugins, 0)?.data,
-        expected.data,
-        "the explicit Shape Decorator graph must survive serialization"
-    );
-    Ok(())
-}
-
-#[test]
-fn path_backplates_render_one_stable_element_before_style() -> AnyResult<()> {
-    let plugins = Arc::new(PluginManager::default());
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-    let render_target = |target: &str| -> AnyResult<Image> {
-        let mut graph = manager
-            .create_shape_graph("M 30 20 H 90 V 55 H 30 Z", WIDTH, HEIGHT, 60, 35)
-            .context("create Shape graph")?;
-        let mut backplate = plugins
-            .create_decorator_operation_node("backplate")
-            .context("create Backplate operation")?;
-        set_constant(
-            &mut backplate,
-            "target",
-            PropertyValue::String(target.into()),
-        );
-        set_constant(
-            &mut backplate,
-            "shape",
-            PropertyValue::String("Rect".into()),
-        );
-        set_constant(
-            &mut backplate,
-            "color",
-            PropertyValue::Color(Color {
-                r: 12,
-                g: 220,
-                b: 35,
-                a: 255,
-            }),
-        );
-        set_constant(&mut backplate, "padding", 7.0.into());
-        let backplate_id = backplate.id;
-        graph.nodes.push(backplate);
-        insert_decorator_chain(&mut graph, &[backplate_id])?;
-        let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
-        let frame = evaluate(&project, &plugins, 0)?;
-        let FrameContent::Shape {
-            ensemble: Some(ensemble),
-            ..
-        } = first_content(&frame.items).context("rendered Shape content is missing")?
-        else {
-            bail!("Path Decorator must survive the Shape -> Image boundary");
-        };
-        assert_eq!(ensemble.decorator_configs.len(), 1);
-        let image = preview(&project, &plugins, 0)?;
-        let green = image
-            .data
-            .chunks_exact(4)
-            .filter(|pixel| {
-                u16::from(pixel[1]) > 150
-                    && u16::from(pixel[1]) > u16::from(pixel[0]) + 80
-                    && u16::from(pixel[1]) > u16::from(pixel[2]) + 80
-            })
-            .count();
-        assert!(green > 100, "the padded Path backplate was not rasterized");
-        Ok(image)
-    };
-
-    let character = render_target("Char")?;
-    let line = render_target("Line")?;
-    let block = render_target("Block")?;
-    assert_eq!(character.data, line.data);
-    assert_eq!(line.data, block.data);
-    Ok(())
-}
-
-#[test]
-fn rounded_path_backplate_is_drawn_once_without_alpha_overdraw() -> AnyResult<()> {
-    let ensemble = EnsembleData {
-        enabled: true,
-        effector_configs: Vec::new(),
-        decorator_configs: vec![DecoratorConfig::Backplate {
-            target: BackplateTarget::Block,
-            shape: BackplateShape::RoundedRect,
-            color: Color {
-                r: 40,
-                g: 120,
-                b: 220,
-                a: 128,
-            },
-            padding: (4.0, 4.0, 4.0, 4.0),
-            corner_radius: 6.0,
-        }],
-        patches: Default::default(),
-    };
-    let mut renderer = SkiaRenderer::new(
-        WIDTH as u32,
-        HEIGHT as u32,
-        Color::black(),
-        false,
-        None,
-        None,
-    )
-    .context("create CPU renderer")?;
-    let RenderOutput::Image(image) = renderer.rasterize_shape_layer(ShapeRasterRequest {
-        path_data: "M 20 20 H 60 V 40 H 20 Z",
-        styles: &[],
-        path_effects: &[],
-        ensemble: Some(&ensemble),
-        transform: Affine2D::IDENTITY,
-    })?
-    else {
-        bail!("CPU renderer unexpectedly returned a texture");
-    };
-    let center = ((30 * WIDTH + 40) * 4) as usize;
-    assert_eq!(image.data[center + 3], 128);
-    Ok(())
-}
-
-#[test]
-fn path_backplate_parts_target_is_explicitly_unsupported() -> AnyResult<()> {
-    let ensemble = EnsembleData {
-        enabled: true,
-        effector_configs: Vec::new(),
-        decorator_configs: vec![DecoratorConfig::Backplate {
-            target: BackplateTarget::Parts,
-            shape: BackplateShape::Rect,
-            color: Color::white(),
-            padding: (0.0, 0.0, 0.0, 0.0),
-            corner_radius: 0.0,
-        }],
-        patches: Default::default(),
-    };
-    let mut renderer = SkiaRenderer::new(
-        WIDTH as u32,
-        HEIGHT as u32,
-        Color::black(),
-        false,
-        None,
-        None,
-    )
-    .context("create CPU renderer")?;
-    let error = match renderer.rasterize_shape_layer(ShapeRasterRequest {
-        path_data: "M 10 10 H 40 V 30 H 10 Z",
-        styles: &[],
-        path_effects: &[],
-        ensemble: Some(&ensemble),
-        transform: Affine2D::IDENTITY,
-    }) {
-        Ok(_) => bail!("BackplateTarget::Parts unexpectedly rendered"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("BackplateTarget::Parts"));
     Ok(())
 }

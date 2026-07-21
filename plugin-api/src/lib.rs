@@ -527,6 +527,10 @@ pub const STYLE_EVALUATE_V1: &str = "style.evaluate.v1";
 pub const MAX_STYLE_DASH_INTERVALS_V1: usize = 1024;
 pub const DECORATOR_CATEGORY: &str = "decorator";
 pub const DECORATOR_EVALUATE_V1: &str = "decorator.evaluate.v1";
+/// Geometry-only, two-Shape Decorator contract. Components advertise support
+/// through [`ComponentDescriptorV1::operations`]; hosts prefer this operation
+/// over [`DECORATOR_EVALUATE_V1`] when both are present.
+pub const DECORATOR_EVALUATE_V2: &str = "decorator.evaluate.v2";
 
 /// Explicit value wire format for runtime property evaluators.
 ///
@@ -669,6 +673,65 @@ pub enum DecoratorOutputV1 {
     },
 }
 
+/// Resolved, evaluator-local inputs for the geometry-only two-Shape
+/// Decorator contract. Unlike v1 requests, v2 is closed: malformed or future
+/// fields require a separately negotiated protocol revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DecoratorEvaluateRequestV2 {
+    pub time: f64,
+    pub fps: f64,
+    pub properties: std::collections::BTreeMap<String, PropertyValueV1>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DecoratorTargetV2 {
+    Block,
+    Line,
+    Char,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackplateFitV2 {
+    Stretch,
+    Contain,
+    Cover,
+}
+
+/// Geometry-only Backplate padding in top, right, bottom, left order.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InsetsV2 {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+/// Geometry-only Backplate placement offset in output pixels.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BackplateOffsetV2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Complete geometry-only two-Shape Decorator output. Appearance fields are
+/// deliberately absent and remain the responsibility of downstream Style.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DecoratorOutputV2 {
+    NoOutput,
+    Backplate {
+        target: DecoratorTargetV2,
+        padding: InsetsV2,
+        offset: BackplateOffsetV2,
+        fit: BackplateFitV2,
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EffectorEvaluateRequestV1 {
     pub time: f64,
@@ -801,6 +864,111 @@ mod tests {
             "unsupported": true
         });
         assert!(serde_json::from_value::<DecoratorOutputV1>(unknown_field).is_err());
+    }
+
+    #[test]
+    fn frozen_decorator_v1_backplate_json_remains_compatible() {
+        let frozen = serde_json::json!({
+            "type": "backplate",
+            "target": "line",
+            "shape": "rounded_rect",
+            "color": {"r": 1, "g": 2, "b": 3, "a": 4},
+            "padding": {"top": -1.0, "right": 2.0, "bottom": 3.0, "left": 4.0},
+            "corner_radius": 5.5
+        });
+        let output: DecoratorOutputV1 =
+            serde_json::from_value(frozen.clone()).expect("frozen v1 output must parse");
+        assert_eq!(
+            output,
+            DecoratorOutputV1::Backplate {
+                target: DecoratorTargetV1::Line,
+                shape: BackplateShapeV1::RoundedRect,
+                color: ColorV1 {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 4,
+                },
+                padding: InsetsV1 {
+                    top: -1.0,
+                    right: 2.0,
+                    bottom: 3.0,
+                    left: 4.0,
+                },
+                corner_radius: 5.5,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(output).expect("v1 output serializes"),
+            frozen
+        );
+    }
+
+    #[test]
+    fn frozen_v1_descriptor_operation_remains_compatible() {
+        let frozen = serde_json::json!({
+            "name": "Legacy Decorator",
+            "vendor": "External Builder",
+            "version": "1.0.0",
+            "components": [{
+                "id": "legacy.backplate",
+                "name": "Legacy Backplate",
+                "category": "decorator",
+                "group": "Legacy",
+                "version": "1.0.0",
+                "operations": ["decorator.evaluate.v1"],
+                "properties": []
+            }]
+        });
+        let descriptor: PluginDescriptorV1 =
+            serde_json::from_value(frozen.clone()).expect("frozen v1 descriptor must parse");
+        assert_eq!(descriptor.components[0].operations, [DECORATOR_EVALUATE_V1]);
+        assert_eq!(
+            serde_json::to_value(descriptor).expect("v1 descriptor serializes"),
+            frozen
+        );
+    }
+
+    #[test]
+    fn decorator_v2_wire_is_geometry_only_and_strict() {
+        let valid = serde_json::json!({
+            "type": "backplate",
+            "target": "char",
+            "padding": {"top": 1.0, "right": 2.0, "bottom": 3.0, "left": 4.0},
+            "offset": {"x": 5.0, "y": -6.0},
+            "fit": "cover"
+        });
+        assert!(serde_json::from_value::<DecoratorOutputV2>(valid).is_ok());
+        for malformed in [
+            serde_json::json!({
+                "type": "backplate",
+                "target": "char",
+                "padding": {"top": 1.0, "right": 2.0, "bottom": 3.0, "left": 4.0},
+                "offset": {"x": 5.0, "y": -6.0},
+                "fit": "cover",
+                "color": {"r": 0, "g": 0, "b": 0, "a": 255}
+            }),
+            serde_json::json!({
+                "type": "backplate",
+                "target": "char",
+                "padding": {"top": 1.0, "right": 2.0, "bottom": 3.0, "left": 4.0, "extra": 0.0},
+                "offset": {"x": 5.0, "y": -6.0},
+                "fit": "cover"
+            }),
+        ] {
+            assert!(serde_json::from_value::<DecoratorOutputV2>(malformed).is_err());
+        }
+
+        let request_with_future_field = serde_json::json!({
+            "time": 1.0,
+            "fps": 30.0,
+            "properties": {},
+            "future_host_hint": true
+        });
+        assert!(
+            serde_json::from_value::<DecoratorEvaluateRequestV2>(request_with_future_field)
+                .is_err()
+        );
     }
 
     #[test]

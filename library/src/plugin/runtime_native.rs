@@ -12,11 +12,10 @@ use ordered_float::OrderedFloat;
 use ruvie_plugin_api::{
     ALPHA_MODE_STRAIGHT_V1, ASSET_KIND_IMAGE_V1, ASSET_KIND_VIDEO_V1, ASSET_METADATA_DIMENSIONS_V1,
     ASSET_METADATA_DURATION_V1, ASSET_METADATA_FPS_V1, ASSET_METADATA_FRAME_COUNT_V1,
-    ASSET_METADATA_STREAM_INDEX_V1, ASSET_METADATA_TIME_BASE_V1, BackplateShapeV1,
-    COLOR_PROFILE_SRGB_V1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY,
-    DECORATOR_EVALUATE_V1, DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1,
+    ASSET_METADATA_STREAM_INDEX_V1, ASSET_METADATA_TIME_BASE_V1, COLOR_PROFILE_SRGB_V1, ColorV1,
+    ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1, DECORATOR_EVALUATE_V2,
     EFFECT_CATEGORY, EFFECT_CPU_RGBA8_EXTENSION_V1, EFFECT_PROCESS_CPU_RGBA8_V1, EFFECTOR_CATEGORY,
-    EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1, EffectorOutputV1, EffectorTargetV1, InsetsV1,
+    EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1, EffectorOutputV1, EffectorTargetV1,
     InvokeRequestV1, LOAD_REQUEST_IMAGE_V1, LOAD_REQUEST_VIDEO_FRAME_V1, LOADER_CATEGORY,
     LOADER_CPU_RGBA8_EXTENSION_V1, LOADER_LOAD_CPU_RGBA8_V1, LOADER_OPEN_V1,
     MAX_CPU_RGBA8_DIMENSION_V1, MAX_CPU_RGBA8_FRAME_BYTES_V1, MAX_LOADER_STREAMS_V1,
@@ -33,6 +32,9 @@ use ruvie_plugin_api::{
 };
 use serde::Deserialize;
 
+#[cfg(test)]
+use ruvie_plugin_api::{DecoratorOutputV2, DecoratorTargetV2};
+
 use crate::error::LibraryError;
 use crate::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
@@ -47,7 +49,15 @@ use crate::plugin::{
     StylePlugin,
 };
 
+mod decorator;
 mod property_evaluation;
+
+use decorator::{RuntimeDecoratorPlugin, RuntimeDecoratorProtocol};
+#[cfg(test)]
+use decorator::{
+    decorator_config_from_response, decorator_config_from_response_v2,
+    decorator_config_from_wire_v2, safe_decorator_config_from_response_v2,
+};
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -442,6 +452,12 @@ fn prepare_runtime_components(
                     }))
                 }
                 DECORATOR_CATEGORY => RuntimeAdapter::Decorator(Arc::new(RuntimeDecoratorPlugin {
+                    protocol: RuntimeDecoratorProtocol::negotiate(descriptor).ok_or_else(|| {
+                        LibraryError::Plugin(format!(
+                            "Runtime Decorator '{}' has no supported evaluator operation",
+                            descriptor.id
+                        ))
+                    })?,
                     component: component.clone(),
                     definitions,
                 })),
@@ -2057,176 +2073,6 @@ fn finite_render_scalar(value: f64) -> bool {
     value.is_finite() && (value as f32).is_finite()
 }
 
-struct RuntimeDecoratorPlugin {
-    component: RuntimeComponent,
-    definitions: Vec<PropertyDefinition>,
-}
-
-impl Plugin for RuntimeDecoratorPlugin {
-    fn id(&self) -> &str {
-        &self.component.descriptor.id
-    }
-
-    fn name(&self) -> String {
-        self.component.descriptor.name.clone()
-    }
-
-    fn category(&self) -> String {
-        self.component.descriptor.group.clone()
-    }
-
-    fn version(&self) -> (u32, u32, u32) {
-        parse_semver_triplet(&self.component.descriptor.version)
-    }
-
-    fn impl_type(&self) -> String {
-        "Native ABI v1".to_string()
-    }
-}
-
-impl DecoratorPlugin for RuntimeDecoratorPlugin {
-    fn properties(&self) -> Vec<PropertyDefinition> {
-        self.definitions.clone()
-    }
-
-    fn evaluate_source(
-        &self,
-        context: &FrameEvaluationContext,
-        _source_id: uuid::Uuid,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
-    ) -> Option<crate::core::ensemble::types::DecoratorConfig> {
-        let label = format!("Runtime Decorator '{}'", self.id());
-        let properties =
-            resolved_config_properties(context, &self.definitions, properties, eval_time, &label)?;
-        let payload = match serde_json::to_value(DecoratorEvaluateRequestV1 {
-            time: eval_time,
-            fps: context.evaluation_fps(),
-            properties,
-        }) {
-            Ok(payload) => payload,
-            Err(error) => {
-                log::error!("Failed to encode {label}: {error}");
-                return None;
-            }
-        };
-        let response = match self.component.invoke(DECORATOR_EVALUATE_V1, payload) {
-            Ok(response) => response,
-            Err(error) => {
-                log::error!("{label} failed: {error}");
-                return None;
-            }
-        };
-        safe_decorator_config_from_response(response, &label)
-    }
-}
-
-fn safe_decorator_config_from_response(
-    response: serde_json::Value,
-    operation_label: &str,
-) -> Option<crate::core::ensemble::types::DecoratorConfig> {
-    match decorator_config_from_response(response) {
-        Ok(output) => output,
-        Err(error) => {
-            log::error!("{operation_label} returned an invalid config: {error}");
-            None
-        }
-    }
-}
-
-fn decorator_config_from_response(
-    response: serde_json::Value,
-) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
-    let output = serde_json::from_value(response).map_err(|error| {
-        LibraryError::Plugin(format!("Runtime Decorator response is invalid: {error}"))
-    })?;
-    decorator_config_from_wire(output)
-}
-
-fn decorator_config_from_wire(
-    output: DecoratorOutputV1,
-) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
-    use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-    use crate::core::ensemble::types::DecoratorConfig;
-
-    let DecoratorOutputV1::Backplate {
-        target,
-        shape,
-        color,
-        padding,
-        corner_radius,
-    } = output
-    else {
-        return Ok(None);
-    };
-    let InsetsV1 {
-        top,
-        right,
-        bottom,
-        left,
-    } = padding;
-    if !valid_backplate_render_geometry((top, right, bottom, left), corner_radius) {
-        return Err(LibraryError::Plugin(
-            "Runtime Decorator output has invalid Backplate numeric fields".to_string(),
-        ));
-    }
-    Ok(Some(DecoratorConfig::Backplate {
-        target: match target {
-            DecoratorTargetV1::Block => BackplateTarget::Block,
-            DecoratorTargetV1::Line => BackplateTarget::Line,
-            DecoratorTargetV1::Char => BackplateTarget::Char,
-        },
-        shape: match shape {
-            BackplateShapeV1::Rect => BackplateShape::Rect,
-            BackplateShapeV1::RoundedRect => BackplateShape::RoundedRect,
-            BackplateShapeV1::Circle => BackplateShape::Circle,
-        },
-        color: color_from_wire(color),
-        padding: (top, right, bottom, left),
-        corner_radius,
-    }))
-}
-
-fn valid_backplate_render_geometry(padding: (f32, f32, f32, f32), corner_radius: f32) -> bool {
-    let (top, right, bottom, left) = padding;
-    top.is_finite()
-        && right.is_finite()
-        && bottom.is_finite()
-        && left.is_finite()
-        // A padded rectangle's width and height add these signed pairs to its
-        // original spans. Check the actual f32 operations, not f64 algebra.
-        && (left + right).is_finite()
-        && (top + bottom).is_finite()
-        // Exercise RuntimeBounds::pad itself against a finite, non-zero
-        // reference rectangle. Config validation cannot guarantee arithmetic
-        // against every possible source bound; source geometry has its own
-        // independent finite-value precondition.
-        && backplate_pad_is_finite(
-            crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0),
-            padding,
-        )
-        && corner_radius.is_finite()
-        && corner_radius >= 0.0
-        && (corner_radius * 2.0).is_finite()
-}
-
-fn backplate_pad_is_finite(
-    bounds: crate::model::frame::runtime_shape::RuntimeBounds,
-    padding: (f32, f32, f32, f32),
-) -> bool {
-    let padded = bounds.pad(padding);
-    [
-        padded.left,
-        padded.top,
-        padded.right,
-        padded.bottom,
-        padded.right - padded.left,
-        padded.bottom - padded.top,
-    ]
-    .into_iter()
-    .all(f32::is_finite)
-}
-
 fn color_from_wire(color: ColorV1) -> crate::model::frame::color::Color {
     crate::model::frame::color::Color {
         r: color.r,
@@ -2469,20 +2315,34 @@ fn validate_descriptor(descriptor: &PluginDescriptorV1) -> Result<(), LibraryErr
                 }
             }
             DECORATOR_CATEGORY => {
-                if !component
-                    .operations
-                    .iter()
-                    .any(|operation| operation == DECORATOR_EVALUATE_V1)
-                {
+                let Some(protocol) = RuntimeDecoratorProtocol::negotiate(component) else {
                     return Err(LibraryError::Plugin(format!(
-                        "Runtime Decorator '{}' does not declare {DECORATOR_EVALUATE_V1}",
+                        "Runtime Decorator '{}' does not declare {DECORATOR_EVALUATE_V2} or {DECORATOR_EVALUATE_V1}",
                         component.id
                     )));
-                }
+                };
                 if component.output_default.is_some() {
                     return Err(LibraryError::Plugin(format!(
                         "Runtime Decorator '{}' must not declare output_default",
                         component.id
+                    )));
+                }
+                const BACKPLATE_APPEARANCE_PROPERTIES: &[&str] = &[
+                    "color",
+                    "opacity",
+                    "stroke",
+                    "shape",
+                    "radius",
+                    "corner_radius",
+                ];
+                if protocol == RuntimeDecoratorProtocol::V2
+                    && let Some(property) = component.properties.iter().find(|property| {
+                        BACKPLATE_APPEARANCE_PROPERTIES.contains(&property.name.as_str())
+                    })
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Decorator v2 '{}' declares Backplate appearance property '{}'; Backplate emits geometry only and appearance belongs to Style",
+                        component.id, property.name
                     )));
                 }
             }
@@ -3011,7 +2871,7 @@ mod tests {
             category: DECORATOR_CATEGORY.to_string(),
             group: "Tests".to_string(),
             version: "2.3.4".to_string(),
-            operations: vec![DECORATOR_EVALUATE_V1.to_string()],
+            operations: vec![DECORATOR_EVALUATE_V2.to_string()],
             properties: vec![
                 PropertyDefinitionV1 {
                     name: "target".to_string(),
@@ -3034,9 +2894,96 @@ mod tests {
                     },
                     default: serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0}),
                 },
+                PropertyDefinitionV1 {
+                    name: "offset".to_string(),
+                    label: "Offset".to_string(),
+                    ui: PropertyUiV1::Vec2 {
+                        min: -1_000_000.0,
+                        max: 1_000_000.0,
+                        step: 0.1,
+                        suffix: "px".to_string(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    default: serde_json::json!({"x": 0.0, "y": 0.0}),
+                },
+                PropertyDefinitionV1 {
+                    name: "fit".to_string(),
+                    label: "Fit".to_string(),
+                    ui: PropertyUiV1::Dropdown {
+                        options: vec![
+                            "Stretch".to_string(),
+                            "Contain".to_string(),
+                            "Cover".to_string(),
+                        ],
+                    },
+                    default: serde_json::json!("Stretch"),
+                },
             ],
             output_default: None,
         }
+    }
+
+    fn legacy_decorator_component() -> ComponentDescriptorV1 {
+        let mut component = decorator_component();
+        component.id = "example.legacy_backplate".to_string();
+        component.version = "1.0.0".to_string();
+        component.operations = vec![DECORATOR_EVALUATE_V1.to_string()];
+        component.properties = vec![
+            PropertyDefinitionV1 {
+                name: "target".to_string(),
+                label: "Target".to_string(),
+                ui: PropertyUiV1::Dropdown {
+                    options: vec!["Block".to_string(), "Line".to_string(), "Char".to_string()],
+                },
+                default: serde_json::json!("Block"),
+            },
+            PropertyDefinitionV1 {
+                name: "shape".to_string(),
+                label: "Shape".to_string(),
+                ui: PropertyUiV1::Dropdown {
+                    options: vec![
+                        "Rect".to_string(),
+                        "RoundedRect".to_string(),
+                        "Circle".to_string(),
+                    ],
+                },
+                default: serde_json::json!("RoundedRect"),
+            },
+            PropertyDefinitionV1 {
+                name: "color".to_string(),
+                label: "Color".to_string(),
+                ui: PropertyUiV1::Color,
+                default: serde_json::json!({"r": 1, "g": 2, "b": 3, "a": 4}),
+            },
+            PropertyDefinitionV1 {
+                name: "padding".to_string(),
+                label: "Padding".to_string(),
+                ui: PropertyUiV1::Vec4 {
+                    min: -100.0,
+                    max: 100.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                default: serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0}),
+            },
+            PropertyDefinitionV1 {
+                name: "corner_radius".to_string(),
+                label: "Corner Radius".to_string(),
+                ui: PropertyUiV1::Float {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
+                },
+                default: serde_json::json!(5.0),
+            },
+        ];
+        component
     }
 
     fn effect_component() -> ComponentDescriptorV1 {
@@ -3283,7 +3230,7 @@ mod tests {
         let decorator_node = decorator_descriptor
             .create_node()
             .expect("runtime Decorator descriptor creates a Node");
-        assert_eq!(decorator_node.properties().iter().count(), 2);
+        assert_eq!(decorator_node.properties().iter().count(), 4);
         let NodeContent::PluginOperation(decorator_operation) = decorator_node.content() else {
             panic!("Decorator descriptor must create PluginOperation content")
         };
@@ -3298,6 +3245,10 @@ mod tests {
         for (key, data_type) in [
             (TIME_PORT, PortDataType::Number),
             (SHAPE_INPUT_PORT, PortDataType::Shape),
+            (
+                crate::model::project::BACKGROUND_SHAPE_INPUT_PORT,
+                PortDataType::Shape,
+            ),
             (SHAPE_OUTPUT_PORT, PortDataType::Shape),
         ] {
             assert!(
@@ -3633,26 +3584,21 @@ mod tests {
     }
 
     #[test]
-    fn decorator_wire_conversion_covers_backplate_without_exposing_parts() {
-        use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+    fn decorator_v2_wire_conversion_covers_backplate_without_exposing_parts() {
+        use crate::core::ensemble::decorators::{BackplateFit, BackplateTarget};
         use crate::core::ensemble::types::DecoratorConfig;
+        use ruvie_plugin_api::{BackplateFitV2, BackplateOffsetV2, InsetsV2};
 
-        let output = decorator_config_from_wire(DecoratorOutputV1::Backplate {
-            target: DecoratorTargetV1::Char,
-            shape: BackplateShapeV1::RoundedRect,
-            color: ColorV1 {
-                r: 10,
-                g: 20,
-                b: 30,
-                a: 40,
-            },
-            padding: InsetsV1 {
+        let output = decorator_config_from_wire_v2(DecoratorOutputV2::Backplate {
+            target: DecoratorTargetV2::Char,
+            padding: InsetsV2 {
                 top: 1.0,
                 right: 2.0,
                 bottom: 3.0,
                 left: 4.0,
             },
-            corner_radius: 5.0,
+            offset: BackplateOffsetV2 { x: 5.0, y: -6.0 },
+            fit: BackplateFitV2::Cover,
         })
         .expect("finite Backplate converts")
         .expect("Backplate produces a config");
@@ -3660,53 +3606,40 @@ mod tests {
             output,
             DecoratorConfig::Backplate {
                 target: BackplateTarget::Char,
-                shape: BackplateShape::RoundedRect,
-                color: crate::model::frame::color::Color {
-                    r: 10,
-                    g: 20,
-                    b: 30,
-                    a: 40,
-                },
                 padding: (1.0, 2.0, 3.0, 4.0),
-                corner_radius: 5.0,
+                offset: (5.0, -6.0),
+                fit: BackplateFit::Cover,
             }
         );
 
         assert!(
-            decorator_config_from_wire(DecoratorOutputV1::Backplate {
-                target: DecoratorTargetV1::Block,
-                shape: BackplateShapeV1::Rect,
-                color: ColorV1 {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                padding: InsetsV1 {
+            decorator_config_from_wire_v2(DecoratorOutputV2::Backplate {
+                target: DecoratorTargetV2::Block,
+                padding: InsetsV2 {
                     top: f32::NAN,
                     right: 0.0,
                     bottom: 0.0,
                     left: 0.0,
                 },
-                corner_radius: 0.0,
+                offset: BackplateOffsetV2 { x: 0.0, y: 0.0 },
+                fit: BackplateFitV2::Stretch,
             })
             .is_err(),
             "non-finite Backplate output must not reach the renderer"
         );
         assert!(
-            decorator_config_from_response(serde_json::json!({
+            decorator_config_from_response_v2(serde_json::json!({
                 "type": "backplate",
                 "target": "parts",
-                "shape": "rect",
-                "color": {"r": 0, "g": 0, "b": 0, "a": 255},
                 "padding": {"top": 0.0, "right": 0.0, "bottom": 0.0, "left": 0.0},
-                "corner_radius": 0.0
+                "offset": {"x": 0.0, "y": 0.0},
+                "fit": "stretch"
             }))
             .is_err(),
             "the unsupported Parts target is not an ABI-v1 config"
         );
         assert!(
-            safe_decorator_config_from_response(
+            safe_decorator_config_from_response_v2(
                 serde_json::json!({"type": "future_decorator"}),
                 "test runtime Decorator"
             )
@@ -3716,80 +3649,143 @@ mod tests {
     }
 
     #[test]
-    fn backplate_rejects_padding_derived_overflow_but_allows_safe_negative_padding() {
-        let renderer_limit = f32::MAX;
-        let overflowing_padding = (0.0, renderer_limit, 0.0, renderer_limit);
-        assert!(
-            !valid_backplate_render_geometry(overflowing_padding, 0.0),
-            "finite left/right padding can overflow the derived f32 span"
+    fn frozen_decorator_v1_descriptor_and_output_keep_one_shape_appearance() {
+        use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+        use crate::core::ensemble::types::DecoratorConfig;
+
+        let component = legacy_decorator_component();
+        validate_descriptor(&descriptor_with(component.clone()))
+            .expect("frozen v1 descriptor and appearance properties remain valid");
+        assert_eq!(
+            RuntimeDecoratorProtocol::negotiate(&component),
+            Some(RuntimeDecoratorProtocol::V1)
         );
+        let operation = runtime_decorator_for_test(component)
+            .descriptor()
+            .expect("v1 operation descriptor is valid");
         assert!(
-            !backplate_pad_is_finite(
-                crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0),
-                overflowing_padding,
-            ),
-            "the real RuntimeBounds::pad arithmetic exposes that overflow"
-        );
-        assert!(
-            safe_decorator_config_from_response(
-                serde_json::json!({
-                    "type": "backplate",
-                    "target": "block",
-                    "shape": "rect",
-                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
-                    "padding": {
-                        "top": 0.0,
-                        "right": renderer_limit,
-                        "bottom": 0.0,
-                        "left": renderer_limit
-                    },
-                    "corner_radius": 0.0
-                }),
-                "test runtime Decorator"
-            )
-            .is_none(),
-            "unsafe padding must turn a decoded response into NoOutput"
+            !operation
+                .declared_ports()
+                .iter()
+                .any(|port| { port.key == crate::model::project::BACKGROUND_SHAPE_INPUT_PORT })
         );
 
-        let safe_boundary = renderer_limit / 4.0;
-        let boundary_padding = (safe_boundary, safe_boundary, safe_boundary, safe_boundary);
-        assert!(valid_backplate_render_geometry(boundary_padding, 1.0));
-        let reference =
-            crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0)
-                .pad(boundary_padding);
-        let boundary_rect = skia_safe::Rect::new(
-            reference.left,
-            reference.top,
-            reference.right,
-            reference.bottom,
-        );
-        assert!(boundary_rect.is_finite());
-        assert!(skia_safe::RRect::new_rect_xy(boundary_rect, 1.0, 1.0).is_valid());
-        assert!(valid_backplate_render_geometry((-1.0, 2.0, -1.0, 2.0), 1.0));
-        assert!(
-            safe_decorator_config_from_response(
-                serde_json::json!({
-                    "type": "backplate",
-                    "target": "block",
-                    "shape": "rounded_rect",
-                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
-                    "padding": {"top": -1.0, "right": 2.0, "bottom": -1.0, "left": 2.0},
-                    "corner_radius": 1.0
-                }),
-                "test runtime Decorator"
-            )
-            .is_some(),
-            "negative padding remains legal when every derived operation is finite"
-        );
-        assert!(
-            !valid_backplate_render_geometry((0.0, 0.0, 0.0, 0.0), renderer_limit),
-            "rounded-rect diameter derivation must also remain finite"
+        let output = decorator_config_from_response(serde_json::json!({
+            "type": "backplate",
+            "target": "line",
+            "shape": "rounded_rect",
+            "color": {"r": 10, "g": 20, "b": 30, "a": 40},
+            "padding": {"top": -1.0, "right": 2.0, "bottom": 3.0, "left": 4.0},
+            "corner_radius": 5.0
+        }))
+        .expect("frozen v1 output parses")
+        .expect("v1 Backplate produces legacy config");
+        assert_eq!(
+            output,
+            DecoratorConfig::LegacyBackplate {
+                target: BackplateTarget::Line,
+                shape: BackplateShape::RoundedRect,
+                color: crate::model::frame::color::Color {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 40,
+                },
+                padding: (-1.0, 2.0, 3.0, 4.0),
+                corner_radius: 5.0,
+            }
         );
     }
 
+    fn runtime_decorator_for_test(component: ComponentDescriptorV1) -> RuntimeDecoratorPlugin {
+        let definitions = property_definitions(&component).expect("test properties are valid");
+        let protocol = RuntimeDecoratorProtocol::negotiate(&component)
+            .expect("test decorator advertises a supported protocol");
+        let pending = pending_bundle(descriptor_with(component.clone()));
+        RuntimeDecoratorPlugin {
+            component: RuntimeComponent {
+                descriptor: component,
+                library: pending.library,
+            },
+            definitions,
+            protocol,
+        }
+    }
+
     #[test]
-    fn accepted_style_and_backplate_configs_execute_in_skia() {
-        use skia_safe::{Paint, PaintStyle, PathBuilder, RRect, Rect};
+    fn v2_only_decorator_uses_two_shape_descriptor() {
+        let component = decorator_component();
+        validate_descriptor(&descriptor_with(component.clone()))
+            .expect("v2-only Decorator descriptor is valid");
+        assert_eq!(
+            RuntimeDecoratorProtocol::negotiate(&component),
+            Some(RuntimeDecoratorProtocol::V2)
+        );
+        let descriptor = runtime_decorator_for_test(component)
+            .descriptor()
+            .expect("v2 operation descriptor is valid");
+        assert!(descriptor.declared_ports().iter().any(|port| {
+            port.key == crate::model::project::BACKGROUND_SHAPE_INPUT_PORT
+                && port.direction == crate::model::project::PortDirection::Input
+        }));
+    }
+
+    #[test]
+    fn dual_decorator_prefers_v2_regardless_of_operation_order() {
+        for operations in [
+            vec![
+                DECORATOR_EVALUATE_V1.to_string(),
+                DECORATOR_EVALUATE_V2.to_string(),
+            ],
+            vec![
+                DECORATOR_EVALUATE_V2.to_string(),
+                DECORATOR_EVALUATE_V1.to_string(),
+            ],
+        ] {
+            let mut component = decorator_component();
+            component.operations = operations;
+            assert_eq!(
+                RuntimeDecoratorProtocol::negotiate(&component),
+                Some(RuntimeDecoratorProtocol::V2)
+            );
+            let descriptor = runtime_decorator_for_test(component)
+                .descriptor()
+                .expect("dual Decorator negotiates a descriptor");
+            assert!(
+                descriptor
+                    .declared_ports()
+                    .iter()
+                    .any(|port| { port.key == crate::model::project::BACKGROUND_SHAPE_INPUT_PORT })
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_v2_output_is_rejected_before_host_dispatch() {
+        for malformed in [
+            serde_json::json!({
+                "type": "backplate",
+                "target": "block",
+                "padding": {"top": 0.0, "right": 0.0, "bottom": 0.0, "left": 0.0},
+                "offset": {"x": 0.0, "y": 0.0},
+                "fit": "stretch",
+                "color": {"r": 0, "g": 0, "b": 0, "a": 255}
+            }),
+            serde_json::json!({
+                "type": "backplate",
+                "target": "block",
+                "padding": {"top": 0.0, "right": 0.0, "bottom": 0.0, "left": 0.0},
+                "offset": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "fit": "stretch"
+            }),
+        ] {
+            assert!(decorator_config_from_response_v2(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn accepted_style_configs_execute_in_skia() {
+        use skia_safe::{Paint, PaintStyle, PathBuilder};
 
         let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32))
             .expect("create a CPU Skia surface for runtime config validation");
@@ -3808,18 +3804,6 @@ mod tests {
         path_builder.line_to((30.0, 6.0));
         let path = path_builder.detach();
         surface.canvas().draw_path(&path, &stroke);
-
-        let bounds = crate::model::frame::runtime_shape::RuntimeBounds::new(8.0, 12.0, 24.0, 24.0);
-        let padding = (-1.0, 2.0, -1.0, 2.0);
-        assert!(backplate_pad_is_finite(bounds, padding));
-        let padded = bounds.pad(padding);
-        let rect = Rect::new(padded.left, padded.top, padded.right, padded.bottom);
-        assert!(rect.is_finite());
-        let rounded = RRect::new_rect_xy(rect, 2.0, 2.0);
-        assert!(rounded.is_valid());
-        let mut backplate = Paint::default();
-        backplate.set_color(skia_safe::Color::RED);
-        surface.canvas().draw_rrect(rounded, &backplate);
 
         let image = crate::core::rendering::skia_utils::surface_to_image(&mut surface, 32, 32)
             .expect("read pixels rendered by accepted runtime configs");
@@ -3875,7 +3859,7 @@ mod tests {
     fn config_categories_require_their_versioned_operation_and_no_default_output() {
         for (mut component, operation) in [
             (style_component(), STYLE_EVALUATE_V1),
-            (decorator_component(), DECORATOR_EVALUATE_V1),
+            (decorator_component(), DECORATOR_EVALUATE_V2),
         ] {
             component.operations.clear();
             let error = validate_descriptor(&descriptor_with(component.clone()))

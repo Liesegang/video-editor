@@ -8,7 +8,6 @@ use std::ops::Range;
 
 use uuid::Uuid;
 
-use crate::core::ensemble::decorators::BackplateTarget;
 use crate::core::ensemble::effectors::{EffectorElementContext, evaluate_configured_transform};
 use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData, TransformData};
 use crate::error::LibraryError;
@@ -16,6 +15,8 @@ use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::frame::transform::Transform;
+
+mod backplate;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RuntimeBounds {
@@ -63,6 +64,15 @@ impl RuntimeBounds {
             top: self.top - padding.0,
             right: self.right + padding.1,
             bottom: self.bottom + padding.2,
+        }
+    }
+
+    pub fn translate(self, offset: (f32, f32)) -> Self {
+        Self {
+            left: self.left + offset.0,
+            top: self.top + offset.1,
+            right: self.right + offset.0,
+            bottom: self.bottom + offset.1,
         }
     }
 }
@@ -167,6 +177,22 @@ pub struct RuntimePathShape {
     pub path: String,
     pub bounds: RuntimeBounds,
     pub path_effects: Vec<PathEffect>,
+    /// Stable semantic groups retained until Style rasterizes this Shape.
+    pub parts: Vec<RuntimePathPart>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimePathPart {
+    pub path: String,
+    pub bounds: RuntimeBounds,
+    pub stable_id: u64,
+    pub block_group_id: u64,
+    pub line_group_id: u64,
+    pub line_index: usize,
+    /// Target modulation retained as semantic metadata. Style currently
+    /// rasterizes the combined path; a later grouped Style boundary can apply
+    /// this per part without reconstructing glyph identity.
+    pub opacity: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,8 +292,9 @@ fn union_indices(
         .reduce(RuntimeBounds::union)
 }
 
-/// Conservative local bounds for the actual Ensemble text paint, including
-/// per-character transforms and every Backplate target/padding mode.
+/// Conservative local bounds for actual Ensemble text paint. Geometry-only
+/// decorators have already produced a separate Shape before this boundary;
+/// frozen ABI-v1 Backplates still paint alongside their one target Shape.
 pub fn measure_ensemble_text_visual_bounds(
     text: &RuntimeTextShape,
     styles: &[StyleConfig],
@@ -291,74 +318,70 @@ pub fn measure_ensemble_text_visual_bounds(
         .reduce(RuntimeBounds::union);
 
     for decorator in &ensemble.decorator_configs {
-        match decorator {
-            DecoratorConfig::Backplate {
-                target,
-                color,
-                padding,
-                ..
-            } => match target {
-                BackplateTarget::Char => {
-                    for (element, transform) in text.elements.iter().zip(&transforms) {
-                        if transform.opacity <= 0.0 || color.a == 0 {
-                            continue;
-                        }
-                        let bounds = transform_bounds(
-                            element.bounds.pad(*padding),
-                            text_element_center(element),
-                            transform,
-                        );
-                        visual_bounds =
-                            Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
+        let DecoratorConfig::LegacyBackplate {
+            target,
+            color,
+            padding,
+            ..
+        } = decorator
+        else {
+            return Err(LibraryError::Render(
+                "geometry-only Backplate reached the paint-time renderer".to_string(),
+            ));
+        };
+        match target {
+            crate::core::ensemble::decorators::BackplateTarget::Char => {
+                for (element, transform) in text.elements.iter().zip(&transforms) {
+                    if transform.opacity <= 0.0 || color.a == 0 {
+                        continue;
                     }
+                    let bounds = transform_bounds(
+                        element.bounds.pad(*padding),
+                        text_element_center(element),
+                        transform,
+                    );
+                    visual_bounds =
+                        Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
                 }
-                BackplateTarget::Line => {
-                    for line_index in 0..text.text.split('\n').count() {
-                        let indices =
-                            text.elements
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, element)| {
-                                    (element.line_index == line_index).then_some(index)
-                                });
-                        let indices = indices.collect::<Vec<_>>();
-                        let opacity = indices
-                            .iter()
-                            .map(|index| transforms[*index].opacity)
-                            .sum::<f32>()
-                            / indices.len().max(1) as f32;
-                        if color.a > 0
-                            && opacity > 0.0
-                            && let Some(bounds) = union_indices(text, &transforms, indices)
-                        {
-                            let bounds = bounds.pad(*padding);
-                            visual_bounds =
-                                Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
-                        }
-                    }
-                }
-                BackplateTarget::Block => {
-                    let opacity = transforms
+            }
+            crate::core::ensemble::decorators::BackplateTarget::Line => {
+                for line in &text.lines {
+                    let indices = line.element_range.clone().collect::<Vec<_>>();
+                    let opacity = indices
                         .iter()
-                        .map(|transform| transform.opacity)
+                        .map(|index| transforms[*index].opacity)
                         .sum::<f32>()
-                        / transforms.len().max(1) as f32;
+                        / indices.len().max(1) as f32;
                     if color.a > 0
                         && opacity > 0.0
-                        && let Some(bounds) =
-                            union_indices(text, &transforms, 0..text.elements.len())
+                        && let Some(bounds) = union_indices(text, &transforms, indices)
                     {
                         let bounds = bounds.pad(*padding);
                         visual_bounds =
                             Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
                     }
                 }
-                BackplateTarget::Parts => {
-                    return Err(LibraryError::Render(
-                        "Ensemble BackplateTarget::Parts is not supported".to_string(),
-                    ));
+            }
+            crate::core::ensemble::decorators::BackplateTarget::Block => {
+                let opacity = transforms
+                    .iter()
+                    .map(|transform| transform.opacity)
+                    .sum::<f32>()
+                    / transforms.len().max(1) as f32;
+                if color.a > 0
+                    && opacity > 0.0
+                    && let Some(bounds) = union_indices(text, &transforms, 0..text.elements.len())
+                {
+                    let bounds = bounds.pad(*padding);
+                    visual_bounds =
+                        Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
                 }
-            },
+            }
+            crate::core::ensemble::decorators::BackplateTarget::Parts => {
+                return Err(LibraryError::Render(
+                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
+                ));
+            }
         }
     }
 
@@ -371,19 +394,21 @@ fn measure_path_decorator_bounds(
 ) -> Result<Option<RuntimeBounds>, LibraryError> {
     decorators
         .iter()
-        .map(|decorator| match decorator {
-            DecoratorConfig::Backplate {
+        .map(|decorator| {
+            let DecoratorConfig::LegacyBackplate {
                 target, padding, ..
-            } => {
-                if *target == BackplateTarget::Parts {
-                    return Err(LibraryError::Render(
-                        "Ensemble BackplateTarget::Parts is not supported".to_string(),
-                    ));
-                }
-                // A RuntimePathShape is one stable element, matching renderer
-                // semantics for Char/Line/Block.
-                Ok(path.bounds.pad(*padding))
+            } = decorator
+            else {
+                return Err(LibraryError::Render(
+                    "geometry-only Backplate reached the paint-time renderer".to_string(),
+                ));
+            };
+            if *target == crate::core::ensemble::decorators::BackplateTarget::Parts {
+                return Err(LibraryError::Render(
+                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
+                ));
             }
+            Ok(path.bounds.pad(*padding))
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|bounds| bounds.into_iter().reduce(RuntimeBounds::union))
@@ -507,9 +532,49 @@ impl RuntimeShape {
         self.decorator_configs.push(config);
     }
 
-    /// Cross the Shape -> Image boundary by creating one renderer object with
-    /// exactly the Style from this branch.
-    pub fn into_styled_object(
+    /// Cross the Shape -> Image boundary. Geometry-only operations retain
+    /// per-part opacity until this point; Style materializes those parts as
+    /// independent objects only when their modulation differs from 1.0.
+    pub fn into_styled_objects(
+        self,
+        style: StyleConfig,
+        current_time: f32,
+    ) -> Result<Vec<FrameObject>, LibraryError> {
+        let RuntimeShapeGeometry::Path(path) = &self.geometry else {
+            return self
+                .into_styled_object(style, current_time)
+                .map(|object| vec![object]);
+        };
+        if path.parts.is_empty()
+            || path
+                .parts
+                .iter()
+                .all(|part| (part.opacity - 1.0).abs() <= f32::EPSILON)
+        {
+            return self
+                .into_styled_object(style, current_time)
+                .map(|object| vec![object]);
+        }
+
+        let parts = path.parts.clone();
+        let path_effects = path.path_effects.clone();
+        parts
+            .into_iter()
+            .map(|part| {
+                let mut shape = self.clone();
+                shape.geometry = RuntimeShapeGeometry::Path(RuntimePathShape {
+                    path: part.path.clone(),
+                    bounds: part.bounds,
+                    path_effects: path_effects.clone(),
+                    parts: vec![part.clone()],
+                });
+                shape.into_styled_object(style_with_opacity(&style, part.opacity), current_time)
+            })
+            .collect()
+    }
+
+    /// Create one renderer object after any semantic part expansion above.
+    fn into_styled_object(
         self,
         style: StyleConfig,
         current_time: f32,
@@ -593,4 +658,15 @@ impl RuntimeShape {
             content,
         })
     }
+}
+
+fn style_with_opacity(style: &StyleConfig, opacity: f32) -> StyleConfig {
+    let mut style = style.clone();
+    let opacity = opacity.clamp(0.0, 1.0);
+    let color = match &mut style.style {
+        crate::model::frame::draw_type::DrawStyle::Fill { color, .. }
+        | crate::model::frame::draw_type::DrawStyle::Stroke { color, .. } => color,
+    };
+    color.a = (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8;
+    style
 }

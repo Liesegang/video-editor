@@ -218,18 +218,41 @@ receive nor choose Project identity.
 
 Backplate is the complete set of host `DecoratorConfig` variants at the time
 this operation was defined. Targets are `block`, `line`, and `char`; `parts`
-is intentionally absent because the host renderer does not implement it.
-Shapes are `rect`, `rounded_rect`, and `circle`. Every padding field must be
-finite, and the signed horizontal (`left + right`) and vertical
+is intentionally absent because the frozen host renderer does not implement
+it. Shapes are `rect`, `rounded_rect`, and `circle`. Every padding field must
+be finite, and the signed horizontal (`left + right`) and vertical
 (`top + bottom`) sums that contribute to the padded width and height must
-remain finite 32-bit values. The host also applies the padding to a finite,
+remain finite 32-bit values. The host also applies padding to a finite,
 non-zero reference rectangle (`left=-1`, `top=-2`, `right=3`, `bottom=4`) and
 requires all four resulting coordinates and both raw spans to remain finite.
 Negative padding is allowed when those checks pass. These config-only checks do
 not make non-finite or extreme source bounds safe; source geometry must
 independently satisfy the renderer's finite-value precondition. Corner radius
 must be non-negative, and both it and its diameter must remain finite 32-bit
-values.
+values. This v1 operation remains a one-Shape graph operation and paints its
+appearance before the target Shape for binary compatibility.
+
+### Negotiated geometry-only Decorator v2
+
+The ABI table and invocation envelope remain ABI v1. A Decorator component can
+add `decorator.evaluate.v2` to its descriptor `operations` list to negotiate a
+new operation payload. Hosts prefer v2 when both v1 and v2 are declared.
+
+- category `decorator`, operation `decorator.evaluate.v2`
+- the request has strict `time`, `fps`, and explicitly tagged resolved
+  `properties` fields; unknown fields are rejected.
+- response, one of:
+  - `{"type":"no_output"}`
+  - `{"type":"backplate","target":"block",
+    "padding":{"top":4.0,"right":6.0,"bottom":4.0,"left":6.0},
+    "offset":{"x":2.0,"y":-1.0},"fit":"contain"}`
+
+The v2 host operation has two Shape inputs: target and background template. It
+emits only fitted, cropped geometry; downstream Fill/Stroke owns appearance.
+The background input accepts Path and Text Shape geometry, and its evaluated
+spatial transform is baked into the template before fitting. `cover` clips the
+overscaled template to each destination. Negative padding remains valid when a
+concrete destination keeps positive finite dimensions.
 
 Style and Decorator requests contain only resolved declared properties and
 scalar metadata. They never transport source shapes, raster frames, paths,

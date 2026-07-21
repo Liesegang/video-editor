@@ -435,7 +435,16 @@ impl std::hash::Hash for EffectorConfig {
 /// Decorator設定（シリアライズ可能）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum DecoratorConfig {
+    /// Geometry-only two-Shape contract used by the built-in and ABI v2.
     Backplate {
+        target: super::decorators::BackplateTarget,
+        padding: (f32, f32, f32, f32),
+        offset: (f32, f32),
+        fit: super::decorators::BackplateFit,
+    },
+    /// Frozen ABI-v1 paint-time contract. This remains a one-Shape operation
+    /// so externally built plugins keep their original appearance semantics.
+    LegacyBackplate {
         target: super::decorators::BackplateTarget,
         shape: super::decorators::BackplateShape,
         color: Color,
@@ -451,12 +460,35 @@ impl PartialEq for DecoratorConfig {
             (
                 DecoratorConfig::Backplate {
                     target: t1,
+                    padding: p1,
+                    offset: o1,
+                    fit: f1,
+                },
+                DecoratorConfig::Backplate {
+                    target: t2,
+                    padding: p2,
+                    offset: o2,
+                    fit: f2,
+                },
+            ) => {
+                t1 == t2
+                    && OrderedFloat(p1.0) == OrderedFloat(p2.0)
+                    && OrderedFloat(p1.1) == OrderedFloat(p2.1)
+                    && OrderedFloat(p1.2) == OrderedFloat(p2.2)
+                    && OrderedFloat(p1.3) == OrderedFloat(p2.3)
+                    && OrderedFloat(o1.0) == OrderedFloat(o2.0)
+                    && OrderedFloat(o1.1) == OrderedFloat(o2.1)
+                    && f1 == f2
+            }
+            (
+                DecoratorConfig::LegacyBackplate {
+                    target: t1,
                     shape: s1,
                     color: c1,
                     padding: p1,
                     corner_radius: cr1,
                 },
-                DecoratorConfig::Backplate {
+                DecoratorConfig::LegacyBackplate {
                     target: t2,
                     shape: s2,
                     color: c2,
@@ -473,6 +505,7 @@ impl PartialEq for DecoratorConfig {
                     && OrderedFloat(p1.3) == OrderedFloat(p2.3)
                     && OrderedFloat(*cr1) == OrderedFloat(*cr2)
             }
+            _ => false,
         }
     }
 }
@@ -484,6 +517,21 @@ impl std::hash::Hash for DecoratorConfig {
         std::mem::discriminant(self).hash(state);
         match self {
             DecoratorConfig::Backplate {
+                target,
+                padding,
+                offset,
+                fit,
+            } => {
+                target.hash(state);
+                OrderedFloat(padding.0).hash(state);
+                OrderedFloat(padding.1).hash(state);
+                OrderedFloat(padding.2).hash(state);
+                OrderedFloat(padding.3).hash(state);
+                OrderedFloat(offset.0).hash(state);
+                OrderedFloat(offset.1).hash(state);
+                fit.hash(state);
+            }
+            DecoratorConfig::LegacyBackplate {
                 target,
                 shape,
                 color,

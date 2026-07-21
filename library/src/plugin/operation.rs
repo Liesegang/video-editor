@@ -6,8 +6,9 @@
 //! be installed merely to load or validate that data.
 
 use crate::model::project::{
-    FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition,
-    PortDirection, PortExposure, PortSide, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    BACKGROUND_SHAPE_INPUT_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    PortDataType, PortDefinition, PortDirection, PortExposure, PortSide, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyUiType};
 use crate::model::{Node, PluginOperationContent};
@@ -230,6 +231,39 @@ impl OperationDescriptor {
                 PortDefinition::output(
                     SHAPE_OUTPUT_PORT,
                     "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    /// Built-in geometry-only Backplate contract. The first Shape supplies the
+    /// layout/group metadata; the second is arbitrary authored geometry to fit
+    /// into each selected target. Appearance remains entirely downstream.
+    pub fn backplate(
+        component_id: impl Into<String>,
+        label: impl Into<String>,
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            DECORATOR_CATEGORY,
+            component_id,
+            DECORATOR_APPLY_OPERATION,
+            label,
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Target", PortDataType::Shape),
+                PortDefinition::input(
+                    BACKGROUND_SHAPE_INPUT_PORT,
+                    "Background",
+                    PortDataType::Shape,
+                ),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Background",
                     PortDataType::Shape,
                     PortSide::Right,
                     PortExposure::Graph,

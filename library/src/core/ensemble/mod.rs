@@ -3,7 +3,7 @@ pub mod effectors;
 pub mod target;
 pub mod types;
 
-pub use decorators::{BackplateDecorator, BackplateShape, BackplateTarget, Decorator};
+pub use decorators::{BackplateFit, BackplateTarget};
 pub use effectors::{
     Effector, OpacityEffector, RandomizeEffector, StepDelayEffector, TransformEffector,
 };

@@ -1,7 +1,8 @@
-use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+use crate::core::ensemble::decorators::{BackplateFit, BackplateTarget};
 use crate::core::ensemble::types::DecoratorConfig;
-use crate::model::frame::color::Color;
-use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
+use crate::model::property::{
+    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec2,
+};
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
 use uuid::Uuid;
@@ -45,6 +46,10 @@ impl Plugin for BackplateDecoratorPlugin {
     }
 }
 impl DecoratorPlugin for BackplateDecoratorPlugin {
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::backplate(self.id(), self.name(), self.properties())
+    }
+
     fn properties(&self) -> Vec<PropertyDefinition> {
         vec![
             PropertyDefinition::new(
@@ -54,24 +59,6 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                 },
                 "Target",
                 PropertyValue::String("Block".to_string()),
-            ),
-            PropertyDefinition::new(
-                "shape",
-                PropertyUiType::Dropdown {
-                    options: vec![
-                        "Rect".to_string(),
-                        "RoundRect".to_string(),
-                        "Circle".to_string(),
-                    ],
-                },
-                "Shape",
-                PropertyValue::String("Rect".to_string()),
-            ),
-            PropertyDefinition::new(
-                "color",
-                PropertyUiType::Color,
-                "Color",
-                PropertyValue::Color(Color::black()),
             ),
             PropertyDefinition::new(
                 "padding",
@@ -87,17 +74,25 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                 PropertyValue::from(0.0),
             ),
             PropertyDefinition::new(
-                "radius",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 50.0,
-                    step: 1.0,
-                    suffix: "px".into(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
+                "offset",
+                PropertyUiType::vec2("px"),
+                "Offset",
+                PropertyValue::Vec2(Vec2 {
+                    x: ordered_float::OrderedFloat(0.0),
+                    y: ordered_float::OrderedFloat(0.0),
+                }),
+            ),
+            PropertyDefinition::new(
+                "fit",
+                PropertyUiType::Dropdown {
+                    options: vec![
+                        "Stretch".to_string(),
+                        "Contain".to_string(),
+                        "Cover".to_string(),
+                    ],
                 },
-                "Corner Radius",
-                PropertyValue::from(0.0),
+                "Fit",
+                PropertyValue::String("Stretch".to_string()),
             ),
         ]
     }
@@ -109,10 +104,8 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<DecoratorConfig> {
-        let color = context.evaluate_color(properties, "color", eval_time, Color::black());
-
         let padding_val = context.evaluate_number(properties, "padding", eval_time, 0.0) as f32;
-        let radius = context.evaluate_number(properties, "radius", eval_time, 0.0) as f32;
+        let [offset_x, offset_y] = context.evaluate_vec2(properties, "offset", eval_time, [0.0; 2]);
 
         let target_str = context
             .require_string(properties, "target", eval_time, "Block")
@@ -124,22 +117,20 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
             _ => BackplateTarget::Block,
         };
 
-        let shape_str = context
-            .require_string(properties, "shape", eval_time, "Rect")
-            .unwrap_or("Rect".to_string());
-
-        let shape = match shape_str.as_str() {
-            "RoundRect" => BackplateShape::RoundedRect,
-            "Circle" => BackplateShape::Circle,
-            _ => BackplateShape::Rect,
+        let fit_str = context
+            .require_string(properties, "fit", eval_time, "Stretch")
+            .unwrap_or("Stretch".to_string());
+        let fit = match fit_str.as_str() {
+            "Contain" => BackplateFit::Contain,
+            "Cover" => BackplateFit::Cover,
+            _ => BackplateFit::Stretch,
         };
 
         Some(DecoratorConfig::Backplate {
             target,
-            shape,
-            color,
             padding: (padding_val, padding_val, padding_val, padding_val),
-            corner_radius: radius,
+            offset: (offset_x as f32, offset_y as f32),
+            fit,
         })
     }
 }
