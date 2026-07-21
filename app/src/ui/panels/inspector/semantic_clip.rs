@@ -17,10 +17,10 @@ use library::model::property::{Property, PropertyMap, PropertyUiType, PropertyVa
 use library::model::Clip;
 use library::{EditorService, PropertyOwner};
 
+use super::clip_timing::render_clip_timing;
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::properties::{render_property_rows, PropertyRenderContext};
 use super::property_authoring::PropertyAction;
-use super::render_clip_timing;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::property_mode::property_for_mode;

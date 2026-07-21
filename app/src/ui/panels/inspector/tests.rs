@@ -1,13 +1,23 @@
+use super::property_inference::inferred_property_definitions;
 use super::*;
+use crate::state::context_types::SelectionTarget;
 use crate::test_support::generator_node;
 use library::editor::project_service::GeneratorNodeRequest;
 use library::model::frame::color::Color;
-use library::model::project::NodeContainer;
-use library::model::property::Property;
-use library::plugin::{
-    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
-    SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION,
+use library::model::project::{
+    NodeContainer, PortOwner, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
+use library::model::property::{
+    Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
+};
+use library::model::{Clip, Composition, Node, NodeContent};
+use library::plugin::{
+    PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
+    SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+};
+use ordered_float::OrderedFloat;
+use uuid::Uuid;
 
 #[test]
 fn clip_selection_keeps_the_clip_as_its_semantic_identity() {
