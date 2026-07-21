@@ -332,6 +332,20 @@ fn render_test_graph_with_context_menu_exclusions(
     egui::emath::TSTransform,
     Vec<ContainerVisual>,
 ) {
+    render_test_graph_at_time_with_plugins(project, composition_id, 0.0, None)
+}
+
+fn render_test_graph_at_time_with_plugins(
+    project: &Project,
+    composition_id: Uuid,
+    current_time: f64,
+    plugin_manager: Option<&PluginManager>,
+) -> (
+    HashMap<String, egui::Rect>,
+    Vec<egui::Rect>,
+    egui::emath::TSTransform,
+    Vec<ContainerVisual>,
+) {
     let context = egui::Context::default();
     let (mut snarl, containers) = build_snarl(project, composition_id);
     let mut final_context_menu_exclusion_rects = Vec::new();
@@ -359,13 +373,13 @@ fn render_test_graph_with_context_menu_exclusions(
                 let mut merge_layer_reorder = None;
                 let mut viewer = ProjectNodeViewer {
                     project,
-                    plugin_manager: None,
+                    plugin_manager,
                     containers: &containers,
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     selected_node_ids: &[],
                     selected_container_owners: &[],
-                    current_time: 0.0,
+                    current_time,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                     wire_context_request: &mut wire_context_request,
                     suppress_wire_connect: false,
@@ -399,7 +413,7 @@ fn render_test_graph_with_context_menu_exclusions(
                         to_global,
                         canvas_clip,
                         project,
-                        0.0,
+                        current_time,
                         false,
                     );
                 }
@@ -422,6 +436,7 @@ fn render_test_graph(project: &Project, composition_id: Uuid) -> HashMap<String,
 mod authoring;
 mod canvas;
 mod catalog;
+mod connected_input;
 mod creation;
 mod graph_state;
 mod layout;

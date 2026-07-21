@@ -13,6 +13,7 @@ mod container_graph;
 mod data_graph;
 mod evaluator;
 mod image_graph;
+mod input_preview;
 mod list_graph;
 mod path_graph;
 mod scope;
@@ -20,6 +21,7 @@ mod shape_graph;
 mod value_graph;
 
 pub use evaluator::FrameEvaluator;
+pub use input_preview::InputValuePreview;
 
 pub fn evaluate_composition_frame(
     project: &Project,

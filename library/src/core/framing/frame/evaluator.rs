@@ -70,12 +70,7 @@ impl<'a> FrameEvaluator<'a> {
         &'b self,
         target: &PortAddress,
     ) -> EvalResult<&'b ProjectConnection> {
-        let connections = self
-            .project
-            .connections
-            .iter()
-            .filter(|connection| &connection.to == target)
-            .collect::<Vec<_>>();
+        let connections = self.validated_connections_to(target)?;
         if connections.is_empty() {
             return Ok(EvalOutput::NoOutput);
         }
@@ -89,18 +84,29 @@ impl<'a> FrameEvaluator<'a> {
                 connections.len()
             )));
         }
-        let connection = connections[0];
-        let errors = self.project.validate_connection(connection);
+        Ok(EvalOutput::Produced(connections[0]))
+    }
+
+    pub(super) fn validated_connections_to<'b>(
+        &'b self,
+        target: &PortAddress,
+    ) -> Result<Vec<&'b ProjectConnection>, LibraryError> {
+        let mut connections = self
+            .project
+            .connections
+            .iter()
+            .filter(|connection| &connection.to == target)
+            .collect::<Vec<_>>();
+        connections.sort_by_key(|connection| (connection.order, connection.id));
+        let errors = connections
+            .iter()
+            .flat_map(|connection| self.project.validate_connection(connection))
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
         if !errors.is_empty() {
-            return Err(LibraryError::Validation(
-                errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ));
+            return Err(LibraryError::Validation(errors.join("; ")));
         }
-        Ok(EvalOutput::Produced(connection))
+        Ok(connections)
     }
 
     pub(super) fn composition_for_owner(&self, owner: PortOwner) -> Option<&Composition> {

@@ -15,6 +15,7 @@ use library::model::property::{Property, PropertyDefinition, PropertyUiType, Pro
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
+mod connected_input;
 mod vector;
 
 fn merge_row_reorder_edit(row: &MergeLayerRow, new_index: usize) -> NodeEdit {
@@ -546,6 +547,7 @@ impl ProjectNodeViewer<'_> {
             .as_ref()
             .map(serde_json::Value::from)
             .unwrap_or(serde_json::Value::Null);
+        let mut connected_render = None;
         let row = ui.horizontal(|ui| {
             bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
             let mode_qa_id = format!("node_editor.property_mode.node:{node_id}:{property_key}");
@@ -582,12 +584,14 @@ impl ProjectNodeViewer<'_> {
                     }));
             }
             if connected {
-                non_selectable_label(
+                connected_render = Some(connected_input::render(
                     ui,
-                    egui::RichText::new("linked")
-                        .small()
-                        .color(Color32::from_gray(145)),
-                );
+                    self.project,
+                    self.plugin_manager,
+                    node_id,
+                    &definition.key,
+                    self.current_time,
+                ));
                 return None;
             }
             if let Some(issue) = evaluated.as_ref().and_then(|evaluated| evaluated.issue()) {
@@ -796,19 +800,18 @@ impl ProjectNodeViewer<'_> {
             }
             Some((response, control_kind, qa_value, vector_components))
         });
-        let (response, control_kind, enabled, value, vector_components) = match row.inner {
-            Some((response, control_kind, value, vector_components)) => {
-                let enabled = response.enabled();
-                (response, control_kind, enabled, value, vector_components)
-            }
-            None => (
-                row.response,
-                if connected { "linked" } else { "missing" },
-                false,
-                current_value_metadata,
-                Vec::new(),
-            ),
-        };
+        let control = connected_input::resolve_control(
+            row.inner,
+            connected_render,
+            row.response,
+            current_value_metadata,
+        );
+        let response = control.response;
+        let control_kind = control.control_kind;
+        let enabled = control.enabled;
+        let value = control.value;
+        let vector_components = control.components;
+        let connected_metadata = control.metadata;
         let component_id = format!("node_editor.property.node:{node_id}:{property_key}");
         let unclipped_rect = *self.to_global * response.rect;
         let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
@@ -824,27 +827,35 @@ impl ProjectNodeViewer<'_> {
                 "operation": operation.operation,
             }))
         });
+        let mut metadata = serde_json::json!({
+            "node_id": node_id,
+            "property": property_key,
+            "port": definition.key,
+            "connected": connected,
+            "control_kind": control_kind,
+            "current_time": property_time,
+            "value": value,
+            "operation_identity": operation_identity,
+            "descriptor_available": property_definition.is_some(),
+            "definition": property_definition.map(
+                crate::ui::panels::inspector::properties::property_definition_metadata
+            ),
+            "unclipped_rect": qa_rect_metadata(unclipped_rect),
+            "visible_in_canvas": rect.is_positive(),
+        });
+        if let (Some(target), Some(serde_json::Value::Object(extra))) =
+            (metadata.as_object_mut(), connected_metadata)
+        {
+            target.extend(extra);
+        }
+        #[cfg(test)]
+        capture_test_metadata(&component_id, &metadata);
         crate::qa::register_component_with_metadata(
             component_id,
             "node_property_control",
             rect,
             enabled,
-            Some(serde_json::json!({
-                "node_id": node_id,
-                "property": property_key,
-                "port": definition.key,
-                "connected": connected,
-                "control_kind": control_kind,
-                "current_time": property_time,
-                "value": value,
-                "operation_identity": operation_identity,
-                "descriptor_available": property_definition.is_some(),
-                "definition": property_definition.map(
-                    crate::ui::panels::inspector::properties::property_definition_metadata
-                ),
-                "unclipped_rect": qa_rect_metadata(unclipped_rect),
-                "visible_in_canvas": rect.is_positive(),
-            })),
+            Some(metadata),
         );
         vector::register_components(
             self,
