@@ -14,9 +14,12 @@ pub fn node_layout_command_blocked(state: &NodeEditorState) -> bool {
         || !state.moved_node_ids.is_empty()
         || state.node_reparent.is_some()
         || state.container_resize.is_some()
+        || state.surface_interaction.is_active()
+        || state.active_drag_selection.is_some()
         || state.wire_gesture.is_some()
         || state.normal_wire_drag_active
         || state.normal_connect_gesture.is_some()
+        || state.normal_connect_cancel_pending_release
         || state.wire_knife.is_some()
         || state.merge_layer_reorder.is_some()
 }
@@ -230,6 +233,19 @@ mod tests {
             CommandId::NodeEditorCleanLayout
         ));
         assert_eq!(state.pending_layout_command, None);
+
+        state.layout_changed_during_drag = false;
+        state.normal_connect_cancel_pending_release = true;
+        assert!(!request_node_layout_command(
+            &mut state,
+            CommandId::NodeEditorCleanLayoutAll
+        ));
+        state.normal_connect_cancel_pending_release = false;
+        state.active_drag_selection = Some(SelectionTarget::Node(Uuid::new_v4()));
+        assert!(!request_node_layout_command(
+            &mut state,
+            CommandId::NodeEditorCleanLayoutSelection
+        ));
     }
 
     #[test]

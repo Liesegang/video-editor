@@ -91,11 +91,15 @@ pub struct CommandRegistry {
     pub commands: Vec<Command>,
 }
 
-fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
+pub(crate) fn format_shortcut(shortcut: &Option<(Modifiers, Key)>) -> String {
     if let Some((m, k)) = shortcut {
         let mut parts = Vec::new();
         if m.command {
-            parts.push("Ctrl");
+            parts.push(if cfg!(target_os = "macos") {
+                "Cmd"
+            } else {
+                "Ctrl"
+            });
         }
         if m.ctrl && !m.command {
             parts.push("Ctrl");
@@ -122,7 +126,7 @@ impl Command {
         allow_when_focused: bool,
         trigger_on_release: bool,
     ) -> Self {
-        let shortcut_text = get_shortcut_text(&shortcut);
+        let shortcut_text = format_shortcut(&shortcut);
         Self {
             id,
             text: text.to_string(),
@@ -258,7 +262,7 @@ impl CommandRegistry {
             Command::new(
                 CommandId::NodeEditorCleanLayoutSelection,
                 "Node Editor: Clean Layout Selection",
-                None,
+                Some((Modifiers::COMMAND, Key::L)),
                 false,
                 false,
             )
@@ -266,7 +270,7 @@ impl CommandRegistry {
             Command::new(
                 CommandId::NodeEditorCleanLayoutContainer,
                 "Node Editor: Clean Layout Current Container",
-                None,
+                Some((Modifiers::ALT, Key::L)),
                 false,
                 false,
             )
@@ -298,7 +302,7 @@ impl CommandRegistry {
                 // - Some(shortcut) -> Override with new shortcut
                 // - None           -> Explicitly unbound (user cleared it)
                 cmd.shortcut = *loaded_shortcut_opt;
-                cmd.shortcut_text = get_shortcut_text(&cmd.shortcut);
+                cmd.shortcut_text = format_shortcut(&cmd.shortcut);
             }
         }
 
@@ -312,7 +316,7 @@ impl CommandRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandContext, CommandId, CommandRegistry, CommandScope};
+    use super::{format_shortcut, CommandContext, CommandId, CommandRegistry, CommandScope};
     use crate::config::AppConfig;
     use eframe::egui::{Key, Modifiers};
 
@@ -338,16 +342,15 @@ mod tests {
             .expect("all layout command");
         assert_eq!(all.shortcut, Some((Modifiers::SHIFT, Key::L)));
 
-        assert!(registry
-            .find(CommandId::NodeEditorCleanLayoutSelection)
-            .is_some());
-        assert!(registry
-            .find(CommandId::NodeEditorCleanLayoutContainer)
-            .is_some());
-
         let selection = registry
             .find(CommandId::NodeEditorCleanLayoutSelection)
             .expect("selection layout command");
+        assert_eq!(selection.shortcut, Some((Modifiers::COMMAND, Key::L)));
+        let container = registry
+            .find(CommandId::NodeEditorCleanLayoutContainer)
+            .expect("container layout command");
+        assert_eq!(container.shortcut, Some((Modifiers::ALT, Key::L)));
+
         assert!(!selection.is_available_in(CommandContext {
             scope: CommandScope::NodeEditor,
             has_node_selection: false,
@@ -371,5 +374,34 @@ mod tests {
         assert_eq!(CommandContext::palette_origin(node, global), node);
         assert_eq!(CommandContext::palette_origin(global, node), node);
         assert_eq!(CommandContext::palette_origin(global, global), global);
+    }
+
+    #[test]
+    fn shortcut_text_uses_the_platform_command_key_name() {
+        let expected = if cfg!(target_os = "macos") {
+            "Cmd+L"
+        } else {
+            "Ctrl+L"
+        };
+        assert_eq!(
+            format_shortcut(&Some((Modifiers::COMMAND, Key::L))),
+            expected
+        );
+        assert_eq!(
+            format_shortcut(&Some((Modifiers::ALT | Modifiers::SHIFT, Key::L))),
+            "Shift+Alt+L"
+        );
+    }
+
+    #[test]
+    fn node_layout_default_shortcuts_are_unique() {
+        let registry = CommandRegistry::new(&AppConfig::new());
+        let shortcuts = registry
+            .commands
+            .iter()
+            .filter(|command| command.id.is_node_editor_layout())
+            .map(|command| command.shortcut.expect("layout command shortcut"))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(shortcuts.len(), 4);
     }
 }

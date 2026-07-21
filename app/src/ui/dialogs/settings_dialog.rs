@@ -1,4 +1,4 @@
-use crate::command::{Command, CommandId, CommandRegistry};
+use crate::command::{format_shortcut, Command, CommandId, CommandRegistry};
 use crate::config::AppConfig;
 use crate::{config, model::ui_types::SettingsTab};
 use eframe::egui::{Key, ScrollArea, TextEdit, Ui};
@@ -630,7 +630,7 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut [Command], state: &mut SettingsStat
         if let Some(cmd) = commands.iter_mut().find(|c| c.id == id) {
             let new_shortcut_val = Some((mods, key));
             cmd.shortcut = new_shortcut_val;
-            cmd.shortcut_text = get_shortcut_text(&new_shortcut_val);
+            cmd.shortcut_text = format_shortcut(&new_shortcut_val);
         }
         state.listening_for = None;
     }
@@ -735,27 +735,4 @@ fn theme_tab(ui: &mut Ui, config: &mut AppConfig) {
                 "Mocha",
             );
         });
-}
-
-fn get_shortcut_text(shortcut: &Option<(eframe::egui::Modifiers, Key)>) -> String {
-    if let Some((m, k)) = shortcut {
-        let mut parts = Vec::new();
-        if m.command {
-            parts.push("Ctrl");
-        } // Simplified for cross-platform visual
-        if m.ctrl && !m.command {
-            parts.push("Ctrl");
-        }
-        if m.shift {
-            parts.push("Shift");
-        }
-        if m.alt {
-            parts.push("Alt");
-        }
-        let key_str = format!("{:?}", k);
-        parts.push(&key_str);
-        parts.join("+")
-    } else {
-        String::new()
-    }
 }
