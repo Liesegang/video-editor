@@ -50,15 +50,15 @@ pub(super) const AUTO_LAYOUT_TRACK_GAP: f32 = 80.0;
 /// Container content starts just below the compact header. Left-edge metadata
 /// labels get a narrow, fixed rail; their number no longer pushes the entire
 /// body down. The right rail is only wide enough for a localized socket hit.
-pub(super) const AUTO_LAYOUT_COMPOSITION_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
+pub(super) const AUTO_LAYOUT_COMPOSITION_TOP: f32 = CONTAINER_HEADER_HEIGHT + 24.0;
 pub(super) const AUTO_LAYOUT_COMPOSITION_LEFT: f32 = 80.0;
 pub(super) const AUTO_LAYOUT_COMPOSITION_RIGHT: f32 = 24.0;
-pub(super) const AUTO_LAYOUT_COMPOSITION_BOTTOM: f32 = 24.0;
-pub(super) const AUTO_LAYOUT_TRACK_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
-pub(super) const AUTO_LAYOUT_CLIP_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
+pub(super) const AUTO_LAYOUT_COMPOSITION_BOTTOM: f32 = 16.0;
+pub(super) const AUTO_LAYOUT_TRACK_TOP: f32 = CONTAINER_HEADER_HEIGHT + 24.0;
+pub(super) const AUTO_LAYOUT_CLIP_TOP: f32 = CONTAINER_HEADER_HEIGHT + 24.0;
 pub(super) const AUTO_LAYOUT_TRACK_LEFT: f32 = 80.0;
 pub(super) const AUTO_LAYOUT_TRACK_RIGHT: f32 = 24.0;
-pub(super) const AUTO_LAYOUT_TRACK_BOTTOM: f32 = 24.0;
+pub(super) const AUTO_LAYOUT_TRACK_BOTTOM: f32 = 16.0;
 
 /// Ephemeral Snarl payload. It contains identity and visual role only; all
 /// editable values continue to live in `Project`.

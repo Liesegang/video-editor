@@ -23,6 +23,16 @@ pub(super) struct NodeRankColumn {
     pub(super) width: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LayoutEdge {
+    pub(super) from: Uuid,
+    pub(super) to: Uuid,
+    /// Persisted variadic order is back-to-front. Presentation places the
+    /// greatest (front-most) order first on the vertical axis.
+    pub(super) order: i64,
+    connection_id: Uuid,
+}
+
 pub(super) fn node_rank_columns(
     project: &Project,
     node_ids: &[Uuid],
@@ -55,12 +65,6 @@ pub(super) fn node_rank_columns(
         x += width + AUTO_LAYOUT_COLUMN_GAP;
     }
     columns
-}
-
-impl NodeBandBounds {
-    pub(super) fn width(self) -> f32 {
-        self.max_x - self.min_x
-    }
 }
 
 pub(super) fn node_band_bounds(
@@ -101,6 +105,7 @@ pub(super) fn layout_node_band(
     node_ids: &[Uuid],
     ranks: &HashMap<Uuid, usize>,
     rank_columns: &BTreeMap<usize, NodeRankColumn>,
+    edges: &[LayoutEdge],
     origin_y: f32,
     positions: &mut BTreeMap<Uuid, [f32; 2]>,
 ) -> Option<NodeBandBounds> {
@@ -125,17 +130,234 @@ pub(super) fn layout_node_band(
         });
     }
 
-    let bounds = node_band_bounds(project, node_ids, ranks, rank_columns)?;
-    for (rank, group) in groups {
-        let x = rank_columns.get(&rank)?.x;
-        let mut y = origin_y;
-        for node_id in group {
-            let size = estimated_node_size(project, node_id);
-            positions.insert(node_id, [x, y]);
-            y += size.y + AUTO_LAYOUT_ROW_GAP;
+    let mut bounds = node_band_bounds(project, node_ids, ranks, rank_columns)?;
+    for (rank, group) in &groups {
+        pack_column(
+            project,
+            group,
+            rank_columns.get(rank)?.x,
+            origin_y,
+            positions,
+        );
+    }
+
+    // Median sweeps reduce crossings while the persisted connection order
+    // provides a deterministic front-to-back tie-break for Merge inputs.
+    for _ in 0..2 {
+        for group in groups.values_mut() {
+            reorder_column(project, group, edges, positions, true);
+        }
+        for group in groups.values_mut().rev() {
+            reorder_column(project, group, edges, positions, false);
         }
     }
+
+    // Align whole rank blocks after ordering. Forward alignment centers
+    // fan-in targets; the reverse pass centers fan-out sources.
+    for _ in 0..2 {
+        for group in groups.values() {
+            align_column(project, group, edges, positions, origin_y, true);
+        }
+        for group in groups.values().rev() {
+            align_column(project, group, edges, positions, origin_y, false);
+        }
+    }
+
+    bounds.height = node_ids
+        .iter()
+        .filter_map(|node_id| {
+            positions
+                .get(node_id)
+                .map(|position| position[1] + estimated_node_size(project, *node_id).y - origin_y)
+        })
+        .max_by(f32::total_cmp)
+        .unwrap_or(bounds.height);
     Some(bounds)
+}
+
+fn pack_column(
+    project: &Project,
+    group: &[Uuid],
+    x: f32,
+    origin_y: f32,
+    positions: &mut BTreeMap<Uuid, [f32; 2]>,
+) {
+    let mut y = origin_y;
+    for node_id in group {
+        positions.insert(*node_id, [x, y]);
+        y += estimated_node_size(project, *node_id).y + AUTO_LAYOUT_ROW_GAP;
+    }
+}
+
+fn node_center_y(
+    project: &Project,
+    node_id: Uuid,
+    positions: &BTreeMap<Uuid, [f32; 2]>,
+) -> Option<f32> {
+    positions
+        .get(&node_id)
+        .map(|position| position[1] + estimated_node_size(project, node_id).y * 0.5)
+}
+
+fn median(mut values: Vec<f32>) -> Option<f32> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f32::total_cmp);
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        Some((values[middle - 1] + values[middle]) * 0.5)
+    } else {
+        values.get(middle).copied()
+    }
+}
+
+fn neighbor_median(
+    project: &Project,
+    node_id: Uuid,
+    edges: &[LayoutEdge],
+    positions: &BTreeMap<Uuid, [f32; 2]>,
+    predecessors: bool,
+) -> Option<f32> {
+    median(
+        edges
+            .iter()
+            .filter_map(|edge| {
+                let neighbor = if predecessors && edge.to == node_id {
+                    Some(edge.from)
+                } else if !predecessors && edge.from == node_id {
+                    Some(edge.to)
+                } else {
+                    None
+                }?;
+                node_center_y(project, neighbor, positions)
+            })
+            .collect(),
+    )
+}
+
+fn reorder_column(
+    project: &Project,
+    group: &mut [Uuid],
+    edges: &[LayoutEdge],
+    positions: &mut BTreeMap<Uuid, [f32; 2]>,
+    predecessors: bool,
+) {
+    let Some(first) = group.first() else {
+        return;
+    };
+    let Some(column_x) = positions.get(first).map(|position| position[0]) else {
+        return;
+    };
+    let origin_y = group
+        .iter()
+        .filter_map(|node_id| positions.get(node_id).map(|position| position[1]))
+        .min_by(f32::total_cmp)
+        .unwrap_or_default();
+    group.sort_by(|left, right| {
+        let left_preference = neighbor_median(project, *left, edges, positions, predecessors)
+            .or_else(|| node_center_y(project, *left, positions))
+            .unwrap_or_default();
+        let right_preference = neighbor_median(project, *right, edges, positions, predecessors)
+            .or_else(|| node_center_y(project, *right, positions))
+            .unwrap_or_default();
+        left_preference
+            .total_cmp(&right_preference)
+            .then_with(|| {
+                scoped_neighbor_order(
+                    project,
+                    *right,
+                    right_preference,
+                    edges,
+                    positions,
+                    predecessors,
+                )
+                .cmp(&scoped_neighbor_order(
+                    project,
+                    *left,
+                    left_preference,
+                    edges,
+                    positions,
+                    predecessors,
+                ))
+            })
+            .then_with(|| {
+                let left_y = project
+                    .get_node(*left)
+                    .map_or(0.0, |node| node.ui_position[1]);
+                let right_y = project
+                    .get_node(*right)
+                    .map_or(0.0, |node| node.ui_position[1]);
+                left_y.total_cmp(&right_y)
+            })
+            .then_with(|| left.cmp(right))
+    });
+    pack_column(project, group, column_x, origin_y, positions);
+}
+
+fn scoped_neighbor_order(
+    project: &Project,
+    node_id: Uuid,
+    preferred_y: f32,
+    edges: &[LayoutEdge],
+    positions: &BTreeMap<Uuid, [f32; 2]>,
+    predecessors: bool,
+) -> Option<i64> {
+    if predecessors {
+        return None;
+    }
+    edges
+        .iter()
+        .filter(|edge| edge.from == node_id)
+        .filter_map(|edge| {
+            node_center_y(project, edge.to, positions)
+                .map(|center| ((center - preferred_y).abs(), edge.to, edge.order))
+        })
+        .min_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| right.2.cmp(&left.2))
+        })
+        .map(|(_, _, order)| order)
+}
+
+fn align_column(
+    project: &Project,
+    group: &[Uuid],
+    edges: &[LayoutEdge],
+    positions: &mut BTreeMap<Uuid, [f32; 2]>,
+    origin_y: f32,
+    predecessors: bool,
+) {
+    let desired = median(
+        group
+            .iter()
+            .filter_map(|node_id| {
+                neighbor_median(project, *node_id, edges, positions, predecessors)
+            })
+            .collect(),
+    );
+    let current = median(
+        group
+            .iter()
+            .filter_map(|node_id| node_center_y(project, *node_id, positions))
+            .collect(),
+    );
+    let (Some(desired), Some(current)) = (desired, current) else {
+        return;
+    };
+    let top = group
+        .iter()
+        .filter_map(|node_id| positions.get(node_id).map(|position| position[1]))
+        .min_by(f32::total_cmp)
+        .unwrap_or(origin_y);
+    let delta = (desired - current).max(origin_y - top);
+    for node_id in group {
+        if let Some(position) = positions.get_mut(node_id) {
+            position[1] += delta;
+        }
+    }
 }
 
 pub(super) fn first_free_y(
@@ -176,63 +398,106 @@ pub(in crate::ui::panels::node_editor) fn canonical_edges(
     project: &Project,
     nodes: &[Uuid],
 ) -> Vec<(Uuid, Uuid)> {
-    let node_set = nodes.iter().copied().collect::<HashSet<_>>();
-    let mut edges = canonical_node_edges(project, nodes);
-    edges.extend(project.connections.iter().flat_map(|connection| {
-        let PortOwner::Node(to) = connection.to.owner else {
-            return Vec::new();
-        };
-        if !node_set.contains(&to) || project.get_node(to).is_none() {
-            return Vec::new();
-        }
-
-        let sources = match connection.from.owner {
-            PortOwner::Node(_) => Vec::new(),
-            owner
-                if connection.from.port == IMAGE_OUTPUT_PORT
-                    || connection.from.port == AUDIO_OUTPUT_PORT =>
-            {
-                container_layout_output_nodes(project, owner, &connection.from.port)
-            }
-            _ => Vec::new(),
-        };
-        sources
-            .into_iter()
-            .filter(|from| {
-                node_set.contains(from) && project.get_node(*from).is_some() && *from != to
-            })
-            .map(|from| (from, to))
-            .collect()
-    }));
+    let mut edges = collect_layout_edges(project, nodes, false)
+        .into_iter()
+        .map(|edge| (edge.from, edge.to))
+        .collect::<Vec<_>>();
     edges.sort_unstable();
     edges.dedup();
     edges
 }
 
-pub(in crate::ui::panels::node_editor) fn canonical_node_edges(
+pub(super) fn canonical_layout_edges(project: &Project, nodes: &[Uuid]) -> Vec<LayoutEdge> {
+    collect_layout_edges(project, nodes, true)
+}
+
+fn collect_layout_edges(
     project: &Project,
     nodes: &[Uuid],
-) -> Vec<(Uuid, Uuid)> {
+    include_complete_container_bounds: bool,
+) -> Vec<LayoutEdge> {
     let node_set = nodes.iter().copied().collect::<HashSet<_>>();
     let mut edges = project
         .connections
         .iter()
-        .filter_map(|connection| {
-            let (PortOwner::Node(from), PortOwner::Node(to)) =
-                (connection.from.owner, connection.to.owner)
-            else {
-                return None;
+        .flat_map(|connection| {
+            let PortOwner::Node(to) = connection.to.owner else {
+                return Vec::new();
             };
-            (node_set.contains(&from)
-                && node_set.contains(&to)
-                && project.get_node(from).is_some()
-                && project.get_node(to).is_some())
-            .then_some((from, to))
+            if !node_set.contains(&to) || project.get_node(to).is_none() {
+                return Vec::new();
+            }
+
+            let sources = match connection.from.owner {
+                PortOwner::Node(from) => vec![from],
+                owner
+                    if connection.from.port == IMAGE_OUTPUT_PORT
+                        || connection.from.port == AUDIO_OUTPUT_PORT =>
+                {
+                    if include_complete_container_bounds {
+                        container_layout_node_ids(project, owner)
+                    } else {
+                        container_layout_output_nodes(project, owner, &connection.from.port)
+                    }
+                }
+                _ => Vec::new(),
+            };
+            sources
+                .into_iter()
+                .filter(|from| {
+                    node_set.contains(from) && project.get_node(*from).is_some() && *from != to
+                })
+                .map(|from| LayoutEdge {
+                    from,
+                    to,
+                    order: connection.order,
+                    connection_id: connection.id,
+                })
+                .collect()
         })
         .collect::<Vec<_>>();
-    edges.sort_unstable();
-    edges.dedup();
+    edges.sort_by_key(|edge| {
+        (
+            edge.from,
+            edge.to,
+            std::cmp::Reverse(edge.order),
+            edge.connection_id,
+        )
+    });
+    edges.dedup_by_key(|edge| (edge.from, edge.to));
     edges
+}
+
+fn container_layout_node_ids(project: &Project, owner: PortOwner) -> Vec<Uuid> {
+    match owner {
+        PortOwner::Node(id) => vec![id],
+        PortOwner::Clip(id) => project
+            .get_clip(id)
+            .map_or_else(Vec::new, |clip| clip.node_ids.clone()),
+        PortOwner::Track(id) => project.get_track(id).map_or_else(Vec::new, |track| {
+            let mut nodes = track.node_ids.clone();
+            for clip_id in &track.clip_ids {
+                if let Some(clip) = project.get_clip(*clip_id) {
+                    nodes.extend(clip.node_ids.iter().copied());
+                }
+            }
+            nodes
+        }),
+        PortOwner::Composition(id) => {
+            project
+                .get_composition(id)
+                .map_or_else(Vec::new, |composition| {
+                    let mut nodes = composition.node_ids.clone();
+                    for track_id in &composition.track_ids {
+                        nodes.extend(container_layout_node_ids(
+                            project,
+                            PortOwner::Track(*track_id),
+                        ));
+                    }
+                    nodes
+                })
+        }
+    }
 }
 
 fn container_layout_output_nodes(project: &Project, owner: PortOwner, port: &str) -> Vec<Uuid> {
@@ -448,6 +713,129 @@ mod tests {
     use library::model::project::NodeContainer;
     use library::model::{Clip, Composition};
 
+    fn layered_positions(
+        node_y: &[(Uuid, f32)],
+        edge_specs: &[(Uuid, Uuid, i64)],
+    ) -> (Project, BTreeMap<Uuid, [f32; 2]>) {
+        let mut project = Project::new("layered positions");
+        for (node_id, y) in node_y {
+            let mut node = Node::new_merge("Node");
+            node.id = *node_id;
+            node.ui_position = [0.0, *y];
+            project.add_node(node);
+        }
+        let edges = edge_specs
+            .iter()
+            .enumerate()
+            .map(|(index, (from, to, order))| LayoutEdge {
+                from: *from,
+                to: *to,
+                order: *order,
+                connection_id: Uuid::from_u128(10_000 + index as u128),
+            })
+            .collect::<Vec<_>>();
+        let edge_pairs = edges
+            .iter()
+            .map(|edge| (edge.from, edge.to))
+            .collect::<Vec<_>>();
+        let node_ids = node_y
+            .iter()
+            .map(|(node_id, _)| *node_id)
+            .collect::<Vec<_>>();
+        let ranks = rank_nodes_by_scc(&node_ids, &edge_pairs);
+        let columns = node_rank_columns(&project, &node_ids, &ranks, 20.0);
+        let mut positions = BTreeMap::new();
+        assert!(layout_node_band(
+            &project,
+            &node_ids,
+            &ranks,
+            &columns,
+            &edges,
+            40.0,
+            &mut positions,
+        )
+        .is_some());
+        (project, positions)
+    }
+
+    fn center_y(project: &Project, positions: &BTreeMap<Uuid, [f32; 2]>, node_id: Uuid) -> f32 {
+        positions[&node_id][1] + estimated_node_size(project, node_id).y * 0.5
+    }
+
+    #[test]
+    fn layered_layout_aligns_chain_fan_in_and_fan_out_medians() {
+        let ids = (1..=7).map(Uuid::from_u128).collect::<Vec<_>>();
+        let (chain_project, chain) = layered_positions(
+            &[(ids[0], 300.0), (ids[1], 20.0), (ids[2], 170.0)],
+            &[(ids[0], ids[1], 0), (ids[1], ids[2], 0)],
+        );
+        assert_eq!(
+            center_y(&chain_project, &chain, ids[0]),
+            center_y(&chain_project, &chain, ids[1])
+        );
+        assert_eq!(
+            center_y(&chain_project, &chain, ids[1]),
+            center_y(&chain_project, &chain, ids[2])
+        );
+
+        let (fan_in_project, fan_in) = layered_positions(
+            &[(ids[0], 200.0), (ids[1], 10.0), (ids[2], 0.0)],
+            &[(ids[0], ids[2], 0), (ids[1], ids[2], 1)],
+        );
+        let source_median = (center_y(&fan_in_project, &fan_in, ids[0])
+            + center_y(&fan_in_project, &fan_in, ids[1]))
+            * 0.5;
+        assert_eq!(center_y(&fan_in_project, &fan_in, ids[2]), source_median);
+        assert!(fan_in[&ids[1]][1] < fan_in[&ids[0]][1]);
+
+        let (fan_out_project, fan_out) = layered_positions(
+            &[(ids[3], 300.0), (ids[4], 10.0), (ids[5], 200.0)],
+            &[(ids[3], ids[4], 0), (ids[3], ids[5], 0)],
+        );
+        let target_median = (center_y(&fan_out_project, &fan_out, ids[4])
+            + center_y(&fan_out_project, &fan_out, ids[5]))
+            * 0.5;
+        assert_eq!(center_y(&fan_out_project, &fan_out, ids[3]), target_median);
+    }
+
+    #[test]
+    fn layered_layout_is_deterministic_and_columns_do_not_overlap() {
+        let a = Uuid::from_u128(20);
+        let b = Uuid::from_u128(21);
+        let c = Uuid::from_u128(22);
+        let d = Uuid::from_u128(23);
+        let nodes = [(a, 400.0), (b, 20.0), (c, 200.0), (d, 60.0)];
+        let edges = [(a, c, 0), (b, c, 1), (c, d, 0)];
+        let (project, forward) = layered_positions(&nodes, &edges);
+        let mut reversed_nodes = nodes;
+        reversed_nodes.reverse();
+        let mut reversed_edges = edges;
+        reversed_edges.reverse();
+        let (_, reversed) = layered_positions(&reversed_nodes, &reversed_edges);
+        assert_eq!(forward, reversed);
+
+        let mut rects = forward
+            .iter()
+            .map(|(node_id, position)| {
+                egui::Rect::from_min_size(
+                    egui::pos2(position[0], position[1]),
+                    estimated_node_size(&project, *node_id),
+                )
+            })
+            .collect::<Vec<_>>();
+        rects.sort_by(|left, right| {
+            left.left()
+                .total_cmp(&right.left())
+                .then_with(|| left.top().total_cmp(&right.top()))
+        });
+        assert!(rects
+            .iter()
+            .enumerate()
+            .all(|(index, left)| rects[index + 1..]
+                .iter()
+                .all(|right| !left.intersects(*right))));
+    }
+
     #[test]
     fn dag_ranking_is_stable_and_every_edge_moves_left_to_right() {
         let a = Uuid::from_u128(1);
@@ -496,6 +884,7 @@ mod tests {
         assert!(project
             .set_output_node(NodeContainer::Clip(clip_id), Some(output_id))
             .is_ok());
+        let authored_connections = project.connections.clone();
 
         let nodes = vec![
             composition_merge_id,
@@ -538,6 +927,7 @@ mod tests {
         let Some(plan) = plan else {
             return;
         };
+        assert_eq!(project.connections, authored_connections);
         assert!(crate::ui::panels::node_editor::apply_auto_layout(
             &mut project,
             composition_id,
@@ -546,16 +936,48 @@ mod tests {
         let Some(clip) = project.get_clip(clip_id) else {
             return;
         };
+        let clip_node_bottom = clip
+            .node_ids
+            .iter()
+            .filter_map(|node_id| project.get_node(*node_id))
+            .map(|node| node.ui_position[1] + estimated_node_size(&project, node.id).y)
+            .max_by(f32::total_cmp)
+            .unwrap_or(clip.ui_position[1]);
+        assert!(clip
+            .node_ids
+            .iter()
+            .filter_map(|node_id| project.get_node(*node_id))
+            .all(|node| node.ui_position[1]
+                >= clip.ui_position[1] + crate::ui::panels::node_editor::AUTO_LAYOUT_CLIP_TOP));
+        assert_eq!(
+            clip.ui_position[1] + clip.ui_size[1] - clip_node_bottom,
+            crate::ui::panels::node_editor::AUTO_LAYOUT_TRACK_BOTTOM
+        );
         let Some(track_merge) = project.get_node(track_merge_id) else {
             return;
         };
-        assert!(clip.ui_position[0] + clip.ui_size[0] < track_merge.ui_position[0]);
+        assert!(
+            clip.ui_position[0]
+                + clip.ui_size[0]
+                + crate::ui::panels::node_editor::AUTO_LAYOUT_NODE_PADDING
+                < track_merge.ui_position[0]
+        );
         let Some(track) = project.get_track(track_id) else {
             return;
         };
         let Some(composition_merge) = project.get_node(composition_merge_id) else {
             return;
         };
-        assert!(track.ui_position[0] + track.ui_size[0] < composition_merge.ui_position[0]);
+        assert!(
+            track.ui_position[0]
+                + track.ui_size[0]
+                + crate::ui::panels::node_editor::AUTO_LAYOUT_NODE_PADDING
+                < composition_merge.ui_position[0]
+        );
+        assert_eq!(
+            center_y(&project, &plan.node_positions, track_merge_id),
+            center_y(&project, &plan.node_positions, composition_merge_id)
+        );
+        assert_eq!(project.connections, authored_connections);
     }
 }

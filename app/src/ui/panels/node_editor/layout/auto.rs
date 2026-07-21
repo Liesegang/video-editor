@@ -5,16 +5,18 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::ranking::{
-    canonical_edges, estimated_node_size, first_free_y, layout_node_band, node_band_bounds,
-    node_rank_columns, rank_nodes_by_scc,
+    canonical_layout_edges, estimated_node_size, first_free_y, layout_node_band, node_band_bounds,
+    node_rank_columns, rank_nodes_by_scc, NodeBandBounds,
 };
 use crate::ui::panels::node_editor::{
     container_rect, estimated_node_rect, AutoLayoutPlan, AutoLayoutScope, ContainerLayout,
     AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
     AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
-    AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP, AUTO_LAYOUT_TRACK_LEFT,
-    AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, MIN_CONTAINER_SIZE,
+    AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
+    AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, MIN_CONTAINER_SIZE,
 };
+
+const CHILD_CONTAINER_NODE_GAP: f32 = AUTO_LAYOUT_NODE_PADDING + 0.5;
 
 pub(in crate::ui::panels::node_editor) fn compute_auto_layout(
     project: &Project,
@@ -453,7 +455,11 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
     }
     nodes.sort_unstable();
     nodes.dedup();
-    let edges = canonical_edges(project, &nodes);
+    let layout_edges = canonical_layout_edges(project, &nodes);
+    let edges = layout_edges
+        .iter()
+        .map(|edge| (edge.from, edge.to))
+        .collect::<Vec<_>>();
     let ranks = rank_nodes_by_scc(&nodes, &edges);
     let mut plan = AutoLayoutPlan::default();
     let track_x = composition.ui_position[0] + AUTO_LAYOUT_COMPOSITION_LEFT;
@@ -465,8 +471,11 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
     let mut track_y = composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP;
     let mut composition_right = track_x;
     let mut composition_bottom = track_y;
+    let mut composition_occupied = Vec::<egui::Rect>::new();
 
-    for track_id in &composition.track_ids {
+    // Stored child order is back-to-front. The canvas presents front-to-back
+    // from top to bottom, matching the Timeline and Merge layer rows.
+    for track_id in composition.track_ids.iter().rev() {
         let Some(track) = project.get_track(*track_id) else {
             continue;
         };
@@ -476,22 +485,7 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
         let mut required_bottom = content_y;
         let mut occupied = Vec::<egui::Rect>::new();
 
-        let mut clip_ids = track.clip_ids.clone();
-        clip_ids.sort_by_key(|clip_id| {
-            project
-                .get_clip(*clip_id)
-                .map_or((usize::MAX, *clip_id), |clip| {
-                    let minimum_rank = clip
-                        .node_ids
-                        .iter()
-                        .filter_map(|node_id| ranks.get(node_id))
-                        .copied()
-                        .min()
-                        .unwrap_or_default();
-                    (minimum_rank, *clip_id)
-                })
-        });
-        for clip_id in clip_ids {
+        for clip_id in track.clip_ids.iter().rev().copied() {
             let Some(clip) = project.get_clip(clip_id) else {
                 continue;
             };
@@ -502,7 +496,7 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
             let clip_width = band.map_or(MIN_CONTAINER_SIZE.x, |bounds| {
                 (bounds.max_x + AUTO_LAYOUT_TRACK_RIGHT - clip_x).max(MIN_CONTAINER_SIZE.x)
             });
-            let clip_height = band.map_or(MIN_CONTAINER_SIZE.y, |bounds| {
+            let mut clip_height = band.map_or(MIN_CONTAINER_SIZE.y, |bounds| {
                 (AUTO_LAYOUT_CLIP_TOP + bounds.height + AUTO_LAYOUT_TRACK_BOTTOM)
                     .max(MIN_CONTAINER_SIZE.y)
             });
@@ -514,17 +508,22 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
                 &occupied,
                 AUTO_LAYOUT_CLIP_GAP,
             );
-            let clip_rect = egui::Rect::from_min_size(
-                egui::pos2(clip_x, clip_y),
-                egui::vec2(clip_width, clip_height),
-            );
-            let _ = layout_node_band(
+            let laid_out_band = layout_node_band(
                 project,
                 &clip.node_ids,
                 &ranks,
                 &rank_columns,
+                &layout_edges,
                 clip_y + AUTO_LAYOUT_CLIP_TOP,
                 &mut plan.node_positions,
+            );
+            if let Some(laid_out_band) = laid_out_band {
+                clip_height = clip_height
+                    .max(AUTO_LAYOUT_CLIP_TOP + laid_out_band.height + AUTO_LAYOUT_TRACK_BOTTOM);
+            }
+            let clip_rect = egui::Rect::from_min_size(
+                egui::pos2(clip_x, clip_y),
+                egui::vec2(clip_width, clip_height),
             );
             plan.clip_layouts.insert(
                 clip_id,
@@ -538,23 +537,35 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
             occupied.push(clip_rect);
         }
 
-        if let Some(bounds) = node_band_bounds(project, &track.node_ids, &ranks, &rank_columns) {
-            let direct_y = first_free_y(
-                bounds.min_x,
-                bounds.width(),
-                bounds.height,
-                content_y,
-                &occupied,
-                AUTO_LAYOUT_ROW_GAP,
-            );
-            let _ = layout_node_band(
+        if let Some(mut bounds) = node_band_bounds(project, &track.node_ids, &ranks, &rank_columns)
+        {
+            let direct_y = content_y;
+            if let Some(laid_out_bounds) = layout_node_band(
                 project,
                 &track.node_ids,
                 &ranks,
                 &rank_columns,
+                &layout_edges,
                 direct_y,
                 &mut plan.node_positions,
-            );
+            ) {
+                let child_nodes = track
+                    .clip_ids
+                    .iter()
+                    .filter_map(|clip_id| project.get_clip(*clip_id))
+                    .flat_map(|clip| clip.node_ids.iter().copied())
+                    .collect::<Vec<_>>();
+                bounds = settle_direct_node_band(
+                    project,
+                    &track.node_ids,
+                    &child_nodes,
+                    &edges,
+                    content_y,
+                    &occupied,
+                    &mut plan.node_positions,
+                )
+                .unwrap_or(laid_out_bounds);
+            }
             required_right = required_right.max(bounds.max_x);
             required_bottom = required_bottom.max(direct_y + bounds.height);
         }
@@ -572,23 +583,42 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
         );
         composition_right = composition_right.max(track_x + track_size[0]);
         composition_bottom = composition_bottom.max(track_y + track_size[1]);
+        composition_occupied.push(egui::Rect::from_min_size(
+            egui::pos2(track_x, track_y),
+            egui::vec2(track_size[0], track_size[1]),
+        ));
         track_y += track_size[1] + AUTO_LAYOUT_TRACK_GAP;
     }
 
-    if let Some(bounds) = node_band_bounds(project, &composition.node_ids, &ranks, &rank_columns) {
-        let direct_y = if composition.track_ids.is_empty() {
-            composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP
-        } else {
-            composition_bottom + AUTO_LAYOUT_TRACK_GAP
-        };
-        let _ = layout_node_band(
+    if let Some(mut bounds) =
+        node_band_bounds(project, &composition.node_ids, &ranks, &rank_columns)
+    {
+        let direct_y = composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP;
+        if let Some(laid_out_bounds) = layout_node_band(
             project,
             &composition.node_ids,
             &ranks,
             &rank_columns,
+            &layout_edges,
             direct_y,
             &mut plan.node_positions,
-        );
+        ) {
+            let child_nodes = composition
+                .track_ids
+                .iter()
+                .flat_map(|track_id| track_leaf_node_ids(project, *track_id))
+                .collect::<Vec<_>>();
+            bounds = settle_direct_node_band(
+                project,
+                &composition.node_ids,
+                &child_nodes,
+                &edges,
+                direct_y,
+                &composition_occupied,
+                &mut plan.node_positions,
+            )
+            .unwrap_or(laid_out_bounds);
+        }
         composition_right = composition_right.max(bounds.max_x);
         composition_bottom = composition_bottom.max(direct_y + bounds.height);
     }
@@ -600,4 +630,96 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
             .max(MIN_CONTAINER_SIZE.y),
     ]);
     Some(plan)
+}
+
+fn settle_direct_node_band(
+    project: &Project,
+    node_ids: &[Uuid],
+    child_nodes: &[Uuid],
+    edges: &[(Uuid, Uuid)],
+    minimum_y: f32,
+    child_rects: &[egui::Rect],
+    positions: &mut std::collections::BTreeMap<Uuid, [f32; 2]>,
+) -> Option<NodeBandBounds> {
+    let downstream = reachable_nodes(child_nodes, edges);
+    let downstream_direct = node_ids
+        .iter()
+        .filter(|node_id| downstream.contains(node_id))
+        .copied()
+        .collect::<Vec<_>>();
+    if let (Some(child_right), Some(downstream_left)) = (
+        child_rects
+            .iter()
+            .map(egui::Rect::right)
+            .max_by(f32::total_cmp),
+        downstream_direct
+            .iter()
+            .filter_map(|node_id| positions.get(node_id).map(|position| position[0]))
+            .min_by(f32::total_cmp),
+    ) {
+        let delta = (child_right + CHILD_CONTAINER_NODE_GAP - downstream_left).max(0.0);
+        for node_id in &downstream_direct {
+            if let Some(position) = positions.get_mut(node_id) {
+                position[0] += delta;
+            }
+        }
+    }
+
+    let mut ordered = node_ids
+        .iter()
+        .filter_map(|node_id| positions.get(node_id).map(|position| (*node_id, *position)))
+        .collect::<Vec<_>>();
+    ordered.sort_by(|(left_id, left), (right_id, right)| {
+        left[0]
+            .total_cmp(&right[0])
+            .then_with(|| left[1].total_cmp(&right[1]))
+            .then_with(|| left_id.cmp(right_id))
+    });
+    let mut occupied = child_rects.to_vec();
+    for (node_id, position) in ordered {
+        let size = estimated_node_size(project, node_id);
+        let y = first_free_y(
+            position[0],
+            size.x,
+            size.y,
+            position[1].max(minimum_y),
+            &occupied,
+            CHILD_CONTAINER_NODE_GAP,
+        );
+        if let Some(position) = positions.get_mut(&node_id) {
+            position[1] = y;
+        }
+        occupied.push(egui::Rect::from_min_size(egui::pos2(position[0], y), size));
+    }
+
+    let mut rects = node_ids.iter().filter_map(|node_id| {
+        positions.get(node_id).map(|position| {
+            egui::Rect::from_min_size(
+                egui::pos2(position[0], position[1]),
+                estimated_node_size(project, *node_id),
+            )
+        })
+    });
+    let first = rects.next()?;
+    let bounds = rects.fold(first, |bounds, rect| bounds.union(rect));
+    Some(NodeBandBounds {
+        min_x: bounds.left(),
+        max_x: bounds.right(),
+        height: bounds.bottom() - minimum_y,
+    })
+}
+
+fn reachable_nodes(sources: &[Uuid], edges: &[(Uuid, Uuid)]) -> HashSet<Uuid> {
+    let mut reachable = sources.iter().copied().collect::<HashSet<_>>();
+    loop {
+        let mut changed = false;
+        for (from, to) in edges {
+            if reachable.contains(from) && reachable.insert(*to) {
+                changed = true;
+            }
+        }
+        if !changed {
+            return reachable;
+        }
+    }
 }
