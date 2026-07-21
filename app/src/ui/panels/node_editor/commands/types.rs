@@ -11,6 +11,11 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
         from: PortAddress,
         to: PortAddress,
     },
+    ConnectAtIndex {
+        from: PortAddress,
+        to: PortAddress,
+        canonical_index: usize,
+    },
     Disconnect {
         from: PortAddress,
         to: PortAddress,

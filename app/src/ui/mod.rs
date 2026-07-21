@@ -1,6 +1,7 @@
 pub mod command_palette;
 pub mod dialogs;
 pub mod easing_menus;
+pub(crate) mod layer_order;
 pub mod menu;
 pub mod panels;
 pub mod selection;

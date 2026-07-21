@@ -243,6 +243,10 @@ fn merge_connections_project_to_distinct_pins_and_disconnect_by_identity() {
         })
         .collect::<Vec<_>>();
     assert_eq!(connected.len(), 3);
+    assert_eq!(
+        connected,
+        connection_ids.iter().rev().copied().collect::<Vec<_>>()
+    );
     assert!(matches!(
         slots.last().map(|slot| &slot.role),
         Some(MergeInputSlotRole::VacantImages)
@@ -485,7 +489,13 @@ fn dropping_an_existing_source_on_the_vacant_merge_slot_is_a_history_no_op() {
         vacant_index,
         true,
     );
-    assert!(matches!(edit, Some(NodeEdit::Connect { .. })));
+    assert!(matches!(
+        edit,
+        Some(NodeEdit::ConnectAtIndex {
+            canonical_index: 0,
+            ..
+        })
+    ));
     let mut history = HistoryManager::new();
     history.push_project_state(initial.clone());
     let mut state = NodeEditorState::default();
@@ -502,7 +512,91 @@ fn dropping_an_existing_source_on_the_vacant_merge_slot_is_a_history_no_op() {
 }
 
 #[test]
-fn real_pointer_drag_reorders_first_to_last_once_and_preserves_wire_metadata() {
+fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slot() {
+    let (mut project, composition_id, merge_id, _, _) = three_layer_fixture();
+    let Some(container) = project.find_node_container(merge_id) else {
+        return;
+    };
+    let source = generator_node(
+        "New Back",
+        GeneratorNodeRequest::Solid {
+            color: Color::black(),
+        },
+    );
+    let source_id = source.id;
+    project.add_node(source);
+    assert!(project
+        .attach_node_to_container(container, source_id)
+        .is_ok());
+
+    let before_slots = merge_input_slots(&project, merge_id);
+    let Some(vacant_index) = before_slots
+        .iter()
+        .position(|slot| matches!(slot.role, MergeInputSlotRole::VacantImages))
+    else {
+        return;
+    };
+    let (snarl, _) = build_snarl(&project, composition_id);
+    let merge_snarl_id = snarl
+        .nodes_ids_data()
+        .find_map(|(id, node)| (node.value == GraphItem::Node(merge_id)).then_some(id));
+    let source_snarl_id = snarl
+        .nodes_ids_data()
+        .find_map(|(id, node)| (node.value == GraphItem::Node(source_id)).then_some(id));
+    let (Some(merge_snarl_id), Some(source_snarl_id)) = (merge_snarl_id, source_snarl_id) else {
+        return;
+    };
+    let edit = edit_for_wire(
+        &project,
+        &snarl,
+        source_snarl_id,
+        0,
+        merge_snarl_id,
+        vacant_index,
+        true,
+    );
+    assert!(matches!(
+        edit,
+        Some(NodeEdit::ConnectAtIndex {
+            canonical_index: 0,
+            ..
+        })
+    ));
+    let Some(edit) = edit else {
+        return;
+    };
+    assert!(apply_edit(&mut project, edit));
+
+    let target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
+    let connection_id = project.connections.iter().find_map(|connection| {
+        (connection.from.owner == PortOwner::Node(source_id) && connection.to == target)
+            .then_some(connection.id)
+    });
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    assert_eq!(
+        merge_input_index_for_connection(&project, merge_id, connection_id),
+        Some(vacant_index),
+        "the connected endpoint replaces the old vacant row exactly"
+    );
+    let rows = merge_layer_rows(&project, merge_id);
+    let Some(new_back) = rows.last() else {
+        return;
+    };
+    assert_eq!(new_back.connection_id, connection_id);
+    assert_eq!(new_back.back_to_front_index, 0);
+    assert_eq!(new_back.front_to_back_index, 3);
+    assert!(matches!(
+        merge_input_slots(&project, merge_id)
+            .last()
+            .map(|slot| &slot.role),
+        Some(MergeInputSlotRole::VacantImages)
+    ));
+}
+
+#[test]
+fn real_pointer_drag_reorders_back_to_front_once_and_preserves_wire_metadata() {
     let (mut project, composition_id, merge_id, _, connection_ids) = three_layer_fixture();
     let initial = project.clone();
     let initial_positions = project
@@ -673,7 +767,7 @@ fn real_pointer_drag_reorders_first_to_last_once_and_preserves_wire_metadata() {
     let rows = merge_layer_rows(&project, merge_id);
     assert_eq!(
         rows.iter().map(|row| row.connection_id).collect::<Vec<_>>(),
-        vec![connection_ids[1], connection_ids[2], connection_ids[0]]
+        vec![connection_ids[0], connection_ids[2], connection_ids[1]]
     );
     for original in original.into_iter().flatten() {
         let current = project
@@ -715,7 +809,7 @@ fn real_pointer_drag_reorders_first_to_last_once_and_preserves_wire_metadata() {
             .iter()
             .map(|(connection_id, _)| *connection_id)
             .collect::<Vec<_>>(),
-        vec![connection_ids[1], connection_ids[2], connection_ids[0]]
+        vec![connection_ids[0], connection_ids[2], connection_ids[1]]
     );
 }
 
@@ -775,7 +869,7 @@ fn real_pointer_drag_outside_rows_cancels_without_project_or_layout_change() {
             .iter()
             .map(|row| row.connection_id)
             .collect::<Vec<_>>(),
-        connection_ids
+        connection_ids.iter().rev().copied().collect::<Vec<_>>()
     );
 }
 

@@ -3171,12 +3171,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
-                    first_connection_id,
-                    0,
-                    0,
-                    BlendMode::LinearDodge,
-                    PortOwner::Node(solid_id),
-                    "Node · Solid",
+                    front_connection_id,
+                    2,
+                    2,
+                    BlendMode::Screen,
+                    PortOwner::Node(front_id),
+                    "Node · Front Blue",
                 ),
                 (
                     middle_connection_id,
@@ -3187,12 +3187,12 @@ mod tests {
                     "Node · Middle Green",
                 ),
                 (
-                    front_connection_id,
-                    2,
-                    2,
-                    BlendMode::Screen,
-                    PortOwner::Node(front_id),
-                    "Node · Front Blue",
+                    first_connection_id,
+                    0,
+                    0,
+                    BlendMode::LinearDodge,
+                    PortOwner::Node(solid_id),
+                    "Node · Solid",
                 ),
             ]
         );

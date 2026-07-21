@@ -21,11 +21,14 @@ impl ProjectNodeViewer<'_> {
             if matches!(slot.role, MergeInputSlotRole::VacantImages) {
                 let response = non_selectable_label(
                     ui,
-                    egui::RichText::new(format!("{} Connect Image", icons::PLUS))
+                    egui::RichText::new(format!("{} Connect Image as Back", icons::PLUS))
                         .small()
                         .weak(),
                 )
-                .on_hover_text("Vacant variadic input; drag an Image output here");
+                .on_hover_text(
+                    "Vacant variadic input; a new Image wire stays on this bottom row and is inserted behind every existing layer",
+                );
+                let layer_count = merge_layer_rows(self.project, merge_id).len();
                 register_merge_layer_component(
                     format!("node_editor.merge_layer.vacant:{merge_id}"),
                     "node_editor_merge_layer_vacant_input",
@@ -38,9 +41,13 @@ impl ProjectNodeViewer<'_> {
                         "action": "connect",
                         "port": library::model::project::MERGE_IMAGES_PORT,
                         "variadic": true,
+                        "canonical_insertion_slot": 0,
+                        "visual_slot": layer_count,
+                        "insertion_semantics": "back",
+                        "visual_order_semantics": "front_to_back",
                     }),
                 );
-                if merge_layer_rows(self.project, merge_id).is_empty() {
+                if layer_count == 0 {
                     register_merge_layer_component(
                         format!("node_editor.merge_layers.empty:{merge_id}"),
                         "node_editor_merge_layers_empty",
@@ -51,6 +58,8 @@ impl ProjectNodeViewer<'_> {
                         serde_json::json!({
                             "merge_id": merge_id,
                             "layer_count": 0,
+                            "canonical_order_semantics": "back_to_front",
+                            "visual_order_semantics": "front_to_back",
                             "order_semantics": "back_to_front",
                         }),
                     );
@@ -97,7 +106,7 @@ impl ProjectNodeViewer<'_> {
                         ui,
                         egui::RichText::new(format!(
                             "{} / {}",
-                            row.back_to_front_index + 1,
+                            row.front_to_back_index + 1,
                             row.layer_count
                         ))
                         .small()
@@ -169,23 +178,23 @@ impl ProjectNodeViewer<'_> {
                         }))),
                     );
 
-                    let back_index = row.back_to_front_index.checked_sub(1);
-                    let response = ui
-                        .add_enabled(back_index.is_some(), egui::Button::new(icons::ARROW_UP))
-                        .on_hover_text("Move one layer toward the back");
-                    if response.clicked() {
-                        requested_order = back_index;
-                    }
-                    back_response = Some(response);
                     let front_index = (row.back_to_front_index + 1 < row.layer_count)
                         .then_some(row.back_to_front_index + 1);
                     let response = ui
-                        .add_enabled(front_index.is_some(), egui::Button::new(icons::ARROW_DOWN))
+                        .add_enabled(front_index.is_some(), egui::Button::new(icons::ARROW_UP))
                         .on_hover_text("Move one layer toward the front");
                     if response.clicked() {
                         requested_order = front_index;
                     }
                     front_response = Some(response);
+                    let back_index = row.back_to_front_index.checked_sub(1);
+                    let response = ui
+                        .add_enabled(back_index.is_some(), egui::Button::new(icons::ARROW_DOWN))
+                        .on_hover_text("Move one layer toward the back");
+                    if response.clicked() {
+                        requested_order = back_index;
+                    }
+                    back_response = Some(response);
                 });
             })
             .response;
