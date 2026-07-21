@@ -3,6 +3,7 @@ mod blend;
 pub mod frame;
 pub mod node;
 pub(crate) mod numeric;
+pub mod path;
 pub mod project;
 pub mod vector;
 
