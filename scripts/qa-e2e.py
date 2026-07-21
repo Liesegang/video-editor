@@ -2068,10 +2068,57 @@ def validate_explicit_operation_fixture(project):
                 raise QaFailure(
                     "{} still contains embedded {}".format(node_id, collection)
                 )
-    if len(project.get("connections", ())) != 29:
+    # The original explicit fixture contributed 29 connections. Container
+    # structural Merge wiring contributes one edge per Clip and Track (5 in
+    # this fixture), while the editable Backplate branch adds a net 6 edges.
+    # Verify the dynamic structural edges and Backplate endpoints below so the
+    # total is not merely a stale magic number.
+    structural_connection_count = 0
+    for track_id, track in project["tracks"].items():
+        for order, clip_id in enumerate(track["clip_ids"]):
+            connection = find_project_connection(
+                project, "Clip", clip_id, "image", "Node",
+                track["structural_merge_node_id"], "images",
+            )
+            if connection["order"] != order:
+                raise QaFailure("Track structural Merge order is stale")
+            structural_connection_count += 1
+    for composition in project["compositions"]:
+        for order, track_id in enumerate(composition["track_ids"]):
+            connection = find_project_connection(
+                project, "Track", track_id, "image", "Node",
+                composition["structural_merge_node_id"], "images",
+            )
+            if connection["order"] != order:
+                raise QaFailure("Composition structural Merge order is stale")
+            structural_connection_count += 1
+
+    backplate_connections = (
+        ("Node", OPACITY_EFFECTOR, "shape", "Node", BACKPLATE_DECORATOR, "shape_in", 0),
+        ("Node", BACKPLATE_SHAPE, "shape", "Node", BACKPLATE_DECORATOR, "background_shape", 0),
+        ("Node", BACKPLATE_DECORATOR, "shape", "Node", BACKPLATE_FILL, "shape_in", 0),
+        ("Node", OPACITY_EFFECTOR, "shape", "Node", TEXT_FILL, "shape_in", 0),
+        ("Node", BACKPLATE_FILL, "image", "Node", TEXT_MERGE, "images", 0),
+        ("Node", TEXT_FILL, "image", "Node", TEXT_MERGE, "images", 1),
+        ("Node", TEXT_MERGE, "image", "Node", BLUR_EFFECT, "image_in", 0),
+        ("Clip", CLIP_A2, "time", "Node", BACKPLATE_SHAPE, "time", 0),
+        ("Clip", CLIP_A2, "time", "Node", BACKPLATE_FILL, "time", 0),
+    )
+    for source_type, source_id, source_port, target_type, target_id, target_port, order in backplate_connections:
+        connection = find_project_connection(
+            project, source_type, source_id, source_port,
+            target_type, target_id, target_port,
+        )
+        if connection["order"] != order:
+            raise QaFailure("Backplate branch connection order is stale")
+
+    expected_connection_count = 29 + structural_connection_count + 6
+    if len(project.get("connections", ())) != expected_connection_count:
         raise QaFailure(
-            "canonical fixture has {} connections, expected 29".format(
-                len(project.get("connections", ()))
+            "canonical fixture has {} connections, expected {} (29 explicit + {} structural + 6 Backplate)".format(
+                len(project.get("connections", ())),
+                expected_connection_count,
+                structural_connection_count,
             )
         )
 
