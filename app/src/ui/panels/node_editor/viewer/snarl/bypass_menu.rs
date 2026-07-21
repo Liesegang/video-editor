@@ -18,23 +18,6 @@ pub(super) fn status(bypassed: bool, inactive: bool) -> (&'static str, &'static 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inactive_no_output_state_has_precedence_over_bypass() {
-        assert_eq!(
-            status(true, true),
-            (icons::CIRCLE_DASHED, "Node has no output")
-        );
-        assert_eq!(
-            status(true, false),
-            (icons::ARROW_RIGHT, "Node is bypassed")
-        );
-    }
-}
-
 pub(super) fn show_toggle(
     ui: &mut egui::Ui,
     node: &Node,
@@ -68,4 +51,21 @@ pub(super) fn show_toggle(
     }));
     ui.close();
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_no_output_state_has_precedence_over_bypass() {
+        assert_eq!(
+            status(true, true),
+            (icons::CIRCLE_DASHED, "Node has no output")
+        );
+        assert_eq!(
+            status(true, false),
+            (icons::ARROW_RIGHT, "Node is bypassed")
+        );
+    }
 }
