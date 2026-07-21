@@ -2,7 +2,7 @@ use crate::cache::CacheManager;
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::loader::AudioLoader;
 use crate::model::asset::{Asset, AssetKind};
-use crate::model::project::{Composition, PortOwner, Project};
+use crate::model::project::{Composition, PortAddress, PortOwner, Project};
 use crate::model::{Node, NodeContent};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use lru::LruCache;
@@ -102,6 +102,7 @@ fn mix_samples_with_policy(
         project,
         composition,
         PortOwner::Composition(composition.id),
+        None,
         cache_manager,
         start_sample,
         frames_to_mix,
@@ -123,6 +124,7 @@ fn mix_owner_samples_with_policy(
     project: &Project,
     composition: &Composition,
     root_owner: PortOwner,
+    root_output: Option<&PortAddress>,
     cache_manager: &CacheManager,
     start_sample: u64,
     output_frames: usize,
@@ -138,12 +140,25 @@ fn mix_owner_samples_with_policy(
     if active_frames == 0 || sample_rate == 0 || channels == 0 {
         return mix_buffer;
     }
-    let evaluator = AudioGraphEvaluator::new_for_owner(
-        project,
-        composition,
-        root_owner,
-        plugin_manager,
-        property_evaluators,
+    let evaluator = root_output.map_or_else(
+        || {
+            AudioGraphEvaluator::new_for_owner(
+                project,
+                composition,
+                root_owner,
+                plugin_manager,
+                property_evaluators,
+            )
+        },
+        |output| {
+            AudioGraphEvaluator::new_for_output(
+                project,
+                composition,
+                output,
+                plugin_manager,
+                property_evaluators,
+            )
+        },
     );
     let mut sources = evaluator
         .routes
@@ -190,7 +205,7 @@ fn mix_owner_samples_with_policy(
 pub(crate) fn render_owner_samples(
     project: &Project,
     composition: &Composition,
-    owner: PortOwner,
+    output: &PortAddress,
     cache_manager: &CacheManager,
     start_sample: u64,
     frames: usize,
@@ -199,10 +214,10 @@ pub(crate) fn render_owner_samples(
     plugin_manager: &PluginManager,
 ) -> Option<Vec<f32>> {
     let property_evaluators = plugin_manager.get_property_evaluators();
-    let evaluator = AudioGraphEvaluator::new_for_owner(
+    let evaluator = AudioGraphEvaluator::new_for_output(
         project,
         composition,
-        owner,
+        output,
         plugin_manager,
         property_evaluators.as_ref(),
     );
@@ -218,7 +233,8 @@ pub(crate) fn render_owner_samples(
         &project.assets,
         project,
         composition,
-        owner,
+        output.owner,
+        Some(output),
         cache_manager,
         start_sample,
         frames,

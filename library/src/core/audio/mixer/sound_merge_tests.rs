@@ -2,10 +2,72 @@ use super::tests::{
     TestAudioFiles, add_audio_node, attach_audio_output, connect_attached_audio_output,
 };
 use super::*;
-use crate::model::project::ProjectGraphError;
+use crate::model::asset::AssetKind;
+use crate::model::project::{
+    AUDIO_OUTPUT_PORT, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT, PortAddress, PortDataType, PortDefinition,
+    PortExposure, PortOwner, PortSide, ProjectGraphError, TIME_PORT,
+};
 use crate::model::property::{Property, PropertyValue};
-use crate::model::{Clip, NodeContainer};
+use crate::model::{Clip, Node, NodeContainer};
 use ordered_float::OrderedFloat;
+
+fn attach_time_fmod(
+    project: &mut Project,
+    track_id: uuid::Uuid,
+    timed_node_id: uuid::Uuid,
+) -> uuid::Uuid {
+    let mut fmod = Node::new_fmod("half-second audio loop");
+    fmod.set_property(
+        FMOD_DIVISOR_INPUT_PORT.to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(0.5))),
+    )
+    .unwrap();
+    let fmod_id = fmod.id;
+    project.add_node(fmod);
+    project
+        .attach_node_to_container(NodeContainer::Track(track_id), fmod_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Track(track_id), TIME_PORT),
+            PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
+        )
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(timed_node_id), TIME_PORT),
+        )
+        .unwrap();
+    fmod_id
+}
+
+fn bypassed_audio_operation() -> Node {
+    let mut persisted = serde_json::to_value(Node::new_merge("bypassed audio operation")).unwrap();
+    persisted["content"] = serde_json::json!({
+        "type": "PluginOperation",
+        "data": {
+            "category": "audio_effect",
+            "component_id": "not-installed",
+            "operation": "audio.effect.v1",
+            "declared_ports": [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input("audio_in", "Audio", PortDataType::Audio),
+                PortDefinition::output(
+                    AUDIO_OUTPUT_PORT,
+                    "Audio",
+                    PortDataType::Audio,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        },
+    });
+    let mut node: Node = serde_json::from_value(persisted).unwrap();
+    node.bypassed = true;
+    node
+}
 
 #[test]
 fn bypass_routes_first_ordered_input_and_disable_is_no_output() {
@@ -127,4 +189,205 @@ fn parent_sources_join_children_and_direct_bindings_fail_transactionally() {
         composition_node,
     );
     assert_eq!(mix(&project), vec![4.0; 4]);
+}
+
+#[test]
+fn sound_merge_scope_gates_no_output_and_propagates_explicit_time() {
+    let mut project = Project::new("Sound Merge time scope");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    let sound_merge_id = track.structural_sound_merge_node_id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(
+        &mut project,
+        &cache,
+        &mut files,
+        (0..8).map(|sample| sample as f32).collect(),
+    );
+    attach_audio_output(&mut project, NodeContainer::Track(track_id), media_id);
+    let fmod_id = attach_time_fmod(&mut project, track_id, sound_merge_id);
+    let mix = |project: &Project| {
+        mix_samples(
+            &project.assets,
+            project,
+            project.get_composition(composition_id).unwrap(),
+            &cache,
+            0,
+            4,
+            4,
+            1,
+            &PluginManager::default(),
+        )
+    };
+    assert_eq!(mix(&project), vec![0.0, 1.0, 0.0, 1.0]);
+
+    project.get_node_mut(fmod_id).unwrap().enabled = false;
+    assert_eq!(mix(&project), vec![0.0; 4]);
+}
+
+#[test]
+fn bypassed_audio_plugin_scope_gates_no_output_and_propagates_explicit_time() {
+    let mut project = Project::new("bypassed audio plugin time scope");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    let sound_merge_id = track.structural_sound_merge_node_id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(
+        &mut project,
+        &cache,
+        &mut files,
+        (0..8).map(|sample| sample as f32).collect(),
+    );
+    project
+        .attach_node_to_container(NodeContainer::Track(track_id), media_id)
+        .unwrap();
+    let operation = bypassed_audio_operation();
+    let operation_id = operation.id;
+    project.add_node(operation);
+    project
+        .attach_node_to_container(NodeContainer::Track(track_id), operation_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(operation_id), "audio_in"),
+        )
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(operation_id), AUDIO_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(sound_merge_id), MERGE_SOUNDS_PORT),
+        )
+        .unwrap();
+    let fmod_id = attach_time_fmod(&mut project, track_id, operation_id);
+    let mix = |project: &Project| {
+        mix_samples(
+            &project.assets,
+            project,
+            project.get_composition(composition_id).unwrap(),
+            &cache,
+            0,
+            4,
+            4,
+            1,
+            &PluginManager::default(),
+        )
+    };
+    assert_eq!(mix(&project), vec![0.0, 1.0, 0.0, 1.0]);
+
+    project.get_node_mut(fmod_id).unwrap().enabled = false;
+    assert_eq!(mix(&project), vec![0.0; 4]);
+}
+
+#[test]
+fn malformed_sound_merge_edges_fail_closed_by_source_type_identity_duplicate_and_order() {
+    let mut project = Project::new("malformed Sound Merge routes");
+    let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
+    let composition_id = composition.id;
+    let track_id = track.id;
+    let sound_merge_id = track.structural_sound_merge_node_id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let cache = CacheManager::new();
+    let mut files = TestAudioFiles::default();
+    let media_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 4]);
+    let edge_id =
+        attach_audio_output(&mut project, NodeContainer::Track(track_id), media_id).unwrap();
+    let target = PortAddress::new(PortOwner::Node(sound_merge_id), MERGE_SOUNDS_PORT);
+    let assert_closed = |malformed: &Project| {
+        assert!(
+            routed_audio_media_nodes(malformed, PortOwner::Composition(composition_id)).is_empty()
+        );
+        assert_eq!(
+            mix_samples(
+                &malformed.assets,
+                malformed,
+                malformed.get_composition(composition_id).unwrap(),
+                &cache,
+                0,
+                4,
+                4,
+                1,
+                &PluginManager::default(),
+            ),
+            vec![0.0; 4]
+        );
+    };
+
+    let mut image_to_sounds = project.clone();
+    image_to_sounds.assets[0].kind = AssetKind::Video;
+    image_to_sounds
+        .connections
+        .iter_mut()
+        .find(|connection| connection.id == edge_id)
+        .unwrap()
+        .from
+        .port = IMAGE_OUTPUT_PORT.to_string();
+    assert_closed(&image_to_sounds);
+    assert!(image_to_sounds.validate_connections().iter().any(|error| {
+        matches!(
+            error,
+            ProjectGraphError::IncompatiblePortTypes {
+                source_type: PortDataType::Image,
+                target_type: PortDataType::Audio,
+            }
+        )
+    }));
+
+    let mut wrong_source_port = project.clone();
+    let wrong_address = PortAddress::new(PortOwner::Node(media_id), "not_an_audio_output");
+    wrong_source_port
+        .connections
+        .iter_mut()
+        .find(|connection| connection.id == edge_id)
+        .unwrap()
+        .from = wrong_address.clone();
+    assert_closed(&wrong_source_port);
+    assert!(
+        wrong_source_port
+            .validate_connections()
+            .contains(&ProjectGraphError::PortNotFound(wrong_address))
+    );
+
+    let mut duplicate = project.clone();
+    let mut duplicate_edge = duplicate
+        .connections
+        .iter()
+        .find(|connection| connection.id == edge_id)
+        .unwrap()
+        .clone();
+    duplicate_edge.id = uuid::Uuid::new_v4();
+    duplicate_edge.order = 1;
+    duplicate.connections.push(duplicate_edge);
+    assert_closed(&duplicate);
+    assert!(duplicate.validate_connections().contains(
+        &ProjectGraphError::DuplicateVariadicConnection {
+            target: target.clone(),
+            from: PortAddress::new(PortOwner::Node(media_id), AUDIO_OUTPUT_PORT),
+        }
+    ));
+
+    let mut order_gap = project;
+    order_gap
+        .connections
+        .iter_mut()
+        .find(|connection| connection.id == edge_id)
+        .unwrap()
+        .order = 3;
+    assert_closed(&order_gap);
+    assert!(order_gap.validate_connections().contains(
+        &ProjectGraphError::NonCanonicalConnectionOrder {
+            target,
+            expected_order: 0,
+            actual_order: 3,
+        }
+    ));
 }

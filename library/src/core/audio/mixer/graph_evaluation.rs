@@ -6,8 +6,9 @@ use super::property_evaluation::{AudioPropertyContext, volume_at};
 use crate::core::framing::FrameEvaluator;
 use crate::model::NodeContent;
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, Composition, EvalOutput, MERGE_SOUNDS_PORT, NodeContainer, PortDataType,
-    PortDirection, PortOwner, Project,
+    AUDIO_OUTPUT_PORT, Composition, EvalOutput, MERGE_SOUNDS_PORT, NodeContainer, PortAddress,
+    PortDataType, PortDirection, PortMultiplicity, PortOwner, Project, ProjectConnection,
+    TIME_PORT,
 };
 use crate::model::property::PropertyMap;
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
@@ -18,6 +19,7 @@ struct AudioRoute(Vec<PortOwner>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AudioRouteStepKind {
     Scope,
+    RemappedScope,
     Gain,
     CompositionInstance,
     Media,
@@ -77,6 +79,41 @@ impl<'a> AudioGraphEvaluator<'a> {
         plugin_manager: &'a PluginManager,
         property_evaluators: &'a PropertyEvaluatorRegistry,
     ) -> Self {
+        Self::new_for_root(
+            project,
+            composition,
+            root_owner,
+            None,
+            plugin_manager,
+            property_evaluators,
+        )
+    }
+
+    pub(super) fn new_for_output(
+        project: &'a Project,
+        composition: &'a Composition,
+        output: &PortAddress,
+        plugin_manager: &'a PluginManager,
+        property_evaluators: &'a PropertyEvaluatorRegistry,
+    ) -> Self {
+        Self::new_for_root(
+            project,
+            composition,
+            output.owner,
+            Some(output),
+            plugin_manager,
+            property_evaluators,
+        )
+    }
+
+    fn new_for_root(
+        project: &'a Project,
+        composition: &'a Composition,
+        root_owner: PortOwner,
+        root_output: Option<&PortAddress>,
+        plugin_manager: &'a PluginManager,
+        property_evaluators: &'a PropertyEvaluatorRegistry,
+    ) -> Self {
         let property_contexts = project
             .compositions
             .iter()
@@ -91,7 +128,7 @@ impl<'a> AudioGraphEvaluator<'a> {
                 )
             })
             .collect();
-        let routes = plan_audio_routes(project, root_owner);
+        let routes = plan_audio_routes(project, root_owner, root_output);
         Self {
             frame_evaluator: FrameEvaluator::new(
                 project,
@@ -137,6 +174,7 @@ impl<'a> AudioGraphEvaluator<'a> {
             }
             match step.kind {
                 AudioRouteStepKind::Scope | AudioRouteStepKind::Gain => {}
+                AudioRouteStepKind::RemappedScope => timeline_time = scope.time,
                 AudioRouteStepKind::CompositionInstance => timeline_time = scope.time,
                 AudioRouteStepKind::Media => {
                     return Some(EvaluatedAudioLeaf {
@@ -150,11 +188,16 @@ impl<'a> AudioGraphEvaluator<'a> {
     }
 }
 
-fn plan_audio_routes(project: &Project, root_owner: PortOwner) -> Vec<AudioRoutePlan<'_>> {
+fn plan_audio_routes<'a>(
+    project: &'a Project,
+    root_owner: PortOwner,
+    root_output: Option<&PortAddress>,
+) -> Vec<AudioRoutePlan<'a>> {
     let mut routes = Vec::new();
     collect_audio_routes(
         project,
         root_owner,
+        root_output,
         &mut HashSet::new(),
         &mut Vec::new(),
         &mut HashSet::new(),
@@ -165,7 +208,7 @@ fn plan_audio_routes(project: &Project, root_owner: PortOwner) -> Vec<AudioRoute
 
 pub(super) fn routed_audio_media_nodes(project: &Project, owner: PortOwner) -> Vec<Uuid> {
     let mut emitted = HashSet::new();
-    plan_audio_routes(project, owner)
+    plan_audio_routes(project, owner, None)
         .into_iter()
         .filter_map(|route| emitted.insert(route.node_id).then_some(route.node_id))
         .collect()
@@ -174,6 +217,7 @@ pub(super) fn routed_audio_media_nodes(project: &Project, owner: PortOwner) -> V
 fn collect_audio_routes<'a>(
     project: &'a Project,
     owner: PortOwner,
+    requested_output: Option<&PortAddress>,
     path: &mut HashSet<PortOwner>,
     steps: &mut Vec<AudioRouteStep<'a>>,
     emitted: &mut HashSet<AudioRoute>,
@@ -186,7 +230,9 @@ fn collect_audio_routes<'a>(
 
     match owner {
         PortOwner::Composition(composition_id) => {
-            if project.get_composition(composition_id).is_some() {
+            if project.get_composition(composition_id).is_some()
+                && requested_output.is_none_or(|output| valid_audio_output(project, owner, output))
+            {
                 steps.push(AudioRouteStep {
                     owner,
                     kind: AudioRouteStepKind::Scope,
@@ -199,7 +245,9 @@ fn collect_audio_routes<'a>(
             }
         }
         PortOwner::Track(track_id) => {
-            if let Some(track) = project.get_track(track_id) {
+            if let Some(track) = project.get_track(track_id)
+                && requested_output.is_none_or(|output| valid_audio_output(project, owner, output))
+            {
                 let step =
                     audio_gain_step(project, owner, AudioRouteStepKind::Gain, &track.properties);
                 steps.push(step);
@@ -208,7 +256,9 @@ fn collect_audio_routes<'a>(
             }
         }
         PortOwner::Clip(clip_id) => {
-            if let Some(clip) = project.get_clip(clip_id) {
+            if let Some(clip) = project.get_clip(clip_id)
+                && requested_output.is_none_or(|output| valid_audio_output(project, owner, output))
+            {
                 let step =
                     audio_gain_step(project, owner, AudioRouteStepKind::Gain, &clip.properties);
                 steps.push(step);
@@ -221,7 +271,14 @@ fn collect_audio_routes<'a>(
                 path.remove(&owner);
                 return;
             };
-            if node.enabled && node_has_audio_output(project, owner) {
+            let default_output;
+            let requested_output = if let Some(output) = requested_output {
+                output
+            } else {
+                default_output = PortAddress::new(owner, AUDIO_OUTPUT_PORT);
+                &default_output
+            };
+            if node.enabled && valid_audio_output(project, owner, requested_output) {
                 match node.content() {
                     NodeContent::Media(_) => {
                         let step = audio_gain_step(
@@ -260,6 +317,7 @@ fn collect_audio_routes<'a>(
                             collect_audio_routes(
                                 project,
                                 PortOwner::Composition(instance.composition_id),
+                                None,
                                 path,
                                 steps,
                                 emitted,
@@ -270,16 +328,27 @@ fn collect_audio_routes<'a>(
                     }
                     NodeContent::PluginOperation(operation) => {
                         if node.bypassed {
-                            let source = node
-                                .bypass_input_for_output(AUDIO_OUTPUT_PORT)
-                                .and_then(|input| {
-                                    project.connections.iter().find(|connection| {
-                                        connection.to.owner == owner && connection.to.port == input
-                                    })
-                                })
-                                .map(|connection| connection.from.owner);
-                            if let Some(source) = source {
-                                collect_audio_routes(project, source, path, steps, emitted, routes);
+                            let connection = node
+                                .bypass_input_for_output(&requested_output.port)
+                                .map(|input| PortAddress::new(owner, input))
+                                .and_then(|target| valid_single_audio_input(project, &target));
+                            if let Some(connection) = connection {
+                                steps.push(audio_node_scope_step(project, owner));
+                                collect_audio_routes(
+                                    project,
+                                    connection.from.owner,
+                                    Some(&connection.from),
+                                    path,
+                                    steps,
+                                    emitted,
+                                    routes,
+                                );
+                                steps.pop();
+                            } else {
+                                log::trace!(
+                                    "audio mixer skipped malformed bypass route for PluginOperation {}",
+                                    node.id
+                                );
                             }
                         } else {
                             // Audio operations need a runtime evaluator.
@@ -295,26 +364,39 @@ fn collect_audio_routes<'a>(
                         }
                     }
                     NodeContent::SoundMerge => {
-                        let mut inputs = project
-                            .connections
-                            .iter()
-                            .filter(|connection| {
-                                connection.to.owner == owner
-                                    && connection.to.port == MERGE_SOUNDS_PORT
-                            })
-                            .collect::<Vec<_>>();
-                        inputs.sort_by_key(|connection| (connection.order, connection.id));
+                        if requested_output.port != AUDIO_OUTPUT_PORT {
+                            path.remove(&owner);
+                            return;
+                        }
+                        if let Some(container) = project.structural_sound_merge_owner(node_id)
+                            && !project.structural_sound_merge_is_well_formed(container)
+                        {
+                            log::trace!(
+                                "audio mixer skipped malformed structural Sound Merge {node_id}"
+                            );
+                            path.remove(&owner);
+                            return;
+                        }
+                        let target = PortAddress::new(owner, MERGE_SOUNDS_PORT);
+                        let Some(inputs) = valid_variadic_audio_inputs(project, &target) else {
+                            log::trace!("audio mixer skipped malformed Sound Merge {node_id}");
+                            path.remove(&owner);
+                            return;
+                        };
                         let input_count = if node.bypassed { 1 } else { inputs.len() };
+                        steps.push(audio_node_scope_step(project, owner));
                         for connection in inputs.into_iter().take(input_count) {
                             collect_audio_routes(
                                 project,
                                 connection.from.owner,
+                                Some(&connection.from),
                                 path,
                                 steps,
                                 emitted,
                                 routes,
                             );
                         }
+                        steps.pop();
                     }
                     NodeContent::Generator(_)
                     | NodeContent::Value(_)
@@ -336,7 +418,16 @@ fn collect_audio_container_routes<'a>(
     routes: &mut Vec<AudioRoutePlan<'a>>,
 ) {
     for source in project.container_audio_sources(owner) {
-        collect_audio_routes(project, source.source, path, steps, emitted, routes);
+        let output = PortAddress::new(source.source, AUDIO_OUTPUT_PORT);
+        collect_audio_routes(
+            project,
+            source.source,
+            Some(&output),
+            path,
+            steps,
+            emitted,
+            routes,
+        );
     }
 }
 
@@ -361,8 +452,80 @@ fn audio_gain_step<'a>(
     }
 }
 
-fn node_has_audio_output(project: &Project, owner: PortOwner) -> bool {
-    project.port_definitions(owner).into_iter().any(|port| {
-        port.direction == PortDirection::Output && port.data_type == PortDataType::Audio
-    })
+fn audio_node_scope_step(project: &Project, owner: PortOwner) -> AudioRouteStep<'_> {
+    let has_explicit_time = project
+        .connections
+        .iter()
+        .any(|connection| connection.to == PortAddress::new(owner, TIME_PORT));
+    AudioRouteStep {
+        owner,
+        kind: if has_explicit_time {
+            AudioRouteStepKind::RemappedScope
+        } else {
+            AudioRouteStepKind::Scope
+        },
+        properties: None,
+        composition_id: None,
+        diagnostic_scope: None,
+    }
+}
+
+fn valid_audio_output(project: &Project, owner: PortOwner, output: &PortAddress) -> bool {
+    output.owner == owner
+        && project
+            .port_definition(output, PortDirection::Output)
+            .is_some_and(|definition| {
+                definition.data_type == PortDataType::Audio
+                    && definition.multiplicity == PortMultiplicity::Single
+            })
+}
+
+fn valid_single_audio_input<'a>(
+    project: &'a Project,
+    target: &PortAddress,
+) -> Option<&'a ProjectConnection> {
+    let inputs = valid_audio_inputs(project, target, PortMultiplicity::Single)?;
+    (inputs.len() == 1).then_some(inputs[0])
+}
+
+fn valid_variadic_audio_inputs<'a>(
+    project: &'a Project,
+    target: &PortAddress,
+) -> Option<Vec<&'a ProjectConnection>> {
+    valid_audio_inputs(project, target, PortMultiplicity::Variadic)
+}
+
+fn valid_audio_inputs<'a>(
+    project: &'a Project,
+    target: &PortAddress,
+    multiplicity: PortMultiplicity,
+) -> Option<Vec<&'a ProjectConnection>> {
+    let target_definition = project.port_definition(target, PortDirection::Input)?;
+    if target_definition.data_type != PortDataType::Audio
+        || target_definition.multiplicity != multiplicity
+    {
+        return None;
+    }
+    let mut inputs = project
+        .connections
+        .iter()
+        .filter(|connection| connection.to == *target)
+        .collect::<Vec<_>>();
+    inputs.sort_by_key(|connection| (connection.order, connection.id));
+    if multiplicity == PortMultiplicity::Single && inputs.len() != 1 {
+        return None;
+    }
+    let mut source_addresses = HashSet::new();
+    let mut connection_ids = HashSet::new();
+    for (expected_order, connection) in inputs.iter().enumerate() {
+        if connection.order != expected_order as i64
+            || !source_addresses.insert(&connection.from)
+            || !connection_ids.insert(connection.id)
+            || !valid_audio_output(project, connection.from.owner, &connection.from)
+            || !project.validate_connection(connection).is_empty()
+        {
+            return None;
+        }
+    }
+    Some(inputs)
 }

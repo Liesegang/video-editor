@@ -462,7 +462,7 @@ fn mixes_every_top_level_track_and_all_audio_nodes() {
 }
 
 #[test]
-fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
+fn malformed_duplicate_container_child_fails_closed_to_silence() {
     let mut project = Project::new("duplicate audio reachability");
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
@@ -501,7 +501,7 @@ fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
         1,
         &PluginManager::default(),
     );
-    assert_eq!(mixed, vec![0.5; 4]);
+    assert_eq!(mixed, vec![0.0; 4]);
 }
 
 #[test]
