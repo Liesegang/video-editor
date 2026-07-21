@@ -363,7 +363,10 @@ tags
 # End of https://www.toptal.com/developers/gitignore/api/rust,jetbrains,jetbrains+all,jetbrains+iml,vim,emacs,visualstudiocode,git
 /repomix-output.xml
 
+# Repository-local editor state
+/.idea/
 /ToDo.md
+/docs/todo.md
 
 # Native C++ Shim build artifacts
 *.obj
