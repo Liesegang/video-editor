@@ -7,20 +7,21 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, bail};
 use library::cache::CacheManager;
-use library::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+use library::core::ensemble::decorators::{BackplateFit, BackplateTarget};
 use library::core::ensemble::types::DecoratorConfig;
 use library::framing::get_frame_from_project;
 use library::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::project::{
-    EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner,
-    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    BACKGROUND_SHAPE_INPUT_PORT, EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer,
+    PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Project};
 use library::plugin::native_plugin_api::{
-    DECORATOR_CATEGORY, EFFECT_CATEGORY, LOADER_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1,
-    STYLE_CATEGORY,
+    BackplateShapeV1, ColorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1, DECORATOR_EVALUATE_V2,
+    DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, EFFECT_CATEGORY, InsetsV1,
+    LOADER_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1, STYLE_CATEGORY,
 };
 use library::plugin::{EvaluationContext, FrameEvaluationContext, LoadRequest, PluginManager};
 use library::rendering::renderer::RenderOutput;
@@ -139,6 +140,15 @@ fn verify_config_operations(
             component.category == DECORATOR_CATEGORY && component.id == BACKPLATE_COMPONENT_ID
         })
         .context("bundle descriptor has no runtime Backplate component")?;
+    if backplate_component
+        .operations
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != [DECORATOR_EVALUATE_V1, DECORATOR_EVALUATE_V2]
+    {
+        bail!("runtime Backplate did not advertise ordered v1/v2 compatibility");
+    }
     let effect_component = components
         .iter()
         .copied()
@@ -169,7 +179,7 @@ fn verify_config_operations(
     verify_hard_minimum(stroke_component, "miter")?;
     verify_soft_minimum(stroke_component, "offset")?;
     verify_soft_minimum(stroke_component, "dash_offset")?;
-    verify_hard_minimum(backplate_component, "corner_radius")?;
+    verify_legacy_backplate_fallback(manager)?;
 
     let (composition, track) = Composition::new("Runtime config proof", 640, 360, 30.0, 1.0);
     let composition_id = composition.id;
@@ -254,15 +264,9 @@ fn verify_config_operations(
     if decorator_config
         != (DecoratorConfig::Backplate {
             target: BackplateTarget::Block,
-            shape: BackplateShape::RoundedRect,
-            color: library::model::frame::color::Color {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 192,
-            },
             padding: (4.0, 6.0, 4.0, 6.0),
-            corner_radius: 3.0,
+            offset: (2.0, -1.0),
+            fit: BackplateFit::Contain,
         })
     {
         bail!("runtime Backplate adapter returned the wrong host config")
@@ -300,6 +304,70 @@ fn verify_config_operations(
         bail!("uninstalled runtime Style operation did not produce NoOutput")
     }
 
+    Ok(())
+}
+
+fn verify_legacy_backplate_fallback(manager: &PluginManager) -> anyhow::Result<()> {
+    let properties = std::collections::BTreeMap::from([
+        (
+            "target".to_string(),
+            PropertyValueV1::String {
+                value: "Block".to_string(),
+            },
+        ),
+        (
+            "padding".to_string(),
+            PropertyValueV1::Vec4 {
+                x: 4.0,
+                y: 6.0,
+                z: 4.0,
+                w: 6.0,
+            },
+        ),
+        (
+            "offset".to_string(),
+            PropertyValueV1::Vec2 { x: 2.0, y: -1.0 },
+        ),
+        (
+            "fit".to_string(),
+            PropertyValueV1::String {
+                value: "Contain".to_string(),
+            },
+        ),
+    ]);
+    let response = manager.invoke_runtime_plugin(
+        DECORATOR_CATEGORY,
+        BACKPLATE_COMPONENT_ID,
+        DECORATOR_EVALUATE_V1,
+        serde_json::to_value(DecoratorEvaluateRequestV1 {
+            time: 0.25,
+            fps: 30.0,
+            properties,
+        })?,
+    )?;
+    let output: DecoratorOutputV1 = serde_json::from_value(response)
+        .context("frozen v1 host parser rejected the dual plugin fallback")?;
+    if output
+        != (DecoratorOutputV1::Backplate {
+            target: DecoratorTargetV1::Block,
+            shape: BackplateShapeV1::RoundedRect,
+            color: ColorV1 {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 192,
+            },
+            padding: InsetsV1 {
+                top: 4.0,
+                right: 6.0,
+                bottom: 4.0,
+                left: 6.0,
+            },
+            corner_radius: 3.0,
+        })
+    {
+        bail!("runtime Backplate returned the wrong frozen v1 fallback")
+    }
     Ok(())
 }
 
@@ -508,6 +576,10 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     backplate.ui_position = [360.0, 0.0];
     let backplate_id = backplate.id;
     graph.nodes.push(backplate);
+    let mut background = factory.create_shape_node("M 0 0 H 1 V 1 H 0 Z", 320, 180, 1, 1)?;
+    background.ui_position = [0.0, 160.0];
+    let background_id = background.id;
+    graph.nodes.push(background);
     let mut effect = manager.create_effect_operation_node(EFFECT_COMPONENT_ID)?;
     effect.ui_position = [1_080.0, 0.0];
     let effect_id = effect.id;
@@ -516,6 +588,11 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
         ProjectConnection::new(
             PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
             PortAddress::new(PortOwner::Node(backplate_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(background_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(backplate_id), BACKGROUND_SHAPE_INPUT_PORT),
             0,
         ),
         ProjectConnection::new(
@@ -552,14 +629,12 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     let frame = get_frame_from_project(&project, 0, 0, 1.0, None, &property_evaluators, manager)?;
     let content = first_frame_content(&frame.items)
         .context("explicit runtime config graph produced no FrameItem")?;
-    let FrameContent::Text {
-        styles,
-        ensemble: Some(ensemble),
-        ..
-    } = content
-    else {
-        bail!("runtime config graph did not preserve Text shape metadata")
+    let FrameContent::Shape { path, styles, .. } = content else {
+        bail!("runtime Backplate must produce geometry-only Shape content")
     };
+    if path.is_empty() {
+        bail!("runtime Backplate produced empty geometry")
+    }
     if !styles.iter().any(|style| {
         style.id == fill_id
             && matches!(
@@ -577,21 +652,6 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     }) {
         bail!("runtime Fill callback config did not reach the FrameItem")
     }
-    if !ensemble.decorator_configs.iter().any(|decorator| {
-        matches!(
-            decorator,
-            DecoratorConfig::Backplate {
-                target: BackplateTarget::Block,
-                shape: BackplateShape::RoundedRect,
-                padding: (4.0, 6.0, 4.0, 6.0),
-                corner_radius: 3.0,
-                ..
-            }
-        )
-    }) {
-        bail!("runtime Backplate callback config did not reach the FrameItem")
-    }
-
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,

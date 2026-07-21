@@ -44,7 +44,11 @@ fields such as `mode` or `target`. Both then use the same plugin ID + explicit
 operation Node + `PropertyMap` editing model; the Project does not branch on
 implementation tier. Runtime Style uses the built-in typed ports. A Decorator
 advertising `decorator.evaluate.v2` uses the built-in two-Shape ports, while a
-v1-only Decorator retains its frozen one-Shape appearance contract. Runtime Effect uses the same
+v1-only Decorator retains its frozen one-Shape appearance contract. Plugins
+that support both hosts should advertise ordered operations
+`[decorator.evaluate.v1, decorator.evaluate.v2]` and implement both callbacks
+over one descriptor property set. New hosts negotiate v2 regardless of
+operation order; old hosts can still invoke v1. Runtime Effect uses the same
 Image input/output operation Node and descriptor-default factory as a built-in
 Effect.
 If the plugin later becomes unavailable, the Project's plugin ID and property
@@ -77,7 +81,10 @@ unchanged prebuilt probe. The probe executes an explicit geometry graph with
 through the Frame evaluator and CPU renderer, then verifies the exact
 post-Effect visible pixel family. Backplate transports fitted Shape geometry
 only; its background Shape and downstream Style remain ordinary editable
-Project Nodes. The probe also loads image and custom-video fixture
+Project Nodes. Before exercising that negotiated v2 path, the prebuilt probe
+also invokes `decorator.evaluate.v1` directly and parses the response through
+the frozen v1 output type. This proves the later-installed dual plugin remains
+callable by the legacy control plane. The probe also loads image and custom-video fixture
 bytes through the post-build Loader by path. The video proof traverses the
 native Image and FFmpeg fallthrough before validating source time, stream
 selection, color-space names, video metadata, and pixels inside the dynamic
@@ -103,6 +110,19 @@ host `DrawStyle` variant (Fill and Stroke). The frozen
 corner-radius output and one-Shape paint path. The negotiated
 `decorator.evaluate.v2` Backplate is preferred when advertised and carries
 only target grouping, padding, offset, and fit for the two-Shape geometry path.
+Dual advertisement is recommended for plugins distributed to mixed host
+versions. Both operations receive the descriptor's resolved property map. A
+v1 fallback must document fields it cannot represent; the sample retains
+target and padding, emits a fixed rounded-rectangle appearance, and explicitly
+drops v2-only offset and fit semantics. The v2 result remains lossless and is
+always selected by a supporting host.
+This negotiation preserves component invocation compatibility, not serialized
+graph interchangeability. A legacy one-Shape graph has no authored background
+input for a new host's negotiated v2 operation, while a two-Shape v2 graph
+cannot run unchanged on an old host. There is deliberately no Project-schema
+migration for this pre-v1 model. A plugin that needs saved-graph compatibility
+must keep its v1 component ID on the one-Shape contract and publish v2 under a
+distinct component ID; otherwise the user must explicitly re-author the graph.
 Backplate `Parts` is not advertised until authored path-part semantics are
 standardized. Descriptor properties are resolved and
 validated once, then materialized as constants before plugin evaluation so a
