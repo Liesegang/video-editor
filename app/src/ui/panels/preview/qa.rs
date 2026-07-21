@@ -13,6 +13,7 @@ pub(super) fn register_preview_qa_components(
         return;
     }
 
+    let render = editor_context.preview_render_scheduler.diagnostics();
     let preview_content = composition.and_then(|(composition_id, width, height)| {
         super::support::preview_content_rect(
             preview_rect,
@@ -45,6 +46,13 @@ pub(super) fn register_preview_qa_components(
             "composition_id": preview_content.map(|content| content.0),
             "texture_width": editor_context.preview_texture_width,
             "texture_height": editor_context.preview_texture_height,
+            "render_generation": render.generation,
+            "render_in_flight_request": render.in_flight_request,
+            "render_desired_pending": render.desired_pending,
+            "render_submitted": render.submitted,
+            "render_published": render.published,
+            "render_discarded": render.discarded,
+            "render_coalesced": render.coalesced,
         })),
     );
     if let Some((composition_id, width, height, content_rect)) = preview_content {

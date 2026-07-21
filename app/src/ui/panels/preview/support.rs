@@ -5,6 +5,7 @@ use library::model::project::Project;
 use library::EditorService;
 
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewViewportRuntimeState};
+use crate::state::preview_render::{PreviewCompletionDecision, PreviewRenderScheduler};
 use crate::ui::viewport::ViewportState;
 use crate::{action::HistoryManager, state::context::EditorContext};
 use pan_zoom_ui::CanvasState;
@@ -307,12 +308,17 @@ pub(super) fn dispatch_preview_frame(
     }
 }
 
-pub(super) fn preview_result_is_current(
-    frame_evaluation_failed: bool,
-    requested: Option<&library::model::frame::frame::FrameInfo>,
-    completed: &library::model::frame::frame::FrameInfo,
-) -> bool {
-    !frame_evaluation_failed && requested == Some(completed)
+/// Apply provenance validation before inspecting either the successful pixels
+/// or the render error. This ordering prevents an error from an invalidated
+/// Project/seek generation from clearing a newer Preview or opening a stale
+/// modal just as strictly as it prevents stale pixels from being published.
+pub(super) fn publishable_preview_result(
+    scheduler: &mut PreviewRenderScheduler,
+    result: library::RenderResult,
+) -> Option<library::RenderResult> {
+    (scheduler.complete(result.request_id, &result.frame_info)
+        == PreviewCompletionDecision::Publish)
+        .then_some(result)
 }
 
 /// Geometry interaction follows the synchronous current request. The
@@ -323,14 +329,6 @@ pub(super) fn preview_frame_for_interaction<'a>(
     _displayed: Option<&library::model::frame::frame::FrameInfo>,
 ) -> Option<&'a library::model::frame::frame::FrameInfo> {
     requested
-}
-
-pub(super) fn preview_render_wait_requires_repaint(
-    frame_evaluation_failed: bool,
-    requested: bool,
-    completed_current_request: bool,
-) -> bool {
-    !frame_evaluation_failed && requested && !completed_current_request
 }
 
 pub(super) fn apply_preview_actions(

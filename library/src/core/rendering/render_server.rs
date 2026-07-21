@@ -21,12 +21,31 @@ pub struct RenderServer {
 }
 
 enum RenderRequest {
-    Render(FrameInfo),
+    Render(RenderRequestId, FrameInfo),
     SetSharingContext(usize, Option<isize>),
     Shutdown,
 }
 
+/// Opaque identity assigned by the caller to one asynchronous render request.
+///
+/// The renderer deliberately does not attach timeline semantics to this value.
+/// It only returns the identity with the result so the caller can validate the
+/// result against its own Project/navigation generation before publishing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenderRequestId(u64);
+
+impl RenderRequestId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 pub struct RenderResult {
+    pub request_id: RenderRequestId,
     pub frame_hash: u64,
     pub output: Result<RenderOutput, LibraryError>,
     pub frame_info: FrameInfo,
@@ -71,7 +90,9 @@ impl RenderServer {
 
                 for request in std::iter::once(first_request).chain(rx.try_iter()) {
                     match request {
-                        RenderRequest::Render(frame_info) => pending_render = Some(frame_info),
+                        RenderRequest::Render(request_id, frame_info) => {
+                            pending_render = Some((request_id, frame_info));
+                        }
                         RenderRequest::SetSharingContext(handle, hwnd) => {
                             if let Some(render_service) = render_service.as_mut()
                                 && let Err(error) =
@@ -84,7 +105,7 @@ impl RenderServer {
                     }
                 }
 
-                let Some(frame_info) = pending_render else {
+                let Some((request_id, frame_info)) = pending_render else {
                     continue;
                 };
                 let Some(render_service) = render_service.as_mut() else {
@@ -94,6 +115,7 @@ impl RenderServer {
                         }));
                     if tx_result
                         .send(RenderResult {
+                            request_id,
                             frame_hash: 0,
                             output: Err(error),
                             frame_info,
@@ -120,6 +142,7 @@ impl RenderServer {
                 if let Some(cached_image_data) = cache.get(&frame_info) {
                     if tx_result
                         .send(RenderResult {
+                            request_id,
                             frame_hash: 0,
                             output: Ok(RenderOutput::Image(Image::new(
                                 target_width,
@@ -153,6 +176,7 @@ impl RenderServer {
                             error!("Failed to resize render target: {error}");
                             if tx_result
                                 .send(RenderResult {
+                                    request_id,
                                     frame_hash: 0,
                                     output: Err(error),
                                     frame_info,
@@ -175,6 +199,7 @@ impl RenderServer {
                 }
                 if tx_result
                     .send(RenderResult {
+                        request_id,
                         frame_hash: 0,
                         output,
                         frame_info,
@@ -193,10 +218,16 @@ impl RenderServer {
         }
     }
 
-    pub fn send_request(&self, frame_info: FrameInfo) {
-        if let Err(error) = self.tx.send(RenderRequest::Render(frame_info)) {
+    /// Queue a render and return whether the worker accepted it.
+    ///
+    /// A failed submission is observable so a caller-side scheduler can clear
+    /// its in-flight slot instead of waiting forever for a result.
+    pub fn send_request(&self, request_id: RenderRequestId, frame_info: FrameInfo) -> bool {
+        if let Err(error) = self.tx.send(RenderRequest::Render(request_id, frame_info)) {
             log::debug!("Render server is unavailable: {error}");
+            return false;
         }
+        true
     }
 
     pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {
@@ -223,7 +254,7 @@ impl Drop for RenderServer {
 
 #[cfg(test)]
 mod tests {
-    use super::RenderServer;
+    use super::{RenderRequestId, RenderServer};
     use crate::cache::CacheManager;
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::FrameInfo;
@@ -252,18 +283,20 @@ mod tests {
             Arc::new(PluginManager::default()),
             Arc::new(CacheManager::new()),
         );
-        server.send_request(empty_frame(0, 0));
+        assert!(server.send_request(RenderRequestId::new(41), empty_frame(0, 0)));
         let failed = server
             .rx_result
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
+        assert_eq!(failed.request_id, RenderRequestId::new(41));
         assert!(failed.output.is_err());
 
-        server.send_request(empty_frame(2, 2));
+        assert!(server.send_request(RenderRequestId::new(42), empty_frame(2, 2)));
         let recovered = server
             .rx_result
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
+        assert_eq!(recovered.request_id, RenderRequestId::new(42));
         let RenderOutput::Image(image) = recovered.output.unwrap() else {
             panic!("CPU fallback must return an image");
         };

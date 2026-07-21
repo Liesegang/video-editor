@@ -137,6 +137,10 @@ pub struct TimelineState {
     pub h_zoom: f32,
     #[serde(skip)]
     pub playback_accumulator: f32,
+    /// Changes only for an explicit transport seek, never for audio-clock
+    /// playback advancement. Preview uses it to reject pre-seek worker results.
+    #[serde(skip)]
+    pub transport_seek_revision: u64,
     #[serde(skip)]
     pub scroll_offset: egui::Vec2,
     #[serde(default)]
@@ -153,9 +157,17 @@ impl Default for TimelineState {
             v_zoom: 1.0,
             h_zoom: 1.0,
             playback_accumulator: 0.0,
+            transport_seek_revision: 0,
             scroll_offset: egui::Vec2::ZERO,
             expanded_tracks: HashSet::new(),
         }
+    }
+}
+
+impl TimelineState {
+    pub fn seek_to(&mut self, time: f32) {
+        self.current_time = time;
+        self.transport_seek_revision = self.transport_seek_revision.wrapping_add(1);
     }
 }
 

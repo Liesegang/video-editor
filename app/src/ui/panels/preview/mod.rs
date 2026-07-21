@@ -12,6 +12,7 @@ use crate::state::context_types::PreviewViewportRuntimeState;
 #[cfg(test)]
 use crate::state::context_types::SelectionTarget;
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
+use crate::state::preview_render::PreviewPresentationKey;
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ZoomPolicy};
 use crate::{action::HistoryManager, state::context::EditorContext};
 use pan_zoom_ui::{AxisMask, NavigationConfig};
@@ -288,7 +289,6 @@ pub fn preview_panel(
     // outside the authoritative Project lock because it can execute Python.
     let mut pending_actions = Vec::new();
     let mut current_interaction_visuals = Vec::new();
-    let mut frame_evaluation_failed = false;
     let mut requested_frame_info = None;
     let project_snapshot = snapshot_project_for_preview(project);
     if let Some(proj_read) = project_snapshot.as_ref() {
@@ -365,34 +365,43 @@ pub fn preview_panel(
                         &plugin_manager,
                     );
 
-                    frame_evaluation_failed =
-                        !dispatch_preview_frame(frame_info, editor_context, |frame_info| {
-                            requested_frame_info = Some(frame_info.clone());
-                            render_server.send_request(frame_info)
-                        });
+                    let mut evaluated_frame = None;
+                    dispatch_preview_frame(frame_info, editor_context, |frame_info| {
+                        evaluated_frame = Some(frame_info);
+                    });
+                    if let Some(frame_info) = evaluated_frame {
+                        requested_frame_info = Some(frame_info.clone());
+                        let presentation = PreviewPresentationKey::from_frame(comp.id, &frame_info);
+                        editor_context.preview_render_scheduler.update_desired(
+                            proj_read,
+                            presentation,
+                            frame_info,
+                            editor_context.timeline.is_playing,
+                            editor_context.timeline.transport_seek_revision,
+                        );
+                    }
                 }
             }
         }
 
-        // 2. Poll for results and update texture
-        let mut latest_result = None;
-        while let Ok(result) = render_server.poll_result() {
-            latest_result = Some(result);
+        if requested_frame_info.is_none() {
+            editor_context.preview_render_scheduler.suspend();
         }
 
-        // Always drain the RenderServer, but only publish pixels evaluated from
-        // the Project/time/viewport requested by this UI frame. The worker may
-        // finish an older request after the user seeks or edits the Project;
-        // applying that result would briefly expose stale pixels as current.
-        let mut completed_current_request = false;
-        if let Some(result) = latest_result.filter(|result| {
-            preview_result_is_current(
-                frame_evaluation_failed,
-                requested_frame_info.as_ref(),
-                &result.frame_info,
-            )
-        }) {
-            completed_current_request = true;
+        // 2. Poll for results and update texture
+        let mut latest_publishable_result = None;
+        while let Ok(result) = render_server.poll_result() {
+            if let Some(result) =
+                publishable_preview_result(&mut editor_context.preview_render_scheduler, result)
+            {
+                latest_publishable_result = Some(result);
+            }
+        }
+
+        // A result may trail the audio clock during uninterrupted playback.
+        // The scheduler accepts that latest completed frame, but rejects every
+        // result from an older Project/seek/composition/ROI/scale generation.
+        if let Some(result) = latest_publishable_result {
             match result.output {
                 Ok(output) => {
                     clear_preview_render_error(editor_context);
@@ -444,11 +453,16 @@ pub fn preview_panel(
                 }
             }
         }
-        if preview_render_wait_requires_repaint(
-            frame_evaluation_failed,
-            requested_frame_info.is_some(),
-            completed_current_request,
-        ) {
+
+        if let Some(submission) = editor_context.preview_render_scheduler.take_submission() {
+            let request_id = submission.request_id;
+            if !render_server.send_request(request_id, submission.frame) {
+                editor_context
+                    .preview_render_scheduler
+                    .submission_failed(request_id);
+            }
+        }
+        if editor_context.preview_render_scheduler.requires_repaint() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -712,6 +726,21 @@ pub fn preview_panel(
             }
         }
         current_interaction_visuals = gui_clips;
+    } else {
+        // A poisoned/unavailable Project snapshot is an invalidation boundary
+        // too. Drain any worker completion so a dead request cannot reappear
+        // after Project recovery.
+        editor_context.preview_render_scheduler.suspend();
+        while let Ok(result) = render_server.poll_result() {
+            drop(publishable_preview_result(
+                &mut editor_context.preview_render_scheduler,
+                result,
+            ));
+        }
+        if editor_context.preview_render_scheduler.requires_repaint() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        }
     } // End of owned Project snapshot scope
 
     // Nested gizmo/path widgets can be the first widgets to recognize a drag.

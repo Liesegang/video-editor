@@ -39,6 +39,7 @@ pub fn snapshot(
     dock_state: &DockState<Tab>,
     history_manager: &HistoryManager,
 ) -> Result<Value, String> {
+    let preview_render = editor_context.preview_render_scheduler.diagnostics();
     let mut expanded_tracks = editor_context
         .timeline
         .expanded_tracks
@@ -120,6 +121,7 @@ pub fn snapshot(
             "timeline": {
                 "current_time": editor_context.timeline.current_time,
                 "is_playing": editor_context.timeline.is_playing,
+                "seek_revision": editor_context.timeline.transport_seek_revision,
                 "pixels_per_second": editor_context.timeline.pixels_per_second,
                 "expanded_tracks": expanded_tracks,
                 "track_reorder": track_reorder,
@@ -134,6 +136,15 @@ pub fn snapshot(
                 "texture_width": editor_context.preview_texture_width,
                 "texture_height": editor_context.preview_texture_height,
                 "render_revision": editor_context.preview_render_revision,
+                "scheduler": {
+                    "generation": preview_render.generation,
+                    "in_flight_request": preview_render.in_flight_request,
+                    "desired_pending": preview_render.desired_pending,
+                    "submitted": preview_render.submitted,
+                    "published": preview_render.published,
+                    "discarded": preview_render.discarded,
+                    "coalesced": preview_render.coalesced,
+                },
                 "nontransparent_pixels": editor_context.preview_nontransparent_pixels,
                 "pixel_hash": editor_context.preview_pixel_hash,
                 "region": editor_context.preview_region,

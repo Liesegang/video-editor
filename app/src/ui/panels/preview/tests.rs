@@ -31,18 +31,9 @@ mod tests {
     }
 
     #[test]
-    fn stale_preview_worker_results_never_replace_the_current_request() {
+    fn preview_interaction_never_uses_displayed_pixel_provenance() {
         let current = empty_preview_frame(3.0);
         let stale = empty_preview_frame(2.0);
-
-        assert!(preview_result_is_current(false, Some(&current), &current));
-        assert!(!preview_result_is_current(false, Some(&current), &stale));
-        assert!(!preview_result_is_current(false, None, &current));
-        assert!(!preview_result_is_current(true, Some(&current), &current));
-        assert!(preview_render_wait_requires_repaint(false, true, false));
-        assert!(!preview_render_wait_requires_repaint(false, true, true));
-        assert!(!preview_render_wait_requires_repaint(false, false, false));
-        assert!(!preview_render_wait_requires_repaint(true, true, false));
 
         assert_eq!(
             preview_frame_for_interaction(Some(&current), Some(&stale)),

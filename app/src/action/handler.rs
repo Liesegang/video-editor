@@ -95,7 +95,7 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                         context.history_manager,
                         &project,
                     );
-                    context.editor_context.timeline.current_time = 0.0;
+                    context.editor_context.timeline.seek_to(0.0);
                     if let Ok(proj_read) = project.read() {
                         context
                             .editor_context
@@ -132,7 +132,7 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                             .push_project_state(proj_read.clone());
                     };
                     info!("Project loaded from {}", path.display());
-                    context.editor_context.timeline.current_time = 0.0;
+                    context.editor_context.timeline.seek_to(0.0);
                 }
             }
         }

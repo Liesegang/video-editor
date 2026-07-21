@@ -474,7 +474,7 @@ pub fn graph_editor_panel(
         if ruler_response.dragged() || ruler_response.clicked() {
             if let Some(pos) = ruler_response.interact_pointer_pos() {
                 let (t, _) = transform.screen_to_graph(pos);
-                editor_context.timeline.current_time = t.max(0.0) as f32;
+                editor_context.timeline.seek_to(t.max(0.0) as f32);
             }
         }
 

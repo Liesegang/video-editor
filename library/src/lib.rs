@@ -34,7 +34,7 @@ pub use crate::model::frame::Image;
 pub use crate::plugin::ExportSettings;
 
 // Re-export the services that the app will need
-pub use core::rendering::render_server::{RenderResult, RenderServer};
+pub use core::rendering::render_server::{RenderRequestId, RenderResult, RenderServer};
 pub use core::rendering::skia_renderer::SkiaRenderer;
 pub use editor::ExportService;
 pub use editor::ProjectModel;

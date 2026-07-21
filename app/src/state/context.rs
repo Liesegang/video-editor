@@ -8,6 +8,7 @@ use crate::state::context_types::{
     GraphEditorState, InteractionState, KeyframeDialogState, NodeEditorState, SelectionState,
     SelectionTarget, TimelineState, ViewState,
 };
+use crate::state::preview_render::PreviewRenderScheduler;
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorContext {
@@ -52,11 +53,14 @@ pub struct EditorContext {
     pub preview_pixel_hash: Option<u64>,
     #[serde(skip)]
     pub preview_region: Option<Region>,
-    /// Authoritative evaluation that produced the currently displayed
-    /// preview. Interaction is derived from this exact frame, never by
-    /// resolving the Project graph a second time in the UI.
+    /// Evaluation that produced the currently displayed pixels. Preview
+    /// interaction deliberately uses the synchronous current request instead,
+    /// so a frame skipped during playback can never provide stale hit targets.
     #[serde(skip)]
     pub preview_frame_info: Option<library::model::frame::frame::FrameInfo>,
+    /// Single-flight request scheduler and provenance generations for Preview.
+    #[serde(skip)]
+    pub preview_render_scheduler: PreviewRenderScheduler,
 
     #[serde(skip)]
     pub available_fonts: Vec<String>,
@@ -85,6 +89,7 @@ impl EditorContext {
             preview_pixel_hash: None,
             preview_region: None,
             preview_frame_info: None,
+            preview_render_scheduler: PreviewRenderScheduler::default(),
             available_fonts: Vec::new(),
         }
     }
@@ -118,12 +123,13 @@ impl EditorContext {
             .expanded_tracks
             .retain(|track_id| project.find_composition_for_track(*track_id) == composition_id);
         if let Some(composition) = composition_id.and_then(|id| project.get_composition(id)) {
-            self.timeline.current_time = self
+            let reconciled_time = self
                 .timeline
                 .current_time
                 .clamp(0.0, composition.duration.max(0.0) as f32);
+            self.timeline.seek_to(reconciled_time);
         } else {
-            self.timeline.current_time = 0.0;
+            self.timeline.seek_to(0.0);
         }
         self.invalidate_composition_scoped_transients();
         // A replacement Project invalidates the edit baseline itself. Normal

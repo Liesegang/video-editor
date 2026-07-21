@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod render_tests {
     use super::*;
+    use crate::state::preview_render::{PreviewPresentationKey, PreviewRenderScheduler};
+    use library::RenderResult;
+    use ordered_float::OrderedFloat;
     use std::cell::Cell;
 
     #[test]
@@ -82,6 +85,48 @@ mod render_tests {
             editor_context.interaction.active_modal_error.as_deref(),
             Some("unrelated failure")
         );
+    }
+
+    #[test]
+    fn stale_render_error_is_discarded_before_it_reaches_the_modal_handler() {
+        let composition_id = uuid::Uuid::new_v4();
+        let mut project = Project::new("before error");
+        let mut scheduler = PreviewRenderScheduler::default();
+        let frame = library::model::frame::frame::FrameInfo {
+            width: 1920,
+            height: 1080,
+            background_color: library::model::frame::color::Color::black(),
+            color_profile: "sRGB".to_string(),
+            render_scale: OrderedFloat(1.0),
+            now_time: OrderedFloat(0.0),
+            region: None,
+            items: Vec::new(),
+        };
+        scheduler.update_desired(
+            &project,
+            PreviewPresentationKey::from_frame(composition_id, &frame),
+            frame,
+            false,
+            0,
+        );
+        let request = scheduler.take_submission().expect("render request");
+
+        project.name = "live edit invalidates error".to_string();
+        scheduler.update_desired(
+            &project,
+            PreviewPresentationKey::from_frame(composition_id, &request.frame),
+            request.frame.clone(),
+            false,
+            0,
+        );
+        let stale_error = RenderResult {
+            request_id: request.request_id,
+            frame_hash: 0,
+            output: Err(library::LibraryError::Render("old shader error".to_string())),
+            frame_info: request.frame,
+        };
+
+        assert!(publishable_preview_result(&mut scheduler, stale_error).is_none());
     }
 
     #[test]
