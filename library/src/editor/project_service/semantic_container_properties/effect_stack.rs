@@ -1,16 +1,16 @@
 //! Atomic Image -> Image Effect-chain authoring for semantic containers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use super::helpers::{container_node_ids, container_output_node_id, position_after_source};
-use super::{container_port_owner, validate_candidate};
+use super::helpers::{container_output_node_id, position_after_source};
+use super::validate_candidate;
 use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
-    PortDirection, PortOwner, Project, ProjectConnection,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortOwner,
+    Project, ProjectConnection,
 };
 use crate::model::{Node, NodeContent};
 use crate::plugin::{
@@ -237,178 +237,78 @@ fn resolve_effect_chain(
     project: &Project,
     owner: NodeContainer,
 ) -> Result<Option<EffectChain>, LibraryError> {
-    let semantics = project.container_graph_semantics(container_port_owner(owner));
-    let mut effects = container_node_ids(project, owner)?
-        .iter()
-        .copied()
-        .filter(|node_id| {
-            semantics.structurally_reaches_output(PortOwner::Node(*node_id))
-                && project.get_node(*node_id).is_some_and(is_effect)
-        })
-        .collect::<Vec<_>>();
-    effects.sort_unstable();
-    if effects.is_empty() {
-        return Ok(None);
-    }
-    let effect_set = effects.iter().copied().collect::<HashSet<_>>();
-    let mut incoming = HashMap::<Uuid, ProjectConnection>::new();
-    for node_id in &effects {
-        let target = image_input(*node_id);
-        let matches = project
-            .connections
-            .iter()
-            .filter(|connection| connection.to == target)
-            .cloned()
-            .collect::<Vec<_>>();
-        let [connection] = matches.as_slice() else {
-            return Err(LibraryError::Project(format!(
-                "Output-reaching Effect {node_id} has {} Image inputs; expected exactly one",
-                matches.len()
-            )));
-        };
-        incoming.insert(*node_id, connection.clone());
-    }
-
-    let mut internal_from = HashMap::<Uuid, ProjectConnection>::new();
-    let mut internal_to = HashMap::<Uuid, ProjectConnection>::new();
-    for connection in &project.connections {
-        let (PortOwner::Node(from), PortOwner::Node(to)) =
-            (connection.from.owner, connection.to.owner)
-        else {
-            continue;
-        };
-        if effect_set.contains(&from)
-            && effect_set.contains(&to)
-            && connection.from.port == IMAGE_OUTPUT_PORT
-            && connection.to.port == IMAGE_INPUT_PORT
-            && (internal_from.insert(from, connection.clone()).is_some()
-                || internal_to.insert(to, connection.clone()).is_some())
-        {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Effect main flow branches",
-            ));
-        }
-    }
-    let heads = effects
-        .iter()
-        .filter(|node_id| !internal_to.contains_key(node_id))
-        .copied()
-        .collect::<Vec<_>>();
-    let [head] = heads.as_slice() else {
-        return Err(ambiguous_chain(
-            owner,
-            &effects,
-            "Effects do not form one contiguous acyclic segment",
-        ));
-    };
-    let mut ordered = Vec::with_capacity(effects.len());
-    let mut internal = Vec::with_capacity(effects.len().saturating_sub(1));
-    let mut cursor = *head;
-    let mut visited = HashSet::new();
-    loop {
-        if !visited.insert(cursor) {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Effect segment contains a cycle",
-            ));
-        }
-        ordered.push(cursor);
-        let Some(connection) = internal_from.get(&cursor) else {
-            break;
-        };
-        let PortOwner::Node(next) = connection.to.owner else {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Effect segment has a non-Node internal target",
-            ));
-        };
-        internal.push(connection.clone());
-        cursor = next;
-    }
-    if ordered.len() != effects.len() {
-        return Err(ambiguous_chain(
-            owner,
-            &effects,
-            "Effects are split into multiple output-reaching segments",
-        ));
-    }
-
-    for (index, node_id) in ordered.iter().enumerate() {
-        let expected_next = ordered.get(index + 1).copied();
-        let main_outgoing = output_reaching_image_connections(project, &semantics, *node_id);
-        if let Some(next) = expected_next
-            && (main_outgoing.len() != 1
-                || main_outgoing[0].to != image_input(next)
-                || main_outgoing[0].id != internal[index].id)
-        {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Effect main flow branches before the segment tail",
-            ));
-        }
-    }
-
-    let tail = *ordered.last().ok_or_else(|| {
-        LibraryError::Project("Resolved Effect segment unexpectedly became empty".to_string())
-    })?;
     let output_id = container_output_node_id(project, owner)?
         .ok_or_else(|| LibraryError::Project(format!("{owner:?} has no Image output Node")))?;
-    let downstream = if tail == output_id {
-        if !output_reaching_image_connections(project, &semantics, tail).is_empty() {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Terminal Effect has another output-reaching branch",
-            ));
+    let mut cursor = output_id;
+    let mut visited = HashSet::new();
+    let mut downstream = None;
+    while project
+        .get_node(cursor)
+        .is_some_and(is_trailing_semantic_image_operation)
+    {
+        if !visited.insert(cursor) {
+            return Err(LibraryError::Project(format!(
+                "Trailing semantic Image trunk for {owner:?} contains a cycle"
+            )));
         }
-        None
-    } else {
-        let matches = output_reaching_image_connections(project, &semantics, tail);
-        let [connection] = matches.as_slice() else {
-            return Err(ambiguous_chain(
-                owner,
-                &effects,
-                "Effect segment tail has no unique downstream Image flow",
-            ));
+        let connection = unique_main_image_input(project, cursor, "trailing semantic Image")?;
+        downstream = Some(connection.clone());
+        let PortOwner::Node(upstream) = connection.from.owner else {
+            return Ok(None);
         };
-        Some(connection.clone())
+        cursor = upstream;
+    }
+    if !project.get_node(cursor).is_some_and(is_effect) {
+        return Ok(None);
+    }
+
+    let mut node_ids_reversed = Vec::new();
+    let mut internal_reversed = Vec::new();
+    let incoming = loop {
+        if !visited.insert(cursor) {
+            return Err(LibraryError::Project(format!(
+                "Semantic Effect trunk for {owner:?} contains a cycle"
+            )));
+        }
+        node_ids_reversed.push(cursor);
+        let connection = unique_main_image_input(project, cursor, "semantic Effect")?;
+        let PortOwner::Node(upstream) = connection.from.owner else {
+            break connection;
+        };
+        if !project.get_node(upstream).is_some_and(is_effect) {
+            break connection;
+        }
+        internal_reversed.push(connection);
+        cursor = upstream;
     };
-    let boundary = incoming.get(head).cloned().ok_or_else(|| {
-        LibraryError::Project(format!("Effect segment head {head} has no Image input"))
-    })?;
+    node_ids_reversed.reverse();
+    internal_reversed.reverse();
     Ok(Some(EffectChain {
-        node_ids: ordered,
-        incoming: boundary,
-        internal,
+        node_ids: node_ids_reversed,
+        incoming,
+        internal: internal_reversed,
         downstream,
     }))
 }
 
-fn output_reaching_image_connections(
+fn unique_main_image_input(
     project: &Project,
-    semantics: &crate::model::project::ContainerGraphSemantics,
     node_id: Uuid,
-) -> Vec<ProjectConnection> {
-    let source = image_output(node_id);
-    let mut result = project
+    role: &str,
+) -> Result<ProjectConnection, LibraryError> {
+    let matches = project
         .connections
         .iter()
-        .filter(|connection| {
-            connection.from == source
-                && semantics.structurally_reaches_output(connection.to.owner)
-                && project
-                    .port_definition(&connection.to, PortDirection::Input)
-                    .is_some_and(|port| port.data_type == PortDataType::Image)
-        })
+        .filter(|connection| connection.to == image_input(node_id))
         .cloned()
         .collect::<Vec<_>>();
-    result.sort_by_key(|connection| (connection.order, connection.id));
-    result
+    let [connection] = matches.as_slice() else {
+        return Err(LibraryError::Project(format!(
+            "{role} Node {node_id} has {} Image inputs; expected exactly one",
+            matches.len()
+        )));
+    };
+    Ok(connection.clone())
 }
 
 fn empty_insertion_point(
@@ -571,13 +471,6 @@ fn image_input(node_id: Uuid) -> PortAddress {
 
 fn image_output(node_id: Uuid) -> PortAddress {
     PortAddress::new(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT)
-}
-
-fn ambiguous_chain(owner: NodeContainer, effects: &[Uuid], reason: &str) -> LibraryError {
-    LibraryError::Project(format!(
-        "Cannot edit Effect stack for {owner:?}: {reason}; Effects={}",
-        format_ids(effects)
-    ))
 }
 
 fn format_ids(ids: &[Uuid]) -> String {

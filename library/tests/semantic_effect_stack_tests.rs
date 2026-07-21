@@ -394,7 +394,7 @@ fn append_reorder_delete_preserve_effect_identity_properties_and_non_main_wires(
 }
 
 #[test]
-fn invalid_reorder_and_output_reaching_branch_fail_without_partial_mutation() -> Result<()> {
+fn invalid_reorder_fails_but_pre_merge_effect_branches_remain_advanced_editing() -> Result<()> {
     let fixture = fixture()?;
     let blur = fixture
         .manager
@@ -411,7 +411,7 @@ fn invalid_reorder_and_output_reaching_branch_fail_without_partial_mutation() ->
     );
     assert_eq!(*read(&fixture.shared)?, before_invalid_order);
 
-    {
+    let (branch_tile, merge_id) = {
         let mut project = write(&fixture.shared)?;
         let tile = fixture
             .manager
@@ -447,21 +447,55 @@ fn invalid_reorder_and_output_reaching_branch_fail_without_partial_mutation() ->
             PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
         )?;
         assert!(project.validate_connections().is_empty());
-    }
+        (tile_id, merge_id)
+    };
     let branched = read(&fixture.shared)?.clone();
-    let error = fixture
-        .manager
-        .semantic_container_effect_stack(fixture.owner)
-        .err()
-        .context("branched output-reaching Effects must be ambiguous")?;
-    assert!(error.to_string().contains("branch"));
     assert!(
         fixture
             .manager
-            .append_semantic_container_effect(fixture.owner, "tile")
-            .is_err()
+            .semantic_container_effect_stack(fixture.owner)?
+            .node_ids()
+            .is_empty(),
+        "Effects before a Merge are branch-local, not the Clip trunk"
     );
-    assert_eq!(*read(&fixture.shared)?, branched);
+    let branch_nodes = effect_nodes(&branched, &[blur, shadow, branch_tile])?;
+    let branch_ids = [blur, shadow, branch_tile, merge_id]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let branch_wires = branched
+        .connections
+        .iter()
+        .filter(|connection| {
+            matches!(connection.from.owner, PortOwner::Node(id) if branch_ids.contains(&id))
+                && matches!(connection.to.owner, PortOwner::Node(id) if branch_ids.contains(&id))
+        })
+        .map(|connection| (connection.id, connection.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let appended = fixture
+        .manager
+        .append_semantic_container_effect(fixture.owner, "tile")?;
+    assert_eq!(
+        fixture
+            .manager
+            .semantic_container_effect_stack(fixture.owner)?
+            .node_ids(),
+        &[appended]
+    );
+    let updated = read(&fixture.shared)?;
+    assert_eq!(
+        effect_nodes(&updated, &[blur, shadow, branch_tile])?,
+        branch_nodes
+    );
+    for (connection_id, original) in branch_wires {
+        assert_eq!(
+            updated
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id),
+            Some(&original),
+            "branch-local wire changed while adding a global Effect"
+        );
+    }
     Ok(())
 }
 
