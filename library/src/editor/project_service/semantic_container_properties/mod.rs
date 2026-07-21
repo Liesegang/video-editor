@@ -26,6 +26,7 @@ use uuid::Uuid;
 mod effect_stack;
 mod helpers;
 mod stack_projection;
+mod transform;
 
 pub use effect_stack::SemanticEffectStack;
 use helpers::*;
@@ -352,6 +353,7 @@ fn resolve_graph_owners(
     owner: NodeContainer,
 ) -> Result<ResolvedGraphOwners, LibraryError> {
     let semantics = project.container_graph_semantics(container_port_owner(owner));
+    let has_image_output = container_output_node_id(project, owner)?.is_some();
     let mut transforms = container_node_ids(project, owner)?
         .iter()
         .filter_map(|node_id| {
@@ -361,7 +363,8 @@ fn resolve_graph_owners(
             };
             if operation.category != TRANSFORM_CATEGORY
                 || operation.operation != TRANSFORM_APPLY_OPERATION
-                || !semantics.structurally_reaches_output(PortOwner::Node(*node_id))
+                || (has_image_output
+                    && !semantics.structurally_reaches_output(PortOwner::Node(*node_id)))
             {
                 return None;
             }
@@ -428,7 +431,8 @@ fn ensure_graph_owners(
     if resolved.opacity.is_none() {
         resolved.opacity = Some(append_image_opacity(project, owner, plugins)?);
     }
-    absorb_legacy_properties(project, owner, resolved)?;
+    absorb_legacy_transform(project, owner, resolved)?;
+    absorb_legacy_opacity(project, owner, resolved)?;
     Ok(resolved)
 }
 
@@ -473,8 +477,29 @@ fn insert_transform(
     }
 
     if shape_style_inputs.is_empty() {
-        insert_image_transform(project, owner, plugins)
-            .map(|node_id| (node_id, TransformKind::Image))
+        if let Ok(source) = terminal_shape_source(project, owner) {
+            let mut transform = plugins.create_shape_transform_operation_node()?;
+            position_after_source(project, &mut transform, &source, 240.0);
+            let transform_id = transform.id;
+            project
+                .insert_node_graph(
+                    owner,
+                    NodeGraphBundle::new(
+                        vec![transform],
+                        vec![ProjectConnection::new(
+                            source,
+                            PortAddress::new(PortOwner::Node(transform_id), SHAPE_INPUT_PORT),
+                            0,
+                        )],
+                        None,
+                    ),
+                )
+                .map_err(|error| LibraryError::Project(error.to_string()))?;
+            Ok((transform_id, TransformKind::Shape))
+        } else {
+            insert_image_transform(project, owner, plugins)
+                .map(|node_id| (node_id, TransformKind::Image))
+        }
     } else {
         let source = shape_style_inputs[0].1.clone();
         if shape_style_inputs
@@ -628,7 +653,7 @@ fn append_image_opacity(
     Ok(opacity_id)
 }
 
-fn absorb_legacy_properties(
+fn absorb_legacy_transform(
     project: &mut Project,
     owner: NodeContainer,
     resolved: ResolvedGraphOwners,
@@ -640,10 +665,6 @@ fn absorb_legacy_properties(
         .ok_or_else(|| {
             LibraryError::Project("Semantic Transform was not synthesized".to_string())
         })?;
-    let opacity_id = resolved.opacity.ok_or_else(|| {
-        LibraryError::Project("Semantic Image Opacity was not synthesized".to_string())
-    })?;
-
     for key in TRANSFORM_PROPERTIES {
         let Some(property) = legacy.get(key) else {
             continue;
@@ -652,6 +673,22 @@ fn absorb_legacy_properties(
             absorb_property(project, owner, transform_id, key, property.clone())?;
         }
     }
+    let properties = container_properties_mut(project, owner)?;
+    for key in TRANSFORM_PROPERTIES {
+        properties.remove(key);
+    }
+    Ok(())
+}
+
+fn absorb_legacy_opacity(
+    project: &mut Project,
+    owner: NodeContainer,
+    resolved: ResolvedGraphOwners,
+) -> Result<(), LibraryError> {
+    let legacy = container_properties(project, owner)?.clone();
+    let opacity_id = resolved.opacity.ok_or_else(|| {
+        LibraryError::Project("Semantic Image Opacity was not synthesized".to_string())
+    })?;
     if let Some(property) = legacy.get("opacity")
         && !is_neutral_legacy("opacity", property)
     {
@@ -663,11 +700,7 @@ fn absorb_legacy_properties(
             scale_number_property(property, 0.01)?,
         )?;
     }
-
-    let properties = container_properties_mut(project, owner)?;
-    for key in SEMANTIC_PROPERTIES {
-        properties.remove(key);
-    }
+    container_properties_mut(project, owner)?.remove("opacity");
     Ok(())
 }
 

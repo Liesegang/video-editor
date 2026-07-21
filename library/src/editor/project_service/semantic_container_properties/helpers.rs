@@ -3,7 +3,10 @@ use uuid::Uuid;
 
 use crate::error::LibraryError;
 use crate::model::Node;
-use crate::model::project::{NodeContainer, PortAddress, PortOwner, Project};
+use crate::model::project::{
+    NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, Project, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT,
+};
 use crate::model::property::{Property, PropertyMap, PropertyValue};
 use crate::plugin::property_port_key;
 
@@ -219,4 +222,58 @@ pub(super) fn position_after_source(
     {
         node.ui_position = [source.ui_position[0] + offset, source.ui_position[1]];
     }
+}
+
+/// Finds the one terminal primary Shape flow when a container has not yet
+/// been rasterized by a Style. Secondary Shape inputs (for example Backplate
+/// geometry) do not redefine the terminal semantic source.
+pub(super) fn terminal_shape_source(
+    project: &Project,
+    owner: NodeContainer,
+) -> Result<PortAddress, LibraryError> {
+    let contained = container_node_ids(project, owner)?
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut candidates = contained
+        .iter()
+        .copied()
+        .filter(|node_id| {
+            project
+                .port_definition(
+                    &PortAddress::new(PortOwner::Node(*node_id), SHAPE_OUTPUT_PORT),
+                    PortDirection::Output,
+                )
+                .is_some_and(|port| port.data_type == PortDataType::Shape)
+        })
+        .filter(|node_id| {
+            let output = PortAddress::new(PortOwner::Node(*node_id), SHAPE_OUTPUT_PORT);
+            !project.connections.iter().any(|connection| {
+                connection.from == output
+                    && connection.to.port == SHAPE_INPUT_PORT
+                    && matches!(connection.to.owner, PortOwner::Node(target) if contained.contains(&target))
+                    && project
+                        .port_definition(
+                            &PortAddress::new(connection.to.owner, SHAPE_OUTPUT_PORT),
+                            PortDirection::Output,
+                        )
+                        .is_some_and(|port| port.data_type == PortDataType::Shape)
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable();
+    let [node_id] = candidates.as_slice() else {
+        return Err(LibraryError::Project(format!(
+            "Cannot find one terminal Shape source for {owner:?}; candidates={}",
+            candidates
+                .iter()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )));
+    };
+    Ok(PortAddress::new(
+        PortOwner::Node(*node_id),
+        SHAPE_OUTPUT_PORT,
+    ))
 }
