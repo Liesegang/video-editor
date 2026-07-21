@@ -104,13 +104,13 @@ fn factory_ports_ownership_and_json_are_canonical() -> Result<()> {
     let mut project = Project::new("composition instance contract");
     let (target, target_track) = Composition::new("target", 640, 360, 24.0, 4.0);
     let target_id = target.id;
-    project.add_track(target_track);
-    project.add_composition(target);
+    project.add_track(target_track)?;
+    project.add_composition(target)?;
     let (parent, parent_track) = Composition::new("parent", 640, 360, 24.0, 4.0);
     let parent_id = parent.id;
     let parent_track_id = parent_track.id;
-    project.add_track(parent_track);
-    project.add_composition(parent);
+    project.add_track(parent_track)?;
+    project.add_composition(parent)?;
 
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(project.clone())),
@@ -226,15 +226,15 @@ fn two_instances_render_one_definition_at_independent_explicit_times() -> Result
     parent.background_color = transparent.clone();
     let parent_id = parent.id;
     let parent_track_id = parent_track.id;
-    project.add_track(parent_track);
-    project.add_composition(parent);
+    project.add_track(parent_track)?;
+    project.add_composition(parent)?;
 
     let (mut source, source_track) = Composition::new("source", 2, 2, 4.0, 2.0);
     source.background_color = transparent;
     let source_id = source.id;
     let source_track_id = source_track.id;
-    project.add_track(source_track);
-    project.add_composition(source);
+    project.add_track(source_track)?;
+    project.add_composition(source)?;
 
     let mut source_node_ids = Vec::new();
     for (name, start_time, color) in [

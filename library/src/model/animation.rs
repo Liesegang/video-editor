@@ -1,7 +1,3 @@
-#[cfg(feature = "python-easing")]
-use pyo3::prelude::*;
-#[cfg(feature = "python-easing")]
-use pyo3::types::PyDict;
 use serde::{Deserialize, Serialize};
 
 use ordered_float::OrderedFloat;
@@ -347,30 +343,23 @@ impl EasingFunction {
     }
 }
 
-#[cfg(feature = "python-easing")]
 fn evaluate_expression_easing(text: &str, t: f64) -> Result<f64, crate::error::LibraryError> {
-    Python::attach(|py| -> PyResult<f64> {
-        let locals = PyDict::new(py);
-        locals.set_item("t", t)?;
-
-        let builtins = PyModule::import(py, "builtins")?;
-        let eval_func = builtins.getattr("eval")?;
-
-        let globals = PyDict::new(py);
-        globals.set_item("math", PyModule::import(py, "math")?)?;
-        globals.set_item("random", PyModule::import(py, "random")?)?;
-        eval_func
-            .call1((text, Some(&globals), Some(&locals)))?
-            .extract::<f64>()
-    })
-    .map_err(|error| {
+    let runtime_error = |error: ruvie_python_runtime::Diagnostic| {
         crate::error::LibraryError::Runtime(format!("Python easing expression failed: {error}"))
-    })
-}
-
-#[cfg(not(feature = "python-easing"))]
-fn evaluate_expression_easing(text: &str, t: f64) -> Result<f64, crate::error::LibraryError> {
-    super::python_expression::evaluate(text, t)
+    };
+    let context = ruvie_python_runtime::EvaluationContext::new(t, 1.0, (1, 1))
+        .map_err(runtime_error)?
+        .with_value(ruvie_python_runtime::PythonValue::Number(t));
+    let host = ruvie_python_runtime::global_host().map_err(runtime_error)?;
+    match host
+        .evaluate(text, &context, ruvie_python_runtime::OutputType::Number)
+        .map_err(runtime_error)?
+    {
+        ruvie_python_runtime::PythonValue::Number(value) => Ok(value),
+        _ => Err(crate::error::LibraryError::Runtime(
+            "Python easing expression returned a non-number".to_string(),
+        )),
+    }
 }
 
 impl PartialEq for EasingFunction {
@@ -502,18 +491,8 @@ impl Hash for EasingFunction {
 mod expression_tests {
     use super::EasingFunction;
 
-    #[cfg(not(feature = "python-easing"))]
     #[test]
-    fn expression_uses_external_python_without_embedded_feature() {
-        let easing = EasingFunction::Expression {
-            text: "t * t".to_string(),
-        };
-        assert_eq!(easing.try_apply(0.5).unwrap(), 0.25);
-    }
-
-    #[cfg(feature = "python-easing")]
-    #[test]
-    fn expression_uses_python_when_feature_is_enabled() {
+    fn expression_uses_embedded_cpython() {
         let easing = EasingFunction::Expression {
             text: "t * t".to_string(),
         };

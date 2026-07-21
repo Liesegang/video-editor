@@ -98,12 +98,11 @@ impl FacadeOwnerKind {
     }
 
     fn output_mode(self, output_node_id: Option<Uuid>) -> FacadeOutputMode {
-        match output_node_id {
-            Some(node_id) => FacadeOutputMode::Explicit(node_id),
-            None => match self {
-                Self::Composition | Self::Track => FacadeOutputMode::DerivedChildren,
-                Self::Clip => FacadeOutputMode::NoOutput,
-            },
+        match self {
+            Self::Composition | Self::Track => FacadeOutputMode::TimelineChildren(output_node_id),
+            Self::Clip => {
+                output_node_id.map_or(FacadeOutputMode::NoOutput, FacadeOutputMode::Explicit)
+            }
         }
     }
 
@@ -119,7 +118,7 @@ impl FacadeOwnerKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FacadeOutputMode {
     Explicit(Uuid),
-    DerivedChildren,
+    TimelineChildren(Option<Uuid>),
     NoOutput,
 }
 
@@ -127,7 +126,7 @@ impl FacadeOutputMode {
     fn qa_value(self) -> &'static str {
         match self {
             Self::Explicit(_) => "explicit",
-            Self::DerivedChildren => "derived_children",
+            Self::TimelineChildren(_) => "timeline_children",
             Self::NoOutput => "no_output",
         }
     }
@@ -135,7 +134,8 @@ impl FacadeOutputMode {
     fn explicit_node_id(self) -> Option<Uuid> {
         match self {
             Self::Explicit(node_id) => Some(node_id),
-            Self::DerivedChildren | Self::NoOutput => None,
+            Self::TimelineChildren(node_id) => node_id,
+            Self::NoOutput => None,
         }
     }
 }
@@ -1121,11 +1121,16 @@ fn facade_output_text(
                 |node| format!("Result: {}", source_semantic_label(node)),
             )
         }
-        FacadeOutputMode::DerivedChildren => format!(
-            "Derived from {}",
+        FacadeOutputMode::TimelineChildren(output_node_id) => format!(
+            "Composes {} through the structural Merge{}",
             owner_kind
                 .derived_children_label()
-                .unwrap_or("ordered child containers")
+                .unwrap_or("ordered child containers"),
+            if output_node_id.is_some() {
+                " and authored downstream graph"
+            } else {
+                " (NoOutput: no result binding)"
+            }
         ),
         FacadeOutputMode::NoOutput => "No output selected (NoOutput)".to_string(),
     }
@@ -1138,7 +1143,7 @@ fn facade_output_metadata(
 ) -> serde_json::Value {
     serde_json::json!({
         "output_node_id": output_mode.explicit_node_id(),
-        "explicit": matches!(output_mode, FacadeOutputMode::Explicit(_)),
+        "explicit": output_mode.explicit_node_id().is_some(),
         "explicit_output_is_directly_contained": explicit_output_is_directly_contained,
         "owner_kind": owner_kind.qa_value(),
         "output_mode": output_mode.qa_value(),
@@ -1763,8 +1768,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let first = Node::new_merge("first");
         let second = Node::new_merge("second");
         let mut clip = Clip::new("clip", 2.0, 4.0);
@@ -1797,8 +1808,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let node = Node::new_merge("leaf");
         let node_id = node.id;
         let clip = Clip::new("clip", 3.0, 5.0);
@@ -1838,8 +1855,14 @@ mod tests {
         let mut node = Node::new_merge("node with shared UUID");
         node.id = shared_id;
 
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.add_node(node);
         project.attach_clip_to_track(track_id, shared_id).unwrap();
@@ -1873,8 +1896,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 5.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let Some(InspectorSelection::Track { track, .. }) = resolve_selection(
             &project,
@@ -1898,8 +1927,14 @@ mod tests {
         let mut project = Project::new("composition scoped inspector");
         let (active, active_track) = Composition::new("active", 1920, 1080, 30.0, 5.0);
         let active_id = active.id;
-        project.add_track(active_track);
-        project.add_composition(active);
+        assert!(
+            project.add_track(active_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(active).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let (other, other_track) = Composition::new("other", 1920, 1080, 30.0, 5.0);
         let other_track_id = other_track.id;
@@ -1908,8 +1943,14 @@ mod tests {
         let other_node = Node::new_merge("other node");
         let other_node_id = other_node.id;
         other_clip.node_ids.push(other_node_id);
-        project.add_track(other_track);
-        project.add_composition(other);
+        assert!(
+            project.add_track(other_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(other).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_node(other_node);
         project.add_clip(other_clip);
         project
@@ -1949,8 +1990,14 @@ mod tests {
         let disconnected_id = disconnected.id;
         let result_id = result.id;
 
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id)?;
         for node in [source, applied, disconnected, result] {
@@ -2064,36 +2111,40 @@ mod tests {
         let result = Node::new_merge("Composite");
         let nodes = [result.clone()];
 
-        for owner_kind in [
-            FacadeOwnerKind::Composition,
-            FacadeOwnerKind::Track,
-            FacadeOwnerKind::Clip,
-        ] {
+        let clip_output = FacadeOwnerKind::Clip.output_mode(Some(result.id));
+        assert_eq!(clip_output, FacadeOutputMode::Explicit(result.id));
+        assert_eq!(clip_output.qa_value(), "explicit");
+        assert_eq!(
+            facade_output_text(FacadeOwnerKind::Clip, clip_output, &nodes),
+            "Result: Composite"
+        );
+
+        for owner_kind in [FacadeOwnerKind::Composition, FacadeOwnerKind::Track] {
             let output_mode = owner_kind.output_mode(Some(result.id));
-            assert_eq!(output_mode, FacadeOutputMode::Explicit(result.id));
-            assert_eq!(output_mode.qa_value(), "explicit");
             assert_eq!(
-                facade_output_text(owner_kind, output_mode, &nodes),
-                "Result: Composite"
+                output_mode,
+                FacadeOutputMode::TimelineChildren(Some(result.id))
             );
+            assert_eq!(output_mode.qa_value(), "timeline_children");
+            assert!(facade_output_text(owner_kind, output_mode, &nodes)
+                .contains("structural Merge and authored downstream graph"));
             let metadata = facade_output_metadata(owner_kind, output_mode, true);
             assert_eq!(metadata["owner_kind"], owner_kind.qa_value());
-            assert_eq!(metadata["output_mode"], "explicit");
+            assert_eq!(metadata["output_mode"], "timeline_children");
             assert_eq!(metadata["output_node_id"], serde_json::json!(result.id));
             assert_eq!(metadata["explicit"], true);
-            assert_eq!(metadata["explicit_output_is_directly_contained"], true);
         }
 
         let composition_mode = FacadeOwnerKind::Composition.output_mode(None);
-        assert_eq!(composition_mode, FacadeOutputMode::DerivedChildren);
-        assert_eq!(composition_mode.qa_value(), "derived_children");
+        assert_eq!(composition_mode, FacadeOutputMode::TimelineChildren(None));
+        assert_eq!(composition_mode.qa_value(), "timeline_children");
         assert_eq!(
             facade_output_text(FacadeOwnerKind::Composition, composition_mode, &nodes,),
-            "Derived from ordered child Tracks"
+            "Composes ordered child Tracks through the structural Merge (NoOutput: no result binding)"
         );
         let composition_metadata =
             facade_output_metadata(FacadeOwnerKind::Composition, composition_mode, false);
-        assert_eq!(composition_metadata["output_mode"], "derived_children");
+        assert_eq!(composition_metadata["output_mode"], "timeline_children");
         assert_eq!(
             composition_metadata["output_node_id"],
             serde_json::Value::Null
@@ -2101,15 +2152,15 @@ mod tests {
         assert_eq!(composition_metadata["explicit"], false);
 
         let track_mode = FacadeOwnerKind::Track.output_mode(None);
-        assert_eq!(track_mode, FacadeOutputMode::DerivedChildren);
-        assert_eq!(track_mode.qa_value(), "derived_children");
+        assert_eq!(track_mode, FacadeOutputMode::TimelineChildren(None));
+        assert_eq!(track_mode.qa_value(), "timeline_children");
         assert_eq!(
             facade_output_text(FacadeOwnerKind::Track, track_mode, &nodes),
-            "Derived from ordered child Clips"
+            "Composes ordered child Clips through the structural Merge (NoOutput: no result binding)"
         );
         let track_metadata = facade_output_metadata(FacadeOwnerKind::Track, track_mode, false);
         assert_eq!(track_metadata["owner_kind"], "track");
-        assert_eq!(track_metadata["output_mode"], "derived_children");
+        assert_eq!(track_metadata["output_mode"], "timeline_children");
 
         let clip_mode = FacadeOwnerKind::Clip.output_mode(None);
         assert_eq!(clip_mode, FacadeOutputMode::NoOutput);

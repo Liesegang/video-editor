@@ -422,8 +422,14 @@ mod tests {
         let (composition, track) = Composition::new(name, 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         (project, composition_id, track_id)
     }
 
@@ -526,12 +532,21 @@ mod tests {
         let (mut project, parent_id, _) = project_with_composition("parent");
         let (child, child_first_track) = Composition::new("child", 1920, 1080, 30.0, 10.0);
         let child_id = child.id;
-        project.add_track(child_first_track);
-        project.add_composition(child);
+        assert!(
+            project.add_track(child_first_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(child).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let child_second_track = Track::new("child second");
         let child_second_track_id = child_second_track.id;
-        project.add_track(child_second_track);
+        assert!(
+            project.add_track(child_second_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(child_id, child_second_track_id)
             .unwrap();

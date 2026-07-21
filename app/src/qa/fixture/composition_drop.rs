@@ -22,10 +22,18 @@ pub(super) fn install(project: &mut Project) -> Result<FixtureInfo, String> {
     source_track.id = SOURCE_TRACK_ID;
     source.track_ids = vec![SOURCE_TRACK_ID];
 
-    project.add_track(parent_track);
-    project.add_track(source_track);
-    project.add_composition(parent);
-    project.add_composition(source);
+    project
+        .add_track(parent_track)
+        .map_err(|error| format!("cannot insert parent Track: {error}"))?;
+    project
+        .add_track(source_track)
+        .map_err(|error| format!("cannot insert source Track: {error}"))?;
+    project
+        .add_composition(parent)
+        .map_err(|error| format!("cannot insert parent Composition: {error}"))?;
+    project
+        .add_composition(source)
+        .map_err(|error| format!("cannot insert source Composition: {error}"))?;
 
     Ok(FixtureInfo {
         composition_id: PARENT_COMPOSITION_ID,

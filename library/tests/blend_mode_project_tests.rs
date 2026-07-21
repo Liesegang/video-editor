@@ -21,8 +21,8 @@ fn project_with_clip() -> Result<(Project, Uuid)> {
     let mut project = Project::new("blend catalog");
     let (composition, track) = Composition::new("main", 320, 180, 30.0, 10.0);
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project.add_track(track)?;
+    project.add_composition(composition)?;
     let clip = Clip::new("blend clip", 0.0, 10.0);
     let clip_id = clip.id;
     project.add_clip(clip);

@@ -4,6 +4,14 @@ mod render_tests {
     use std::cell::Cell;
 
     #[test]
+    fn preview_snapshot_releases_authoritative_lock_before_frame_evaluation() {
+        let shared = Arc::new(RwLock::new(Project::new("snapshot lock boundary")));
+        let snapshot = snapshot_project_for_preview(&shared);
+        assert!(snapshot.is_some());
+        assert!(shared.try_write().is_ok());
+    }
+
+    #[test]
     fn frame_error_is_reported_and_invalidates_stale_preview_without_dispatch() {
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.preview_texture_id = Some(42);
@@ -221,8 +229,8 @@ mod render_tests {
         let mut model = Project::new("preview target");
         let (composition, track) = Composition::new("main", 640, 360, 30.0, 2.0);
         let track_id = track.id;
-        model.add_track(track);
-        model.add_composition(composition);
+        assert!(model.add_track(track).is_ok(), "container structural Merge insertion must succeed");
+        assert!(model.add_composition(composition).is_ok(), "container structural Merge insertion must succeed");
         let clip = Clip::new("Text Clip", 0.0, 2.0);
         let clip_id = clip.id;
         model.add_clip(clip);

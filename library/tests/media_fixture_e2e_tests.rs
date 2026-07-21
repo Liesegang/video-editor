@@ -115,8 +115,14 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     composition.background_color = Color::black();
     let composition_id = composition.id;
     let solid_track_id = solid_track.id;
-    project.add_track(solid_track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(solid_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let solid = generator_node_for_canvas(
         "solid",
@@ -137,7 +143,10 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
 
     let image_track = Track::new("image track");
     let image_track_id = image_track.id;
-    project.add_track(image_track);
+    assert!(
+        project.add_track(image_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, image_track_id)?;
     let mut image_asset = Asset::new("rgba.png", &fixture("rgba.png"), AssetKind::Image);
     image_asset.width = Some(8);
@@ -164,7 +173,10 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
 
     let video_track = Track::new("video track");
     let video_track_id = video_track.id;
-    project.add_track(video_track);
+    assert!(
+        project.add_track(video_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, video_track_id)?;
     let mut video_asset = Asset::new("h264_24.mp4", &fixture("h264_24.mp4"), AssetKind::Video);
     video_asset.duration = Some(3.0);
@@ -197,7 +209,10 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
 
     let text_track = Track::new("text track");
     let text_track_id = text_track.id;
-    project.add_track(text_track);
+    assert!(
+        project.add_track(text_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, text_track_id)?;
     add_clip_graph(
         &mut project,
@@ -211,7 +226,10 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     // observable while its iTime pixels independently change every sample.
     let shader_track = Track::new("shader track");
     let shader_track_id = shader_track.id;
-    project.add_track(shader_track);
+    assert!(
+        project.add_track(shader_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, shader_track_id)?;
     let shader_source = r#"
 half4 main(float2 fragCoord) {
@@ -653,8 +671,14 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
     let (composition, track) = Composition::new("main", 8, 6, 12.0, 1.25);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut asset = Asset::new(
         "multi audio video",
@@ -720,8 +744,14 @@ fn media_project_with_asset(asset: Asset) -> Result<(Project, Uuid)> {
     let file_path = asset.path.clone();
     let media_width = u64::from(asset.width.unwrap_or(12));
     let media_height = u64::from(asset.height.unwrap_or(8));
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.assets.push(asset);
 
     let clip = Clip::new("padded media clip", 0.0, 2.0);
@@ -1173,8 +1203,14 @@ fn track_and_clip_reordering_change_pixels_immediately() -> Result<()> {
     let (composition, first_track) = Composition::new("main", 4, 4, 1.0, 1.0);
     let composition_id = composition.id;
     let first_track_id = first_track.id;
-    track_project.add_track(first_track);
-    track_project.add_composition(composition);
+    assert!(
+        track_project.add_track(first_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        track_project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     add_clip_node(
         &mut track_project,
         first_track_id,
@@ -1183,7 +1219,10 @@ fn track_and_clip_reordering_change_pixels_immediately() -> Result<()> {
     )?;
     let second_track = Track::new("blue track");
     let second_track_id = second_track.id;
-    track_project.add_track(second_track);
+    assert!(
+        track_project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     track_project.attach_track_to_composition(composition_id, second_track_id)?;
     add_clip_node(
         &mut track_project,
@@ -1200,8 +1239,14 @@ fn track_and_clip_reordering_change_pixels_immediately() -> Result<()> {
     let mut clip_project = Project::new("clip order");
     let (composition, track) = Composition::new("main", 4, 4, 1.0, 1.0);
     let track_id = track.id;
-    clip_project.add_track(track);
-    clip_project.add_composition(composition);
+    assert!(
+        clip_project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        clip_project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let (red_clip_id, _) = add_clip_node(
         &mut clip_project,
         track_id,

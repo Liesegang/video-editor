@@ -5,7 +5,7 @@ use library::model::project::{
     PortAddress, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
-use library::model::property::{Property, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue};
 #[cfg(test)]
 use library::model::NodeContent;
 use library::model::{Clip, Composition, Node, Project, Track};
@@ -19,8 +19,11 @@ mod audio;
 use audio::audio_node;
 
 mod composition_drop;
+mod nodes;
 mod transform_preview;
 mod waveform;
+
+use nodes::{operation_node, root_transform_node};
 
 #[cfg(test)]
 use transform_preview::{
@@ -359,8 +362,12 @@ fn install_named(
     shape_merge.id = E2E_SHAPE_MERGE_ID;
     shape_merge.ui_position = [1250.0, 980.0];
 
-    project.add_track(track_a);
-    project.add_track(track_b);
+    project
+        .add_track(track_a)
+        .map_err(|error| format!("cannot insert primary QA Track: {error}"))?;
+    project
+        .add_track(track_b)
+        .map_err(|error| format!("cannot insert secondary QA Track: {error}"))?;
     project.add_clip(clip_a1);
     project.add_clip(clip_a2);
     project.add_clip(clip_b1);
@@ -382,7 +389,9 @@ fn install_named(
     project.add_node(shape_fill);
     project.add_node(shape_stroke);
     project.add_node(shape_merge);
-    project.add_composition(composition);
+    project
+        .add_composition(composition)
+        .map_err(|error| format!("cannot insert QA Composition: {error}"))?;
 
     for (source_owner, source_port, target_node, target_port) in [
         (
@@ -566,54 +575,6 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
     Ok(node)
 }
 
-fn root_transform_node(
-    plugin_manager: &PluginManager,
-    id: Uuid,
-    name: &str,
-    position: [f64; 2],
-    anchor: [f64; 2],
-    ui_position: [f32; 2],
-) -> Result<Node, String> {
-    let mut node = operation_node(
-        plugin_manager.create_shape_transform_operation_node(),
-        id,
-        name,
-        ui_position,
-    )?;
-    for (key, value) in [
-        (
-            "position",
-            PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(position[0]),
-                y: OrderedFloat(position[1]),
-            }),
-        ),
-        (
-            "anchor",
-            PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(anchor[0]),
-                y: OrderedFloat(anchor[1]),
-            }),
-        ),
-    ] {
-        node.set_property(key.to_string(), Property::constant(value))?;
-    }
-    Ok(node)
-}
-
-fn operation_node<E: std::fmt::Display>(
-    result: Result<Node, E>,
-    id: Uuid,
-    name: &str,
-    ui_position: [f32; 2],
-) -> Result<Node, String> {
-    let mut node = result.map_err(|error| format!("cannot create QA {name}: {error}"))?;
-    node.id = id;
-    node.name = name.to_string();
-    node.ui_position = ui_position;
-    Ok(node)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,8 +655,14 @@ mod tests {
         assert_eq!(info.composition_id, E2E_COMPOSITION_ID);
         let composition = &read.compositions[0];
         assert_eq!(composition.track_ids, info.expanded_tracks);
-        assert!(composition.node_ids.is_empty());
-        assert!(composition.output_node_id.is_none());
+        assert_eq!(
+            composition.node_ids,
+            vec![composition.structural_merge_node_id]
+        );
+        assert_eq!(
+            composition.output_node_id,
+            Some(composition.structural_merge_node_id)
+        );
         assert_eq!(
             read.get_track(E2E_TRACK_A_ID).unwrap().clip_ids,
             vec![E2E_CLIP_A1_ID, E2E_CLIP_A2_ID]
@@ -809,10 +776,10 @@ mod tests {
             assert_operation(&read, &plugin_manager, node_id, category, component_id);
         }
 
-        assert_eq!(read.nodes.len(), 16);
+        assert_eq!(read.nodes.len(), 19);
         for track in read.tracks.values() {
-            assert!(track.output_node_id.is_none());
-            assert!(track.node_ids.is_empty());
+            assert_eq!(track.node_ids, vec![track.structural_merge_node_id]);
+            assert_eq!(track.output_node_id, Some(track.structural_merge_node_id));
         }
         assert!(read.validate_connections().is_empty());
         assert!(read.validate_containment().is_empty());
@@ -907,7 +874,32 @@ mod tests {
         assert!(!read.connections.iter().any(|connection| {
             connection.to == PortAddress::new(PortOwner::Node(E2E_MERGE_ID), TIME_PORT)
         }));
-        assert_eq!(read.connections.len(), 29);
+        let track_a_merge = read
+            .get_track(E2E_TRACK_A_ID)
+            .unwrap()
+            .structural_merge_node_id;
+        let track_b_merge = read
+            .get_track(E2E_TRACK_B_ID)
+            .unwrap()
+            .structural_merge_node_id;
+        let composition_merge = read.compositions[0].structural_merge_node_id;
+        for (source, target, order) in [
+            (PortOwner::Clip(E2E_CLIP_A1_ID), track_a_merge, 0),
+            (PortOwner::Clip(E2E_CLIP_A2_ID), track_a_merge, 1),
+            (PortOwner::Clip(E2E_CLIP_B1_ID), track_b_merge, 0),
+            (PortOwner::Track(E2E_TRACK_A_ID), composition_merge, 0),
+            (PortOwner::Track(E2E_TRACK_B_ID), composition_merge, 1),
+        ] {
+            assert_connection(
+                &read,
+                source,
+                IMAGE_OUTPUT_PORT,
+                PortOwner::Node(target),
+                MERGE_IMAGES_PORT,
+                order,
+            );
+        }
+        assert_eq!(read.connections.len(), 34);
         assert!(read.validate_connections().is_empty());
     }
 

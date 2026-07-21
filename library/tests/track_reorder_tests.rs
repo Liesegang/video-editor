@@ -8,7 +8,10 @@ use library::editor::project_service::GeneratorNodeRequest;
 use library::model::Track;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameGroupKind, FrameItem};
-use library::model::project::{Composition, NodeContainer, Project, ProjectGraphError};
+use library::model::project::{
+    Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortAddress, PortOwner,
+    Project, ProjectGraphError,
+};
 use library::plugin::properties::ConstantEvaluator;
 use library::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use uuid::Uuid;
@@ -22,15 +25,24 @@ fn project_with_tracks(track_names: &[&str]) -> Result<(Project, Uuid, Vec<Uuid>
     let (mut composition, first_track) = Composition::new(track_names[0], 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
     let mut track_ids = vec![first_track.id];
-    project.add_track(first_track);
+    assert!(
+        project.add_track(first_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     for name in &track_names[1..] {
         let track = Track::new(name);
         track_ids.push(track.id);
         composition.track_ids.push(track.id);
-        project.add_track(track);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
     }
-    project.add_composition(composition);
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     // Keep every Track renderable so FrameEvaluator preserves one top-level
     // item per Track instead of collapsing empty aggregates into a single
@@ -45,7 +57,14 @@ fn project_with_tracks(track_names: &[&str]) -> Result<(Project, Uuid, Vec<Uuid>
         let node_id = node.id;
         project.add_node(node);
         project.attach_node_to_container(NodeContainer::Track(track_id), node_id)?;
-        project.set_output_node(NodeContainer::Track(track_id), Some(node_id))?;
+        let structural_merge_node_id = project
+            .get_track(track_id)
+            .context("Track must exist after insertion")?
+            .structural_merge_node_id;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(structural_merge_node_id), MERGE_IMAGES_PORT),
+        )?;
     }
 
     Ok((project, composition_id, track_ids))
@@ -71,16 +90,25 @@ fn evaluated_track_order(project: &Project, composition_id: Uuid) -> Result<Vec<
         plugin_manager.as_ref(),
     )
     .evaluate(0, 1.0, None)?
-    .items
-    .into_iter();
-    items
-        .map(|item| match item {
-            FrameItem::Group(group) if group.kind == FrameGroupKind::Track => Ok(group.source_id),
-            other => Err(anyhow!(
-                "expected a top-level Track frame group, got {other:?}"
-            )),
-        })
-        .collect()
+    .items;
+    fn collect_tracks(items: &[FrameItem], track_ids: &mut Vec<Uuid>) {
+        for item in items {
+            let FrameItem::Group(group) = item else {
+                continue;
+            };
+            if group.kind == FrameGroupKind::Track {
+                track_ids.push(group.source_id);
+            } else {
+                collect_tracks(&group.items, track_ids);
+            }
+        }
+    }
+    let mut track_ids = Vec::new();
+    collect_tracks(&items, &mut track_ids);
+    if track_ids.is_empty() {
+        return Err(anyhow!("evaluated Composition contained no Track groups"));
+    }
+    Ok(track_ids)
 }
 
 #[test]
@@ -124,8 +152,14 @@ fn track_move_rejects_cross_composition_reparenting_without_mutation() -> Result
     let (second_composition, second_track) = Composition::new("Other", 1920, 1080, 30.0, 10.0);
     let second_composition_id = second_composition.id;
     let second_track_id = second_track.id;
-    project.add_track(second_track);
-    project.add_composition(second_composition);
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(second_composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let before_first = project
         .get_composition(first_composition_id)

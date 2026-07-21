@@ -1,13 +1,10 @@
 use super::*;
 
-/// Why a container exposes a particular owner as part of its image output.
-/// This is a derived graph projection, not persisted project state.
+/// Why a container exposes a particular owner as its image output.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ContainerImageSourceKind {
     /// The container's `output_node_id` selects one directly contained Node.
     OutputBinding,
-    /// No output binding exists, so the ordered direct children are composed.
-    DerivedChild,
 }
 
 /// One ordered dependency of a Composition, Track, or Clip image output.
@@ -35,13 +32,10 @@ pub struct ContainerAudioSource {
 }
 
 impl Project {
-    /// Return the authoritative, ordered image dependencies for a container.
-    ///
-    /// An explicit output binding always replaces fallback composition. Without
-    /// one, a Composition derives from its ordered Tracks and a Track derives
-    /// from its ordered Clips. Direct Nodes are an internal graph implementation
-    /// detail and never become an implicit image output; a Clip therefore needs
-    /// an explicit output binding. Missing owners and leaf Nodes have no sources.
+    /// Return the authoritative image dependency for a container. Timeline
+    /// children enter Track and Composition output only through persisted
+    /// connections to their annotated structural Merge Nodes; there is no
+    /// derived child fallback.
     pub fn container_image_sources(&self, owner: PortOwner) -> Vec<ContainerImageSource> {
         self.container_image_sources_with_connections(owner, &self.connections)
     }
@@ -105,12 +99,8 @@ impl Project {
     pub(super) fn container_image_sources_with_connections(
         &self,
         owner: PortOwner,
-        _connections: &[ProjectConnection],
+        connections: &[ProjectConnection],
     ) -> Vec<ContainerImageSource> {
-        let derived = |source| ContainerImageSource {
-            source,
-            kind: ContainerImageSourceKind::DerivedChild,
-        };
         let bound = |node_id| {
             vec![ContainerImageSource {
                 source: PortOwner::Node(node_id),
@@ -118,39 +108,46 @@ impl Project {
             }]
         };
 
-        let (container, output_node_id) = match owner {
+        let (container, output_node_id, requires_structural_merge) = match owner {
             PortOwner::Composition(id) => {
                 let Some(composition) = self.get_composition(id) else {
                     return Vec::new();
                 };
-                (NodeContainer::Composition(id), composition.output_node_id)
+                (
+                    NodeContainer::Composition(id),
+                    composition.output_node_id,
+                    true,
+                )
             }
             PortOwner::Track(id) => {
                 let Some(track) = self.get_track(id) else {
                     return Vec::new();
                 };
-                (NodeContainer::Track(id), track.output_node_id)
+                (NodeContainer::Track(id), track.output_node_id, true)
             }
             PortOwner::Clip(id) => {
                 let Some(clip) = self.get_clip(id) else {
                     return Vec::new();
                 };
-                (NodeContainer::Clip(id), clip.output_node_id)
+                (NodeContainer::Clip(id), clip.output_node_id, false)
             }
             PortOwner::Node(_) => return Vec::new(),
         };
-        if let Some(output_node_id) = output_node_id {
-            if !self.container_directly_contains_node(owner, output_node_id) {
-                return Vec::new();
-            }
-            return bound(output_node_id);
+        if requires_structural_merge && !self.structural_merge_is_well_formed(container) {
+            return Vec::new();
         }
-
-        self.direct_child_owners(container)
-            .into_iter()
-            .filter(|source| self.owner_has_image_output(*source))
-            .map(derived)
-            .collect()
+        let Some(output_node_id) = output_node_id else {
+            return Vec::new();
+        };
+        if !self.container_directly_contains_node(owner, output_node_id) {
+            return Vec::new();
+        }
+        if requires_structural_merge
+            && !self.structural_merge_reaches_output(container, output_node_id, connections)
+        {
+            return Vec::new();
+        }
+        bound(output_node_id)
     }
 
     fn direct_child_owners(&self, container: NodeContainer) -> Vec<PortOwner> {
@@ -204,8 +201,14 @@ mod tests {
         let mut project = Project::new("malformed foreign image binding");
         let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let first_clip = Clip::new("First", 0.0, 1.0);
         let first_clip_id = first_clip.id;

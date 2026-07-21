@@ -7,6 +7,8 @@ RUNTIME_PROPERTY_PLUGIN_MANIFEST="${REPOSITORY_ROOT}/plugins/random_property/Car
 
 # shellcheck source=scripts/clippy-policy.sh
 source "${SCRIPT_DIR}/clippy-policy.sh"
+# shellcheck source=scripts/managed-python-env.sh
+source "${SCRIPT_DIR}/managed-python-env.sh"
 
 cd "${REPOSITORY_ROOT}"
 
@@ -21,8 +23,8 @@ echo "[quality] rustfmt"
 cargo fmt --all -- --check
 cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check
 
-echo "[quality] default build has no host libpython dependency"
-"${SCRIPT_DIR}/check-default-no-libpython.sh"
+echo "[quality] pinned managed CPython"
+"${SCRIPT_DIR}/check-managed-cpython.sh"
 
 echo "[quality] cargo check (default features)"
 cargo check --workspace --all-targets --locked

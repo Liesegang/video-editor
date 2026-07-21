@@ -782,8 +782,14 @@ mod tests {
         let mut project = Project::new("typed binding endpoint reconnect");
         let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("Audio", 0.0, 2.0);
         let clip_id = clip.id;
         project.add_clip(clip);

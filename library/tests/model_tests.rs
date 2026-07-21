@@ -22,8 +22,14 @@ fn add_composition(project: &mut Project, name: &str) -> (Uuid, Uuid) {
     let (composition, track) = Composition::new(name, 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     (composition_id, track_id)
 }
 
@@ -264,7 +270,10 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() -> 
     let (composition_id, first_track_id) = add_composition(&mut project, "Comp");
     let target = Track::new("Target");
     let target_id = target.id;
-    project.add_track(target);
+    assert!(
+        project.add_track(target).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, target_id)?;
 
     let first_id = add_clip(&mut project, first_track_id, "First", 1.0)?;
@@ -402,7 +411,15 @@ fn removal_cleans_owned_registries_output_pointers_instances_and_connections() -
     assert!(project.get_clip(first_clip_id).is_none());
     assert!(project.get_node(source_id).is_none());
     assert!(project.get_node(instance_id).is_none());
-    assert!(project.connections.is_empty());
+    assert!(project.connections.iter().all(|connection| {
+        !matches!(
+            connection.from.owner,
+            PortOwner::Composition(id) if id == first_composition_id
+        ) && !matches!(connection.from.owner, PortOwner::Track(id) if id == first_track_id)
+            && !matches!(connection.from.owner, PortOwner::Clip(id) if id == first_clip_id)
+            && !matches!(connection.from.owner, PortOwner::Node(id) if id == source_id || id == instance_id)
+            && !matches!(connection.to.owner, PortOwner::Node(id) if id == source_id || id == instance_id)
+    }));
     assert!(project.get_composition(second_composition_id).is_some());
     assert!(
         project

@@ -41,8 +41,14 @@ fn time_graph_fixture(
     let mut project = Project::new("time graph");
     let (composition, track) = Composition::new("main", 320, 180, FPS, 20.0);
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut clip = Clip::new("video", start_time, 10.0);
     clip.trim_in = OrderedFloat(trim_in);

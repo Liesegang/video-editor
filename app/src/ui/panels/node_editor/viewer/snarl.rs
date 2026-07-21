@@ -739,7 +739,24 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             }
         }
         if let Some((owner, label)) = delete_target {
-            let response = ui.button(label);
+            let blocked_reason = match owner {
+                PortOwner::Node(node_id)
+                    if self.project.compositions.iter().any(|composition| {
+                        composition.structural_merge_node_id == node_id
+                    })
+                        || self.project.tracks.values().any(|track| {
+                            track.structural_merge_node_id == node_id
+                        }) =>
+                {
+                    Some(
+                        "Structural Merge nodes belong to their Timeline container and cannot be deleted directly",
+                    )
+                }
+                _ => None,
+            };
+            let response = ui
+                .add_enabled(blocked_reason.is_none(), egui::Button::new(label))
+                .on_disabled_hover_text(blocked_reason.unwrap_or_default());
             crate::qa::register_component_with_metadata(
                 format!("node_editor.menu.delete.{}", qa_container_key(owner)),
                 "node_editor_menu_item",
@@ -748,6 +765,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 Some(serde_json::json!({
                     "action": "delete",
                     "owner": qa_container_key(owner),
+                    "blocked_reason": blocked_reason,
                 })),
             );
             if response.clicked() {

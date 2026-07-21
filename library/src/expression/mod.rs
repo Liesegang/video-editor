@@ -1,24 +1,16 @@
-//! Deterministic Python Expression subset for properties and value nodes.
+//! Trusted CPython expressions shared by properties and easing.
 //!
-//! Source is parsed with RustPython's Python 3 parser. RuViE evaluates only an
-//! explicit, side-effect-free AST whitelist; it does not expose imports,
-//! Python builtins, files, networking, processes, or host objects.
+//! Authored code has ordinary Python builtins and imports. It is not sandboxed;
+//! opening a Project containing Python must be treated as executing code.
 
-mod builtins;
-mod diagnostic;
 mod engine;
-mod evaluator;
-mod semantics;
-mod validation;
-mod value;
 
-pub use diagnostic::{
-    ExpressionDiagnostic, ExpressionDiagnosticKind, ExpressionPhase, ExpressionSourceSpan,
-};
 pub(crate) use engine::ExpressionEngine;
-#[cfg(test)]
-pub(crate) use engine::ExpressionLimits;
-pub(crate) use value::{ExpressionEvaluationContext, ExpressionOutputType, ExpressionValue};
+pub use ruvie_python_runtime::{
+    Diagnostic as ExpressionDiagnostic, DiagnosticKind as ExpressionDiagnosticKind,
+    EvaluationContext as ExpressionEvaluationContext, OutputType as ExpressionOutputType,
+    Phase as ExpressionPhase, PythonValue as ExpressionValue, SourceSpan as ExpressionSourceSpan,
+};
 
 #[cfg(test)]
 mod tests;

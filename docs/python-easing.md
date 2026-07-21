@@ -1,38 +1,33 @@
-# Python expression easing
+# Embedded CPython expressions
 
-The default editor build does not link a host `libpython`. This keeps normal
-core, test, and GUI builds independent of Xcode's Python framework layout and
-prevents failures such as a stale `Python3.framework/Versions/3.9/lib` search
-path followed by `library 'python3.9' not found`.
+RuViE uses a trusted, in-process CPython 3.13 runtime for Property Expressions,
+Python easing, future automation, and Python-authored plugins. It does not use
+the removed RustPython parser or a RuViE-owned Python IR/evaluator.
 
-`EasingFunction::Expression` remains part of the Project model and continues
-to execute by default. The default mode keeps a `python3` worker process and
-communicates over JSON lines, so no Python library is linked into the editor.
-Set `VIDEO_EDITOR_PYTHON` when the desired interpreter is not `python3` or
-`python`:
+The source checkout pins CPython 3.13.14 through `uv`. Install it once:
 
 ```sh
-VIDEO_EDITOR_PYTHON=/usr/local/bin/python3 cargo run -p app
+./scripts/bootstrap-managed-python.sh
 ```
 
-An embedded PyO3 runtime is also available as an explicit build feature:
+Compile, test, and launch through the wrapper so PyO3's build-time interpreter
+and RuViE's runtime home always refer to that same distribution:
 
 ```sh
-cargo run -p app --features python-easing
+./scripts/with-managed-python.sh cargo run -p app
+./scripts/with-managed-python.sh cargo test --workspace
 ```
 
-PyO3's embedding mode needs a Python installation that supplies a linkable
-library. If discovery selects an Xcode command-line-tools Python whose library
-directory no longer exists, select a complete installation before building:
+The full quality gate sources the same environment and verifies the dependency
+graph and exact interpreter version with `scripts/check-managed-cpython.sh`.
+`RUVIE_CPYTHON_VERSION` may be overridden for an intentional runtime upgrade;
+the runtime contract and package manifest must be updated in the same change.
 
-```sh
-PYO3_PYTHON=/opt/homebrew/bin/python3 \
-  cargo run -p app --features python-easing
-```
+Expressions run with Python builtins and imports. They are trusted code, not a
+sandbox. Realtime audio never calls CPython per sample: until block/envelope
+pre-evaluation is implemented, audio Expressions use their authored fallback
+and report one diagnostic.
 
-The repository check below verifies that the default normal dependency graph
-does not contain PyO3:
-
-```sh
-./scripts/check-default-no-libpython.sh
-```
+Packaged builds will place the pinned runtime and pure-Python `site-packages`
+next to the application according to `python-runtime/cpython-runtime.json`.
+That packaging step is separate from this source-build bootstrap.

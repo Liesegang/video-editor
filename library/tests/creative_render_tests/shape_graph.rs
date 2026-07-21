@@ -28,8 +28,14 @@ pub(super) fn project_with_shape_graph(
     let clip = Clip::new("creative clip", 0.0, 2.0);
     let clip_id = clip.id;
 
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id)?;
 
