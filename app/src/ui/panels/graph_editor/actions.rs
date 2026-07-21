@@ -74,6 +74,32 @@ fn current_keyframe_value(
         .map(|keyframe| keyframe.value)
 }
 
+fn validate_keyframe_component(
+    project: &Project,
+    entity_id: Uuid,
+    property_key: &str,
+    keyframe_id: KeyframeId,
+    component: Option<PropertyComponent>,
+) -> Result<PropertyOwner, String> {
+    let node = project
+        .get_node(entity_id)
+        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
+    let property = node.properties().get(property_key).ok_or_else(|| {
+        format!("Graph property {property_key:?} does not exist on Node {entity_id}")
+    })?;
+    if property.evaluator != "keyframe" {
+        return Err(format!("Graph property {property_key:?} is not keyframed"));
+    }
+    let keyframe = property
+        .keyframe_by_id(keyframe_id)
+        .ok_or_else(|| format!("Graph keyframe {keyframe_id} does not exist"))?;
+    property_component_value(
+        &keyframe.value,
+        component.unwrap_or(PropertyComponent::Scalar),
+    )?;
+    Ok(PropertyOwner::Node(entity_id))
+}
+
 #[derive(Clone)]
 struct PreparedMove {
     property_key: String,
@@ -267,49 +293,69 @@ pub fn process_action(
             }
         }
         Action::SetEasing(name, keyframe_id, easing) => {
-            let Some((property_key, _)) = parse_property_name(&name) else {
+            let Some((property_key, component)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
-            let owner = project.read().ok().and_then(|project| {
-                project
-                    .get_node(entity_id)
-                    .map(|_| PropertyOwner::Node(entity_id))
-            });
-            if let Some(owner) = owner {
-                if project_service
-                    .update_keyframe_by_id(
-                        owner,
+            let owner = project
+                .read()
+                .map_err(|error| error.to_string())
+                .and_then(|project| {
+                    validate_keyframe_component(
+                        &project,
+                        entity_id,
                         &property_key,
                         keyframe_id,
-                        KeyframeUpdate {
-                            easing: Some(easing),
-                            ..Default::default()
-                        },
+                        component,
                     )
-                    .is_ok()
-                {
-                    push_history(project, history_manager);
+                });
+            match owner {
+                Ok(owner) => {
+                    if project_service
+                        .update_keyframe_by_id(
+                            owner,
+                            &property_key,
+                            keyframe_id,
+                            KeyframeUpdate {
+                                easing: Some(easing),
+                                ..Default::default()
+                            },
+                        )
+                        .is_ok()
+                    {
+                        push_history(project, history_manager);
+                    }
                 }
+                Err(error) => log::error!("Rejected Graph easing update: {error}"),
             }
         }
         Action::Remove(name, keyframe_id) => {
-            let Some((property_key, _)) = parse_property_name(&name) else {
+            let Some((property_key, component)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
-            let owner = project.read().ok().and_then(|project| {
-                project
-                    .get_node(entity_id)
-                    .map(|_| PropertyOwner::Node(entity_id))
-            });
-            if let Some(owner) = owner {
-                if project_service
-                    .remove_keyframe_by_id(owner, &property_key, keyframe_id)
-                    .is_ok()
-                {
-                    push_history(project, history_manager);
+            let owner = project
+                .read()
+                .map_err(|error| error.to_string())
+                .and_then(|project| {
+                    validate_keyframe_component(
+                        &project,
+                        entity_id,
+                        &property_key,
+                        keyframe_id,
+                        component,
+                    )
+                });
+            match owner {
+                Ok(owner) => {
+                    if project_service
+                        .remove_keyframe_by_id(owner, &property_key, keyframe_id)
+                        .is_ok()
+                    {
+                        push_history(project, history_manager);
+                    }
                 }
+                Err(error) => log::error!("Rejected Graph keyframe removal: {error}"),
             }
         }
         Action::EditKeyframe(name, keyframe_id) => {
@@ -382,7 +428,7 @@ mod tests {
     use super::*;
     use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, Vec2};
+    use library::model::property::{Keyframe, Property, Vec2, Vec3};
     use library::model::{Clip, Composition};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
@@ -395,6 +441,14 @@ mod tests {
         let keyframe = Keyframe::new(time, number(value), EasingFunction::Linear);
         let id = keyframe.id;
         (Property::keyframe(vec![keyframe]), id)
+    }
+
+    fn vec3(x: f64, y: f64, z: f64) -> PropertyValue {
+        PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+        })
     }
 
     fn property_value(
@@ -423,6 +477,76 @@ mod tests {
         );
         assert!(parse_property_name("amount").is_none());
         assert!(parse_property_name("effect:obsolete:amount").is_none());
+    }
+
+    #[test]
+    fn easing_and_remove_reject_wrong_vector_axis_without_history_or_mutation() {
+        let keyframe = Keyframe::new(1.0, vec3(1.0, 2.0, 3.0), EasingFunction::Linear);
+        let keyframe_id = keyframe.id;
+        let mut node = Node::new_add("typed vector action");
+        let node_id = node.id;
+        assert!(node
+            .set_property("b".to_string(), Property::keyframe(vec![keyframe]))
+            .is_ok());
+        let mut model = Project::new("typed vector action");
+        model.add_node(node);
+        let project = Arc::new(RwLock::new(model));
+        let service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )
+        .expect("test EditorService initializes");
+        let composition_id = Uuid::new_v4();
+        let mut context = EditorContext::new(composition_id);
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().expect("project read").clone());
+        let before = project.read().expect("project read").clone();
+
+        for action in [
+            Action::SetEasing(
+                graph_property_name("b", PropertyComponent::W),
+                keyframe_id,
+                EasingFunction::EaseInQuad,
+            ),
+            Action::Remove(graph_property_name("b", PropertyComponent::W), keyframe_id),
+        ] {
+            process_action(
+                action,
+                composition_id,
+                node_id,
+                &service,
+                &project,
+                &mut context,
+                &mut history,
+            );
+        }
+        assert_eq!(*project.read().expect("project read"), before);
+        assert_eq!(history.undo_depth(), 1);
+
+        process_action(
+            Action::SetEasing(
+                graph_property_name("b", PropertyComponent::Z),
+                keyframe_id,
+                EasingFunction::EaseInQuad,
+            ),
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        let after_easing = project.read().expect("project read");
+        let updated = after_easing
+            .get_node(node_id)
+            .and_then(|node| node.properties().get("b"))
+            .and_then(|property| property.keyframe_by_id(keyframe_id))
+            .expect("keyframe survives easing edit");
+        assert_eq!(updated.value, vec3(1.0, 2.0, 3.0));
+        assert_eq!(updated.easing, EasingFunction::EaseInQuad);
+        drop(after_easing);
+        assert_eq!(history.undo_depth(), 2);
     }
 
     #[test]
