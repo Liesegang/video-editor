@@ -30,7 +30,7 @@ mod stack_projection;
 mod style_stack;
 mod transform;
 
-pub use decorator_stack::SemanticDecoratorStack;
+pub use decorator_stack::{SemanticDecoratorChain, SemanticDecoratorStack};
 pub use effect_stack::SemanticEffectStack;
 use helpers::*;
 pub use stack_projection::{

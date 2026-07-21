@@ -438,7 +438,38 @@ fn ordinary_backplate_branch_does_not_make_clip_decorator_facade_unusable() -> R
         .manager
         .semantic_container_decorator_stack(fixture.owner)?;
     assert_eq!(stack.node_ids().len(), 1, "Backplate remains discoverable");
+    assert_eq!(stack.chains().len(), 2, "main and Backplate chains differ");
+    let backplate_id = stack.node_ids()[0];
+    let branch = stack
+        .chains()
+        .iter()
+        .find(|chain| chain.node_ids().contains(&backplate_id))
+        .context("Backplate chain")?;
+    let style_anchor = *branch
+        .style_anchor_ids()
+        .first()
+        .context("Backplate Style anchor")?;
 
+    let branch_append = fixture
+        .manager
+        .append_semantic_container_decorator_for_style(fixture.owner, "backplate", style_anchor)?;
+    fixture
+        .manager
+        .reorder_semantic_container_decorators_for_style(
+            fixture.owner,
+            style_anchor,
+            &[branch_append, backplate_id],
+        )?;
+    fixture
+        .manager
+        .remove_semantic_container_decorator_for_style(
+            fixture.owner,
+            style_anchor,
+            branch_append,
+        )?;
+
+    // Both chains still have one common Shape root, so the convenience form
+    // can intentionally add a shared prefix without guessing a branch.
     let appended = fixture
         .manager
         .append_semantic_container_decorator(fixture.owner, "backplate")?;
