@@ -498,3 +498,80 @@ fn added_effects_are_inserted_before_trailing_transform_and_opacity() -> Result<
     ));
     Ok(())
 }
+
+#[test]
+fn branch_local_effect_does_not_hide_the_post_merge_semantic_trunk() -> Result<()> {
+    let fixture = fixture()?;
+    let (branch_effect, trunk_effect) = {
+        let mut project = write(&fixture.shared)?;
+        let branch = fixture
+            .manager
+            .get_plugin_manager()
+            .create_effect_operation_node("blur")?;
+        let trunk = fixture
+            .manager
+            .get_plugin_manager()
+            .create_effect_operation_node("tile")?;
+        let merge = Node::new_merge("branch-local effect merge");
+        let (branch_id, trunk_id, merge_id) = (branch.id, trunk.id, merge.id);
+        project.insert_node_graph(
+            fixture.owner,
+            NodeGraphBundle::new(vec![branch, trunk, merge], Vec::new(), None),
+        )?;
+        let boundary = project
+            .connections
+            .iter_mut()
+            .find(|connection| {
+                connection.from
+                    == PortAddress::new(PortOwner::Node(fixture.source_id), IMAGE_OUTPUT_PORT)
+                    && connection.to
+                        == PortAddress::new(PortOwner::Node(fixture.transform_id), IMAGE_INPUT_PORT)
+            })
+            .context("source -> Transform boundary")?;
+        boundary.from = PortAddress::new(PortOwner::Node(trunk_id), IMAGE_OUTPUT_PORT);
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(fixture.source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(branch_id), IMAGE_INPUT_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(branch_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(fixture.source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(trunk_id), IMAGE_INPUT_PORT),
+        )?;
+        assert!(project.validate_connections().is_empty());
+        (branch_id, trunk_id)
+    };
+    let before = read(&fixture.shared)?.clone();
+
+    assert_eq!(
+        fixture
+            .manager
+            .semantic_container_effect_stack(fixture.owner)?
+            .node_ids(),
+        &[trunk_effect],
+        "the semantic stack is the contiguous post-Merge trunk"
+    );
+    let appended = fixture
+        .manager
+        .append_semantic_container_effect(fixture.owner, "drop_shadow")?;
+    assert_eq!(
+        fixture
+            .manager
+            .semantic_container_effect_stack(fixture.owner)?
+            .node_ids(),
+        &[trunk_effect, appended]
+    );
+    assert_eq!(
+        read(&fixture.shared)?.get_node(branch_effect),
+        before.get_node(branch_effect),
+        "branch-local advanced editing is untouched"
+    );
+    Ok(())
+}
