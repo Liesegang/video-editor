@@ -5,6 +5,7 @@ members = [
     "python-runtime",
     "library",
     "pan-zoom-ui",
+    "node-editor-ui",
     "app",
 ]
 

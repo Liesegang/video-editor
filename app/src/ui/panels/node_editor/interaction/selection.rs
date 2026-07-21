@@ -65,9 +65,7 @@ pub(in crate::ui::panels::node_editor) fn logical_hit_owner(
     hits: &[(PortOwner, egui::Rect)],
     graph_position: egui::Pos2,
 ) -> Option<PortOwner> {
-    hits.iter()
-        .rev()
-        .find_map(|(owner, rect)| rect.contains(graph_position).then_some(*owner))
+    node_editor_ui::selection::topmost_hit(hits, graph_position)
 }
 
 pub(in crate::ui::panels::node_editor) fn selection_after_logical_click(
@@ -76,32 +74,7 @@ pub(in crate::ui::panels::node_editor) fn selection_after_logical_click(
     clicked: SelectionTarget,
     shift: bool,
 ) -> (Vec<SelectionTarget>, Option<SelectionTarget>) {
-    if shift {
-        if current_targets.contains(&clicked) {
-            let targets = current_targets
-                .iter()
-                .copied()
-                .filter(|target| *target != clicked)
-                .collect::<Vec<_>>();
-            let primary = current_primary
-                .filter(|target| targets.contains(target))
-                .or_else(|| targets.last().copied());
-            return (targets, primary);
-        }
-
-        let mut targets = current_targets.to_vec();
-        targets.push(clicked);
-        return (targets, Some(clicked));
-    }
-
-    if current_targets.contains(&clicked) {
-        let mut targets = current_targets.to_vec();
-        targets.retain(|target| *target != clicked);
-        targets.push(clicked);
-        return (targets, Some(clicked));
-    }
-
-    (vec![clicked], Some(clicked))
+    node_editor_ui::selection::after_click(current_targets, current_primary, clicked, shift)
 }
 
 pub(in crate::ui::panels::node_editor) fn selection_after_marquee(
@@ -109,26 +82,7 @@ pub(in crate::ui::panels::node_editor) fn selection_after_marquee(
     marquee_targets: &[SelectionTarget],
     additive: bool,
 ) -> (Vec<SelectionTarget>, Option<SelectionTarget>) {
-    let mut unique = Vec::new();
-    for target in marquee_targets.iter().copied() {
-        if !unique.contains(&target) {
-            unique.push(target);
-        }
-    }
-
-    if additive {
-        let mut targets = current_targets.to_vec();
-        for target in unique {
-            if !targets.contains(&target) {
-                targets.push(target);
-            }
-        }
-        let primary = targets.last().copied();
-        (targets, primary)
-    } else {
-        let primary = unique.last().copied();
-        (unique, primary)
-    }
+    node_editor_ui::selection::after_marquee(current_targets, marquee_targets, additive)
 }
 
 pub(in crate::ui::panels::node_editor) fn canvas_marquee_interaction(

@@ -19,6 +19,7 @@ log = "0.4"
 env_logger = "0.11"
 library = { version = "0.1.0", path = "../library" }
 pan-zoom-ui = { version = "0.1.0", path = "../pan-zoom-ui" }
+node-editor-ui = { version = "0.1.0", path = "../node-editor-ui" }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 directories = "6.0"
 toml = "0.9"
