@@ -37,18 +37,32 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
         Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
         Some(NodeContent::PluginOperation(_)) => 260.0,
         Some(NodeContent::NativeOperation(_)) => 260.0,
-        Some(NodeContent::Merge | NodeContent::SoundMerge) => {
+        Some(
+            NodeContent::Merge
+            | NodeContent::SoundMerge
+            | NodeContent::List(library::model::ListContent::Make),
+        ) => {
             let layer_count = merge_layer_rows(project, node_id).len();
             (166.0 + layer_count as f32 * 82.0).max(220.0)
         }
         Some(NodeContent::SoundAnalysis(_)) => 260.0,
         Some(
-            NodeContent::Media(_) | NodeContent::CompositionInstance(_) | NodeContent::Value(_),
+            NodeContent::Media(_)
+            | NodeContent::CompositionInstance(_)
+            | NodeContent::Value(_)
+            | NodeContent::List(_),
         ) => 220.0,
         None => 220.0,
     };
     egui::vec2(
-        if matches!(content, Some(NodeContent::Merge | NodeContent::SoundMerge)) {
+        if content.is_some_and(|content| {
+            matches!(
+                content,
+                NodeContent::Merge
+                    | NodeContent::SoundMerge
+                    | NodeContent::List(library::model::ListContent::Make)
+            )
+        }) {
             estimated_merge_node_width()
         } else {
             estimated_node_width()

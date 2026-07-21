@@ -647,26 +647,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
-                NodeContent::Value(value) => {
-                    ui.horizontal(|ui| {
-                        property_label(ui, "Category");
-                        bounded_non_selectable_label(
-                            ui,
-                            VALUE_NODE_CATEGORY_LABEL,
-                            INLINE_CONTROL_WIDTH,
-                            egui::Align::LEFT,
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        property_label(ui, "Operation");
-                        bounded_non_selectable_label(
-                            ui,
-                            value_operation_label(*value),
-                            INLINE_CONTROL_WIDTH,
-                            egui::Align::LEFT,
-                        );
-                    });
-                }
+                NodeContent::Value(value) => self.show_value_body(ui, *value),
+                NodeContent::List(operation) => self.show_list_body(ui, *operation),
                 NodeContent::NativeOperation(_) => self.show_native_body(ui, project_node_id),
                 NodeContent::Media(_)
                 | NodeContent::CompositionInstance(_)

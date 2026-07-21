@@ -308,6 +308,9 @@ fn assert_structural_pointer_drag_synchronizes_both_merges(kind: NativeVariadicM
         NativeVariadicMergeKind::Sound => {
             (fixture.sound_merge_id, MERGE_SOUNDS_PORT, AUDIO_OUTPUT_PORT)
         }
+        NativeVariadicMergeKind::List => {
+            panic!("structural merge helper does not accept List inputs")
+        }
     };
     let first_connection = connection_id_for_child(
         &fixture.project,

@@ -1,7 +1,7 @@
 use super::{property_value_summary, ProjectNodeViewer};
 use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
-use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
+use crate::ui::panels::time_context::time_source_state;
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control, toggled_keyframe_property, PropertyModeAction,
@@ -59,6 +59,9 @@ impl ProjectNodeViewer<'_> {
                     NativeVariadicMergeKind::Sound => {
                         "Vacant variadic input; a new Sound wire is appended in canonical top-to-bottom order"
                     }
+                    NativeVariadicMergeKind::List => {
+                        "Vacant ordered List item; a new value is appended in canonical top-to-bottom order"
+                    }
                 });
                 register_merge_layer_component(
                     format!("node_editor.merge_layer.vacant:{merge_id}"),
@@ -69,6 +72,9 @@ impl ProjectNodeViewer<'_> {
                     *self.canvas_clip,
                     serde_json::json!({
                         "merge_id": merge_id,
+                        "ordered_input_node_id": merge_id,
+                        "ordered_input": true,
+                        "input_kind": kind.qa_key(),
                         "action": "connect",
                         "merge_kind": kind.qa_key(),
                         "port": kind.input_port(),
@@ -155,6 +161,9 @@ impl ProjectNodeViewer<'_> {
                             NativeVariadicMergeKind::Sound => {
                                 format!("Input {} / {}", row.canonical_index + 1, row.layer_count)
                             }
+                            NativeVariadicMergeKind::List => {
+                                format!("Item {} / {}", row.canonical_index + 1, row.layer_count)
+                            }
                         })
                         .small()
                         .strong(),
@@ -230,16 +239,35 @@ impl ProjectNodeViewer<'_> {
                     } else {
                         bounded_non_selectable_label(
                             ui,
-                            format!("Canonical {}", row.canonical_index + 1),
+                            match row.kind {
+                                NativeVariadicMergeKind::List => {
+                                    format!("Item {}", row.canonical_index + 1)
+                                }
+                                NativeVariadicMergeKind::Image | NativeVariadicMergeKind::Sound => {
+                                    format!("Canonical {}", row.canonical_index + 1)
+                                }
+                            },
                             92.0,
                             egui::Align::Center,
                         )
-                        .on_hover_text("Sound inputs are mixed in canonical top-to-bottom order");
+                        .on_hover_text(match row.kind {
+                            NativeVariadicMergeKind::List => {
+                                "List items are evaluated in canonical top-to-bottom order"
+                            }
+                            NativeVariadicMergeKind::Image => {
+                                "Image layers are composited in canonical back-to-front order"
+                            }
+                            NativeVariadicMergeKind::Sound => {
+                                "Sound inputs are mixed in canonical top-to-bottom order"
+                            }
+                        });
                     }
 
                     let up_index = match row.kind {
                         NativeVariadicMergeKind::Image => row.canonical_index.checked_add(1),
-                        NativeVariadicMergeKind::Sound => row.canonical_index.checked_sub(1),
+                        NativeVariadicMergeKind::Sound | NativeVariadicMergeKind::List => {
+                            row.canonical_index.checked_sub(1)
+                        }
                     }
                     .filter(|index| {
                         *index >= row.reorder_min_index && *index <= row.reorder_max_index
@@ -250,6 +278,7 @@ impl ProjectNodeViewer<'_> {
                         .on_hover_text(match row.kind {
                             NativeVariadicMergeKind::Image => "Move one layer toward the front",
                             NativeVariadicMergeKind::Sound => "Move one Sound input earlier",
+                            NativeVariadicMergeKind::List => "Move one List item earlier",
                         });
                     if response.clicked() {
                         requested_order = up_index;
@@ -257,7 +286,9 @@ impl ProjectNodeViewer<'_> {
                     up_response = Some(response);
                     let down_index = match row.kind {
                         NativeVariadicMergeKind::Image => row.canonical_index.checked_sub(1),
-                        NativeVariadicMergeKind::Sound => row.canonical_index.checked_add(1),
+                        NativeVariadicMergeKind::Sound | NativeVariadicMergeKind::List => {
+                            row.canonical_index.checked_add(1)
+                        }
                     }
                     .filter(|index| {
                         *index >= row.reorder_min_index && *index <= row.reorder_max_index
@@ -268,6 +299,7 @@ impl ProjectNodeViewer<'_> {
                         .on_hover_text(match row.kind {
                             NativeVariadicMergeKind::Image => "Move one layer toward the back",
                             NativeVariadicMergeKind::Sound => "Move one Sound input later",
+                            NativeVariadicMergeKind::List => "Move one List item later",
                         });
                     if response.clicked() {
                         requested_order = down_index;
@@ -379,7 +411,7 @@ impl ProjectNodeViewer<'_> {
         );
         let (up_direction, down_direction) = match row.kind {
             NativeVariadicMergeKind::Image => ("front", "back"),
-            NativeVariadicMergeKind::Sound => ("earlier", "later"),
+            NativeVariadicMergeKind::Sound | NativeVariadicMergeKind::List => ("earlier", "later"),
         };
         for (direction, response, target_index) in [
             (up_direction, up_response, up_target),
@@ -794,58 +826,6 @@ impl ProjectNodeViewer<'_> {
             connected,
             property_time,
             vector_components,
-        );
-    }
-
-    fn show_node_time_source_row(
-        &self,
-        ui: &mut egui::Ui,
-        node_id: Uuid,
-        definition: &PinDefinition,
-        connected: bool,
-        state: &TimeSourceState,
-    ) {
-        let presentation = state.presentation(self.project);
-        let row = ui.horizontal(|ui| {
-            bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
-            ui.add_sized(
-                [164.0, PORT_ROW_HEIGHT - 2.0],
-                egui::Label::new(
-                    egui::RichText::new(&presentation.label)
-                        .small()
-                        .color(Color32::from_gray(145)),
-                )
-                .selectable(false)
-                .truncate(),
-            )
-            .on_hover_text(&presentation.tooltip)
-        });
-
-        let component_id = format!("node_editor.time_source.node:{node_id}");
-        let unclipped_rect = *self.to_global * row.inner.rect;
-        let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
-        let mut metadata = state.qa_metadata(PortOwner::Node(node_id));
-        if let Some(metadata) = metadata.as_object_mut() {
-            metadata.insert("label".to_string(), presentation.label.into());
-            metadata.insert("tooltip".to_string(), presentation.tooltip.into());
-            metadata.insert("connected".to_string(), connected.into());
-            metadata.insert(
-                "unclipped_rect".to_string(),
-                qa_rect_metadata(unclipped_rect),
-            );
-            metadata.insert("visible_in_canvas".to_string(), rect.is_positive().into());
-        }
-        #[cfg(test)]
-        {
-            capture_test_rect(&component_id, rect);
-            capture_test_metadata(&component_id, &metadata);
-        }
-        crate::qa::register_component_with_metadata(
-            component_id,
-            "node_time_source",
-            rect,
-            true,
-            Some(metadata),
         );
     }
 

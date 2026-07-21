@@ -11,7 +11,7 @@ use library::model::project::{
 use library::model::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
-use library::model::{Clip, Composition, Node, NodeContent, SoundAnalysisContent};
+use library::model::{Clip, Composition, ListContent, Node, NodeContent, SoundAnalysisContent};
 use library::plugin::{
     PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
     SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
@@ -501,6 +501,28 @@ fn fmod_uses_canonical_divisor_metadata_instead_of_inferred_ranges() {
 
     let inferred = inferred_property_definitions(node.properties(), 0.0);
     assert_ne!(inferred[0].ui_type(), divisor.ui_type());
+}
+
+#[test]
+fn get_list_item_uses_canonical_integer_index_metadata() {
+    let node = Node::new_list("Get List Item", ListContent::GetItem);
+    let definitions = canonical_native_property_definitions(&node).unwrap();
+    assert_eq!(definitions.len(), 1);
+    let index = &definitions[0];
+    assert_eq!(index.name(), "index");
+    assert_eq!(index.label(), "Index");
+    assert_eq!(index.default_value(), &PropertyValue::Integer(0));
+    assert!(matches!(
+        index.ui_type(),
+        PropertyUiType::Integer {
+            min: 0,
+            max: i64::MAX,
+            suffix,
+            min_hard_limit: true,
+            max_hard_limit: false,
+        } if suffix.is_empty()
+    ));
+    assert_eq!(node.properties().iter().count(), 1);
 }
 
 #[test]

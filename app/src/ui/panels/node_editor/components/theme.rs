@@ -94,6 +94,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(39, 83, 95),
             accent: Color32::from_rgb(91, 197, 218),
         },
+        Some(NodeContent::List(_)) => NodePalette {
+            body: Color32::from_rgb(27, 43, 38),
+            header: Color32::from_rgb(38, 88, 70),
+            accent: Color32::from_rgb(87, 207, 158),
+        },
         Some(NodeContent::NativeOperation(_)) => NodePalette {
             body: Color32::from_rgb(48, 38, 29),
             header: Color32::from_rgb(106, 72, 38),
@@ -161,6 +166,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             ValueContent::Multiply => NodeEditorIcon::new(icons::X, "Multiply value operation"),
             ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
         },
+        Some(NodeContent::List(_)) => {
+            NodeEditorIcon::new(icons::LIST_NUMBERS, "Ordered List operation")
+        }
         Some(NodeContent::NativeOperation(operation)) => {
             let descriptor = library::model::native_node_descriptor(&operation.catalog_id);
             match descriptor.map(|item| item.category()) {
@@ -450,6 +458,7 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
         | PortDataType::FieldStack => Color32::from_rgb(185, 125, 225),
         PortDataType::MotionBehavior => Color32::from_rgb(235, 145, 105),
         PortDataType::Any => Color32::from_rgb(200, 200, 200),
+        PortDataType::List => Color32::from_rgb(87, 207, 158),
     }
 }
 

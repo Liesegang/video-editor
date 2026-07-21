@@ -38,14 +38,8 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
             to,
             canonical_index,
         } => {
-            if project
-                .connections
-                .iter()
-                .any(|connection| connection.from == from && connection.to == to)
-            {
-                return false;
-            }
             let mut candidate = project.clone();
+            let connection_count = candidate.connections.len();
             let connection_id = match candidate.connect_ports(from, to) {
                 Ok(connection_id) => connection_id,
                 Err(error) => {
@@ -53,6 +47,12 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                     return false;
                 }
             };
+            // Ordinary variadic inputs remain idempotent. Make List is the
+            // model-owned exception and adds a new connection identity for
+            // every intentional duplicate `[x, x]` slot.
+            if candidate.connections.len() == connection_count {
+                return false;
+            }
             if let Err(error) = candidate.reorder_connection(connection_id, canonical_index as i64)
             {
                 log::warn!("Cannot place new variadic wire at index {canonical_index}: {error}");

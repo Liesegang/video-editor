@@ -9,10 +9,13 @@ use uuid::Uuid;
 use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey, SurfaceCapture};
 
 mod body;
+mod list;
 mod native_operation;
 mod property_value_summary;
 mod selection;
 mod snarl;
+mod time_source;
+mod value;
 
 /// The Snarl payload contains only stable IDs. All labels, pins, positions and
 /// connections are read from `Project` for this frame, so Snarl never becomes

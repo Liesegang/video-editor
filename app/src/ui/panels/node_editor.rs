@@ -45,6 +45,8 @@ mod blend_popup_tests;
 mod canvas;
 mod container_output;
 #[cfg(test)]
+mod list_order_reorder_tests;
+#[cfg(test)]
 mod merge_connection_contract_tests;
 #[cfg(test)]
 mod merge_reorder_tests;

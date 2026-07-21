@@ -142,6 +142,7 @@ pub(super) fn canonical_native_property_definitions(
 ) -> Option<Vec<PropertyDefinition>> {
     match node.content() {
         NodeContent::Value(value) => Some(value.property_definitions().to_vec()),
+        NodeContent::List(operation) => Some(operation.property_definitions().to_vec()),
         NodeContent::SoundAnalysis(analysis) => Some(analysis.property_definitions().to_vec()),
         _ => None,
     }
@@ -299,6 +300,7 @@ pub(super) fn node_display_type(node: &Node) -> String {
             operation.category, operation.operation
         ),
         NodeContent::Value(value) => value.label().to_string(),
+        NodeContent::List(operation) => operation.label().to_string(),
         NodeContent::NativeOperation(operation) => {
             library::model::native_node_descriptor(&operation.catalog_id).map_or_else(
                 || format!("Native Operation · unknown ({})", operation.catalog_id),

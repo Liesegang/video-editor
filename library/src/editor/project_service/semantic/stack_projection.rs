@@ -573,6 +573,13 @@ fn node_metadata(
             diagnostic: None,
             unavailable_reason: None,
         },
+        NodeContent::List(operation) => NodeMetadata {
+            label: operation.label().to_string(),
+            group: SemanticPropertyGroup::Other,
+            definitions: operation.property_definitions().to_vec(),
+            diagnostic: None,
+            unavailable_reason: None,
+        },
         NodeContent::SoundAnalysis(analysis) => NodeMetadata {
             label: analysis.label().to_string(),
             group: SemanticPropertyGroup::Other,

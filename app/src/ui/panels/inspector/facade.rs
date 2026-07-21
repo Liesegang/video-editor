@@ -836,6 +836,7 @@ pub(super) fn source_kind(node: &Node) -> &'static str {
             _ => "Plug-in",
         },
         NodeContent::Value(value) => value.label(),
+        NodeContent::List(operation) => operation.label(),
         NodeContent::NativeOperation(operation) => {
             library::model::native_node_descriptor(&operation.catalog_id)
                 .map_or("Native Operation", |descriptor| descriptor.label())

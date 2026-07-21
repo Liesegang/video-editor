@@ -1,28 +1,31 @@
 use eframe::egui;
+use library::model::project::connection::{LIST_ITEMS_INPUT_PORT, LIST_ITEM_OUTPUT_PORT};
 use library::model::project::{
     PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner, AUDIO_OUTPUT_PORT,
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
 };
-use library::model::{BlendMode, NodeContainer, NodeContent, Project};
+use library::model::{BlendMode, ListContent, NodeContainer, NodeContent, Project};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[cfg(test)]
-use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     canonical_pin_definitions, clipped_qa_rect, qa_container_key, qa_rect_metadata, PinDefinition,
 };
+#[cfg(test)]
+use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
 
 const AUTHORED_BLEND_MODES: [BlendMode; 29] = BlendMode::ALL;
 
-/// Native variadic merge inputs that are projected as physical rows in the
-/// Node Editor. This is presentation metadata over the authoritative Project
-/// connections, not a second graph model.
+/// Native ordered variadic inputs projected as physical rows in the Node
+/// Editor. This is presentation metadata over authoritative Project
+/// connections, not a second graph model. The legacy type name keeps existing
+/// Image/Sound automation IDs stable while List adopts this same contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) enum NativeVariadicMergeKind {
     Image,
     Sound,
+    List,
 }
 
 impl NativeVariadicMergeKind {
@@ -30,6 +33,7 @@ impl NativeVariadicMergeKind {
         match self {
             Self::Image => MERGE_IMAGES_PORT,
             Self::Sound => MERGE_SOUNDS_PORT,
+            Self::List => LIST_ITEMS_INPUT_PORT,
         }
     }
 
@@ -37,6 +41,7 @@ impl NativeVariadicMergeKind {
         match self {
             Self::Image => PortDataType::Image,
             Self::Sound => PortDataType::Audio,
+            Self::List => PortDataType::Any,
         }
     }
 
@@ -44,6 +49,7 @@ impl NativeVariadicMergeKind {
         match self {
             Self::Image => "image",
             Self::Sound => "sound",
+            Self::List => "list",
         }
     }
 
@@ -52,21 +58,21 @@ impl NativeVariadicMergeKind {
     ) -> &'static str {
         match self {
             Self::Image => "back_to_front",
-            Self::Sound => "top_to_bottom",
+            Self::Sound | Self::List => "top_to_bottom",
         }
     }
 
     pub(in crate::ui::panels::node_editor) const fn visual_order_semantics(self) -> &'static str {
         match self {
             Self::Image => "front_to_back",
-            Self::Sound => "top_to_bottom",
+            Self::Sound | Self::List => "top_to_bottom",
         }
     }
 
     const fn visual_index(self, canonical_index: usize, item_count: usize) -> usize {
         match self {
             Self::Image => item_count - canonical_index - 1,
-            Self::Sound => canonical_index,
+            Self::Sound | Self::List => canonical_index,
         }
     }
 
@@ -77,7 +83,7 @@ impl NativeVariadicMergeKind {
     ) -> usize {
         match self {
             Self::Image => structural_prefix_len,
-            Self::Sound => item_count,
+            Self::Sound | Self::List => item_count,
         }
     }
 
@@ -85,6 +91,7 @@ impl NativeVariadicMergeKind {
         match self {
             Self::Image => "Image",
             Self::Sound => "Sound",
+            Self::List => "Item",
         }
     }
 
@@ -92,7 +99,7 @@ impl NativeVariadicMergeKind {
         match self {
             Self::Image if structural_prefix_len > 0 => "custom_back_after_structural_prefix",
             Self::Image => "back",
-            Self::Sound => "end",
+            Self::Sound | Self::List => "end",
         }
     }
 
@@ -208,6 +215,9 @@ impl MergeLayerRow {
         };
         let mut metadata = serde_json::json!({
             "merge_id": self.merge_id,
+            "ordered_input_node_id": self.merge_id,
+            "ordered_input": true,
+            "input_kind": self.kind.qa_key(),
             "merge_kind": self.kind.qa_key(),
             "port": self.kind.input_port(),
             "connection_id": self.connection_id,
@@ -299,6 +309,7 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
                 let expected_port = match kind {
                     NativeVariadicMergeKind::Image => IMAGE_OUTPUT_PORT,
                     NativeVariadicMergeKind::Sound => AUDIO_OUTPUT_PORT,
+                    NativeVariadicMergeKind::List => LIST_ITEM_OUTPUT_PORT,
                 };
                 (connection.from.port == expected_port && children.contains(&connection.from.owner))
                     .then_some(StructuralMergeChild {
@@ -390,7 +401,7 @@ pub(in crate::ui::panels::node_editor) fn merge_vacant_slot(
         .vacant_canonical_index(layer_count, structural_prefix_len);
     let visual_index = match merge.kind {
         NativeVariadicMergeKind::Image => layer_count.saturating_sub(canonical_index),
-        NativeVariadicMergeKind::Sound => canonical_index,
+        NativeVariadicMergeKind::Sound | NativeVariadicMergeKind::List => canonical_index,
     };
     Some(MergeVacantSlot {
         canonical_index,
@@ -431,6 +442,7 @@ pub(in crate::ui::panels::node_editor) fn native_variadic_merge_for_node(
     let kind = match project.get_node(node_id).map(|node| node.content()) {
         Some(NodeContent::Merge) => NativeVariadicMergeKind::Image,
         Some(NodeContent::SoundMerge) => NativeVariadicMergeKind::Sound,
+        Some(NodeContent::List(ListContent::Make)) => NativeVariadicMergeKind::List,
         _ => return None,
     };
     Some(NativeVariadicMerge { node_id, kind })
@@ -531,7 +543,10 @@ pub(in crate::ui::panels::node_editor) fn register_merge_layer_component(
         );
     }
     #[cfg(test)]
-    capture_test_rect(&id, rect);
+    {
+        capture_test_rect(&id, rect);
+        capture_test_metadata(&id, &metadata);
+    }
     crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
 }
 
