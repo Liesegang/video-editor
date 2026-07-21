@@ -4,20 +4,28 @@
 //! Nodes. Timeline inheritance and local-time derivation remain in `scope`.
 
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use uuid::Uuid;
 
 use super::evaluator::{FrameEvaluator, cycle_error, missing_error};
 use super::scope::EvaluationScope;
+use crate::cache::CacheManager;
+use crate::core::audio::analysis::{Spectrum, band_energy, peak, rms, spectrum};
+use crate::core::audio::mixer::render_owner_samples;
 use crate::error::LibraryError;
 use crate::model::numeric::evaluate_numeric_binary;
 use crate::model::project::{
-    DURATION_PORT, EvalOutput, EvalResult, PortAddress, PortDataType, PortDirection, PortOwner,
-    RESOLUTION_PORT, TIME_PORT,
+    ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
+    BAND_HIGH_HZ_PROPERTY, BAND_LOW_HZ_PROPERTY, DURATION_PORT, EvalOutput, EvalResult,
+    NUMBER_RESULT_OUTPUT_PORT, PortAddress, PortDataType, PortDirection, PortOwner,
+    RESOLUTION_PORT, SOUND_INPUT_PORT, SPECTRUM_INPUT_PORT, SPECTRUM_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::PropertyValue;
-use crate::model::{Node, NodeContent, ValueContent};
+use crate::model::{Node, NodeContent, SoundAnalysisContent, ValueContent};
 use crate::plugin::{PropertyEvaluationError, ResolvedNodeInputs, property_name_from_port};
+
+static SOUND_ANALYSIS_CACHE: LazyLock<CacheManager> = LazyLock::new(CacheManager::new);
 
 impl FrameEvaluator<'_> {
     pub(super) fn resolve_node_inputs(
@@ -43,7 +51,10 @@ impl FrameEvaluator<'_> {
                     LibraryError::Validation(format!("Missing input port {target:?}"))
                 })?;
             match target_definition.data_type {
-                PortDataType::Image | PortDataType::Shape => continue,
+                PortDataType::Image
+                | PortDataType::Shape
+                | PortDataType::Audio
+                | PortDataType::Spectrum => continue,
                 _ => {}
             }
             if matches!(
@@ -92,7 +103,7 @@ impl FrameEvaluator<'_> {
             .ok_or_else(|| LibraryError::Validation(format!("Missing output port {source:?}")))?;
         if matches!(
             definition.data_type,
-            PortDataType::Image | PortDataType::Audio
+            PortDataType::Image | PortDataType::Audio | PortDataType::Spectrum
         ) {
             return Err(LibraryError::Validation(format!(
                 "Typed media port {source:?} cannot be resolved as a value"
@@ -143,6 +154,19 @@ impl FrameEvaluator<'_> {
             && matches!(source_node.map(Node::content), Some(NodeContent::Value(_)))
         {
             return self.evaluate_value_node_output(node_id, &source.port, global_time, path);
+        }
+        if let PortOwner::Node(node_id) = source.owner
+            && matches!(
+                source_node.map(Node::content),
+                Some(NodeContent::SoundAnalysis(_))
+            )
+        {
+            return self.evaluate_sound_analysis_value_output(
+                node_id,
+                &source.port,
+                global_time,
+                path,
+            );
         }
         if let Some(NodeContent::PluginOperation(operation)) = source_node.map(Node::content) {
             let descriptor = match self.plugin_manager.operation_descriptor(
@@ -272,6 +296,224 @@ impl FrameEvaluator<'_> {
                 Ok(property_output(value, node.id, property_key))
             }
         }
+    }
+
+    fn evaluate_sound_analysis_value_output(
+        &self,
+        node_id: Uuid,
+        output_port: &str,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let owner = PortOwner::Node(node_id);
+        let node = self
+            .project
+            .get_node(node_id)
+            .ok_or_else(|| missing_error(owner))?;
+        let NodeContent::SoundAnalysis(analysis) = node.content() else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        if !node.enabled || output_port != NUMBER_RESULT_OUTPUT_PORT {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let scope = match self.scope_for_owner(owner, global_time, path)? {
+            EvalOutput::Produced(scope) => scope,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        if !path.insert(owner) {
+            return Err(cycle_error(owner));
+        }
+        let result = match analysis {
+            SoundAnalysisContent::Rms | SoundAnalysisContent::Peak => {
+                self.evaluate_sound_scalar(node, *analysis, scope, global_time, path)
+            }
+            SoundAnalysisContent::BandEnergy => {
+                self.evaluate_band_energy(node, scope, global_time, path)
+            }
+            SoundAnalysisContent::Spectrum => Ok(EvalOutput::NoOutput),
+        };
+        path.remove(&owner);
+        result.map(|output| output.map(PropertyValue::from))
+    }
+
+    fn evaluate_sound_scalar(
+        &self,
+        node: &Node,
+        analysis: SoundAnalysisContent,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<f64> {
+        let samples = match self.resolve_sound_window(node, scope, global_time, path)? {
+            EvalOutput::Produced(samples) => samples,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        Ok(EvalOutput::Produced(match analysis {
+            SoundAnalysisContent::Rms => rms(&samples),
+            SoundAnalysisContent::Peak => peak(&samples),
+            SoundAnalysisContent::Spectrum | SoundAnalysisContent::BandEnergy => {
+                return Ok(EvalOutput::NoOutput);
+            }
+        }))
+    }
+
+    fn evaluate_band_energy(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<f64> {
+        let target = PortAddress::new(PortOwner::Node(node.id), SPECTRUM_INPUT_PORT);
+        let connection = match self.single_connection_to(&target)? {
+            EvalOutput::Produced(connection) => connection,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let spectrum = match self.resolve_spectrum(&connection.from, global_time, path)? {
+            EvalOutput::Produced(spectrum) => spectrum,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let low = match self.evaluate_analysis_property(node, BAND_LOW_HZ_PROPERTY, scope)? {
+            Some(value) => value,
+            None => return Ok(EvalOutput::NoOutput),
+        };
+        let high = match self.evaluate_analysis_property(node, BAND_HIGH_HZ_PROPERTY, scope)? {
+            Some(value) => value,
+            None => return Ok(EvalOutput::NoOutput),
+        };
+        Ok(EvalOutput::Produced(band_energy(&spectrum, low, high)))
+    }
+
+    fn resolve_spectrum(
+        &self,
+        source: &PortAddress,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<Spectrum> {
+        if source.port != SPECTRUM_OUTPUT_PORT {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let PortOwner::Node(node_id) = source.owner else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        let node = self
+            .project
+            .get_node(node_id)
+            .ok_or_else(|| missing_error(source.owner))?;
+        if !node.enabled
+            || !matches!(
+                node.content(),
+                NodeContent::SoundAnalysis(SoundAnalysisContent::Spectrum)
+            )
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let scope = match self.scope_for_owner(source.owner, global_time, path)? {
+            EvalOutput::Produced(scope) => scope,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        if !path.insert(source.owner) {
+            return Err(cycle_error(source.owner));
+        }
+        let result = match self.resolve_sound_window(node, scope, global_time, path)? {
+            EvalOutput::Produced(samples) => {
+                let sample_rate = self.analysis_sample_rate(node, scope).ok_or_else(|| {
+                    LibraryError::Validation("invalid analysis sample rate".into())
+                })?;
+                Ok(EvalOutput::Produced(spectrum(&samples, sample_rate)))
+            }
+            EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
+        };
+        path.remove(&source.owner);
+        result
+    }
+
+    fn resolve_sound_window(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        _path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<Vec<f32>> {
+        let target = PortAddress::new(PortOwner::Node(node.id), SOUND_INPUT_PORT);
+        let connection = match self.single_connection_to(&target)? {
+            EvalOutput::Produced(connection) => connection,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let sample_rate = match self.analysis_sample_rate(node, scope) {
+            Some(sample_rate) => sample_rate,
+            None => return Ok(EvalOutput::NoOutput),
+        };
+        let window_ms =
+            match self.evaluate_analysis_property(node, ANALYSIS_WINDOW_MS_PROPERTY, scope)? {
+                Some(value) if value.is_finite() && value > 0.0 => value,
+                _ => return Ok(EvalOutput::NoOutput),
+            };
+        let hop_ms = match self.evaluate_analysis_property(node, ANALYSIS_HOP_MS_PROPERTY, scope)? {
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            _ => return Ok(EvalOutput::NoOutput),
+        };
+        let window_seconds = window_ms / 1_000.0;
+        let hop_seconds = hop_ms / 1_000.0;
+        let local_center = (scope.time / hop_seconds).floor() * hop_seconds;
+        let center_time = global_time + (local_center - scope.time);
+        let start_time = (center_time - window_seconds * 0.5).max(0.0);
+        let frames = (window_seconds * f64::from(sample_rate))
+            .ceil()
+            .clamp(1.0, 262_144.0) as usize;
+        let start_sample = (start_time * f64::from(sample_rate)).floor() as u64;
+        let Some(composition) = self.composition_for_owner(PortOwner::Node(node.id)) else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        Ok(render_owner_samples(
+            self.project,
+            composition,
+            connection.from.owner,
+            &SOUND_ANALYSIS_CACHE,
+            start_sample,
+            frames,
+            sample_rate,
+            center_time,
+            self.plugin_manager,
+        )
+        .map_or(EvalOutput::NoOutput, EvalOutput::Produced))
+    }
+
+    fn analysis_sample_rate(&self, node: &Node, scope: EvaluationScope) -> Option<u32> {
+        let value = self
+            .evaluate_analysis_property(node, ANALYSIS_SAMPLE_RATE_PROPERTY, scope)
+            .ok()??;
+        (value.is_finite() && (8_000.0..=192_000.0).contains(&value))
+            .then_some(value.round() as u32)
+    }
+
+    fn evaluate_analysis_property(
+        &self,
+        node: &Node,
+        key: &str,
+        scope: EvaluationScope,
+    ) -> Result<Option<f64>, LibraryError> {
+        let Some(property) = node.properties().get(key) else {
+            return Ok(None);
+        };
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
+        let context = self.context(composition, Some(&inputs));
+        let value = context
+            .evaluate_property_value(property, node.properties(), scope.time)
+            .map_err(|error| {
+                LibraryError::Validation(format!(
+                    "Sound analysis property '{}.{key}' failed: {error}",
+                    node.id
+                ))
+            })?;
+        Ok(match value {
+            PropertyValue::Number(value) => Some(value.into_inner()),
+            PropertyValue::Integer(value) => Some(value as f64),
+            _ => None,
+        })
     }
 }
 

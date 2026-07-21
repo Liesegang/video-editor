@@ -182,6 +182,14 @@ pub(super) fn create_action_for_request(
                 comp_id,
             )
         })),
+        NodeCreateRequest::SoundAnalysis(analysis) => Some(Box::new(move |project| {
+            create_prebuilt_node(
+                project,
+                graph_position,
+                Node::new_sound_analysis(analysis.label(), analysis),
+                comp_id,
+            )
+        })),
         NodeCreateRequest::Clip => Some(Box::new(move |project| {
             create_clip_at_free_slot(project, graph_position, comp_id, "Clip").is_some()
         })),

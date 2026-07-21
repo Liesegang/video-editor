@@ -9,7 +9,7 @@ pub mod vector;
 pub use blend::{BlendMode, BlendModeGroup, BlendModeInfo};
 pub use node::{
     Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent,
-    PluginOperationContent, Track, ValueContent,
+    PluginOperationContent, SoundAnalysisContent, Track, ValueContent,
 };
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;

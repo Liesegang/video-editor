@@ -298,5 +298,6 @@ pub(super) fn node_display_type(node: &Node) -> String {
         NodeContent::Value(value) => value.label().to_string(),
         NodeContent::Merge => "Merge".to_string(),
         NodeContent::SoundMerge => "Sound Merge".to_string(),
+        NodeContent::SoundAnalysis(analysis) => analysis.label().to_string(),
     }
 }

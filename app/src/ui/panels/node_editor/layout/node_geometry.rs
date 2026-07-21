@@ -36,6 +36,7 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
             (166.0 + layer_count as f32 * 82.0).max(220.0)
         }
         Some(NodeContent::SoundMerge) => 220.0,
+        Some(NodeContent::SoundAnalysis(_)) => 260.0,
         Some(
             NodeContent::Media(_) | NodeContent::CompositionInstance(_) | NodeContent::Value(_),
         ) => 220.0,

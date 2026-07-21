@@ -104,6 +104,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(76, 55, 104),
             accent: Color32::from_rgb(190, 145, 229),
         },
+        Some(NodeContent::SoundAnalysis(_)) => NodePalette {
+            body: Color32::from_rgb(27, 42, 46),
+            header: Color32::from_rgb(39, 87, 96),
+            accent: Color32::from_rgb(88, 207, 220),
+        },
     }
 }
 
@@ -154,6 +159,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
         Some(NodeContent::Merge) => NodeEditorIcon::new(icons::ARROWS_MERGE, "Merge operation"),
         Some(NodeContent::SoundMerge) => {
             NodeEditorIcon::new(icons::WAVEFORM, "Sound Merge operation")
+        }
+        Some(NodeContent::SoundAnalysis(_)) => {
+            NodeEditorIcon::new(icons::WAVE_SINE, "Sound analysis operation")
         }
         None => NodeEditorIcon::new(icons::QUESTION, "Missing node"),
     }
@@ -400,6 +408,7 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
         PortDataType::Image => Color32::from_rgb(238, 207, 109),
         PortDataType::Shape => Color32::from_rgb(142, 132, 246),
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
+        PortDataType::Spectrum => Color32::from_rgb(88, 207, 220),
         PortDataType::String => Color32::from_rgb(100, 220, 220),
         PortDataType::Path => Color32::from_rgb(100, 150, 255),
         PortDataType::Numeric | PortDataType::Number | PortDataType::Integer => {

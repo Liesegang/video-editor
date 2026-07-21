@@ -1,5 +1,5 @@
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
-use library::model::{Node, Project, ValueContent};
+use library::model::{Node, Project, SoundAnalysisContent, ValueContent};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
     EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
@@ -27,6 +27,7 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
     Effect(String),
     Merge,
     SoundMerge,
+    SoundAnalysis(SoundAnalysisContent),
     Clip,
     Track,
     Composition,
@@ -49,6 +50,7 @@ impl NodeCreateRequest {
             Self::Effect(_) => "effect",
             Self::Merge => "merge",
             Self::SoundMerge => "sound_merge",
+            Self::SoundAnalysis(analysis) => analysis.operation_key(),
             Self::Clip => "clip",
             Self::Track => "track",
             Self::Composition => "composition",
@@ -236,6 +238,21 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
             keywords.iter().copied(),
             format!("node_editor.menu.create.value:{}", value.operation_key()),
             NodeCreateRequest::Value(value),
+        )
+    }));
+    items.extend(SoundAnalysisContent::ALL.into_iter().map(|analysis| {
+        let keywords: &[&str] = match analysis {
+            SoundAnalysisContent::Rms => &["sound", "audio", "rms", "level", "amplitude"],
+            SoundAnalysisContent::Peak => &["sound", "audio", "peak", "level", "amplitude"],
+            SoundAnalysisContent::Spectrum => &["sound", "audio", "fft", "spectrum", "frequency"],
+            SoundAnalysisContent::BandEnergy => &["sound", "audio", "band", "frequency", "energy"],
+        };
+        node_create_menu_item(
+            analysis.label(),
+            "Sound / Analysis",
+            keywords.iter().copied(),
+            format!("node_editor.menu.create.{}", analysis.operation_key()),
+            NodeCreateRequest::SoundAnalysis(analysis),
         )
     }));
     items.extend([
@@ -445,6 +462,9 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
         }
         NodeCreateRequest::Merge => return Some(Node::new_merge("Merge")),
         NodeCreateRequest::SoundMerge => return Some(Node::new_sound_merge("Sound Merge")),
+        NodeCreateRequest::SoundAnalysis(analysis) => {
+            return Some(Node::new_sound_analysis(analysis.label(), *analysis));
+        }
         NodeCreateRequest::Value(value) => return Some(Node::new_value(value.label(), *value)),
         NodeCreateRequest::Text
         | NodeCreateRequest::Solid

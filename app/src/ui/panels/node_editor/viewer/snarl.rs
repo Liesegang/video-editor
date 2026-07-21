@@ -671,7 +671,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 NodeContent::Media(_)
                 | NodeContent::CompositionInstance(_)
                 | NodeContent::Merge
-                | NodeContent::SoundMerge => {}
+                | NodeContent::SoundMerge
+                | NodeContent::SoundAnalysis(_) => {}
             }
         });
     }

@@ -24,6 +24,14 @@ pub const FMOD_DIVISOR_INPUT_PORT: &str = "divisor";
 pub const NUMERIC_A_INPUT_PORT: &str = "a";
 pub const NUMERIC_B_INPUT_PORT: &str = "b";
 pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
+pub const SOUND_INPUT_PORT: &str = "sound";
+pub const SPECTRUM_INPUT_PORT: &str = "spectrum_in";
+pub const SPECTRUM_OUTPUT_PORT: &str = "spectrum";
+pub const ANALYSIS_WINDOW_MS_PROPERTY: &str = "window_ms";
+pub const ANALYSIS_HOP_MS_PROPERTY: &str = "hop_ms";
+pub const ANALYSIS_SAMPLE_RATE_PROPERTY: &str = "sample_rate";
+pub const BAND_LOW_HZ_PROPERTY: &str = "low_hz";
+pub const BAND_HIGH_HZ_PROPERTY: &str = "high_hz";
 
 /// A graph result; `NoOutput` is distinct from every valid value in `T`.
 #[derive(Clone, PartialEq, Debug)]
@@ -117,6 +125,9 @@ pub enum PortDataType {
     /// which is only an authored scalar SVG path string.
     Shape,
     Audio,
+    /// Transient frequency-domain Sound value. Spectrum payloads are never
+    /// persisted in Project; only this typed connection contract is authored.
+    Spectrum,
     /// A scalar or 2D/3D/4D floating-point graph value. Integer sources are
     /// promoted to a scalar. Runtime values keep their concrete dimension.
     Numeric,

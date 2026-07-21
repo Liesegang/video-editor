@@ -14,10 +14,12 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 mod containers;
+mod sound_analysis;
 pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
+pub use sound_analysis::SoundAnalysisContent;
 
 static FMOD_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
     [PropertyDefinition::new(
@@ -613,6 +615,9 @@ pub enum NodeContent {
     /// Ordered variadic Sound mixer. Runtime audio routing traverses these
     /// typed connections before the sample mixer combines Media leaves.
     SoundMerge,
+    /// Native frame-time Sound analysis. PCM and Spectrum values are
+    /// transient evaluation data and never become a persisted side model.
+    SoundAnalysis(SoundAnalysisContent),
 }
 
 impl NodeContent {

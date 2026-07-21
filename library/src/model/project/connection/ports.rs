@@ -5,7 +5,8 @@ use super::{
     AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, DURATION_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
     FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
     NUMERIC_A_INPUT_PORT, PortAddress, PortDataType, PortDefinition, PortDirection, PortExposure,
-    PortOwner, PortSide, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    PortOwner, PortSide, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT,
+    SPECTRUM_INPUT_PORT, TIME_PORT,
 };
 
 fn metadata_catalog(direction: PortDirection, exposure: PortExposure) -> Vec<PortDefinition> {
@@ -171,6 +172,10 @@ fn node_ports(
             );
             ports.push(audio_output());
         }
+        NodeContent::SoundAnalysis(analysis) => {
+            include_property_inputs = true;
+            ports.extend(analysis.port_definitions().iter().cloned());
+        }
     }
     if include_property_inputs {
         let mut properties = node.properties().iter().collect::<Vec<_>>();
@@ -241,6 +246,8 @@ fn canonical_node_port_rank(node: &crate::model::Node, port: &PortDefinition) ->
             | BACKGROUND_SHAPE_INPUT_PORT
             | MERGE_IMAGES_PORT
             | MERGE_SOUNDS_PORT
+            | SOUND_INPUT_PORT
+            | SPECTRUM_INPUT_PORT
             | FMOD_X_INPUT_PORT
             | NUMERIC_A_INPUT_PORT
     ) {

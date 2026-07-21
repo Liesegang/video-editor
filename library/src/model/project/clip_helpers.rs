@@ -42,6 +42,7 @@ impl Node {
             NodeContent::Value(_) => (125, 190, 210),
             NodeContent::Merge => (150, 180, 190),
             NodeContent::SoundMerge => (170, 135, 205),
+            NodeContent::SoundAnalysis(_) => (120, 190, 205),
         }
     }
 

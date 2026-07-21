@@ -19,13 +19,16 @@ pub mod property;
 mod structural_merge;
 
 pub use connection::{
-    AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, ContainerAudioSource, ContainerAudioSourceKind,
-    ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
-    EvalOutput, EvalResult, EvaluationError, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
-    FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
-    NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress,
-    PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
-    PortSide, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
+    AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, BAND_HIGH_HZ_PROPERTY, BAND_LOW_HZ_PROPERTY,
+    ContainerAudioSource, ContainerAudioSourceKind, ContainerGraphSemantics, ContainerImageSource,
+    ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult, EvaluationError,
+    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress, PortDataType, PortDefinition,
+    PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
+    RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT, SPECTRUM_INPUT_PORT,
+    SPECTRUM_OUTPUT_PORT, TIME_PORT,
 };
 pub use error::ProjectGraphError;
 
