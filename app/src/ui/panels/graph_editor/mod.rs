@@ -524,15 +524,25 @@ fn finish_graph_drag_if_owner_changed(
     project: &Arc<RwLock<Project>>,
     history_manager: &mut HistoryManager,
 ) -> bool {
-    if editor_context
+    let changed = if editor_context
         .graph_editor
         .keyframe_drag
         .as_ref()
         .is_some_and(|drag| graph_target != Some(drag.target))
     {
-        return actions::finish_pending_move(editor_context, project, history_manager);
+        actions::finish_pending_move(editor_context, project, history_manager)
+    } else {
+        false
+    };
+    // The panel returns before `begin_target` when selection is cleared. Do
+    // not leave the previous owner's property visibility or keyframe
+    // selection available to a later re-selection of that same typed owner.
+    if graph_target.is_none() {
+        editor_context.graph_editor.clear_target();
+        editor_context.interaction.selected_keyframe = None;
+        editor_context.interaction.editing_keyframe = None;
     }
-    false
+    changed
 }
 
 fn node_belongs_to_composition(
@@ -786,6 +796,50 @@ mod tests {
         ));
         assert_eq!(history.undo_depth(), 2);
         assert_eq!(history.undo(&edited), Some(original));
+        assert!(context.graph_editor.keyframe_drag.is_none());
+    }
+
+    #[test]
+    fn missing_owner_commits_changed_drag_and_prunes_graph_target_state() {
+        let composition_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let original = Project::new("before cleared graph selection");
+        let project = Arc::new(RwLock::new(original.clone()));
+        project.write().unwrap().name = "after cleared graph selection".to_string();
+        let edited = project.read().unwrap().clone();
+        let target = SelectionTarget::Node(node_id);
+        let mut context = EditorContext::new(composition_id);
+        assert!(context.graph_editor.begin_target(target));
+        context
+            .graph_editor
+            .sync_properties(["node:opacity".to_string()]);
+        context
+            .graph_editor
+            .selected_keyframes
+            .insert(("node:opacity".to_string(), keyframe_id));
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            target,
+            anchor: ("node:opacity".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
+        let mut history = HistoryManager::new();
+        history.push_project_state(original.clone());
+
+        assert!(finish_graph_drag_if_owner_changed(
+            None,
+            &mut context,
+            &project,
+            &mut history,
+        ));
+
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undo(&edited), Some(original));
+        assert_eq!(context.graph_editor.active_target, None);
+        assert!(context.graph_editor.visible_properties.is_empty());
+        assert!(context.graph_editor.known_properties.is_empty());
+        assert!(context.graph_editor.selected_keyframes.is_empty());
         assert!(context.graph_editor.keyframe_drag.is_none());
     }
 }

@@ -219,15 +219,23 @@ impl Default for GraphEditorState {
 impl GraphEditorState {
     pub fn begin_target(&mut self, target: SelectionTarget) -> bool {
         if self.active_target != Some(target) {
+            self.clear_target();
             self.active_target = Some(target);
-            self.visible_properties.clear();
-            self.known_properties.clear();
-            self.selected_keyframes.clear();
-            self.keyframe_drag = None;
             true
         } else {
             false
         }
+    }
+
+    /// Clears state whose property identifiers are meaningful only for the
+    /// current typed Graph owner. A changed drag must be committed before
+    /// calling this method.
+    pub fn clear_target(&mut self) {
+        self.active_target = None;
+        self.visible_properties.clear();
+        self.known_properties.clear();
+        self.selected_keyframes.clear();
+        self.keyframe_drag = None;
     }
 
     pub fn sync_properties(&mut self, current: impl IntoIterator<Item = String>) {

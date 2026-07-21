@@ -145,10 +145,7 @@ impl EditorContext {
     fn invalidate_composition_scoped_transients(&mut self) {
         self.timeline.is_playing = false;
         self.timeline.playback_accumulator = 0.0;
-        self.graph_editor.active_target = None;
-        self.graph_editor.known_properties.clear();
-        self.graph_editor.selected_keyframes.clear();
-        self.graph_editor.keyframe_drag = None;
+        self.graph_editor.clear_target();
         self.keyframe_dialog = KeyframeDialogState::default();
 
         self.interaction.dragged_item = None;
@@ -706,6 +703,10 @@ mod tests {
         context.interaction.preview_viewport.auto_fit = false;
         context.interaction.preview_viewport.fitted_composition_id = Some(first);
         context.graph_editor.active_target = Some(SelectionTarget::Node(node_id));
+        context
+            .graph_editor
+            .visible_properties
+            .insert("node:opacity".to_string());
         context.node_editor_state.selected_connection_id = Some(uuid::Uuid::new_v4());
         context.node_editor_state.pending_continuous_edit = Some(NodeEditorPendingEdit {
             owner: PortOwner::Node(node_id),
@@ -733,6 +734,7 @@ mod tests {
             .fitted_composition_id
             .is_none());
         assert_eq!(context.graph_editor.active_target, None);
+        assert!(context.graph_editor.visible_properties.is_empty());
         assert_eq!(context.node_editor_state.selected_connection_id, None);
         assert!(context.node_editor_state.pending_continuous_edit.is_some());
     }
