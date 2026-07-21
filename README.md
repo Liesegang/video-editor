@@ -70,7 +70,7 @@ ABI、bundle構成、対応categoryの詳細は
 - `bitrate`: kbps 単位の映像ビットレート (任意)。
 - `quality`: H.264 の CRF など品質値 (任意)。
 
-設定を `mp4` などにした場合、`cargo run -p library -- ...` を実行すると `./rendered/<composition>.mp4` が生成されます。FFmpeg バイナリはシステム PATH 上にある前提です (必要に応じて `ffmpeg_path` プロパティで明示できます)。
+動画出力はアプリのExportダイアログから実行します。FFmpegバイナリはシステムPATH上にある前提です（必要に応じて`ffmpeg_path`プロパティで明示できます）。
 
 ## 開発への貢献
 

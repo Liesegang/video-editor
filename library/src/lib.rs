@@ -49,8 +49,3 @@ pub fn initialize_python_runtime() -> Result<(), LibraryError> {
         .map(|_| ())
         .map_err(|error| LibraryError::Runtime(format!("Cannot initialize CPython: {error}")))
 }
-
-pub fn run(_: Vec<String>) -> Result<(), LibraryError> {
-    println!("Library CLI temporarily disabled during Trinity refactor.");
-    Ok(())
-}
