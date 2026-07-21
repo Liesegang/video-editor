@@ -195,6 +195,15 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             }
             GraphItem::Container(owner) => {
                 let collapsed = container_collapsed(self.project, owner).unwrap_or(false);
+                let selection = super::selection::container_selection_presentation(
+                    self.project,
+                    self.containers,
+                    self.selected_container_owners,
+                    owner,
+                    self.current_time,
+                    self.to_global.scaling,
+                );
+                let selected = selection.selected;
                 let header_width = container_name_and_size(self.project, owner)
                     .map_or(240.0, |(_, size)| (size[0] - 28.0).max(240.0));
                 ui.set_min_width(header_width);
@@ -259,8 +268,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 let header_rect = clipped_qa_rect(unclipped_header_rect, *self.canvas_clip);
                 let component_id =
                     format!("node_editor.container_header.{}", qa_container_key(owner));
+                let highlight_metadata = selection.visual.map(container_highlight_metadata);
                 #[cfg(test)]
-                capture_test_rect(&component_id, header_rect);
+                {
+                    capture_test_rect(&component_id, header_rect);
+                    capture_test_metadata(
+                        &component_id,
+                        &serde_json::json!({
+                            "owner": qa_container_key(owner),
+                            "selected": selected,
+                            "highlight_style": highlight_metadata,
+                        }),
+                    );
+                }
                 crate::qa::register_component_with_metadata(
                     component_id,
                     "node_container_header",
@@ -268,6 +288,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     response.enabled(),
                     Some(serde_json::json!({
                         "owner": qa_container_key(owner),
+                        "selected": selected,
+                        "highlight_style": highlight_metadata,
                         "unclipped_rect": qa_rect_metadata(unclipped_header_rect),
                         "visible_in_canvas": header_rect.is_positive(),
                     })),
@@ -949,10 +971,13 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         paint_node_editor_canvas_grid(painter, *viewport, *self.canvas_clip, *self.to_global);
 
         for container in self.containers {
+            let selected = self.selected_container_owners.contains(&container.owner);
             paint_container_backdrop(
                 painter,
                 container,
                 container_inactive(self.project, container.owner, self.current_time),
+                selected,
+                self.to_global.scaling,
             );
         }
     }

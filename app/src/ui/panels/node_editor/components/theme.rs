@@ -15,6 +15,19 @@ use crate::ui::panels::node_editor::{
 
 pub(in crate::ui::panels::node_editor) const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
 
+const CONTAINER_SELECTED_OUTLINE: Color32 = Color32::from_rgb(102, 190, 255);
+const CONTAINER_SELECTED_OUTLINE_SCREEN_WIDTH: f32 = 3.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::ui::panels::node_editor) struct ContainerVisualStyle {
+    pub(in crate::ui::panels::node_editor) body_fill: Color32,
+    pub(in crate::ui::panels::node_editor) header_fill: Color32,
+    pub(in crate::ui::panels::node_editor) outline: egui::Stroke,
+    pub(in crate::ui::panels::node_editor) divider: egui::Stroke,
+    pub(in crate::ui::panels::node_editor) highlight_state: &'static str,
+    pub(in crate::ui::panels::node_editor) highlight_screen_width: f32,
+}
+
 /// One semantic glyph from the bundled Phosphor font plus its plain-language
 /// meaning. Keeping both together prevents visual chrome from falling back to
 /// arbitrary Unicode symbols and gives every glyph an accessible tooltip.
@@ -153,30 +166,17 @@ pub(in crate::ui::panels::node_editor) fn paint_container_backdrop(
     painter: &egui::Painter,
     container: &ContainerVisual,
     inactive: bool,
+    selected: bool,
+    scale: f32,
 ) {
     let rect = container.rect();
-    let mut fill = match container.kind {
-        ContainerKind::Composition => Color32::from_rgba_premultiplied(25, 43, 67, 70),
-        ContainerKind::Track => Color32::from_rgba_premultiplied(48, 43, 61, 64),
-        ContainerKind::Clip => Color32::from_rgba_premultiplied(38, 60, 47, 66),
-    };
-    if inactive {
-        fill = fill.gamma_multiply(0.35);
-    }
-    let mut header_fill = match container.kind {
-        ContainerKind::Composition => Color32::from_rgba_premultiplied(38, 66, 100, 220),
-        ContainerKind::Track => Color32::from_rgba_premultiplied(73, 61, 91, 220),
-        ContainerKind::Clip => Color32::from_rgba_premultiplied(52, 88, 64, 220),
-    };
-    if inactive {
-        header_fill = header_fill.gamma_multiply(0.42);
-    }
+    let style = container_visual_style(container.kind, inactive, selected, scale);
     Editor::paint_group_backdrop(
         painter,
         rect,
         GroupChrome {
-            body_fill: fill,
-            header_fill,
+            body_fill: style.body_fill,
+            header_fill: style.header_fill,
             outline: egui::Stroke::NONE,
             divider: egui::Stroke::NONE,
             header_height: CONTAINER_HEADER_HEIGHT,
@@ -191,47 +191,20 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
     project: &Project,
     container: &ContainerVisual,
     inactive: bool,
+    selected: bool,
     scale: f32,
 ) {
     let rect = container.rect();
     let detailed = node_editor_details_visible(scale);
-    let mut stroke = match container.kind {
-        ContainerKind::Composition => egui::Stroke::new(
-            if detailed {
-                2.0
-            } else {
-                screen_stroke_in_graph_units(1.4, scale)
-            },
-            Color32::from_rgb(74, 137, 207),
-        ),
-        ContainerKind::Track => egui::Stroke::new(
-            if detailed {
-                1.5
-            } else {
-                screen_stroke_in_graph_units(1.15, scale)
-            },
-            Color32::from_rgb(143, 116, 196),
-        ),
-        ContainerKind::Clip => egui::Stroke::new(
-            if detailed {
-                1.5
-            } else {
-                screen_stroke_in_graph_units(1.15, scale)
-            },
-            Color32::from_rgb(95, 174, 121),
-        ),
-    };
-    if inactive {
-        stroke.color = stroke.color.gamma_multiply(0.5);
-    }
+    let style = container_visual_style(container.kind, inactive, selected, scale);
     Editor::paint_group_foreground(
         painter,
         rect,
         GroupChrome {
             body_fill: Color32::TRANSPARENT,
             header_fill: Color32::TRANSPARENT,
-            outline: stroke,
-            divider: egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.82)),
+            outline: style.outline,
+            divider: style.divider,
             header_height: CONTAINER_HEADER_HEIGHT,
             corner_radius: 8,
             details_visible: detailed,
@@ -300,6 +273,152 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
                 Color32::from_white_alpha(if inactive { 75 } else { 135 }),
             );
         }
+    }
+}
+
+pub(in crate::ui::panels::node_editor) fn container_visual_style(
+    kind: ContainerKind,
+    inactive: bool,
+    selected: bool,
+    scale: f32,
+) -> ContainerVisualStyle {
+    let detailed = node_editor_details_visible(scale);
+    let mut body_fill = match kind {
+        ContainerKind::Composition => Color32::from_rgba_premultiplied(25, 43, 67, 70),
+        ContainerKind::Track => Color32::from_rgba_premultiplied(48, 43, 61, 64),
+        ContainerKind::Clip => Color32::from_rgba_premultiplied(38, 60, 47, 66),
+    };
+    let mut header_fill = match kind {
+        ContainerKind::Composition => Color32::from_rgba_premultiplied(38, 66, 100, 220),
+        ContainerKind::Track => Color32::from_rgba_premultiplied(73, 61, 91, 220),
+        ContainerKind::Clip => Color32::from_rgba_premultiplied(52, 88, 64, 220),
+    };
+    let (normal_screen_width, accent) = match kind {
+        ContainerKind::Composition => (
+            if detailed { 2.0 } else { 1.4 },
+            Color32::from_rgb(74, 137, 207),
+        ),
+        ContainerKind::Track => (
+            if detailed { 1.5 } else { 1.15 },
+            Color32::from_rgb(143, 116, 196),
+        ),
+        ContainerKind::Clip => (
+            if detailed { 1.5 } else { 1.15 },
+            Color32::from_rgb(95, 174, 121),
+        ),
+    };
+    if inactive {
+        body_fill = body_fill.gamma_multiply(0.35);
+        header_fill = header_fill.gamma_multiply(0.42);
+    }
+
+    let (outline, highlight_state, highlight_screen_width) = if selected {
+        header_fill = mix_color(header_fill, CONTAINER_SELECTED_OUTLINE, 0.48);
+        (
+            egui::Stroke::new(
+                screen_stroke_in_graph_units(CONTAINER_SELECTED_OUTLINE_SCREEN_WIDTH, scale),
+                CONTAINER_SELECTED_OUTLINE,
+            ),
+            "selected",
+            CONTAINER_SELECTED_OUTLINE_SCREEN_WIDTH,
+        )
+    } else {
+        let color = if inactive {
+            accent.gamma_multiply(0.5)
+        } else {
+            accent
+        };
+        let width = if detailed {
+            normal_screen_width
+        } else {
+            screen_stroke_in_graph_units(normal_screen_width, scale)
+        };
+        (
+            egui::Stroke::new(width, color),
+            "none",
+            width * scale.max(f32::EPSILON),
+        )
+    };
+    ContainerVisualStyle {
+        body_fill,
+        header_fill,
+        outline,
+        divider: egui::Stroke::new(1.0, outline.color.gamma_multiply(0.82)),
+        highlight_state,
+        highlight_screen_width,
+    }
+}
+
+pub(in crate::ui::panels::node_editor) fn container_highlight_metadata(
+    style: ContainerVisualStyle,
+) -> serde_json::Value {
+    serde_json::json!({
+        "state": style.highlight_state,
+        "outer_stroke": {
+            "color": [
+                style.outline.color.r(),
+                style.outline.color.g(),
+                style.outline.color.b(),
+                style.outline.color.a(),
+            ],
+            "width_graph": style.outline.width,
+            "width_screen": style.highlight_screen_width,
+        },
+        "header_fill": [
+            style.header_fill.r(),
+            style.header_fill.g(),
+            style.header_fill.b(),
+            style.header_fill.a(),
+        ],
+    })
+}
+
+fn mix_color(base: Color32, tint: Color32, tint_weight: f32) -> Color32 {
+    fn channel(base: u8, tint: u8, tint_weight: f32) -> u8 {
+        (base as f32 * (1.0 - tint_weight) + tint as f32 * tint_weight)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    }
+    Color32::from_rgba_premultiplied(
+        channel(base.r(), tint.r(), tint_weight),
+        channel(base.g(), tint.g(), tint_weight),
+        channel(base.b(), tint.b(), tint_weight),
+        channel(base.a(), tint.a(), tint_weight),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_container_kind_has_selected_header_and_screen_stable_outline() {
+        for kind in [
+            ContainerKind::Composition,
+            ContainerKind::Track,
+            ContainerKind::Clip,
+        ] {
+            for scale in [0.0065, 0.18, 1.0] {
+                let normal = container_visual_style(kind, false, false, scale);
+                let selected = container_visual_style(kind, false, true, scale);
+                assert_eq!(selected.highlight_state, "selected");
+                assert_ne!(selected.header_fill, normal.header_fill);
+                assert_ne!(selected.outline, normal.outline);
+                assert!(
+                    (selected.outline.width * scale - CONTAINER_SELECTED_OUTLINE_SCREEN_WIDTH)
+                        .abs()
+                        < 0.001
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_inactive_container_keeps_inactive_body_semantics() {
+        let inactive = container_visual_style(ContainerKind::Clip, true, false, 1.0);
+        let selected = container_visual_style(ContainerKind::Clip, true, true, 1.0);
+        assert_eq!(selected.body_fill, inactive.body_fill);
+        assert_ne!(selected.header_fill, inactive.header_fill);
     }
 }
 

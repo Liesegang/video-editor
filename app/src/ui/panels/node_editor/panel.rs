@@ -25,11 +25,11 @@ use super::{
     primary_node_drop_intent, push_history_snapshot, record_node_reparent_origins,
     register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
     register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
-    selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
-    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
-    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
-    SurfaceCapture, SurfaceProjection, TimeContextNode, WireInteractionFrame,
-    WireSecondaryClickHit,
+    selected_container_owners, selection_target_for_owner, show_wire_context_menu,
+    splice_node_for_release, wire_interactions, wire_port_drop_rect, wire_secondary_click_hit,
+    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
+    ProjectNodeViewer, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
+    WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -110,6 +110,7 @@ pub fn node_editor_panel(
         .filter_map(|target| target.node_id())
         .collect::<Vec<_>>();
     selected_nodes.sort_unstable();
+    let selected_containers = selected_container_owners(&editor_context.selection);
     let selected_container = editor_context
         .selection
         .primary()
@@ -243,6 +244,7 @@ pub fn node_editor_panel(
             edits: &mut edits,
             pending_navigation: &mut node_editor_state.pending_navigation,
             selected_node_ids: &selected_nodes,
+            selected_container_owners: &selected_containers,
             current_time,
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
             wire_context_request: &mut wire_context_request,
@@ -377,14 +379,23 @@ pub fn node_editor_panel(
             &context_wire_painter,
         );
         for container in &containers {
+            let selected = selected_containers.contains(&container.owner);
             paint_container_foreground(
                 &foreground,
                 &project,
                 container,
                 container_inactive(&project, container.owner, current_time),
+                selected,
                 to_global.scaling,
             );
-            register_container_chrome(container, to_global, canvas_clip, &project, current_time);
+            register_container_chrome(
+                container,
+                to_global,
+                canvas_clip,
+                &project,
+                current_time,
+                selected,
+            );
         }
 
         if ui.input(|input| input.pointer.secondary_clicked()) {

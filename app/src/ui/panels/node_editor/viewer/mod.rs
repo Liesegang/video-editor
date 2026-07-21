@@ -24,6 +24,10 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     /// Authoritative Project selection from `EditorContext`, sorted by UUID.
     /// egui-snarl's transient selection remains an input gesture detail only.
     pub(in crate::ui::panels::node_editor) selected_node_ids: &'a [Uuid],
+    /// Exact authoritative non-Node selections. Selecting a Node never
+    /// implicitly highlights its parent Group.
+    pub(in crate::ui::panels::node_editor) selected_container_owners:
+        &'a [library::model::project::PortOwner],
     pub(in crate::ui::panels::node_editor) current_time: f64,
     pub(in crate::ui::panels::node_editor) context_menu_exclusion_rects: &'a mut Vec<egui::Rect>,
     pub(in crate::ui::panels::node_editor) wire_context_request:

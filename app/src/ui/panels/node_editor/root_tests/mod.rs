@@ -364,6 +364,7 @@ fn render_test_graph_with_context_menu_exclusions(
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     selected_node_ids: &[],
+                    selected_container_owners: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                     wire_context_request: &mut wire_context_request,
@@ -393,7 +394,14 @@ fn render_test_graph_with_context_menu_exclusions(
                 final_context_menu_exclusion_rects = context_menu_exclusion_rects;
                 final_to_global = to_global;
                 for container in &containers {
-                    register_container_chrome(container, to_global, canvas_clip, project, 0.0);
+                    register_container_chrome(
+                        container,
+                        to_global,
+                        canvas_clip,
+                        project,
+                        0.0,
+                        false,
+                    );
                 }
                 register_rendered_edges(project, &rendered_ports, canvas_clip, None);
             });

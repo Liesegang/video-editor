@@ -10,8 +10,9 @@ use super::hit::cubic_bezier_point;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
-    blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend, container_inactive,
-    container_output_node_id, container_output_type_key, edge_endpoint_qa_metadata,
+    blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend,
+    container_highlight_metadata, container_inactive, container_output_node_id,
+    container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
     merge_images_target_node_id, overview_wire_graph_points, pin_color, qa_container_key,
     qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
     ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
@@ -32,6 +33,7 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
     canvas_clip: egui::Rect,
     project: &Project,
     current_time: f64,
+    selected: bool,
 ) {
     let owner = qa_container_key(container.owner);
     let graph_main = container.rect();
@@ -42,8 +44,24 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
         content.width() * content.height() / (graph_main.width() * graph_main.height())
     });
     let main_id = format!("node_editor.container.{owner}");
+    let highlight_metadata = container_highlight_metadata(container_visual_style(
+        container.kind,
+        container_inactive(project, container.owner, current_time),
+        selected,
+        to_global.scaling,
+    ));
     #[cfg(test)]
-    capture_test_rect(&main_id, main);
+    {
+        capture_test_rect(&main_id, main);
+        crate::ui::panels::node_editor::capture_test_metadata(
+            &main_id,
+            &serde_json::json!({
+                "owner": owner,
+                "selected": selected,
+                "highlight_style": highlight_metadata,
+            }),
+        );
+    }
     crate::qa::register_component_with_metadata(
         main_id,
         match container.kind {
@@ -55,6 +73,8 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
         true,
         Some(serde_json::json!({
             "owner": owner,
+            "selected": selected,
+            "highlight_style": highlight_metadata,
             "collapsed": container.collapsed,
             "inactive": container_inactive(project, container.owner, current_time),
             "output_node_id": container_output_node_id(

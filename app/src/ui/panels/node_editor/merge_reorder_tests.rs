@@ -193,6 +193,7 @@ fn render_merge_frame(
                     edits: &mut result.edits,
                     pending_navigation: &mut navigation,
                     selected_node_ids: &[],
+                    selected_container_owners: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut exclusions,
                     wire_context_request: &mut wire_context_request,

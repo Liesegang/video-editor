@@ -2699,6 +2699,61 @@ def run_selection_suite(client):
     activate_dock_tab(
         client, "dock.tab:node_editor", "Node Editor", "typed Node selection"
     )
+    container_selections = []
+    for kind, entity_id, owner_key in (
+        ("composition", COMPOSITION, "composition:" + COMPOSITION),
+        ("track", TRACK_A, "track:" + TRACK_A),
+        ("clip", CLIP_A2, "clip:" + CLIP_A2),
+    ):
+        header_id = "node_editor.container_header." + owner_key
+        visual_id = "node_editor.container." + owner_key
+        reveal_node_editor_component(client, header_id)
+        before = client.state()
+        client.click_component(header_id)
+        selected_state = client.wait_until(
+            "typed Node Editor {} selection".format(kind),
+            lambda: state
+            if selection_matches((state := client.state()), kind, entity_id)
+            else None,
+        )
+        assert_exact_selection(
+            selected_state,
+            kind,
+            entity_id,
+            "Node Editor {} container click".format(kind),
+        )
+        client.wait_component("inspector.owner.{}:{}".format(kind, entity_id))
+
+        def selected_container_visual():
+            try:
+                _, component = client.component(visual_id)
+            except QaFailure:
+                return None
+            metadata = component.get("metadata") or {}
+            highlight = metadata.get("highlight_style") or {}
+            if (
+                metadata.get("selected") is True
+                and highlight.get("state") == "selected"
+            ):
+                return component
+            return None
+
+        visual = client.wait_until(
+            "{} container selected visual".format(kind), selected_container_visual
+        )
+        if selected_state["project"] != before["project"]:
+            raise QaFailure("{} container selection mutated Project".format(kind))
+        if selected_state["history"] != before["history"]:
+            raise QaFailure("{} container selection changed history".format(kind))
+        container_selections.append(
+            {
+                "kind": kind,
+                "id": entity_id,
+                "selection": selected_state["editor"]["selection"],
+                "highlight_style": visual["metadata"]["highlight_style"],
+            }
+        )
+
     node_header = "node_editor.node_header:" + TEXT
     reveal_node_editor_component(client, node_header)
     node_before = client.state()
@@ -2751,6 +2806,7 @@ def run_selection_suite(client):
         "initial_frame": initial["frame"],
         "final_frame": cleared_state["frame"],
         "clip_selection": clip_state["editor"]["selection"],
+        "container_selections": container_selections,
         "node_selection": node_state["editor"]["selection"],
         "cleared_selection": cleared_state["editor"]["selection"],
         "actions": client.evidence,

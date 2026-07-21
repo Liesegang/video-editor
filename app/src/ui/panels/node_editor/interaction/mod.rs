@@ -11,7 +11,7 @@ pub(in crate::ui::panels::node_editor) use resize::{
 pub(in crate::ui::panels::node_editor) use selection::node_selection_after_snarl_click;
 pub(in crate::ui::panels::node_editor) use selection::{
     captured_snarl_drag_node, captured_snarl_drag_target, select_logical_item,
-    selection_target_for_owner,
+    selected_container_owners, selection_target_for_owner,
 };
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::cubic_bezier_point;

@@ -1,5 +1,6 @@
 use crate::ui::panels::node_editor::{
-    graph_item_inactive, merge_images_target_node_id, node_palette, GraphItem,
+    container_inactive, container_visual_style, graph_item_inactive, merge_images_target_node_id,
+    node_palette, ContainerVisual, ContainerVisualStyle, GraphItem,
 };
 use library::model::project::{PortAddress, PortOwner, MERGE_IMAGES_PORT};
 use library::model::Project;
@@ -15,6 +16,34 @@ pub(super) struct NodeSelectionPresentation {
     pub(super) selected: bool,
     pub(super) inactive: bool,
     pub(super) visual: NodeVisualStyle,
+}
+
+pub(super) struct ContainerSelectionPresentation {
+    pub(super) selected: bool,
+    pub(super) visual: Option<ContainerVisualStyle>,
+}
+
+pub(super) fn container_selection_presentation(
+    project: &Project,
+    containers: &[ContainerVisual],
+    selected_owners: &[PortOwner],
+    owner: PortOwner,
+    current_time: f64,
+    scale: f32,
+) -> ContainerSelectionPresentation {
+    let selected = selected_owners.contains(&owner);
+    let visual = containers
+        .iter()
+        .find(|container| container.owner == owner)
+        .map(|container| {
+            container_visual_style(
+                container.kind,
+                container_inactive(project, owner, current_time),
+                selected,
+                scale,
+            )
+        });
+    ContainerSelectionPresentation { selected, visual }
 }
 
 pub(super) fn node_selection_presentation(

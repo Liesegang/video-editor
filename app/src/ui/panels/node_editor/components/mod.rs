@@ -18,6 +18,7 @@ pub(in crate::ui::panels::node_editor) use merge_layers::{
     wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
 };
 pub(in crate::ui::panels::node_editor) use theme::{
-    container_icon, node_icon, node_palette, paint_container_backdrop, paint_container_foreground,
-    pin_color, pin_info, value_operation_label, VALUE_NODE_CATEGORY_LABEL,
+    container_highlight_metadata, container_icon, container_visual_style, node_icon, node_palette,
+    paint_container_backdrop, paint_container_foreground, pin_color, pin_info,
+    value_operation_label, ContainerVisualStyle, VALUE_NODE_CATEGORY_LABEL,
 };

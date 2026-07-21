@@ -226,6 +226,7 @@ fn overview_canvas_keeps_pan_gestures_while_precision_controls_are_disabled() {
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
                         selected_node_ids: &[],
+                        selected_container_owners: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
                         wire_context_request: &mut wire_context_request,

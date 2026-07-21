@@ -46,6 +46,7 @@ fn render_time_context_test_graph(
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     selected_node_ids: &selected_node_ids,
+                    selected_container_owners: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut exclusions,
                     wire_context_request: &mut wire_context_request,

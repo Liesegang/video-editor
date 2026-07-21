@@ -118,8 +118,9 @@ use components::{
     non_selectable_label, port_label_width, property_label, strong_non_selectable_label,
 };
 use components::{
-    container_icon, node_icon, node_palette, paint_container_backdrop, paint_container_foreground,
-    pin_color, pin_info, value_operation_label, VALUE_NODE_CATEGORY_LABEL,
+    container_highlight_metadata, container_icon, container_visual_style, node_icon, node_palette,
+    paint_container_backdrop, paint_container_foreground, pin_color, pin_info,
+    value_operation_label, ContainerVisualStyle, VALUE_NODE_CATEGORY_LABEL,
 };
 use qa::{
     clipped_qa_rect, edge_endpoint_qa_metadata, qa_container_key, qa_port_id, qa_rect_metadata,
@@ -133,7 +134,7 @@ use interaction::resize_regions;
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 use interaction::{
     captured_snarl_drag_node, captured_snarl_drag_target, select_logical_item,
-    selection_target_for_owner,
+    selected_container_owners, selection_target_for_owner,
 };
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};

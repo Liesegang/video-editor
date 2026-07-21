@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn production_container_metadata_exposes_selected_visual_for_all_group_kinds() {
+    let (project, composition_id, track_id, clip_id, _, _) = fixture();
+    let (_, containers) = build_snarl(&project, composition_id);
+    reset_test_rects();
+    let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3_000.0, 2_000.0));
+
+    for container in &containers {
+        register_container_chrome(
+            container,
+            egui::emath::TSTransform::IDENTITY,
+            canvas,
+            &project,
+            0.0,
+            true,
+        );
+    }
+
+    for owner in [
+        PortOwner::Composition(composition_id),
+        PortOwner::Track(track_id),
+        PortOwner::Clip(clip_id),
+    ] {
+        let id = format!("node_editor.container.{}", qa_container_key(owner));
+        let metadata = test_metadata(&id).expect("selected container QA metadata");
+        assert_eq!(metadata["selected"], true);
+        assert_eq!(metadata["highlight_style"]["state"], "selected");
+        assert_eq!(
+            metadata["highlight_style"]["outer_stroke"]["width_screen"],
+            3.0
+        );
+    }
+}
+
+#[test]
 fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
     let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
     assert!(project.remove_node(solid_id).unwrap().is_some());
@@ -79,6 +113,7 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
                         selected_node_ids: &[],
+                        selected_container_owners: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
                         wire_context_request: &mut wire_context_request,
@@ -491,6 +526,7 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
                         selected_node_ids: &[],
+                        selected_container_owners: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
                         wire_context_request: &mut wire_context_request,
@@ -582,6 +618,7 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
                         selected_node_ids: &[],
+                        selected_container_owners: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
                         wire_context_request: &mut wire_context_request,
