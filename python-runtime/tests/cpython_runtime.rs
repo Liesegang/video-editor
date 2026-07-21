@@ -90,7 +90,7 @@ fn reports_cpython_syntax_and_runtime_tracebacks_with_source_spans() -> TestResu
 
     let runtime = expected_error(host.evaluate("10 + (1 / 0)", &context()?, OutputType::Number))?;
     assert_eq!(runtime.phase, Phase::Evaluate);
-    assert_eq!(runtime.kind, DiagnosticKind::Runtime);
+    assert_eq!(runtime.kind, DiagnosticKind::DivisionByZero);
     let traceback = runtime.traceback.as_deref().unwrap_or_default();
     assert!(traceback.contains("<ruvie-expression>"));
     assert!(traceback.contains("ZeroDivisionError"));
