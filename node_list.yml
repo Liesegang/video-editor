@@ -1670,19 +1670,22 @@ Opacity Effector:
 
 Backplate Decorator:
   category: Ensemble
+  description: Fit arbitrary background Shape geometry to Char, Line, or Block bounds; use downstream Fill/Stroke Style nodes for appearance
   inputs:
+    - name: target_shape
+      type: Shape
+    - name: background_shape
+      type: Shape
     - name: target
       type: Enum
       options: [Char, Line, Block]
-    - name: shape
-      type: Enum
-      options: [Rect, RoundRect, Circle]
-    - name: color
-      type: Color
     - name: padding
       type: Scalar
-    - name: corner_radius
-      type: Scalar
+    - name: offset
+      type: Vector2
+    - name: fit
+      type: Enum
+      options: [Stretch, Contain, Cover]
   outputs:
-    - name: decorator
-      type: Decorator
+    - name: background_shape
+      type: Shape

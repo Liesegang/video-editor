@@ -5,8 +5,9 @@ use crate::error::LibraryError;
 use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
 use crate::model::project::{
-    Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeGraphBundle, PortAddress, PortDataType,
-    PortDirection, PortOwner, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    BACKGROUND_SHAPE_INPUT_PORT, Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    NodeGraphBundle, PortAddress, PortDataType, PortDirection, PortOwner, Project,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use crate::model::property::{
     KeyframeId, KeyframeUpdate, Property, PropertyDefinition, PropertyMap, PropertyUiType,
@@ -20,6 +21,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod backplate;
 mod property_authoring;
 mod property_evaluation;
 mod raster_source_graph;
@@ -1269,6 +1271,18 @@ impl ProjectManager {
         let decorator = self
             .plugin_manager
             .create_decorator_operation_node(decorator_type)?;
+        if matches!(
+            decorator.content(),
+            NodeContent::PluginOperation(operation)
+                if {
+                operation
+                    .declared_ports
+                    .iter()
+                    .any(|port| port.key == BACKGROUND_SHAPE_INPUT_PORT)
+                }
+        ) {
+            return self.insert_backplate_geometry_branch(node_id, decorator);
+        }
         self.insert_shape_operation_after(node_id, decorator)
     }
 
@@ -1991,60 +2005,6 @@ mod keyframe_tests {
     }
 
     #[test]
-    fn add_shape_operation_preserves_one_downstream_connection_identity() {
-        let (shared, manager, _, clip_id) = manager_with_empty_clip();
-        let graph = manager
-            .create_text_graph("one", DEFAULT_TEXT_FONT, 640, 480)
-            .unwrap();
-        let source_id = graph
-            .nodes
-            .iter()
-            .find(|node| {
-                matches!(
-                    node.content(),
-                    NodeContent::Generator(GeneratorContent::Text)
-                )
-            })
-            .unwrap()
-            .id;
-        let transform_id = graph
-            .nodes
-            .iter()
-            .find(|node| {
-                matches!(
-                    node.content(),
-                    NodeContent::PluginOperation(operation)
-                        if operation.category == crate::plugin::TRANSFORM_CATEGORY
-                )
-            })
-            .expect("Text graph must contain Transform")
-            .id;
-        let original = graph
-            .connections
-            .iter()
-            .find(|connection| connection.from.owner == PortOwner::Node(transform_id))
-            .unwrap()
-            .clone();
-        shared
-            .write()
-            .unwrap()
-            .insert_node_graph(NodeContainer::Clip(clip_id), graph)
-            .unwrap();
-
-        manager.add_decorator(source_id, "backplate").unwrap();
-        let project = shared.read().unwrap();
-        let rewired = project
-            .connections
-            .iter()
-            .find(|connection| connection.id == original.id)
-            .unwrap();
-        assert_eq!(rewired.to, original.to);
-        assert_eq!(rewired.order, original.order);
-        assert_ne!(rewired.from, original.from);
-        assert_eq!(rewired.from.port, SHAPE_OUTPUT_PORT);
-    }
-
-    #[test]
     fn add_shape_operation_preserves_every_fanout_connection_identity_and_order() {
         let (shared, manager, _, clip_id) = manager_with_empty_clip();
         let graph = manager
@@ -2146,7 +2106,7 @@ mod keyframe_tests {
             .expect("cross-container shape connection must exist")
             .clone();
 
-        manager.add_decorator(source_id, "backplate").unwrap();
+        manager.add_effector(source_id, "opacity").unwrap();
         let project = shared.read().unwrap();
         let inserted = project
             .nodes
@@ -2155,8 +2115,8 @@ mod keyframe_tests {
                 matches!(
                     node.content(),
                     NodeContent::PluginOperation(operation)
-                        if operation.category == "decorator"
-                            && operation.component_id == "backplate"
+                        if operation.category == "effector"
+                            && operation.component_id == "opacity"
                 )
             })
             .unwrap();
