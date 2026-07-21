@@ -355,4 +355,3 @@
         assert!(effectors.get("example.first").is_some());
         assert!(effectors.get("example.second").is_some());
     }
-

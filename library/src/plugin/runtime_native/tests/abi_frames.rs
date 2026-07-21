@@ -259,4 +259,3 @@
         assert!(error.contains("status 3"));
         assert!(error.contains("fixture callback panicked"));
     }
-

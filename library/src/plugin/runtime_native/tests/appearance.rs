@@ -549,4 +549,3 @@
             "accepted configs must produce visible Skia output"
         );
     }
-
