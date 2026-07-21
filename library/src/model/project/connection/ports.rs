@@ -223,6 +223,7 @@ fn property_value_data_type(value: &crate::model::property::PropertyValue) -> Po
         PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PortDataType::Color,
         PropertyValue::Vec3(_) => PortDataType::Vec3,
         PropertyValue::Vec4(_) => PortDataType::Vec4,
+        PropertyValue::Path(_) => PortDataType::Path,
         PropertyValue::Array(_) | PropertyValue::Map(_) => PortDataType::Any,
     }
 }
@@ -282,8 +283,9 @@ pub(super) fn is_graph_connectable_type(data_type: PortDataType) -> bool {
 }
 
 #[cfg(test)]
-mod color_value_tests {
+mod structured_property_value_tests {
     use super::*;
+    use crate::model::path::{FillRule, PathValue};
     use crate::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
 
     #[test]
@@ -294,5 +296,11 @@ mod color_value_tests {
             PortDataType::Color
         );
         Ok(())
+    }
+
+    #[test]
+    fn canonical_path_property_uses_path_ports() {
+        let value = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
+        assert_eq!(property_value_data_type(&value), PortDataType::Path);
     }
 }

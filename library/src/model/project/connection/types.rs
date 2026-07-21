@@ -121,8 +121,8 @@ pub enum PortMultiplicity {
 pub enum PortDataType {
     Any,
     Image,
-    /// Render-time vector/typographic value. This is distinct from `Path`,
-    /// which is only an authored scalar SVG path string.
+    /// Render-time vector/typographic value. This is distinct from canonical
+    /// authored `Path` geometry.
     Shape,
     Audio,
     /// Transient frequency-domain Sound value. Spectrum payloads are never
@@ -136,6 +136,7 @@ pub enum PortDataType {
     Boolean,
     String,
     Color,
+    /// Canonical authored multi-contour path geometry.
     Path,
     Vec2,
     Vec3,

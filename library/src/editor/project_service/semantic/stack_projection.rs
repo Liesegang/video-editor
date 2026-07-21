@@ -826,7 +826,7 @@ fn inferred_definition(key: &str, property: &Property) -> Option<PropertyDefinit
         PropertyValue::Vec3(_) => PropertyUiType::vec3(""),
         PropertyValue::Vec4(_) => PropertyUiType::vec4(""),
         PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PropertyUiType::Color,
-        PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
+        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
     };
     Some(PropertyDefinition::new(
         key,

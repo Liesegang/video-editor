@@ -10,6 +10,7 @@ use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey, SurfaceCapture};
 
 mod body;
 mod native_operation;
+mod property_value_summary;
 mod selection;
 mod snarl;
 

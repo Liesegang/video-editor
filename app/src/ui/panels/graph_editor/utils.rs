@@ -58,6 +58,7 @@ fn components_for_value(value: &PropertyValue) -> Option<&'static [PropertyCompo
         | PropertyValue::Boolean(_)
         | PropertyValue::ColorValue(_)
         | PropertyValue::Color(_)
+        | PropertyValue::Path(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_) => None,
     }

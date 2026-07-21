@@ -4,8 +4,9 @@
 //! [`SvgPathEnvelope`] therefore keeps a valid, interoperable SVG `d` string
 //! together with lossless conic hints. The envelope round trip is lossless;
 //! copying only [`SvgPathEnvelope::path_data`] intentionally discards those
-//! extensions. The legacy string writer rejects conics instead of hiding that
-//! loss.
+//! extensions and may change the rendered geometry because its ordinary
+//! quadratic fallback has no rational weight. The legacy string writer rejects
+//! conics instead of hiding that loss.
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -19,8 +20,9 @@ use super::{FillRule, PathContour, PathPoint, PathSegment, PathValidationError, 
 /// SVG presentation property, while private conic hints retain information
 /// that SVG path syntax cannot express. Serializing the complete envelope is
 /// lossless for a value decoded through this codec; serializing only
-/// `path_data` is not lossless for conics. Parsing raw SVG uses Skia's `f32`
-/// coordinate boundary, so this is not a general-purpose `f64` interchange.
+/// `path_data` is not lossless for conics and its fallback can render different
+/// geometry. Parsing raw SVG uses Skia's `f32` coordinate boundary, so this is
+/// not a general-purpose `f64` interchange.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SvgPathEnvelope {

@@ -96,9 +96,9 @@ pub(super) fn property_views(
                         "Runtime Effect property {name:?} contains a non-finite value"
                     )));
                 }
-                PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
                     return Err(LibraryError::Plugin(format!(
-                        "Runtime Effect property {name:?} uses an unsupported aggregate value"
+                        "Runtime Effect property {name:?} uses a value unsupported by ABI v1"
                     )));
                 }
             }
@@ -177,8 +177,8 @@ pub(super) fn property_value_to_wire(
                 a: value.a,
             })
         }
-        PropertyValue::Array(_) | PropertyValue::Map(_) => {
-            Err("array and map values are not supported by ABI v1")
+        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
+            Err("path, array, and map values are not supported by ABI v1")
         }
     }
 }
@@ -255,9 +255,10 @@ pub(super) fn property_output_default(
 }
 
 #[cfg(test)]
-mod color_value_tests {
+mod tests {
     use super::*;
     use crate::model::frame::color::Color;
+    use crate::model::path::{FillRule, PathValue};
     use crate::model::property::{ColorSpaceRef, ColorValue};
 
     #[test]
@@ -300,5 +301,17 @@ mod color_value_tests {
         assert_eq!(from_abi, PropertyValue::Color(legacy));
         assert!(!matches!(from_abi, PropertyValue::ColorValue(_)));
         Ok(())
+    }
+
+    #[test]
+    fn canonical_path_is_explicitly_rejected_by_abi_v1() {
+        let path = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
+        assert_eq!(
+            property_value_to_wire(&path).unwrap_err(),
+            "path, array, and map values are not supported by ABI v1"
+        );
+
+        let error = property_views(&[("geometry".to_string(), path)]).unwrap_err();
+        assert!(error.to_string().contains("unsupported by ABI v1"));
     }
 }

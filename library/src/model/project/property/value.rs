@@ -6,6 +6,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::frame::color::Color;
+use crate::model::path::{FillRule, PathPoint, PathSegment, PathValue};
 
 use super::{ColorValue, PropertyUiType};
 
@@ -74,6 +75,8 @@ pub enum PropertyValue {
     /// variant remains the explicit legacy straight-sRGBA8 boundary.
     ColorValue(ColorValue),
     Color(Color),
+    // Tagged structured scalars stay distinct from arbitrary authored maps.
+    Path(PathValue),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
 }
@@ -121,6 +124,11 @@ impl<'de> Deserialize<'de> for PropertyValue {
                 .map(Self::ColorValue)
                 .map_err(D::Error::custom);
         }
+        if crate::model::path::is_tagged_path_value_json(&value) {
+            return serde_json::from_value(value)
+                .map(Self::Path)
+                .map_err(D::Error::custom);
+        }
         serde_json::from_value::<UntaggedPropertyValue>(value)
             .map(Self::from)
             .map_err(D::Error::custom)
@@ -140,6 +148,7 @@ impl Hash for PropertyValue {
             PropertyValue::Vec4(v) => v.hash(state),
             PropertyValue::ColorValue(c) => c.hash(state),
             PropertyValue::Color(c) => c.hash(state),
+            PropertyValue::Path(path) => path.hash(state),
             PropertyValue::Array(arr) => arr.hash(state),
             PropertyValue::Map(map) => {
                 let mut entries: Vec<_> = map.iter().collect();
@@ -178,8 +187,7 @@ impl PropertyValue {
             PropertyValue::Vec2(_) => matches!(ui_type, PropertyUiType::Vec2 { .. }),
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
-            PropertyValue::Array(_) => false,
-            _ => false,
+            PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => false,
         }
     }
 }
@@ -231,9 +239,14 @@ impl From<serde_json::Value> for PropertyValue {
             serde_json::Value::Object(o) => {
                 let object = serde_json::Value::Object(o.clone());
                 if super::color_value::is_tagged_color_value_json(&object)
-                    && let Ok(color) = serde_json::from_value(object)
+                    && let Ok(color) = serde_json::from_value(object.clone())
                 {
                     return PropertyValue::ColorValue(color);
+                }
+                if crate::model::path::is_tagged_path_value_json(&object)
+                    && let Ok(path) = serde_json::from_value(object)
+                {
+                    return PropertyValue::Path(path);
                 }
 
                 // Try to infer specific types
@@ -345,6 +358,7 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Color(c) => {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
+            PropertyValue::Path(path) => path_json_value(path),
             PropertyValue::Array(arr) => {
                 serde_json::Value::Array(arr.iter().map(|v| v.into()).collect())
             }
@@ -353,6 +367,72 @@ impl From<&PropertyValue> for serde_json::Value {
             }
         }
     }
+}
+
+fn path_json_value(path: &PathValue) -> serde_json::Value {
+    let fill_rule = match path.fill_rule() {
+        FillRule::NonZero => "non_zero",
+        FillRule::EvenOdd => "even_odd",
+    };
+    let contours = path
+        .contours()
+        .iter()
+        .map(|contour| {
+            let segments = contour
+                .segments()
+                .iter()
+                .map(path_segment_json_value)
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "start": path_point_json_value(contour.start()),
+                "segments": segments,
+                "closed": contour.is_closed(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "$type": "path_value",
+        "fill_rule": fill_rule,
+        "contours": contours,
+    })
+}
+
+fn path_segment_json_value(segment: &PathSegment) -> serde_json::Value {
+    match segment {
+        PathSegment::Line { to } => serde_json::json!({
+            "kind": "line",
+            "to": path_point_json_value(*to),
+        }),
+        PathSegment::Quadratic { control, to } => serde_json::json!({
+            "kind": "quadratic",
+            "control": path_point_json_value(*control),
+            "to": path_point_json_value(*to),
+        }),
+        PathSegment::Conic {
+            control,
+            to,
+            weight,
+        } => serde_json::json!({
+            "kind": "conic",
+            "control": path_point_json_value(*control),
+            "to": path_point_json_value(*to),
+            "weight": weight.into_inner(),
+        }),
+        PathSegment::Cubic {
+            control1,
+            control2,
+            to,
+        } => serde_json::json!({
+            "kind": "cubic",
+            "control1": path_point_json_value(*control1),
+            "control2": path_point_json_value(*control2),
+            "to": path_point_json_value(*to),
+        }),
+    }
+}
+
+fn path_point_json_value(point: PathPoint) -> serde_json::Value {
+    serde_json::json!({ "x": point.x(), "y": point.y() })
 }
 
 // Define a trait for type-safe extraction from PropertyValue
@@ -487,6 +567,15 @@ impl TryGetProperty<ColorValue> for ColorValue {
     fn try_get(p: &PropertyValue) -> Option<ColorValue> {
         match p {
             PropertyValue::ColorValue(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl TryGetProperty<PathValue> for PathValue {
+    fn try_get(p: &PropertyValue) -> Option<PathValue> {
+        match p {
+            PropertyValue::Path(value) => Some(value.clone()),
             _ => None,
         }
     }

@@ -4,7 +4,8 @@
 //! Backend and interchange formats are converted only at explicit boundaries.
 
 use ordered_float::OrderedFloat;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod svg;
 
@@ -15,6 +16,9 @@ pub use svg::{
 
 #[cfg(test)]
 mod tests;
+
+const PATH_VALUE_TAG_FIELD: &str = "$type";
+const PATH_VALUE_TAG: &str = "path_value";
 
 /// Fill rule applied across every contour of one path value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,11 +140,23 @@ impl PathContour {
 /// Construction and deserialization reject every non-finite coordinate or
 /// conic weight. Empty paths and move-only contours remain legal values;
 /// consumers decide whether those values produce visible output.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PathValue {
     fill_rule: FillRule,
     contours: Vec<PathContour>,
+}
+
+impl Serialize for PathValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("PathValue", 3)?;
+        state.serialize_field(PATH_VALUE_TAG_FIELD, PATH_VALUE_TAG)?;
+        state.serialize_field("fill_rule", &self.fill_rule)?;
+        state.serialize_field("contours", &self.contours)?;
+        state.end()
+    }
 }
 
 impl PathValue {
@@ -217,6 +233,8 @@ impl PathValue {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PathValueData {
+    #[serde(rename = "$type")]
+    value_type: String,
     fill_rule: FillRule,
     contours: Vec<PathContour>,
 }
@@ -227,8 +245,30 @@ impl<'de> Deserialize<'de> for PathValue {
         D: Deserializer<'de>,
     {
         let data = PathValueData::deserialize(deserializer)?;
+        if data.value_type != PATH_VALUE_TAG {
+            return Err(serde::de::Error::custom(format!(
+                "path value tag must be {PATH_VALUE_TAG:?}, got {:?}",
+                data.value_type
+            )));
+        }
         Self::new(data.fill_rule, data.contours).map_err(serde::de::Error::custom)
     }
+}
+
+pub(crate) fn is_tagged_path_value_json(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    // Reserve only the complete wire envelope. Partial or extended objects
+    // using the same `$type` string remain ordinary authored Maps. Once the
+    // exact envelope is present, malformed path data is rejected by serde.
+    object.len() == 3
+        && object.contains_key("fill_rule")
+        && object.contains_key("contours")
+        && object
+            .get(PATH_VALUE_TAG_FIELD)
+            .and_then(serde_json::Value::as_str)
+            == Some(PATH_VALUE_TAG)
 }
 
 /// Exact location and value of malformed canonical path data.

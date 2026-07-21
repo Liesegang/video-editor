@@ -189,10 +189,12 @@ fn expression_value_from_property(
         )),
         PropertyValue::Boolean(value) => Ok(ExpressionValue::Bool(*value)),
         PropertyValue::String(value) => Ok(ExpressionValue::String(value.clone())),
-        PropertyValue::Array(_) | PropertyValue::Map(_) => Err(evaluation_error(
-            ExpressionDiagnosticKind::TypeMismatch,
-            "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, legacy Color, Bool, or String",
-        )),
+        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
+            Err(evaluation_error(
+                ExpressionDiagnosticKind::TypeMismatch,
+                "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, legacy Color, Bool, or String",
+            ))
+        }
     }
 }
 
@@ -238,8 +240,9 @@ fn evaluation_error(
 }
 
 #[cfg(test)]
-mod color_value_tests {
+mod tests {
     use super::*;
+    use crate::model::path::{FillRule, PathValue};
     use crate::model::property::{ColorSpaceRef, ColorValue};
 
     #[test]
@@ -256,5 +259,13 @@ mod color_value_tests {
         assert_eq!(error.kind, ExpressionDiagnosticKind::TypeMismatch);
         assert!(error.message.contains("Tagged graph colors"));
         Ok(())
+    }
+
+    #[test]
+    fn canonical_path_is_explicitly_rejected_as_expression_fallback() {
+        let path = PropertyValue::Path(PathValue::empty(FillRule::EvenOdd));
+        let diagnostic = expression_value_from_property(&path).unwrap_err();
+        assert_eq!(diagnostic.kind, ExpressionDiagnosticKind::TypeMismatch);
+        assert!(diagnostic.to_string().contains("Expression fallback"));
     }
 }

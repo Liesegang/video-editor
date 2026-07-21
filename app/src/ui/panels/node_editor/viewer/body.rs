@@ -1,4 +1,4 @@
-use super::ProjectNodeViewer;
+use super::{property_value_summary, ProjectNodeViewer};
 use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
@@ -668,17 +668,7 @@ impl ProjectNodeViewer<'_> {
                         )
                     }
                     PropertyValue::ColorValue(color) => {
-                        let [r, g, b, a] = color.rgba();
-                        let response = bounded_non_selectable_label(
-                            ui,
-                            format!("{r:.2},{g:.2},{b:.2},{a:.2} @ {}", color.color_space()),
-                            96.0,
-                            egui::Align::LEFT,
-                        )
-                        .on_hover_text(format!(
-                            "r={r}, g={g}, b={b}, a={a} @ {} (straight alpha)",
-                            color.color_space()
-                        ));
+                        let response = property_value_summary::render_color(ui, color);
                         (
                             false,
                             false,
@@ -709,6 +699,10 @@ impl ProjectNodeViewer<'_> {
                             rendered.response,
                             rendered.axes,
                         )
+                    }
+                    PropertyValue::Path(path) => {
+                        let response = property_value_summary::render_path(ui, path);
+                        (false, false, false, "path_readonly", response, Vec::new())
                     }
                     PropertyValue::Array(_) | PropertyValue::Map(_) => {
                         let response = non_selectable_label(
