@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::ui::panels::node_editor::{
     container_output_node_id, container_output_type_key, qa_container_key, wire_port_drop_rect,
     RenderedEdge, RenderedPortKey, WireSecondaryClickHit, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
+    WIRE_RECONNECT_HANDLE_OFFSET, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 
 pub(in crate::ui::panels::node_editor) fn cubic_bezier_point(
@@ -168,6 +169,39 @@ pub(in crate::ui::panels::node_editor) fn rendered_wire_drag_kind(
         HitRegion::Body => NodeEditorWireDragKind::Disconnect,
         HitRegion::End => NodeEditorWireDragKind::ReconnectTarget,
     }
+}
+
+pub(in crate::ui::panels::node_editor) fn reconnect_handle_position(
+    edge: &RenderedEdge,
+    kind: NodeEditorWireDragKind,
+) -> Option<egui::Pos2> {
+    let (endpoint, toward_wire) = match kind {
+        NodeEditorWireDragKind::ReconnectSource => (edge.start, edge.control_a),
+        NodeEditorWireDragKind::ReconnectTarget => (edge.end, edge.control_b),
+        NodeEditorWireDragKind::Disconnect => return None,
+    };
+    let direction = toward_wire - endpoint;
+    let length = direction.length();
+    if !length.is_finite() || length <= f32::EPSILON {
+        return None;
+    }
+    let direction = direction / length;
+    Some(endpoint + direction * WIRE_RECONNECT_HANDLE_OFFSET)
+}
+
+pub(in crate::ui::panels::node_editor) fn reconnect_handle_at_position(
+    edge: &RenderedEdge,
+    position: egui::Pos2,
+) -> Option<NodeEditorWireDragKind> {
+    [
+        NodeEditorWireDragKind::ReconnectSource,
+        NodeEditorWireDragKind::ReconnectTarget,
+    ]
+    .into_iter()
+    .find(|kind| {
+        reconnect_handle_position(edge, *kind)
+            .is_some_and(|center| center.distance(position) <= WIRE_RECONNECT_HANDLE_RADIUS)
+    })
 }
 
 pub(in crate::ui::panels::node_editor) fn rendered_port_at_position(

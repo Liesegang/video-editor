@@ -13,6 +13,9 @@ import os
 import signal
 import subprocess
 import sys
+import time
+
+import qa_sound_graph_actions as ACTIONS
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,12 +30,16 @@ QaClient = BASE.QaClient
 QaFailure = BASE.QaFailure
 free_port = BASE.free_port
 
-MENU_ITEMS = {
+SOUND_MENU_ITEMS = {
     "sound_merge": "node_editor.menu.create.sound_merge",
     "rms": "node_editor.menu.create.sound_rms",
     "peak": "node_editor.menu.create.sound_peak",
     "spectrum": "node_editor.menu.create.sound_spectrum",
     "band_energy": "node_editor.menu.create.sound_band_energy",
+}
+MENU_ITEMS = {
+    **SOUND_MENU_ITEMS,
+    "multiply": "node_editor.menu.create.value:multiply",
 }
 
 AUDIO_A = BASE.AUDIO_A
@@ -65,7 +72,11 @@ def activate_node_editor(client):
 def create_rms_through_hierarchy(client):
     before = client.state()
     node_ids_before = set(before["project"]["nodes"])
-    BASE.open_create_menu(client, operation="hierarchical Sound Add menu")
+    BASE.open_create_menu(
+        client,
+        "node_editor.container.clip:" + CLIP_A1,
+        operation="hierarchical Sound Add menu",
+    )
     client.wait_component("node_editor.menu.search")
 
     sound_category = "node_editor.menu.search.category:Sound"
@@ -76,7 +87,7 @@ def create_rms_through_hierarchy(client):
     client.click_component(analysis_category)
 
     menu_metadata = {}
-    for name, component_id in MENU_ITEMS.items():
+    for name, component_id in SOUND_MENU_ITEMS.items():
         _, component = client.wait_component_settled(component_id)
         metadata = component.get("metadata") or {}
         expected_category = "Sound" if name == "sound_merge" else "Sound / Analysis"
@@ -155,100 +166,6 @@ def validate_port_contract(client, node_id, definitions):
     return evidence
 
 
-def connect_spectrum_to_band_energy(client, spectrum_id, band_energy_id):
-    source_id = "node_editor.port.node:{}.output:spectrum".format(spectrum_id)
-    target_id = "node_editor.port.node:{}.input:spectrum_in".format(band_energy_id)
-    BASE.ensure_node_editor_ports_interactive(client, [source_id, target_id])
-    before = client.state()
-    connection_ids_before = {
-        connection["id"] for connection in before["project"]["connections"]
-    }
-    client.drag_components(source_id, target_id, steps=14)
-
-    def connected(project):
-        try:
-            return BASE.find_project_connection(
-                project,
-                "Node",
-                spectrum_id,
-                "spectrum",
-                "Node",
-                band_energy_id,
-                "spectrum_in",
-            )
-        except QaFailure:
-            return None
-
-    state = client.wait_project("FFT Spectrum to Band Energy wire", connected)
-    connection = connected(state["project"])
-    if connection["id"] in connection_ids_before:
-        raise QaFailure("Spectrum wire did not create a new canonical connection")
-    if state["history"]["undo_depth"] != before["history"]["undo_depth"] + 1:
-        raise QaFailure("Spectrum wire did not produce exactly one history entry")
-    return connection
-
-
-def merge_connections(project, merge_id, port):
-    return sorted(
-        (
-            connection
-            for connection in project["connections"]
-            if connection["to"]["owner"].get("owner_type") == "Node"
-            and connection["to"]["owner"].get("owner_id") == merge_id
-            and connection["to"].get("port") == port
-        ),
-        key=lambda connection: (connection["order"], connection["id"]),
-    )
-
-
-def connection_source_owner(connection):
-    owner = connection["from"]["owner"]
-    return "{}:{}".format(owner["owner_type"].lower(), owner["owner_id"])
-
-
-def assert_wire_identity(before, after, operation):
-    before_by_id = {connection["id"]: connection for connection in before}
-    after_by_id = {connection["id"]: connection for connection in after}
-    if set(before_by_id) != set(after_by_id):
-        raise QaFailure("{} changed canonical wire IDs".format(operation))
-    for connection_id, original in before_by_id.items():
-        current = after_by_id[connection_id]
-        for field in ("id", "from", "to", "blend_mode"):
-            if current[field] != original[field]:
-                raise QaFailure(
-                    "{} changed {} on wire {}".format(
-                        operation, field, connection_id
-                    )
-                )
-
-
-def connect_audio_source(client, source_node_id, merge_id, description):
-    source_id = "node_editor.port.node:{}.output:audio".format(source_node_id)
-    target_id = "node_editor.port.node:{}.input:sounds".format(merge_id)
-    BASE.ensure_node_editor_ports_interactive(client, [source_id, target_id])
-    before = client.state()
-    before_ids = {
-        connection["id"]
-        for connection in merge_connections(before["project"], merge_id, "sounds")
-    }
-    client.drag_components(source_id, target_id, steps=16)
-
-    def added(project):
-        matches = [
-            connection
-            for connection in merge_connections(project, merge_id, "sounds")
-            if connection["id"] not in before_ids
-            and connection_source_owner(connection) == "node:" + source_node_id
-            and connection["from"]["port"] == "audio"
-        ]
-        return matches[0] if len(matches) == 1 else None
-
-    state = client.wait_project(description, added)
-    connection = added(state["project"])
-    BASE.assert_history_delta(before, state, 1, description)
-    return connection, state
-
-
 def row_component_ids(merge_id, connection_id):
     return (
         "node_editor.merge_layer.drag_handle:{}:{}".format(
@@ -278,7 +195,9 @@ def validate_sound_row(client, merge_id, connection, expected_min, expected_max)
 
 
 def reorder_custom_sound_rows(client, merge_id, first, second):
-    original = merge_connections(client.state()["project"], merge_id, "sounds")
+    original = ACTIONS.merge_connections(
+        client.state()["project"], merge_id, "sounds"
+    )
     if [connection["id"] for connection in original] != [first["id"], second["id"]]:
         raise QaFailure("standalone Sound Merge did not append inputs top-to-bottom")
     first_ui = validate_sound_row(client, merge_id, first, 0, 1)
@@ -289,14 +208,15 @@ def reorder_custom_sound_rows(client, merge_id, first, second):
         "physical Sound Merge custom row reorder",
         lambda project: [
             connection["id"]
-            for connection in merge_connections(project, merge_id, "sounds")
+            for connection in ACTIONS.merge_connections(project, merge_id, "sounds")
         ]
         == [second["id"], first["id"]],
     )
     BASE.assert_history_delta(before, reordered, 1, "Sound Merge custom row reorder")
-    assert_wire_identity(
+    ACTIONS.assert_wire_identity(
+        BASE,
         original,
-        merge_connections(reordered["project"], merge_id, "sounds"),
+        ACTIONS.merge_connections(reordered["project"], merge_id, "sounds"),
         "Sound Merge custom row reorder",
     )
     undone = BASE.undo_project_edit(
@@ -304,7 +224,7 @@ def reorder_custom_sound_rows(client, merge_id, first, second):
         "Sound Merge custom row reorder",
         lambda project: [
             connection["id"]
-            for connection in merge_connections(project, merge_id, "sounds")
+            for connection in ACTIONS.merge_connections(project, merge_id, "sounds")
         ]
         == [first["id"], second["id"]],
     )
@@ -313,13 +233,14 @@ def reorder_custom_sound_rows(client, merge_id, first, second):
         "Sound Merge custom row reorder",
         lambda project: [
             connection["id"]
-            for connection in merge_connections(project, merge_id, "sounds")
+            for connection in ACTIONS.merge_connections(project, merge_id, "sounds")
         ]
         == [second["id"], first["id"]],
     )
-    assert_wire_identity(
+    ACTIONS.assert_wire_identity(
+        BASE,
         original,
-        merge_connections(redone["project"], merge_id, "sounds"),
+        ACTIONS.merge_connections(redone["project"], merge_id, "sounds"),
         "Sound Merge custom row reorder redo",
     )
     return {
@@ -334,7 +255,7 @@ def reorder_custom_sound_rows(client, merge_id, first, second):
 def structural_prefix(project, merge_id, port, owner_type):
     return [
         connection
-        for connection in merge_connections(project, merge_id, port)
+        for connection in ACTIONS.merge_connections(project, merge_id, port)
         if connection["from"]["owner"].get("owner_type") == owner_type
     ]
 
@@ -342,13 +263,13 @@ def structural_prefix(project, merge_id, port, owner_type):
 def track_order_is(project, clip_ids, sound_merge_id, image_merge_id):
     expected_sources = ["clip:" + clip_id for clip_id in clip_ids]
     sound_sources = [
-        connection_source_owner(connection)
+        ACTIONS.connection_source_owner(connection)
         for connection in structural_prefix(
             project, sound_merge_id, "sounds", "Clip"
         )
     ]
     image_sources = [
-        connection_source_owner(connection)
+        ACTIONS.connection_source_owner(connection)
         for connection in structural_prefix(
             project, image_merge_id, "images", "Clip"
         )
@@ -370,22 +291,24 @@ def exercise_structural_sound_rows(client):
     ):
         raise QaFailure("Track A typed structural prefixes do not match Timeline order")
 
-    custom_a, _ = connect_audio_source(
+    custom_a, _ = ACTIONS.connect_audio_source(
+        BASE,
         client,
         AUDIO_A,
         sound_merge_id,
         "Audio A custom input on structural Sound Merge",
     )
-    custom_b, custom_state = connect_audio_source(
+    custom_b, custom_state = ACTIONS.connect_audio_source(
+        BASE,
         client,
         AUDIO_B,
         sound_merge_id,
         "Audio B custom input on structural Sound Merge",
     )
-    sound_rows = merge_connections(
+    sound_rows = ACTIONS.merge_connections(
         custom_state["project"], sound_merge_id, "sounds"
     )
-    if [connection_source_owner(connection) for connection in sound_rows] != [
+    if [ACTIONS.connection_source_owner(connection) for connection in sound_rows] != [
         "clip:" + CLIP_A1,
         "clip:" + CLIP_A2,
         "node:" + AUDIO_A,
@@ -428,10 +351,10 @@ def exercise_structural_sound_rows(client):
         raise QaFailure("custom Sound row crossed the mandatory structural prefix")
 
     sound_before = client.state()
-    before_sound_rows = merge_connections(
+    before_sound_rows = ACTIONS.merge_connections(
         sound_before["project"], sound_merge_id, "sounds"
     )
-    before_image_rows = merge_connections(
+    before_image_rows = ACTIONS.merge_connections(
         sound_before["project"], image_merge_id, "images"
     )
     client.drag_components(
@@ -446,14 +369,20 @@ def exercise_structural_sound_rows(client):
     BASE.assert_history_delta(
         sound_before, sound_reordered, 1, "structural Sound row Timeline reorder"
     )
-    assert_wire_identity(
+    ACTIONS.assert_wire_identity(
+        BASE,
         before_sound_rows,
-        merge_connections(sound_reordered["project"], sound_merge_id, "sounds"),
+        ACTIONS.merge_connections(
+            sound_reordered["project"], sound_merge_id, "sounds"
+        ),
         "structural Sound row Timeline reorder",
     )
-    assert_wire_identity(
+    ACTIONS.assert_wire_identity(
+        BASE,
         before_image_rows,
-        merge_connections(sound_reordered["project"], image_merge_id, "images"),
+        ACTIONS.merge_connections(
+            sound_reordered["project"], image_merge_id, "images"
+        ),
         "structural Sound row synchronized Image prefix",
     )
     BASE.undo_project_edit(
@@ -478,7 +407,7 @@ def exercise_structural_sound_rows(client):
     image_rows = structural_prefix(
         image_state["project"], image_merge_id, "images", "Clip"
     )
-    if [connection_source_owner(connection) for connection in image_rows] != [
+    if [ACTIONS.connection_source_owner(connection) for connection in image_rows] != [
         "clip:" + CLIP_A2,
         "clip:" + CLIP_A1,
     ]:
@@ -590,13 +519,43 @@ def run_suite(client):
         scope_component_id="node_editor.container.clip:" + CLIP_A1,
     )
     peak_id, peak_menu = create_from_search(
-        client, "peak amplitude", "peak", "SoundAnalysis", "Peak"
+        client,
+        "peak amplitude",
+        "peak",
+        "SoundAnalysis",
+        "Peak",
+        "node_editor.container.clip:" + CLIP_A1,
     )
     spectrum_id, spectrum_menu = create_from_search(
-        client, "fft spectrum", "spectrum", "SoundAnalysis", "Spectrum"
+        client,
+        "fft spectrum",
+        "spectrum",
+        "SoundAnalysis",
+        "Spectrum",
+        "node_editor.container.clip:" + CLIP_A1,
     )
     band_energy_id, band_energy_menu = create_from_search(
-        client, "band energy", "band_energy", "SoundAnalysis", "BandEnergy"
+        client,
+        "band energy",
+        "band_energy",
+        "SoundAnalysis",
+        "BandEnergy",
+        "node_editor.container.clip:" + CLIP_A1,
+    )
+    multiply_id, multiply_menu = create_from_search(
+        client,
+        "multiply",
+        "multiply",
+        "Value",
+        scope_component_id="node_editor.container.clip:" + CLIP_A1,
+    )
+    multiply_scale = ACTIONS.set_node_number(
+        BASE,
+        client,
+        multiply_id,
+        "b",
+        80.0,
+        "Multiply analysis scale",
     )
 
     port_metadata = {}
@@ -644,25 +603,105 @@ def run_suite(client):
                 ("output", "result", "number"),
             ),
         ),
+        (
+            multiply_id,
+            (
+                ("input", "a", "numeric"),
+                ("input", "b", "numeric"),
+                ("output", "result", "numeric"),
+            ),
+        ),
     ):
         port_metadata.update(validate_port_contract(client, node_id, definitions))
 
-    connection = connect_spectrum_to_band_energy(
-        client, spectrum_id, band_energy_id
-    )
-    inspector = inspect_band_energy(client, band_energy_id)
-
-    audio_a_connection, _ = connect_audio_source(
+    audio_a_connection, _ = ACTIONS.connect_audio_source(
+        BASE,
         client, AUDIO_A, sound_merge_id, "Audio A to standalone Sound Merge"
     )
-    audio_b_connection, _ = connect_audio_source(
+    reconnect = ACTIONS.reconnect_sound_source(
+        BASE,
+        client, audio_a_connection, AUDIO_A, AUDIO_B
+    )
+    audio_b_connection, _ = ACTIONS.connect_audio_source(
+        BASE,
         client, AUDIO_B, sound_merge_id, "Audio B to standalone Sound Merge"
     )
     standalone_reorder = reorder_custom_sound_rows(
         client, sound_merge_id, audio_a_connection, audio_b_connection
     )
+    inspector = inspect_band_energy(client, band_energy_id)
     structural_reorder = exercise_structural_sound_rows(client)
+
+    dataflow_started_at = time.monotonic()
+    dataflow_start = client.state()
+    audio_rms, _ = ACTIONS.connect_node_wire(
+        BASE, client, AUDIO_A, "audio", rms_id, "sound", "Audio A to RMS"
+    )
+    audio_peak, _ = ACTIONS.connect_node_wire(
+        BASE, client, AUDIO_B, "audio", peak_id, "sound", "Audio B to Peak"
+    )
+    audio_spectrum, _ = ACTIONS.connect_node_wire(
+        BASE,
+        client,
+        sound_merge_id,
+        "audio",
+        spectrum_id,
+        "sound",
+        "Sound Merge to Spectrum",
+    )
+    spectrum_band, _ = ACTIONS.connect_node_wire(
+        BASE,
+        client,
+        spectrum_id,
+        "spectrum",
+        band_energy_id,
+        "spectrum_in",
+        "FFT Spectrum to Band Energy wire",
+        steps=14,
+    )
+    rms_multiply, _ = ACTIONS.connect_node_wire(
+        BASE, client, rms_id, "result", multiply_id, "a", "RMS to Multiply"
+    )
+
+    baseline = client.wait_preview_settled("Sound analysis image-property baseline")
+    multiply_blur, _ = ACTIONS.connect_node_wire(
+        BASE,
+        client,
+        multiply_id,
+        "result",
+        BASE.BLUR_EFFECT,
+        "property:sigma_x",
+        "RMS Multiply to Blur sigma_x",
+    )
+    rms_rendered = client.wait_preview_change(
+        baseline["editor"]["preview"]["pixel_hash"],
+        baseline["editor"]["preview"]["render_revision"],
+    )
+    band_blur, _ = ACTIONS.connect_node_wire(
+        BASE,
+        client,
+        band_energy_id,
+        "result",
+        BASE.BLUR_EFFECT,
+        "property:sigma_y",
+        "Band Energy to Blur sigma_y",
+    )
+    band_rendered = client.wait_preview_change(
+        rms_rendered["editor"]["preview"]["pixel_hash"],
+        rms_rendered["editor"]["preview"]["render_revision"],
+    )
     final = client.state()
+    dataflow_elapsed_seconds = time.monotonic() - dataflow_started_at
+    start_preview = dataflow_start["editor"]["preview"]
+    final_preview = final["editor"]["preview"]
+    performance_probe = {
+        "paused": not final["editor"]["timeline"]["is_playing"],
+        "elapsed_seconds": round(dataflow_elapsed_seconds, 3),
+        "frame_delta": final["frame"] - dataflow_start["frame"],
+        "render_revision_delta": final_preview["render_revision"]
+        - start_preview["render_revision"],
+        "known_preview_p0": "paused Sound analysis graph is re-evaluated on QA-driven UI frames",
+    }
     if not any(action.get("endpoint") == "drag" for action in client.evidence):
         raise QaFailure("Sound graph E2E produced no coordinate wire drag evidence")
 
@@ -678,6 +717,7 @@ def run_suite(client):
             "peak": peak_id,
             "spectrum": spectrum_id,
             "band_energy": band_energy_id,
+            "multiply": multiply_id,
         },
         "menus": {
             "hierarchy": hierarchy_metadata,
@@ -685,14 +725,34 @@ def run_suite(client):
             "peak_search": peak_menu,
             "spectrum_search": spectrum_menu,
             "band_energy_search": band_energy_menu,
+            "multiply_search": multiply_menu,
+            "multiply_scale_history": multiply_scale["history"],
         },
         "ports": port_metadata,
         "standalone_sound_merge": {
             "connections": [audio_a_connection, audio_b_connection],
             "reorder": standalone_reorder,
+            "reconnect": reconnect,
         },
         "structural_sound_merge": structural_reorder,
-        "spectrum_connection": connection,
+        "analysis_dataflow": {
+            "connections": [
+                audio_rms,
+                audio_peak,
+                audio_spectrum,
+                spectrum_band,
+                rms_multiply,
+                multiply_blur,
+                band_blur,
+            ],
+            "baseline_pixel_hash": baseline["editor"]["preview"]["pixel_hash"],
+            "rms_pixel_hash": rms_rendered["editor"]["preview"]["pixel_hash"],
+            "band_pixel_hash": band_rendered["editor"]["preview"]["pixel_hash"],
+            "rms_changed_preview": True,
+            "band_changed_preview": True,
+            "performance_probe": performance_probe,
+        },
+        "spectrum_connection": spectrum_band,
         "inspector": inspector,
         "final_history": final["history"],
         "actions": client.evidence,

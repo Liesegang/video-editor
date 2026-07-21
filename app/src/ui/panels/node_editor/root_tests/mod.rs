@@ -430,3 +430,4 @@ mod reparent_transactions;
 mod selection;
 mod timeline_semantics;
 mod wire_editing;
+mod wire_reconnect;

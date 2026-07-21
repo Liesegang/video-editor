@@ -87,7 +87,8 @@ use types::{
     NODE_BODY_WIDTH, NODE_HEADER_WIDTH, NODE_REPARENT_DRAG_THRESHOLD,
     NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, PORT_SOCKET_SIZE,
     PROPERTY_LABEL_WIDTH, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH, WIRE_DRAG_THRESHOLD,
-    WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS,
+    WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS, WIRE_RECONNECT_HANDLE_OFFSET,
+    WIRE_RECONNECT_HANDLE_RADIUS,
 };
 mod interaction;
 
@@ -145,9 +146,10 @@ use interaction::{
 };
 use interaction::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
-    editable_wire_stable_key, knife_segment_hits_edge, rendered_container_output_at_position,
-    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
-    rendered_wire_drag_kind, wire_secondary_click_hit,
+    editable_wire_stable_key, knife_segment_hits_edge, reconnect_handle_at_position,
+    reconnect_handle_position, rendered_container_output_at_position, rendered_edge_at_position,
+    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
+    wire_secondary_click_hit,
 };
 use interaction::{overview_wire_graph_points, wire_interactions, WireInteractionFrame};
 use interaction::{

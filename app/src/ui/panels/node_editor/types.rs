@@ -27,6 +27,10 @@ pub(super) const PROPERTY_LABEL_WIDTH: f32 = 58.0;
 pub(super) const INLINE_CONTROL_WIDTH: f32 = 126.0;
 pub(super) const WIRE_HIT_RADIUS: f32 = 8.0;
 pub(super) const WIRE_ENDPOINT_RADIUS: f32 = 12.0;
+/// Selected reconnect handles sit on the wire side of a socket so their
+/// centers do not collide with the normal output fan-out gesture.
+pub(super) const WIRE_RECONNECT_HANDLE_OFFSET: f32 = 9.0;
+pub(super) const WIRE_RECONNECT_HANDLE_RADIUS: f32 = 4.0;
 /// The custom endpoint-reconnect path accepts a drop this many screen points
 /// around a rendered port, including at overview zoom where Snarl's normal
 /// port interaction is deliberately disabled.

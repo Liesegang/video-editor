@@ -14,9 +14,10 @@ use crate::ui::panels::node_editor::{
     container_output_binding_port, container_output_port, editable_wire_is_current,
     editable_wire_qa_value, editable_wire_sort_key, editable_wire_stable_key,
     knife_segment_hits_edge, node_editor_port_interactions_enabled, qa_container_key,
-    rendered_container_output_at_position, rendered_edge_at_position,
-    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind, NodeEdit,
-    QueuedNodeEdit, RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_DRAG_THRESHOLD,
+    reconnect_handle_at_position, reconnect_handle_position, rendered_container_output_at_position,
+    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
+    rendered_wire_drag_kind, NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind,
+    RenderedPortKey, WIRE_DRAG_THRESHOLD, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 
 pub(in crate::ui::panels::node_editor) struct WireInteractionFrame<'a> {
@@ -266,6 +267,30 @@ fn paint_wire_interaction(
         Color32::TRANSPARENT,
         egui::Stroke::new(5.0, Color32::from_rgb(255, 196, 72)),
     ));
+    let displayed = RenderedEdge {
+        kind: edge.kind,
+        start: points[0],
+        control_a: points[1],
+        control_b: points[2],
+        end: points[3],
+    };
+    for kind in [
+        NodeEditorWireDragKind::ReconnectSource,
+        NodeEditorWireDragKind::ReconnectTarget,
+    ] {
+        if let Some(center) = reconnect_handle_position(&displayed, kind) {
+            painter.circle_filled(
+                center,
+                WIRE_RECONNECT_HANDLE_RADIUS,
+                Color32::from_rgb(38, 38, 42),
+            );
+            painter.circle_stroke(
+                center,
+                WIRE_RECONNECT_HANDLE_RADIUS,
+                egui::Stroke::new(1.5, Color32::from_rgb(255, 196, 72)),
+            );
+        }
+    }
 }
 
 fn paint_normal_connect_interaction(
@@ -432,31 +457,44 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         }
     }
 
-    let priority_container_output = node_editor_port_interactions_enabled(frame.to_global.scaling)
-        .then(|| {
-            pointer.and_then(|position| {
-                frame.rendered_ports.lock().ok().and_then(|ports| {
-                    rendered_container_output_at_position(
-                        frame.project,
-                        &ports,
-                        position,
-                        frame.canvas_clip,
-                    )
-                })
+    let selected_handle = state.selected_connection_id.and_then(|connection_id| {
+        let edge = frame
+            .edges
+            .iter()
+            .find(|edge| edge.kind.connection_id() == Some(connection_id))?;
+        pointer
+            .and_then(|position| reconnect_handle_at_position(edge, position))
+            .map(|kind| (edge, kind))
+    });
+    let selected_handle_edge = selected_handle.map(|(edge, _)| edge);
+    let port_interactions_enabled = node_editor_port_interactions_enabled(frame.to_global.scaling);
+    let priority_container_output = if selected_handle_edge.is_none() && port_interactions_enabled {
+        pointer.and_then(|position| {
+            frame.rendered_ports.lock().ok().and_then(|ports| {
+                rendered_container_output_at_position(
+                    frame.project,
+                    &ports,
+                    position,
+                    frame.canvas_clip,
+                )
             })
         })
-        .flatten();
-    let normal_port = priority_container_output.clone().or_else(|| {
-        node_editor_port_interactions_enabled(frame.to_global.scaling)
-            .then(|| {
+    } else {
+        None
+    };
+    let normal_port = if selected_handle_edge.is_some() {
+        None
+    } else {
+        priority_container_output.clone().or_else(|| {
+            port_interactions_enabled.then(|| {
                 pointer.and_then(|position| {
                     frame.rendered_ports.lock().ok().and_then(|ports| {
                         rendered_normal_port_at_position(&ports, position, frame.canvas_clip)
                     })
                 })
-            })
-            .flatten()
-    });
+            })?
+        })
+    };
     let binding_on_normal_port = normal_port
         .as_ref()
         .filter(|port| {
@@ -468,7 +506,7 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         })
         .and_then(|port| output_binding_edge_for_port(frame.edges, port));
     let pointer_on_other_normal_port = normal_port.is_some() && binding_on_normal_port.is_none();
-    let hovered = binding_on_normal_port.or_else(|| {
+    let hovered = selected_handle_edge.or(binding_on_normal_port).or_else(|| {
         pointer
             .filter(|_| !pointer_on_other_normal_port)
             .and_then(|position| {
@@ -585,7 +623,9 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                 state.wire_context_menu = None;
                 state.wire_gesture = Some(NodeEditorWireGesture {
                     wire,
-                    kind: rendered_wire_drag_kind(edge, position),
+                    kind: selected_handle
+                        .filter(|(handle_edge, _)| handle_edge.kind == edge.kind)
+                        .map_or_else(|| rendered_wire_drag_kind(edge, position), |(_, kind)| kind),
                     start: position,
                     current: position,
                     canvas_transform: frame.to_global,

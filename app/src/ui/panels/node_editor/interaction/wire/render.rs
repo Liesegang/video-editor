@@ -14,9 +14,9 @@ use crate::ui::panels::node_editor::{
     container_highlight_metadata, container_inactive, container_output_node_id,
     container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
     native_variadic_merge_target, overview_wire_graph_points, pin_color, qa_container_key,
-    qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
-    ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey,
+    qa_rect_metadata, reconnect_handle_position, screen_stroke_in_graph_units,
+    wire_order_menu_states, ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter,
+    RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 
@@ -414,6 +414,8 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
                 "x": start.x,
                 "y": start.y,
             },
+            "control_a": {"x": control_a.x, "y": control_a.y},
+            "control_b": {"x": control_b.x, "y": control_b.y},
             "to": {
                 "owner": qa_container_key(edge.to.owner),
                 "port": edge.to.port,
@@ -436,11 +438,32 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         })),
     );
     if let Some(connection_id) = connection_id {
-        for (suffix, role, position) in [
-            ("from_handle", "source", start),
-            ("to_handle", "target", end),
+        let rendered_edge = RenderedEdge {
+            kind: edge.kind,
+            start,
+            control_a,
+            control_b,
+            end,
+        };
+        for (suffix, role, kind) in [
+            (
+                "from_handle",
+                "source",
+                crate::state::context_types::NodeEditorWireDragKind::ReconnectSource,
+            ),
+            (
+                "to_handle",
+                "target",
+                crate::state::context_types::NodeEditorWireDragKind::ReconnectTarget,
+            ),
         ] {
-            let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
+            let Some(position) = reconnect_handle_position(&rendered_edge, kind) else {
+                continue;
+            };
+            let unclipped_rect = egui::Rect::from_center_size(
+                position,
+                egui::Vec2::splat(WIRE_RECONNECT_HANDLE_RADIUS * 2.0),
+            );
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
             let component_id = format!("node_editor.edge:{connection_id}.{suffix}");
             #[cfg(test)]
