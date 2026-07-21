@@ -287,6 +287,7 @@ pub fn node_editor_panel(
                         .as_ref()
                         .map(|gesture| gesture.canvas_transform)
                 }),
+            previous_canvas_transform: node_editor_state.node_editor_canvas_transform,
             to_global: &mut to_global,
             canvas_clip: &mut canvas_clip,
             rendered_ports: Arc::clone(&rendered_ports),

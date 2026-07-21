@@ -46,6 +46,7 @@ fn render_time_context_test_graph(
                     wire_context_request: &mut wire_context_request,
                     suppress_wire_connect: false,
                     locked_canvas_transform: None,
+                    previous_canvas_transform: None,
                     to_global: &mut to_global,
                     canvas_clip: &mut canvas_clip,
                     rendered_ports: Arc::clone(&rendered_ports),

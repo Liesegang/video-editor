@@ -32,6 +32,10 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     pub(in crate::ui::panels::node_editor) suppress_wire_connect: bool,
     pub(in crate::ui::panels::node_editor) locked_canvas_transform:
         Option<egui::emath::TSTransform>,
+    /// Last transform observed outside egui-snarl. It is transition input,
+    /// not a second authoritative viewport state.
+    pub(in crate::ui::panels::node_editor) previous_canvas_transform:
+        Option<egui::emath::TSTransform>,
     pub(in crate::ui::panels::node_editor) to_global: &'a mut egui::emath::TSTransform,
     pub(in crate::ui::panels::node_editor) canvas_clip: &'a mut egui::Rect,
     pub(in crate::ui::panels::node_editor) rendered_ports:

@@ -962,7 +962,12 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         to_global: &mut egui::emath::TSTransform,
         _snarl: &mut Snarl<GraphItem>,
     ) {
-        resolve_node_editor_transform(to_global, self.locked_canvas_transform);
+        resolve_node_editor_transform(
+            to_global,
+            self.locked_canvas_transform,
+            self.previous_canvas_transform,
+        );
+        self.previous_canvas_transform = Some(*to_global);
         *self.to_global = *to_global;
     }
 }
@@ -970,9 +975,15 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
 pub(in crate::ui::panels::node_editor) fn resolve_node_editor_transform(
     transform: &mut egui::emath::TSTransform,
     locked: Option<egui::emath::TSTransform>,
+    previous: Option<egui::emath::TSTransform>,
 ) {
-    if let Some(locked) = locked {
-        *transform = locked;
-    }
-    sanitize_node_editor_transform(transform);
+    let target = locked.unwrap_or(*transform);
+    *transform = previous.map_or_else(
+        || {
+            let mut target = target;
+            sanitize_node_editor_transform(&mut target);
+            target
+        },
+        |previous| bridge_node_editor_transform(previous, target),
+    );
 }

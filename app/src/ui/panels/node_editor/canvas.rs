@@ -7,7 +7,8 @@
 use eframe::egui;
 use egui_snarl::ui::{BackgroundPattern, PinPlacement, SnarlStyle, WireLayer, WireStyle};
 use pan_zoom_ui::{
-    sanitize_state, CanvasState, CanvasTheme, GridConfig, NavigationConfig, ZoomPolicy,
+    apply_navigation, sanitize_state, CanvasState, CanvasTheme, GridConfig, NavigationConfig,
+    NavigationDelta, ZoomPolicy,
 };
 use uuid::Uuid;
 
@@ -33,7 +34,11 @@ pub(super) fn node_editor_navigation_config() -> NavigationConfig {
 }
 
 pub(super) fn node_editor_grid_config() -> GridConfig {
-    GridConfig::default()
+    GridConfig {
+        // Preserve the previous canvas' roughly 52-point adaptive grid rhythm.
+        min_screen_spacing: 52.0,
+        ..GridConfig::default()
+    }
 }
 
 pub(super) fn paint_node_editor_canvas_grid(
@@ -95,6 +100,22 @@ pub(super) fn sanitize_node_editor_transform(transform: &mut egui::emath::TSTran
     sanitize_state(&mut state, node_editor_navigation_config());
     transform.scaling = state.zoom.x;
     transform.translation = state.pan;
+}
+
+/// Reconcile a transform transition owned by egui-snarl through the shared
+/// policy without taking gesture ownership away from the widget.
+pub(super) fn bridge_node_editor_transform(
+    current: egui::emath::TSTransform,
+    target: egui::emath::TSTransform,
+) -> egui::emath::TSTransform {
+    let config = node_editor_navigation_config();
+    let mut current_state = CanvasState::uniform(current.translation, current.scaling);
+    let mut target_state = CanvasState::uniform(target.translation, target.scaling);
+    sanitize_state(&mut current_state, config);
+    sanitize_state(&mut target_state, config);
+    let delta = NavigationDelta::between(current_state, target_state, egui::Pos2::ZERO);
+    apply_navigation(&mut current_state, delta, config);
+    egui::emath::TSTransform::new(current_state.pan, current_state.zoom.x)
 }
 
 pub(super) fn screen_stroke_in_graph_units(screen_width: f32, scale: f32) -> f32 {
@@ -171,6 +192,7 @@ mod tests {
         );
         assert_eq!(navigation.zoom_policy, ZoomPolicy::Uniform);
         assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+        assert_eq!(node_editor_grid_config().min_screen_spacing, 52.0);
         let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_800.0, 1_200.0));
         for scale in [NODE_EDITOR_MIN_SCALE, 0.01, 0.1, 1.0, NODE_EDITOR_MAX_SCALE] {
             let state = CanvasState::uniform(egui::vec2(347.0, -73.0), scale);
@@ -183,5 +205,13 @@ mod tests {
             assert!(!lines.is_empty(), "scale={scale}");
             assert!(lines.len() < 320, "scale={scale}, lines={}", lines.len());
         }
+    }
+
+    #[test]
+    fn external_widget_bridge_preserves_a_valid_uniform_transition() {
+        let current = egui::emath::TSTransform::new(egui::vec2(120.0, -40.0), 0.5);
+        let target = egui::emath::TSTransform::new(egui::vec2(87.0, 31.0), 0.75);
+
+        assert_eq!(bridge_node_editor_transform(current, target), target);
     }
 }

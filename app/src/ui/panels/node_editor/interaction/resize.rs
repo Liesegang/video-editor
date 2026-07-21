@@ -515,7 +515,12 @@ mod tests {
             transform.translation + egui::vec2(180.0, 90.0),
             transform.scaling,
         );
-        resolve_node_editor_transform(&mut scene_pan, Some(resize.canvas_transform));
+        let previous_scene_pan = scene_pan;
+        resolve_node_editor_transform(
+            &mut scene_pan,
+            Some(resize.canvas_transform),
+            Some(previous_scene_pan),
+        );
         assert_eq!(scene_pan, transform);
     }
 

@@ -167,6 +167,35 @@ impl Default for NavigationDelta {
     }
 }
 
+impl NavigationDelta {
+    /// Bridge a transform transition produced by an external widget into the
+    /// shared navigation pipeline. Applying this delta to `current` recreates
+    /// `target` while still allowing [`apply_navigation`] to enforce policy
+    /// and bounds.
+    pub fn between(current: CanvasState, target: CanvasState, anchor: Pos2) -> Self {
+        let valid_zoom = |zoom: f32| zoom.is_finite() && zoom > 0.0;
+        let factor = egui::vec2(
+            if valid_zoom(current.zoom.x) && valid_zoom(target.zoom.x) {
+                target.zoom.x / current.zoom.x
+            } else {
+                1.0
+            },
+            if valid_zoom(current.zoom.y) && valid_zoom(target.zoom.y) {
+                target.zoom.y / current.zoom.y
+            } else {
+                1.0
+            },
+        );
+        let anchor = anchor.to_vec2();
+        let zoomed_pan = anchor - (anchor - current.pan) * factor;
+        Self {
+            pan: target.pan - zoomed_pan,
+            zoom_factor: factor,
+            zoom_anchor: Some(Pos2::new(anchor.x, anchor.y)),
+        }
+    }
+}
+
 /// Convert sampled input into a generic delta without mutating panel state.
 pub fn navigation_delta(input: NavigationInput, config: NavigationConfig) -> NavigationDelta {
     let mut result = NavigationDelta {
@@ -528,6 +557,22 @@ mod tests {
         let zoomed_pan = anchor.to_vec2() - (anchor.to_vec2() - start_pan) * 1.25;
         assert_eq!(state.zoom, Vec2::splat(2.5));
         assert_eq!(state.pan, zoomed_pan + egui::vec2(3.0, -2.0));
+    }
+
+    #[test]
+    fn external_widget_delta_reconstructs_its_target_transform() {
+        let current = CanvasState::uniform(egui::vec2(10.0, 20.0), 2.0);
+        let target = CanvasState::uniform(egui::vec2(-7.0, 31.0), 3.0);
+        let mut resolved = current;
+        apply_navigation(
+            &mut resolved,
+            NavigationDelta::between(current, target, egui::pos2(50.0, 80.0)),
+            NavigationConfig::default(),
+        );
+
+        assert_near(resolved.pan.x, target.pan.x);
+        assert_near(resolved.pan.y, target.pan.y);
+        assert_eq!(resolved.zoom, target.zoom);
     }
 
     #[test]

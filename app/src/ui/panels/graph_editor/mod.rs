@@ -413,14 +413,60 @@ fn node_belongs_to_composition(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_graph_drag_if_owner_changed, graph_node_selection, HistoryManager, SelectionTarget,
+        finish_graph_drag_if_owner_changed, graph_navigation_config, graph_node_selection,
+        GraphViewportState, HistoryManager, SelectionTarget,
     };
     use crate::state::context::EditorContext;
     use crate::state::context_types::GraphKeyframeDragState;
+    use crate::ui::viewport::ViewportController;
     use library::model::project::Project;
     use library::model::property::KeyframeId;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
+
+    const VIEWPORT: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(420.0, 230.0));
+
+    fn run_graph_frame(
+        context: &egui::Context,
+        frame: usize,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+        pan: &mut egui::Vec2,
+        zoom_x: &mut f32,
+        zoom_y: &mut f32,
+    ) {
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 300.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let mut state = GraphViewportState {
+                        pan,
+                        zoom_x,
+                        zoom_y,
+                    };
+                    let mut handled = false;
+                    ViewportController::new(
+                        ui,
+                        ui.make_persistent_id("graph-raw-navigation"),
+                        None,
+                    )
+                    .with_config(graph_navigation_config())
+                    .with_screen_origin(egui::pos2(VIEWPORT.min.x, VIEWPORT.center().y))
+                    .interact_with_rect(VIEWPORT, &mut state, &mut handled);
+                });
+            },
+        ));
+    }
 
     #[test]
     fn graph_uses_shared_canvas_token_with_explicit_axis_grid_spacing() {
@@ -439,6 +485,75 @@ mod tests {
             pan_zoom_ui::ZoomPolicy::IndependentXY
         );
         assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+    }
+
+    #[test]
+    fn raw_events_preserve_graph_pan_sign_and_independent_zoom_axes() {
+        let context = egui::Context::default();
+        let pointer = egui::pos2(240.0, 120.0);
+        let mut pan = egui::vec2(10.0, -5.0);
+        let mut zoom_x = 2.0;
+        let mut zoom_y = 3.0;
+        run_graph_frame(
+            &context,
+            0,
+            vec![egui::Event::PointerMoved(pointer)],
+            egui::Modifiers::NONE,
+            &mut pan,
+            &mut zoom_x,
+            &mut zoom_y,
+        );
+        run_graph_frame(
+            &context,
+            1,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(4.0, -3.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+            &mut pan,
+            &mut zoom_x,
+            &mut zoom_y,
+        );
+        assert_eq!(pan, egui::vec2(14.0, -8.0));
+
+        let command = egui::Modifiers::COMMAND;
+        run_graph_frame(
+            &context,
+            2,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 4.0),
+                modifiers: command,
+            }],
+            command,
+            &mut pan,
+            &mut zoom_x,
+            &mut zoom_y,
+        );
+        assert!((zoom_x - 2.2).abs() < 1.0e-5);
+        assert_eq!(zoom_y, 3.0);
+
+        let command_shift = egui::Modifiers {
+            shift: true,
+            ..command
+        };
+        run_graph_frame(
+            &context,
+            3,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 4.0),
+                modifiers: command_shift,
+            }],
+            command_shift,
+            &mut pan,
+            &mut zoom_x,
+            &mut zoom_y,
+        );
+        assert!((zoom_x - 2.2).abs() < 1.0e-5);
+        assert!((zoom_y - 3.3).abs() < 1.0e-5);
     }
 
     #[test]

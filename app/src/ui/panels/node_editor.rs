@@ -53,7 +53,7 @@ mod test_fixture;
 mod time_context_tests;
 
 use canvas::{
-    node_editor_canvas_metadata, node_editor_details_visible,
+    bridge_node_editor_transform, node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
     node_editor_snarl_style_for, paint_node_editor_canvas_grid, sanitize_node_editor_transform,
     sanitized_node_editor_scale, screen_stroke_in_graph_units,
@@ -2315,6 +2315,7 @@ mod tests {
                                 || state.normal_connect_gesture.is_some()
                                 || state.normal_connect_cancel_pending_release,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::clone(&rendered_ports),
@@ -2461,6 +2462,7 @@ mod tests {
                                 .normal_connect_gesture
                                 .as_ref()
                                 .map(|gesture| gesture.canvas_transform),
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::clone(&rendered_ports),
@@ -3933,6 +3935,7 @@ mod tests {
                         wire_context_request: &mut wire_context_request,
                         suppress_wire_connect: false,
                         locked_canvas_transform: None,
+                        previous_canvas_transform: None,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::clone(&rendered_ports),
@@ -4543,6 +4546,7 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -4615,6 +4619,7 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -4896,6 +4901,8 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: node_editor_state
+                                .node_editor_canvas_transform,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports,
@@ -4910,6 +4917,7 @@ mod tests {
                             ui,
                         );
                         drop(viewer);
+                        node_editor_state.node_editor_canvas_transform = Some(to_global);
                         let resize_edits = container_resize_interactions(
                             ui,
                             &project,
@@ -4963,12 +4971,14 @@ mod tests {
         let locked = egui::emath::TSTransform::new(egui::vec2(120.0, 240.0), 0.25);
         let mut scene_pan =
             egui::emath::TSTransform::new(egui::vec2(1_920.0, -480.0), locked.scaling);
-        resolve_node_editor_transform(&mut scene_pan, Some(locked));
+        let previous_scene_pan = scene_pan;
+        resolve_node_editor_transform(&mut scene_pan, Some(locked), Some(previous_scene_pan));
         assert_eq!(scene_pan, locked);
 
         let mut normal_pan =
             egui::emath::TSTransform::new(egui::vec2(1_920.0, -480.0), locked.scaling);
-        resolve_node_editor_transform(&mut normal_pan, None);
+        let previous_normal_pan = normal_pan;
+        resolve_node_editor_transform(&mut normal_pan, None, Some(previous_normal_pan));
         assert_eq!(normal_pan.translation, egui::vec2(1_920.0, -480.0));
     }
 
@@ -7512,6 +7522,7 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -7926,6 +7937,7 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -8017,6 +8029,7 @@ mod tests {
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
                             locked_canvas_transform: None,
+                            previous_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -8244,6 +8257,7 @@ mod tests {
                         wire_context_request: &mut wire_context_request,
                         suppress_wire_connect: false,
                         locked_canvas_transform: None,
+                        previous_canvas_transform: None,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),

@@ -20,6 +20,9 @@ pub mod interactions;
 pub(in crate::ui::panels::timeline) mod reorder;
 mod waveform;
 
+const TIMELINE_MIN_V_ZOOM: f32 = 0.1;
+const TIMELINE_MAX_V_ZOOM: f32 = 10.0;
+
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,
     h_zoom: &'a mut f32,
@@ -46,15 +49,20 @@ impl<'a> ViewportState for TimelineViewportState<'a> {
     }
 }
 
-fn timeline_navigation_config() -> NavigationConfig {
+fn timeline_navigation_config(
+    min_h_zoom: f32,
+    max_h_zoom: f32,
+    min_v_zoom: f32,
+    max_v_zoom: f32,
+) -> NavigationConfig {
     NavigationConfig {
         input_policy: ViewportInputPolicy::AxisModifiers,
         zoom_policy: ZoomPolicy::IndependentXY,
         pan_axes: AxisMask::BOTH,
         // Preserve the existing Ctrl/Cmd = X and Ctrl/Cmd+Shift = Y controls.
         zoom_axes: AxisMask::BOTH,
-        min_zoom: egui::Vec2::splat(0.0001),
-        max_zoom: egui::Vec2::splat(10_000.0),
+        min_zoom: egui::vec2(min_h_zoom, min_v_zoom),
+        max_zoom: egui::vec2(max_h_zoom, max_v_zoom),
         ..Default::default()
     }
 }
@@ -168,8 +176,8 @@ pub(super) fn show_clip_area(
         v_zoom: &mut editor_context.timeline.v_zoom,
         min_h_zoom,
         max_h_zoom,
-        min_v_zoom: 0.1,
-        max_v_zoom: 10.0,
+        min_v_zoom: TIMELINE_MIN_V_ZOOM,
+        max_v_zoom: TIMELINE_MAX_V_ZOOM,
         max_scroll_y: (num_visible_tracks as f32 * (row_height + track_spacing)
             - content_rect_for_clip_area.height())
         .max(0.0),
@@ -180,7 +188,12 @@ pub(super) fn show_clip_area(
         ui_content.make_persistent_id("unique_timeline_viewport_controller_id"),
         hand_tool_key,
     )
-    .with_config(timeline_navigation_config());
+    .with_config(timeline_navigation_config(
+        min_h_zoom,
+        max_h_zoom,
+        TIMELINE_MIN_V_ZOOM,
+        TIMELINE_MAX_V_ZOOM,
+    ));
 
     let (_changed, vp_response) = controller.interact_with_rect(
         content_rect_for_clip_area,
@@ -320,17 +333,108 @@ pub(super) fn show_clip_area(
 
 #[cfg(test)]
 mod tests {
-    use super::{box_selection_start_position, timeline_navigation_config};
+    use super::{box_selection_start_position, timeline_navigation_config, TimelineViewportState};
+    use crate::ui::viewport::ViewportController;
     use pan_zoom_ui::{AxisMask, InputPolicy, ZoomPolicy};
+
+    const VIEWPORT: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(420.0, 230.0));
 
     #[test]
     fn navigation_preserves_independent_timeline_axes() {
-        let config = timeline_navigation_config();
+        let config = timeline_navigation_config(0.25, 4.0, 0.1, 10.0);
 
         assert_eq!(config.input_policy, InputPolicy::AxisModifiers);
         assert_eq!(config.zoom_policy, ZoomPolicy::IndependentXY);
         assert_eq!(config.pan_axes, AxisMask::BOTH);
         assert_eq!(config.zoom_axes, AxisMask::BOTH);
+        assert_eq!(config.min_zoom, egui::vec2(0.25, 0.1));
+        assert_eq!(config.max_zoom, egui::vec2(4.0, 10.0));
+    }
+
+    fn run_timeline_frame(
+        context: &egui::Context,
+        frame: usize,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+        scroll_offset: &mut egui::Vec2,
+        h_zoom: &mut f32,
+        v_zoom: &mut f32,
+    ) -> bool {
+        let mut changed = false;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 300.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let mut state = TimelineViewportState {
+                        scroll_offset,
+                        h_zoom,
+                        v_zoom,
+                        min_h_zoom: 0.25,
+                        max_h_zoom: 4.0,
+                        min_v_zoom: 0.1,
+                        max_v_zoom: 10.0,
+                        max_scroll_y: 500.0,
+                    };
+                    let mut handled = false;
+                    changed = ViewportController::new(
+                        ui,
+                        ui.make_persistent_id("timeline-boundary-navigation"),
+                        None,
+                    )
+                    .with_config(timeline_navigation_config(0.25, 4.0, 0.1, 10.0))
+                    .interact_with_rect(VIEWPORT, &mut state, &mut handled)
+                    .0;
+                });
+            },
+        ));
+        changed
+    }
+
+    #[test]
+    fn raw_zoom_event_at_dynamic_max_keeps_scroll_anchor_stable() {
+        let context = egui::Context::default();
+        let pointer = egui::pos2(240.0, 120.0);
+        let mut scroll_offset = egui::vec2(120.0, 40.0);
+        let mut h_zoom = 4.0;
+        let mut v_zoom = 2.0;
+        assert!(!run_timeline_frame(
+            &context,
+            0,
+            vec![egui::Event::PointerMoved(pointer)],
+            egui::Modifiers::NONE,
+            &mut scroll_offset,
+            &mut h_zoom,
+            &mut v_zoom,
+        ));
+
+        let before = scroll_offset;
+        let command = egui::Modifiers::COMMAND;
+        assert!(!run_timeline_frame(
+            &context,
+            1,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 4.0),
+                modifiers: command,
+            }],
+            command,
+            &mut scroll_offset,
+            &mut h_zoom,
+            &mut v_zoom,
+        ));
+        assert_eq!(scroll_offset, before);
+        assert_eq!(h_zoom, 4.0);
+        assert_eq!(v_zoom, 2.0);
     }
 
     #[test]

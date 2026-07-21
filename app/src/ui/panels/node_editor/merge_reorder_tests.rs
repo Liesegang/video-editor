@@ -199,6 +199,7 @@ fn render_merge_frame(
                     wire_context_request: &mut wire_context_request,
                     suppress_wire_connect: state.merge_layer_reorder.is_some(),
                     locked_canvas_transform,
+                    previous_canvas_transform: state.node_editor_canvas_transform,
                     to_global: &mut to_global,
                     canvas_clip: &mut canvas_clip,
                     rendered_ports: Arc::clone(&rendered_ports),
@@ -213,6 +214,7 @@ fn render_merge_frame(
                     ui,
                 );
                 drop(viewer);
+                state.node_editor_canvas_transform = Some(to_global);
                 result.transform = to_global;
                 result.layout_edit_count = collect_layout_edits(project, &snarl).len();
                 result.edges = register_rendered_edges(project, &rendered_ports, canvas_clip, None);
