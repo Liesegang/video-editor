@@ -27,6 +27,7 @@ mod decorator_stack;
 mod effect_stack;
 mod helpers;
 mod stack_projection;
+mod style_stack;
 mod transform;
 
 pub use decorator_stack::SemanticDecoratorStack;
@@ -36,6 +37,7 @@ pub use stack_projection::{
     SemanticAnimationSupport, SemanticContainerPropertyStack, SemanticPropertyAccess,
     SemanticPropertyEntry, SemanticPropertyGroup, SemanticPropertyOwner, SemanticPropertySection,
 };
+pub use style_stack::{SemanticStyleBranch, SemanticStyleStack};
 
 const TRANSFORM_PROPERTIES: [&str; 4] = ["position", "rotation", "scale", "anchor"];
 const SEMANTIC_PROPERTIES: [&str; 5] = ["position", "rotation", "scale", "anchor", "opacity"];

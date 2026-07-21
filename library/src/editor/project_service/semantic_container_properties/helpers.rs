@@ -235,9 +235,24 @@ pub(super) fn terminal_shape_source(
         .iter()
         .copied()
         .collect::<std::collections::HashSet<_>>();
+    let auxiliary_sources = project
+        .connections
+        .iter()
+        .filter(|connection| connection.to.port != SHAPE_INPUT_PORT)
+        .filter(|connection| {
+            project
+                .port_definition(&connection.to, PortDirection::Input)
+                .is_some_and(|port| port.data_type == PortDataType::Shape)
+        })
+        .filter_map(|connection| match connection.from.owner {
+            PortOwner::Node(node_id) if contained.contains(&node_id) => Some(node_id),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
     let mut candidates = contained
         .iter()
         .copied()
+        .filter(|node_id| !auxiliary_sources.contains(node_id))
         .filter(|node_id| {
             project
                 .port_definition(
