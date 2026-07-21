@@ -2716,14 +2716,43 @@ def run_selection_suite(client):
         raise QaFailure("Node Editor selection mutated the authoritative Project")
     if node_state["history"] != node_before["history"]:
         raise QaFailure("Node Editor selection changed undo/redo history")
+
+    blank_snapshot, blank_point = find_free_canvas_point(client)
+    client.inject(
+        "click",
+        {
+            "x": blank_point["x"],
+            "y": blank_point["y"],
+            "coordinate_space": "points",
+            "button": "primary",
+        },
+        {
+            "component_id": "node_editor.canvas",
+            "component_frame": blank_snapshot["frame"],
+            "coordinate_reason": "fresh unobstructed canvas point clears Node selection",
+            "cleared_node_id": TEXT,
+        },
+    )
+    cleared_state = client.wait_until(
+        "blank canvas clears typed Node selection",
+        lambda: state
+        if (state := client.state())["editor"]["selection"]["primary"] is None
+        and state["editor"]["selection"]["targets"] == []
+        else None,
+    )
+    if cleared_state["project"] != node_state["project"]:
+        raise QaFailure("blank Node deselection mutated the authoritative Project")
+    if cleared_state["history"] != node_state["history"]:
+        raise QaFailure("blank Node deselection changed undo/redo history")
     return {
         "ok": True,
         "suite": "selection",
         "health": health,
         "initial_frame": initial["frame"],
-        "final_frame": node_state["frame"],
+        "final_frame": cleared_state["frame"],
         "clip_selection": clip_state["editor"]["selection"],
         "node_selection": node_state["editor"]["selection"],
+        "cleared_selection": cleared_state["editor"]["selection"],
         "actions": client.evidence,
     }
 
