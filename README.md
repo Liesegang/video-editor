@@ -96,19 +96,9 @@ Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎し
 
 ## 謝辞
 
-サンプル画像、動画は以下のクリエイター様の作品を使用させていただきました。
-
-- **SDx3 様**
-  「カートゥーンな海と空」
-  ライセンス: CC0
-  https://www.pixiv.net/artworks/83263525
+サンプル動画は以下のクリエイター様の作品を使用させていただきました。
 
 - **Blender Foundation**
   「Big Buck Bunny」
   ライセンス: CC BY 3.0
   https://peach.blender.org/
-
-- **test_sound.mp3**
-  「作業中のテーマ -Working now-」
-  ライセンス: CC BY 3.0
-  https://soundcloud.com/user-80857924/working-now
