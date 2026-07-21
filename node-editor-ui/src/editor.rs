@@ -3,8 +3,9 @@
 use egui::{Color32, CornerRadius, Pos2, Stroke, StrokeKind, Vec2};
 
 use crate::{
-    interaction, EditorOutput, GraphFrame, InteractionOptions, InteractionState, ItemId,
-    NodeDescriptor, PortDirection,
+    chrome, interaction, EditorOutput, GraphFrame, GroupChrome, InteractionOptions,
+    InteractionState, ItemId, NodeDescriptor, NodeHeader, NodePalette, NodeVisualStyle,
+    PortDirection, PortLabel, PortVisualStyle,
 };
 
 /// Host extension point for domain-specific controls inside a generic Node.
@@ -90,6 +91,55 @@ impl Default for EditorConfig {
 pub struct Editor;
 
 impl Editor {
+    /// Resolve a Node palette against generic selection/inactive state.
+    ///
+    /// Host adapters use this before handing frames to an external layout
+    /// engine. The returned style is also the shell contract used by the
+    /// editor-owned renderer.
+    pub fn node_visual_style(
+        palette: NodePalette,
+        inactive: bool,
+        selected: bool,
+        scale: f32,
+    ) -> NodeVisualStyle {
+        chrome::node_visual_style(palette, inactive, selected, scale)
+    }
+
+    /// Build the generic Node body shell for an external layout engine.
+    pub fn node_frame(style: NodeVisualStyle) -> egui::Frame {
+        chrome::node_frame(style)
+    }
+
+    /// Build the generic Node header shell for an external layout engine.
+    pub fn node_header_frame(style: NodeVisualStyle) -> egui::Frame {
+        chrome::node_header_frame(style)
+    }
+
+    /// Render generic header content inside a host-owned Node layout.
+    pub fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> egui::Response {
+        chrome::show_node_header(ui, header)
+    }
+
+    /// Render a non-selectable, bounded port label inside a host layout.
+    pub fn show_port_label(ui: &mut egui::Ui, label: PortLabel<'_>) -> egui::Response {
+        chrome::show_port_label(ui, label)
+    }
+
+    /// Resolve connected/unconnected socket presentation from a host type color.
+    pub fn port_visual_style(color: Color32, connected: bool) -> PortVisualStyle {
+        chrome::port_visual_style(color, connected)
+    }
+
+    /// Paint the fill/header portion of a nested group shell.
+    pub fn paint_group_backdrop(painter: &egui::Painter, rect: egui::Rect, chrome: GroupChrome) {
+        crate::chrome::paint_group_backdrop(painter, rect, chrome);
+    }
+
+    /// Paint the outline/header divider portion of a nested group shell.
+    pub fn paint_group_foreground(painter: &egui::Painter, rect: egui::Rect, chrome: GroupChrome) {
+        crate::chrome::paint_group_foreground(painter, rect, chrome);
+    }
+
     /// Render a complete reusable editor and produce host mutation intents.
     pub fn show<NodeId, PortId, WireId, GroupId, Key, Renderer>(
         ui: &mut egui::Ui,
@@ -166,19 +216,22 @@ where
             .selection
             .items
             .contains(&ItemId::Group(group.id.clone()));
-        painter.rect(
-            rect,
-            CornerRadius::same(8),
-            config.group_fill,
-            if selected {
+        let group_chrome = GroupChrome {
+            body_fill: config.group_fill,
+            header_fill: config.group_header_fill,
+            outline: if selected {
                 config.selected_stroke
             } else {
                 config.normal_stroke
             },
-            StrokeKind::Inside,
-        );
+            divider: config.normal_stroke,
+            header_height: header.height(),
+            corner_radius: 8,
+            details_visible: true,
+        };
+        chrome::paint_group_backdrop(&painter, rect, group_chrome);
+        chrome::paint_group_foreground(&painter, rect, group_chrome);
         if header.is_positive() {
-            painter.rect_filled(header, CornerRadius::same(8), config.group_header_fill);
             painter.text(
                 header.left_center() + Vec2::new(9.0, 0.0),
                 egui::Align2::LEFT_CENTER,
@@ -219,8 +272,9 @@ where
             PortDirection::Input => Color32::from_rgb(104, 171, 255),
             PortDirection::Output => Color32::from_rgb(244, 172, 74),
         };
-        painter.circle_filled(center, config.port_radius, color);
-        painter.circle_stroke(center, config.port_radius, Stroke::new(1.0, Color32::BLACK));
+        let visual = chrome::port_visual_style(color, true);
+        painter.circle_filled(center, config.port_radius, visual.fill);
+        painter.circle_stroke(center, config.port_radius, visual.stroke);
         if !port.label.is_empty() {
             let (position, anchor) = match port.direction {
                 PortDirection::Input => (
@@ -266,31 +320,55 @@ where
         .items
         .contains(&ItemId::Node(node.id.clone()));
     let painter = ui.painter().with_clip_rect(frame.viewport);
-    painter.rect(
-        rect,
-        CornerRadius::same(7),
-        config.node_fill,
-        if selected {
+    let visual = NodeVisualStyle {
+        body_fill: config.node_fill,
+        header_fill: config.node_header_fill,
+        outer_stroke: if selected {
             config.selected_stroke
         } else {
             config.normal_stroke
         },
+        highlight_state: if selected { "selected" } else { "none" },
+        highlight_screen_width: if selected {
+            config.selected_stroke.width * frame.transform.scaling
+        } else {
+            config.normal_stroke.width * frame.transform.scaling
+        },
+    };
+    painter.rect(
+        rect,
+        CornerRadius::same(7),
+        visual.body_fill,
+        visual.outer_stroke,
         StrokeKind::Inside,
     );
     let header = frame
         .screen_rect(node.header_rect)
         .intersect(rect)
         .intersect(frame.viewport);
-    painter.rect_filled(header, CornerRadius::same(7), config.node_header_fill);
-    painter.text(
-        header.left_center() + Vec2::new(8.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        node.title,
-        egui::TextStyle::Button.resolve(ui.style()),
-        if node.enabled {
-            ui.visuals().strong_text_color()
-        } else {
-            ui.visuals().weak_text_color()
+    painter.rect_filled(header, CornerRadius::same(7), visual.header_fill);
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(8.0, 0.0))),
+        |ui| {
+            ui.set_clip_rect(header.intersect(frame.viewport));
+            chrome::show_node_header(
+                ui,
+                NodeHeader {
+                    title: node.title,
+                    title_color: Some(if node.enabled {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    }),
+                    leading: None,
+                    trailing: None,
+                    accent: ui.visuals().weak_text_color(),
+                    min_width: (header.width() - 16.0).max(0.0),
+                    title_width: (header.width() - 24.0).max(0.0),
+                    row_height: header.height(),
+                    details_visible: true,
+                },
+            );
         },
     );
 

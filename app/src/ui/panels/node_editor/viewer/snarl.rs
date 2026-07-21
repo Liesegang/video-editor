@@ -10,6 +10,7 @@ use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwne
 use library::model::property::PropertyValue;
 use library::model::{GeneratorContent, NodeContent};
 use library::plugin::property_name_from_port;
+use node_editor_ui::{Editor, HeaderGlyph, NodeHeader, PortLabel};
 use std::sync::Arc;
 
 mod bypass_menu;
@@ -54,11 +55,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     self.to_global.scaling,
                 )
                 .visual;
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(9, 8))
-                    .corner_radius(10)
-                    .fill(style.body_fill)
-                    .stroke(style.outer_stroke)
+                Editor::node_frame(style)
             }
         }
     }
@@ -85,15 +82,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     self.to_global.scaling,
                 )
                 .visual;
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(9, 7))
-                    .corner_radius(egui::CornerRadius {
-                        nw: 9,
-                        ne: 9,
-                        sw: 3,
-                        se: 3,
-                    })
-                    .fill(style.header_fill)
+                Editor::node_header_frame(style)
             }
         }
     }
@@ -123,33 +112,29 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 let (inactive, selected, visual) =
                     (selection.inactive, selection.selected, selection.visual);
                 let bypassed = bypass_menu::is_bypassed(self.project.get_node(project_node_id));
-                ui.set_min_width(NODE_HEADER_WIDTH);
-                let response = if node_editor_details_visible(self.to_global.scaling) {
-                    ui.horizontal(|ui| {
-                        let icon = node_icon(self.project, project_node_id);
-                        non_selectable_label(
-                            ui,
-                            egui::RichText::new(icon.glyph)
-                                .color(palette.accent)
-                                .strong(),
-                        )
-                        .on_hover_text(icon.label);
-                        bounded_strong_non_selectable_label(
-                            ui,
-                            node_title(self.project, project_node_id),
-                            NODE_HEADER_WIDTH - 48.0,
-                        );
-                        let (status, status_label) = bypass_menu::status(bypassed, inactive);
-                        non_selectable_label(ui, egui::RichText::new(status).color(palette.accent))
-                            .on_hover_text(status_label);
-                    })
-                    .response
-                } else {
-                    ui.allocate_response(
-                        egui::vec2(NODE_HEADER_WIDTH, PORT_ROW_HEIGHT),
-                        egui::Sense::hover(),
-                    )
-                };
+                let icon = node_icon(self.project, project_node_id);
+                let (status, status_label) = bypass_menu::status(bypassed, inactive);
+                let title = node_title(self.project, project_node_id);
+                let response = Editor::show_node_header(
+                    ui,
+                    NodeHeader {
+                        title: &title,
+                        title_color: None,
+                        leading: Some(HeaderGlyph {
+                            glyph: icon.glyph,
+                            tooltip: icon.label,
+                        }),
+                        trailing: Some(HeaderGlyph {
+                            glyph: status,
+                            tooltip: status_label,
+                        }),
+                        accent: palette.accent,
+                        min_width: NODE_HEADER_WIDTH,
+                        title_width: NODE_HEADER_WIDTH - 48.0,
+                        row_height: PORT_ROW_HEIGHT,
+                        details_visible: node_editor_details_visible(self.to_global.scaling),
+                    },
+                );
                 let response = graph_item_inactive_reason(
                     self.project,
                     GraphItem::Node(project_node_id),
@@ -437,16 +422,16 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 data_type: PortDataType::Any,
             });
         if matches!(item, Some(GraphItem::Node(_))) {
-            if node_editor_details_visible(self.to_global.scaling) {
-                bounded_non_selectable_label(
-                    ui,
-                    definition.name.clone(),
-                    port_label_width(item),
-                    egui::Align::RIGHT,
-                );
-            } else {
-                ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH, PORT_ROW_HEIGHT));
-            }
+            Editor::show_port_label(
+                ui,
+                PortLabel {
+                    text: &definition.name,
+                    width: port_label_width(item),
+                    row_height: PORT_ROW_HEIGHT,
+                    align: egui::Align::RIGHT,
+                    details_visible: node_editor_details_visible(self.to_global.scaling),
+                },
+            );
         } else {
             ui.allocate_space(egui::vec2(0.0, PORT_ROW_HEIGHT));
         }

@@ -7,12 +7,16 @@
 
 #![forbid(unsafe_code)]
 
+mod chrome;
 mod editor;
 mod graph;
 mod interaction;
 mod selection;
 mod wire;
 
+pub use chrome::{
+    GroupChrome, HeaderGlyph, NodeHeader, NodePalette, NodeVisualStyle, PortLabel, PortVisualStyle,
+};
 pub use editor::{Editor, EditorConfig, NodeBodyRenderer, NodeBodyResponse};
 pub use graph::{
     AuthoritativeSelection, GraphFrame, GroupDescriptor, ItemId, NodeDescriptor, PortDescriptor,

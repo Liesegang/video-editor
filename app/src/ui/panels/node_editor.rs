@@ -114,14 +114,12 @@ use viewer::ProjectNodeViewer;
 mod components;
 
 use components::{
-    bounded_non_selectable_label, bounded_strong_non_selectable_label,
-    continuous_color_edit_button, continuous_response_finished, non_selectable_label,
-    port_label_width, property_label, strong_non_selectable_label,
+    bounded_non_selectable_label, continuous_color_edit_button, continuous_response_finished,
+    non_selectable_label, port_label_width, property_label, strong_non_selectable_label,
 };
 use components::{
-    container_icon, node_icon, node_palette, node_visual_style, paint_container_backdrop,
-    paint_container_foreground, pin_color, pin_info, value_operation_label, NodeVisualStyle,
-    VALUE_NODE_CATEGORY_LABEL,
+    container_icon, node_icon, node_palette, paint_container_backdrop, paint_container_foreground,
+    pin_color, pin_info, value_operation_label, VALUE_NODE_CATEGORY_LABEL,
 };
 use qa::{
     clipped_qa_rect, edge_endpoint_qa_metadata, qa_container_key, qa_port_id, qa_rect_metadata,

@@ -3,6 +3,7 @@ use egui_phosphor::regular as icons;
 use egui_snarl::ui::{PinInfo, WireStyle};
 use library::model::project::{PortDataType, PortDirection, PortOwner, PortSide};
 use library::model::{AssetKind, GeneratorContent, Node, NodeContent, Project, ValueContent};
+use node_editor_ui::{Editor, GroupChrome, NodePalette};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
@@ -11,89 +12,6 @@ use crate::ui::panels::node_editor::{
     CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, EMBEDDED_PORT_LABEL_INSET,
     PORT_ROW_HEIGHT,
 };
-
-#[derive(Clone, Copy)]
-pub(in crate::ui::panels::node_editor) struct NodePalette {
-    pub(in crate::ui::panels::node_editor) body: Color32,
-    pub(in crate::ui::panels::node_editor) header: Color32,
-    pub(in crate::ui::panels::node_editor) accent: Color32,
-}
-
-const NODE_SELECTED_OUTLINE: Color32 = Color32::from_rgb(102, 190, 255);
-const NODE_SELECTED_OUTLINE_SCREEN_WIDTH: f32 = 3.0;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::ui::panels::node_editor) struct NodeVisualStyle {
-    pub(in crate::ui::panels::node_editor) body_fill: Color32,
-    pub(in crate::ui::panels::node_editor) header_fill: Color32,
-    pub(in crate::ui::panels::node_editor) outer_stroke: egui::Stroke,
-    pub(in crate::ui::panels::node_editor) highlight_state: &'static str,
-    pub(in crate::ui::panels::node_editor) highlight_screen_width: f32,
-}
-
-pub(in crate::ui::panels::node_editor) fn node_visual_style(
-    palette: NodePalette,
-    inactive: bool,
-    selected: bool,
-    scale: f32,
-) -> NodeVisualStyle {
-    let body_fill = if inactive {
-        palette.body.gamma_multiply(0.42)
-    } else {
-        palette.body
-    };
-    let base_header = if inactive {
-        palette.header.gamma_multiply(0.42)
-    } else {
-        palette.header
-    };
-    if selected {
-        return NodeVisualStyle {
-            body_fill,
-            // Keep the category/inactive header state visible under a strong,
-            // stable selection tint instead of replacing all Node semantics.
-            header_fill: mix_color(base_header, NODE_SELECTED_OUTLINE, 0.48),
-            outer_stroke: egui::Stroke::new(
-                screen_stroke_in_graph_units(NODE_SELECTED_OUTLINE_SCREEN_WIDTH, scale),
-                NODE_SELECTED_OUTLINE,
-            ),
-            highlight_state: "selected",
-            highlight_screen_width: NODE_SELECTED_OUTLINE_SCREEN_WIDTH,
-        };
-    }
-
-    let stroke_color = if inactive {
-        palette.accent.gamma_multiply(0.48)
-    } else {
-        palette.accent
-    };
-    let stroke_width = if node_editor_details_visible(scale) {
-        1.25
-    } else {
-        screen_stroke_in_graph_units(1.1, scale)
-    };
-    NodeVisualStyle {
-        body_fill,
-        header_fill: base_header,
-        outer_stroke: egui::Stroke::new(stroke_width, stroke_color),
-        highlight_state: "none",
-        highlight_screen_width: stroke_width * scale.max(f32::EPSILON),
-    }
-}
-
-fn mix_color(base: Color32, tint: Color32, tint_weight: f32) -> Color32 {
-    fn channel(base: u8, tint: u8, tint_weight: f32) -> u8 {
-        (base as f32 * (1.0 - tint_weight) + tint as f32 * tint_weight)
-            .round()
-            .clamp(0.0, 255.0) as u8
-    }
-    Color32::from_rgba_premultiplied(
-        channel(base.r(), tint.r(), tint_weight),
-        channel(base.g(), tint.g(), tint_weight),
-        channel(base.b(), tint.b(), tint_weight),
-        channel(base.a(), tint.a(), tint_weight),
-    )
-}
 
 pub(in crate::ui::panels::node_editor) const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
 
@@ -245,8 +163,6 @@ pub(in crate::ui::panels::node_editor) fn paint_container_backdrop(
     if inactive {
         fill = fill.gamma_multiply(0.35);
     }
-    let radius = egui::CornerRadius::same(8);
-    painter.rect_filled(rect, radius, fill);
     let mut header_fill = match container.kind {
         ContainerKind::Composition => Color32::from_rgba_premultiplied(38, 66, 100, 220),
         ContainerKind::Track => Color32::from_rgba_premultiplied(73, 61, 91, 220),
@@ -255,19 +171,18 @@ pub(in crate::ui::panels::node_editor) fn paint_container_backdrop(
     if inactive {
         header_fill = header_fill.gamma_multiply(0.42);
     }
-    let header = egui::Rect::from_min_size(
-        rect.min,
-        egui::vec2(rect.width(), CONTAINER_HEADER_HEIGHT.min(rect.height())),
-    );
-    painter.rect_filled(
-        header,
-        egui::CornerRadius {
-            nw: 8,
-            ne: 8,
-            sw: 2,
-            se: 2,
+    Editor::paint_group_backdrop(
+        painter,
+        rect,
+        GroupChrome {
+            body_fill: fill,
+            header_fill,
+            outline: egui::Stroke::NONE,
+            divider: egui::Stroke::NONE,
+            header_height: CONTAINER_HEADER_HEIGHT,
+            corner_radius: 8,
+            details_visible: false,
         },
-        header_fill,
     );
 }
 
@@ -309,23 +224,22 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
     if inactive {
         stroke.color = stroke.color.gamma_multiply(0.5);
     }
-    painter.rect_stroke(
+    Editor::paint_group_foreground(
+        painter,
         rect,
-        egui::CornerRadius::same(8),
-        stroke,
-        egui::StrokeKind::Inside,
+        GroupChrome {
+            body_fill: Color32::TRANSPARENT,
+            header_fill: Color32::TRANSPARENT,
+            outline: stroke,
+            divider: egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.82)),
+            header_height: CONTAINER_HEADER_HEIGHT,
+            corner_radius: 8,
+            details_visible: detailed,
+        },
     );
     if !detailed {
         return;
     }
-    let header_bottom = rect.top() + CONTAINER_HEADER_HEIGHT.min(rect.height());
-    painter.line_segment(
-        [
-            egui::pos2(rect.left(), header_bottom),
-            egui::pos2(rect.right(), header_bottom),
-        ],
-        egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.82)),
-    );
     if !container.collapsed {
         for (index, definition) in canonical_pin_definitions(
             project,
@@ -413,48 +327,10 @@ pub(in crate::ui::panels::node_editor) fn pin_info(
     connected: bool,
 ) -> PinInfo {
     let color = pin_color(data_type);
-    let fill = if connected {
-        color
-    } else {
-        color.gamma_multiply(0.32)
-    };
+    let visual = Editor::port_visual_style(color, connected);
     PinInfo::circle()
-        .with_fill(fill)
-        .with_stroke(egui::Stroke::new(if connected { 2.0 } else { 1.25 }, color))
-        .with_wire_color(color)
+        .with_fill(visual.fill)
+        .with_stroke(visual.stroke)
+        .with_wire_color(visual.wire_color)
         .with_wire_style(WireStyle::Bezier3)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn palette() -> NodePalette {
-        NodePalette {
-            body: Color32::from_rgb(30, 40, 50),
-            header: Color32::from_rgb(60, 70, 80),
-            accent: Color32::from_rgb(150, 160, 170),
-        }
-    }
-
-    #[test]
-    fn selected_outline_stays_three_screen_points_at_every_lod() {
-        for scale in [0.0065, 0.18, 1.0, 1.25] {
-            let selected = node_visual_style(palette(), false, true, scale);
-            assert_eq!(selected.highlight_state, "selected");
-            assert!((selected.highlight_screen_width - 3.0).abs() < f32::EPSILON);
-            assert!((selected.outer_stroke.width * scale - 3.0).abs() < 0.001);
-            assert_eq!(selected.outer_stroke.color, NODE_SELECTED_OUTLINE);
-        }
-    }
-
-    #[test]
-    fn selection_preserves_inactive_body_while_tinting_header_and_outline() {
-        let inactive = node_visual_style(palette(), true, false, 1.0);
-        let selected_inactive = node_visual_style(palette(), true, true, 1.0);
-        assert_eq!(selected_inactive.body_fill, inactive.body_fill);
-        assert_ne!(selected_inactive.header_fill, inactive.header_fill);
-        assert_ne!(selected_inactive.outer_stroke, inactive.outer_stroke);
-        assert_eq!(selected_inactive.highlight_state, "selected");
-    }
 }

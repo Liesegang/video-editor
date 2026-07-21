@@ -3,9 +3,9 @@ use std::cell::RefCell;
 use egui::{pos2, vec2, Event, Modifiers, Pos2, RawInput, Rect};
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, Editor, EditorConfig, EditorOutput, GraphFrame,
-    GroupDescriptor, InteractionOptions, InteractionState, ItemId, NodeBodyRenderer,
-    NodeBodyResponse, NodeDescriptor, PortDescriptor, PortDirection, PortOwner, TypeKey,
-    WireDescriptor,
+    GroupChrome, GroupDescriptor, HeaderGlyph, InteractionOptions, InteractionState, ItemId,
+    NodeBodyRenderer, NodeBodyResponse, NodeDescriptor, NodeHeader, NodePalette, PortDescriptor,
+    PortDirection, PortLabel, PortOwner, TypeKey, WireDescriptor,
 };
 
 type Output = EditorOutput<u8, u8, u8, u8>;
@@ -264,6 +264,78 @@ fn fake_host_renders_nested_groups_nodes_wires_ports_and_host_bodies() {
     assert_eq!(rendered, [1, 2]);
     assert!(!full.shapes.is_empty());
     assert_eq!(graph.groups[1].parent, Some(graph.groups[0].id));
+}
+
+#[test]
+fn fake_external_layout_consumes_the_same_chrome_descriptors() {
+    let context = egui::Context::default();
+    let response_rects = RefCell::new(Vec::new());
+    let full = context.run(
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(500.0, 300.0))),
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(context, |ui| {
+                    let palette = NodePalette {
+                        body: egui::Color32::from_rgb(30, 40, 50),
+                        header: egui::Color32::from_rgb(60, 70, 80),
+                        accent: egui::Color32::from_rgb(150, 160, 170),
+                    };
+                    let visual = Editor::node_visual_style(palette, false, true, 0.5);
+                    Editor::node_frame(visual).show(ui, |ui| {
+                        Editor::node_header_frame(visual).show(ui, |ui| {
+                            let response = Editor::show_node_header(
+                                ui,
+                                NodeHeader {
+                                    title: "Host source",
+                                    title_color: None,
+                                    leading: Some(HeaderGlyph {
+                                        glyph: "S",
+                                        tooltip: "Source",
+                                    }),
+                                    trailing: None,
+                                    accent: palette.accent,
+                                    min_width: 180.0,
+                                    title_width: 140.0,
+                                    row_height: 24.0,
+                                    details_visible: true,
+                                },
+                            );
+                            response_rects.borrow_mut().push(response.rect);
+                        });
+                        let response = Editor::show_port_label(
+                            ui,
+                            PortLabel {
+                                text: "Image",
+                                width: 90.0,
+                                row_height: 22.0,
+                                align: egui::Align::RIGHT,
+                                details_visible: true,
+                            },
+                        );
+                        response_rects.borrow_mut().push(response.rect);
+                    });
+                    let group = Rect::from_min_size(pos2(240.0, 40.0), vec2(220.0, 180.0));
+                    let chrome = GroupChrome {
+                        body_fill: egui::Color32::from_gray(30),
+                        header_fill: egui::Color32::from_gray(50),
+                        outline: egui::Stroke::new(1.5, egui::Color32::LIGHT_BLUE),
+                        divider: egui::Stroke::new(1.0, egui::Color32::GRAY),
+                        header_height: 28.0,
+                        corner_radius: 8,
+                        details_visible: true,
+                    };
+                    Editor::paint_group_backdrop(ui.painter(), group, chrome);
+                    Editor::paint_group_foreground(ui.painter(), group, chrome);
+                });
+        },
+    );
+
+    assert_eq!(response_rects.into_inner().len(), 2);
+    assert!(!full.shapes.is_empty());
 }
 
 #[test]

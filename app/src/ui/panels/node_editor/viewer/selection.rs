@@ -1,9 +1,9 @@
 use crate::ui::panels::node_editor::{
-    graph_item_inactive, merge_images_target_node_id, node_palette, node_visual_style, GraphItem,
-    NodeVisualStyle,
+    graph_item_inactive, merge_images_target_node_id, node_palette, GraphItem,
 };
 use library::model::project::{PortAddress, PortOwner, MERGE_IMAGES_PORT};
 use library::model::Project;
+use node_editor_ui::{Editor, NodeVisualStyle};
 use uuid::Uuid;
 
 pub(super) fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
@@ -29,7 +29,12 @@ pub(super) fn node_selection_presentation(
     NodeSelectionPresentation {
         selected,
         inactive,
-        visual: node_visual_style(node_palette(project, node_id), inactive, selected, scale),
+        visual: Editor::node_visual_style(
+            node_palette(project, node_id),
+            inactive,
+            selected,
+            scale,
+        ),
     }
 }
 

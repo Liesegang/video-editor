@@ -34,7 +34,11 @@ cache. Dropping it loses no project data.
 ## Reusable surface
 
 `Editor::show` owns generic group/node chrome, ports, wires, selection
-presentation, and interaction orchestration. A host implements
+presentation, and interaction orchestration. The same `Editor` chrome API can
+be embedded into an external layout engine while it is being retired: Node
+frame/header styling, bounded non-selectable header and port labels, typed
+socket presentation, and group shell painting still consume host-provided
+borrowed labels/colors and no graph model. A host implements
 `NodeBodyRenderer<NodeId>` for domain-specific body controls. A Node's explicit
 `header_rect` is its movement handle, while body controls combine their real
 egui responses into `NodeBodyResponse`; a slider or drag value therefore owns
@@ -61,10 +65,16 @@ large Node/Group click targets and blank deselection while precise marquee and
 wire selection remain gated.
 
 This is a usable reusable-core vertical slice, **not completion of the RuViE
-renderer migration**. The following production behavior still belongs to the
-existing Snarl adapter and must move in coherent slices:
+renderer migration**. Production Node body/header shells, selection emphasis,
+Node header content, output labels/socket visuals, and group backdrop/outline
+now use that reusable chrome API. RuViE remains responsible only for resolving
+Project semantics into the borrowed glyph, label, palette, status, and type
+color descriptors.
 
-1. Node/Group chrome and Project-specific body/port controls.
+The following production behavior still belongs to the existing Snarl adapter
+and must move in coherent slices:
+
+1. Project-specific Node body/input controls and Group header commands.
 2. Node movement plus multi-selection position application.
 3. Group edge resize and nested containment constraints.
 4. Connect/reconnect/disconnect, wire knife, and connection context menus.

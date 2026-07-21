@@ -67,16 +67,3 @@ pub(in crate::ui::panels::node_editor) fn strong_non_selectable_label(
 ) -> egui::Response {
     ui.add(egui::Label::new(egui::RichText::new(text.into()).strong()).selectable(false))
 }
-
-pub(in crate::ui::panels::node_editor) fn bounded_strong_non_selectable_label(
-    ui: &mut egui::Ui,
-    text: impl Into<String>,
-    width: f32,
-) -> egui::Response {
-    ui.add_sized(
-        [width, PORT_ROW_HEIGHT],
-        egui::Label::new(egui::RichText::new(text.into()).strong())
-            .selectable(false)
-            .truncate(),
-    )
-}
