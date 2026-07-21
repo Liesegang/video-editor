@@ -29,8 +29,8 @@ mod semantic_container_properties;
 
 pub use semantic_container_properties::{
     SemanticAnimationSupport, SemanticContainerPropertyProjection, SemanticContainerPropertyStack,
-    SemanticPropertyAccess, SemanticPropertyBinding, SemanticPropertyEntry, SemanticPropertyGroup,
-    SemanticPropertyOwner, SemanticPropertySection,
+    SemanticEffectStack, SemanticPropertyAccess, SemanticPropertyBinding, SemanticPropertyEntry,
+    SemanticPropertyGroup, SemanticPropertyOwner, SemanticPropertySection,
 };
 
 pub const DEFAULT_TEXT_FONT: &str = "Arial";

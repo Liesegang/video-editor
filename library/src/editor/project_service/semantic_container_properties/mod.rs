@@ -23,9 +23,11 @@ use crate::plugin::{
 };
 use uuid::Uuid;
 
+mod effect_stack;
 mod helpers;
 mod stack_projection;
 
+pub use effect_stack::SemanticEffectStack;
 use helpers::*;
 pub use stack_projection::{
     SemanticAnimationSupport, SemanticContainerPropertyStack, SemanticPropertyAccess,
