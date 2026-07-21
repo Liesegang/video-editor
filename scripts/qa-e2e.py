@@ -1993,7 +1993,15 @@ def validate_explicit_operation_fixture(project):
         for item in project.get("compositions", [])
     }
     structural_nodes.update(
+        item.get("structural_sound_merge_node_id")
+        for item in project.get("compositions", [])
+    )
+    structural_nodes.update(
         item.get("structural_merge_node_id")
+        for item in project.get("tracks", {}).values()
+    )
+    structural_nodes.update(
+        item.get("structural_sound_merge_node_id")
         for item in project.get("tracks", {}).values()
     )
     structural_nodes.discard(None)
@@ -2002,7 +2010,7 @@ def validate_explicit_operation_fixture(project):
         missing = sorted(expected_nodes - actual_nodes)
         extra = sorted(actual_nodes - expected_nodes)
         raise QaFailure(
-            "fixture must contain the 19 explicit Nodes plus container structural Merge Nodes; "
+            "fixture must contain the 19 explicit Nodes plus typed container structural Merge Nodes; "
             "missing={}, extra={}".format(missing, extra)
         )
 
@@ -2069,29 +2077,46 @@ def validate_explicit_operation_fixture(project):
                     "{} still contains embedded {}".format(node_id, collection)
                 )
     # The original explicit fixture contributed 29 connections. Container
-    # structural Merge wiring contributes one edge per Clip and Track (5 in
-    # this fixture), while the editable Backplate branch adds a net 6 edges.
+    # typed structural Merge wiring contributes one Image and one Sound edge
+    # per Clip and Track (10 in this fixture), while the editable Backplate
+    # branch adds a net 6 edges.
     # Verify the dynamic structural edges and Backplate endpoints below so the
     # total is not merely a stale magic number.
     structural_connection_count = 0
     for track_id, track in project["tracks"].items():
+        if track.get("output_node_id") != track.get("structural_merge_node_id"):
+            raise QaFailure("Track Image output does not use structural Merge")
+        if track.get("audio_output_node_id") != track.get("structural_sound_merge_node_id"):
+            raise QaFailure("Track Sound output does not use structural Sound Merge")
         for order, clip_id in enumerate(track["clip_ids"]):
-            connection = find_project_connection(
-                project, "Clip", clip_id, "image", "Node",
-                track["structural_merge_node_id"], "images",
-            )
-            if connection["order"] != order:
-                raise QaFailure("Track structural Merge order is stale")
-            structural_connection_count += 1
+            for source_port, merge_key, target_port in (
+                ("image", "structural_merge_node_id", "images"),
+                ("audio", "structural_sound_merge_node_id", "sounds"),
+            ):
+                connection = find_project_connection(
+                    project, "Clip", clip_id, source_port, "Node",
+                    track[merge_key], target_port,
+                )
+                if connection["order"] != order:
+                    raise QaFailure("Track typed structural Merge order is stale")
+                structural_connection_count += 1
     for composition in project["compositions"]:
+        if composition.get("output_node_id") != composition.get("structural_merge_node_id"):
+            raise QaFailure("Composition Image output does not use structural Merge")
+        if composition.get("audio_output_node_id") != composition.get("structural_sound_merge_node_id"):
+            raise QaFailure("Composition Sound output does not use structural Sound Merge")
         for order, track_id in enumerate(composition["track_ids"]):
-            connection = find_project_connection(
-                project, "Track", track_id, "image", "Node",
-                composition["structural_merge_node_id"], "images",
-            )
-            if connection["order"] != order:
-                raise QaFailure("Composition structural Merge order is stale")
-            structural_connection_count += 1
+            for source_port, merge_key, target_port in (
+                ("image", "structural_merge_node_id", "images"),
+                ("audio", "structural_sound_merge_node_id", "sounds"),
+            ):
+                connection = find_project_connection(
+                    project, "Track", track_id, source_port, "Node",
+                    composition[merge_key], target_port,
+                )
+                if connection["order"] != order:
+                    raise QaFailure("Composition typed structural Merge order is stale")
+                structural_connection_count += 1
 
     backplate_connections = (
         ("Node", OPACITY_EFFECTOR, "shape", "Node", BACKPLATE_DECORATOR, "shape_in", 0),
@@ -2115,7 +2140,7 @@ def validate_explicit_operation_fixture(project):
     expected_connection_count = 29 + structural_connection_count + 6
     if len(project.get("connections", ())) != expected_connection_count:
         raise QaFailure(
-            "canonical fixture has {} connections, expected {} (29 explicit + {} structural + 6 Backplate)".format(
+            "canonical fixture has {} connections, expected {} (29 explicit + {} typed structural + 6 Backplate)".format(
                 len(project.get("connections", ())),
                 expected_connection_count,
                 structural_connection_count,
