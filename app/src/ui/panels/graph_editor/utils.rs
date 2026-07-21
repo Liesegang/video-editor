@@ -1,13 +1,205 @@
 use egui::{Pos2, Rect, Vec2};
 use library::model::project::Project;
+use library::model::property::{
+    Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2 as PropertyVec2,
+    Vec3 as PropertyVec3, Vec4 as PropertyVec4,
+};
 use library::model::Clip;
 use library::PropertyOwner;
+use ordered_float::OrderedFloat;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum PropertyComponent {
     Scalar,
     X,
     Y,
+    Z,
+    W,
+}
+
+const SCALAR_COMPONENTS: [PropertyComponent; 1] = [PropertyComponent::Scalar];
+const VEC2_COMPONENTS: [PropertyComponent; 2] = [PropertyComponent::X, PropertyComponent::Y];
+const VEC3_COMPONENTS: [PropertyComponent; 3] = [
+    PropertyComponent::X,
+    PropertyComponent::Y,
+    PropertyComponent::Z,
+];
+const VEC4_COMPONENTS: [PropertyComponent; 4] = [
+    PropertyComponent::X,
+    PropertyComponent::Y,
+    PropertyComponent::Z,
+    PropertyComponent::W,
+];
+
+fn components_for_ui_type(ui_type: &PropertyUiType) -> &'static [PropertyComponent] {
+    match ui_type {
+        PropertyUiType::Float { .. } => &SCALAR_COMPONENTS,
+        PropertyUiType::Vec2 { .. } => &VEC2_COMPONENTS,
+        PropertyUiType::Vec3 { .. } => &VEC3_COMPONENTS,
+        PropertyUiType::Vec4 { .. } => &VEC4_COMPONENTS,
+        PropertyUiType::Integer { .. }
+        | PropertyUiType::Color
+        | PropertyUiType::Text
+        | PropertyUiType::MultilineText
+        | PropertyUiType::Bool
+        | PropertyUiType::Dropdown { .. }
+        | PropertyUiType::Font => &[],
+    }
+}
+
+fn components_for_value(value: &PropertyValue) -> Option<&'static [PropertyComponent]> {
+    match value {
+        PropertyValue::Number(_) => Some(&SCALAR_COMPONENTS),
+        PropertyValue::Vec2(_) => Some(&VEC2_COMPONENTS),
+        PropertyValue::Vec3(_) => Some(&VEC3_COMPONENTS),
+        PropertyValue::Vec4(_) => Some(&VEC4_COMPONENTS),
+        PropertyValue::Integer(_)
+        | PropertyValue::String(_)
+        | PropertyValue::Boolean(_)
+        | PropertyValue::Color(_)
+        | PropertyValue::Array(_)
+        | PropertyValue::Map(_) => None,
+    }
+}
+
+/// Resolves the plottable components for one authored property. Canonical UI
+/// metadata is authoritative; persisted values are only a fallback for Nodes
+/// whose descriptor is unavailable.
+pub fn numeric_property_components(
+    definition: Option<&PropertyDefinition>,
+    property: &Property,
+) -> Vec<PropertyComponent> {
+    if let Some(definition) = definition {
+        return components_for_ui_type(definition.ui_type()).to_vec();
+    }
+
+    property
+        .value()
+        .and_then(components_for_value)
+        .or_else(|| {
+            property
+                .keyframes()
+                .first()
+                .and_then(|keyframe| components_for_value(&keyframe.value))
+        })
+        .unwrap_or_default()
+        .to_vec()
+}
+
+pub fn property_component_value(
+    value: &PropertyValue,
+    component: PropertyComponent,
+) -> Result<f64, String> {
+    let component_value = match (value, component) {
+        (PropertyValue::Number(value), PropertyComponent::Scalar) => value.into_inner(),
+        (PropertyValue::Vec2(value), PropertyComponent::X) => value.x.into_inner(),
+        (PropertyValue::Vec2(value), PropertyComponent::Y) => value.y.into_inner(),
+        (PropertyValue::Vec3(value), PropertyComponent::X) => value.x.into_inner(),
+        (PropertyValue::Vec3(value), PropertyComponent::Y) => value.y.into_inner(),
+        (PropertyValue::Vec3(value), PropertyComponent::Z) => value.z.into_inner(),
+        (PropertyValue::Vec4(value), PropertyComponent::X) => value.x.into_inner(),
+        (PropertyValue::Vec4(value), PropertyComponent::Y) => value.y.into_inner(),
+        (PropertyValue::Vec4(value), PropertyComponent::Z) => value.z.into_inner(),
+        (PropertyValue::Vec4(value), PropertyComponent::W) => value.w.into_inner(),
+        _ => {
+            return Err(format!(
+                "Graph component {component:?} is incompatible with {value:?}"
+            ));
+        }
+    };
+    if component_value.is_finite() {
+        Ok(component_value)
+    } else {
+        Err(format!(
+            "Graph component {component:?} has a non-finite value"
+        ))
+    }
+}
+
+pub fn replace_property_component(
+    current: &PropertyValue,
+    component: PropertyComponent,
+    replacement: f64,
+) -> Result<PropertyValue, String> {
+    if !replacement.is_finite() {
+        return Err(format!(
+            "Graph component {component:?} cannot be replaced with a non-finite value"
+        ));
+    }
+    let replacement = OrderedFloat(replacement);
+    match (current, component) {
+        (PropertyValue::Number(_), PropertyComponent::Scalar) => {
+            Ok(PropertyValue::Number(replacement))
+        }
+        (PropertyValue::Vec2(value), PropertyComponent::X) => {
+            Ok(PropertyValue::Vec2(PropertyVec2 {
+                x: replacement,
+                y: value.y,
+            }))
+        }
+        (PropertyValue::Vec2(value), PropertyComponent::Y) => {
+            Ok(PropertyValue::Vec2(PropertyVec2 {
+                x: value.x,
+                y: replacement,
+            }))
+        }
+        (PropertyValue::Vec3(value), PropertyComponent::X) => {
+            Ok(PropertyValue::Vec3(PropertyVec3 {
+                x: replacement,
+                y: value.y,
+                z: value.z,
+            }))
+        }
+        (PropertyValue::Vec3(value), PropertyComponent::Y) => {
+            Ok(PropertyValue::Vec3(PropertyVec3 {
+                x: value.x,
+                y: replacement,
+                z: value.z,
+            }))
+        }
+        (PropertyValue::Vec3(value), PropertyComponent::Z) => {
+            Ok(PropertyValue::Vec3(PropertyVec3 {
+                x: value.x,
+                y: value.y,
+                z: replacement,
+            }))
+        }
+        (PropertyValue::Vec4(value), PropertyComponent::X) => {
+            Ok(PropertyValue::Vec4(PropertyVec4 {
+                x: replacement,
+                y: value.y,
+                z: value.z,
+                w: value.w,
+            }))
+        }
+        (PropertyValue::Vec4(value), PropertyComponent::Y) => {
+            Ok(PropertyValue::Vec4(PropertyVec4 {
+                x: value.x,
+                y: replacement,
+                z: value.z,
+                w: value.w,
+            }))
+        }
+        (PropertyValue::Vec4(value), PropertyComponent::Z) => {
+            Ok(PropertyValue::Vec4(PropertyVec4 {
+                x: value.x,
+                y: value.y,
+                z: replacement,
+                w: value.w,
+            }))
+        }
+        (PropertyValue::Vec4(value), PropertyComponent::W) => {
+            Ok(PropertyValue::Vec4(PropertyVec4 {
+                x: value.x,
+                y: value.y,
+                z: value.z,
+                w: replacement,
+            }))
+        }
+        _ => Err(format!(
+            "Graph component {component:?} is incompatible with {current:?}"
+        )),
+    }
 }
 
 #[derive(Clone, Copy)]

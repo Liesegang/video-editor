@@ -1,12 +1,12 @@
 use crate::state::context::EditorContext;
 use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
-use library::model::property::{Property, PropertyMap, PropertyValue};
+use library::model::property::{Property, PropertyMap};
 use library::EditorService;
 use pan_zoom_ui::{CanvasState, CanvasTheme, GridAxis, GridConfig, GridLineKind, GridStroke};
 
 use super::actions::{Action, KeyframeMove};
-use super::utils::{GraphTransform, PropertyComponent, TimeMapper};
+use super::utils::{property_component_value, GraphTransform, PropertyComponent, TimeMapper};
 
 #[derive(Clone, Copy)]
 pub(super) struct GraphCanvasTheme {
@@ -173,20 +173,6 @@ pub fn draw_playhead(
     }
 }
 
-fn keyframe_component_value(value: &PropertyValue, component: PropertyComponent) -> Option<f64> {
-    match component {
-        PropertyComponent::Scalar => value.get_as::<f64>(),
-        PropertyComponent::X => match value {
-            PropertyValue::Vec2(vector) => Some(vector.x.into_inner()),
-            _ => None,
-        },
-        PropertyComponent::Y => match value {
-            PropertyValue::Vec2(vector) => Some(vector.y.into_inner()),
-            _ => None,
-        },
-    }
-}
-
 #[allow(
     clippy::too_many_arguments,
     reason = "immediate-mode graph rendering requires the frame UI, coordinate transforms, editable model context, and deferred action outputs together"
@@ -226,13 +212,18 @@ pub fn draw_properties(
             continue;
         }
         for keyframe in property.keyframes() {
-            let value = keyframe_component_value(&keyframe.value, *component).unwrap_or(0.0);
-            available_drag_origins.push(GraphKeyframeDragOrigin {
-                property_name: name.clone(),
-                keyframe_id: keyframe.id,
-                global_time: time_mapper.to_global_time(keyframe.time.into_inner()),
-                value,
-            });
+            match property_component_value(&keyframe.value, *component) {
+                Ok(value) => available_drag_origins.push(GraphKeyframeDragOrigin {
+                    property_name: name.clone(),
+                    keyframe_id: keyframe.id,
+                    global_time: time_mapper.to_global_time(keyframe.time.into_inner()),
+                    value,
+                }),
+                Err(error) => log::warn!(
+                    "Skipping malformed Graph keyframe {} for {name}: {error}",
+                    keyframe.id
+                ),
+            }
         }
     }
 
@@ -250,23 +241,13 @@ pub fn draw_properties(
 
         match property.evaluator.as_str() {
             "constant" => {
-                let maybe_val = match component {
-                    PropertyComponent::Scalar => property.value().and_then(|v| v.get_as::<f64>()),
-                    PropertyComponent::X => property.value().and_then(|v| {
-                        if let PropertyValue::Vec2(vec) = v {
-                            Some(vec.x.into_inner())
-                        } else {
-                            None
-                        }
-                    }),
-                    PropertyComponent::Y => property.value().and_then(|v| {
-                        if let PropertyValue::Vec2(vec) = v {
-                            Some(vec.y.into_inner())
-                        } else {
-                            None
-                        }
-                    }),
-                };
+                let maybe_val = property.value().and_then(|value| {
+                    property_component_value(value, component)
+                        .inspect_err(|error| {
+                            log::warn!("Skipping malformed Graph property {name}: {error}");
+                        })
+                        .ok()
+                });
                 if let Some(val) = maybe_val {
                     let y = transform.to_screen(0.0, val).y;
                     if y >= graph_rect.min.y && y <= graph_rect.max.y {
@@ -325,29 +306,16 @@ pub fn draw_properties(
                     ) else {
                         continue;
                     };
-                    // Match *component here too
-                    let val_f64 = match component {
-                        PropertyComponent::Scalar => value_pv.get_as::<f64>(),
-                        PropertyComponent::X => {
-                            if let PropertyValue::Vec2(vec) = value_pv {
-                                Some(vec.x.into_inner())
-                            } else {
-                                None
-                            }
-                        }
-                        PropertyComponent::Y => {
-                            if let PropertyValue::Vec2(vec) = value_pv {
-                                Some(vec.y.into_inner())
-                            } else {
-                                None
-                            }
+                    let val = match property_component_value(&value_pv, component) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            log::warn!("Skipping malformed Graph curve {name}: {error}");
+                            path_points.clear();
+                            break;
                         }
                     };
-
-                    if let Some(val) = val_f64 {
-                        let pos = transform.to_screen(global_time as f64, val);
-                        path_points.push(pos);
-                    }
+                    let pos = transform.to_screen(global_time as f64, val);
+                    path_points.push(pos);
                 }
 
                 if crate::qa::is_enabled() && property.evaluator == "keyframe" {
@@ -355,12 +323,20 @@ pub fn draw_properties(
                         .keyframes()
                         .into_iter()
                         .filter_map(|keyframe| {
-                            keyframe_component_value(&keyframe.value, component).map(|value| {
-                                transform.to_screen(
-                                    time_mapper.to_global_time(keyframe.time.into_inner()),
-                                    value,
-                                )
-                            })
+                            property_component_value(&keyframe.value, component)
+                                .inspect_err(|error| {
+                                    log::warn!(
+                                        "Skipping malformed Graph keyframe {} for {name}: {error}",
+                                        keyframe.id
+                                    );
+                                })
+                                .ok()
+                                .map(|value| {
+                                    transform.to_screen(
+                                        time_mapper.to_global_time(keyframe.time.into_inner()),
+                                        value,
+                                    )
+                                })
                         })
                         .collect::<Vec<_>>();
                     let curve_hit = path_points
@@ -409,8 +385,16 @@ pub fn draw_properties(
 
                     for (i, kf) in sorted_kf.iter().enumerate() {
                         let t = kf.time.into_inner();
-                        let val_f64 = keyframe_component_value(&kf.value, component);
-                        let val = val_f64.unwrap_or(0.0);
+                        let val = match property_component_value(&kf.value, component) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                log::warn!(
+                                    "Skipping malformed Graph keyframe {} for {name}: {error}",
+                                    kf.id
+                                );
+                                continue;
+                            }
+                        };
                         let global_t = time_mapper.to_global_time(t);
                         let kf_pos = transform.to_screen(global_t, val);
 
@@ -617,7 +601,7 @@ pub fn draw_properties(
                     }
 
                     // Add Keyframe (Double Click) logic constraint
-                    if response.double_clicked() {
+                    if property.evaluator == "keyframe" && response.double_clicked() {
                         if let Some(pointer_pos) = response.interact_pointer_pos() {
                             if graph_rect.contains(pointer_pos) {
                                 let (t, _) = transform.screen_to_graph(pointer_pos);
@@ -632,23 +616,14 @@ pub fn draw_properties(
                                 ) else {
                                     continue;
                                 };
-                                let val_at_t = match component {
-                                    PropertyComponent::Scalar => {
-                                        value_pv.get_as::<f64>().unwrap_or(0.0)
-                                    }
-                                    PropertyComponent::X => {
-                                        if let PropertyValue::Vec2(vec) = value_pv {
-                                            vec.x.into_inner()
-                                        } else {
-                                            0.0
-                                        }
-                                    }
-                                    PropertyComponent::Y => {
-                                        if let PropertyValue::Vec2(vec) = value_pv {
-                                            vec.y.into_inner()
-                                        } else {
-                                            0.0
-                                        }
+                                let val_at_t = match property_component_value(&value_pv, component)
+                                {
+                                    Ok(value) => value,
+                                    Err(error) => {
+                                        log::warn!(
+                                            "Skipping malformed Graph keyframe add for {name}: {error}"
+                                        );
+                                        continue;
                                     }
                                 };
                                 let curve_pos = transform.to_screen(t, val_at_t);

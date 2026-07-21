@@ -8,9 +8,12 @@ use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
 use library::model::project::{NodeContainer, Project};
-use library::model::property::{Property, PropertyMap, PropertyValue};
+use library::model::property::{Property, PropertyDefinition, PropertyMap};
+use library::model::NodeContent;
 use library::EditorService;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 use crate::action::HistoryManager;
 use crate::command::CommandRegistry;
@@ -49,31 +52,36 @@ impl<'a> ViewportState for GraphViewportState<'a> {
     }
 }
 
-fn numeric_components(property: &Property) -> Vec<PropertyComponent> {
-    let value = if property.evaluator == "keyframe" {
-        property
-            .keyframes()
-            .first()
-            .map(|keyframe| &keyframe.value)
-            .cloned()
-    } else if property.evaluator == "constant" {
-        property.value().cloned()
-    } else {
-        None
-    };
-    match value {
-        Some(PropertyValue::Number(_)) => vec![PropertyComponent::Scalar],
-        Some(PropertyValue::Vec2(_)) => vec![PropertyComponent::X, PropertyComponent::Y],
-        _ => Vec::new(),
-    }
-}
-
 fn append_property_map<'a>(
     output: &mut Vec<(String, &'a Property, &'a PropertyMap, PropertyComponent)>,
     properties: &'a PropertyMap,
+    definitions: &[PropertyDefinition],
 ) {
-    for (property_key, property) in properties.iter() {
-        for component in numeric_components(property) {
+    let mut known_names = HashSet::with_capacity(definitions.len());
+    for definition in definitions {
+        if !known_names.insert(definition.name()) {
+            continue;
+        }
+        let Some(property) = properties.get(definition.name()) else {
+            continue;
+        };
+        for component in numeric_property_components(Some(definition), property) {
+            output.push((
+                graph_property_name(definition.name(), component),
+                property,
+                properties,
+                component,
+            ));
+        }
+    }
+
+    let mut extras = properties
+        .iter()
+        .filter(|(property_key, _)| !known_names.contains(property_key.as_str()))
+        .collect::<Vec<_>>();
+    extras.sort_by_key(|(property_key, _)| property_key.as_str());
+    for (property_key, property) in extras {
+        for component in numeric_property_components(None, property) {
             output.push((
                 graph_property_name(property_key, component),
                 property,
@@ -82,6 +90,42 @@ fn append_property_map<'a>(
             ));
         }
     }
+}
+
+fn exact_node_property_definitions(
+    project_service: &EditorService,
+    project: &Arc<RwLock<Project>>,
+    composition_id: Uuid,
+    node_id: Uuid,
+) -> Vec<PropertyDefinition> {
+    let canonical = project.read().ok().and_then(|project| {
+        let node = project.get_node(node_id)?;
+        match node.content() {
+            NodeContent::Value(value) => Some(value.property_definitions().to_vec()),
+            NodeContent::PluginOperation(operation) => project_service
+                .get_plugin_manager()
+                .operation_descriptor(
+                    &operation.category,
+                    &operation.component_id,
+                    &operation.operation,
+                )
+                .ok()
+                .map(|descriptor| descriptor.properties().to_vec()),
+            _ => None,
+        }
+    });
+    canonical.unwrap_or_else(|| {
+        let track_id = project
+            .read()
+            .ok()
+            .and_then(|project| match project.find_node_container(node_id) {
+                Some(NodeContainer::Clip(clip_id)) => project.find_track_for_clip(clip_id),
+                Some(NodeContainer::Track(track_id)) => Some(track_id),
+                Some(NodeContainer::Composition(_)) | None => None,
+            })
+            .unwrap_or_else(Uuid::nil);
+        project_service.get_property_definitions(composition_id, track_id, node_id)
+    })
 }
 
 pub fn graph_editor_panel(
@@ -118,6 +162,8 @@ pub fn graph_editor_panel(
         editor_context.interaction.editing_keyframe = None;
     }
 
+    let property_definitions =
+        exact_node_property_definitions(project_service, project, comp_id, entity_id);
     let mut actions = Vec::new();
 
     {
@@ -141,7 +187,11 @@ pub fn graph_editor_panel(
 
         let mut properties_to_plot: Vec<(String, &Property, &PropertyMap, PropertyComponent)> =
             Vec::new();
-        append_property_map(&mut properties_to_plot, entity.properties());
+        append_property_map(
+            &mut properties_to_plot,
+            entity.properties(),
+            &property_definitions,
+        );
 
         // Capture clip range for visualization
         let containing_clip = proj_read

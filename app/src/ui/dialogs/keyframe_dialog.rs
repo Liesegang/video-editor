@@ -1,9 +1,8 @@
 use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
 use library::animation::EasingFunction;
 use library::model::project::Project;
-use library::model::property::{KeyframeUpdate, PropertyValue};
+use library::model::property::KeyframeUpdate;
 use library::EditorService;
-use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -11,7 +10,9 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::{
     KeyframeDialogEditControl, KeyframeDialogState, KeyframeDialogValues, KeyframeValueComponent,
 };
-use crate::ui::panels::graph_editor::utils::time_mapper_for_owner;
+use crate::ui::panels::graph_editor::utils::{
+    replace_property_component, time_mapper_for_owner, PropertyComponent,
+};
 
 struct PreparedKeyframeDialogUpdate {
     owner: library::PropertyOwner,
@@ -30,9 +31,13 @@ fn property_owner_metadata(owner: library::PropertyOwner) -> serde_json::Value {
 fn prepare_keyframe_dialog_update(
     project: &Project,
     state: &KeyframeDialogState,
-) -> Option<PreparedKeyframeDialogUpdate> {
-    let owner = state.owner?;
-    let keyframe_id = state.keyframe_id?;
+) -> Result<PreparedKeyframeDialogUpdate, String> {
+    let owner = state
+        .owner
+        .ok_or_else(|| "Keyframe dialog has no property owner".to_string())?;
+    let keyframe_id = state
+        .keyframe_id
+        .ok_or_else(|| "Keyframe dialog has no keyframe ID".to_string())?;
     let current_value = match owner {
         library::PropertyOwner::Node(node_id) => {
             project.get_node(node_id).map(|node| node.properties())
@@ -43,23 +48,22 @@ fn prepare_keyframe_dialog_update(
     }
     .and_then(|properties| properties.get(&state.property_key))
     .and_then(|property| property.keyframe_by_id(keyframe_id))
-    .map(|keyframe| keyframe.value);
-    let value = if let Some(PropertyValue::Vec2(old)) = current_value {
-        match state.component {
-            KeyframeValueComponent::X => PropertyValue::Vec2(library::model::property::Vec2 {
-                x: OrderedFloat(state.value),
-                y: old.y,
-            }),
-            KeyframeValueComponent::Y => PropertyValue::Vec2(library::model::property::Vec2 {
-                x: old.x,
-                y: OrderedFloat(state.value),
-            }),
-            KeyframeValueComponent::Scalar => PropertyValue::Number(OrderedFloat(state.value)),
-        }
-    } else {
-        PropertyValue::Number(OrderedFloat(state.value))
+    .map(|keyframe| keyframe.value)
+    .ok_or_else(|| {
+        format!(
+            "Keyframe {keyframe_id} was not found in property {:?}",
+            state.property_key
+        )
+    })?;
+    let component = match state.component {
+        KeyframeValueComponent::Scalar => PropertyComponent::Scalar,
+        KeyframeValueComponent::X => PropertyComponent::X,
+        KeyframeValueComponent::Y => PropertyComponent::Y,
+        KeyframeValueComponent::Z => PropertyComponent::Z,
+        KeyframeValueComponent::W => PropertyComponent::W,
     };
-    Some(PreparedKeyframeDialogUpdate {
+    let value = replace_property_component(&current_value, component, state.value)?;
+    Ok(PreparedKeyframeDialogUpdate {
         owner,
         property_key: state.property_key.clone(),
         keyframe_id,
@@ -122,11 +126,14 @@ fn apply_keyframe_dialog_change(
 
     let prepared = project
         .read()
-        .ok()
+        .map_err(|error| error.to_string())
         .and_then(|project| prepare_keyframe_dialog_update(&project, state));
-    let Some(prepared) = prepared else {
-        log::error!("Failed to prepare Keyframe dialog update");
-        return false;
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            log::error!("Failed to prepare Keyframe dialog update: {error}");
+            return false;
+        }
     };
     match project_service.update_keyframe_by_id(
         prepared.owner,
@@ -455,9 +462,10 @@ mod tests {
     use super::*;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, Vec2};
+    use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
     use library::model::Clip;
     use library::plugin::PluginManager;
+    use ordered_float::OrderedFloat;
 
     #[test]
     fn dialog_converts_global_time_once_and_preserves_the_other_vector_component() {

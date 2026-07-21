@@ -16,6 +16,8 @@ pub enum KeyframeValueComponent {
     Scalar,
     X,
     Y,
+    Z,
+    W,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

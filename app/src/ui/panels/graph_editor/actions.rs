@@ -1,4 +1,4 @@
-use super::utils::time_mapper_for_owner;
+use super::utils::{property_component_value, replace_property_component, time_mapper_for_owner};
 use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
@@ -8,7 +8,6 @@ use library::model::project::Project;
 use library::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
 use library::model::Node;
 use library::{EditorService, KeyframeBatchUpdate, PropertyOwner};
-use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -36,6 +35,8 @@ pub fn graph_property_name(property_key: &str, component: PropertyComponent) -> 
         PropertyComponent::Scalar => "",
         PropertyComponent::X => ".x",
         PropertyComponent::Y => ".y",
+        PropertyComponent::Z => ".z",
+        PropertyComponent::W => ".w",
     };
     format!("node:{property_key}{suffix}")
 }
@@ -53,6 +54,10 @@ fn split_component(name: &str) -> (&str, Option<PropertyComponent>) {
         (base, Some(PropertyComponent::X))
     } else if let Some(base) = name.strip_suffix(".y") {
         (base, Some(PropertyComponent::Y))
+    } else if let Some(base) = name.strip_suffix(".z") {
+        (base, Some(PropertyComponent::Z))
+    } else if let Some(base) = name.strip_suffix(".w") {
+        (base, Some(PropertyComponent::W))
     } else {
         (name, None)
     }
@@ -67,28 +72,6 @@ fn current_keyframe_value(
     property
         .keyframe_by_id(keyframe_id)
         .map(|keyframe| keyframe.value)
-}
-
-fn merge_component(
-    current: Option<PropertyValue>,
-    value: f64,
-    component: Option<PropertyComponent>,
-) -> PropertyValue {
-    if let Some(PropertyValue::Vec2(old)) = current {
-        match component {
-            Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::property::Vec2 {
-                x: OrderedFloat(value),
-                y: old.y,
-            }),
-            Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::property::Vec2 {
-                x: old.x,
-                y: OrderedFloat(value),
-            }),
-            _ => PropertyValue::Number(OrderedFloat(value)),
-        }
-    } else {
-        PropertyValue::Number(OrderedFloat(value))
-    }
 }
 
 #[derive(Clone)]
@@ -136,15 +119,11 @@ fn prepare_move_batch(
                     movement.keyframe_id, property_key
                 )
             })?;
-        if matches!(component, Some(PropertyComponent::X | PropertyComponent::Y))
-            && !matches!(current, PropertyValue::Vec2(_))
-        {
-            return Err(format!(
-                "Graph component {:?} does not address a Vec2 keyframe",
-                component
-            ));
-        }
-        let value = merge_component(Some(current), movement.value, component);
+        let value = replace_property_component(
+            &current,
+            component.unwrap_or(PropertyComponent::Scalar),
+            movement.value,
+        )?;
         let source_time = mapper.to_source_time(movement.global_time);
         if let Some(index) = existing_index {
             prepared[index].source_time = source_time;
@@ -241,13 +220,25 @@ pub fn process_action(
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
-            let prepared = project.read().ok().and_then(|project| {
-                let composition = project.get_composition(comp_id)?;
-                let node = project.get_node(entity_id)?;
-                let source_time = time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
-                    .to_source_time(time);
-                let current = node.properties().get(&property_key).and_then(|property| {
-                    project_service
+            let prepared = project
+                .read()
+                .map_err(|error| error.to_string())
+                .and_then(|project| {
+                    let composition = project
+                        .get_composition(comp_id)
+                        .ok_or_else(|| format!("Graph composition {comp_id} does not exist"))?;
+                    let node = project
+                        .get_node(entity_id)
+                        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
+                    let source_time =
+                        time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
+                            .to_source_time(time);
+                    let property = node.properties().get(&property_key).ok_or_else(|| {
+                        format!(
+                            "Graph property {property_key:?} does not exist on Node {entity_id}"
+                        )
+                    })?;
+                    let current = project_service
                         .evaluate_property_value(
                             property,
                             node.properties(),
@@ -255,21 +246,24 @@ pub fn process_action(
                             composition.fps,
                             (composition.width, composition.height),
                         )
-                        .ok()
+                        .map_err(|error| error.to_string())?;
+                    let value = replace_property_component(
+                        &current,
+                        component.unwrap_or(PropertyComponent::Scalar),
+                        value,
+                    )?;
+                    Ok((PropertyOwner::Node(entity_id), source_time, value))
                 });
-                Some((
-                    PropertyOwner::Node(entity_id),
-                    source_time,
-                    merge_component(current, value, component),
-                ))
-            });
-            if let Some((owner, source_time, value)) = prepared {
-                if project_service
-                    .add_keyframe(owner, &property_key, source_time, value, None)
-                    .is_ok()
-                {
-                    push_history(project, history_manager);
+            match prepared {
+                Ok((owner, source_time, value)) => {
+                    if project_service
+                        .add_keyframe(owner, &property_key, source_time, value, None)
+                        .is_ok()
+                    {
+                        push_history(project, history_manager);
+                    }
                 }
+                Err(error) => log::error!("Rejected Graph keyframe add: {error}"),
             }
         }
         Action::SetEasing(name, keyframe_id, easing) => {
@@ -323,52 +317,61 @@ pub fn process_action(
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
-            let keyframe = project.read().ok().and_then(|project| {
-                let node = project.get_node(entity_id)?;
-                let property = node.properties().get(&property_key)?;
-                if property.evaluator != "keyframe" {
-                    return None;
+            let prepared = project
+                .read()
+                .map_err(|error| error.to_string())
+                .and_then(|project| {
+                    let node = project
+                        .get_node(entity_id)
+                        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
+                    let property = node.properties().get(&property_key).ok_or_else(|| {
+                        format!(
+                            "Graph property {property_key:?} does not exist on Node {entity_id}"
+                        )
+                    })?;
+                    if property.evaluator != "keyframe" {
+                        return Err(format!("Graph property {property_key:?} is not keyframed"));
+                    }
+                    let keyframe = property
+                        .keyframe_by_id(keyframe_id)
+                        .ok_or_else(|| format!("Graph keyframe {keyframe_id} does not exist"))?;
+                    let value = property_component_value(
+                        &keyframe.value,
+                        component.unwrap_or(PropertyComponent::Scalar),
+                    )?;
+                    let global_time =
+                        time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
+                            .to_global_time(keyframe.time.into_inner());
+                    Ok((keyframe, PropertyOwner::Node(entity_id), global_time, value))
+                });
+            match prepared {
+                Ok((keyframe, owner, global_time, value)) => {
+                    editor_context.keyframe_dialog.is_open = true;
+                    editor_context.keyframe_dialog.property_name = name;
+                    editor_context.keyframe_dialog.owner = Some(owner);
+                    editor_context.keyframe_dialog.property_key = property_key;
+                    editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
+                    editor_context.keyframe_dialog.component = match component {
+                        Some(PropertyComponent::X) => {
+                            crate::state::context_types::KeyframeValueComponent::X
+                        }
+                        Some(PropertyComponent::Y) => {
+                            crate::state::context_types::KeyframeValueComponent::Y
+                        }
+                        Some(PropertyComponent::Z) => {
+                            crate::state::context_types::KeyframeValueComponent::Z
+                        }
+                        Some(PropertyComponent::W) => {
+                            crate::state::context_types::KeyframeValueComponent::W
+                        }
+                        _ => crate::state::context_types::KeyframeValueComponent::Scalar,
+                    };
+                    editor_context.keyframe_dialog.time = global_time;
+                    editor_context.keyframe_dialog.value = value;
+                    editor_context.keyframe_dialog.easing = keyframe.easing;
+                    editor_context.keyframe_dialog.begin_transaction();
                 }
-                property
-                    .keyframe_by_id(keyframe_id)
-                    .map(|keyframe| (keyframe, PropertyOwner::Node(entity_id)))
-            });
-            if let Some((keyframe, owner)) = keyframe {
-                editor_context.keyframe_dialog.is_open = true;
-                editor_context.keyframe_dialog.property_name = name;
-                editor_context.keyframe_dialog.owner = Some(owner);
-                editor_context.keyframe_dialog.property_key = property_key;
-                editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
-                editor_context.keyframe_dialog.component = match component {
-                    Some(PropertyComponent::X) => {
-                        crate::state::context_types::KeyframeValueComponent::X
-                    }
-                    Some(PropertyComponent::Y) => {
-                        crate::state::context_types::KeyframeValueComponent::Y
-                    }
-                    _ => crate::state::context_types::KeyframeValueComponent::Scalar,
-                };
-                editor_context.keyframe_dialog.time =
-                    project
-                        .read()
-                        .ok()
-                        .map_or(keyframe.time.into_inner(), |project| {
-                            time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
-                                .to_global_time(keyframe.time.into_inner())
-                        });
-                editor_context.keyframe_dialog.value = match component {
-                    Some(PropertyComponent::X) => keyframe
-                        .value
-                        .get_as::<library::model::property::Vec2>()
-                        .map_or(0.0, |value| value.x.into_inner()),
-                    Some(PropertyComponent::Y) => keyframe
-                        .value
-                        .get_as::<library::model::property::Vec2>()
-                        .map_or(0.0, |value| value.y.into_inner()),
-                    _ => keyframe.value.get_as::<f64>().unwrap_or(0.0),
-                };
-                editor_context.keyframe_dialog.easing = keyframe.easing;
-                editor_context.keyframe_dialog.begin_transaction();
+                Err(error) => log::error!("Rejected Graph keyframe dialog: {error}"),
             }
         }
     }
@@ -382,6 +385,7 @@ mod tests {
     use library::model::property::{Keyframe, Property, Vec2};
     use library::model::{Clip, Composition};
     use library::plugin::PluginManager;
+    use ordered_float::OrderedFloat;
 
     fn number(value: f64) -> PropertyValue {
         PropertyValue::Number(OrderedFloat(value))
