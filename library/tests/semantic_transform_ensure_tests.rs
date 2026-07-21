@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use library::model::frame::color::Color;
 use library::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortOwner,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle,
+    PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, NodeContent, Project};
@@ -183,6 +183,76 @@ fn ensure_reuses_factory_shape_transform_without_rewriting_graph() -> Result<()>
     assert_eq!(
         manager.ensure_semantic_container_transform(NodeContainer::Clip(clip_id))?,
         expected
+    );
+    assert_eq!(*read(&shared)?, before);
+    Ok(())
+}
+
+#[test]
+fn ensure_transform_is_independent_of_ambiguous_opacity_branches() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let factory = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        Arc::clone(&plugins),
+    );
+    let source = factory.create_generator_node(
+        GeneratorNodeRequest::Solid {
+            color: Color::white(),
+        },
+        320,
+        180,
+        320,
+        180,
+    )?;
+    let transform = plugins.create_image_transform_operation_node()?;
+    let first_opacity = plugins.create_image_opacity_style_operation_node()?;
+    let second_opacity = plugins.create_image_opacity_style_operation_node()?;
+    let merge = library::model::Node::new_merge("opacity branches");
+    let (source_id, transform_id, first_opacity_id, second_opacity_id, merge_id) = (
+        source.id,
+        transform.id,
+        first_opacity.id,
+        second_opacity.id,
+        merge.id,
+    );
+    let graph = NodeGraphBundle::new(
+        vec![source, transform, first_opacity, second_opacity, merge],
+        vec![
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(first_opacity_id), IMAGE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(second_opacity_id), IMAGE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(first_opacity_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(second_opacity_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                1,
+            ),
+        ],
+        Some(merge_id),
+    );
+    let (shared, manager, clip_id) = project_with_clip(graph, plugins)?;
+    let before = read(&shared)?.clone();
+
+    assert_eq!(
+        manager.ensure_semantic_container_transform(NodeContainer::Clip(clip_id))?,
+        transform_id,
+        "a unique authored Transform remains independently addressable"
     );
     assert_eq!(*read(&shared)?, before);
     Ok(())
