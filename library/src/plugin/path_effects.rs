@@ -39,13 +39,13 @@ fn float_property(
     name: &str,
     label: &str,
     default: f64,
-    min: f64,
-    max: f64,
+    range: std::ops::RangeInclusive<f64>,
     step: f64,
     suffix: &str,
-    min_hard_limit: bool,
-    max_hard_limit: bool,
+    hard_limits: (bool, bool),
 ) -> PropertyDefinition {
+    let (min, max) = range.into_inner();
+    let (min_hard_limit, max_hard_limit) = hard_limits;
     PropertyDefinition::new(
         name,
         PropertyUiType::Float {
@@ -137,7 +137,15 @@ impl PathEffectPlugin for DashPathEffectPlugin {
                 "Intervals",
                 PropertyValue::String("8 4".to_string()),
             ),
-            float_property("phase", "Phase", 0.0, 0.0, 1000.0, 1.0, "px", false, false),
+            float_property(
+                "phase",
+                "Phase",
+                0.0,
+                0.0..=1000.0,
+                1.0,
+                "px",
+                (false, false),
+            ),
         ]
     }
 
@@ -182,7 +190,13 @@ impl Plugin for CornerPathEffectPlugin {
 impl PathEffectPlugin for CornerPathEffectPlugin {
     fn properties(&self) -> Vec<PropertyDefinition> {
         vec![float_property(
-            "radius", "Radius", 8.0, 0.0, 1000.0, 1.0, "px", true, false,
+            "radius",
+            "Radius",
+            8.0,
+            0.0..=1000.0,
+            1.0,
+            "px",
+            (true, false),
         )]
     }
 
@@ -225,23 +239,19 @@ impl PathEffectPlugin for DiscretePathEffectPlugin {
                 "segment_length",
                 "Segment Length",
                 8.0,
-                0.1,
-                1000.0,
+                0.1..=1000.0,
                 1.0,
                 "px",
-                true,
-                false,
+                (true, false),
             ),
             float_property(
                 "deviation",
                 "Deviation",
                 2.0,
-                0.0,
-                1000.0,
+                0.0..=1000.0,
                 1.0,
                 "px",
-                true,
-                false,
+                (true, false),
             ),
             PropertyDefinition::new(
                 "seed",
@@ -295,8 +305,8 @@ impl Plugin for TrimPathEffectPlugin {
 impl PathEffectPlugin for TrimPathEffectPlugin {
     fn properties(&self) -> Vec<PropertyDefinition> {
         vec![
-            float_property("start", "Start", 0.0, 0.0, 1.0, 0.01, "", true, true),
-            float_property("end", "End", 1.0, 0.0, 1.0, 0.01, "", true, true),
+            float_property("start", "Start", 0.0, 0.0..=1.0, 0.01, "", (true, true)),
+            float_property("end", "End", 1.0, 0.0..=1.0, 0.01, "", (true, true)),
         ]
     }
 

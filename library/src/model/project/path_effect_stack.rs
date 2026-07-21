@@ -136,19 +136,22 @@ impl Project {
             }
         }
 
-        let roots = requested
-            .iter()
-            .copied()
-            .filter(|node_id| {
-                let connection_id = incoming[node_id];
-                let connection = self
-                    .connections
-                    .iter()
-                    .find(|connection| connection.id == connection_id)
-                    .expect("captured connection must still exist");
-                !matches!(connection.from.owner, PortOwner::Node(id) if requested.contains(&id))
-            })
-            .collect::<Vec<_>>();
+        let mut roots = Vec::new();
+        for node_id in &requested {
+            let connection_id = *incoming.get(node_id).ok_or_else(|| {
+                invalid(format!(
+                    "Path Effect Node {node_id} lost its captured Shape input"
+                ))
+            })?;
+            let connection = self
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)
+                .ok_or(ProjectGraphError::ConnectionNotFound(connection_id))?;
+            if !matches!(connection.from.owner, PortOwner::Node(id) if requested.contains(&id)) {
+                roots.push(*node_id);
+            }
+        }
         let [root] = roots.as_slice() else {
             return Err(invalid(
                 "requested Path Effect Nodes do not form one externally rooted linear stack",
@@ -185,20 +188,42 @@ impl Project {
             return Ok(());
         }
 
-        let upstream_connection_id = incoming[&current_order[0]];
+        let current_root = current_order
+            .first()
+            .ok_or_else(|| invalid("resolved Path Effect stack has no root"))?;
+        let upstream_connection_id = *incoming.get(current_root).ok_or_else(|| {
+            invalid(format!(
+                "Path Effect root {current_root} lost its captured Shape input"
+            ))
+        })?;
         let internal_connection_ids = current_order
             .iter()
             .take(current_order.len() - 1)
-            .map(|node_id| successor[node_id].1)
-            .collect::<Vec<_>>();
+            .map(|node_id| {
+                successor
+                    .get(node_id)
+                    .map(|(_, connection_id)| *connection_id)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "Path Effect Node {node_id} lost its captured successor"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let current_terminal = current_order
+            .last()
+            .ok_or_else(|| invalid("resolved Path Effect stack has no terminal"))?;
         let downstream_connection_ids = external_outgoing
-            .remove(current_order.last().expect("non-empty stack"))
+            .remove(current_terminal)
             .unwrap_or_default();
 
         let baseline = self.validate_connections();
         let mut candidate = self.clone();
+        let requested_root = ordered_node_ids
+            .first()
+            .ok_or_else(|| invalid("requested Path Effect stack has no root"))?;
         candidate.connection_mut(upstream_connection_id)?.to =
-            PortAddress::new(PortOwner::Node(ordered_node_ids[0]), SHAPE_INPUT_PORT);
+            PortAddress::new(PortOwner::Node(*requested_root), SHAPE_INPUT_PORT);
         for (connection_id, pair) in internal_connection_ids
             .iter()
             .zip(ordered_node_ids.windows(2))
@@ -207,7 +232,9 @@ impl Project {
             connection.from = PortAddress::new(PortOwner::Node(pair[0]), SHAPE_OUTPUT_PORT);
             connection.to = PortAddress::new(PortOwner::Node(pair[1]), SHAPE_INPUT_PORT);
         }
-        let terminal = *ordered_node_ids.last().expect("non-empty stack");
+        let terminal = *ordered_node_ids
+            .last()
+            .ok_or_else(|| invalid("requested Path Effect stack has no terminal"))?;
         for connection_id in downstream_connection_ids {
             candidate.connection_mut(connection_id)?.from =
                 PortAddress::new(PortOwner::Node(terminal), SHAPE_OUTPUT_PORT);
