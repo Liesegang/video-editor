@@ -1,10 +1,12 @@
 use eframe::egui;
 use egui_snarl::Snarl;
-use library::model::Project;
-use std::collections::HashMap;
+use library::model::project::PortOwner;
+use library::model::{NodeContainer, Project};
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 use super::ranking::{canonical_edges, estimated_node_size, rank_nodes_by_scc};
+use crate::state::context_types::SelectionTarget;
 use crate::ui::panels::node_editor::graph_build::{container_item_position, container_visual};
 use crate::ui::panels::node_editor::{
     container_rect, set_container_geometry, translate_container, GraphItem, LayoutEdit,
@@ -14,42 +16,189 @@ use crate::ui::panels::node_editor::{
     AUTO_LAYOUT_TRACK_TOP,
 };
 
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) fn collect_layout_edits(
     project: &Project,
     snarl: &Snarl<GraphItem>,
 ) -> Vec<LayoutEdit> {
-    let mut edits = Vec::new();
+    observed_layout_deltas(project, snarl)
+        .into_iter()
+        .filter_map(|(target, delta)| layout_edit_for_delta(project, target, delta))
+        .collect()
+}
+
+/// Expand the one transient Snarl frame that actually captured the pointer to
+/// the authoritative typed selection. Port anchors are drag handles for their
+/// owning container, never independently movable graph objects.
+pub(in crate::ui::panels::node_editor) fn collect_layout_edits_for_selection(
+    project: &Project,
+    snarl: &Snarl<GraphItem>,
+    drag_driver: Option<SelectionTarget>,
+    selected: &[SelectionTarget],
+) -> Vec<LayoutEdit> {
+    let observed = observed_layout_deltas(project, snarl);
+    let Some(driver) = drag_driver else {
+        return observed
+            .into_iter()
+            .filter_map(|(target, delta)| layout_edit_for_delta(project, target, delta))
+            .collect();
+    };
+    let Some(delta) = observed.get(&driver).copied() else {
+        return Vec::new();
+    };
+
+    let candidates = if selected.contains(&driver) {
+        selected.to_vec()
+    } else {
+        vec![driver]
+    };
+    selection_move_roots(project, &candidates)
+        .into_iter()
+        .filter_map(|target| layout_edit_for_delta(project, target, delta))
+        .collect()
+}
+
+fn observed_layout_deltas(
+    project: &Project,
+    snarl: &Snarl<GraphItem>,
+) -> BTreeMap<SelectionTarget, egui::Vec2> {
+    let mut deltas = BTreeMap::new();
     for (position, item) in snarl.nodes_pos() {
         match *item {
             GraphItem::Node(node_id) => {
                 let Some(node) = project.get_node(node_id) else {
                     continue;
                 };
-                let new_position = [position.x, position.y];
-                if node.ui_position != new_position {
-                    edits.push(LayoutEdit::MoveNode {
-                        node_id,
-                        position: new_position,
-                    });
-                }
+                let expected = egui::pos2(node.ui_position[0], node.ui_position[1]);
+                insert_largest_delta(
+                    &mut deltas,
+                    SelectionTarget::Node(node_id),
+                    position - expected,
+                );
             }
-            GraphItem::Container(owner) => {
+            GraphItem::Container(owner) | GraphItem::PortAnchor { owner, .. } => {
                 let Some(visual) = container_visual(project, owner) else {
                     continue;
                 };
                 let expected = container_item_position(&visual, *item);
-                let delta = position - expected;
-                if delta.length_sq() > 0.001 {
-                    edits.push(LayoutEdit::MoveContainer {
-                        owner,
-                        delta: [delta.x, delta.y],
-                    });
-                }
+                insert_largest_delta(
+                    &mut deltas,
+                    selection_target_for_owner(owner),
+                    position - expected,
+                );
             }
-            GraphItem::PortAnchor { .. } => {}
         }
     }
-    edits
+    deltas.retain(|_, delta| delta.length_sq() > 0.001);
+    deltas
+}
+
+fn insert_largest_delta(
+    deltas: &mut BTreeMap<SelectionTarget, egui::Vec2>,
+    target: SelectionTarget,
+    delta: egui::Vec2,
+) {
+    match deltas.get_mut(&target) {
+        Some(existing) if delta.length_sq() > existing.length_sq() => *existing = delta,
+        Some(_) => {}
+        None => {
+            deltas.insert(target, delta);
+        }
+    }
+}
+
+fn selection_target_for_owner(owner: PortOwner) -> SelectionTarget {
+    match owner {
+        PortOwner::Node(id) => SelectionTarget::Node(id),
+        PortOwner::Clip(id) => SelectionTarget::Clip(id),
+        PortOwner::Track(id) => SelectionTarget::Track(id),
+        PortOwner::Composition(id) => SelectionTarget::Composition(id),
+    }
+}
+
+fn owner_for_selection_target(target: SelectionTarget) -> PortOwner {
+    match target {
+        SelectionTarget::Node(id) => PortOwner::Node(id),
+        SelectionTarget::Clip(id) => PortOwner::Clip(id),
+        SelectionTarget::Track(id) => PortOwner::Track(id),
+        SelectionTarget::Composition(id) => PortOwner::Composition(id),
+    }
+}
+
+fn parent_owner(project: &Project, owner: PortOwner) -> Option<PortOwner> {
+    match owner {
+        PortOwner::Node(id) => project
+            .find_node_container(id)
+            .map(|container| match container {
+                NodeContainer::Composition(id) => PortOwner::Composition(id),
+                NodeContainer::Track(id) => PortOwner::Track(id),
+                NodeContainer::Clip(id) => PortOwner::Clip(id),
+            }),
+        PortOwner::Clip(id) => project.find_track_for_clip(id).map(PortOwner::Track),
+        PortOwner::Track(id) => project
+            .find_composition_for_track(id)
+            .map(PortOwner::Composition),
+        PortOwner::Composition(_) => None,
+    }
+}
+
+fn target_is_ancestor(
+    project: &Project,
+    ancestor: SelectionTarget,
+    descendant: SelectionTarget,
+) -> bool {
+    let ancestor = owner_for_selection_target(ancestor);
+    let mut current = parent_owner(project, owner_for_selection_target(descendant));
+    while let Some(owner) = current {
+        if owner == ancestor {
+            return true;
+        }
+        current = parent_owner(project, owner);
+    }
+    false
+}
+
+fn selection_move_roots(project: &Project, selected: &[SelectionTarget]) -> Vec<SelectionTarget> {
+    let mut roots = Vec::new();
+    for target in selected.iter().copied() {
+        if roots.contains(&target)
+            || selected.iter().copied().any(|candidate| {
+                candidate != target && target_is_ancestor(project, candidate, target)
+            })
+        {
+            continue;
+        }
+        roots.push(target);
+    }
+    roots
+}
+
+fn layout_edit_for_delta(
+    project: &Project,
+    target: SelectionTarget,
+    delta: egui::Vec2,
+) -> Option<LayoutEdit> {
+    match target {
+        SelectionTarget::Node(node_id) => {
+            let node = project.get_node(node_id)?;
+            Some(LayoutEdit::MoveNode {
+                node_id,
+                position: [node.ui_position[0] + delta.x, node.ui_position[1] + delta.y],
+            })
+        }
+        SelectionTarget::Clip(id) => Some(LayoutEdit::MoveContainer {
+            owner: PortOwner::Clip(id),
+            delta: [delta.x, delta.y],
+        }),
+        SelectionTarget::Track(id) => Some(LayoutEdit::MoveContainer {
+            owner: PortOwner::Track(id),
+            delta: [delta.x, delta.y],
+        }),
+        SelectionTarget::Composition(id) => Some(LayoutEdit::MoveContainer {
+            owner: PortOwner::Composition(id),
+            delta: [delta.x, delta.y],
+        }),
+    }
 }
 
 pub(in crate::ui::panels::node_editor) fn layout_needs_reflow(
@@ -305,5 +454,47 @@ pub(in crate::ui::panels::node_editor) fn apply_layout_edit(
             position,
             size,
         } => set_container_geometry(project, owner, position, size),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::panels::node_editor::test_fixture::fixture;
+    use crate::ui::panels::node_editor::PortAnchorKind;
+
+    #[test]
+    fn dragging_any_port_anchor_moves_its_container_tree_exactly_once() {
+        let (mut project, _composition_id, track_id, _clip_id, solid_id, _) = fixture();
+        let driver = SelectionTarget::Track(track_id);
+        let delta = egui::vec2(37.0, -19.0);
+        let item = GraphItem::PortAnchor {
+            owner: PortOwner::Track(track_id),
+            kind: PortAnchorKind::InternalMetadata,
+        };
+        let visual = container_visual(&project, PortOwner::Track(track_id)).unwrap();
+        let mut snarl = Snarl::new();
+        snarl.insert_node(container_item_position(&visual, item) + delta, item);
+
+        let edits = collect_layout_edits_for_selection(&project, &snarl, Some(driver), &[driver]);
+        assert_eq!(edits.len(), 1, "one logical container edit: {edits:?}");
+        assert!(matches!(
+            edits.as_slice(),
+            [LayoutEdit::MoveContainer { owner, delta: observed }]
+                if *owner == PortOwner::Track(track_id)
+                    && *observed == [delta.x, delta.y]
+        ));
+
+        let track_before = project.get_track(track_id).unwrap().ui_position;
+        let node_before = project.get_node(solid_id).unwrap().ui_position;
+        assert!(apply_layout_edit(&mut project, edits[0]));
+        assert_eq!(
+            project.get_track(track_id).unwrap().ui_position,
+            [track_before[0] + delta.x, track_before[1] + delta.y]
+        );
+        assert_eq!(
+            project.get_node(solid_id).unwrap().ui_position,
+            [node_before[0] + delta.x, node_before[1] + delta.y]
+        );
     }
 }

@@ -7,7 +7,13 @@ pub(in crate::ui::panels::node_editor) use resize::resize_regions;
 pub(in crate::ui::panels::node_editor) use resize::{
     capture_container_resize_before_canvas, container_resize_interactions,
 };
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) use selection::node_selection_after_snarl_click;
+pub(in crate::ui::panels::node_editor) use selection::{
+    canvas_marquee_interaction, captured_snarl_drag_node, captured_snarl_drag_target,
+    logical_hit_owner, selection_after_logical_click, selection_after_marquee,
+    selection_target_for_owner, CanvasSelectionOutcome,
+};
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::cubic_bezier_point;
 #[cfg(test)]

@@ -125,10 +125,15 @@ use qa::{
     wire_port_drop_rect,
 };
 mod queries;
-
+#[cfg(test)]
 use interaction::node_selection_after_snarl_click;
 #[cfg(test)]
 use interaction::resize_regions;
+use interaction::{
+    canvas_marquee_interaction, captured_snarl_drag_node, captured_snarl_drag_target,
+    logical_hit_owner, selection_after_logical_click, selection_after_marquee,
+    selection_target_for_owner, CanvasSelectionOutcome,
+};
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
@@ -180,10 +185,12 @@ use components::{
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]
+use layout::collect_layout_edits;
+#[cfg(test)]
 use layout::padded_intersection;
 use layout::{apply_auto_layout, set_container_geometry, set_container_size, translate_container};
 use layout::{
-    apply_layout_edit, collect_layout_edits, composition_content_rect,
+    apply_layout_edit, collect_layout_edits_for_selection, composition_content_rect,
     container_hierarchy_needs_reflow, estimated_node_rect, layout_needs_reflow,
     nested_content_rect, rect_contains_rect,
 };
@@ -1448,23 +1455,6 @@ fn primary_node_drop_intent(
         .or_else(|| intents.first().copied())
 }
 
-fn captured_snarl_drag_node(
-    context: &egui::Context,
-    snarl: &Snarl<GraphItem>,
-    snarl_id: egui::Id,
-) -> Option<Uuid> {
-    let dragged_id = context.dragged_id()?;
-    snarl.node_ids().find_map(|(node_id, item)| {
-        if snarl_id.with(("snarl-node", node_id)).with("frame") != dragged_id {
-            return None;
-        }
-        match item {
-            GraphItem::Node(project_node_id) => Some(*project_node_id),
-            GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
-        }
-    })
-}
-
 fn reparent_ineligible_reason(geometry: ReparentContainerGeometry) -> Option<&'static str> {
     geometry.collapsed.then_some("collapsed_hidden_content")
 }
@@ -2217,6 +2207,7 @@ mod tests {
                             rendered_ports: Arc::clone(&rendered_ports),
                             merge_layer_reorder: &mut state.merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -2362,6 +2353,7 @@ mod tests {
                             rendered_ports: Arc::clone(&rendered_ports),
                             merge_layer_reorder: &mut state.merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -3830,6 +3822,7 @@ mod tests {
                         rendered_ports: Arc::clone(&rendered_ports),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     let style = SnarlStyle {
                         collapsible: Some(false),
@@ -4439,6 +4432,7 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -4510,6 +4504,7 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -4812,6 +4807,7 @@ mod tests {
                             rendered_ports,
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -7411,6 +7407,7 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
                         drop(viewer);
@@ -7814,6 +7811,7 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         snarl.show(
                             &mut viewer,
@@ -7904,6 +7902,7 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             merge_layer_reorder: &mut merge_layer_reorder,
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
+                            rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                         };
                         let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
                         snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
@@ -8130,6 +8129,7 @@ mod tests {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     let style = SnarlStyle {
                         collapsible: Some(false),

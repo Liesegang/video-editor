@@ -43,4 +43,9 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     /// precise enough around nested container boundaries.
     pub(in crate::ui::panels::node_editor) rendered_node_rects:
         Arc<Mutex<HashMap<Uuid, egui::Rect>>>,
+    /// Draw-order list of every transient Snarl frame mapped to its canonical
+    /// Project owner. Container cards and port anchors intentionally share an
+    /// owner so hit testing cannot create separate selection identities.
+    pub(in crate::ui::panels::node_editor) rendered_selection_hits:
+        Arc<Mutex<Vec<(PortOwner, egui::Rect)>>>,
 }
