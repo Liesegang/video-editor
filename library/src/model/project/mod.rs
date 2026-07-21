@@ -17,6 +17,9 @@ mod output_binding;
 mod path_effect_stack;
 pub mod property;
 mod structural_merge;
+mod transaction;
+
+use transaction::{first_new_project_validation_error, port_owner_for_container};
 
 pub use connection::{
     ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
@@ -1284,31 +1287,6 @@ impl Project {
             }))
             .collect()
     }
-}
-
-fn port_owner_for_container(container: NodeContainer) -> PortOwner {
-    match container {
-        NodeContainer::Composition(id) => PortOwner::Composition(id),
-        NodeContainer::Track(id) => PortOwner::Track(id),
-        NodeContainer::Clip(id) => PortOwner::Clip(id),
-    }
-}
-
-fn first_new_project_validation_error(
-    baseline: &[ProjectGraphError],
-    current: Vec<ProjectGraphError>,
-) -> Option<ProjectGraphError> {
-    let mut unmatched_baseline = baseline.to_vec();
-    current.into_iter().find(|error| {
-        let Some(index) = unmatched_baseline
-            .iter()
-            .position(|baseline_error| baseline_error == error)
-        else {
-            return true;
-        };
-        unmatched_baseline.remove(index);
-        false
-    })
 }
 
 fn remove_node_id(ids: &mut Vec<Uuid>, node_id: Uuid) -> bool {
