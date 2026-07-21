@@ -15,6 +15,7 @@ pub mod connection;
 mod error;
 mod output_binding;
 pub mod property;
+mod structural_merge;
 
 pub use error::ProjectGraphError;
 
@@ -121,6 +122,10 @@ pub struct Composition {
     pub track_ids: Vec<Uuid>,
     #[serde(default)]
     pub node_ids: Vec<Uuid>,
+    /// Stable identity of the ordinary Merge Node that receives direct Track
+    /// image outputs. This required annotation is independent from the
+    /// editable downstream output binding.
+    pub structural_merge_node_id: Uuid,
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
     /// Explicit graph result for the Composition audio output. This is
@@ -189,6 +194,7 @@ impl Composition {
 
     pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, Track) {
         let first_track = Track::new("Track 1");
+        let structural_merge_node_id = Uuid::new_v4();
         (
             Self {
                 id: Uuid::new_v4(),
@@ -204,8 +210,9 @@ impl Composition {
                 blend_mode: BlendMode::Normal,
                 properties: PropertyMap::new(),
                 track_ids: vec![first_track.id],
-                node_ids: Vec::new(),
-                output_node_id: None,
+                node_ids: vec![structural_merge_node_id],
+                structural_merge_node_id,
+                output_node_id: Some(structural_merge_node_id),
                 audio_output_node_id: None,
                 ui_position: [0.0, 0.0],
                 ui_size: default_composition_ui_size(),
@@ -335,16 +342,16 @@ impl Project {
         serde_json::to_string(self)
     }
 
-    pub fn add_composition(&mut self, composition: Composition) {
-        self.compositions.push(composition);
+    pub fn add_composition(&mut self, composition: Composition) -> Result<(), ProjectGraphError> {
+        self.insert_composition_with_structural_merge(composition)
     }
 
-    pub fn add_track(&mut self, track: Track) {
-        self.tracks.insert(track.id, track);
+    pub fn add_track(&mut self, track: Track) -> Result<(), ProjectGraphError> {
+        self.insert_track_with_structural_merge(track)
     }
 
     pub fn add_clip(&mut self, clip: Clip) {
-        self.clips.insert(clip.id, clip);
+        self.insert_clip_with_structural_edges(clip);
     }
 
     pub fn add_node(&mut self, node: Node) {
@@ -609,36 +616,31 @@ impl Project {
             })
             .transpose()?
             .unwrap_or_default();
-        let containment_backup = self
-            .compositions
-            .iter()
-            .filter(|composition| {
-                composition.id == composition_id || composition.track_ids.contains(&track_id)
-            })
-            .map(|composition| (composition.id, composition.track_ids.clone()))
-            .collect::<Vec<_>>();
-
-        self.detach_track(track_id);
-        let composition = self
+        let mut candidate = self.clone();
+        for composition in &mut candidate.compositions {
+            composition.track_ids.retain(|id| *id != track_id);
+        }
+        let composition = candidate
             .get_composition_mut(composition_id)
             .ok_or(ProjectGraphError::CompositionNotFound(composition_id))?;
         let index = index
             .unwrap_or(composition.track_ids.len())
             .min(composition.track_ids.len());
         composition.track_ids.insert(index, track_id);
-        self.apply_connection_source_remaps(&remaps);
+        candidate.apply_connection_source_remaps(&remaps);
+        candidate.transition_structural_child(
+            old_parent.map(NodeContainer::Composition),
+            NodeContainer::Composition(composition_id),
+            PortOwner::Track(track_id),
+        );
 
-        if let Some(error) =
-            first_new_project_validation_error(&validation_baseline, self.validate_connections())
-        {
-            for (composition_id, track_ids) in containment_backup {
-                if let Some(composition) = self.get_composition_mut(composition_id) {
-                    composition.track_ids = track_ids;
-                }
-            }
-            self.rollback_connection_source_remaps(&remaps);
+        if let Some(error) = first_new_project_validation_error(
+            &validation_baseline,
+            candidate.validate_connections(),
+        ) {
             return Err(error);
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -651,7 +653,9 @@ impl Project {
         if !self.tracks.contains_key(&track_id) {
             return Err(ProjectGraphError::TrackNotFound(track_id));
         }
-        let composition = self
+        let validation_baseline = self.validate_connections();
+        let mut candidate = self.clone();
+        let composition = candidate
             .get_composition_mut(composition_id)
             .ok_or(ProjectGraphError::CompositionNotFound(composition_id))?;
         let source_index = composition
@@ -668,16 +672,31 @@ impl Project {
         }
         let track = composition.track_ids.remove(source_index);
         composition.track_ids.insert(destination_index, track);
+        candidate.reorder_structural_children(NodeContainer::Composition(composition_id), None);
+        if let Some(error) = first_new_project_validation_error(
+            &validation_baseline,
+            candidate.validate_connections(),
+        ) {
+            return Err(error);
+        }
+        *self = candidate;
         Ok(true)
     }
 
     pub fn detach_track(&mut self, track_id: Uuid) -> bool {
+        let parents = self
+            .compositions
+            .iter()
+            .filter(|composition| composition.track_ids.contains(&track_id))
+            .map(|composition| NodeContainer::Composition(composition.id))
+            .collect::<Vec<_>>();
         let mut removed = false;
         for composition in &mut self.compositions {
             let old_len = composition.track_ids.len();
             composition.track_ids.retain(|id| *id != track_id);
             removed |= composition.track_ids.len() != old_len;
         }
+        self.disconnect_structural_child(&parents, PortOwner::Track(track_id));
         removed
     }
 
@@ -715,17 +734,11 @@ impl Project {
             })
             .transpose()?
             .unwrap_or_default();
-        let containment_backup = self
-            .tracks
-            .iter()
-            .filter(|(candidate_id, track)| {
-                **candidate_id == track_id || track.clip_ids.contains(&clip_id)
-            })
-            .map(|(candidate_id, track)| (*candidate_id, track.clip_ids.clone()))
-            .collect::<Vec<_>>();
-
-        self.detach_clip(clip_id);
-        let track = self
+        let mut candidate = self.clone();
+        for track in candidate.tracks.values_mut() {
+            track.clip_ids.retain(|id| *id != clip_id);
+        }
+        let track = candidate
             .tracks
             .get_mut(&track_id)
             .ok_or(ProjectGraphError::TrackNotFound(track_id))?;
@@ -733,29 +746,37 @@ impl Project {
             .unwrap_or(track.clip_ids.len())
             .min(track.clip_ids.len());
         track.clip_ids.insert(index, clip_id);
-        self.apply_connection_source_remaps(&remaps);
+        candidate.apply_connection_source_remaps(&remaps);
+        candidate.transition_structural_child(
+            old_parent.map(NodeContainer::Track),
+            NodeContainer::Track(track_id),
+            PortOwner::Clip(clip_id),
+        );
 
-        if let Some(error) =
-            first_new_project_validation_error(&validation_baseline, self.validate_connections())
-        {
-            for (track_id, clip_ids) in containment_backup {
-                if let Some(track) = self.get_track_mut(track_id) {
-                    track.clip_ids = clip_ids;
-                }
-            }
-            self.rollback_connection_source_remaps(&remaps);
+        if let Some(error) = first_new_project_validation_error(
+            &validation_baseline,
+            candidate.validate_connections(),
+        ) {
             return Err(error);
         }
+        *self = candidate;
         Ok(())
     }
 
     pub fn detach_clip(&mut self, clip_id: Uuid) -> bool {
+        let parents = self
+            .tracks
+            .values()
+            .filter(|track| track.clip_ids.contains(&clip_id))
+            .map(|track| NodeContainer::Track(track.id))
+            .collect::<Vec<_>>();
         let mut removed = false;
         for track in self.tracks.values_mut() {
             let old_len = track.clip_ids.len();
             track.clip_ids.retain(|id| *id != clip_id);
             removed |= track.clip_ids.len() != old_len;
         }
+        self.disconnect_structural_child(&parents, PortOwner::Clip(clip_id));
         removed
     }
 
@@ -1019,44 +1040,70 @@ impl Project {
                 errors.push(ProjectGraphError::NodeHasNoContainer(*node_id));
             }
         }
+        errors.extend(self.validate_structural_merges());
         errors
     }
 
-    pub fn remove_node(&mut self, node_id: Uuid) -> Option<Node> {
+    pub fn remove_node(&mut self, node_id: Uuid) -> Result<Option<Node>, ProjectGraphError> {
+        if let Some(container) = self.structural_merge_owner(node_id) {
+            return Err(ProjectGraphError::CannotRemoveStructuralMerge { container, node_id });
+        }
+        Ok(self.remove_node_unchecked(node_id))
+    }
+
+    fn remove_node_unchecked(&mut self, node_id: Uuid) -> Option<Node> {
         self.detach_node(node_id);
-        self.connections.retain(|connection| {
-            connection.from.owner != PortOwner::Node(node_id)
-                && connection.to.owner != PortOwner::Node(node_id)
-        });
+        let connection_ids = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(node_id)
+                    || connection.to.owner == PortOwner::Node(node_id)
+            })
+            .map(|connection| connection.id)
+            .collect::<Vec<_>>();
+        self.disconnect_connections(connection_ids);
         self.nodes.remove(&node_id)
     }
 
     pub fn remove_clip(&mut self, clip_id: Uuid) -> Option<Clip> {
         let clip = self.clips.remove(&clip_id)?;
         self.detach_clip(clip_id);
+        let connection_ids = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Clip(clip_id)
+                    || connection.to.owner == PortOwner::Clip(clip_id)
+            })
+            .map(|connection| connection.id)
+            .collect::<Vec<_>>();
+        self.disconnect_connections(connection_ids);
         for node_id in clip.node_ids.clone() {
-            self.remove_node(node_id);
+            self.remove_node_unchecked(node_id);
         }
-        self.connections.retain(|connection| {
-            connection.from.owner != PortOwner::Clip(clip_id)
-                && connection.to.owner != PortOwner::Clip(clip_id)
-        });
         Some(clip)
     }
 
     pub fn remove_track(&mut self, track_id: Uuid) -> Option<Track> {
         let track = self.tracks.remove(&track_id)?;
         self.detach_track(track_id);
+        let connection_ids = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Track(track_id)
+                    || connection.to.owner == PortOwner::Track(track_id)
+            })
+            .map(|connection| connection.id)
+            .collect::<Vec<_>>();
+        self.disconnect_connections(connection_ids);
         for clip_id in track.clip_ids.clone() {
             self.remove_clip(clip_id);
         }
         for node_id in track.node_ids.clone() {
-            self.remove_node(node_id);
+            self.remove_node_unchecked(node_id);
         }
-        self.connections.retain(|connection| {
-            connection.from.owner != PortOwner::Track(track_id)
-                && connection.to.owner != PortOwner::Track(track_id)
-        });
         Some(track)
     }
 
@@ -1070,7 +1117,7 @@ impl Project {
             self.remove_track(track_id);
         }
         for node_id in composition.node_ids.clone() {
-            self.remove_node(node_id);
+            self.remove_node_unchecked(node_id);
         }
         let instances = self
             .nodes
@@ -1079,12 +1126,18 @@ impl Project {
             .map(|node| node.id)
             .collect::<Vec<_>>();
         for node_id in instances {
-            self.remove_node(node_id);
+            self.remove_node_unchecked(node_id);
         }
-        self.connections.retain(|connection| {
-            connection.from.owner != PortOwner::Composition(composition_id)
-                && connection.to.owner != PortOwner::Composition(composition_id)
-        });
+        let connection_ids = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Composition(composition_id)
+                    || connection.to.owner == PortOwner::Composition(composition_id)
+            })
+            .map(|connection| connection.id)
+            .collect::<Vec<_>>();
+        self.disconnect_connections(connection_ids);
         Some(composition)
     }
 

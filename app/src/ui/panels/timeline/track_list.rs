@@ -762,11 +762,20 @@ mod tests {
         let mut node = Node::new_merge("same UUID Node");
         node.id = shared_id;
 
-        project.add_track(clip_track);
-        project.add_track(node_track);
+        assert!(
+            project.add_track(clip_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(node_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.add_node(node);
-        project.add_composition(composition);
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(composition_id, node_track_id)
             .unwrap();

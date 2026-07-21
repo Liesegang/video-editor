@@ -5,8 +5,19 @@ use crate::model::project::{
     TIME_PORT,
 };
 use crate::model::property::{Property, PropertyValue};
-use crate::model::{Clip, CompositionInstanceContent, Node, NodeContainer};
+use crate::model::{Clip, Composition, CompositionInstanceContent, Node, NodeContainer, Track};
 use ordered_float::OrderedFloat;
+
+fn add_composition_with_track(project: &mut Project, composition: Composition, track: Track) {
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+}
 
 fn attach_composition_instance(
     project: &mut Project,
@@ -80,8 +91,7 @@ fn instances_mix_the_same_definition_with_independent_clip_times() {
     let (target, target_track) = Composition::new("source", 16, 16, 4.0, 2.0);
     let target_id = target.id;
     let target_track_id = target_track.id;
-    project.add_track(target_track);
-    project.add_composition(target);
+    add_composition_with_track(&mut project, target, target_track);
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     let media_id = add_target_audio(
@@ -95,8 +105,7 @@ fn instances_mix_the_same_definition_with_independent_clip_times() {
     let (parent, parent_track) = Composition::new("parent", 16, 16, 4.0, 1.0);
     let parent_id = parent.id;
     let parent_track_id = parent_track.id;
-    project.add_track(parent_track);
-    project.add_composition(parent);
+    add_composition_with_track(&mut project, parent, parent_track);
     let (first_instance_clip_id, _) =
         attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.0);
     attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.5);
@@ -131,8 +140,7 @@ fn instance_honors_explicit_fmod_time_with_expression_divisor() {
     let (target, target_track) = Composition::new("source", 16, 16, 4.0, 2.0);
     let target_id = target.id;
     let target_track_id = target_track.id;
-    project.add_track(target_track);
-    project.add_composition(target);
+    add_composition_with_track(&mut project, target, target_track);
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     add_target_audio(
@@ -146,8 +154,7 @@ fn instance_honors_explicit_fmod_time_with_expression_divisor() {
     let (parent, parent_track) = Composition::new("parent", 16, 16, 4.0, 1.0);
     let parent_id = parent.id;
     let parent_track_id = parent_track.id;
-    project.add_track(parent_track);
-    project.add_composition(parent);
+    add_composition_with_track(&mut project, parent, parent_track);
     let (instance_clip_id, instance_id) =
         attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.0);
     let mut fmod = Node::new_fmod("half-second loop");
@@ -211,8 +218,7 @@ fn unreachable_invalid_instances_do_not_mute_valid_audio_requests() {
     let (root, root_track) = Composition::new("root", 16, 16, 4.0, 1.0);
     let root_id = root.id;
     let root_track_id = root_track.id;
-    project.add_track(root_track);
-    project.add_composition(root);
+    add_composition_with_track(&mut project, root, root_track);
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     let media_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 4]);
@@ -226,8 +232,7 @@ fn unreachable_invalid_instances_do_not_mute_valid_audio_requests() {
 
     let (unreachable, unreachable_track) = Composition::new("unreachable", 16, 16, 4.0, 1.0);
     let unreachable_track_id = unreachable_track.id;
-    project.add_track(unreachable_track);
-    project.add_composition(unreachable);
+    add_composition_with_track(&mut project, unreachable, unreachable_track);
     attach_malformed_composition_instance(&mut project, unreachable_track_id, uuid::Uuid::new_v4());
     assert!(!project.validate_connections().is_empty());
 
@@ -253,20 +258,17 @@ fn reachable_self_and_transitive_instance_cycles_fail_closed() {
     let (root, root_track) = Composition::new("root", 16, 16, 4.0, 1.0);
     let root_id = root.id;
     let root_track_id = root_track.id;
-    project.add_track(root_track);
-    project.add_composition(root);
+    add_composition_with_track(&mut project, root, root_track);
     attach_malformed_composition_instance(&mut project, root_track_id, root_id);
 
     let (first, first_track) = Composition::new("first", 16, 16, 4.0, 1.0);
     let first_id = first.id;
     let first_track_id = first_track.id;
-    project.add_track(first_track);
-    project.add_composition(first);
+    add_composition_with_track(&mut project, first, first_track);
     let (second, second_track) = Composition::new("second", 16, 16, 4.0, 1.0);
     let second_id = second.id;
     let second_track_id = second_track.id;
-    project.add_track(second_track);
-    project.add_composition(second);
+    add_composition_with_track(&mut project, second, second_track);
     attach_composition_instance(&mut project, first_track_id, second_id, 0.0, 1.0, 0.0);
     attach_malformed_composition_instance(&mut project, second_track_id, first_id);
     attach_malformed_composition_instance(&mut project, root_track_id, first_id);

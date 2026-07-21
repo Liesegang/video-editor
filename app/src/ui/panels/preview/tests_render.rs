@@ -229,8 +229,8 @@ mod render_tests {
         let mut model = Project::new("preview target");
         let (composition, track) = Composition::new("main", 640, 360, 30.0, 2.0);
         let track_id = track.id;
-        model.add_track(track);
-        model.add_composition(composition);
+        assert!(model.add_track(track).is_ok(), "container structural Merge insertion must succeed");
+        assert!(model.add_composition(composition).is_ok(), "container structural Merge insertion must succeed");
         let clip = Clip::new("Text Clip", 0.0, 2.0);
         let clip_id = clip.id;
         model.add_clip(clip);

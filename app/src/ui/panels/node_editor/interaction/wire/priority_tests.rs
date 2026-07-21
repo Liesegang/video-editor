@@ -93,8 +93,14 @@ fn track_output_fixture() -> (Project, PortAddress, PortAddress) {
     let (composition, track) = Composition::new("Main", 640, 360, 24.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let merge = Node::new_merge("Composition Merge");
     let merge_id = merge.id;
     project.add_node(merge);
@@ -224,17 +230,18 @@ fn output_binding_endpoint_claims_pointer_before_overlapping_header() {
     let mut project = Project::new("output binding before header");
     let (composition, track) = Composition::new("Main", 640, 360, 24.0, 2.0);
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
-    let output = Node::new_merge("Track Output");
-    let output_id = output.id;
-    project.add_node(output);
-    project
-        .attach_node_to_container(NodeContainer::Track(track_id), output_id)
-        .expect("attach output Node");
-    project
-        .set_output_node(NodeContainer::Track(track_id), Some(output_id))
-        .expect("bind Track output");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    let output_id = project
+        .get_track(track_id)
+        .expect("inserted Track")
+        .structural_merge_node_id;
     let initial = project.clone();
     let endpoint = egui::pos2(400.0, 130.0);
     let edge = RenderedEdge {

@@ -142,8 +142,10 @@ impl ProjectManager {
         let (default_comp, root_track) =
             Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
         let new_comp_id = default_comp.id;
-        new_project.add_track(root_track);
-        new_project.add_composition(default_comp);
+        new_project
+            .add_track(root_track)
+            .and_then(|()| new_project.add_composition(default_comp))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
 
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
@@ -772,7 +774,9 @@ impl ProjectManager {
             project_write.remove_clip(clip_id);
         }
         for node_id in media_node_ids {
-            project_write.remove_node(node_id);
+            project_write
+                .remove_node(node_id)
+                .map_err(|error| LibraryError::Project(error.to_string()))?;
         }
 
         // Remove the asset itself
@@ -1943,8 +1947,14 @@ mod keyframe_tests {
         let mut project = Project::new("shape splice");
         let (composition, track) = Composition::new("main", 640, 480, 30.0, 5.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("clip", 0.0, 5.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -1987,13 +1997,20 @@ mod keyframe_tests {
             project.find_node_container(operation.id),
             Some(NodeContainer::Clip(clip_id))
         );
-        assert_eq!(project.connections.len(), 1);
+        let inserted_connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(source_id)
+                    && connection.to.owner == PortOwner::Node(operation.id)
+            })
+            .expect("shape operation must receive the dangling source");
         assert_eq!(
-            project.connections[0].from,
+            inserted_connection.from,
             PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT)
         );
         assert_eq!(
-            project.connections[0].to,
+            inserted_connection.to,
             PortAddress::new(PortOwner::Node(operation.id), SHAPE_INPUT_PORT)
         );
     }
@@ -2142,7 +2159,17 @@ mod keyframe_tests {
                 )
                 .unwrap();
         }
-        let original = shared.read().unwrap().connections[0].clone();
+        let original = shared
+            .read()
+            .unwrap()
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(source_id)
+                    && connection.to.owner == PortOwner::Node(downstream_id)
+            })
+            .expect("cross-container shape connection must exist")
+            .clone();
 
         manager.add_decorator(source_id, "backplate").unwrap();
         let project = shared.read().unwrap();

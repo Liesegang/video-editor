@@ -85,6 +85,10 @@ pub struct Track {
     /// Leaf Nodes placed directly in this Track scope.
     #[serde(default)]
     pub node_ids: Vec<Uuid>,
+    /// Stable identity of the ordinary Merge Node that receives direct Clip
+    /// image outputs. This annotation is authoritative and is never inferred
+    /// from a Node name or the current output binding.
+    pub structural_merge_node_id: Uuid,
     /// Explicit graph result for the Track image output.
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
@@ -105,14 +109,16 @@ fn default_track_ui_size() -> [f32; 2] {
 
 impl Track {
     pub fn new(name: &str) -> Self {
+        let structural_merge_node_id = Uuid::new_v4();
         Self {
             id: Uuid::new_v4(),
             name: name.to_string(),
             blend_mode: BlendMode::Normal,
             properties: PropertyMap::new(),
             clip_ids: Vec::new(),
-            node_ids: Vec::new(),
-            output_node_id: None,
+            node_ids: vec![structural_merge_node_id],
+            structural_merge_node_id,
+            output_node_id: Some(structural_merge_node_id),
             audio_output_node_id: None,
             ui_position: [0.0, 0.0],
             ui_size: default_track_ui_size(),

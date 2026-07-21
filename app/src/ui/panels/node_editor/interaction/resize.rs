@@ -523,8 +523,14 @@ mod tests {
             size: track.ui_size,
             collapsed: false,
         };
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let transform = egui::emath::TSTransform::IDENTITY;
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0));
         let output = visual.embedded_port_center(PortAnchorKind::ExternalOutputs, 0);

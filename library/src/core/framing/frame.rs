@@ -1436,8 +1436,14 @@ mod tests {
         let mut project = Project::new("fmod semantics");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 2.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let mut clip = Clip::new("clip", 0.0, 1.0);
         clip.trim_in = OrderedFloat(left - 0.5);
         let clip_id = clip.id;
@@ -1535,13 +1541,25 @@ mod tests {
         let mut project = Project::new("composition instance metadata");
         let (target, target_track) = Composition::new("target", 640, 360, 24.0, 4.0);
         let target_id = target.id;
-        project.add_track(target_track);
-        project.add_composition(target);
+        assert!(
+            project.add_track(target_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(target).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let (parent, parent_track) = Composition::new("parent", 320, 180, 30.0, 10.0);
         let parent_id = parent.id;
         let parent_track_id = parent_track.id;
-        project.add_track(parent_track);
-        project.add_composition(parent);
+        assert!(
+            project.add_track(parent_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(parent).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let mut clip = Clip::new("instance", 2.0, 2.0);
         clip.trim_in = OrderedFloat(1.0);
@@ -1632,8 +1650,14 @@ mod tests {
         let mut project = Project::new("direct value resolver cycle");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 1.0);
         let track_id = track.id;
-        project.add_track(track);
-        project.add_composition(composition);
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("clip", 0.0, 1.0);
         let clip_id = clip.id;
         project.add_clip(clip);

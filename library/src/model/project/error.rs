@@ -19,6 +19,8 @@ pub enum ProjectGraphError {
     DuplicateCompositionId(Uuid),
     #[error("track map key {key} does not match entity id {entity_id}")]
     TrackKeyMismatch { key: Uuid, entity_id: Uuid },
+    #[error("track id {0} already exists")]
+    TrackAlreadyExists(Uuid),
     #[error("clip map key {key} does not match entity id {entity_id}")]
     ClipKeyMismatch { key: Uuid, entity_id: Uuid },
     #[error("node map key {key} does not match entity id {entity_id}")]
@@ -126,6 +128,44 @@ pub enum ProjectGraphError {
     OutputNodeHasNoAudioPort {
         node_id: Uuid,
         container: NodeContainer,
+    },
+    #[error("structural Merge node {node_id} for {container:?} does not exist")]
+    StructuralMergeNodeMissing {
+        container: NodeContainer,
+        node_id: Uuid,
+    },
+    #[error("structural Merge node {node_id} is not directly contained by {container:?}")]
+    StructuralMergeNodeOutsideContainer {
+        container: NodeContainer,
+        node_id: Uuid,
+    },
+    #[error("structural Merge node {node_id} for {container:?} is not a Merge")]
+    StructuralMergeNodeWrongType {
+        container: NodeContainer,
+        node_id: Uuid,
+    },
+    #[error(
+        "structural Merge node {node_id} does not reach output node {output_node_id} in {container:?}"
+    )]
+    StructuralMergeDoesNotReachOutput {
+        container: NodeContainer,
+        node_id: Uuid,
+        output_node_id: Uuid,
+    },
+    #[error(
+        "direct child {child:?} has more than one structural edge into Merge node {node_id} for {container:?}"
+    )]
+    DuplicateStructuralChildEdge {
+        container: NodeContainer,
+        node_id: Uuid,
+        child: PortOwner,
+    },
+    #[error(
+        "structural Merge node {node_id} owned by {container:?} cannot be removed directly; remove the container instead"
+    )]
+    CannotRemoveStructuralMerge {
+        container: NodeContainer,
+        node_id: Uuid,
     },
     #[error("plugin operation node {node_id} has an empty {field} identifier")]
     EmptyPluginOperationIdentifier { node_id: Uuid, field: String },

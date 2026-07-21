@@ -717,7 +717,9 @@ fn create_prebuilt_node(
         place_node_in_free_slot(project, node_id, container, position, &[]);
         true
     } else {
-        project.remove_node(node_id);
+        if let Err(error) = project.remove_node(node_id) {
+            log::warn!("Cannot roll back unattached Node {node_id}: {error}");
+        }
         false
     }
 }
@@ -727,8 +729,13 @@ fn create_composition_node(project: &mut Project, position: egui::Pos2, comp_id:
     let (composition, root) =
         library::model::Composition::new("Nested Comp", 1920, 1080, 30.0, 10.0);
     let nested_id = composition.id;
-    candidate.add_track(root);
-    candidate.add_composition(composition);
+    if candidate
+        .add_track(root)
+        .and_then(|()| candidate.add_composition(composition))
+        .is_err()
+    {
+        return false;
+    }
 
     let mut node = Node::new_composition_instance(
         "Container",
@@ -1697,6 +1704,7 @@ fn ensure_container_hierarchy_contains(
 ) -> bool {
     let owner = port_owner_for_node_container(container);
     let mut changed = grow_container_to_rect(project, owner, node_rect);
+    changed |= ensure_structural_merge_layout(project, container);
 
     // Creation and auto-layout clamp their leaf Node to the owning container's
     // minimum content edge. Preserve existing container origins here and grow
@@ -1713,6 +1721,7 @@ fn ensure_container_hierarchy_contains(
                 let clip_rect = container_rect(clip.ui_position, clip.ui_size);
                 changed |= grow_container_to_rect(project, PortOwner::Track(track_id), clip_rect);
             }
+            changed |= ensure_structural_merge_layout(project, NodeContainer::Track(track_id));
         }
         if let Some(composition_id) = project.find_composition_for_track(track_id) {
             if let Some(track) = project.get_track(track_id) {
@@ -1723,6 +1732,8 @@ fn ensure_container_hierarchy_contains(
                     track_rect,
                 );
             }
+            changed |=
+                ensure_structural_merge_layout(project, NodeContainer::Composition(composition_id));
         }
     }
     changed
@@ -1735,6 +1746,7 @@ fn ensure_reparent_hierarchy_contains(
 ) -> bool {
     let owner = port_owner_for_node_container(container);
     let mut changed = grow_container_to_rect_all_edges(project, owner, node_rect);
+    changed |= ensure_structural_merge_layout(project, container);
 
     // Propagate each *updated child container rectangle*, not only the Node.
     // Expanding the min edge intentionally changes only container chrome;
@@ -1747,9 +1759,94 @@ fn ensure_reparent_hierarchy_contains(
         };
         let child_rect = container_rect(child.position, child.size);
         changed |= grow_container_to_rect_all_edges(project, parent_owner, child_rect);
+        if let Some(parent_container) = node_container_for_port_owner(parent_owner) {
+            changed |= ensure_structural_merge_layout(project, parent_container);
+        }
         child_owner = parent_owner;
     }
     changed
+}
+
+fn ensure_structural_merge_layout(project: &mut Project, container: NodeContainer) -> bool {
+    let structural_merge_id = match container {
+        NodeContainer::Composition(id) => project
+            .get_composition(id)
+            .map(|composition| composition.structural_merge_node_id),
+        NodeContainer::Track(id) => project
+            .get_track(id)
+            .map(|track| track.structural_merge_node_id),
+        NodeContainer::Clip(_) => None,
+    };
+    let Some(structural_merge_id) = structural_merge_id else {
+        return false;
+    };
+    let Some((container_position, _, direct_node_ids)) = container_geometry(project, container)
+    else {
+        return false;
+    };
+    let Some(node) = project.get_node(structural_merge_id) else {
+        return false;
+    };
+    let node_size = estimated_node_size(project, structural_merge_id);
+    let current = egui::Rect::from_min_size(
+        egui::pos2(node.ui_position[0], node.ui_position[1]),
+        node_size,
+    );
+    let (left, top) = match container {
+        NodeContainer::Composition(_) => {
+            (AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_TOP)
+        }
+        NodeContainer::Track(_) => (AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_TOP),
+        NodeContainer::Clip(_) => return false,
+    };
+    let content_min = egui::pos2(container_position[0] + left, container_position[1] + top);
+    let mut occupied = immediate_child_rects(project, &AutoLayoutPlan::default(), container);
+    occupied.extend(
+        direct_node_ids
+            .iter()
+            .copied()
+            .filter(|node_id| *node_id != structural_merge_id)
+            .filter_map(|node_id| estimated_node_rect(project, node_id)),
+    );
+
+    let collides = occupied
+        .iter()
+        .any(|other| rects_are_closer_than(current, *other, AUTO_LAYOUT_NODE_PADDING));
+    let mut candidate = current;
+    if collides || current.left() < content_min.x || current.top() < content_min.y {
+        let x = current.left().max(content_min.x);
+        let mut y = current.top().max(content_min.y);
+        loop {
+            candidate = egui::Rect::from_min_size(egui::pos2(x, y), node_size);
+            let next_y = occupied
+                .iter()
+                .filter(|other| rects_are_closer_than(candidate, **other, AUTO_LAYOUT_NODE_PADDING))
+                .map(|other| other.bottom() + AUTO_LAYOUT_NODE_PADDING + 1.0)
+                .max_by(f32::total_cmp);
+            let Some(next_y) = next_y else {
+                break;
+            };
+            y = next_y;
+        }
+    }
+
+    let mut changed = false;
+    if candidate.min != current.min {
+        if let Some(node) = project.get_node_mut(structural_merge_id) {
+            node.ui_position = [candidate.min.x, candidate.min.y];
+            changed = true;
+        }
+    }
+    changed | grow_container_to_rect(project, port_owner_for_node_container(container), candidate)
+}
+
+fn node_container_for_port_owner(owner: PortOwner) -> Option<NodeContainer> {
+    match owner {
+        PortOwner::Composition(id) => Some(NodeContainer::Composition(id)),
+        PortOwner::Track(id) => Some(NodeContainer::Track(id)),
+        PortOwner::Clip(id) => Some(NodeContainer::Clip(id)),
+        PortOwner::Node(_) => None,
+    }
 }
 
 fn grow_container_to_rect(project: &mut Project, owner: PortOwner, rect: egui::Rect) -> bool {
@@ -1905,7 +2002,10 @@ fn create_track_at_free_slot(
     }
     track.ui_position = [candidate.min.x, candidate.min.y];
     let track_id = track.id;
-    project.add_track(track);
+    if let Err(error) = project.add_track(track) {
+        log::warn!("Cannot add Track to project: {error}");
+        return None;
+    }
     if let Err(error) = project.attach_track_to_composition(composition_id, track_id) {
         project.remove_track(track_id);
         log::warn!("Cannot add track to composition: {error}");
@@ -1951,8 +2051,14 @@ mod tests {
         let clip_track_id = clip_track.id;
         let mut collision = Clip::new("same UUID Clip", 0.0, 5.0);
         collision.id = shared_id;
-        project.add_track(clip_track);
-        project.add_composition(clip_composition);
+        assert!(
+            project.add_track(clip_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(clip_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(collision);
         project
             .attach_clip_to_track(clip_track_id, shared_id)
@@ -1963,8 +2069,14 @@ mod tests {
         let node_composition_id = node_composition.id;
         let mut node = Node::new_merge("same UUID Node");
         node.id = shared_id;
-        project.add_track(node_track);
-        project.add_composition(node_composition);
+        assert!(
+            project.add_track(node_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(node_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_node(node);
         project
             .attach_node_to_container(NodeContainer::Composition(node_composition_id), shared_id)
@@ -3732,7 +3844,10 @@ mod tests {
         collapsed_track.id = empty_track;
         collapsed_track.ui_collapsed = true;
         collapsed_track.ui_position = [110.0, 140.0];
-        project.add_track(collapsed_track);
+        assert!(
+            project.add_track(collapsed_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(composition, empty_track)
             .unwrap();
@@ -5213,7 +5328,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_edges_include_explicit_output_binding_and_derived_dependencies() {
+    fn rendered_edges_include_explicit_output_binding_and_structural_connections() {
         let (mut project, composition_id, track_id, clip_id, _solid_id, merge_id) = fixture();
         project
             .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
@@ -5237,16 +5352,23 @@ mod tests {
             "missing Clip output binding edge"
         );
 
-        let track_dependency = format!(
-            "node_editor.edge.derived:{}:image:{}",
-            qa_container_key(PortOwner::Track(track_id)),
-            qa_container_key(PortOwner::Clip(clip_id))
-        );
+        let track_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_merge_node_id;
+        let track_dependency = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Clip(clip_id)
+                    && connection.to.owner == PortOwner::Node(track_merge_id)
+            })
+            .expect("persisted Clip → structural Merge edge");
         assert!(
             rects
-                .get(&track_dependency)
+                .get(&format!("node_editor.edge:{}", track_dependency.id))
                 .is_some_and(egui::Rect::is_positive),
-            "missing evaluator-derived Clip → Track edge"
+            "missing explicit Clip → structural Merge edge"
         );
     }
 
@@ -5557,7 +5679,7 @@ mod tests {
             project.get_clip(clip_id).unwrap().node_ids,
             original_node_ids
         );
-        assert_eq!(project.connections.len(), 2);
+        assert_eq!(project.connections.len(), 4);
     }
 
     #[test]
@@ -5943,7 +6065,15 @@ mod tests {
         assert!(project.get_node(solid_id).is_none());
         assert!(project.get_node(merge_id).is_none());
         assert!(project.get_track(track_id).is_some());
-        assert!(project.connections.is_empty());
+        let track_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_merge_node_id;
+        assert_eq!(project.connections.len(), 1);
+        assert!(project.connections.iter().all(|connection| {
+            connection.from.owner == PortOwner::Track(track_id)
+                || connection.to.owner == PortOwner::Node(track_merge_id)
+        }));
     }
 
     #[test]
@@ -6916,7 +7046,7 @@ mod tests {
             })
             .unwrap_or_default();
         for other_node_id in other_node_ids {
-            project.remove_node(other_node_id);
+            assert!(project.remove_node(other_node_id).is_ok());
         }
         let Some(composition) = project.get_composition_mut(composition_id) else {
             assert!(project.get_composition(composition_id).is_some());
@@ -7142,6 +7272,16 @@ mod tests {
         assert!(project
             .attach_node_to_container(NodeContainer::Track(track_id), track_output_id)
             .is_ok());
+        let structural_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_merge_node_id;
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(structural_merge_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(track_output_id), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
         assert!(project
             .set_output_node(NodeContainer::Track(track_id), Some(track_output_id))
             .is_ok());
@@ -7324,8 +7464,8 @@ mod tests {
     #[test]
     fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
         let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
-        assert!(project.remove_node(solid_id).is_some());
-        assert!(project.remove_node(merge_id).is_some());
+        assert!(project.remove_node(solid_id).unwrap().is_some());
+        assert!(project.remove_node(merge_id).unwrap().is_some());
         if let Some(clip) = project.get_clip_mut(clip_id) {
             clip.ui_size = [1_300.0, 760.0];
         }
@@ -7753,6 +7893,16 @@ mod tests {
         }
         if let Some(composition) = project.get_composition_mut(composition_id) {
             composition.ui_size = [2_200.0, 1_400.0];
+        }
+        let track_structural_merge_id = project
+            .get_track(track_id)
+            .expect("fixture Track")
+            .structural_merge_node_id;
+        if let Some(structural_merge) = project.get_node_mut(track_structural_merge_id) {
+            // This test exercises the Solid header gesture itself. Keep the
+            // generated Track sink clear of that header; production performs
+            // the same collision repair before the first interactive frame.
+            structural_merge.ui_position = [1_450.0, 760.0];
         }
         assert!(project
             .set_output_node(NodeContainer::Clip(clip_id), Some(solid_id))
