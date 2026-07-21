@@ -2,9 +2,10 @@ use crate::ui::widgets::searchable_context_menu::SearchableItem;
 use library::model::{Node, Project, ValueContent};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
-    EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_TRANSFORM_COMPONENT_ID,
-    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
+    IMAGE_TRANSFORM_COMPONENT_ID, PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
+    TRANSFORM_CATEGORY,
 };
 use uuid::Uuid;
 
@@ -295,19 +296,25 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
     items.extend(styles.into_iter().filter_map(|component_id| {
         let qa_id = match component_id.as_str() {
             "fill" | "stroke" => format!("node_editor.menu.create.{component_id}"),
+            IMAGE_OPACITY_STYLE_COMPONENT_ID => "node_editor.menu.create.image_opacity".to_string(),
             _ => format!("node_editor.menu.create.style:{component_id}"),
         };
+        let is_image_style = component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID;
         plugin_operation_menu_item(
             plugin_manager,
             PluginOperationMenuItemSpec {
                 descriptor_category: STYLE_CATEGORY,
                 operation: STYLE_APPLY_OPERATION,
                 component_id: component_id.clone(),
-                menu_category: "Shape Operations / Styles".to_string(),
+                menu_category: if is_image_style {
+                    "Image Operations / Styles".to_string()
+                } else {
+                    "Shape Operations / Styles".to_string()
+                },
                 display_kind: "Style",
                 qa_id,
                 request: NodeCreateRequest::Style(component_id),
-                extra_keywords: vec!["shape".to_string(), "image".to_string()],
+                extra_keywords: vec![if is_image_style { "image" } else { "shape" }.to_string()],
             },
         )
     }));
@@ -636,6 +643,52 @@ mod tests {
                     port.key == key && port.direction == direction && port.data_type == data_type
                 }));
             }
+        }
+    }
+
+    #[test]
+    fn image_opacity_style_is_discoverable_in_the_typed_image_menu() {
+        let plugins = PluginManager::default();
+        let items = node_create_menu_items(&plugins);
+        let request = NodeCreateRequest::Style(IMAGE_OPACITY_STYLE_COMPONENT_ID.to_string());
+        let item = items
+            .iter()
+            .find(|item| item.value == request)
+            .expect("Image Opacity Style is missing from the Add menu");
+        assert_eq!(item.label, "Style · Image Opacity");
+        assert_eq!(item.category.as_deref(), Some("Image Operations / Styles"));
+        assert_eq!(
+            item.qa_id.as_deref(),
+            Some("node_editor.menu.create.image_opacity")
+        );
+        assert_eq!(
+            item.qa_metadata.as_ref().unwrap()["component_id"],
+            IMAGE_OPACITY_STYLE_COMPONENT_ID
+        );
+
+        let node = create_operation_node_for_request(&request, &plugins)
+            .expect("Image Opacity Style factory is unavailable");
+        assert_eq!(
+            node.properties()
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["opacity"]
+        );
+        let NodeContent::PluginOperation(operation) = node.content() else {
+            panic!("Image Opacity factory did not create a PluginOperation")
+        };
+        for (key, direction, data_type) in [
+            (IMAGE_INPUT_PORT, PortDirection::Input, PortDataType::Image),
+            (
+                IMAGE_OUTPUT_PORT,
+                PortDirection::Output,
+                PortDataType::Image,
+            ),
+        ] {
+            assert!(operation.declared_ports.iter().any(|port| {
+                port.key == key && port.direction == direction && port.data_type == data_type
+            }));
         }
     }
 

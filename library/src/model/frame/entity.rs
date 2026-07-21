@@ -314,6 +314,9 @@ pub enum FrameGroupKind {
     /// A descriptor-backed Effect operation. Its child image is composited
     /// into one isolated layer before the operation is applied exactly once.
     Effect,
+    /// A typed Image -> Image appearance operation. The complete child image
+    /// is isolated once, then alpha is applied without changing geometry.
+    ImageStyle,
     /// A native Image -> Image spatial operation. Its complete child image is
     /// rasterized in local space and transformed as one layer. Nested groups
     /// preserve the graph's ordered affine stack.

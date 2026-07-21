@@ -17,6 +17,9 @@ use thiserror::Error;
 
 pub const STYLE_CATEGORY: &str = "style";
 pub const STYLE_APPLY_OPERATION: &str = "style.apply.v1";
+/// Native Image -> Image Style which owns raster alpha independently from
+/// spatial Transform. Its descriptor is discovered through the Style registry.
+pub const IMAGE_OPACITY_STYLE_COMPONENT_ID: &str = "image_opacity";
 pub const EFFECT_CATEGORY: &str = "effect";
 pub const EFFECT_APPLY_OPERATION: &str = "effect.apply.v1";
 pub const EFFECTOR_CATEGORY: &str = "effector";
@@ -155,6 +158,31 @@ impl OperationDescriptor {
             [
                 PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
                 PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    IMAGE_OUTPUT_PORT,
+                    "Image",
+                    PortDataType::Image,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    /// Typed Image -> Image appearance operation. Fill/Stroke rasterize Shape;
+    /// Image Opacity preserves the complete upstream raster subtree.
+    pub fn image_opacity_style(
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            STYLE_CATEGORY,
+            IMAGE_OPACITY_STYLE_COMPONENT_ID,
+            STYLE_APPLY_OPERATION,
+            "Image Opacity",
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(IMAGE_INPUT_PORT, "Image", PortDataType::Image),
                 PortDefinition::output(
                     IMAGE_OUTPUT_PORT,
                     "Image",

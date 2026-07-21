@@ -35,9 +35,10 @@ use crate::plugin::traits::{Plugin, PropertyPlugin};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
-    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, PATH_EFFECT_APPLY_OPERATION,
-    PATH_EFFECT_CATEGORY, PathEffectPlugin, SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION,
-    STYLE_CATEGORY, StylePlugin, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    IMAGE_OPACITY_STYLE_COMPONENT_ID, IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor,
+    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PathEffectPlugin,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
+    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 
 fn materialize_validated_operation_properties(
@@ -140,6 +141,7 @@ impl Default for PluginManager {
         // Standard Styles
         manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
         manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
+        manager.register_style_plugin(Arc::new(crate::plugin::styles::ImageOpacityStylePlugin));
 
         // Standard Shape Path Effects
         manager.register_path_effect_plugin(Arc::new(
@@ -392,6 +394,50 @@ impl PluginManager {
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
         self.create_operation_node(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)
+    }
+
+    pub fn create_image_opacity_style_operation_node(
+        &self,
+    ) -> Result<crate::model::Node, LibraryError> {
+        self.create_style_operation_node(IMAGE_OPACITY_STYLE_COMPONENT_ID)
+    }
+
+    /// Resolves the native Image Opacity value through descriptor-backed
+    /// properties, scalar wires, keyframes, and Expression evaluation.
+    pub fn evaluate_image_opacity_style_operation(
+        &self,
+        context: &crate::plugin::FrameEvaluationContext,
+        properties: &crate::model::property::PropertyMap,
+        eval_time: f64,
+    ) -> crate::model::project::EvalOutput<f64> {
+        let descriptor = match self.operation_descriptor(
+            STYLE_CATEGORY,
+            IMAGE_OPACITY_STYLE_COMPONENT_ID,
+            STYLE_APPLY_OPERATION,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                log::warn!("Image Opacity descriptor is unavailable: {error}; producing NoOutput");
+                return crate::model::project::EvalOutput::NoOutput;
+            }
+        };
+        let Some(evaluated) = context.evaluate_operation_properties(
+            descriptor.properties(),
+            properties,
+            eval_time,
+            "Image Opacity",
+        ) else {
+            return crate::model::project::EvalOutput::NoOutput;
+        };
+        let Some(opacity) = evaluated
+            .get("opacity")
+            .and_then(|value| value.get_as::<f64>())
+            .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        else {
+            log::warn!("Image Opacity evaluated outside [0, 1]; producing NoOutput");
+            return crate::model::project::EvalOutput::NoOutput;
+        };
+        crate::model::project::EvalOutput::Produced(opacity)
     }
 
     pub fn create_effect_operation_node(

@@ -1573,6 +1573,52 @@ Render 3D:
       type: Image
 
 # --- Style ---
+Image Opacity:
+  category: Image Operations / Styles
+  operation_category: style
+  component_id: image_opacity
+  operation: style.apply.v1
+  description: Apply alpha to one complete Image subtree without changing its spatial transform
+  inputs:
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata:
+        ui_type: Float
+        default: 1.0
+        min: 0.0
+        max: 1.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Fill:
   category: Shape Operations / Styles
   operation_category: style

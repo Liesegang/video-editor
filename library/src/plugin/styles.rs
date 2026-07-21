@@ -6,6 +6,22 @@ use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
 use uuid::Uuid;
 
+pub fn image_opacity_property_definitions() -> Vec<PropertyDefinition> {
+    vec![PropertyDefinition::new(
+        "opacity",
+        PropertyUiType::Float {
+            min: 0.0,
+            max: 1.0,
+            step: 0.01,
+            suffix: String::new(),
+            min_hard_limit: true,
+            max_hard_limit: true,
+        },
+        "Opacity",
+        PropertyValue::from(1.0),
+    )]
+}
+
 pub trait StylePlugin: Plugin {
     /// Authoritative operation identity, ports, property metadata, and
     /// defaults for this Style producer.
@@ -32,6 +48,46 @@ pub trait StylePlugin: Plugin {
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Style
+    }
+}
+
+/// Native raster appearance boundary. Its descriptor participates in the
+/// ordinary Style registry/menu, while frame evaluation uses its typed Image
+/// contract instead of asking Shape Style code to manufacture geometry.
+pub struct ImageOpacityStylePlugin;
+
+impl Plugin for ImageOpacityStylePlugin {
+    fn id(&self) -> &'static str {
+        crate::plugin::IMAGE_OPACITY_STYLE_COMPONENT_ID
+    }
+
+    fn name(&self) -> String {
+        "Image Opacity".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Built-in".to_string()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl StylePlugin for ImageOpacityStylePlugin {
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::image_opacity_style(image_opacity_property_definitions())
+    }
+
+    fn evaluate_source(
+        &self,
+        _context: &FrameEvaluationContext,
+        _source_id: Uuid,
+        _properties: &PropertyMap,
+        _eval_time: f64,
+    ) -> Option<StyleConfig> {
+        // Image Opacity is evaluated by the typed Image -> Image frame path.
+        None
     }
 }
 
