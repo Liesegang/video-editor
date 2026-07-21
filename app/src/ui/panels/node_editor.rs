@@ -189,7 +189,10 @@ use interaction::show_wire_context_menu;
 use layout::collect_layout_edits;
 #[cfg(test)]
 use layout::padded_intersection;
-use layout::{apply_auto_layout, set_container_geometry, set_container_size, translate_container};
+use layout::{
+    apply_auto_layout, ensure_structural_merge_layout, set_container_geometry, set_container_size,
+    translate_container,
+};
 use layout::{
     apply_layout_edit, collect_layout_edits_for_selection, composition_content_rect,
     container_hierarchy_needs_reflow, estimated_node_rect, layout_needs_reflow,
@@ -1756,79 +1759,6 @@ fn ensure_reparent_hierarchy_contains(
         child_owner = parent_owner;
     }
     changed
-}
-
-fn ensure_structural_merge_layout(project: &mut Project, container: NodeContainer) -> bool {
-    let structural_merge_id = match container {
-        NodeContainer::Composition(id) => project
-            .get_composition(id)
-            .map(|composition| composition.structural_merge_node_id),
-        NodeContainer::Track(id) => project
-            .get_track(id)
-            .map(|track| track.structural_merge_node_id),
-        NodeContainer::Clip(_) => None,
-    };
-    let Some(structural_merge_id) = structural_merge_id else {
-        return false;
-    };
-    let Some((container_position, _, direct_node_ids)) = container_geometry(project, container)
-    else {
-        return false;
-    };
-    let Some(node) = project.get_node(structural_merge_id) else {
-        return false;
-    };
-    let node_size = estimated_node_size(project, structural_merge_id);
-    let current = egui::Rect::from_min_size(
-        egui::pos2(node.ui_position[0], node.ui_position[1]),
-        node_size,
-    );
-    let (left, top) = match container {
-        NodeContainer::Composition(_) => {
-            (AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_TOP)
-        }
-        NodeContainer::Track(_) => (AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_TOP),
-        NodeContainer::Clip(_) => return false,
-    };
-    let content_min = egui::pos2(container_position[0] + left, container_position[1] + top);
-    let mut occupied = immediate_child_rects(project, &AutoLayoutPlan::default(), container);
-    occupied.extend(
-        direct_node_ids
-            .iter()
-            .copied()
-            .filter(|node_id| *node_id != structural_merge_id)
-            .filter_map(|node_id| estimated_node_rect(project, node_id)),
-    );
-
-    let collides = occupied
-        .iter()
-        .any(|other| rects_are_closer_than(current, *other, AUTO_LAYOUT_NODE_PADDING));
-    let mut candidate = current;
-    if collides || current.left() < content_min.x || current.top() < content_min.y {
-        let x = current.left().max(content_min.x);
-        let mut y = current.top().max(content_min.y);
-        loop {
-            candidate = egui::Rect::from_min_size(egui::pos2(x, y), node_size);
-            let next_y = occupied
-                .iter()
-                .filter(|other| rects_are_closer_than(candidate, **other, AUTO_LAYOUT_NODE_PADDING))
-                .map(|other| other.bottom() + AUTO_LAYOUT_NODE_PADDING + 1.0)
-                .max_by(f32::total_cmp);
-            let Some(next_y) = next_y else {
-                break;
-            };
-            y = next_y;
-        }
-    }
-
-    let mut changed = false;
-    if candidate.min != current.min {
-        if let Some(node) = project.get_node_mut(structural_merge_id) {
-            node.ui_position = [candidate.min.x, candidate.min.y];
-            changed = true;
-        }
-    }
-    changed | grow_container_to_rect(project, port_owner_for_node_container(container), candidate)
 }
 
 fn node_container_for_port_owner(owner: PortOwner) -> Option<NodeContainer> {

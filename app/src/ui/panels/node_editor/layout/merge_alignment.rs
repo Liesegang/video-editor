@@ -6,11 +6,12 @@ use uuid::Uuid;
 use super::node_geometry::estimated_node_size;
 use super::ranking::{LayoutEdge, NodeRankColumn};
 use crate::ui::panels::node_editor::types::{
-    AUTO_LAYOUT_CONTAINER_SOURCE_GAP, MERGE_OUTPUT_FIRST_ROW_Y, NODE_OUTPUT_FIRST_ROW_Y,
+    AUTO_LAYOUT_CONTAINER_SOURCE_GAP, CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y,
+    MERGE_OUTPUT_FIRST_ROW_Y, NODE_OUTPUT_FIRST_ROW_Y,
 };
 use crate::ui::panels::node_editor::{
     estimated_merge_input_anchor_offset, merge_layer_rows, output_definitions, GraphItem,
-    AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP, PORT_ROW_HEIGHT,
+    PortAnchorKind, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP, PORT_ROW_HEIGHT,
 };
 
 pub(super) fn pack_targeted_column(
@@ -20,17 +21,33 @@ pub(super) fn pack_targeted_column(
     positions: &mut BTreeMap<Uuid, [f32; 2]>,
     origin_y: f32,
 ) {
+    // Packing is a constrained projection: keep the ideal top-anchor order,
+    // then move each node downward only far enough to clear its predecessor.
+    let mut ordered = group.to_vec();
+    ordered.sort_by(|left, right| {
+        let desired = |node_id: &Uuid| {
+            targets.get(node_id).copied().unwrap_or_else(|| {
+                positions
+                    .get(node_id)
+                    .map_or(origin_y, |position| position[1])
+            })
+        };
+        desired(left)
+            .total_cmp(&desired(right))
+            .then_with(|| left.cmp(right))
+    });
+
     let mut cursor = origin_y;
-    for node_id in group {
+    for node_id in ordered {
         let current = positions
-            .get(node_id)
+            .get(&node_id)
             .map_or(origin_y, |position| position[1]);
-        let target = targets.get(node_id).copied().unwrap_or(current);
+        let target = targets.get(&node_id).copied().unwrap_or(current);
         let y = target.max(cursor);
-        if let Some(position) = positions.get_mut(node_id) {
+        if let Some(position) = positions.get_mut(&node_id) {
             position[1] = y;
         }
-        cursor = y + estimated_node_size(project, *node_id).y + AUTO_LAYOUT_ROW_GAP;
+        cursor = y + estimated_node_size(project, node_id).y + AUTO_LAYOUT_ROW_GAP;
     }
 }
 
@@ -73,18 +90,12 @@ pub(super) fn merge_anchor_aligned_top(
     positions: &BTreeMap<Uuid, [f32; 2]>,
     container_output_y: &HashMap<PortOwner, f32>,
 ) -> Option<f32> {
-    median(
-        merge_layer_rows(project, merge_id)
-            .into_iter()
-            .filter_map(|row| {
-                estimated_source_output_y(project, &row.source, positions, container_output_y).map(
-                    |source_y| {
-                        source_y - estimated_merge_input_anchor_offset(row.front_to_back_index)
-                    },
-                )
-            })
-            .collect(),
-    )
+    // Merge rows are projected front-to-back. Anchoring the front-most source
+    // to row zero gives 1, 2, and N inputs the same deterministic vertical
+    // rule; a median would align neither row for an even layer count.
+    let front = merge_layer_rows(project, merge_id).into_iter().next()?;
+    estimated_source_output_y(project, &front.source, positions, container_output_y)
+        .map(|source_y| source_y - estimated_merge_input_anchor_offset(front.front_to_back_index))
 }
 
 fn estimated_source_output_y(
@@ -112,21 +123,32 @@ fn estimated_source_output_y(
             };
             Some(top + first + index as f32 * PORT_ROW_HEIGHT)
         }
-        owner => container_output_y.get(&owner).copied(),
+        owner => container_output_y
+            .get(&owner)
+            .copied()
+            .or_else(|| authored_container_output_y(project, source)),
     }
 }
 
-fn median(mut values: Vec<f32>) -> Option<f32> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f32::total_cmp);
-    let middle = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        Some((values[middle - 1] + values[middle]) * 0.5)
-    } else {
-        values.get(middle).copied()
-    }
+fn authored_container_output_y(project: &Project, source: &PortAddress) -> Option<f32> {
+    let top = match source.owner {
+        PortOwner::Composition(id) => project
+            .get_composition(id)
+            .map(|composition| composition.ui_position[1]),
+        PortOwner::Track(id) => project.get_track(id).map(|track| track.ui_position[1]),
+        PortOwner::Clip(id) => project.get_clip(id).map(|clip| clip.ui_position[1]),
+        PortOwner::Node(_) => None,
+    }?;
+    let index = output_definitions(
+        project,
+        GraphItem::PortAnchor {
+            owner: source.owner,
+            kind: PortAnchorKind::ExternalOutputs,
+        },
+    )
+    .iter()
+    .position(|definition| definition.key == source.port)?;
+    Some(top + CONTAINER_RIGHT_PORT_Y + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT)
 }
 
 #[cfg(test)]
@@ -159,11 +181,11 @@ mod tests {
     }
 
     #[test]
-    fn merge_top_uses_physical_row_offsets_for_one_two_and_three_inputs() {
+    fn merge_top_aligns_the_frontmost_source_to_the_top_row_for_one_two_and_three_inputs() {
         for (tops, expected) in [
             (vec![100.0], 45.0),
-            (vec![600.0, 100.0], 267.5),
-            (vec![900.0, 500.0, 100.0], 390.0),
+            (vec![600.0, 100.0], 45.0),
+            (vec![900.0, 500.0, 100.0], 45.0),
         ] {
             let (project, merge_id, positions) = merge_with_sources(&tops);
             assert_eq!(
@@ -174,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn targeted_same_rank_nodes_are_clamped_and_packed_without_overlap() {
+    fn targeted_same_rank_nodes_pack_by_desired_anchor_then_uuid() {
         let (mut project, first, mut positions) = merge_with_sources(&[100.0]);
         let mut second = Node::new_merge("Second target");
         second.id = Uuid::from_u128(1_001);
@@ -184,7 +206,7 @@ mod tests {
         let targets = HashMap::from([(first, -80.0), (second_id, 20.0)]);
         pack_targeted_column(
             &project,
-            &[first, second_id],
+            &[second_id, first],
             &targets,
             &mut positions,
             40.0,
@@ -196,6 +218,28 @@ mod tests {
                     + estimated_node_size(&project, first).y
                     + AUTO_LAYOUT_ROW_GAP
         );
+    }
+
+    #[test]
+    fn targeted_same_rank_nodes_break_equal_anchor_ties_by_uuid() {
+        let (mut project, first, mut positions) = merge_with_sources(&[100.0]);
+        let mut second = Node::new_merge("Second target");
+        second.id = Uuid::from_u128(1_001);
+        let second_id = second.id;
+        project.add_node(second);
+        positions.insert(second_id, [600.0, 0.0]);
+        let targets = HashMap::from([(first, 40.0), (second_id, 40.0)]);
+
+        pack_targeted_column(
+            &project,
+            &[second_id, first],
+            &targets,
+            &mut positions,
+            40.0,
+        );
+
+        assert_eq!(positions[&first][1], 40.0);
+        assert!(positions[&second_id][1] > positions[&first][1]);
     }
 
     #[test]
