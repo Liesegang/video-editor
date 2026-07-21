@@ -185,7 +185,7 @@ use components::{
     MergeInputSlotRole, MergeLayerRow, NativeVariadicMergeKind,
 };
 #[cfg(test)]
-use components::{merge_images_target_node_id, WireOrderMenuState};
+use components::{merge_images_target_node_id, merge_vacant_slot, WireOrderMenuState};
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]

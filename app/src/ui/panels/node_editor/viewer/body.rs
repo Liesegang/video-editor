@@ -1,4 +1,5 @@
 use super::ProjectNodeViewer;
+use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
@@ -39,27 +40,22 @@ impl ProjectNodeViewer<'_> {
         let MergeInputSlotRole::Connected(row) = &slot.role else {
             if let MergeInputSlotRole::Vacant(kind) = &slot.role {
                 let kind = *kind;
-                let layer_count = merge_layer_rows(self.project, merge_id).len();
-                let canonical_insertion_slot = kind.vacant_canonical_index(layer_count);
+                let vacant = merge_vacant_slot(self.project, merge_id)?;
                 let response = non_selectable_label(
                     ui,
                     egui::RichText::new(format!(
-                        "{} Connect {}{}",
+                        "{} Connect {}",
                         icons::PLUS,
-                        kind.display_name(),
-                        if kind == NativeVariadicMergeKind::Image {
-                            " as Back"
-                        } else {
-                            ""
-                        }
+                        kind.display_name()
                     ))
                         .small()
                         .weak(),
                 )
                 .on_hover_text(match kind {
-                    NativeVariadicMergeKind::Image => {
-                        "Vacant variadic input; a new Image wire stays on this bottom row and is inserted behind every existing layer"
+                    NativeVariadicMergeKind::Image if vacant.structural_prefix_len > 0 => {
+                        "Vacant variadic input; inserts behind existing advanced Image inputs while preserving the mandatory Timeline-child prefix"
                     }
+                    NativeVariadicMergeKind::Image => "Vacant variadic input; inserts a new back layer",
                     NativeVariadicMergeKind::Sound => {
                         "Vacant variadic input; a new Sound wire is appended in canonical top-to-bottom order"
                     }
@@ -77,14 +73,16 @@ impl ProjectNodeViewer<'_> {
                         "merge_kind": kind.qa_key(),
                         "port": kind.input_port(),
                         "variadic": true,
-                        "canonical_insertion_slot": canonical_insertion_slot,
-                        "visual_slot": layer_count,
-                        "insertion_semantics": kind.vacant_insertion_semantics(),
+                        "canonical_insertion_slot": vacant.canonical_index,
+                        "visual_slot": vacant.visual_index,
+                        "layer_count": vacant.layer_count,
+                        "structural_prefix_len": vacant.structural_prefix_len,
+                        "insertion_semantics": vacant.insertion_semantics,
                         "canonical_order_semantics": kind.canonical_order_semantics(),
                         "visual_order_semantics": kind.visual_order_semantics(),
                     }),
                 );
-                if layer_count == 0 {
+                if vacant.layer_count == 0 {
                     register_merge_layer_component(
                         format!("node_editor.merge_layers.empty:{merge_id}"),
                         "node_editor_merge_layers_empty",

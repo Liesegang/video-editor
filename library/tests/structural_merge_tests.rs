@@ -326,6 +326,58 @@ fn timeline_reorder_preserves_edge_identity_and_keeps_custom_inputs_after_childr
 }
 
 #[test]
+fn custom_image_input_can_enter_exact_structural_boundary_but_not_cross_child_prefix() -> Result<()>
+{
+    let (mut project, _, track_id) = one_track_project()?;
+    let first_clip = add_clip(&mut project, track_id, "First")?;
+    let second_clip = add_clip(&mut project, track_id, "Second")?;
+    let target = structural_target(&project, NodeContainer::Track(track_id))?;
+    let first_custom =
+        add_merge_node(&mut project, NodeContainer::Track(track_id), "First custom")?;
+    let second_custom = add_merge_node(
+        &mut project,
+        NodeContainer::Track(track_id),
+        "Second custom",
+    )?;
+    let first_custom_id = project.connect_ports(
+        address(PortOwner::Node(first_custom), IMAGE_OUTPUT_PORT),
+        target.clone(),
+    )?;
+    let second_custom_id = project.connect_ports(
+        address(PortOwner::Node(second_custom), IMAGE_OUTPUT_PORT),
+        target.clone(),
+    )?;
+    project.set_connection_blend_mode(second_custom_id, BlendMode::Screen)?;
+
+    project.reorder_connection(second_custom_id, 2)?;
+    let at_boundary = target_inputs(&project, &target);
+    assert_eq!(
+        at_boundary
+            .iter()
+            .map(|connection| connection.from.owner)
+            .collect::<Vec<_>>(),
+        vec![
+            PortOwner::Clip(first_clip),
+            PortOwner::Clip(second_clip),
+            PortOwner::Node(second_custom),
+            PortOwner::Node(first_custom),
+        ]
+    );
+    assert_eq!(at_boundary[2].id, second_custom_id);
+    assert_eq!(at_boundary[2].blend_mode, BlendMode::Screen);
+    assert_eq!(at_boundary[3].id, first_custom_id);
+
+    let before_crossing = project.clone();
+    assert!(matches!(
+        project.reorder_connection(second_custom_id, 1),
+        Err(ProjectGraphError::StructuralOrderMismatch { .. })
+    ));
+    assert_eq!(project, before_crossing);
+    assert!(project.validate_connections().is_empty());
+    Ok(())
+}
+
+#[test]
 fn required_structural_edge_rejects_direct_deletion_across_timeline_mutations() -> Result<()> {
     let (mut project, _, track_id) = one_track_project()?;
     let a = add_clip(&mut project, track_id, "A")?;

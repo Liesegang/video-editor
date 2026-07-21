@@ -216,6 +216,11 @@ fn sound_merge_projects_audio_connections_in_canonical_top_to_bottom_rows_withou
             .map(|slot| &slot.role),
         Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Sound))
     ));
+    let vacant = merge_vacant_slot(&fixture.project, fixture.sound_merge_id).unwrap();
+    assert_eq!(vacant.structural_prefix_len, fixture.clip_ids.len());
+    assert_eq!(vacant.canonical_index, rows.len());
+    assert_eq!(vacant.visual_index, rows.len());
+    assert_eq!(vacant.insertion_semantics, "end");
     let target = PortAddress::new(PortOwner::Node(fixture.sound_merge_id), MERGE_SOUNDS_PORT);
     let native = native_variadic_merge_target(&fixture.project, &target).unwrap();
     assert_eq!(native.node_id, fixture.sound_merge_id);

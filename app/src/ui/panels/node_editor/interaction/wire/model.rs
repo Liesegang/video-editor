@@ -4,6 +4,7 @@ use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwne
 use library::model::{NodeContainer, Project};
 
 use crate::state::context_types::NodeEditorEditableWire;
+use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::{
     container_output_node_id, input_definitions, merge_input_slots, native_variadic_merge_for_node,
     output_definitions, ContainerVisual, GraphItem, NodeEdit,
@@ -56,22 +57,14 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
             return Some(NodeEdit::DisconnectConnection { connection_id });
         }
     }
-    if let (true, Some(crate::ui::panels::node_editor::MergeInputSlotRole::Vacant(kind))) =
+    if let (true, Some(crate::ui::panels::node_editor::MergeInputSlotRole::Vacant(_))) =
         (connect, merge_slot.as_ref().map(|slot| &slot.role))
     {
-        let layer_count = merge_input_slots(project, target_merge?.node_id)
-            .iter()
-            .filter(|slot| {
-                matches!(
-                    slot.role,
-                    crate::ui::panels::node_editor::MergeInputSlotRole::Connected(_)
-                )
-            })
-            .count();
+        let vacant = merge_vacant_slot(project, target_merge?.node_id)?;
         return Some(NodeEdit::ConnectAtIndex {
             from,
             to,
-            canonical_index: kind.vacant_canonical_index(layer_count),
+            canonical_index: vacant.canonical_index,
         });
     }
     edit_for_port_addresses(project, from, to, connect)

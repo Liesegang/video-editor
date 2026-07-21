@@ -70,12 +70,13 @@ impl NativeVariadicMergeKind {
         }
     }
 
-    pub(in crate::ui::panels::node_editor) const fn vacant_canonical_index(
+    const fn vacant_canonical_index(
         self,
         item_count: usize,
+        structural_prefix_len: usize,
     ) -> usize {
         match self {
-            Self::Image => 0,
+            Self::Image => structural_prefix_len,
             Self::Sound => item_count,
         }
     }
@@ -87,10 +88,9 @@ impl NativeVariadicMergeKind {
         }
     }
 
-    pub(in crate::ui::panels::node_editor) const fn vacant_insertion_semantics(
-        self,
-    ) -> &'static str {
+    const fn vacant_insertion_semantics(self, structural_prefix_len: usize) -> &'static str {
         match self {
+            Self::Image if structural_prefix_len > 0 => "custom_back_after_structural_prefix",
             Self::Image => "back",
             Self::Sound => "end",
         }
@@ -99,6 +99,22 @@ impl NativeVariadicMergeKind {
     const fn has_blend_controls(self) -> bool {
         matches!(self, Self::Image)
     }
+}
+
+/// Canonical and physical placement of a native variadic Merge's vacant pin.
+///
+/// Structural children form a mandatory canonical prefix. Image layers are
+/// displayed in the inverse (front-to-back) direction, so their vacant pin is
+/// placed at the physical boundary that maps to the first legal custom slot.
+/// This keeps the pin's screen position honest while leaving ordinary Image
+/// Merge and Sound Merge insertion unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::panels::node_editor) struct MergeVacantSlot {
+    pub(in crate::ui::panels::node_editor) canonical_index: usize,
+    pub(in crate::ui::panels::node_editor) visual_index: usize,
+    pub(in crate::ui::panels::node_editor) layer_count: usize,
+    pub(in crate::ui::panels::node_editor) structural_prefix_len: usize,
+    pub(in crate::ui::panels::node_editor) insertion_semantics: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,6 +371,36 @@ fn structural_merge_context(
         })
 }
 
+pub(in crate::ui::panels::node_editor) fn merge_vacant_slot(
+    project: &Project,
+    merge_id: Uuid,
+) -> Option<MergeVacantSlot> {
+    let merge = native_variadic_merge_for_node(project, merge_id)?;
+    let target = PortAddress::new(PortOwner::Node(merge_id), merge.kind.input_port());
+    let layer_count = project
+        .connections
+        .iter()
+        .filter(|connection| connection.to == target)
+        .count();
+    let structural_prefix_len = structural_merge_context(project, merge_id)
+        .map_or(0, |(_, children)| children.len())
+        .min(layer_count);
+    let canonical_index = merge
+        .kind
+        .vacant_canonical_index(layer_count, structural_prefix_len);
+    let visual_index = match merge.kind {
+        NativeVariadicMergeKind::Image => layer_count.saturating_sub(canonical_index),
+        NativeVariadicMergeKind::Sound => canonical_index,
+    };
+    Some(MergeVacantSlot {
+        canonical_index,
+        visual_index,
+        layer_count,
+        structural_prefix_len,
+        insertion_semantics: merge.kind.vacant_insertion_semantics(structural_prefix_len),
+    })
+}
+
 /// Identify a native typed variadic Merge input. A matching port key alone is
 /// intentionally insufficient: plugin operations may declare their own
 /// variadic `images` or `sounds` input, and those remain ordinary graph pins.
@@ -432,10 +478,13 @@ pub(in crate::ui::panels::node_editor) fn merge_input_slots(
                 role: MergeInputSlotRole::Connected(row),
             })
             .collect::<Vec<_>>();
-        slots.push(MergeInputSlot {
+        let vacant = MergeInputSlot {
             definition,
             role: MergeInputSlotRole::Vacant(kind),
-        });
+        };
+        let vacant_visual_index = merge_vacant_slot(project, merge_id)
+            .map_or(slots.len(), |slot| slot.visual_index.min(slots.len()));
+        slots.insert(vacant_visual_index, vacant);
         slots
     })
     .collect()
