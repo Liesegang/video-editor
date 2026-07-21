@@ -705,12 +705,10 @@ mod tests {
         use ordered_float::OrderedFloat;
 
         fn source_node() -> Node {
-            let mut source = generator_node(
-                "Transformed source",
-                GeneratorNodeRequest::SkSL {
-                    shader: "half4 main(float2 p) { return half4(1); }".to_string(),
-                },
-            );
+            let mut source = PluginManager::default()
+                .create_image_transform_operation_node()
+                .expect("Image Transform descriptor is valid");
+            source.name = "Transformed source".to_string();
             source
                 .set_property(
                     "position".to_string(),
@@ -719,7 +717,7 @@ mod tests {
                         y: OrderedFloat(11.0),
                     })),
                 )
-                .expect("SkSL factory initializes position");
+                .expect("Image Transform factory initializes position");
             source
                 .set_property(
                     "scale".to_string(),
@@ -728,13 +726,13 @@ mod tests {
                         y: OrderedFloat(100.0),
                     })),
                 )
-                .expect("SkSL factory initializes scale");
+                .expect("Image Transform factory initializes scale");
             source
                 .set_property(
                     "rotation".to_string(),
                     Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
                 )
-                .expect("SkSL factory initializes rotation");
+                .expect("Image Transform factory initializes rotation");
             source
         }
 
@@ -760,7 +758,7 @@ mod tests {
                 content_node: source.clone(),
                 spatial_layers: vec![clip::PreviewSpatialLayer {
                     node: source.clone(),
-                    kind: clip::PreviewSpatialKind::Content,
+                    kind: clip::PreviewSpatialKind::ImageTransform,
                     transform: source_transform,
                     parent_transform,
                 }],

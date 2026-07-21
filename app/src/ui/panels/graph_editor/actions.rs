@@ -378,10 +378,7 @@ pub fn process_action(
 mod tests {
     use super::*;
     use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
-    use crate::test_support::generator_node;
     use library::cache::CacheManager;
-    use library::editor::project_service::GeneratorNodeRequest;
-    use library::model::frame::color::Color;
     use library::model::property::{Keyframe, Property, Vec2};
     use library::model::{Clip, Composition};
     use library::plugin::PluginManager;
@@ -438,20 +435,18 @@ mod tests {
             EasingFunction::Linear,
         );
         let position_id = position_keyframe.id;
-        let mut node = generator_node(
-            "graph target",
-            GeneratorNodeRequest::Solid {
-                color: Color::default(),
-            },
-        );
+        let mut node = PluginManager::default()
+            .create_image_transform_operation_node()
+            .expect("Image Transform descriptor is valid");
+        node.name = "graph target".to_string();
         let node_id = node.id;
-        node.set_property("opacity".to_string(), direct_property)
-            .expect("solid factory initializes opacity");
+        node.set_property("rotation".to_string(), direct_property)
+            .expect("Image Transform factory initializes rotation");
         node.set_property(
             "position".to_string(),
             Property::keyframe(vec![position_keyframe]),
         )
-        .expect("solid factory initializes position");
+        .expect("Image Transform factory initializes position");
         let (mut composition, track) = Composition::new("main", 640, 360, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
@@ -481,7 +476,7 @@ mod tests {
         )
         .unwrap();
         let mut context = EditorContext::new(composition_id);
-        let anchor_name = graph_property_name("opacity", PropertyComponent::Scalar);
+        let anchor_name = graph_property_name("rotation", PropertyComponent::Scalar);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
             entity_id: node_id,
             anchor: (anchor_name.clone(), direct_id),
@@ -547,7 +542,7 @@ mod tests {
 
         let read = project.read().unwrap();
         assert_eq!(
-            property_value(&read, node_id, "opacity", direct_id),
+            property_value(&read, node_id, "rotation", direct_id),
             (2.8, number(14.0))
         );
         let (_, position) = property_value(&read, node_id, "position", position_id);

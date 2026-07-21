@@ -453,11 +453,8 @@ pub fn show_keyframe_dialog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::generator_node;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
-    use library::editor::project_service::GeneratorNodeRequest;
-    use library::model::frame::color::Color;
     use library::model::property::{Keyframe, Property, Vec2};
     use library::model::Clip;
     use library::plugin::PluginManager;
@@ -473,15 +470,13 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = generator_node(
-            "dialog",
-            GeneratorNodeRequest::Solid {
-                color: Color::default(),
-            },
-        );
+        let mut node = PluginManager::default()
+            .create_image_transform_operation_node()
+            .expect("Image Transform descriptor is valid");
+        node.name = "dialog".to_string();
         let node_id = node.id;
         node.set_property("position".to_string(), Property::keyframe(vec![keyframe]))
-            .expect("solid factory initializes position");
+            .expect("Image Transform factory initializes position");
         let mut clip = Clip::new("mapped", 4.0, 8.0);
         clip.trim_in = OrderedFloat(1.5);
         clip.time_stretch = OrderedFloat(0.5);
@@ -524,15 +519,13 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = generator_node(
-            "dialog history",
-            GeneratorNodeRequest::Solid {
-                color: Color::default(),
-            },
-        );
+        let mut node = PluginManager::default()
+            .create_style_operation_node("fill")
+            .expect("Fill descriptor is valid");
+        node.name = "dialog history".to_string();
         let node_id = node.id;
         node.set_property("opacity".to_string(), Property::keyframe(vec![keyframe]))
-            .expect("solid factory initializes opacity");
+            .expect("Fill factory initializes opacity");
         let mut initial = Project::new("dialog history");
         initial.add_node(node);
         let project = Arc::new(RwLock::new(initial.clone()));

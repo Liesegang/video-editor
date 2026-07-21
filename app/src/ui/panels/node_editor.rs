@@ -5780,15 +5780,13 @@ mod tests {
         assert!(!clip_node_property.has_keyframe_at(global_time, 0.001));
 
         let root_id = Uuid::from_u128(0x9_101);
-        let mut root = generator_node(
-            "Root",
-            GeneratorNodeRequest::Solid {
-                color: Color::default(),
-            },
-        );
+        let mut root = PluginManager::default()
+            .create_style_operation_node("fill")
+            .expect("Fill descriptor is valid");
+        root.name = "Root".to_string();
         root.id = root_id;
         root.set_property("opacity".to_string(), animated)
-            .expect("solid factory initializes opacity");
+            .expect("Fill factory initializes opacity");
         project.add_node(root);
         project
             .attach_node_to_container(NodeContainer::Composition(composition_id), root_id)
