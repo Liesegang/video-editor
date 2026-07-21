@@ -123,6 +123,22 @@ pub(super) fn create_action_for_request(
                 }
             }
         }
+        NodeCreateRequest::PathEffect(component_id) => {
+            match plugin_manager.create_path_effect_operation_node(&component_id) {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Path Effect Node {component_id}: {error}");
+                    None
+                }
+            }
+        }
         NodeCreateRequest::Decorator(component_id) => {
             match plugin_manager.create_decorator_operation_node(&component_id) {
                 Ok(node) => Some(Box::new(move |project| {

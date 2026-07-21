@@ -945,41 +945,255 @@ Union Path:
   outputs:
     - name: path
       type: Path
-Trim Path:
-  category: Path
+Dash Path Effect:
+  category: Shape Operations / Path Effects
+  operation_category: path_effect
+  component_id: dash
+  operation: path_effect.apply.v1
+  shape_geometry: Path
+  description: Apply one Dash config to Path geometry; Text requires an explicit outline-extraction operation
   inputs:
-    - name: path
-      type: Path
-    - name: start
-      type: Scalar
-    - name: end
-      type: Scalar
+    - name: intervals
+      key: property:intervals
+      label: Intervals
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: intervals
+      property_metadata:
+        ui_type: Text
+        default: "8 4"
+    - name: phase
+      key: property:phase
+      label: Phase
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: phase
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: 0.0
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: path
-      type: Path
-Corner Path:
-  category: Path
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Corner Path Effect:
+  category: Shape Operations / Path Effects
+  operation_category: path_effect
+  component_id: corner
+  operation: path_effect.apply.v1
+  shape_geometry: Path
+  description: Apply one Corner config to Path geometry; Text requires an explicit outline-extraction operation
   inputs:
-    - name: path
-      type: Path
     - name: radius
-      type: Scalar
+      key: property:radius
+      label: Radius
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: radius
+      property_metadata:
+        ui_type: Float
+        default: 8.0
+        min: 0.0
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: true
+        max_hard_limit: false
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: path
-      type: Path
-Discrete Path:
-  category: Path
-  description: Jitter the path (DiscretePathEffect)
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Discrete Path Effect:
+  category: Shape Operations / Path Effects
+  operation_category: path_effect
+  component_id: discrete
+  operation: path_effect.apply.v1
+  shape_geometry: Path
+  description: Apply one seeded Discrete config to Path geometry; Text requires explicit outline extraction
   inputs:
-    - name: path
-      type: Path
     - name: segment_length
-      type: Scalar
+      key: property:segment_length
+      label: Segment Length
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: segment_length
+      property_metadata:
+        ui_type: Float
+        default: 8.0
+        min: 0.1
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: true
+        max_hard_limit: false
     - name: deviation
-      type: Scalar
+      key: property:deviation
+      label: Deviation
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: deviation
+      property_metadata:
+        ui_type: Float
+        default: 2.0
+        min: 0.0
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: true
+        max_hard_limit: false
+    - name: seed
+      key: property:seed
+      label: Seed
+      type: Integer
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: seed
+      property_metadata:
+        ui_type: Integer
+        default: 0
+        min: 0
+        max: 9223372036854775807
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: path
-      type: Path
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Trim Path Effect:
+  category: Shape Operations / Path Effects
+  operation_category: path_effect
+  component_id: trim
+  operation: path_effect.apply.v1
+  shape_geometry: Path
+  description: Apply one Trim config to Path geometry; Text requires an explicit outline-extraction operation
+  inputs:
+    - name: start
+      key: property:start
+      label: Start
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: start
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: 0.0
+        max: 1.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: end
+      key: property:end
+      label: End
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: end
+      property_metadata:
+        ui_type: Float
+        default: 1.0
+        min: 0.0
+        max: 1.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Simplify Path:
   category: Path
   description: Reduce points in path

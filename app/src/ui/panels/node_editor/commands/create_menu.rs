@@ -3,8 +3,8 @@ use library::model::{Node, Project, ValueContent};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
     EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_TRANSFORM_COMPONENT_ID,
-    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
-    TRANSFORM_CATEGORY,
+    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
+    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 use uuid::Uuid;
 
@@ -21,6 +21,7 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
     Value(ValueContent),
     Style(String),
     Effector(String),
+    PathEffect(String),
     Decorator(String),
     Effect(String),
     Merge,
@@ -41,6 +42,7 @@ impl NodeCreateRequest {
             Self::Value(value) => value.operation_key(),
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
+            Self::PathEffect(_) => "path_effect",
             Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
             Self::Merge => "merge",
@@ -328,6 +330,39 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
         )
     }));
 
+    let mut path_effects = plugin_manager.get_available_path_effects();
+    path_effects.sort();
+    items.extend(path_effects.into_iter().filter_map(|component_id| {
+        let mut item = plugin_operation_menu_item(
+            plugin_manager,
+            PluginOperationMenuItemSpec {
+                descriptor_category: PATH_EFFECT_CATEGORY,
+                operation: PATH_EFFECT_APPLY_OPERATION,
+                component_id: component_id.clone(),
+                menu_category: "Shape Operations / Path Effects".to_string(),
+                display_kind: "Path Effect",
+                qa_id: format!("node_editor.menu.create.path_effect:{component_id}"),
+                request: NodeCreateRequest::PathEffect(component_id),
+                extra_keywords: vec!["shape".to_string(), "path geometry".to_string()],
+            },
+        )?;
+        if let Some(metadata) = item
+            .qa_metadata
+            .as_mut()
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            metadata.insert(
+                "shape_geometry".to_string(),
+                serde_json::Value::String("path_only".to_string()),
+            );
+            metadata.insert(
+                "unsupported_shape_geometry".to_string(),
+                serde_json::Value::String("text".to_string()),
+            );
+        }
+        Some(item)
+    }));
+
     let mut decorators = plugin_manager.get_available_decorators();
     decorators.sort();
     items.extend(decorators.into_iter().filter_map(|component_id| {
@@ -382,6 +417,9 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
         }
         NodeCreateRequest::Effector(component_id) => {
             plugin_manager.create_effector_operation_node(component_id)
+        }
+        NodeCreateRequest::PathEffect(component_id) => {
+            plugin_manager.create_path_effect_operation_node(component_id)
         }
         NodeCreateRequest::Decorator(component_id) => {
             plugin_manager.create_decorator_operation_node(component_id)
@@ -537,6 +575,68 @@ mod tests {
         assert!(image_matches
             .iter()
             .any(|index| items[*index].value == NodeCreateRequest::ImageTransform));
+    }
+
+    #[test]
+    fn path_effect_menu_uses_four_descriptor_backed_shape_operations() {
+        let plugins = PluginManager::default();
+        let items = node_create_menu_items(&plugins);
+        let expected = [
+            ("corner", ["radius"].as_slice()),
+            ("dash", ["intervals", "phase"].as_slice()),
+            (
+                "discrete",
+                ["deviation", "seed", "segment_length"].as_slice(),
+            ),
+            ("trim", ["end", "start"].as_slice()),
+        ];
+        for (component_id, property_names) in expected {
+            let request = NodeCreateRequest::PathEffect(component_id.to_string());
+            let item = items
+                .iter()
+                .find(|item| item.value == request)
+                .unwrap_or_else(|| panic!("missing Path Effect menu item {component_id}"));
+            assert_eq!(
+                item.category.as_deref(),
+                Some("Shape Operations / Path Effects")
+            );
+            let expected_qa_id = format!("node_editor.menu.create.path_effect:{component_id}");
+            assert_eq!(item.qa_id.as_deref(), Some(expected_qa_id.as_str()));
+            let metadata = item.qa_metadata.as_ref().unwrap();
+            assert_eq!(metadata["operation_category"], PATH_EFFECT_CATEGORY);
+            assert_eq!(metadata["operation"], PATH_EFFECT_APPLY_OPERATION);
+            assert_eq!(metadata["component_id"], component_id);
+            assert_eq!(metadata["shape_geometry"], "path_only");
+            assert_eq!(metadata["unsupported_shape_geometry"], "text");
+
+            let node = create_operation_node_for_request(&request, &plugins)
+                .expect("Path Effect request must use its descriptor factory");
+            let actual_properties = node
+                .properties()
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(actual_properties, property_names.iter().copied().collect());
+            let NodeContent::PluginOperation(operation) = node.content() else {
+                panic!("Path Effect factory returned a non-operation Node")
+            };
+            assert_eq!(operation.category, PATH_EFFECT_CATEGORY);
+            assert_eq!(operation.component_id, component_id);
+            assert_eq!(operation.operation, PATH_EFFECT_APPLY_OPERATION);
+            for (key, direction, data_type) in [
+                (TIME_PORT, PortDirection::Input, PortDataType::Number),
+                (SHAPE_INPUT_PORT, PortDirection::Input, PortDataType::Shape),
+                (
+                    SHAPE_OUTPUT_PORT,
+                    PortDirection::Output,
+                    PortDataType::Shape,
+                ),
+            ] {
+                assert!(operation.declared_ports.iter().any(|port| {
+                    port.key == key && port.direction == direction && port.data_type == data_type
+                }));
+            }
+        }
     }
 
     #[test]

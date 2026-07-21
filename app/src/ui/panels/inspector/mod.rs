@@ -12,7 +12,7 @@ use library::model::project::{
 };
 use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track};
-use library::plugin::{PluginManager, TRANSFORM_CATEGORY};
+use library::plugin::{PluginManager, PATH_EFFECT_CATEGORY, TRANSFORM_CATEGORY};
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -81,8 +81,9 @@ enum FacadeOwnerKind {
     Clip,
 }
 
-const OPERATION_CATEGORY_SECTIONS: [(&str, &str, &str); 5] = [
+const OPERATION_CATEGORY_SECTIONS: [(&str, &str, &str); 6] = [
     (TRANSFORM_CATEGORY, "Transform", "Root placement"),
+    (PATH_EFFECT_CATEGORY, "Path Effects", "Path geometry only"),
     ("decorator", "Decorator", "Shape modifier"),
     ("effector", "Effector", "Shape modifier"),
     ("style", "Style", "Appearance"),
@@ -967,6 +968,8 @@ fn render_operation_category(
                 "structurally_reaches_result": wired_to_result,
                 "connection_count": outgoing.len(),
                 "connections": connection_metadata,
+                "shape_geometry": (operation.category == PATH_EFFECT_CATEGORY).then_some("path_only"),
+                "unsupported_shape_geometry": (operation.category == PATH_EFFECT_CATEGORY).then_some("text"),
             })),
         );
     }
@@ -1246,6 +1249,7 @@ fn source_kind(node: &Node) -> &'static str {
         NodeContent::CompositionInstance(_) => "Composition Instance",
         NodeContent::PluginOperation(operation) => match operation.category.as_str() {
             TRANSFORM_CATEGORY => "Transform",
+            PATH_EFFECT_CATEGORY => "Path Effect",
             "decorator" => "Decorator",
             "effector" => "Effector",
             "style" => "Style",
@@ -1278,6 +1282,32 @@ fn render_node(
         ui.label("Type:");
         ui.label(node_display_type(node));
     });
+
+    if matches!(
+        node.content(),
+        NodeContent::PluginOperation(operation)
+            if operation.category == PATH_EFFECT_CATEGORY
+    ) {
+        let response = ui.label(
+            egui::RichText::new(
+                "Path geometry only. Text requires an explicit outline-extraction operation.",
+            )
+            .small()
+            .weak(),
+        );
+        crate::qa::register_component_with_metadata(
+            format!("inspector.path_effect_contract:{}", node.id),
+            "inspector_operation_contract",
+            response.rect,
+            true,
+            Some(serde_json::json!({
+                "operation_id": node.id,
+                "category": PATH_EFFECT_CATEGORY,
+                "shape_geometry": "path_only",
+                "unsupported_shape_geometry": "text",
+            })),
+        );
+    }
 
     render_node_properties(
         ui,
@@ -1735,6 +1765,11 @@ fn node_display_type(node: &Node) -> String {
             if operation.category.as_str() == TRANSFORM_CATEGORY =>
         {
             "Transform".to_string()
+        }
+        NodeContent::PluginOperation(operation)
+            if operation.category.as_str() == PATH_EFFECT_CATEGORY =>
+        {
+            "Path Effect · Path geometry only".to_string()
         }
         NodeContent::PluginOperation(operation) => format!(
             "Plugin Operation · {} / {}",
@@ -2535,6 +2570,75 @@ mod tests {
                 "unknown plugin value {property_name} must remain generically inspectable"
             );
         }
+    }
+
+    #[test]
+    fn path_effect_inspector_metadata_is_exact_and_path_only() {
+        assert!(OPERATION_CATEGORY_SECTIONS.contains(&(
+            PATH_EFFECT_CATEGORY,
+            "Path Effects",
+            "Path geometry only"
+        )));
+        let plugins = PluginManager::default();
+        let discrete = plugins
+            .create_path_effect_operation_node("discrete")
+            .unwrap();
+        assert_eq!(source_kind(&discrete), "Path Effect");
+        assert_eq!(
+            node_display_type(&discrete),
+            "Path Effect · Path geometry only"
+        );
+        let definitions = plugin_operation_property_definitions(&plugins, &discrete).unwrap();
+        let metadata = definitions
+            .iter()
+            .map(properties::property_definition_metadata)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            metadata,
+            [
+                serde_json::json!({
+                    "name": "segment_length",
+                    "label": "Segment Length",
+                    "default": 8.0,
+                    "ui": {
+                        "kind": "float",
+                        "min": 0.1,
+                        "max": 1000.0,
+                        "step": 1.0,
+                        "suffix": "px",
+                        "min_hard_limit": true,
+                        "max_hard_limit": false,
+                    },
+                }),
+                serde_json::json!({
+                    "name": "deviation",
+                    "label": "Deviation",
+                    "default": 2.0,
+                    "ui": {
+                        "kind": "float",
+                        "min": 0.0,
+                        "max": 1000.0,
+                        "step": 1.0,
+                        "suffix": "px",
+                        "min_hard_limit": true,
+                        "max_hard_limit": false,
+                    },
+                }),
+                serde_json::json!({
+                    "name": "seed",
+                    "label": "Seed",
+                    "default": 0,
+                    "ui": {
+                        "kind": "integer",
+                        "min": 0,
+                        "max": i64::MAX,
+                        "suffix": "",
+                        "min_hard_limit": true,
+                        "max_hard_limit": true,
+                    },
+                }),
+            ]
+        );
     }
 
     #[test]

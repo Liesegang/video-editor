@@ -204,6 +204,7 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             "style" => NodeEditorIcon::new(icons::PALETTE, "Style operation"),
             "effect" => NodeEditorIcon::new(icons::SPARKLE, "Effect operation"),
             "effector" => NodeEditorIcon::new(icons::LIGHTNING, "Effector operation"),
+            "path_effect" => NodeEditorIcon::new(icons::WAVE_SINE, "Path Effect operation"),
             "decorator" => NodeEditorIcon::new(icons::MAGIC_WAND, "Decorator operation"),
             _ => NodeEditorIcon::new(icons::PLUG, "Plugin operation"),
         },
