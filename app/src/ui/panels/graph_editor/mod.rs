@@ -463,19 +463,99 @@ fn node_belongs_to_composition(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_graph_drag_if_owner_changed, graph_navigation_config, graph_node_selection,
-        GraphViewportState, HistoryManager, SelectionTarget,
+        append_property_map, finish_graph_drag_if_owner_changed, graph_navigation_config,
+        graph_node_selection, GraphViewportState, HistoryManager, SelectionTarget,
     };
     use crate::state::context::EditorContext;
     use crate::state::context_types::GraphKeyframeDragState;
     use crate::ui::viewport::ViewportController;
     use library::model::project::Project;
-    use library::model::property::KeyframeId;
+    use library::model::property::{
+        KeyframeId, Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec3,
+        Vec4,
+    };
+    use ordered_float::OrderedFloat;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
 
     const VIEWPORT: egui::Rect =
         egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(420.0, 230.0));
+
+    #[test]
+    fn property_rows_keep_definition_order_then_sort_numeric_persisted_extras() {
+        let number = |value| PropertyValue::Number(OrderedFloat(value));
+        let vec3 = |x, y, z| {
+            PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(x),
+                y: OrderedFloat(y),
+                z: OrderedFloat(z),
+            })
+        };
+        let vec4 = |x, y, z, w| {
+            PropertyValue::Vec4(Vec4 {
+                x: OrderedFloat(x),
+                y: OrderedFloat(y),
+                z: OrderedFloat(z),
+                w: OrderedFloat(w),
+            })
+        };
+        let definitions = vec![
+            PropertyDefinition::new(
+                "later",
+                PropertyUiType::vec3(""),
+                "Later",
+                vec3(0.0, 0.0, 0.0),
+            ),
+            PropertyDefinition::new(
+                "first",
+                PropertyUiType::Float {
+                    min: -10.0,
+                    max: 10.0,
+                    step: 0.1,
+                    suffix: String::new(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                "First",
+                number(0.0),
+            ),
+            PropertyDefinition::new(
+                "first",
+                PropertyUiType::vec4(""),
+                "Duplicate First",
+                vec4(0.0, 0.0, 0.0, 0.0),
+            ),
+        ];
+        let mut properties = PropertyMap::new();
+        properties.set("first".to_string(), Property::constant(number(1.0)));
+        properties.set("later".to_string(), Property::constant(vec3(2.0, 3.0, 4.0)));
+        properties.set("zeta".to_string(), Property::constant(number(5.0)));
+        properties.set(
+            "orphan_expression".to_string(),
+            Property::expression("value + time".to_string(), vec4(6.0, 7.0, 8.0, 9.0)),
+        );
+
+        let mut rows = Vec::new();
+        append_property_map(&mut rows, &properties, &definitions);
+        let names = rows
+            .iter()
+            .map(|(name, _, _, _)| name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "node:later.x",
+                "node:later.y",
+                "node:later.z",
+                "node:first",
+                "node:orphan_expression.x",
+                "node:orphan_expression.y",
+                "node:orphan_expression.z",
+                "node:orphan_expression.w",
+                "node:zeta",
+            ]
+        );
+    }
 
     fn run_graph_frame(
         context: &egui::Context,

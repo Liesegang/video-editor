@@ -428,13 +428,22 @@ mod tests {
     use super::*;
     use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, Vec2, Vec3};
+    use library::model::property::{Keyframe, Property, Vec2, Vec3, Vec4};
     use library::model::{Clip, Composition};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
     fn number(value: f64) -> PropertyValue {
         PropertyValue::Number(OrderedFloat(value))
+    }
+
+    fn vec4(x: f64, y: f64, z: f64, w: f64) -> PropertyValue {
+        PropertyValue::Vec4(Vec4 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+            w: OrderedFloat(w),
+        })
     }
 
     fn keyframed_number(time: f64, value: f64) -> (Property, KeyframeId) {
@@ -547,6 +556,147 @@ mod tests {
         assert_eq!(updated.easing, EasingFunction::EaseInQuad);
         drop(after_easing);
         assert_eq!(history.undo_depth(), 2);
+    }
+
+    #[test]
+    fn exact_node_vec4_w_add_and_move_preserve_xyz_and_reject_scalar_mismatch() {
+        let mut node = Node::new_add("Vec4 Graph target");
+        let node_id = node.id;
+        assert!(node
+            .set_property(
+                "b".to_string(),
+                Property::constant(vec4(1.0, 2.0, 3.0, 4.0)),
+            )
+            .is_ok());
+        let (mut composition, track) = Composition::new("main", 640, 360, 30.0, 10.0);
+        let composition_id = composition.id;
+        composition.track_ids = vec![track.id];
+        let mut model = Project::new("Vec4 Graph actions");
+        assert!(model.add_track(track).is_ok());
+        model.add_node(node);
+        assert!(model.add_composition(composition).is_ok());
+        let project = Arc::new(RwLock::new(model));
+        let service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )
+        .expect("test EditorService initializes");
+        let mut context = EditorContext::new(composition_id);
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().expect("project read").clone());
+        let property_name = graph_property_name("b", PropertyComponent::W);
+
+        process_action(
+            Action::Add(property_name.clone(), 1.0, 8.0),
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 2);
+        let keyframe_id = project
+            .read()
+            .expect("project read")
+            .get_node(node_id)
+            .and_then(|node| node.properties().get("b"))
+            .and_then(|property| property.keyframes().first().cloned())
+            .expect("added Vec4 keyframe exists")
+            .id;
+        assert_eq!(
+            property_value(
+                &project.read().expect("project read"),
+                node_id,
+                "b",
+                keyframe_id,
+            )
+            .1,
+            vec4(1.0, 2.0, 3.0, 8.0)
+        );
+
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: (property_name.clone(), keyframe_id),
+            origins: Vec::new(),
+            changed: false,
+        });
+        process_action(
+            Action::MoveBatch(vec![KeyframeMove {
+                property_name: property_name.clone(),
+                keyframe_id,
+                global_time: 2.0,
+                value: 9.0,
+            }]),
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 2, "drag frame must remain pending");
+        assert_eq!(
+            property_value(
+                &project.read().expect("project read"),
+                node_id,
+                "b",
+                keyframe_id,
+            ),
+            (2.0, vec4(1.0, 2.0, 3.0, 9.0))
+        );
+        process_action(
+            Action::FinishMove,
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 3);
+
+        let before_mismatch = project.read().expect("project read").clone();
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: (property_name, keyframe_id),
+            origins: Vec::new(),
+            changed: false,
+        });
+        process_action(
+            Action::MoveBatch(vec![KeyframeMove {
+                property_name: graph_property_name("b", PropertyComponent::Scalar),
+                keyframe_id,
+                global_time: 3.0,
+                value: 10.0,
+            }]),
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(*project.read().expect("project read"), before_mismatch);
+        assert!(
+            !context
+                .graph_editor
+                .keyframe_drag
+                .as_ref()
+                .expect("drag state remains")
+                .changed
+        );
+        process_action(
+            Action::FinishMove,
+            composition_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 3);
     }
 
     #[test]

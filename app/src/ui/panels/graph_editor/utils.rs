@@ -287,7 +287,78 @@ pub fn time_mapper_for_owner(project: &Project, owner: PropertyOwner) -> TimeMap
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::animation::EasingFunction;
+    use library::model::property::{Keyframe, Vec3, Vec4};
     use ordered_float::OrderedFloat;
+
+    fn vec3(x: f64, y: f64, z: f64) -> PropertyValue {
+        PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+        })
+    }
+
+    fn vec4(x: f64, y: f64, z: f64, w: f64) -> PropertyValue {
+        PropertyValue::Vec4(Vec4 {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            z: OrderedFloat(z),
+            w: OrderedFloat(w),
+        })
+    }
+
+    #[test]
+    fn numeric_components_are_definition_first_then_expression_or_keyframe_fallback() {
+        let definition = PropertyDefinition::new(
+            "vector",
+            PropertyUiType::vec4(""),
+            "Vector",
+            vec4(0.0, 0.0, 0.0, 0.0),
+        );
+        let scalar_expression = Property::expression(
+            "value + time".to_string(),
+            PropertyValue::Number(OrderedFloat(2.0)),
+        );
+        assert_eq!(
+            numeric_property_components(Some(&definition), &scalar_expression),
+            VEC4_COMPONENTS
+        );
+
+        let vector_expression = Property::expression("value".to_string(), vec3(1.0, 2.0, 3.0));
+        assert_eq!(
+            numeric_property_components(None, &vector_expression),
+            VEC3_COMPONENTS
+        );
+
+        let mut keyframed = Property::keyframe(vec![Keyframe::new(
+            0.0,
+            vec4(4.0, 3.0, 2.0, 1.0),
+            EasingFunction::Linear,
+        )]);
+        assert!(keyframed.properties.remove("value").is_some());
+        assert_eq!(
+            numeric_property_components(None, &keyframed),
+            VEC4_COMPONENTS
+        );
+    }
+
+    #[test]
+    fn vec4_w_replacement_preserves_xyz_and_wrong_components_are_rejected() {
+        let original = vec4(1.0, 2.0, 3.0, 4.0);
+        assert_eq!(
+            replace_property_component(&original, PropertyComponent::W, 9.0),
+            Ok(vec4(1.0, 2.0, 3.0, 9.0))
+        );
+        assert_eq!(
+            property_component_value(&original, PropertyComponent::W),
+            Ok(4.0)
+        );
+        assert!(
+            replace_property_component(&vec3(1.0, 2.0, 3.0), PropertyComponent::W, 9.0).is_err()
+        );
+        assert!(property_component_value(&original, PropertyComponent::Scalar).is_err());
+    }
 
     #[test]
     fn clip_time_mapping_is_exact_with_fractional_start_trim_and_stretch() {

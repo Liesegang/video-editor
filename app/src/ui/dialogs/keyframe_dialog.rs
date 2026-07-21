@@ -462,29 +462,30 @@ mod tests {
     use super::*;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
+    use library::model::property::{Keyframe, Property, PropertyValue, Vec4};
     use library::model::Clip;
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
     #[test]
-    fn dialog_converts_global_time_once_and_preserves_the_other_vector_component() {
+    fn dialog_converts_global_time_once_and_preserves_other_vec4_components() {
         let keyframe = Keyframe::new(
             2.0,
-            PropertyValue::Vec2(Vec2 {
+            PropertyValue::Vec4(Vec4 {
                 x: OrderedFloat(10.0),
                 y: OrderedFloat(20.0),
+                z: OrderedFloat(30.0),
+                w: OrderedFloat(40.0),
             }),
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = PluginManager::default()
-            .create_image_transform_operation_node()
-            .expect("Image Transform descriptor is valid");
+        let mut node = library::model::Node::new_add("dialog");
         node.name = "dialog".to_string();
         let node_id = node.id;
-        node.set_property("position".to_string(), Property::keyframe(vec![keyframe]))
-            .expect("Image Transform factory initializes position");
+        assert!(node
+            .set_property("b".to_string(), Property::keyframe(vec![keyframe]))
+            .is_ok());
         let mut clip = Clip::new("mapped", 4.0, 8.0);
         clip.trim_in = OrderedFloat(1.5);
         clip.time_stretch = OrderedFloat(0.5);
@@ -496,11 +497,11 @@ mod tests {
 
         let state = KeyframeDialogState {
             is_open: true,
-            property_name: "node:position.x".to_string(),
+            property_name: "node:b.w".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
-            property_key: "position".to_string(),
+            property_key: "b".to_string(),
             keyframe_id: Some(keyframe_id),
-            component: KeyframeValueComponent::X,
+            component: KeyframeValueComponent::W,
             time: 6.25,
             value: 99.0,
             easing: EasingFunction::EaseInQuad,
@@ -511,9 +512,11 @@ mod tests {
         assert_eq!(prepared.update.time, Some(2.625));
         assert_eq!(
             prepared.update.value,
-            Some(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(99.0),
+            Some(PropertyValue::Vec4(Vec4 {
+                x: OrderedFloat(10.0),
                 y: OrderedFloat(20.0),
+                z: OrderedFloat(30.0),
+                w: OrderedFloat(99.0),
             }))
         );
         assert_eq!(prepared.update.easing, Some(EasingFunction::EaseInQuad));
