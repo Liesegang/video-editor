@@ -378,7 +378,7 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
     }));
 
     let estimated = estimated_node_size(&project, merge_id);
-    assert_eq!(estimated.x, 518.0);
+    assert_eq!(estimated.x, 544.0);
     assert_eq!(estimated.x, estimated_merge_node_width());
     assert_eq!(estimated_node_size(&project, solid_id).x, 462.0);
     assert_eq!(estimated_node_width(), 462.0);
@@ -388,7 +388,11 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
     let rendered_merge = rects
         .get(&format!("node_editor.node:{merge_id}"))
         .expect("rendered Merge card");
-    assert!(rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0);
+    assert!(
+        rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0,
+        "rendered Merge width escaped its authoritative estimate: rendered={rendered_merge:?}, estimated={estimated:?}, scale={}",
+        rendered_transform.scaling,
+    );
     assert!(rendered_merge.height() <= estimated.y * rendered_transform.scaling + 1.0);
     let port_rects = [
         qa_port_id(

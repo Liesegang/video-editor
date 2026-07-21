@@ -3,6 +3,7 @@ use library::model::{Node, NodeContent, Project};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
+use super::column_packing::enforce_structural_pair_order;
 use super::node_geometry::estimated_node_size;
 use super::ranking::{LayoutEdge, NodeRankColumn};
 use crate::ui::panels::node_editor::types::{
@@ -36,6 +37,7 @@ pub(super) fn pack_targeted_column(
             .total_cmp(&desired(right))
             .then_with(|| left.cmp(right))
     });
+    enforce_structural_pair_order(project, group, &mut ordered);
 
     let mut cursor = origin_y;
     for node_id in ordered {

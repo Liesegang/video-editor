@@ -16,7 +16,10 @@ pub(super) const EMBEDDED_PORT_LABEL_INSET: f32 = 18.0;
 pub(super) const RESIZE_HIT_WIDTH: f32 = 7.0;
 pub(super) const RESIZE_CORNER_SIZE: f32 = 15.0;
 pub(super) const NODE_BODY_WIDTH: f32 = 200.0;
-pub(super) const MERGE_BODY_WIDTH: f32 = 242.0;
+/// Physical variadic rows need enough room for their handle, source label,
+/// typed controls, and both reorder buttons without outgrowing layout's
+/// estimate at runtime.
+pub(super) const MERGE_BODY_WIDTH: f32 = 260.0;
 pub(super) const NODE_HEADER_WIDTH: f32 = 190.0;
 pub(super) const PORT_LABEL_WIDTH: f32 = 96.0;
 pub(super) const PORT_ROW_HEIGHT: f32 = 22.0;

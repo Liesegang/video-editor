@@ -133,7 +133,7 @@ impl ProjectNodeViewer<'_> {
             })
             .show(ui, |ui| {
                 ui.set_min_size(egui::vec2(
-                    260.0,
+                    MERGE_BODY_WIDTH,
                     crate::ui::panels::node_editor::types::MERGE_LAYER_BODY_HEIGHT,
                 ));
                 ui.horizontal(|ui| {

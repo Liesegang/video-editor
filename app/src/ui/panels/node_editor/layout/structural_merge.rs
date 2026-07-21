@@ -187,7 +187,10 @@ mod tests {
         let sound_rect = estimated_node_rect(project, sound_merge_id).expect("Sound Merge rect");
 
         assert_eq!(image_rect.left(), sound_rect.left());
-        assert!(image_rect.bottom() + AUTO_LAYOUT_ROW_GAP <= sound_rect.top());
+        assert!(
+            image_rect.bottom() + AUTO_LAYOUT_ROW_GAP <= sound_rect.top(),
+            "typed Merge pair lost its Image-before-Sound row gap: image={image_rect:?}, sound={sound_rect:?}, required_gap={AUTO_LAYOUT_ROW_GAP}",
+        );
         assert!(!padded_intersection(image_rect, sound_rect));
         assert!(rect_contains_rect(content, image_rect));
         assert!(rect_contains_rect(content, sound_rect));

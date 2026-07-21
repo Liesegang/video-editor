@@ -11,8 +11,8 @@ use super::ranking::{
     rank_nodes_by_scc, NodeBandBounds, NodeBandPlacement,
 };
 use crate::ui::panels::node_editor::{
-    container_rect, estimated_node_rect, AutoLayoutPlan, AutoLayoutScope, ContainerLayout,
-    AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
+    container_rect, estimated_node_rect, rects_are_closer_than, AutoLayoutPlan, AutoLayoutScope,
+    ContainerLayout, AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
     AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
     AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
     AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, MIN_CONTAINER_SIZE,
@@ -697,15 +697,16 @@ fn settle_direct_node_band(
             .then_with(|| left_id.cmp(right_id))
     });
     let mut occupied = child_rects.to_vec();
+    let child_count = occupied.len();
     for (node_id, position) in ordered {
         let size = estimated_node_size(project, node_id);
-        let y = first_free_y(
+        let y = first_free_direct_node_y(
             position[0],
             size.x,
             size.y,
             position[1].max(minimum_y),
             &occupied,
-            CHILD_CONTAINER_NODE_GAP,
+            child_count,
         );
         if let Some(position) = positions.get_mut(&node_id) {
             position[1] = y;
@@ -728,6 +729,40 @@ fn settle_direct_node_band(
         max_x: bounds.right(),
         height: bounds.bottom() - minimum_y,
     })
+}
+
+/// Settle direct Nodes around child containers without shrinking the normal
+/// Node-to-Node row gap. A single shared gap used to place the structural
+/// Image/Sound Merge pair only `CHILD_CONTAINER_NODE_GAP` apart after the
+/// ranking pass had already packed them with `AUTO_LAYOUT_ROW_GAP`.
+fn first_free_direct_node_y(
+    x: f32,
+    width: f32,
+    height: f32,
+    initial_y: f32,
+    occupied: &[egui::Rect],
+    child_count: usize,
+) -> f32 {
+    let mut y = initial_y;
+    loop {
+        let candidate = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height));
+        let next_y = occupied
+            .iter()
+            .enumerate()
+            .filter_map(|(index, other)| {
+                let gap = if index < child_count {
+                    CHILD_CONTAINER_NODE_GAP
+                } else {
+                    AUTO_LAYOUT_ROW_GAP
+                };
+                rects_are_closer_than(candidate, *other, gap).then_some(other.bottom() + gap)
+            })
+            .max_by(f32::total_cmp);
+        let Some(next_y) = next_y else {
+            return y;
+        };
+        y = next_y;
+    }
 }
 
 fn reachable_nodes(sources: &[Uuid], edges: &[(Uuid, Uuid)]) -> HashSet<Uuid> {
