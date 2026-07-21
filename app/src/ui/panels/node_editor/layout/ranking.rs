@@ -1,14 +1,14 @@
 use eframe::egui;
 use library::model::project::{PortOwner, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT};
-use library::model::{GeneratorContent, Node, NodeContent, Project};
+#[cfg(test)]
+use library::model::Node;
+use library::model::Project;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::ui::panels::node_editor::{
-    input_definitions, merge_layer_rows, output_definitions, GraphItem, AUTO_LAYOUT_COLUMN_GAP,
-    AUTO_LAYOUT_ROW_GAP, MERGE_BODY_WIDTH, NODE_BODY_WIDTH, NODE_HEADER_WIDTH, PORT_LABEL_WIDTH,
-    PORT_ROW_HEIGHT,
-};
+use super::merge_alignment::{merge_anchor_aligned_top, pack_targeted_column};
+use super::node_geometry::{estimated_node_size, estimated_node_width};
+use crate::ui::panels::node_editor::{AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NodeBandBounds {
@@ -30,7 +30,14 @@ pub(super) struct LayoutEdge {
     /// Persisted variadic order is back-to-front. Presentation places the
     /// greatest (front-most) order first on the vertical axis.
     pub(super) order: i64,
-    connection_id: Uuid,
+    pub(super) container_source: bool,
+    pub(super) connection_id: Uuid,
+}
+
+pub(super) struct NodeBandPlacement<'a> {
+    pub(super) container_output_y: &'a HashMap<PortOwner, f32>,
+    pub(super) origin_y: f32,
+    pub(super) positions: &'a mut BTreeMap<Uuid, [f32; 2]>,
 }
 
 pub(super) fn node_rank_columns(
@@ -106,9 +113,13 @@ pub(super) fn layout_node_band(
     ranks: &HashMap<Uuid, usize>,
     rank_columns: &BTreeMap<usize, NodeRankColumn>,
     edges: &[LayoutEdge],
-    origin_y: f32,
-    positions: &mut BTreeMap<Uuid, [f32; 2]>,
+    placement: NodeBandPlacement<'_>,
 ) -> Option<NodeBandBounds> {
+    let NodeBandPlacement {
+        container_output_y,
+        origin_y,
+        positions,
+    } = placement;
     let mut groups = BTreeMap::<usize, Vec<Uuid>>::new();
     for node_id in node_ids {
         if project.get_node(*node_id).is_some() {
@@ -156,10 +167,26 @@ pub(super) fn layout_node_band(
     // fan-in targets; the reverse pass centers fan-out sources.
     for _ in 0..2 {
         for group in groups.values() {
-            align_column(project, group, edges, positions, origin_y, true);
+            align_column(
+                project,
+                group,
+                edges,
+                positions,
+                container_output_y,
+                origin_y,
+                true,
+            );
         }
         for group in groups.values().rev() {
-            align_column(project, group, edges, positions, origin_y, false);
+            align_column(
+                project,
+                group,
+                edges,
+                positions,
+                container_output_y,
+                origin_y,
+                false,
+            );
         }
     }
 
@@ -327,9 +354,23 @@ fn align_column(
     group: &[Uuid],
     edges: &[LayoutEdge],
     positions: &mut BTreeMap<Uuid, [f32; 2]>,
+    container_output_y: &HashMap<PortOwner, f32>,
     origin_y: f32,
     predecessors: bool,
 ) {
+    let targeted = group
+        .iter()
+        .filter_map(|node_id| {
+            merge_anchor_aligned_top(project, *node_id, positions, container_output_y)
+                .map(|target| (*node_id, target))
+        })
+        .collect::<HashMap<_, _>>();
+    if !targeted.is_empty() {
+        if predecessors {
+            pack_targeted_column(project, group, &targeted, positions, origin_y);
+        }
+        return;
+    }
     let desired = median(
         group
             .iter()
@@ -428,6 +469,7 @@ fn collect_layout_edges(
                 return Vec::new();
             }
 
+            let container_source = !matches!(connection.from.owner, PortOwner::Node(_));
             let sources = match connection.from.owner {
                 PortOwner::Node(from) => vec![from],
                 owner
@@ -451,6 +493,7 @@ fn collect_layout_edges(
                     from,
                     to,
                     order: connection.order,
+                    container_source,
                     connection_id: connection.id,
                 })
                 .collect()
@@ -662,51 +705,6 @@ fn visit_scc(
     }
 }
 
-pub(in crate::ui::panels::node_editor) fn estimated_node_width() -> f32 {
-    (NODE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 70.0).max(NODE_HEADER_WIDTH + 30.0)
-}
-
-pub(in crate::ui::panels::node_editor) fn estimated_merge_node_width() -> f32 {
-    (MERGE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 84.0).max(NODE_HEADER_WIDTH + 30.0)
-}
-
-pub(in crate::ui::panels::node_editor) fn estimated_node_size(
-    project: &Project,
-    node_id: Uuid,
-) -> egui::Vec2 {
-    let item = GraphItem::Node(node_id);
-    let pin_rows = input_definitions(project, item)
-        .len()
-        .max(output_definitions(project, item).len());
-    // These are conservative graph-space bounds for the complete rendered
-    // card (header, pin rows and body controls), not just the body widget.
-    // The extra pin term keeps plugin Nodes with unusually many ports safe.
-    let content = project.get_node(node_id).map(Node::content);
-    let base_height = match content {
-        Some(NodeContent::Generator(GeneratorContent::Text)) => 330.0,
-        Some(NodeContent::Generator(GeneratorContent::Shape))
-        | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
-        Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
-        Some(NodeContent::PluginOperation(_)) => 260.0,
-        Some(NodeContent::Merge) => {
-            let layer_count = merge_layer_rows(project, node_id).len();
-            (166.0 + layer_count as f32 * 82.0).max(220.0)
-        }
-        Some(
-            NodeContent::Media(_) | NodeContent::CompositionInstance(_) | NodeContent::Value(_),
-        ) => 220.0,
-        None => 220.0,
-    };
-    egui::vec2(
-        if matches!(content, Some(NodeContent::Merge)) {
-            estimated_merge_node_width()
-        } else {
-            estimated_node_width()
-        },
-        base_height + pin_rows.saturating_sub(4) as f32 * PORT_ROW_HEIGHT,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +729,7 @@ mod tests {
                 from: *from,
                 to: *to,
                 order: *order,
+                container_source: false,
                 connection_id: Uuid::from_u128(10_000 + index as u128),
             })
             .collect::<Vec<_>>();
@@ -751,8 +750,11 @@ mod tests {
             &ranks,
             &columns,
             &edges,
-            40.0,
-            &mut positions,
+            NodeBandPlacement {
+                container_output_y: &HashMap::new(),
+                origin_y: 40.0,
+                positions: &mut positions,
+            },
         )
         .is_some());
         (project, positions)
@@ -974,9 +976,14 @@ mod tests {
                 + crate::ui::panels::node_editor::AUTO_LAYOUT_NODE_PADDING
                 < composition_merge.ui_position[0]
         );
+        let Some(composition) = project.get_composition(composition_id) else {
+            return;
+        };
         assert_eq!(
-            center_y(&project, &plan.node_positions, track_merge_id),
-            center_y(&project, &plan.node_positions, composition_merge_id)
+            composition_merge.ui_position[1],
+            composition.ui_position[1]
+                + crate::ui::panels::node_editor::AUTO_LAYOUT_COMPOSITION_TOP,
+            "row-anchor optimum is clamped to the owning container, not bottom-biased"
         );
         assert_eq!(project.connections, authored_connections);
     }

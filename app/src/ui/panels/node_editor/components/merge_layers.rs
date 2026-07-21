@@ -16,6 +16,13 @@ use crate::ui::widgets::searchable_context_menu::SearchableItem;
 
 const AUTHORED_BLEND_MODES: [BlendMode; 29] = BlendMode::ALL;
 
+pub(in crate::ui::panels::node_editor) fn estimated_merge_input_anchor_offset(
+    front_to_back_index: usize,
+) -> f32 {
+    crate::ui::panels::node_editor::types::MERGE_INPUT_FIRST_ROW_Y
+        + front_to_back_index as f32 * crate::ui::panels::node_editor::types::MERGE_INPUT_ROW_STRIDE
+}
+
 pub(in crate::ui::panels::node_editor) fn blend_mode_label(blend_mode: BlendMode) -> &'static str {
     blend_mode.label()
 }

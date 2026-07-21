@@ -81,7 +81,10 @@ impl ProjectNodeViewer<'_> {
         let mut back_response = None;
         let mut front_response = None;
         let row_response = egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(5, 3))
+            .inner_margin(egui::Margin::symmetric(
+                5,
+                crate::ui::panels::node_editor::types::MERGE_LAYER_VERTICAL_MARGIN,
+            ))
             .corner_radius(4)
             .fill(if target_highlight {
                 Color32::from_rgba_premultiplied(120, 154, 230, 72)
@@ -89,7 +92,10 @@ impl ProjectNodeViewer<'_> {
                 Color32::from_black_alpha(28)
             })
             .show(ui, |ui| {
-                ui.set_min_size(egui::vec2(260.0, 46.0));
+                ui.set_min_size(egui::vec2(
+                    260.0,
+                    crate::ui::panels::node_editor::types::MERGE_LAYER_BODY_HEIGHT,
+                ));
                 ui.horizontal(|ui| {
                     let handle = ui
                         .add_enabled(

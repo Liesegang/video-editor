@@ -126,25 +126,25 @@ pub fn node_editor_panel(
         .unwrap_or(PortOwner::Composition(comp_id));
     ui.horizontal(|ui| {
         non_selectable_label(ui, "Clean layout");
-        if ui
+        let all = ui
             .button("All")
-            .on_hover_text("Lay out every track and node in this composition")
-            .clicked()
-        {
+            .on_hover_text("Lay out every track and node in this composition");
+        register_layout_button(ui, &all, "node_editor.layout.all", "all");
+        if all.clicked() {
             requested_layout = Some(AutoLayoutScope::All);
         }
-        if ui
+        let selection = ui
             .add_enabled(!selected_nodes.is_empty(), egui::Button::new("Selection"))
-            .on_hover_text("Lay out selected nodes without moving unselected nodes")
-            .clicked()
-        {
+            .on_hover_text("Lay out selected nodes without moving unselected nodes");
+        register_layout_button(ui, &selection, "node_editor.layout.selection", "selection");
+        if selection.clicked() {
             requested_layout = Some(AutoLayoutScope::Selection(selected_nodes.clone()));
         }
-        if ui
-            .button("Container")
-            .on_hover_text("Lay out the selected track, or the composition if no track is selected")
-            .clicked()
-        {
+        let container = ui.button("Container").on_hover_text(
+            "Lay out the selected track, or the composition if no track is selected",
+        );
+        register_layout_button(ui, &container, "node_editor.layout.container", "container");
+        if container.clicked() {
             requested_layout = Some(AutoLayoutScope::Container(selected_container));
         }
     });
@@ -803,4 +803,17 @@ pub fn node_editor_panel(
     if let Ok(project) = project_lock.read() {
         editor_context.reconcile_selection(&project);
     }
+}
+
+fn register_layout_button(ui: &egui::Ui, response: &egui::Response, id: &str, scope: &str) {
+    crate::qa::register_component_with_metadata(
+        id,
+        "node_editor_layout_button",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "scope": scope,
+            "visible": ui.is_rect_visible(response.rect),
+        })),
+    );
 }

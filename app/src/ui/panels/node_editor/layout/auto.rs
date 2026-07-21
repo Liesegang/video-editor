@@ -1,12 +1,14 @@
 use eframe::egui;
 use library::model::project::PortOwner;
 use library::model::{NodeContainer, Project};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+use super::merge_alignment::enforce_layout_edge_clearance;
+use super::node_geometry::estimated_node_size;
 use super::ranking::{
-    canonical_layout_edges, estimated_node_size, first_free_y, layout_node_band, node_band_bounds,
-    node_rank_columns, rank_nodes_by_scc, NodeBandBounds,
+    canonical_layout_edges, first_free_y, layout_node_band, node_band_bounds, node_rank_columns,
+    rank_nodes_by_scc, NodeBandBounds, NodeBandPlacement,
 };
 use crate::ui::panels::node_editor::{
     container_rect, estimated_node_rect, AutoLayoutPlan, AutoLayoutScope, ContainerLayout,
@@ -467,7 +469,9 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
     // membership may move a Node vertically, but can never reverse an edge by
     // giving two sibling Clips or Tracks unrelated local x origins.
     let column_origin_x = track_x + AUTO_LAYOUT_TRACK_LEFT * 2.0;
-    let rank_columns = node_rank_columns(project, &nodes, &ranks, column_origin_x);
+    let mut rank_columns = node_rank_columns(project, &nodes, &ranks, column_origin_x);
+    enforce_layout_edge_clearance(&mut rank_columns, &ranks, &layout_edges);
+    let mut container_output_y = HashMap::<PortOwner, f32>::new();
     let mut track_y = composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_TOP;
     let mut composition_right = track_x;
     let mut composition_bottom = track_y;
@@ -514,8 +518,11 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
                 &ranks,
                 &rank_columns,
                 &layout_edges,
-                clip_y + AUTO_LAYOUT_CLIP_TOP,
-                &mut plan.node_positions,
+                NodeBandPlacement {
+                    container_output_y: &container_output_y,
+                    origin_y: clip_y + AUTO_LAYOUT_CLIP_TOP,
+                    positions: &mut plan.node_positions,
+                },
             );
             if let Some(laid_out_band) = laid_out_band {
                 clip_height = clip_height
@@ -532,6 +539,10 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
                     size: [clip_width, clip_height],
                 },
             );
+            container_output_y.insert(
+                PortOwner::Clip(clip_id),
+                clip_y + crate::ui::panels::node_editor::CONTAINER_RIGHT_PORT_Y,
+            );
             required_right = required_right.max(clip_rect.right());
             required_bottom = required_bottom.max(clip_rect.bottom());
             occupied.push(clip_rect);
@@ -546,8 +557,11 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
                 &ranks,
                 &rank_columns,
                 &layout_edges,
-                direct_y,
-                &mut plan.node_positions,
+                NodeBandPlacement {
+                    container_output_y: &container_output_y,
+                    origin_y: direct_y,
+                    positions: &mut plan.node_positions,
+                },
             ) {
                 let child_nodes = track
                     .clip_ids
@@ -581,6 +595,10 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
                 size: track_size,
             },
         );
+        container_output_y.insert(
+            PortOwner::Track(*track_id),
+            track_y + crate::ui::panels::node_editor::CONTAINER_RIGHT_PORT_Y,
+        );
         composition_right = composition_right.max(track_x + track_size[0]);
         composition_bottom = composition_bottom.max(track_y + track_size[1]);
         composition_occupied.push(egui::Rect::from_min_size(
@@ -600,8 +618,11 @@ pub(in crate::ui::panels::node_editor) fn compute_full_composition_layout(
             &ranks,
             &rank_columns,
             &layout_edges,
-            direct_y,
-            &mut plan.node_positions,
+            NodeBandPlacement {
+                container_output_y: &container_output_y,
+                origin_y: direct_y,
+                positions: &mut plan.node_positions,
+            },
         ) {
             let child_nodes = composition
                 .track_ids

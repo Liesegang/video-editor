@@ -42,6 +42,11 @@ pub(super) const MIN_CONTAINER_SIZE: egui::Vec2 = egui::vec2(360.0, 220.0);
 /// Compact left-to-right lane spacing. This still clears the 24 px container
 /// output rail while using roughly one third of the previous 112 px gap.
 pub(super) const AUTO_LAYOUT_COLUMN_GAP: f32 = 36.0;
+/// Container output chrome extends 24 px beyond its bound output Node. Keep
+/// the following Node 24 px beyond that anchor while ordinary Node columns
+/// retain the compact 36 px gap.
+pub(super) const AUTO_LAYOUT_CONTAINER_SOURCE_GAP: f32 =
+    AUTO_LAYOUT_TRACK_RIGHT + AUTO_LAYOUT_NODE_PADDING;
 pub(super) const AUTO_LAYOUT_ROW_GAP: f32 = 52.0;
 pub(super) const AUTO_LAYOUT_NODE_PADDING: f32 = 24.0;
 pub(super) const DETACHED_GRAPH_NODE_GAP: f32 = AUTO_LAYOUT_NODE_PADDING + 0.5;
@@ -59,6 +64,17 @@ pub(super) const AUTO_LAYOUT_CLIP_TOP: f32 = CONTAINER_HEADER_HEIGHT + 24.0;
 pub(super) const AUTO_LAYOUT_TRACK_LEFT: f32 = 80.0;
 pub(super) const AUTO_LAYOUT_TRACK_RIGHT: f32 = 24.0;
 pub(super) const AUTO_LAYOUT_TRACK_BOTTOM: f32 = 16.0;
+/// Graph-space port centers produced by the current Snarl row geometry.
+/// Layout shares these values with Merge row alignment so UI and placement do
+/// not independently guess where a physical variadic input lives.
+pub(super) const NODE_OUTPUT_FIRST_ROW_Y: f32 = 43.0;
+pub(super) const MERGE_OUTPUT_FIRST_ROW_Y: f32 = 58.0;
+pub(super) const MERGE_INPUT_FIRST_ROW_Y: f32 = 113.0;
+pub(super) const MERGE_LAYER_BODY_HEIGHT: f32 = 46.0;
+pub(super) const MERGE_LAYER_VERTICAL_MARGIN: i8 = 3;
+pub(super) const MERGE_LAYER_INTER_ROW_GAP: f32 = 3.0;
+pub(super) const MERGE_INPUT_ROW_STRIDE: f32 =
+    MERGE_LAYER_BODY_HEIGHT + MERGE_LAYER_VERTICAL_MARGIN as f32 * 2.0 + MERGE_LAYER_INTER_ROW_GAP;
 
 /// Ephemeral Snarl payload. It contains identity and visual role only; all
 /// editable values continue to live in `Project`.

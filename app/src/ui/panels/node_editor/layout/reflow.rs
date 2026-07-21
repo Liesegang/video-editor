@@ -5,7 +5,8 @@ use library::model::{NodeContainer, Project};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
-use super::ranking::{canonical_edges, estimated_node_size, rank_nodes_by_scc};
+use super::node_geometry::estimated_node_size;
+use super::ranking::{canonical_edges, rank_nodes_by_scc};
 use crate::state::context_types::SelectionTarget;
 use crate::ui::panels::node_editor::graph_build::{container_item_position, container_visual};
 use crate::ui::panels::node_editor::{
