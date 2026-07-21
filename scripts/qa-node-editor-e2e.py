@@ -30,6 +30,8 @@ QaFailure = BASE.QaFailure
 free_port = BASE.free_port
 
 CANVAS_ID = "node_editor.canvas"
+NODE_EDITOR_TAB_ID = "dock.tab:node_editor"
+NODE_EDITOR_TAB_LABEL = "Node Editor"
 TRANSFORM_STATIC_FIELDS = (
     "scale",
     "min_scale",
@@ -213,6 +215,34 @@ def wait_canvas(client, description, predicate=None, after_frame=-1):
     return client.wait_until(description, ready)
 
 
+def activate_node_editor_tab(client):
+    """Activate the Node Editor through the latest rendered dock-tab rect."""
+    client.wait_component_settled(NODE_EDITOR_TAB_ID)
+    point = client.click_component(NODE_EDITOR_TAB_ID)
+
+    def active():
+        state = client.state()
+        return state if NODE_EDITOR_TAB_LABEL in state["dock"]["active_tabs"] else None
+
+    state = client.wait_until("Node Editor dock activation", active)
+    if not client.evidence:
+        raise QaFailure("Node Editor tab click produced no coordinate evidence")
+    action = client.evidence[-1]
+    if action.get("endpoint") != "click" or action.get("component_id") != NODE_EDITOR_TAB_ID:
+        raise QaFailure("Node Editor tab activation did not use its rendered rectangle")
+    return (
+        {
+            "component_id": NODE_EDITOR_TAB_ID,
+            "point": point,
+            "action_id": action["action_id"],
+            "component_frame": action["component_frame"],
+            "component_rect_points": action["component_rect_points"],
+            "active_frame": state["frame"],
+        },
+        state,
+    )
+
+
 def command_scroll_at_canvas_center(client, delta_y, purpose):
     snapshot, component = client.component(CANVAS_ID)
     point = client.point(component["rect_points"])
@@ -238,7 +268,8 @@ def command_scroll_at_canvas_center(client, delta_y, purpose):
 
 def run_suite(client):
     health = client.wait_health()
-    initial_state = client.state()
+    BASE.wait_fresh_fixture(client)
+    tab_click, initial_state = activate_node_editor_tab(client)
     initial_snapshot, _, initial = wait_canvas(client, "final Node Editor canvas metadata")
 
     # A manually reused app may already be at the lower clamp. Recover only
@@ -311,6 +342,7 @@ def run_suite(client):
         "ok": True,
         "suite": "node-editor-zoom",
         "health": health,
+        "tab_click": tab_click,
         "initial_frame": initial_snapshot["frame"],
         "zoom_frame": zoom_snapshot["frame"],
         "final_frame": final_snapshot["frame"],

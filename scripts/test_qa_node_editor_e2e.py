@@ -26,6 +26,52 @@ def transform(scale=1.0, x=10.0, y=20.0):
 
 
 class NodeEditorQaTests(unittest.TestCase):
+    def test_node_editor_tab_activation_uses_settled_coordinate_click_evidence(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+                self.evidence = []
+
+            def wait_component_settled(self, component_id):
+                self.calls.append(("settled", component_id))
+
+            def click_component(self, component_id):
+                self.calls.append(("click", component_id))
+                self.evidence.append(
+                    {
+                        "action_id": 7,
+                        "endpoint": "click",
+                        "component_id": component_id,
+                        "component_frame": 41,
+                        "component_rect_points": {"center_x": 320.0, "center_y": 24.0},
+                    }
+                )
+                return {"x": 320.0, "y": 24.0}
+
+            def state(self):
+                self.calls.append(("state", None))
+                return {"frame": 43, "dock": {"active_tabs": ["Node Editor"]}}
+
+            def wait_until(self, description, predicate):
+                self.calls.append(("wait", description))
+                return predicate()
+
+        client = Client()
+        evidence, state = NODE_QA.activate_node_editor_tab(client)
+
+        self.assertEqual(
+            client.calls[:3],
+            [
+                ("settled", NODE_QA.NODE_EDITOR_TAB_ID),
+                ("click", NODE_QA.NODE_EDITOR_TAB_ID),
+                ("wait", "Node Editor dock activation"),
+            ],
+        )
+        self.assertEqual(evidence["point"], {"x": 320.0, "y": 24.0})
+        self.assertEqual(evidence["component_frame"], 41)
+        self.assertEqual(evidence["active_frame"], 43)
+        self.assertIn("Node Editor", state["dock"]["active_tabs"])
+
     def test_canvas_metadata_contract_reads_finite_final_transform(self):
         value = transform(scale=0.0065, x=321.5, y=-87.25)
         component = {"id": NODE_QA.CANVAS_ID, "metadata": value}
