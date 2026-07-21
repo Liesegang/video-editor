@@ -13,9 +13,14 @@ use uuid::Uuid;
 use crate::{
     action::HistoryManager,
     state::{context::EditorContext, context_types::SelectionTarget},
+    ui::layer_order::{reverse_index, reverse_slot},
 };
 
 use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
+use super::reorder::{
+    calculate_insert_index, clip_insertion_markers, clip_reorder_preview, clip_reorder_projection,
+    destination_index_for_clip_slot, nearest_clip_insertion_slot, ClipReorderProjection,
+};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
@@ -28,7 +33,7 @@ pub(crate) struct ClipRowLayout {
 }
 
 impl ClipRowLayout {
-    fn row_step(self) -> f32 {
+    pub(super) fn row_step(self) -> f32 {
         self.row_height + self.row_spacing
     }
 }
@@ -178,109 +183,6 @@ fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
     }
 }
 
-pub(crate) fn calculate_insert_index(
-    mouse_y: f32,
-    display_rows: &[DisplayRow],
-    project: &Project,
-    hovered_track_id: Uuid,
-    layout: ClipRowLayout,
-) -> Option<(usize, usize)> {
-    // Returns (target_index, header_row_index)
-
-    // Find header row for hovered track
-    if let Some((header_idx, _)) = display_rows.iter().enumerate().find(|(_, r)| {
-        r.track_id() == hovered_track_id && matches!(r, DisplayRow::TrackHeader { .. })
-    }) {
-        let current_y_in_clip_area = mouse_y - layout.content_min_y + layout.scroll_y;
-
-        let hovered_row_index = (current_y_in_clip_area / layout.row_step()).floor() as isize;
-        let header_row_index = header_idx as isize;
-
-        let raw_target_index = hovered_row_index - header_row_index - 1;
-
-        // Clamp to valid range
-        if let Some(track) = project.get_track(hovered_track_id) {
-            // Count clips in this track
-            let clip_count = track.clip_ids.len();
-
-            // Invert index because display order is reversed (Top of UI = End of List)
-            let max_index = clip_count as isize;
-
-            let inverted_target = max_index - raw_target_index;
-            let target_index = inverted_target.clamp(0, max_index) as usize;
-
-            return Some((target_index, header_idx));
-        }
-    }
-    None
-}
-
-/// Logical insertion slots for an expanded Track.  Slot 0 is before the
-/// first canonical clip and `clip_count` is after the last.  The Timeline is
-/// visually reversed (later clips are higher), so slot numbers descend as Y
-/// increases.
-fn clip_insertion_markers(
-    display_rows: &[DisplayRow],
-    track_id: Uuid,
-    project: &Project,
-    layout: ClipRowLayout,
-) -> Vec<(usize, f32)> {
-    let Some(header_row) = display_rows.iter().position(|row| {
-        row.track_id() == track_id && matches!(row, DisplayRow::TrackHeader { .. })
-    }) else {
-        return Vec::new();
-    };
-    let Some(track) = project.get_track(track_id) else {
-        return Vec::new();
-    };
-    let clip_count = track.clip_ids.len();
-    (0..=clip_count)
-        .map(|slot| {
-            let boundary_row = header_row + 1 + (clip_count - slot);
-            (
-                slot,
-                layout.content_min_y + boundary_row as f32 * layout.row_step() - layout.scroll_y,
-            )
-        })
-        .collect()
-}
-
-fn nearest_clip_insertion_slot(pointer_y: f32, markers: &[(usize, f32)]) -> Option<usize> {
-    markers
-        .iter()
-        .min_by(|(_, lhs_y), (_, rhs_y)| {
-            (pointer_y - *lhs_y)
-                .abs()
-                .total_cmp(&(pointer_y - *rhs_y).abs())
-        })
-        .map(|(slot, _)| *slot)
-}
-
-/// Convert an insertion slot in the original list into the index expected
-/// after the source Clip is detached.  The two slots directly adjacent to a
-/// Clip are intentional no-ops, which is what keeps a horizontal timing drag
-/// from silently changing layer order.
-fn destination_index_for_clip_slot(
-    same_track: bool,
-    source_index: usize,
-    insertion_slot: usize,
-    target_clip_count: usize,
-) -> Option<usize> {
-    if !same_track {
-        return Some(insertion_slot.min(target_clip_count));
-    }
-    if target_clip_count == 0 || source_index >= target_clip_count {
-        return None;
-    }
-    let destination = if insertion_slot > source_index {
-        insertion_slot - 1
-    } else {
-        insertion_slot
-    }
-    .min(target_clip_count - 1);
-    (destination != source_index).then_some(destination)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ClipTiming {
     start_time: f64,
@@ -334,15 +236,6 @@ pub(super) struct DrawClipsContext<'a> {
     pub(super) project: &'a Arc<RwLock<Project>>,
     pub(super) track_ids: &'a [Uuid],
     pub(super) geometry: ClipAreaGeometry,
-}
-
-#[derive(Clone, Copy)]
-struct ClipReorderPreview {
-    dragged_id: Uuid,
-    target_track_id: Uuid,
-    source_index: usize,
-    target_index: usize,
-    header_row_index: usize,
 }
 
 #[derive(Default)]
@@ -457,6 +350,9 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
             for (slot, y) in
                 clip_insertion_markers(&display_rows, *track_id, &proj_read, geometry.row_layout())
             {
+                let visual_slot = proj_read
+                    .get_track(*track_id)
+                    .and_then(|track| reverse_slot(slot, track.clip_ids.len()));
                 let rect = egui::Rect::from_min_max(
                     egui::pos2(geometry.content_rect.min.x, y - 4.0),
                     egui::pos2(geometry.content_rect.max.x, y + 4.0),
@@ -469,6 +365,10 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
                     Some(serde_json::json!({
                         "track_id": track_id,
                         "slot": slot,
+                        "canonical_slot": slot,
+                        "visual_slot": visual_slot,
+                        "canonical_order_semantics": "back_to_front",
+                        "visual_order_semantics": "front_to_back",
                     })),
                 );
             }
@@ -484,37 +384,30 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
             editor_context.interaction.dragged_entity_hovered_track_id,
         ) {
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-                if let Some((target_index, header_idx)) = calculate_insert_index(
+                if let Some((canonical_insertion_slot, _)) = calculate_insert_index(
                     mouse_pos.y,
                     &display_rows,
                     &proj_read,
                     hovered_tid,
                     geometry.row_layout(),
                 ) {
-                    // Find dragged clip original info
                     let source_track_id = editor_context
                         .interaction
                         .dragged_entity_original_track_id
                         .unwrap_or(hovered_tid);
-                    if let Some(dragged_original_index) =
-                        proj_read.get_track(source_track_id).and_then(|track| {
-                            track
-                                .clip_ids
-                                .iter()
-                                .position(|clip_id| *clip_id == dragged_id)
-                        })
-                    {
-                        reorder_state = Some(ClipReorderPreview {
-                            dragged_id,
-                            target_track_id: hovered_tid,
-                            source_index: dragged_original_index,
-                            target_index,
-                            header_row_index: header_idx,
-                        });
-                    }
+                    reorder_state = clip_reorder_preview(
+                        &proj_read,
+                        dragged_id,
+                        source_track_id,
+                        hovered_tid,
+                        canonical_insertion_slot,
+                    );
                 }
             }
         }
+
+        let reorder_projection = reorder_state
+            .map(|preview| clip_reorder_projection(&display_rows, &proj_read, preview));
 
         {
             let mut draw_context = SingleClipDrawContext {
@@ -525,7 +418,7 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
                 project: &proj_read,
                 geometry,
                 display_rows: &display_rows,
-                reorder_state,
+                reorder_projection: reorder_projection.as_ref(),
             };
 
             for row in &display_rows {
@@ -705,7 +598,7 @@ struct SingleClipDrawContext<'a> {
     project: &'a Project,
     geometry: ClipAreaGeometry,
     display_rows: &'a [DisplayRow<'a>],
-    reorder_state: Option<ClipReorderPreview>,
+    reorder_projection: Option<&'a ClipReorderProjection>,
 }
 
 fn draw_single_clip(
@@ -723,7 +616,7 @@ fn draw_single_clip(
         project,
         geometry,
         display_rows,
-        reorder_state,
+        reorder_projection,
     } = context;
     let graph_nodes = clip_graph_nodes(clip, project);
     // Result and semantic source are separate: explicit Style/Effect/Merge
@@ -732,51 +625,9 @@ fn draw_single_clip(
     let (r, g, b) = get_clip_color(graph_nodes.semantic_source, project);
     let clip_color = egui::Color32::from_rgb(r, g, b);
 
-    // Apply Live Reordering Visual Shift
-    let mut visual_row_index = row_index;
-
-    // Check if we are in a reordering state
-    if let Some(reorder) = reorder_state {
-        if clip.id == reorder.dragged_id {
-            visual_row_index = reorder.header_row_index + 1 + reorder.target_index;
-        } else if track.id == reorder.target_track_id {
-            // Get original child index from DisplayRow if available
-            let mut original_child_index = None;
-            if let Some(DisplayRow::ClipRow { child_index, .. }) = display_rows.get(row_index) {
-                original_child_index = Some(*child_index);
-            }
-
-            if let Some(idx) = original_child_index {
-                let mut new_child_index = idx;
-                let src = reorder.source_index;
-                let dst = reorder.target_index;
-
-                let is_same_track_sort = if let Some(orig_tid) =
-                    editor_context.interaction.dragged_entity_original_track_id
-                {
-                    orig_tid == reorder.target_track_id
-                } else {
-                    false
-                };
-
-                if is_same_track_sort {
-                    if src < dst {
-                        if idx > src && idx <= dst {
-                            new_child_index = idx - 1;
-                        }
-                    } else if src > dst && idx >= dst && idx < src {
-                        new_child_index = idx + 1;
-                    }
-                } else if idx >= dst {
-                    new_child_index = idx + 1;
-                }
-
-                if new_child_index != idx {
-                    visual_row_index = reorder.header_row_index + 1 + new_child_index;
-                }
-            }
-        }
-    }
+    let visual_row_index = reorder_projection
+        .and_then(|projection| projection.row_for_clip(clip.id))
+        .unwrap_or(row_index);
 
     let initial_clip_rect = geometry.clip_rect(*clip.start_time, *clip.duration, visual_row_index);
     let safe_width = initial_clip_rect.width();
@@ -791,6 +642,8 @@ fn draw_single_clip(
             .clip_ids
             .iter()
             .position(|candidate| *candidate == clip.id);
+        let visual_index =
+            canonical_index.and_then(|index| reverse_index(index, track.clip_ids.len()));
         crate::qa::register_component_with_metadata(
             format!("timeline.clip:{}", clip.id),
             "timeline_clip",
@@ -800,6 +653,10 @@ fn draw_single_clip(
                 "clip_id": clip.id,
                 "track_id": track.id,
                 "canonical_index": canonical_index,
+                "visual_index": visual_index,
+                "display_row_index": visual_row_index,
+                "canonical_order_semantics": "back_to_front",
+                "visual_order_semantics": "front_to_back",
                 "start_time": clip.start_time.into_inner(),
                 "duration": clip.duration.into_inner(),
                 "pixels_per_second": geometry.pixels_per_unit,
@@ -1493,6 +1350,115 @@ mod tests {
             "container structural Merge insertion must succeed"
         );
         (project, track_id, clip_ids)
+    }
+
+    #[test]
+    fn same_track_preview_matches_canonical_release_order() {
+        let (project, track_id, clip_ids) = expanded_track_project();
+        let expanded = HashSet::from([track_id]);
+        let rows = flatten_tracks_to_rows(&project, &[track_id], &expanded);
+        let preview =
+            clip_reorder_preview(&project, clip_ids[0], track_id, track_id, clip_ids.len());
+        assert!(preview.is_some());
+        let Some(preview) = preview else {
+            return;
+        };
+        assert_eq!(preview.source_index(), 0);
+        assert_eq!(preview.destination_index(), 2);
+        let projection = clip_reorder_projection(&rows, &project, preview);
+
+        assert_eq!(projection.row_for_track(track_id), Some(0));
+        assert_eq!(projection.row_for_clip(clip_ids[0]), Some(1));
+        assert_eq!(projection.row_for_clip(clip_ids[2]), Some(2));
+        assert_eq!(projection.row_for_clip(clip_ids[1]), Some(3));
+        assert_eq!(
+            destination_index_for_clip_slot(true, 0, clip_ids.len(), clip_ids.len()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn cross_track_preview_reflows_both_groups_to_the_release_order() {
+        let (mut project, source_track_id, source_clip_ids) = expanded_track_project();
+        let target_clips = [Clip::new("D", 0.0, 1.0), Clip::new("E", 1.0, 1.0)];
+        let target_clip_ids = target_clips.iter().map(|clip| clip.id).collect::<Vec<_>>();
+        let mut target_track = Track::new("Front Track");
+        let target_track_id = target_track.id;
+        target_track.clip_ids = target_clip_ids.clone();
+        for clip in target_clips {
+            project.add_clip(clip);
+        }
+        assert!(project.add_track(target_track).is_ok());
+
+        let canonical_track_ids = [source_track_id, target_track_id];
+        let expanded = HashSet::from([source_track_id, target_track_id]);
+        let rows = flatten_tracks_to_rows(&project, &canonical_track_ids, &expanded);
+        let preview = clip_reorder_preview(
+            &project,
+            source_clip_ids[1],
+            source_track_id,
+            target_track_id,
+            target_clip_ids.len(),
+        );
+        assert!(preview.is_some());
+        let Some(preview) = preview else {
+            return;
+        };
+        let projection = clip_reorder_projection(&rows, &project, preview);
+
+        // Front Track is visually first. B is inserted at its canonical front
+        // and therefore occupies the first Clip row under that header.
+        assert_eq!(projection.row_for_track(target_track_id), Some(0));
+        assert_eq!(projection.row_for_clip(source_clip_ids[1]), Some(1));
+        assert_eq!(projection.row_for_clip(target_clip_ids[1]), Some(2));
+        assert_eq!(projection.row_for_clip(target_clip_ids[0]), Some(3));
+        // The source group closes the removed row and all following headers
+        // shift to the exact row they will use after release.
+        assert_eq!(projection.row_for_track(source_track_id), Some(4));
+        assert_eq!(projection.row_for_clip(source_clip_ids[2]), Some(5));
+        assert_eq!(projection.row_for_clip(source_clip_ids[0]), Some(6));
+        assert_eq!(
+            destination_index_for_clip_slot(false, 1, target_clip_ids.len(), 2),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn cross_track_preview_projects_the_dragged_clip_onto_a_collapsed_target_header() {
+        let (mut project, source_track_id, source_clip_ids) = expanded_track_project();
+        let target_clip = Clip::new("Collapsed target Clip", 0.0, 1.0);
+        let target_clip_id = target_clip.id;
+        let mut target_track = Track::new("Collapsed target");
+        let target_track_id = target_track.id;
+        target_track.clip_ids.push(target_clip_id);
+        project.add_clip(target_clip);
+        assert!(project.add_track(target_track).is_ok());
+
+        let expanded = HashSet::from([source_track_id]);
+        let rows = flatten_tracks_to_rows(&project, &[source_track_id, target_track_id], &expanded);
+        let preview = clip_reorder_preview(
+            &project,
+            source_clip_ids[1],
+            source_track_id,
+            target_track_id,
+            1,
+        );
+        assert!(preview.is_some());
+        let Some(preview) = preview else {
+            return;
+        };
+        let projection = clip_reorder_projection(&rows, &project, preview);
+
+        assert_eq!(projection.row_for_track(target_track_id), Some(0));
+        assert_eq!(projection.row_for_clip(target_clip_id), Some(0));
+        assert_eq!(projection.row_for_clip(source_clip_ids[1]), Some(0));
+        let dragged_source_row = rows.iter().find(
+            |row| matches!(row, DisplayRow::ClipRow { clip, .. } if clip.id == source_clip_ids[1]),
+        );
+        assert!(dragged_source_row.is_some());
+        if let Some(dragged_source_row) = dragged_source_row {
+            assert_eq!(projection.row_for(dragged_source_row), Some(0));
+        }
     }
 
     fn selection_geometry() -> ClipAreaGeometry {

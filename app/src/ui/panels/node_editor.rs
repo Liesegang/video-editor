@@ -3085,7 +3085,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_body_rows_are_back_to_front_and_keep_per_wire_blend_and_source_identity() {
+    fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
         let (mut project, composition_id, _, clip_id, solid_id, merge_id) = fixture();
         let single_layer_estimated = estimated_node_size(&project, merge_id);
         let first_connection_id = project
