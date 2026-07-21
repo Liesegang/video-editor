@@ -5,7 +5,7 @@ use library::model::project::{
     PortAddress, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
-use library::model::property::{Property, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue};
 #[cfg(test)]
 use library::model::NodeContent;
 use library::model::{Clip, Composition, Node, Project, Track};
@@ -19,8 +19,11 @@ mod audio;
 use audio::audio_node;
 
 mod composition_drop;
+mod nodes;
 mod transform_preview;
 mod waveform;
+
+use nodes::{operation_node, root_transform_node};
 
 #[cfg(test)]
 use transform_preview::{
@@ -568,54 +571,6 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
         .map_err(|error| format!("cannot create QA Shape through factory: {error}"))?;
     node.id = id;
     node.name = "QA Shape".to_string();
-    node.ui_position = ui_position;
-    Ok(node)
-}
-
-fn root_transform_node(
-    plugin_manager: &PluginManager,
-    id: Uuid,
-    name: &str,
-    position: [f64; 2],
-    anchor: [f64; 2],
-    ui_position: [f32; 2],
-) -> Result<Node, String> {
-    let mut node = operation_node(
-        plugin_manager.create_shape_transform_operation_node(),
-        id,
-        name,
-        ui_position,
-    )?;
-    for (key, value) in [
-        (
-            "position",
-            PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(position[0]),
-                y: OrderedFloat(position[1]),
-            }),
-        ),
-        (
-            "anchor",
-            PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(anchor[0]),
-                y: OrderedFloat(anchor[1]),
-            }),
-        ),
-    ] {
-        node.set_property(key.to_string(), Property::constant(value))?;
-    }
-    Ok(node)
-}
-
-fn operation_node<E: std::fmt::Display>(
-    result: Result<Node, E>,
-    id: Uuid,
-    name: &str,
-    ui_position: [f32; 2],
-) -> Result<Node, String> {
-    let mut node = result.map_err(|error| format!("cannot create QA {name}: {error}"))?;
-    node.id = id;
-    node.name = name.to_string();
     node.ui_position = ui_position;
     Ok(node)
 }
