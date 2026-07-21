@@ -402,7 +402,7 @@ fn derived_timing_output_requires_an_available_enabled_operation() -> AnyResult<
     let timing = plugins.create_effect_operation_node("derived_timing_probe")?;
     let timing_id = timing.id;
     let visual = manager
-        .create_solid_node(Color::white(), WIDTH, HEIGHT)
+        .create_sksl_node("half4 main(float2 p) { return half4(1); }", WIDTH, HEIGHT)
         .context("create derived timing consumer")?;
     let visual_id = visual.id;
     let graph = NodeGraphBundle::new(
@@ -410,12 +410,12 @@ fn derived_timing_output_requires_an_available_enabled_operation() -> AnyResult<
         vec![
             ProjectConnection::new(
                 PortAddress::new(PortOwner::Node(timing_id), FRAME_PORT),
-                PortAddress::new(PortOwner::Node(visual_id), "rotation"),
+                PortAddress::new(PortOwner::Node(visual_id), "width"),
                 0,
             ),
             ProjectConnection::new(
                 PortAddress::new(PortOwner::Node(timing_id), FPS_PORT),
-                PortAddress::new(PortOwner::Node(visual_id), "opacity"),
+                PortAddress::new(PortOwner::Node(visual_id), "height"),
                 0,
             ),
         ],
@@ -635,12 +635,18 @@ impl EffectPlugin for PostCompositeProbe {
     }
 }
 
-fn half_solid(manager: &ProjectManager, color: Color, x: f64) -> AnyResult<Node> {
-    let mut node = manager.create_solid_node(color, WIDTH, HEIGHT)?;
-    set_constant(&mut node, "anchor", vec2(0.0, 0.0));
-    set_constant(&mut node, "scale", vec2(50.0, 100.0));
-    set_constant(&mut node, "position", vec2(x, 0.0));
-    Ok(node)
+fn half_solid(
+    manager: &ProjectManager,
+    plugins: &PluginManager,
+    color: Color,
+    x: f64,
+) -> AnyResult<(Node, Node)> {
+    let source = manager.create_solid_node(color, WIDTH, HEIGHT)?;
+    let mut transform = plugins.create_image_transform_operation_node()?;
+    set_constant(&mut transform, "anchor", vec2(0.0, 0.0));
+    set_constant(&mut transform, "scale", vec2(50.0, 100.0));
+    set_constant(&mut transform, "position", vec2(x, 0.0));
+    Ok((source, transform))
 }
 
 #[test]
@@ -654,8 +660,9 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() -> Any
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
-    let red = half_solid(
+    let (red, red_transform) = half_solid(
         &manager,
+        &plugins,
         Color {
             r: 255,
             g: 0,
@@ -664,8 +671,9 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() -> Any
         },
         0.0,
     )?;
-    let blue = half_solid(
+    let (blue, blue_transform) = half_solid(
         &manager,
+        &plugins,
         Color {
             r: 0,
             g: 0,
@@ -680,19 +688,23 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() -> Any
         .context("create probe Effect operation")?;
     let red_id = red.id;
     let blue_id = blue.id;
+    let red_transform_id = red_transform.id;
+    let blue_transform_id = blue_transform.id;
     let merge_id = merge.id;
     let effect_id = effect.id;
     let merge_target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     let graph = NodeGraphBundle::new(
-        vec![red, blue, merge, effect],
+        vec![red, red_transform, blue, blue_transform, merge, effect],
         vec![
+            image_wire(red_id, red_transform_id),
+            image_wire(blue_id, blue_transform_id),
             ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(red_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(red_transform_id), IMAGE_OUTPUT_PORT),
                 merge_target.clone(),
                 0,
             ),
             ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(blue_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(blue_transform_id), IMAGE_OUTPUT_PORT),
                 merge_target,
                 1,
             ),

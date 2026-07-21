@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use library::ProjectModel;
 use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
-use library::model::frame::entity::{FrameContent, FrameItem, FrameObject};
+use library::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem};
 use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
@@ -36,14 +36,14 @@ fn insert_persisted_property(node: &mut Node, key: &str, property: Property) -> 
     })
 }
 
-fn project_with_solid() -> Result<(Project, uuid::Uuid, uuid::Uuid)> {
+fn project_with_solid() -> Result<(Project, uuid::Uuid, uuid::Uuid, uuid::Uuid)> {
     let mut project = Project::new("authoritative");
     let (composition, track) = Composition::new("main", 320, 180, 30.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
     let clip = Clip::new("solid clip", 0.0, 2.0);
     let clip_id = clip.id;
-    let mut node = generator_node_for_canvas(
+    let node = generator_node_for_canvas(
         "solid",
         GeneratorNodeRequest::Solid {
             color: Default::default(),
@@ -53,15 +53,18 @@ fn project_with_solid() -> Result<(Project, uuid::Uuid, uuid::Uuid)> {
         320,
         180,
     );
-    node.set_property(
-        "position".to_string(),
-        Property::constant(PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(10.0),
-            y: OrderedFloat(20.0),
-        })),
-    )
-    .map_err(|error| anyhow!(error))?;
-    let node_id = node.id;
+    let source_id = node.id;
+    let mut transform = PluginManager::default().create_image_transform_operation_node()?;
+    transform
+        .set_property(
+            "position".to_string(),
+            Property::constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(10.0),
+                y: OrderedFloat(20.0),
+            })),
+        )
+        .map_err(|error| anyhow!(error))?;
+    let transform_id = transform.id;
 
     assert!(
         project.add_track(track).is_ok(),
@@ -69,14 +72,20 @@ fn project_with_solid() -> Result<(Project, uuid::Uuid, uuid::Uuid)> {
     );
     project.add_clip(clip);
     project.add_node(node);
+    project.add_node(transform);
     assert!(
         project.add_composition(composition).is_ok(),
         "container structural Merge insertion must succeed"
     );
     project.attach_clip_to_track(track_id, clip_id)?;
-    project.attach_node_to_container(NodeContainer::Clip(clip_id), node_id)?;
-    project.set_output_node(NodeContainer::Clip(clip_id), Some(node_id))?;
-    Ok((project, composition_id, node_id))
+    project.attach_node_to_container(NodeContainer::Clip(clip_id), source_id)?;
+    project.attach_node_to_container(NodeContainer::Clip(clip_id), transform_id)?;
+    project.connect_ports(
+        PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+    )?;
+    project.set_output_node(NodeContainer::Clip(clip_id), Some(transform_id))?;
+    Ok((project, composition_id, source_id, transform_id))
 }
 
 fn rendered_position(project: &Project, plugin_manager: &Arc<PluginManager>) -> Result<(f64, f64)> {
@@ -89,18 +98,17 @@ fn rendered_position(project: &Project, plugin_manager: &Arc<PluginManager>) -> 
         &plugin_manager.get_property_evaluators(),
         plugin_manager,
     )?;
-    fn first_object(items: &[FrameItem]) -> Option<&FrameObject> {
+    fn first_image_transform(items: &[FrameItem]) -> Option<&FrameGroup> {
         items.iter().find_map(|item| match item {
-            FrameItem::Object(object) => Some(object),
-            FrameItem::Group(group) => first_object(&group.items),
+            FrameItem::Group(group) if group.kind == FrameGroupKind::ImageTransform => Some(group),
+            FrameItem::Group(group) => first_image_transform(&group.items),
+            FrameItem::Object(_) => None,
         })
     }
 
-    let object = first_object(&frame.items).context("frame should contain the solid layer")?;
-    let FrameContent::Shape { transform, .. } = &object.content else {
-        bail!("solid generator should project to a shape frame object");
-    };
-    Ok((transform.position.x, transform.position.y))
+    let group = first_image_transform(&frame.items)
+        .context("frame should contain the explicit Image Transform")?;
+    Ok((group.transform.position.x, group.transform.position.y))
 }
 
 fn read_project(project: &RwLock<Project>) -> Result<std::sync::RwLockReadGuard<'_, Project>> {
@@ -111,7 +119,7 @@ fn read_project(project: &RwLock<Project>) -> Result<std::sync::RwLockReadGuard<
 
 #[test]
 fn load_and_undo_style_replacement_keep_every_consumer_on_the_same_arc() -> Result<()> {
-    let (initial, _, _) = project_with_solid()?;
+    let (initial, _, _, _) = project_with_solid()?;
     let shared = Arc::new(RwLock::new(initial));
     let timeline_consumer = Arc::clone(&shared);
     let preview_consumer = Arc::clone(&shared);
@@ -144,7 +152,7 @@ fn load_and_undo_style_replacement_keep_every_consumer_on_the_same_arc() -> Resu
     );
     assert_eq!(Project::load(&manager.save_project()?)?, loaded);
 
-    let (restored, _, _) = project_with_solid()?;
+    let (restored, _, _, _) = project_with_solid()?;
     manager.set_project(restored.clone())?;
     assert_eq!(*read_project(&timeline_consumer)?, restored);
     assert_eq!(*read_project(&preview_consumer)?, restored);
@@ -153,7 +161,7 @@ fn load_and_undo_style_replacement_keep_every_consumer_on_the_same_arc() -> Resu
 
 #[test]
 fn set_and_load_reject_invalid_structure_without_replacing_the_current_project() -> Result<()> {
-    let (current, _, _) = project_with_solid()?;
+    let (current, _, _, _) = project_with_solid()?;
     let shared = Arc::new(RwLock::new(current.clone()));
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
     let mut invalid = current.clone();
@@ -181,7 +189,7 @@ fn set_and_load_reject_invalid_structure_without_replacing_the_current_project()
 
 #[test]
 fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> Result<()> {
-    let (candidate, _, node_id) = project_with_solid()?;
+    let (candidate, _, node_id, _) = project_with_solid()?;
     let mut serialized_candidate = serde_json::to_value(candidate)?;
     serialized_candidate["nodes"][node_id.to_string()]["properties"] = serde_json::json!({});
     let candidate: Project = serde_json::from_value(serialized_candidate)?;
@@ -209,7 +217,7 @@ fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> R
 
 #[test]
 fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() -> Result<()> {
-    let (mut candidate, _, node_id) = project_with_solid()?;
+    let (mut candidate, _, _, node_id) = project_with_solid()?;
     insert_persisted_property(
         candidate
             .get_node_mut(node_id)
@@ -319,7 +327,7 @@ fn legacy_embedded_operation_fields_are_rejected_instead_of_migrated() -> Result
         Composition,
     }
 
-    let (candidate, _, node_id) = project_with_solid()?;
+    let (candidate, _, node_id, _) = project_with_solid()?;
     let composition = candidate
         .compositions
         .first()
@@ -392,7 +400,7 @@ fn legacy_embedded_operation_fields_are_rejected_instead_of_migrated() -> Result
 #[test]
 fn inspector_mutation_immediately_reaches_timeline_preview_save_and_export_snapshot() -> Result<()>
 {
-    let (project, composition_id, node_id) = project_with_solid()?;
+    let (project, composition_id, source_id, node_id) = project_with_solid()?;
     let shared = Arc::new(RwLock::new(project));
     let plugin_manager = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::clone(&plugin_manager));
@@ -432,7 +440,7 @@ fn inspector_mutation_immediately_reaches_timeline_preview_save_and_export_snaps
         .context("Clip must exist after mutation")?;
     assert_eq!(
         clip.node_ids,
-        vec![node_id],
+        vec![source_id, node_id],
         "Timeline reads the same Project"
     );
     assert_eq!(

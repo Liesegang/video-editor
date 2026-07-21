@@ -1,7 +1,7 @@
 use super::*;
-use crate::test_support::generator_node;
-use library::editor::project_service::GeneratorNodeRequest;
 use library::model::project::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, TIME_PORT};
+use library::model::property::{Property, PropertyValue};
+use library::plugin::PluginManager;
 
 pub(super) fn fixture() -> (Project, Uuid, Uuid, Uuid, Uuid, Uuid) {
     let mut project = Project::new("Node editor test");
@@ -29,17 +29,21 @@ pub(super) fn fixture() -> (Project, Uuid, Uuid, Uuid, Uuid, Uuid) {
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-    let mut solid = generator_node(
-        "Solid",
-        GeneratorNodeRequest::Solid {
-            color: library::model::frame::color::Color {
+    let mut solid = PluginManager::default()
+        .create_style_operation_node("fill")
+        .unwrap();
+    solid.name = "Solid".to_string();
+    solid
+        .set_property(
+            "color".to_string(),
+            Property::constant(PropertyValue::Color(library::model::frame::color::Color {
                 r: 10,
                 g: 20,
                 b: 30,
                 a: 255,
-            },
-        },
-    );
+            })),
+        )
+        .unwrap();
     solid.ui_position = [450.0, 390.0];
     let solid_id = solid.id;
     project.add_node(solid);

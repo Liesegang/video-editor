@@ -7,9 +7,8 @@ impl FrameEvaluator<'_> {
         instance: &crate::model::CompositionInstanceContent,
         scope: EvaluationScope,
         path: &mut HashSet<PortOwner>,
-        inputs: &ResolvedNodeInputs,
+        _inputs: &ResolvedNodeInputs,
     ) -> EvalResult<FrameItem> {
-        let owner = PortOwner::Node(node.id);
         let target = self
             .project
             .get_composition(instance.composition_id)
@@ -28,17 +27,13 @@ impl FrameEvaluator<'_> {
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
         neutralize_root_blend(&mut item);
-        let composition = self
-            .composition_for_owner(owner)
-            .ok_or_else(|| missing_error(owner))?;
-        let context = self.context(composition, Some(inputs));
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::CompositionInstance,
             width: target_scope.width,
             height: target_scope.height,
             background_color: transparent(),
-            transform: context.build_transform(node.properties(), scope.time),
+            transform: Default::default(),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),

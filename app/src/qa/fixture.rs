@@ -177,7 +177,7 @@ fn install_named(
     clip_b1.ui_position = [250.0, 860.0];
     clip_b1.ui_size = [1600.0, 380.0];
 
-    let mut solid = solid_node(
+    let solid = solid_node(
         &factory,
         E2E_SOLID_ID,
         "QA Solid",
@@ -188,10 +188,6 @@ fn install_named(
             a: 255,
         },
         [2350.0, 390.0],
-    )?;
-    solid.set_property(
-        "opacity".to_string(),
-        Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     )?;
     let mut merge = Node::new_merge("QA Merge");
     merge.id = E2E_MERGE_ID;

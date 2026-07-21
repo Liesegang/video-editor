@@ -813,6 +813,7 @@ mod tests {
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
         let mut ids = Vec::new();
+        let mut items = Vec::new();
         for name in ["first", "second"] {
             let node = generator_node(
                 name,
@@ -820,11 +821,41 @@ mod tests {
                     shader: "half4 main(float2 p) { return half4(1); }".to_string(),
                 },
             );
-            ids.push(node.id);
-            project.add_node(node.clone());
-            project
-                .attach_node_to_container(NodeContainer::Clip(clip_id), node.id)
+            let node_id = node.id;
+            let transform = library::plugin::PluginManager::default()
+                .create_image_transform_operation_node()
                 .unwrap();
+            let transform_id = transform.id;
+            ids.push(transform_id);
+            project.add_node(node.clone());
+            project.add_node(transform);
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
+                .unwrap();
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), transform_id)
+                .unwrap();
+            project
+                .connect_ports(
+                    library::model::project::PortAddress::new(
+                        library::model::project::PortOwner::Node(node_id),
+                        library::model::project::IMAGE_OUTPUT_PORT,
+                    ),
+                    library::model::project::PortAddress::new(
+                        library::model::project::PortOwner::Node(transform_id),
+                        library::model::project::IMAGE_INPUT_PORT,
+                    ),
+                )
+                .unwrap();
+            let mut object = frame_object(node_id);
+            object.spatial_transform_node_id = None;
+            object.spatial_transform = Box::default();
+            *object.content.transform_mut() = Transform::default();
+            items.push(group(
+                transform_id,
+                FrameGroupKind::ImageTransform,
+                vec![FrameItem::Object(object)],
+            ));
         }
         let frame = FrameInfo {
             width: 100,
@@ -834,7 +865,7 @@ mod tests {
             render_scale: OrderedFloat(1.0),
             now_time: OrderedFloat(0.0),
             region: None,
-            items: ids.iter().copied().map(object).collect(),
+            items,
         };
         let visuals = from_evaluated_frame(&project, &frame);
         match resolve_owner_edit_target(&visuals, SelectionTarget::Clip(clip_id)) {

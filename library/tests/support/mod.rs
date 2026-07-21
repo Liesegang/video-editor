@@ -1,10 +1,14 @@
 use anyhow::{Context, Result};
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
 use library::model::project::{
-    PortDataType, PortDefinition, PortDirection, PortExposure, PortSide, ProjectGraphError,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortDataType,
+    PortDefinition, PortDirection, PortExposure, PortOwner, PortSide, ProjectConnection,
+    ProjectGraphError,
 };
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Node, NodeContainer, Project};
 use library::plugin::PluginManager;
+use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
 #[allow(
@@ -93,6 +97,44 @@ pub fn media_node_for_canvas(
         "built-in Media factory must create a complete test Node: {result:?}"
     );
     result.unwrap_or_else(|_| Node::new_merge("invalid Media test fallback"))
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn transformed_image_graph(
+    plugin_manager: &PluginManager,
+    source: Node,
+    position: [f64; 2],
+    anchor: [f64; 2],
+) -> Result<(NodeGraphBundle, uuid::Uuid)> {
+    let source_id = source.id;
+    let mut transform = plugin_manager.create_image_transform_operation_node()?;
+    for (key, value) in [("position", position), ("anchor", anchor)] {
+        transform
+            .set_property(
+                key.to_string(),
+                Property::constant(PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(value[0]),
+                    y: OrderedFloat(value[1]),
+                })),
+            )
+            .map_err(anyhow::Error::msg)?;
+    }
+    let transform_id = transform.id;
+    Ok((
+        NodeGraphBundle::new(
+            vec![source, transform],
+            vec![ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+                0,
+            )],
+            Some(transform_id),
+        ),
+        transform_id,
+    ))
 }
 
 #[allow(

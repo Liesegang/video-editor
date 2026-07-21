@@ -37,67 +37,13 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         &self,
         canvas_width: u64,
         canvas_height: u64,
-        clip_width: u64,
-        clip_height: u64,
+        _clip_width: u64,
+        _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
         use ordered_float::OrderedFloat;
 
         vec![
-            // Transform Properties
-            PropertyDefinition::new(
-                "position",
-                PropertyUiType::vec2("px"),
-                "Position",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "scale",
-                PropertyUiType::vec2_with_range(0.0, 1_000.0, 0.1, "%", true, false),
-                "Scale",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "rotation",
-                PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Rotation",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "anchor",
-                PropertyUiType::vec2("px"),
-                "Anchor",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(clip_width as f64 / 2.0),
-                    y: OrderedFloat(clip_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "opacity",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Opacity",
-                PropertyValue::Number(OrderedFloat(100.0)),
-            ),
             // Shader Properties
             PropertyDefinition::new(
                 "shader",
@@ -152,17 +98,16 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         let res_x = evaluator.evaluate_number(props, "width", eval_time, default_width as f64);
         let res_y = evaluator.evaluate_number(props, "height", eval_time, default_height as f64);
 
-        let transform = evaluator.build_transform(props, eval_time);
         Some(FrameObject {
             source_node_id: node.id,
-            spatial_transform_node_id: Some(node.id),
-            spatial_transform: Box::new(transform.clone()),
+            spatial_transform_node_id: None,
+            spatial_transform: Box::default(),
             content_bounds: Some(FrameBounds::new(0.0, 0.0, res_x as f32, res_y as f32)),
             content: FrameContent::SkSL {
                 shader,
                 resolution: (res_x as f32, res_y as f32),
                 effects: Vec::new(),
-                transform,
+                transform: Default::default(),
             },
         })
     }
