@@ -178,6 +178,7 @@ mod tests {
     use crate::state::context::EditorContext;
     use crate::state::context_types::{
         BodyDragState, GraphKeyframeDragState, NodeEditorPendingEdit, PreviewPrimaryGesture,
+        SelectionTarget,
     };
     use library::model::project::{PortOwner, Project};
     use library::model::property::KeyframeId;
@@ -239,7 +240,7 @@ mod tests {
         let edited = project.read().unwrap().clone();
         let mut context = EditorContext::new(first_composition);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: ("node:opacity".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,
@@ -298,7 +299,7 @@ mod tests {
         project.write().unwrap().name = "uncommitted".to_string();
         let mut context = EditorContext::new(composition_id);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: ("node:opacity".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,

@@ -94,7 +94,7 @@ pub fn snapshot(
         .as_ref()
         .map(|drag| {
             json!({
-                "entity_id": drag.entity_id,
+                "target": drag.target,
                 "anchor": {
                     "property": drag.anchor.0,
                     "keyframe_id": drag.anchor.1,
@@ -277,7 +277,7 @@ pub fn snapshot(
                 }),
             },
             "graph": {
-                "active_entity_id": editor_context.graph_editor.active_entity_id,
+                "active_target": editor_context.graph_editor.active_target,
                 "selected_keyframes": graph_keyframes,
                 "drag": graph_drag,
                 "pan": {

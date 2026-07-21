@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod drawing;
+pub mod projection;
 pub mod utils;
 
 use actions::*;
@@ -7,11 +8,11 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
+use library::editor::project_service::SemanticPropertyAccess;
 use library::model::project::{NodeContainer, Project};
-use library::model::property::{Property, PropertyDefinition, PropertyMap};
+use library::model::property::PropertyDefinition;
 use library::model::NodeContent;
 use library::EditorService;
-use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -23,6 +24,7 @@ use crate::state::context_types::SelectionTarget;
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
 use pan_zoom_ui::{AxisMask, CanvasState, NavigationConfig};
+use projection::{container_for_selection, GraphPropertyProjection};
 
 fn graph_navigation_config() -> NavigationConfig {
     NavigationConfig {
@@ -49,46 +51,6 @@ impl<'a> ViewportState for GraphViewportState<'a> {
         *self.pan = state.pan;
         *self.zoom_x = state.zoom.x;
         *self.zoom_y = state.zoom.y;
-    }
-}
-
-fn append_property_map<'a>(
-    output: &mut Vec<(String, &'a Property, &'a PropertyMap, PropertyComponent)>,
-    properties: &'a PropertyMap,
-    definitions: &[PropertyDefinition],
-) {
-    let mut known_names = HashSet::with_capacity(definitions.len());
-    for definition in definitions {
-        if !known_names.insert(definition.name()) {
-            continue;
-        }
-        let Some(property) = properties.get(definition.name()) else {
-            continue;
-        };
-        for component in numeric_property_components(Some(definition), property) {
-            output.push((
-                graph_property_name(definition.name(), component),
-                property,
-                properties,
-                component,
-            ));
-        }
-    }
-
-    let mut extras = properties
-        .iter()
-        .filter(|(property_key, _)| !known_names.contains(property_key.as_str()))
-        .collect::<Vec<_>>();
-    extras.sort_by_key(|(property_key, _)| property_key.as_str());
-    for (property_key, property) in extras {
-        for component in numeric_property_components(None, property) {
-            output.push((
-                graph_property_name(property_key, component),
-                property,
-                properties,
-                component,
-            ));
-        }
     }
 }
 
@@ -128,6 +90,219 @@ fn exact_node_property_definitions(
     })
 }
 
+fn graph_property_projection(
+    project_service: &EditorService,
+    project: &Arc<RwLock<Project>>,
+    composition_id: Uuid,
+    target: SelectionTarget,
+) -> Result<GraphPropertyProjection, String> {
+    match target {
+        SelectionTarget::Node(node_id) => {
+            let definitions =
+                exact_node_property_definitions(project_service, project, composition_id, node_id);
+            let project = project.read().map_err(|error| error.to_string())?;
+            let node = project
+                .get_node(node_id)
+                .ok_or_else(|| format!("Graph Node {node_id} does not exist"))?;
+            Ok(GraphPropertyProjection::exact_node(
+                &project,
+                node,
+                &definitions,
+            ))
+        }
+        SelectionTarget::Clip(_) | SelectionTarget::Track(_) | SelectionTarget::Composition(_) => {
+            let container = container_for_selection(target)
+                .ok_or_else(|| "Graph selection is not a container".to_string())?;
+            let stack = project_service
+                .semantic_container_property_stack(container)
+                .map_err(|error| error.to_string())?;
+            let project = project.read().map_err(|error| error.to_string())?;
+            Ok(GraphPropertyProjection::semantic(&project, &stack))
+        }
+    }
+}
+
+fn graph_selection_for_composition(
+    project: &Project,
+    target: Option<SelectionTarget>,
+    composition_id: Uuid,
+) -> Option<SelectionTarget> {
+    let target = target?;
+    let belongs = match target {
+        SelectionTarget::Node(node_id) => {
+            node_belongs_to_composition(project, node_id, composition_id)
+        }
+        SelectionTarget::Clip(clip_id) => {
+            project.get_clip(clip_id).is_some()
+                && project
+                    .find_track_for_clip(clip_id)
+                    .is_some_and(|track_id| {
+                        project.find_composition_for_track(track_id) == Some(composition_id)
+                    })
+        }
+        SelectionTarget::Track(track_id) => {
+            project.get_track(track_id).is_some()
+                && project.find_composition_for_track(track_id) == Some(composition_id)
+        }
+        SelectionTarget::Composition(id) => {
+            id == composition_id && project.get_composition(id).is_some()
+        }
+    };
+    belongs.then_some(target)
+}
+
+fn graph_valid_time_range(
+    project: &Project,
+    target: SelectionTarget,
+    composition_duration: f64,
+) -> Option<(f64, f64)> {
+    let clip_id = match target {
+        SelectionTarget::Node(node_id) => project.find_parent_clip(node_id),
+        SelectionTarget::Clip(clip_id) => Some(clip_id),
+        SelectionTarget::Track(_) | SelectionTarget::Composition(_) => None,
+    };
+    let Some(clip_id) = clip_id else {
+        return Some((0.0, composition_duration));
+    };
+    project.get_clip(clip_id).map(|clip| {
+        let start = clip.start_time.into_inner();
+        (start, start + clip.duration.into_inner())
+    })
+}
+
+fn draw_property_sidebar(
+    ui: &mut Ui,
+    projection: &GraphPropertyProjection,
+    editor_context: &mut EditorContext,
+) {
+    ui.heading("Properties");
+    for diagnostic in &projection.diagnostics {
+        ui.colored_label(Color32::LIGHT_RED, diagnostic);
+    }
+    ui.separator();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        const PROPERTY_COLORS: [Color32; 7] = [
+            Color32::RED,
+            Color32::GREEN,
+            Color32::BLUE,
+            Color32::YELLOW,
+            Color32::CYAN,
+            Color32::MAGENTA,
+            Color32::ORANGE,
+        ];
+        let mut row_index = 0usize;
+        for section in &projection.sections {
+            let section_label = ui.strong(&section.label);
+            crate::qa::register_component_with_metadata(
+                format!("graph.section:{}", section.stable_id),
+                "graph_property_section",
+                section_label.rect,
+                false,
+                Some(serde_json::json!({
+                    "target": projection.target,
+                    "section_id": section.stable_id,
+                    "group": format!("{:?}", section.group),
+                    "owner": format!("{:?}", section.owner),
+                    "node_id": section.node_id,
+                    "diagnostics": section.diagnostics,
+                })),
+            );
+            for diagnostic in &section.diagnostics {
+                ui.small(egui::RichText::new(diagnostic).color(Color32::LIGHT_RED));
+            }
+            for row in &section.rows {
+                let color = PROPERTY_COLORS[row_index % PROPERTY_COLORS.len()];
+                row_index += 1;
+                let mut is_visible = editor_context
+                    .graph_editor
+                    .visible_properties
+                    .contains(&row.stable_id);
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                    ui.painter().circle_filled(
+                        rect.center(),
+                        5.0,
+                        if row.is_plottable() {
+                            color
+                        } else {
+                            Color32::DARK_GRAY
+                        },
+                    );
+                    let visibility = ui.add_enabled(
+                        row.is_plottable(),
+                        egui::Checkbox::new(&mut is_visible, &row.label),
+                    );
+                    let visibility = if let Some(status) = row.access_label() {
+                        visibility.on_hover_text(status)
+                    } else if row.component.is_none() {
+                        visibility.on_hover_text("This property is not numeric and is not plotted")
+                    } else {
+                        visibility
+                    };
+                    crate::qa::register_component_with_metadata(
+                        format!("graph.property:{}", row.stable_id),
+                        "graph_property_visibility",
+                        visibility.rect,
+                        row.is_plottable(),
+                        Some(serde_json::json!({
+                            "target": projection.target,
+                            "property": row.stable_id,
+                            "property_key": row.property_key,
+                            "label": row.label,
+                            "visible": is_visible,
+                            "plotted": row.is_plottable(),
+                            "editable": row.is_editable(),
+                            "component": row.component.map(|component| format!("{component:?}")),
+                            "owner": format!("{:?}", row.owner),
+                            "access": property_access_metadata(&row.access),
+                            "animation": format!("{:?}", row.animation),
+                            "definition": row.definition.as_ref().map(|definition| serde_json::json!({
+                                "name": definition.name(),
+                                "label": definition.label(),
+                                "ui_type": format!("{:?}", definition.ui_type()),
+                            })),
+                        })),
+                    );
+                    if visibility.changed() {
+                        if is_visible {
+                            editor_context
+                                .graph_editor
+                                .visible_properties
+                                .insert(row.stable_id.clone());
+                        } else {
+                            editor_context
+                                .graph_editor
+                                .visible_properties
+                                .remove(&row.stable_id);
+                        }
+                    }
+                });
+            }
+            ui.add_space(6.0);
+        }
+        if projection.sections.is_empty() {
+            ui.label("No properties found.");
+        }
+    });
+}
+
+fn property_access_metadata(access: &SemanticPropertyAccess) -> serde_json::Value {
+    match access {
+        SemanticPropertyAccess::Editable => serde_json::json!({"kind": "editable"}),
+        SemanticPropertyAccess::Wired { source } => {
+            serde_json::json!({"kind": "wired", "source": source})
+        }
+        SemanticPropertyAccess::ReadOnly {
+            reason,
+            related_nodes,
+        } => serde_json::json!({
+            "kind": "read_only",
+            "reason": reason,
+            "related_nodes": related_nodes,
+        }),
+    }
+}
+
 pub fn graph_editor_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
@@ -136,261 +311,183 @@ pub fn graph_editor_panel(
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
-    let graph_owner = editor_context
-        .active_composition_id
-        .zip(graph_node_selection(editor_context.selection.primary()))
-        .and_then(|(composition_id, node_id)| {
-            project.read().ok().and_then(|project| {
-                node_belongs_to_composition(&project, node_id, composition_id).then_some(node_id)
-            })
-        });
-    finish_graph_drag_if_owner_changed(graph_owner, editor_context, project, history_manager);
-
     let Some(comp_id) = editor_context.active_composition_id else {
         ui.label("No composition selected.");
         return;
     };
-    let Some(entity_id) = graph_owner else {
-        ui.label("Select a Node to edit its keyframes.");
+    let graph_target = project.read().ok().and_then(|project| {
+        graph_selection_for_composition(&project, editor_context.selection.primary(), comp_id)
+    });
+    finish_graph_drag_if_owner_changed(graph_target, editor_context, project, history_manager);
+    let Some(target) = graph_target else {
+        ui.label("Select a Node, Clip, Track, or Composition to inspect its properties.");
         return;
     };
-    if editor_context.graph_editor.active_entity_id != Some(entity_id) {
+    if editor_context.graph_editor.active_target != Some(target) {
         actions::finish_pending_move(editor_context, project, history_manager);
     }
-    if editor_context.graph_editor.begin_entity(entity_id) {
+    if editor_context.graph_editor.begin_target(target) {
         editor_context.interaction.selected_keyframe = None;
         editor_context.interaction.editing_keyframe = None;
     }
 
-    let property_definitions =
-        exact_node_property_definitions(project_service, project, comp_id, entity_id);
-    let mut actions = Vec::new();
-
-    {
-        let proj_read = if let Ok(p) = project.read() {
-            p
-        } else {
-            return;
-        };
-
-        let composition = if let Some(c) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-            c
-        } else {
-            return;
-        };
-
-        let entity = if let Some(e) = proj_read.get_node(entity_id) {
-            e
-        } else {
-            return;
-        };
-
-        let mut properties_to_plot: Vec<(String, &Property, &PropertyMap, PropertyComponent)> =
-            Vec::new();
-        append_property_map(
-            &mut properties_to_plot,
-            entity.properties(),
-            &property_definitions,
-        );
-
-        // Capture clip range for visualization
-        let containing_clip = proj_read
-            .find_parent_clip(entity.id)
-            .and_then(|clip_id| proj_read.get_clip(clip_id));
-        let valid_time_range = {
-            let start = containing_clip
-                .map(|clip| clip.start_time.into_inner())
-                .unwrap_or(0.0);
-            let duration = containing_clip
-                .map(|clip| clip.duration.into_inner())
-                .unwrap_or(composition.duration);
-            Some((start, start + duration))
-        };
-        if properties_to_plot.is_empty() {
-            ui.label("No animatable properties found.");
+    let projection = match graph_property_projection(project_service, project, comp_id, target) {
+        Ok(projection) => projection,
+        Err(error) => {
+            let response = ui.colored_label(
+                Color32::LIGHT_RED,
+                format!("Cannot resolve Graph properties: {error}"),
+            );
+            crate::qa::register_component_with_metadata(
+                "graph.projection_error",
+                "graph_diagnostic",
+                response.rect,
+                false,
+                Some(serde_json::json!({
+                    "target": target,
+                    "error": error,
+                })),
+            );
             return;
         }
+    };
+    let property_rows = projection.rows().cloned().collect::<Vec<_>>();
+    editor_context.graph_editor.sync_properties(
+        property_rows
+            .iter()
+            .filter(|row| row.is_plottable())
+            .map(|row| row.stable_id.clone()),
+    );
+    let mut actions = Vec::new();
+    let (composition_fps, composition_resolution, valid_time_range) = {
+        let Ok(project) = project.read() else {
+            return;
+        };
+        let Some(composition) = project.get_composition(comp_id) else {
+            return;
+        };
+        (
+            composition.fps,
+            (composition.width, composition.height),
+            graph_valid_time_range(&project, target, composition.duration),
+        )
+    };
 
-        if editor_context.graph_editor.visible_properties.is_empty() {
-            for (name, _, _, _) in &properties_to_plot {
-                editor_context
-                    .graph_editor
-                    .visible_properties
-                    .insert(name.clone());
+    egui::SidePanel::left("graph_sidebar")
+        .resizable(true)
+        .default_width(240.0)
+        .show_inside(ui, |ui| {
+            draw_property_sidebar(ui, &projection, editor_context);
+        });
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        let pixels_per_second = editor_context.graph_editor.zoom_x;
+        let pixels_per_unit = editor_context.graph_editor.zoom_y;
+
+        let ruler_height = 24.0;
+        let available_rect = ui.available_rect_before_wrap();
+
+        let mut ruler_rect = available_rect;
+        ruler_rect.max.y = ruler_rect.min.y + ruler_height;
+
+        let mut graph_rect = available_rect;
+        graph_rect.min.y += ruler_height;
+
+        crate::qa::register_component_with_metadata(
+            "graph.canvas",
+            "graph_canvas",
+            graph_rect,
+            true,
+            Some(serde_json::json!({
+                "target": target,
+                "entity_id": target.node_id(),
+                "pan": {
+                    "x": editor_context.graph_editor.pan.x,
+                    "y": editor_context.graph_editor.pan.y,
+                },
+                "zoom_x": pixels_per_second,
+                "zoom_y": pixels_per_unit,
+            })),
+        );
+        crate::qa::register_component_with_metadata(
+            "graph.ruler",
+            "graph_ruler",
+            ruler_rect,
+            true,
+            Some(serde_json::json!({
+                "target": target,
+                "entity_id": target.node_id(),
+                "pixels_per_second": pixels_per_second,
+            })),
+        );
+
+        let (_base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
+
+        let ruler_response =
+            ui.interact(ruler_rect, ui.id().with("ruler"), Sense::click_and_drag());
+
+        let mut state = GraphViewportState {
+            pan: &mut editor_context.graph_editor.pan,
+            zoom_x: &mut editor_context.graph_editor.zoom_x,
+            zoom_y: &mut editor_context.graph_editor.zoom_y,
+        };
+
+        let hand_tool_key = registry
+            .commands
+            .iter()
+            .find(|c| c.id == CommandId::HandTool)
+            .and_then(|c| c.shortcut)
+            .map(|(_, k)| k);
+
+        let mut controller = ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
+            .with_config(graph_navigation_config())
+            .with_screen_origin(egui::pos2(graph_rect.min.x, graph_rect.center().y));
+
+        let (_, graph_response) = controller.interact_with_rect(
+            graph_rect,
+            &mut state,
+            &mut editor_context.interaction.handled_hand_tool_drag,
+        );
+
+        let transform = GraphTransform::new(
+            graph_rect,
+            editor_context.graph_editor.pan,
+            editor_context.graph_editor.zoom_x,
+            editor_context.graph_editor.zoom_y,
+        );
+
+        drawing::draw_background(&painter, &transform, ruler_rect, valid_time_range);
+        drawing::draw_grid(&painter, &transform, ruler_rect);
+
+        if ruler_response.dragged() || ruler_response.clicked() {
+            if let Some(pos) = ruler_response.interact_pointer_pos() {
+                let (t, _) = transform.screen_to_graph(pos);
+                editor_context.timeline.current_time = t.max(0.0) as f32;
             }
         }
 
-        {
-            let sidebar_width = 200.0;
-            egui::SidePanel::left("graph_sidebar")
-                .resizable(true)
-                .default_width(sidebar_width)
-                .show_inside(ui, |ui| {
-                    ui.heading("Properties");
-                    ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        const PROPERTY_COLORS: [Color32; 7] = [
-                            Color32::RED,
-                            Color32::GREEN,
-                            Color32::BLUE,
-                            Color32::YELLOW,
-                            Color32::CYAN,
-                            Color32::MAGENTA,
-                            Color32::ORANGE,
-                        ];
+        drawing::draw_properties(
+            ui,
+            &painter,
+            &graph_response,
+            &transform,
+            &property_rows,
+            target,
+            matches!(target, SelectionTarget::Node(_)),
+            editor_context,
+            project_service,
+            &mut actions,
+            composition_fps,
+            composition_resolution,
+        );
 
-                        for (index, (name, _, _, _)) in properties_to_plot.iter().enumerate() {
-                            let color = PROPERTY_COLORS[index % PROPERTY_COLORS.len()];
-                            let mut is_visible = editor_context
-                                .graph_editor
-                                .visible_properties
-                                .contains(name);
-
-                            ui.horizontal(|ui| {
-                                let (rect, _response) =
-                                    ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
-                                ui.painter().circle_filled(rect.center(), 5.0, color);
-
-                                let visibility = ui.checkbox(&mut is_visible, name);
-                                crate::qa::register_component_with_metadata(
-                                    format!("graph.property_visibility:{name}"),
-                                    "graph_property_visibility",
-                                    visibility.rect,
-                                    visibility.enabled(),
-                                    Some(serde_json::json!({
-                                        "property": name,
-                                        "visible": is_visible,
-                                        "entity_id": entity_id,
-                                    })),
-                                );
-                                if visibility.changed() {
-                                    if is_visible {
-                                        editor_context
-                                            .graph_editor
-                                            .visible_properties
-                                            .insert(name.clone());
-                                    } else {
-                                        editor_context.graph_editor.visible_properties.remove(name);
-                                    }
-                                }
-                            });
-                        }
-                    });
-                });
-
-            egui::CentralPanel::default().show_inside(ui, |ui| {
-                let pixels_per_second = editor_context.graph_editor.zoom_x;
-                let pixels_per_unit = editor_context.graph_editor.zoom_y;
-
-                let ruler_height = 24.0;
-                let available_rect = ui.available_rect_before_wrap();
-
-                let mut ruler_rect = available_rect;
-                ruler_rect.max.y = ruler_rect.min.y + ruler_height;
-
-                let mut graph_rect = available_rect;
-                graph_rect.min.y += ruler_height;
-
-                crate::qa::register_component_with_metadata(
-                    "graph.canvas",
-                    "graph_canvas",
-                    graph_rect,
-                    true,
-                    Some(serde_json::json!({
-                        "entity_id": entity_id,
-                        "pan": {
-                            "x": editor_context.graph_editor.pan.x,
-                            "y": editor_context.graph_editor.pan.y,
-                        },
-                        "zoom_x": pixels_per_second,
-                        "zoom_y": pixels_per_unit,
-                    })),
-                );
-                crate::qa::register_component_with_metadata(
-                    "graph.ruler",
-                    "graph_ruler",
-                    ruler_rect,
-                    true,
-                    Some(serde_json::json!({
-                        "entity_id": entity_id,
-                        "pixels_per_second": pixels_per_second,
-                    })),
-                );
-
-                let (_base_response, painter) =
-                    ui.allocate_painter(available_rect.size(), Sense::hover());
-
-                let ruler_response =
-                    ui.interact(ruler_rect, ui.id().with("ruler"), Sense::click_and_drag());
-
-                let mut state = GraphViewportState {
-                    pan: &mut editor_context.graph_editor.pan,
-                    zoom_x: &mut editor_context.graph_editor.zoom_x,
-                    zoom_y: &mut editor_context.graph_editor.zoom_y,
-                };
-
-                let hand_tool_key = registry
-                    .commands
-                    .iter()
-                    .find(|c| c.id == CommandId::HandTool)
-                    .and_then(|c| c.shortcut)
-                    .map(|(_, k)| k);
-
-                let mut controller =
-                    ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
-                        .with_config(graph_navigation_config())
-                        .with_screen_origin(egui::pos2(graph_rect.min.x, graph_rect.center().y));
-
-                let (_, graph_response) = controller.interact_with_rect(
-                    graph_rect,
-                    &mut state,
-                    &mut editor_context.interaction.handled_hand_tool_drag,
-                );
-
-                let transform = GraphTransform::new(
-                    graph_rect,
-                    editor_context.graph_editor.pan,
-                    editor_context.graph_editor.zoom_x,
-                    editor_context.graph_editor.zoom_y,
-                );
-
-                drawing::draw_background(&painter, &transform, ruler_rect, valid_time_range);
-                drawing::draw_grid(&painter, &transform, ruler_rect);
-
-                if ruler_response.dragged() || ruler_response.clicked() {
-                    if let Some(pos) = ruler_response.interact_pointer_pos() {
-                        let (t, _) = transform.screen_to_graph(pos);
-                        editor_context.timeline.current_time = t.max(0.0) as f32;
-                    }
-                }
-
-                let time_mapper =
-                    containing_clip.map_or_else(TimeMapper::identity, TimeMapper::from_clip);
-
-                drawing::draw_properties(
-                    ui,
-                    &painter,
-                    &graph_response,
-                    &transform,
-                    &time_mapper,
-                    &properties_to_plot,
-                    entity_id,
-                    editor_context,
-                    project_service,
-                    &mut actions,
-                    composition.fps,
-                    (composition.width, composition.height),
-                );
-
-                drawing::draw_playhead(
-                    &painter,
-                    &transform,
-                    ruler_rect,
-                    editor_context.timeline.current_time as f64,
-                );
-            });
-        }
-    }
+        drawing::draw_playhead(
+            &painter,
+            &transform,
+            ruler_rect,
+            editor_context.timeline.current_time as f64,
+        );
+    });
 
     if editor_context.graph_editor.keyframe_drag.is_some()
         && ui.input(|input| input.pointer.any_released())
@@ -401,25 +498,28 @@ pub fn graph_editor_panel(
         actions.push(Action::FinishMove);
     }
 
-    for action in actions {
-        actions::process_action(
-            action,
-            comp_id,
-            entity_id,
-            project_service,
-            project,
-            editor_context,
-            history_manager,
-        );
+    if let SelectionTarget::Node(entity_id) = target {
+        for action in actions {
+            actions::process_action(
+                action,
+                comp_id,
+                entity_id,
+                project_service,
+                project,
+                editor_context,
+                history_manager,
+            );
+        }
     }
 }
 
+#[cfg(test)]
 fn graph_node_selection(target: Option<SelectionTarget>) -> Option<uuid::Uuid> {
     target.and_then(SelectionTarget::node_id)
 }
 
 fn finish_graph_drag_if_owner_changed(
-    graph_owner: Option<uuid::Uuid>,
+    graph_target: Option<SelectionTarget>,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
     history_manager: &mut HistoryManager,
@@ -428,7 +528,7 @@ fn finish_graph_drag_if_owner_changed(
         .graph_editor
         .keyframe_drag
         .as_ref()
-        .is_some_and(|drag| graph_owner != Some(drag.entity_id))
+        .is_some_and(|drag| graph_target != Some(drag.target))
     {
         return actions::finish_pending_move(editor_context, project, history_manager);
     }
@@ -463,18 +563,15 @@ fn node_belongs_to_composition(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_property_map, finish_graph_drag_if_owner_changed, graph_navigation_config,
-        graph_node_selection, GraphViewportState, HistoryManager, SelectionTarget,
+        finish_graph_drag_if_owner_changed, graph_navigation_config, graph_node_selection,
+        graph_selection_for_composition, GraphViewportState, HistoryManager, SelectionTarget,
     };
     use crate::state::context::EditorContext;
     use crate::state::context_types::GraphKeyframeDragState;
     use crate::ui::viewport::ViewportController;
     use library::model::project::Project;
-    use library::model::property::{
-        KeyframeId, Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec3,
-        Vec4,
-    };
-    use ordered_float::OrderedFloat;
+    use library::model::property::KeyframeId;
+    use library::model::{Clip, Composition};
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
 
@@ -482,78 +579,39 @@ mod tests {
         egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(420.0, 230.0));
 
     #[test]
-    fn property_rows_keep_definition_order_then_sort_numeric_persisted_extras() {
-        let number = |value| PropertyValue::Number(OrderedFloat(value));
-        let vec3 = |x, y, z| {
-            PropertyValue::Vec3(Vec3 {
-                x: OrderedFloat(x),
-                y: OrderedFloat(y),
-                z: OrderedFloat(z),
-            })
-        };
-        let vec4 = |x, y, z, w| {
-            PropertyValue::Vec4(Vec4 {
-                x: OrderedFloat(x),
-                y: OrderedFloat(y),
-                z: OrderedFloat(z),
-                w: OrderedFloat(w),
-            })
-        };
-        let definitions = vec![
-            PropertyDefinition::new(
-                "later",
-                PropertyUiType::vec3(""),
-                "Later",
-                vec3(0.0, 0.0, 0.0),
-            ),
-            PropertyDefinition::new(
-                "first",
-                PropertyUiType::Float {
-                    min: -10.0,
-                    max: 10.0,
-                    step: 0.1,
-                    suffix: String::new(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "First",
-                number(0.0),
-            ),
-            PropertyDefinition::new(
-                "first",
-                PropertyUiType::vec4(""),
-                "Duplicate First",
-                vec4(0.0, 0.0, 0.0, 0.0),
-            ),
-        ];
-        let mut properties = PropertyMap::new();
-        properties.set("first".to_string(), Property::constant(number(1.0)));
-        properties.set("later".to_string(), Property::constant(vec3(2.0, 3.0, 4.0)));
-        properties.set("zeta".to_string(), Property::constant(number(5.0)));
-        properties.set(
-            "orphan_expression".to_string(),
-            Property::expression("value + time".to_string(), vec4(6.0, 7.0, 8.0, 9.0)),
-        );
+    fn graph_selection_accepts_each_typed_target_only_in_the_active_composition() {
+        let mut project = Project::new("typed Graph targets");
+        let (composition, track) = Composition::new("main", 320, 180, 30.0, 2.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track).expect("track insertion succeeds");
+        project
+            .add_composition(composition)
+            .expect("composition insertion succeeds");
+        let clip = Clip::new("clip", 0.0, 2.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project
+            .attach_clip_to_track(track_id, clip_id)
+            .expect("clip attachment succeeds");
 
-        let mut rows = Vec::new();
-        append_property_map(&mut rows, &properties, &definitions);
-        let names = rows
-            .iter()
-            .map(|(name, _, _, _)| name.as_str())
-            .collect::<Vec<_>>();
+        for target in [
+            SelectionTarget::Clip(clip_id),
+            SelectionTarget::Track(track_id),
+            SelectionTarget::Composition(composition_id),
+        ] {
+            assert_eq!(
+                graph_selection_for_composition(&project, Some(target), composition_id),
+                Some(target)
+            );
+        }
         assert_eq!(
-            names,
-            [
-                "node:later.x",
-                "node:later.y",
-                "node:later.z",
-                "node:first",
-                "node:orphan_expression.x",
-                "node:orphan_expression.y",
-                "node:orphan_expression.z",
-                "node:orphan_expression.w",
-                "node:zeta",
-            ]
+            graph_selection_for_composition(
+                &project,
+                Some(SelectionTarget::Composition(Uuid::new_v4())),
+                composition_id,
+            ),
+            None
         );
     }
 
@@ -711,7 +769,7 @@ mod tests {
         let edited = project.read().unwrap().clone();
         let mut context = EditorContext::new(composition_id);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: ("node:opacity".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,
@@ -721,7 +779,7 @@ mod tests {
         history.push_project_state(original.clone());
 
         assert!(finish_graph_drag_if_owner_changed(
-            graph_node_selection(context.selection.primary()),
+            context.selection.primary(),
             &mut context,
             &project,
             &mut history,

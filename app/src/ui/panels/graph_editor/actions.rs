@@ -426,7 +426,9 @@ pub fn process_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
+    use crate::state::context_types::{
+        GraphKeyframeDragOrigin, GraphKeyframeDragState, SelectionTarget,
+    };
     use library::cache::CacheManager;
     use library::model::property::{Keyframe, Property, Vec2, Vec3, Vec4};
     use library::model::{Clip, Composition};
@@ -617,7 +619,7 @@ mod tests {
         );
 
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: (property_name.clone(), keyframe_id),
             origins: Vec::new(),
             changed: false,
@@ -659,7 +661,7 @@ mod tests {
 
         let before_mismatch = project.read().expect("project read").clone();
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: (property_name, keyframe_id),
             origins: Vec::new(),
             changed: false,
@@ -756,7 +758,7 @@ mod tests {
         let mut context = EditorContext::new(composition_id);
         let anchor_name = graph_property_name("rotation", PropertyComponent::Scalar);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: (anchor_name.clone(), direct_id),
             origins: vec![GraphKeyframeDragOrigin {
                 property_name: anchor_name.clone(),
@@ -856,7 +858,7 @@ mod tests {
 
         let before_invalid_batch = project.read().unwrap().clone();
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: node_id,
+            target: SelectionTarget::Node(node_id),
             anchor: (anchor_name.clone(), direct_id),
             origins: Vec::new(),
             changed: false,
@@ -898,17 +900,17 @@ mod tests {
     }
 
     #[test]
-    fn graph_selection_and_drag_state_do_not_leak_between_nodes() {
+    fn graph_visibility_selection_and_drag_do_not_leak_between_typed_targets() {
         let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
         let keyframe_id = KeyframeId::new();
         let mut state = crate::state::context_types::GraphEditorState::default();
         assert!(state.begin_entity(first));
+        state.sync_properties(["node:amount".to_string()]);
         state
             .selected_keyframes
             .insert(("node:amount".to_string(), keyframe_id));
         state.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: first,
+            target: SelectionTarget::Node(first),
             anchor: ("node:amount".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,
@@ -917,7 +919,9 @@ mod tests {
         assert!(!state.begin_entity(first));
         assert_eq!(state.selected_keyframes.len(), 1);
         assert!(state.keyframe_drag.is_some());
-        assert!(state.begin_entity(second));
+        assert!(state.begin_target(SelectionTarget::Clip(first)));
+        assert!(state.visible_properties.is_empty());
+        assert!(state.known_properties.is_empty());
         assert!(state.selected_keyframes.is_empty());
         assert!(state.keyframe_drag.is_none());
     }
@@ -931,7 +935,7 @@ mod tests {
         let keyframe_id = KeyframeId::new();
         let mut context = EditorContext::new(composition_id);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id,
+            target: SelectionTarget::Node(entity_id),
             anchor: ("node:amount".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,

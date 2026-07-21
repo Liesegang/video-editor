@@ -471,7 +471,7 @@ mod tests {
         )?;
         let mut editor_context = EditorContext::new(old_composition_id);
         editor_context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
-            entity_id: Uuid::new_v4(),
+            target: SelectionTarget::Node(Uuid::new_v4()),
             anchor: ("node:opacity".to_string(), KeyframeId::new()),
             origins: Vec::new(),
             changed: true,

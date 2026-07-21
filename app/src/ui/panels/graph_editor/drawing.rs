@@ -1,12 +1,14 @@
 use crate::state::context::EditorContext;
-use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
+use crate::state::context_types::{
+    GraphKeyframeDragOrigin, GraphKeyframeDragState, SelectionTarget,
+};
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
-use library::model::property::{Property, PropertyMap};
 use library::EditorService;
 use pan_zoom_ui::{CanvasState, CanvasTheme, GridAxis, GridConfig, GridLineKind, GridStroke};
 
 use super::actions::{Action, KeyframeMove};
-use super::utils::{property_component_value, GraphTransform, PropertyComponent, TimeMapper};
+use super::projection::GraphPropertyRow;
+use super::utils::{property_component_value, GraphTransform};
 
 #[derive(Clone, Copy)]
 pub(super) struct GraphCanvasTheme {
@@ -182,9 +184,9 @@ pub fn draw_properties(
     painter: &Painter,
     response: &Response,
     transform: &GraphTransform,
-    time_mapper: &TimeMapper,
-    properties: &[(String, &Property, &PropertyMap, PropertyComponent)],
-    entity_id: uuid::Uuid,
+    properties: &[GraphPropertyRow],
+    target: SelectionTarget,
+    allow_edits: bool,
     editor_context: &mut EditorContext,
     project_service: &EditorService,
     actions: &mut Vec<Action>,
@@ -207,29 +209,43 @@ pub fn draw_properties(
     .cycle();
 
     let mut available_drag_origins = Vec::new();
-    for (name, property, _, component) in properties {
-        if property.evaluator != "keyframe" {
+    for row in properties {
+        let Some(component) = row.component else {
+            continue;
+        };
+        if !allow_edits || !row.is_editable() || row.property.evaluator != "keyframe" {
             continue;
         }
-        for keyframe in property.keyframes() {
-            match property_component_value(&keyframe.value, *component) {
+        for keyframe in row.property.keyframes() {
+            match property_component_value(&keyframe.value, component) {
                 Ok(value) => available_drag_origins.push(GraphKeyframeDragOrigin {
-                    property_name: name.clone(),
+                    property_name: row.stable_id.clone(),
                     keyframe_id: keyframe.id,
-                    global_time: time_mapper.to_global_time(keyframe.time.into_inner()),
+                    global_time: row.time_mapper.to_global_time(keyframe.time.into_inner()),
                     value,
                 }),
                 Err(error) => log::warn!(
-                    "Skipping malformed Graph keyframe {} for {name}: {error}",
-                    keyframe.id
+                    "Skipping malformed Graph keyframe {} for {}: {error}",
+                    keyframe.id,
+                    row.stable_id
                 ),
             }
         }
     }
 
-    for (name, property, map, component_ref) in properties {
-        let component = *component_ref;
+    for row in properties {
         let color = color_cycle.next().copied().unwrap_or(Color32::WHITE);
+        if !row.is_plottable() {
+            continue;
+        }
+        let Some(component) = row.component else {
+            continue;
+        };
+        let name = &row.stable_id;
+        let property = &row.property;
+        let map = row.property_map.as_ref();
+        let time_mapper = &row.time_mapper;
+        let editable = allow_edits && row.is_editable();
 
         if !editor_context
             .graph_editor
@@ -273,7 +289,7 @@ pub fn draw_properties(
                                     && graph_rect.contains(pointer_pos)
                                 {
                                     let (t, _) = transform.screen_to_graph(pointer_pos);
-                                    if actions.is_empty() {
+                                    if editable && actions.is_empty() {
                                         actions.push(Action::Add(name.clone(), t.max(0.0), val));
                                     }
                                 }
@@ -359,11 +375,12 @@ pub fn draw_properties(
                             format!("graph.curve_hit.{name}"),
                             "graph_curve_hit",
                             Rect::from_center_size(curve_hit, Vec2::splat(12.0)),
-                            true,
+                            editable,
                             Some(serde_json::json!({
                                 "property": name,
                                 "component": format!("{component:?}"),
-                                "entity_id": entity_id,
+                                "target": target,
+                                "entity_id": target.node_id(),
                                 "global_time": global_time,
                                 "source_time": time_mapper.to_source_time(global_time),
                                 "value": value,
@@ -406,8 +423,15 @@ pub fn draw_properties(
                         // Interaction area
                         let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
                         let point_id = response.id.with(name).with(kf.id);
-                        let point_response =
-                            ui.interact(point_rect, point_id, Sense::click_and_drag());
+                        let point_response = ui.interact(
+                            point_rect,
+                            point_id,
+                            if editable {
+                                Sense::click_and_drag()
+                            } else {
+                                Sense::hover()
+                            },
+                        );
 
                         let selection = (name.clone(), kf.id);
                         let is_selected = editor_context
@@ -419,7 +443,7 @@ pub fn draw_properties(
                             format!("graph.keyframe.{name}:{}", kf.id),
                             "graph_keyframe",
                             point_rect,
-                            true,
+                            editable,
                             Some(serde_json::json!({
                                 "property": name,
                                 "component": format!("{component:?}"),
@@ -428,7 +452,8 @@ pub fn draw_properties(
                                 "global_time": global_t,
                                 "value": val,
                                 "selected": is_selected,
-                                "entity_id": entity_id,
+                                "target": target,
+                                "entity_id": target.node_id(),
                             })),
                         );
 
@@ -440,7 +465,7 @@ pub fn draw_properties(
                         let additive_selection = ui.input(|input| {
                             input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
                         });
-                        if point_response.clicked() {
+                        if editable && point_response.clicked() {
                             if additive_selection {
                                 if !editor_context
                                     .graph_editor
@@ -468,7 +493,7 @@ pub fn draw_properties(
                             }
                         }
 
-                        if point_response.drag_started() {
+                        if editable && point_response.drag_started() {
                             if !is_selected {
                                 if !additive_selection {
                                     editor_context.graph_editor.selected_keyframes.clear();
@@ -490,7 +515,7 @@ pub fn draw_properties(
                                 .collect();
                             editor_context.graph_editor.keyframe_drag =
                                 Some(GraphKeyframeDragState {
-                                    entity_id,
+                                    target,
                                     anchor: selection.clone(),
                                     origins,
                                     changed: false,
@@ -500,67 +525,71 @@ pub fn draw_properties(
 
                         // Context Menu
                         let name_for_menu = name.clone();
-                        point_response.context_menu(|ui| {
-                            ui.label(format!("Keyframe {} - {}", i, name_for_menu));
-                            ui.separator();
-                            let mut chosen_easing = None;
-                            let keyframe_id = kf.id.to_string();
-                            crate::ui::easing_menus::show_easing_menu(
-                                ui,
-                                Some(&kf.easing),
-                                Some(crate::ui::easing_menus::EasingMenuQaScope::new(
-                                    "graph.keyframe_menu.easing",
-                                    &keyframe_id,
-                                )),
-                                |easing| {
-                                    chosen_easing = Some(easing);
-                                },
-                            );
+                        if editable {
+                            point_response.context_menu(|ui| {
+                                ui.label(format!("Keyframe {} - {}", i, name_for_menu));
+                                ui.separator();
+                                let mut chosen_easing = None;
+                                let keyframe_id = kf.id.to_string();
+                                crate::ui::easing_menus::show_easing_menu(
+                                    ui,
+                                    Some(&kf.easing),
+                                    Some(crate::ui::easing_menus::EasingMenuQaScope::new(
+                                        "graph.keyframe_menu.easing",
+                                        &keyframe_id,
+                                    )),
+                                    |easing| {
+                                        chosen_easing = Some(easing);
+                                    },
+                                );
 
-                            if let Some(easing) = chosen_easing {
-                                actions.push(Action::SetEasing(
-                                    name_for_menu.clone(),
-                                    kf.id,
-                                    easing,
-                                ));
-                                ui.close_kind(UiKind::Menu);
-                            }
+                                if let Some(easing) = chosen_easing {
+                                    actions.push(Action::SetEasing(
+                                        name_for_menu.clone(),
+                                        kf.id,
+                                        easing,
+                                    ));
+                                    ui.close_kind(UiKind::Menu);
+                                }
 
-                            ui.separator();
-                            let edit = ui.button("Edit Keyframe...");
-                            crate::qa::register_component_with_metadata(
-                                format!("graph.keyframe_menu.edit:{}", kf.id),
-                                "graph_keyframe_menu_item",
-                                edit.rect,
-                                edit.enabled(),
-                                Some(serde_json::json!({
-                                    "property": name_for_menu,
-                                    "keyframe_id": kf.id,
-                                })),
-                            );
-                            if edit.clicked() {
-                                actions.push(Action::EditKeyframe(name_for_menu.clone(), kf.id));
-                                ui.close_kind(UiKind::Menu);
-                            }
+                                ui.separator();
+                                let edit = ui.button("Edit Keyframe...");
+                                crate::qa::register_component_with_metadata(
+                                    format!("graph.keyframe_menu.edit:{}", kf.id),
+                                    "graph_keyframe_menu_item",
+                                    edit.rect,
+                                    edit.enabled(),
+                                    Some(serde_json::json!({
+                                        "property": name_for_menu,
+                                        "keyframe_id": kf.id,
+                                    })),
+                                );
+                                if edit.clicked() {
+                                    actions
+                                        .push(Action::EditKeyframe(name_for_menu.clone(), kf.id));
+                                    ui.close_kind(UiKind::Menu);
+                                }
 
-                            ui.separator();
-                            let delete = ui
-                                .button(egui::RichText::new("Delete Keyframe").color(Color32::RED));
-                            crate::qa::register_component_with_metadata(
-                                format!("graph.keyframe_menu.delete:{}", kf.id),
-                                "graph_keyframe_menu_item",
-                                delete.rect,
-                                delete.enabled(),
-                                Some(serde_json::json!({
-                                    "property": name_for_menu,
-                                    "keyframe_id": kf.id,
-                                })),
-                            );
-                            if delete.clicked() {
-                                actions.push(Action::Remove(name_for_menu.clone(), kf.id));
-                                ui.close_kind(UiKind::Menu);
-                            }
-                        });
+                                ui.separator();
+                                let delete = ui.button(
+                                    egui::RichText::new("Delete Keyframe").color(Color32::RED),
+                                );
+                                crate::qa::register_component_with_metadata(
+                                    format!("graph.keyframe_menu.delete:{}", kf.id),
+                                    "graph_keyframe_menu_item",
+                                    delete.rect,
+                                    delete.enabled(),
+                                    Some(serde_json::json!({
+                                        "property": name_for_menu,
+                                        "keyframe_id": kf.id,
+                                    })),
+                                );
+                                if delete.clicked() {
+                                    actions.push(Action::Remove(name_for_menu.clone(), kf.id));
+                                    ui.close_kind(UiKind::Menu);
+                                }
+                            });
+                        }
 
                         // Dragging
                         let is_drag_anchor = editor_context
@@ -568,7 +597,7 @@ pub fn draw_properties(
                             .keyframe_drag
                             .as_ref()
                             .is_some_and(|drag| drag.anchor == selection);
-                        if is_drag_anchor && point_response.dragged() {
+                        if editable && is_drag_anchor && point_response.dragged() {
                             // Origins are a gesture-start snapshot, so apply
                             // the gesture's total displacement. `drag_delta`
                             // is only the latest frame's pointer movement.
@@ -595,13 +624,13 @@ pub fn draw_properties(
                                 actions.push(Action::MoveBatch(moves));
                             }
                         }
-                        if is_drag_anchor && point_response.drag_stopped() {
+                        if editable && is_drag_anchor && point_response.drag_stopped() {
                             actions.push(Action::FinishMove);
                         }
                     }
 
                     // Add Keyframe (Double Click) logic constraint
-                    if property.evaluator == "keyframe" && response.double_clicked() {
+                    if editable && property.evaluator == "keyframe" && response.double_clicked() {
                         if let Some(pointer_pos) = response.interact_pointer_pos() {
                             if graph_rect.contains(pointer_pos) {
                                 let (t, _) = transform.screen_to_graph(pointer_pos);

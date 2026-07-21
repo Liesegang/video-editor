@@ -186,10 +186,12 @@ pub struct GraphEditorState {
     pub zoom_y: f32, // Pixels per unit value
     #[serde(default)]
     pub visible_properties: HashSet<String>,
-    /// Graph selection is view state for one authoritative Node. It must not
-    /// leak when a different Clip/Node becomes the active Graph owner.
+    /// Typed Graph selection view state. UUIDs can collide across entity kinds,
+    /// so the target kind participates in owner-switch invalidation.
     #[serde(skip)]
-    pub active_entity_id: Option<Uuid>,
+    pub active_target: Option<SelectionTarget>,
+    #[serde(skip)]
+    pub known_properties: HashSet<String>,
     #[serde(skip)]
     pub selected_keyframes: HashSet<(String, KeyframeId)>,
     /// Absolute gesture snapshot. egui's `drag_delta` is per-frame while
@@ -206,7 +208,8 @@ impl Default for GraphEditorState {
             zoom_x: 100.0, // Default 100 pixels per second
             zoom_y: 1.0,   // Default 1 pixel per unit
             visible_properties: HashSet::new(),
-            active_entity_id: None,
+            active_target: None,
+            known_properties: HashSet::new(),
             selected_keyframes: HashSet::new(),
             keyframe_drag: None,
         }
@@ -214,15 +217,32 @@ impl Default for GraphEditorState {
 }
 
 impl GraphEditorState {
-    pub fn begin_entity(&mut self, entity_id: Uuid) -> bool {
-        if self.active_entity_id != Some(entity_id) {
-            self.active_entity_id = Some(entity_id);
+    pub fn begin_target(&mut self, target: SelectionTarget) -> bool {
+        if self.active_target != Some(target) {
+            self.active_target = Some(target);
+            self.visible_properties.clear();
+            self.known_properties.clear();
             self.selected_keyframes.clear();
             self.keyframe_drag = None;
             true
         } else {
             false
         }
+    }
+
+    pub fn sync_properties(&mut self, current: impl IntoIterator<Item = String>) {
+        let current = current.into_iter().collect::<HashSet<_>>();
+        for property in current.difference(&self.known_properties) {
+            self.visible_properties.insert(property.clone());
+        }
+        self.visible_properties
+            .retain(|property| current.contains(property));
+        self.known_properties = current;
+    }
+
+    #[cfg(test)]
+    pub fn begin_entity(&mut self, entity_id: Uuid) -> bool {
+        self.begin_target(SelectionTarget::Node(entity_id))
     }
 }
 
@@ -236,7 +256,7 @@ pub struct GraphKeyframeDragOrigin {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphKeyframeDragState {
-    pub entity_id: Uuid,
+    pub target: SelectionTarget,
     pub anchor: (String, KeyframeId),
     pub origins: Vec<GraphKeyframeDragOrigin>,
     pub changed: bool,
