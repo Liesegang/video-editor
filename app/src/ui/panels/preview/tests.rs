@@ -4,6 +4,19 @@ mod tests {
     use crate::test_support::generator_node;
     use library::editor::project_service::GeneratorNodeRequest;
 
+    #[test]
+    fn preview_uses_shared_canvas_background_and_uniform_grid_config() {
+        let navigation = preview_navigation_config();
+
+        assert_eq!(
+            preview_canvas_theme().background,
+            pan_zoom_ui::CanvasTheme::default().background
+        );
+        assert_eq!(preview_grid_config(), pan_zoom_ui::GridConfig::default());
+        assert_eq!(navigation.zoom_policy, pan_zoom_ui::ZoomPolicy::Uniform);
+        assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+    }
+
     fn empty_preview_frame(time: f64) -> library::model::frame::frame::FrameInfo {
         library::model::frame::frame::FrameInfo {
             width: 1920,

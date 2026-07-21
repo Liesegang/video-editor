@@ -20,16 +20,16 @@ use super::{
     final_node_positions, finish_node_reparent, flush_pending_continuous_edit, handle_context_menu,
     layout_needs_reflow, logical_hit_owner, merge_images_target_node_id,
     node_can_splice_connection, node_drop_intents, node_editor_canvas_metadata,
-    node_editor_details_visible, node_editor_port_interactions_enabled, node_editor_snarl_style,
-    non_selectable_label, paint_container_foreground, port_owner_composition,
-    port_owner_for_node_container, primary_node_drop_intent, push_history_snapshot,
-    record_node_reparent_origins, register_container_chrome, register_implicit_time_context_wires,
-    register_rendered_edges, register_reparent_drop_targets, rendered_edge_at_position,
-    selection_after_logical_click, selection_after_marquee, selection_target_for_owner,
-    show_wire_context_menu, splice_node_for_release, wire_interactions, wire_port_drop_rect,
-    wire_secondary_click_hit, AutoLayoutScope, CanvasSelectionOutcome, GraphItem,
-    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
-    TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
+    node_editor_details_visible, node_editor_port_interactions_enabled,
+    node_editor_snarl_style_for, non_selectable_label, paint_container_foreground,
+    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
+    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
+    register_implicit_time_context_wires, register_rendered_edges, register_reparent_drop_targets,
+    rendered_edge_at_position, selection_after_logical_click, selection_after_marquee,
+    selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
+    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, CanvasSelectionOutcome,
+    GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
+    ReparentReleaseOutcome, TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -294,7 +294,7 @@ pub fn node_editor_panel(
             rendered_node_rects: Arc::clone(&rendered_node_rects),
             rendered_selection_hits: Arc::clone(&rendered_selection_hits),
         };
-        let snarl_style = node_editor_snarl_style();
+        let snarl_style = node_editor_snarl_style_for(ui.style());
         let graph_id = egui::Id::new(("project_node_editor", comp_id));
         snarl.show(&mut viewer, &snarl_style, graph_id, ui);
         drop(viewer);

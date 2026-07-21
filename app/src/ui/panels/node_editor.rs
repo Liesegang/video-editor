@@ -53,14 +53,14 @@ mod test_fixture;
 mod time_context_tests;
 
 use canvas::{
-    adaptive_grid_spacing, node_editor_canvas_metadata, node_editor_details_visible,
+    node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
-    node_editor_snarl_style, sanitize_node_editor_transform, sanitized_node_editor_scale,
-    screen_stroke_in_graph_units,
+    node_editor_snarl_style_for, paint_node_editor_canvas_grid, sanitize_node_editor_transform,
+    sanitized_node_editor_scale, screen_stroke_in_graph_units,
 };
 #[cfg(test)]
 use canvas::{
-    GRID_TARGET_SCREEN_SPACING, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
+    node_editor_snarl_style, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
     NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE,
 };
 use container_output::{
@@ -4714,28 +4714,6 @@ mod tests {
             egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.0),
         )
         .is_none());
-
-        for scale in [
-            NODE_EDITOR_MIN_SCALE,
-            0.01,
-            0.02,
-            0.1,
-            NODE_EDITOR_DETAIL_SCALE,
-            1.0,
-            NODE_EDITOR_MAX_SCALE,
-        ] {
-            let spacing = adaptive_grid_spacing(scale);
-            let screen_spacing = spacing * scale;
-            assert!(spacing.is_finite() && spacing > 0.0);
-            assert!(
-                (GRID_TARGET_SCREEN_SPACING..=GRID_TARGET_SCREEN_SPACING * 2.5 + 0.01)
-                    .contains(&screen_spacing),
-                "scale={scale}, spacing={spacing}, screen_spacing={screen_spacing}"
-            );
-            let approximate_line_count =
-                (1800.0 / screen_spacing).ceil() + (1200.0 / screen_spacing).ceil();
-            assert!(approximate_line_count < 70.0);
-        }
     }
 
     #[test]

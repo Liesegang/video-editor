@@ -18,7 +18,18 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::SelectionTarget;
 
 use crate::command::CommandId;
-use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy, ViewportState};
+use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
+use pan_zoom_ui::{AxisMask, CanvasState, NavigationConfig};
+
+fn graph_navigation_config() -> NavigationConfig {
+    NavigationConfig {
+        input_policy: ViewportInputPolicy::AxisModifiers,
+        zoom_policy: ZoomPolicy::IndependentXY,
+        pan_axes: AxisMask::BOTH,
+        zoom_axes: AxisMask::BOTH,
+        ..Default::default()
+    }
+}
 
 struct GraphViewportState<'a> {
     pan: &'a mut Vec2,
@@ -27,18 +38,14 @@ struct GraphViewportState<'a> {
 }
 
 impl<'a> ViewportState for GraphViewportState<'a> {
-    fn get_pan(&self) -> Vec2 {
-        -(*self.pan)
+    fn canvas_state(&self) -> CanvasState {
+        CanvasState::new(*self.pan, Vec2::new(*self.zoom_x, *self.zoom_y))
     }
-    fn set_pan(&mut self, pan: Vec2) {
-        *self.pan = -pan;
-    }
-    fn get_zoom(&self) -> Vec2 {
-        Vec2::new(*self.zoom_x, *self.zoom_y)
-    }
-    fn set_zoom(&mut self, zoom: Vec2) {
-        *self.zoom_x = zoom.x;
-        *self.zoom_y = zoom.y;
+
+    fn set_canvas_state(&mut self, state: CanvasState) {
+        *self.pan = state.pan;
+        *self.zoom_x = state.zoom.x;
+        *self.zoom_y = state.zoom.y;
     }
 }
 
@@ -280,14 +287,9 @@ pub fn graph_editor_panel(
                     .map(|(_, k)| k);
 
                 let mut controller =
-                    ViewportController::new(ui, ui.id().with("graph"), hand_tool_key).with_config(
-                        ViewportConfig {
-                            input_policy: ViewportInputPolicy::AxisModifiers,
-                            allow_zoom_x: true,
-                            allow_zoom_y: true,
-                            ..Default::default()
-                        },
-                    );
+                    ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
+                        .with_config(graph_navigation_config())
+                        .with_screen_origin(egui::pos2(graph_rect.min.x, graph_rect.center().y));
 
                 let (_, graph_response) = controller.interact_with_rect(
                     graph_rect,
@@ -298,8 +300,8 @@ pub fn graph_editor_panel(
                 let transform = GraphTransform::new(
                     graph_rect,
                     editor_context.graph_editor.pan,
-                    pixels_per_second,
-                    pixels_per_unit,
+                    editor_context.graph_editor.zoom_x,
+                    editor_context.graph_editor.zoom_y,
                 );
 
                 drawing::draw_background(&painter, &transform, ruler_rect, valid_time_range);
@@ -419,6 +421,25 @@ mod tests {
     use library::model::property::KeyframeId;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
+
+    #[test]
+    fn graph_uses_shared_canvas_token_with_explicit_axis_grid_spacing() {
+        let theme = super::drawing::graph_canvas_theme();
+        let grid = super::drawing::graph_grid_config();
+        let navigation = super::graph_navigation_config();
+
+        assert_eq!(
+            theme.canvas.background,
+            pan_zoom_ui::CanvasTheme::default().background
+        );
+        assert_eq!(grid.minor_spacing, egui::vec2(0.1, 10.0));
+        assert_eq!(grid.major_spacing, egui::vec2(0.5, 50.0));
+        assert_eq!(
+            navigation.zoom_policy,
+            pan_zoom_ui::ZoomPolicy::IndependentXY
+        );
+        assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+    }
 
     #[test]
     fn same_uuid_clip_target_is_not_accepted_as_graph_node() {

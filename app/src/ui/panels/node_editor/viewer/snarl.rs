@@ -937,8 +937,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         &mut self,
         _background: Option<&BackgroundPattern>,
         viewport: &egui::Rect,
-        snarl_style: &SnarlStyle,
-        style: &egui::Style,
+        _snarl_style: &SnarlStyle,
+        _style: &egui::Style,
         painter: &egui::Painter,
         _snarl: &Snarl<GraphItem>,
     ) {
@@ -946,18 +946,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         // Preserve its screen-space equivalent for foreground painting, QA
         // geometry and coordinate interactions registered after `show`.
         *self.canvas_clip = *self.to_global * painter.clip_rect();
-        let scale = sanitized_node_editor_scale(self.to_global.scaling);
-        let mut grid_style = *snarl_style;
-        grid_style.bg_pattern_stroke = Some(egui::Stroke::new(
-            screen_stroke_in_graph_units(0.7, scale),
-            Color32::from_rgba_premultiplied(115, 128, 152, 34),
-        ));
-        BackgroundPattern::grid(egui::Vec2::splat(adaptive_grid_spacing(scale)), 0.0).draw(
-            viewport,
-            &grid_style,
-            style,
-            painter,
-        );
+        paint_node_editor_canvas_grid(painter, *viewport, *self.canvas_clip, *self.to_global);
 
         for container in self.containers {
             paint_container_backdrop(

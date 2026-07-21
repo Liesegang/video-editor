@@ -7,6 +7,7 @@ use library::EditorService;
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewViewportRuntimeState};
 use crate::ui::viewport::ViewportState;
 use crate::{action::HistoryManager, state::context::EditorContext};
+use pan_zoom_ui::CanvasState;
 
 use super::{action::PreviewAction, clip::PreviewClip, routing};
 
@@ -426,22 +427,12 @@ pub(super) struct PreviewViewportState<'a> {
 }
 
 impl<'a> ViewportState for PreviewViewportState<'a> {
-    // Preview Pan is Translation. Positive Pan = Content Right.
-    // Viewport Pan is Scroll Offset. Positive Pan (+Delta) = Content Left.
-    // So we Invert.
-    fn get_pan(&self) -> egui::Vec2 {
-        -(*self.pan)
+    fn canvas_state(&self) -> CanvasState {
+        CanvasState::uniform(*self.pan, *self.zoom)
     }
 
-    fn set_pan(&mut self, pan: egui::Vec2) {
-        *self.pan = -pan;
-    }
-
-    fn get_zoom(&self) -> egui::Vec2 {
-        egui::vec2(*self.zoom, *self.zoom)
-    }
-
-    fn set_zoom(&mut self, zoom: egui::Vec2) {
-        *self.zoom = zoom.x;
+    fn set_canvas_state(&mut self, state: CanvasState) {
+        *self.pan = state.pan;
+        *self.zoom = state.zoom.x;
     }
 }

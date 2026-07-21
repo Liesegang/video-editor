@@ -12,13 +12,13 @@ use crate::state::context_types::PreviewViewportRuntimeState;
 #[cfg(test)]
 use crate::state::context_types::SelectionTarget;
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
-use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy};
+use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ZoomPolicy};
 use crate::{action::HistoryManager, state::context::EditorContext};
+use pan_zoom_ui::{AxisMask, NavigationConfig};
 
 mod action;
 pub mod clip;
 mod gizmo;
-mod grid;
 mod interaction;
 mod qa;
 mod routing;
@@ -29,6 +29,26 @@ pub mod vector_editor;
 use action::PreviewAction;
 use qa::*;
 use support::*;
+
+fn preview_grid_config() -> pan_zoom_ui::GridConfig {
+    pan_zoom_ui::GridConfig::default()
+}
+
+fn preview_canvas_theme() -> pan_zoom_ui::CanvasTheme {
+    pan_zoom_ui::CanvasTheme::default()
+}
+
+fn preview_navigation_config() -> NavigationConfig {
+    NavigationConfig {
+        input_policy: ViewportInputPolicy::Trackpad,
+        zoom_policy: ZoomPolicy::Uniform,
+        pan_axes: AxisMask::BOTH,
+        zoom_axes: AxisMask::BOTH,
+        min_zoom: egui::Vec2::splat(PREVIEW_MIN_ZOOM),
+        max_zoom: egui::Vec2::splat(PREVIEW_MAX_ZOOM),
+        ..Default::default()
+    }
+}
 
 /// Clone the authoritative Project while holding the read lock briefly. Frame
 /// evaluation (including trusted CPython Expressions) must happen on this
@@ -205,12 +225,7 @@ pub fn preview_panel(
         };
         let controller_id = ui.make_persistent_id("unique_preview_viewport_controller_id");
         let mut controller = ViewportController::new(ui, controller_id, None)
-            .with_config(ViewportConfig {
-                input_policy: ViewportInputPolicy::Trackpad,
-                min_zoom: PREVIEW_MIN_ZOOM,
-                max_zoom: PREVIEW_MAX_ZOOM,
-                ..Default::default()
-            })
+            .with_config(preview_navigation_config())
             // A latched primary pan uses the raw per-frame pointer delta below
             // instead of asking Response to re-arbitrate gesture ownership.
             .with_pan_tool_active(!gesture_input.primary_down && pan_requested)
@@ -260,15 +275,13 @@ pub fn preview_panel(
 
     let painter = ui.painter().with_clip_rect(rect);
 
-    // Background fill
-    painter.rect_filled(rect, 0.0, egui::Color32::from_gray(30));
-
-    // Grid
-    grid::draw_grid(
+    pan_zoom_ui::paint_canvas(
         &painter,
         rect,
-        editor_context.view.pan,
-        editor_context.view.zoom,
+        rect.min,
+        pan_zoom_ui::CanvasState::uniform(editor_context.view.pan, editor_context.view.zoom),
+        preview_grid_config(),
+        preview_canvas_theme(),
     );
 
     // Snapshot once; all synchronous frame evaluation below is deliberately

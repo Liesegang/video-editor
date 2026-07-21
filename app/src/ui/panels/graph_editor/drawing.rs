@@ -3,9 +3,47 @@ use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragStat
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
+use pan_zoom_ui::{CanvasState, CanvasTheme, GridAxis, GridConfig, GridLineKind, GridStroke};
 
 use super::actions::{Action, KeyframeMove};
 use super::utils::{GraphTransform, PropertyComponent, TimeMapper};
+
+#[derive(Clone, Copy)]
+pub(super) struct GraphCanvasTheme {
+    pub(super) canvas: CanvasTheme,
+    valid_range_overlay: Color32,
+    ruler_overlay: Color32,
+    ruler_border: Stroke,
+    ruler_tick: Color32,
+    ruler_label: Color32,
+}
+
+pub(super) fn graph_canvas_theme() -> GraphCanvasTheme {
+    GraphCanvasTheme {
+        canvas: CanvasTheme::default(),
+        valid_range_overlay: Color32::from_black_alpha(20),
+        ruler_overlay: Color32::from_black_alpha(12),
+        ruler_border: Stroke::new(1.0, Color32::BLACK),
+        ruler_tick: Color32::GRAY,
+        ruler_label: Color32::from_gray(150),
+    }
+}
+
+pub(super) fn graph_grid_config() -> GridConfig {
+    GridConfig {
+        minor_spacing: egui::vec2(0.1, 10.0),
+        major_spacing: egui::vec2(0.5, 50.0),
+        ..GridConfig::default()
+    }
+}
+
+fn grid_stroke(kind: GridLineKind, theme: CanvasTheme) -> GridStroke {
+    match kind {
+        GridLineKind::Minor => theme.minor_grid,
+        GridLineKind::Major => theme.major_grid,
+        GridLineKind::Origin => theme.origin_grid,
+    }
+}
 
 pub fn draw_background(
     painter: &Painter,
@@ -14,7 +52,8 @@ pub fn draw_background(
     valid_range: Option<(f64, f64)>,
 ) {
     let graph_rect = transform.graph_rect;
-    painter.rect_filled(graph_rect, 0.0, Color32::from_gray(45));
+    let theme = graph_canvas_theme();
+    painter.rect_filled(graph_rect, 0.0, theme.canvas.background);
 
     if let Some((start_t, end_t)) = valid_range {
         let start_x = transform.to_screen(start_t, 0.0).x;
@@ -26,117 +65,75 @@ pub fn draw_background(
         );
 
         if highlight_rect.is_positive() {
-            painter.rect_filled(highlight_rect, 0.0, Color32::from_gray(25));
+            painter.rect_filled(highlight_rect, 0.0, theme.valid_range_overlay);
         }
     }
 
-    painter.rect_filled(ruler_rect, 0.0, Color32::from_gray(40));
+    painter.rect_filled(ruler_rect, 0.0, theme.canvas.background);
+    painter.rect_filled(ruler_rect, 0.0, theme.ruler_overlay);
     painter.line_segment(
         [ruler_rect.left_bottom(), ruler_rect.right_bottom()],
-        Stroke::new(1.0, Color32::BLACK),
+        theme.ruler_border,
     );
 }
 
 pub fn draw_grid(painter: &Painter, transform: &GraphTransform, ruler_rect: Rect) {
     let graph_rect = transform.graph_rect;
-    let pixels_per_second = transform.zoom_x;
-    let pixels_per_unit = transform.zoom_y;
-
-    // Time Grid & Ruler
-    let start_time = (-transform.pan.x / pixels_per_second) as f64;
-    let end_time = ((graph_rect.width() - transform.pan.x) / pixels_per_second) as f64;
-
-    // Adaptive step size
-    let min_step_px = 50.0;
-    let step_time = (min_step_px / pixels_per_second).max(0.01);
-    let step_power = step_time.log10().floor();
-    let step_base = 10.0f32.powf(step_power);
-    let step_time = if step_time / step_base < 2.0 {
-        step_base
-    } else if step_time / step_base < 5.0 {
-        step_base * 2.0
-    } else {
-        step_base * 5.0
-    };
-
-    let start_step = (start_time / step_time as f64).floor() as i64;
-    let end_step = (end_time / step_time as f64).ceil() as i64;
-
-    for i in start_step..=end_step {
-        let t = i as f64 * step_time as f64;
-        let x = graph_rect.min.x + transform.pan.x + (t as f32 * pixels_per_second);
-
-        if x >= graph_rect.min.x && x <= graph_rect.max.x {
-            // Main Vertical Line
-            painter.line_segment(
-                [
-                    Pos2::new(x, graph_rect.min.y),
-                    Pos2::new(x, graph_rect.max.y),
-                ],
-                Stroke::new(1.0, Color32::from_gray(40)),
-            );
-
-            // Ruler Tick & Label
-            painter.line_segment(
-                [
-                    Pos2::new(x, ruler_rect.max.y),
-                    Pos2::new(x, ruler_rect.max.y - 10.0),
-                ],
-                Stroke::new(1.0, Color32::GRAY),
-            );
-            painter.text(
-                Pos2::new(x + 2.0, ruler_rect.min.y + 2.0),
-                egui::Align2::LEFT_TOP,
-                format!("{:.2}", t),
-                egui::FontId::proportional(10.0),
-                Color32::GRAY,
-            );
-        }
-    }
-
-    // Value Grid & Left Axis
-    let zero_y = graph_rect.center().y + transform.pan.y;
-    let min_val = (zero_y - graph_rect.max.y) / pixels_per_unit;
-    let max_val = (zero_y - graph_rect.min.y) / pixels_per_unit;
-
-    let v_step_val = (30.0 / pixels_per_unit).max(0.01);
-    let v_step_power = v_step_val.log10().floor();
-    let v_step_base = 10.0f32.powf(v_step_power);
-    let v_step_val = if v_step_val / v_step_base < 2.0 {
-        v_step_base
-    } else if v_step_val / v_step_base < 5.0 {
-        v_step_base * 2.0
-    } else {
-        v_step_base * 5.0
-    };
-
-    let start_v = (min_val / v_step_val).floor() as i64;
-    let end_v = (max_val / v_step_val).ceil() as i64;
-
-    for i in start_v..=end_v {
-        let val = i as f32 * v_step_val;
-        let y = zero_y - (val * pixels_per_unit);
-
-        if y >= graph_rect.min.y && y <= graph_rect.max.y {
-            let color = if i == 0 {
-                Color32::from_gray(80)
-            } else {
-                Color32::from_gray(40)
-            };
-            painter.line_segment(
-                [
-                    Pos2::new(graph_rect.min.x, y),
-                    Pos2::new(graph_rect.max.x, y),
-                ],
-                Stroke::new(1.0, color),
-            );
-            painter.text(
-                Pos2::new(graph_rect.min.x + 2.0, y - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                format!("{:.2}", val),
-                egui::FontId::proportional(10.0),
-                Color32::from_gray(150),
-            );
+    let theme = graph_canvas_theme();
+    let screen_origin = egui::pos2(graph_rect.min.x, graph_rect.center().y);
+    let state = CanvasState::new(
+        transform.pan,
+        egui::vec2(transform.zoom_x, -transform.zoom_y),
+    );
+    for line in pan_zoom_ui::grid_lines(graph_rect, screen_origin, state, graph_grid_config()) {
+        let grid = grid_stroke(line.kind, theme.canvas);
+        let stroke = Stroke::new(grid.width, grid.color);
+        match line.axis {
+            GridAxis::X => {
+                let x = line.screen_position;
+                painter.line_segment(
+                    [
+                        Pos2::new(x, graph_rect.min.y),
+                        Pos2::new(x, graph_rect.max.y),
+                    ],
+                    stroke,
+                );
+                if line.kind != GridLineKind::Minor {
+                    painter.line_segment(
+                        [
+                            Pos2::new(x, ruler_rect.max.y),
+                            Pos2::new(x, ruler_rect.max.y - 10.0),
+                        ],
+                        Stroke::new(1.0, theme.ruler_tick),
+                    );
+                    painter.text(
+                        Pos2::new(x + 2.0, ruler_rect.min.y + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:.2}", line.world_position),
+                        egui::FontId::proportional(10.0),
+                        theme.ruler_tick,
+                    );
+                }
+            }
+            GridAxis::Y => {
+                let y = line.screen_position;
+                painter.line_segment(
+                    [
+                        Pos2::new(graph_rect.min.x, y),
+                        Pos2::new(graph_rect.max.x, y),
+                    ],
+                    stroke,
+                );
+                if line.kind != GridLineKind::Minor {
+                    painter.text(
+                        Pos2::new(graph_rect.min.x + 2.0, y - 2.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("{:.2}", line.world_position),
+                        egui::FontId::proportional(10.0),
+                        theme.ruler_label,
+                    );
+                }
+            }
         }
     }
 }

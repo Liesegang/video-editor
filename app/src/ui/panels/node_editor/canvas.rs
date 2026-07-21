@@ -6,6 +6,9 @@
 
 use eframe::egui;
 use egui_snarl::ui::{BackgroundPattern, PinPlacement, SnarlStyle, WireLayer, WireStyle};
+use pan_zoom_ui::{
+    sanitize_state, CanvasState, CanvasTheme, GridConfig, NavigationConfig, ZoomPolicy,
+};
 use uuid::Uuid;
 
 use super::PORT_SOCKET_SIZE;
@@ -16,45 +19,82 @@ use super::PORT_SOCKET_SIZE;
 pub(super) const NODE_EDITOR_MIN_SCALE: f32 = 0.0065;
 pub(super) const NODE_EDITOR_MAX_SCALE: f32 = 1.25;
 pub(super) const NODE_EDITOR_MAX_TRANSLATION: f32 = 10_000_000.0;
-pub(super) const GRID_TARGET_SCREEN_SPACING: f32 = 52.0;
 pub(super) const NODE_EDITOR_DETAIL_SCALE: f32 = 0.18;
 pub(super) const NODE_EDITOR_RESIZE_INTERACTION_SCALE: f32 = 0.12;
 
-pub(super) fn sanitized_node_editor_scale(scale: f32) -> f32 {
-    if scale.is_finite() && scale > 0.0 {
-        scale.clamp(NODE_EDITOR_MIN_SCALE, NODE_EDITOR_MAX_SCALE)
-    } else {
-        1.0
+pub(super) fn node_editor_navigation_config() -> NavigationConfig {
+    NavigationConfig {
+        zoom_policy: ZoomPolicy::Uniform,
+        min_zoom: egui::Vec2::splat(NODE_EDITOR_MIN_SCALE),
+        max_zoom: egui::Vec2::splat(NODE_EDITOR_MAX_SCALE),
+        max_pan: egui::Vec2::splat(NODE_EDITOR_MAX_TRANSLATION),
+        ..NavigationConfig::default()
     }
+}
+
+pub(super) fn node_editor_grid_config() -> GridConfig {
+    GridConfig::default()
+}
+
+pub(super) fn paint_node_editor_canvas_grid(
+    painter: &egui::Painter,
+    graph_viewport: egui::Rect,
+    screen_viewport: egui::Rect,
+    transform: egui::emath::TSTransform,
+) {
+    let scale = sanitized_node_editor_scale(transform.scaling);
+    let theme = CanvasTheme::default();
+    painter.rect_filled(graph_viewport, 0.0, theme.background);
+    let state = CanvasState::uniform(transform.translation, scale);
+    for line in pan_zoom_ui::grid_lines(
+        screen_viewport,
+        egui::Pos2::ZERO,
+        state,
+        node_editor_grid_config(),
+    ) {
+        let grid_stroke = match line.kind {
+            pan_zoom_ui::GridLineKind::Minor => theme.minor_grid,
+            pan_zoom_ui::GridLineKind::Major => theme.major_grid,
+            pan_zoom_ui::GridLineKind::Origin => theme.origin_grid,
+        };
+        let stroke = egui::Stroke::new(
+            screen_stroke_in_graph_units(grid_stroke.width, scale),
+            grid_stroke.color,
+        );
+        match line.axis {
+            pan_zoom_ui::GridAxis::X => {
+                painter.line_segment(
+                    [
+                        egui::pos2(line.world_position, graph_viewport.min.y),
+                        egui::pos2(line.world_position, graph_viewport.max.y),
+                    ],
+                    stroke,
+                );
+            }
+            pan_zoom_ui::GridAxis::Y => {
+                painter.line_segment(
+                    [
+                        egui::pos2(graph_viewport.min.x, line.world_position),
+                        egui::pos2(graph_viewport.max.x, line.world_position),
+                    ],
+                    stroke,
+                );
+            }
+        }
+    }
+}
+
+pub(super) fn sanitized_node_editor_scale(scale: f32) -> f32 {
+    let mut state = CanvasState::uniform(egui::Vec2::ZERO, scale);
+    sanitize_state(&mut state, node_editor_navigation_config());
+    state.zoom.x
 }
 
 pub(super) fn sanitize_node_editor_transform(transform: &mut egui::emath::TSTransform) {
-    transform.scaling = sanitized_node_editor_scale(transform.scaling);
-    for value in [&mut transform.translation.x, &mut transform.translation.y] {
-        *value = if value.is_finite() {
-            value.clamp(-NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MAX_TRANSLATION)
-        } else {
-            0.0
-        };
-    }
-}
-
-/// Pick a 1/2/5-decade grid size in graph units. This keeps the number of
-/// painted lines proportional to screen size instead of exploding at 0.0065x.
-pub(super) fn adaptive_grid_spacing(scale: f32) -> f32 {
-    let target = GRID_TARGET_SCREEN_SPACING / sanitized_node_editor_scale(scale);
-    let decade = 10.0_f32.powf(target.log10().floor());
-    let normalized = target / decade;
-    let multiplier = if normalized <= 1.0 {
-        1.0
-    } else if normalized <= 2.0 {
-        2.0
-    } else if normalized <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-    (decade * multiplier).clamp(1.0, 1_000_000_000.0)
+    let mut state = CanvasState::uniform(transform.translation, transform.scaling);
+    sanitize_state(&mut state, node_editor_navigation_config());
+    transform.scaling = state.zoom.x;
+    transform.translation = state.pan;
 }
 
 pub(super) fn screen_stroke_in_graph_units(screen_width: f32, scale: f32) -> f32 {
@@ -73,7 +113,13 @@ pub(super) fn node_editor_resize_interactions_enabled(scale: f32) -> bool {
     sanitized_node_editor_scale(scale) >= NODE_EDITOR_RESIZE_INTERACTION_SCALE
 }
 
+#[cfg(test)]
 pub(super) fn node_editor_snarl_style() -> SnarlStyle {
+    node_editor_snarl_style_for(&egui::Style::default())
+}
+
+pub(super) fn node_editor_snarl_style_for(style: &egui::Style) -> SnarlStyle {
+    let navigation = node_editor_navigation_config();
     SnarlStyle {
         collapsible: Some(false),
         pin_placement: Some(PinPlacement::Edge),
@@ -83,8 +129,9 @@ pub(super) fn node_editor_snarl_style() -> SnarlStyle {
         wire_layer: Some(WireLayer::BehindNodes),
         wire_frame_size: Some(72.0),
         bg_pattern: Some(BackgroundPattern::NoPattern),
-        min_scale: Some(NODE_EDITOR_MIN_SCALE),
-        max_scale: Some(NODE_EDITOR_MAX_SCALE),
+        bg_frame: Some(egui::Frame::canvas(style).fill(CanvasTheme::default().background)),
+        min_scale: Some(navigation.min_zoom.x),
+        max_scale: Some(navigation.max_zoom.x),
         ..Default::default()
     }
 }
@@ -108,4 +155,33 @@ pub(super) fn node_editor_canvas_metadata(
         "port_interaction_enabled": node_editor_port_interactions_enabled(scale),
         "resize_interaction_enabled": node_editor_resize_interactions_enabled(scale),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_canvas_uses_shared_theme_and_bounded_grid() {
+        let style = node_editor_snarl_style();
+        let navigation = node_editor_navigation_config();
+        assert_eq!(
+            style.bg_frame.map(|frame| frame.fill),
+            Some(CanvasTheme::default().background)
+        );
+        assert_eq!(navigation.zoom_policy, ZoomPolicy::Uniform);
+        assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_800.0, 1_200.0));
+        for scale in [NODE_EDITOR_MIN_SCALE, 0.01, 0.1, 1.0, NODE_EDITOR_MAX_SCALE] {
+            let state = CanvasState::uniform(egui::vec2(347.0, -73.0), scale);
+            let lines = pan_zoom_ui::grid_lines(
+                viewport,
+                egui::Pos2::ZERO,
+                state,
+                node_editor_grid_config(),
+            );
+            assert!(!lines.is_empty(), "scale={scale}");
+            assert!(lines.len() < 320, "scale={scale}, lines={}", lines.len());
+        }
+    }
 }

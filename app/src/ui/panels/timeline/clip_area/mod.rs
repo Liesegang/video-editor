@@ -9,7 +9,8 @@ use crate::{
 };
 
 use crate::command::{CommandId, CommandRegistry};
-use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy, ViewportState};
+use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
+use pan_zoom_ui::{AxisMask, CanvasState, NavigationConfig};
 
 mod background;
 pub mod clips;
@@ -31,21 +32,30 @@ struct TimelineViewportState<'a> {
 }
 
 impl<'a> ViewportState for TimelineViewportState<'a> {
-    fn get_pan(&self) -> egui::Vec2 {
-        *self.scroll_offset
+    fn canvas_state(&self) -> CanvasState {
+        CanvasState::new(-*self.scroll_offset, egui::vec2(*self.h_zoom, *self.v_zoom))
     }
-    fn set_pan(&mut self, pan: egui::Vec2) {
-        let mut new_offset = pan;
+
+    fn set_canvas_state(&mut self, state: CanvasState) {
+        let mut new_offset = -state.pan;
         new_offset.x = new_offset.x.max(0.0);
         new_offset.y = new_offset.y.clamp(0.0, self.max_scroll_y);
         *self.scroll_offset = new_offset;
+        *self.h_zoom = state.zoom.x.clamp(self.min_h_zoom, self.max_h_zoom);
+        *self.v_zoom = state.zoom.y.clamp(self.min_v_zoom, self.max_v_zoom);
     }
-    fn get_zoom(&self) -> egui::Vec2 {
-        egui::vec2(*self.h_zoom, *self.v_zoom)
-    }
-    fn set_zoom(&mut self, zoom: egui::Vec2) {
-        *self.h_zoom = zoom.x.clamp(self.min_h_zoom, self.max_h_zoom);
-        *self.v_zoom = zoom.y.clamp(self.min_v_zoom, self.max_v_zoom);
+}
+
+fn timeline_navigation_config() -> NavigationConfig {
+    NavigationConfig {
+        input_policy: ViewportInputPolicy::AxisModifiers,
+        zoom_policy: ZoomPolicy::IndependentXY,
+        pan_axes: AxisMask::BOTH,
+        // Preserve the existing Ctrl/Cmd = X and Ctrl/Cmd+Shift = Y controls.
+        zoom_axes: AxisMask::BOTH,
+        min_zoom: egui::Vec2::splat(0.0001),
+        max_zoom: egui::Vec2::splat(10_000.0),
+        ..Default::default()
     }
 }
 
@@ -170,15 +180,7 @@ pub(super) fn show_clip_area(
         ui_content.make_persistent_id("unique_timeline_viewport_controller_id"),
         hand_tool_key,
     )
-    .with_config(ViewportConfig {
-        input_policy: ViewportInputPolicy::AxisModifiers,
-        allow_zoom_x: true,
-        allow_zoom_y: true,
-        allow_pan_x: true,
-        allow_pan_y: true,
-        min_zoom: 0.0001,
-        max_zoom: 10000.0,
-    });
+    .with_config(timeline_navigation_config());
 
     let (_changed, vp_response) = controller.interact_with_rect(
         content_rect_for_clip_area,
@@ -318,7 +320,18 @@ pub(super) fn show_clip_area(
 
 #[cfg(test)]
 mod tests {
-    use super::box_selection_start_position;
+    use super::{box_selection_start_position, timeline_navigation_config};
+    use pan_zoom_ui::{AxisMask, InputPolicy, ZoomPolicy};
+
+    #[test]
+    fn navigation_preserves_independent_timeline_axes() {
+        let config = timeline_navigation_config();
+
+        assert_eq!(config.input_policy, InputPolicy::AxisModifiers);
+        assert_eq!(config.zoom_policy, ZoomPolicy::IndependentXY);
+        assert_eq!(config.pan_axes, AxisMask::BOTH);
+        assert_eq!(config.zoom_axes, AxisMask::BOTH);
+    }
 
     #[test]
     fn hand_tool_drag_owns_the_pointer_before_box_selection() {

@@ -273,6 +273,7 @@ dependencies = [
  "log",
  "once_cell",
  "ordered-float",
+ "pan-zoom-ui",
  "raw-window-handle",
  "rfd",
  "serde",
