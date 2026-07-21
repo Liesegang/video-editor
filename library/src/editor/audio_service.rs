@@ -20,7 +20,7 @@ mod waveform;
 use waveform::WaveformJobs;
 
 const SCRUB_PREVIEW_SECONDS: f64 = 0.05;
-const MAX_MIX_SAMPLES_PER_PUMP: usize = 16_384;
+const MAX_MIX_SECONDS_PER_PUMP: usize = 1;
 const MAX_CONCURRENT_AUDIO_DECODES: usize = 4;
 
 /// Resolve enabled Media leaves for one Clip through the canonical typed
@@ -116,16 +116,28 @@ impl AudioService {
     }
 
     pub fn set_playing(&self, is_playing: bool) {
-        update_playback_state(&self.is_playing, is_playing, || {
-            // The device stream intentionally remains alive for low-latency
-            // scrubbing, so pausing it is not what stops queued audio. Drop
-            // the producer backlog exactly once on the playing -> paused
-            // transition instead.
-            if let Ok(mut scrub) = self.pending_scrub.lock() {
-                *scrub = None;
-            }
-            self.audio_engine.flush();
-        });
+        update_playback_state(
+            &self.is_playing,
+            is_playing,
+            || {
+                if let Err(error) = self.audio_engine.play() {
+                    log::error!("Failed to activate the audio playback clock: {error}");
+                }
+            },
+            || {
+                if let Err(error) = self.audio_engine.pause() {
+                    log::error!("Failed to pause the audio playback clock: {error}");
+                }
+                // The device stream intentionally remains alive for low-latency
+                // scrubbing, so pausing it is not what stops queued audio. Drop
+                // the producer backlog exactly once on the playing -> paused
+                // transition instead.
+                if let Ok(mut scrub) = self.pending_scrub.lock() {
+                    *scrub = None;
+                }
+                self.audio_engine.flush();
+            },
+        );
     }
 
     /// Cancel every in-flight decode before adopting another authoritative
@@ -186,23 +198,23 @@ impl AudioService {
         }
 
         let channels_usize = usize::from(channels);
-        let chunk_size = available.min(MAX_MIX_SAMPLES_PER_PUMP);
-        if chunk_size < channels_usize {
+        let available_frames = available / channels_usize;
+        if available_frames == 0 {
             return;
         }
-        let requested_frames = chunk_size / channels_usize;
+        let requested_frames = available_frames.min(
+            usize::try_from(sample_rate)
+                .unwrap_or(usize::MAX)
+                .saturating_mul(MAX_MIX_SECONDS_PER_PUMP),
+        );
         let start_sample = self.next_write_sample.load(Ordering::Relaxed);
 
         let (frames_to_write, all_ready) =
             self.prepare_window(start_sample, requested_frames, sample_rate, channels);
         if !all_ready {
-            // Already-buffered samples remain valid while the next chunk is
-            // decoding. Hold only once the consumer catches the producer
-            // cursor; flushing earlier would discard valid, unplayed audio.
-            if self.audio_engine.get_current_sample() >= start_sample {
-                self.audio_engine
-                    .set_time(start_sample as f64 / f64::from(sample_rate));
-            }
+            // The callback holds the playback clock at the producer cursor on
+            // an underrun. Re-seeking here would repeatedly flush valid queued
+            // frames while an asynchronous decode is still in flight.
             return;
         }
         let mix_buffer = self.mix_active(
@@ -212,9 +224,12 @@ impl AudioService {
             u32::from(channels),
         );
         let written = self.audio_engine.push_samples(&mix_buffer);
-        let written_frames = written / channels_usize;
-        self.next_write_sample
-            .fetch_add(written_frames as u64, Ordering::Relaxed);
+        commit_write_cursor(
+            &self.next_write_sample,
+            start_sample,
+            written,
+            channels_usize,
+        );
     }
 
     pub fn render_audio(&self, start_time: f64, duration: f64) -> Vec<f32> {
@@ -271,10 +286,11 @@ impl AudioService {
             u32::from(channels),
         );
         let written = self.audio_engine.push_samples(&samples);
-        let written_frames = written / usize::from(channels);
-        self.next_write_sample.store(
-            sample_pos.saturating_add(written_frames as u64),
-            Ordering::Relaxed,
+        let written_frames = commit_write_cursor(
+            &self.next_write_sample,
+            sample_pos,
+            written,
+            usize::from(channels),
         );
         if let Ok(mut scrub) = self.pending_scrub.lock()
             && *scrub == request
@@ -531,6 +547,20 @@ fn seconds_to_sample(time: f64, sample_rate: u32) -> u64 {
     (time * f64::from(sample_rate)).round() as u64
 }
 
+fn commit_write_cursor(
+    cursor: &AtomicU64,
+    start_sample: u64,
+    written_samples: usize,
+    channels: usize,
+) -> usize {
+    let written_frames = written_samples / channels.max(1);
+    cursor.store(
+        start_sample.saturating_add(written_frames as u64),
+        Ordering::Release,
+    );
+    written_frames
+}
+
 fn active_composition(
     project: &Project,
     active_id: Option<Uuid>,
@@ -538,10 +568,17 @@ fn active_composition(
     active_id.and_then(|id| project.get_composition(id))
 }
 
-fn update_playback_state(state: &AtomicBool, is_playing: bool, on_pause: impl FnOnce()) {
+fn update_playback_state(
+    state: &AtomicBool,
+    is_playing: bool,
+    on_play: impl FnOnce(),
+    on_pause: impl FnOnce(),
+) {
     let was_playing = state.swap(is_playing, Ordering::AcqRel);
-    if was_playing && !is_playing {
-        on_pause();
+    match (was_playing, is_playing) {
+        (false, true) => on_play(),
+        (true, false) => on_pause(),
+        _ => {}
     }
 }
 
@@ -585,10 +622,15 @@ mod tests {
         let flushes = AtomicUsize::new(0);
         let pending_scrub = Mutex::new(Some((10_u64, 50_usize)));
         let set = |playing| {
-            update_playback_state(&state, playing, || {
-                *pending_scrub.lock().unwrap() = None;
-                flushes.fetch_add(1, Ordering::Relaxed);
-            });
+            update_playback_state(
+                &state,
+                playing,
+                || {},
+                || {
+                    *pending_scrub.lock().unwrap() = None;
+                    flushes.fetch_add(1, Ordering::Relaxed);
+                },
+            );
         };
 
         set(false);
@@ -631,6 +673,18 @@ mod tests {
         assert!(active_composition(&project, None).is_none());
         assert!(active_composition(&project, Some(Uuid::new_v4())).is_none());
         assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn producer_cursor_advances_by_committed_interleaved_frames_only() {
+        let cursor = AtomicU64::new(999);
+        assert_eq!(commit_write_cursor(&cursor, 40, 4, 2), 2);
+        assert_eq!(cursor.load(Ordering::Acquire), 42);
+
+        // The engine rejects partial frames, but cursor accounting remains
+        // defensive if a future producer reports a malformed sample count.
+        assert_eq!(commit_write_cursor(&cursor, 42, 3, 2), 1);
+        assert_eq!(cursor.load(Ordering::Acquire), 43);
     }
 
     #[test]

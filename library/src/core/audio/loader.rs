@@ -13,6 +13,11 @@ use std::path::Path;
 
 pub struct AudioLoader;
 
+// Predictive codecs (notably MP3) may need packets preceding the requested
+// timestamp to rebuild their bit reservoir. Seeking exactly to a cache chunk
+// boundary can otherwise decode the first few hundred frames as silence.
+const SEEK_PREROLL_SECONDS: f64 = 0.25;
+
 fn probe_hint(path: &Path) -> Hint {
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|extension| extension.to_str()) {
@@ -49,10 +54,11 @@ impl AudioLoader {
         let end_seconds = start_seconds + frame_capacity as f64 / f64::from(target_rate);
 
         if start_frame > 0 {
+            let seek_seconds = (start_seconds - SEEK_PREROLL_SECONDS).max(0.0);
             opened.format.seek(
                 SeekMode::Accurate,
                 SeekTo::Time {
-                    time: seconds_to_time(start_seconds),
+                    time: seconds_to_time(seek_seconds),
                     track_id: Some(opened.track_id),
                 },
             )?;
@@ -275,4 +281,93 @@ fn mapped_sample(
         target_channel.min(source_channels - 1)
     };
     samples[base + source_channel]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
+
+    struct TempWave(std::path::PathBuf);
+
+    impl TempWave {
+        fn continuous_sine(sample_rate: u32, seconds: u32) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "ruvie-audio-continuity-{}.wav",
+                uuid::Uuid::new_v4()
+            ));
+            let channels = 2_u16;
+            let frames = sample_rate.saturating_mul(seconds);
+            let data_bytes = frames.saturating_mul(u32::from(channels)).saturating_mul(2);
+            let mut bytes = Vec::with_capacity(44 + data_bytes as usize);
+            bytes.extend_from_slice(b"RIFF");
+            bytes.extend_from_slice(&(36_u32 + data_bytes).to_le_bytes());
+            bytes.extend_from_slice(b"WAVEfmt ");
+            bytes.extend_from_slice(&16_u32.to_le_bytes());
+            bytes.extend_from_slice(&1_u16.to_le_bytes());
+            bytes.extend_from_slice(&channels.to_le_bytes());
+            bytes.extend_from_slice(&sample_rate.to_le_bytes());
+            bytes.extend_from_slice(&(sample_rate * u32::from(channels) * 2).to_le_bytes());
+            bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+            bytes.extend_from_slice(&16_u16.to_le_bytes());
+            bytes.extend_from_slice(b"data");
+            bytes.extend_from_slice(&data_bytes.to_le_bytes());
+            for frame in 0..frames {
+                let phase = std::f32::consts::TAU * 440.0 * frame as f32 / sample_rate as f32;
+                let sample = (phase.sin() * 0.75 * f32::from(i16::MAX)) as i16;
+                for _ in 0..channels {
+                    bytes.extend_from_slice(&sample.to_le_bytes());
+                }
+            }
+            std::fs::write(&path, bytes).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempWave {
+        fn drop(&mut self) {
+            drop(std::fs::remove_file(&self.0));
+        }
+    }
+
+    #[test]
+    fn independently_decoded_pcm_chunks_preserve_source_boundary_continuity() {
+        let sample_rate = 8_000;
+        let wave = TempWave::continuous_sine(sample_rate, 2);
+        let format = AudioDecodeFormat::new(sample_rate, 2).unwrap();
+        let source = AudioSourceKey::read(&wave.0, None, format).unwrap();
+        let first = AudioLoader::decode_chunk(&AudioChunkKey {
+            source: source.clone(),
+            chunk_index: 0,
+        })
+        .unwrap();
+        let second = AudioLoader::decode_chunk(&AudioChunkKey {
+            source,
+            chunk_index: 1,
+        })
+        .unwrap();
+        assert_eq!(first.frame_count(), sample_rate as usize);
+        assert_eq!(second.frame_count(), sample_rate as usize);
+
+        let first_left = first
+            .samples()
+            .chunks_exact(2)
+            .map(|frame| frame[0])
+            .collect::<Vec<_>>();
+        let second_left = second
+            .samples()
+            .chunks_exact(2)
+            .map(|frame| frame[0])
+            .collect::<Vec<_>>();
+        let boundary_step = (second_left[0] - first_left[first_left.len() - 1]).abs();
+        let largest_interior_step = first_left
+            .windows(2)
+            .chain(second_left.windows(2))
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            boundary_step <= largest_interior_step + 2.0 / f32::from(i16::MAX),
+            "PCM decoder introduced boundary step {boundary_step}, interior max {largest_interior_step}"
+        );
+    }
 }
