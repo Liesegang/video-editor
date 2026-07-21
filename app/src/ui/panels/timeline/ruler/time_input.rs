@@ -1,6 +1,9 @@
 use crate::model::ui_types::TimelineDisplayMode;
 use crate::state::context::EditorContext;
 use egui::Ui;
+use library::EditorService;
+
+use crate::state::transport::seek_transport;
 
 fn parse_seconds_and_frames(input: &str, frames_per_second: f64) -> Option<f32> {
     if !frames_per_second.is_finite() || frames_per_second <= 0.0 {
@@ -22,6 +25,7 @@ fn parse_seconds_and_frames(input: &str, frames_per_second: f64) -> Option<f32> 
 pub fn show_time_input(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
+    project_service: &EditorService,
     composition_fps: f64,
     max_duration: f64,
 ) -> egui::Response {
@@ -113,9 +117,11 @@ pub fn show_time_input(
                 if let Some(new_time) = parsed_time_in_seconds {
                     let snapped_time =
                         (new_time * composition_fps as f32).round() / composition_fps as f32;
-                    editor_context
-                        .timeline
-                        .seek_to(snapped_time.clamp(0.0, max_duration as f32));
+                    seek_transport(
+                        editor_context,
+                        project_service,
+                        snapped_time.clamp(0.0, max_duration as f32),
+                    );
                 } else {
                     log::warn!("Failed to parse time input: {}", input_str);
                     // Revert to current_time's formatted string

@@ -308,15 +308,16 @@ pub(super) fn dispatch_preview_frame(
     }
 }
 
-/// Apply provenance validation before inspecting either the successful pixels
-/// or the render error. This ordering prevents an error from an invalidated
-/// Project/seek generation from clearing a newer Preview or opening a stale
-/// modal just as strictly as it prevents stale pixels from being published.
+/// Apply request-metadata provenance validation before inspecting either the
+/// output or its error. Lagged successful playback output is allowed, while a
+/// render error must describe the exact latest desired frame. Shared GPU
+/// texture lifetime is outside this metadata gate.
 pub(super) fn publishable_preview_result(
     scheduler: &mut PreviewRenderScheduler,
     result: library::RenderResult,
 ) -> Option<library::RenderResult> {
-    (scheduler.complete(result.request_id, &result.frame_info)
+    let succeeded = result.output.is_ok();
+    (scheduler.complete(result.request_id, &result.frame_info, succeeded)
         == PreviewCompletionDecision::Publish)
         .then_some(result)
 }

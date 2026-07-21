@@ -30,7 +30,9 @@ enum RenderRequest {
 ///
 /// The renderer deliberately does not attach timeline semantics to this value.
 /// It only returns the identity with the result so the caller can validate the
-/// result against its own Project/navigation generation before publishing it.
+/// result against its own Project/navigation generation before applying it.
+/// This identity does not manage the lifetime or ownership of shared GPU
+/// textures; that remains a separate renderer/UI context contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenderRequestId(u64);
 

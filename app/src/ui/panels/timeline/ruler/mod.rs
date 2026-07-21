@@ -1,4 +1,5 @@
 use crate::state::context::EditorContext;
+use crate::state::transport::seek_transport;
 use egui::Ui;
 use library::model::project::Project;
 use library::EditorService as ProjectService;
@@ -32,6 +33,7 @@ pub fn show_timeline_ruler(
         let _ = time_input::show_time_input(
             h_ui,
             editor_context,
+            project_service,
             composition_fps,
             current_comp_duration,
         );
@@ -55,8 +57,7 @@ pub fn show_timeline_ruler(
                     .max(0.0);
                 let snapped = (raw_time * composition_fps as f32).round() / composition_fps as f32;
                 let new_time = snapped.min(current_comp_duration as f32);
-                editor_context.timeline.seek_to(new_time);
-                project_service.reset_audio_pump(new_time as f64);
+                seek_transport(editor_context, project_service, new_time);
             }
         }
 

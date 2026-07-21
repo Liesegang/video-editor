@@ -90,7 +90,7 @@ mod render_tests {
     #[test]
     fn stale_render_error_is_discarded_before_it_reaches_the_modal_handler() {
         let composition_id = uuid::Uuid::new_v4();
-        let mut project = Project::new("before error");
+        let project = Project::new("playback error");
         let mut scheduler = PreviewRenderScheduler::default();
         let frame = library::model::frame::frame::FrameInfo {
             width: 1920,
@@ -106,17 +106,18 @@ mod render_tests {
             &project,
             PreviewPresentationKey::from_frame(composition_id, &frame),
             frame,
-            false,
+            true,
             0,
         );
         let request = scheduler.take_submission().expect("render request");
 
-        project.name = "live edit invalidates error".to_string();
+        let mut latest = request.frame.clone();
+        latest.now_time = OrderedFloat(3.0);
         scheduler.update_desired(
             &project,
-            PreviewPresentationKey::from_frame(composition_id, &request.frame),
-            request.frame.clone(),
-            false,
+            PreviewPresentationKey::from_frame(composition_id, &latest),
+            latest,
+            true,
             0,
         );
         let stale_error = RenderResult {
@@ -126,7 +127,28 @@ mod render_tests {
             frame_info: request.frame,
         };
 
-        assert!(publishable_preview_result(&mut scheduler, stale_error).is_none());
+        let mut editor_context = EditorContext::new(composition_id);
+        editor_context.preview_texture_id = Some(42);
+        editor_context.preview_texture_width = 1920;
+        editor_context.preview_texture_height = 1080;
+        if let Some(result) = publishable_preview_result(&mut scheduler, stale_error) {
+            if let Err(error) = result.output {
+                report_preview_render_error(&error, &mut editor_context);
+            }
+        }
+
+        assert_eq!(editor_context.preview_texture_id, Some(42));
+        assert_eq!(editor_context.preview_texture_width, 1920);
+        assert_eq!(editor_context.preview_texture_height, 1080);
+        assert_eq!(editor_context.interaction.active_modal_error, None);
+        assert_eq!(
+            scheduler
+                .take_submission()
+                .expect("latest playback frame must proceed")
+                .frame
+                .now_time,
+            OrderedFloat(3.0)
+        );
     }
 
     #[test]

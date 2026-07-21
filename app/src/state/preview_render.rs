@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 /// Render-affecting view state that is not part of the authoritative Project.
 ///
-/// Timeline time is intentionally absent. Continuous playback may publish the
-/// newest completed frame even after the audio clock has advanced, while every
+/// Timeline time is intentionally absent. Continuous playback may accept the
+/// newest completed result even after the audio clock has advanced, while every
 /// field in this key remains an exact invalidation boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreviewPresentationKey {
@@ -83,7 +83,9 @@ pub struct PreviewRenderDiagnostics {
 /// request flood. A completed frame may lag the audio clock only within the
 /// same uninterrupted playback generation. Project mutations (including live
 /// edits), explicit seeks, playback transitions, and presentation changes
-/// advance the generation and make old results unpublishable.
+/// advance the generation and make old result metadata unacceptable.
+/// Renderer output ownership, especially shared GPU texture lifetime, is not
+/// governed by this scheduler.
 pub struct PreviewRenderScheduler {
     generation: u64,
     next_request_serial: u64,
@@ -243,6 +245,7 @@ impl PreviewRenderScheduler {
         &mut self,
         request_id: RenderRequestId,
         completed_frame: &FrameInfo,
+        succeeded: bool,
     ) -> PreviewCompletionDecision {
         let Some(in_flight) = self.in_flight.take() else {
             self.discarded = self.discarded.wrapping_add(1);
@@ -253,24 +256,32 @@ impl PreviewRenderScheduler {
             self.discarded = self.discarded.wrapping_add(1);
             return PreviewCompletionDecision::Discard;
         }
+        if in_flight.frame != *completed_frame {
+            if self.available && in_flight.generation == self.generation && self.desired.is_none() {
+                self.desired = Some(DesiredRender {
+                    generation: in_flight.generation,
+                    frame: in_flight.frame,
+                });
+            }
+            self.discarded = self.discarded.wrapping_add(1);
+            return PreviewCompletionDecision::Discard;
+        }
 
         let latest_frame = self
             .desired
             .as_ref()
             .filter(|desired| desired.generation == self.generation)
             .map_or(&in_flight.frame, |desired| &desired.frame);
-        let exact_protocol_match = &in_flight.frame == completed_frame;
         let generation_is_current = self.available && in_flight.generation == self.generation;
         let exact_current_frame = completed_frame == latest_frame;
-        let playback_can_skip = self.last_playing == Some(true)
+        let playback_can_skip = succeeded
+            && self.last_playing == Some(true)
             && completed_frame.now_time <= latest_frame.now_time
             && self.last_completed.as_ref().is_none_or(|last| {
                 last.generation != self.generation
                     || completed_frame.now_time >= last.frame.now_time
             });
-        let publish = exact_protocol_match
-            && generation_is_current
-            && (exact_current_frame || playback_can_skip);
+        let publish = generation_is_current && (exact_current_frame || playback_can_skip);
 
         if publish {
             self.published = self.published.wrapping_add(1);
@@ -401,7 +412,7 @@ mod tests {
         );
 
         assert_eq!(
-            scheduler.complete(first.request_id, &first.frame),
+            scheduler.complete(first.request_id, &first.frame, true),
             PreviewCompletionDecision::Publish,
             "latest completed pixels must remain visible while playback advances"
         );
@@ -411,6 +422,41 @@ mod tests {
         assert_eq!(next.frame.now_time, OrderedFloat(3.0));
         assert_eq!(scheduler.diagnostics().submitted, 2);
         assert_eq!(scheduler.diagnostics().coalesced, 2);
+    }
+
+    #[test]
+    fn lagged_playback_error_is_discarded_and_latest_frame_submits_immediately() {
+        let project = Project::new("playback error");
+        let composition_id = Uuid::new_v4();
+        let mut scheduler = PreviewRenderScheduler::default();
+        update(
+            &mut scheduler,
+            &project,
+            composition_id,
+            frame(0.0),
+            true,
+            0,
+        );
+        let failed = scheduler.take_submission().expect("t0 request");
+        update(
+            &mut scheduler,
+            &project,
+            composition_id,
+            frame(3.0),
+            true,
+            0,
+        );
+
+        assert_eq!(
+            scheduler.complete(failed.request_id, &failed.frame, false),
+            PreviewCompletionDecision::Discard,
+            "an old error must not masquerade as the latest playback result"
+        );
+        let next = scheduler
+            .take_submission()
+            .expect("t3 must submit as soon as the failed t0 slot is released");
+        assert_eq!(next.frame.now_time, OrderedFloat(3.0));
+        assert_eq!(scheduler.diagnostics().published, 0);
     }
 
     #[test]
@@ -438,7 +484,7 @@ mod tests {
             0,
         );
         assert_eq!(
-            scheduler.complete(stale.request_id, &stale.frame),
+            scheduler.complete(stale.request_id, &stale.frame, true),
             PreviewCompletionDecision::Discard
         );
         assert!(scheduler.take_submission().is_some());
@@ -468,7 +514,7 @@ mod tests {
         );
 
         assert_eq!(
-            scheduler.complete(stale.request_id, &stale.frame),
+            scheduler.complete(stale.request_id, &stale.frame, true),
             PreviewCompletionDecision::Discard
         );
         assert_eq!(
@@ -512,7 +558,7 @@ mod tests {
             let stale = scheduler.take_submission().expect("initial request");
             update(&mut scheduler, &project, changed.0, changed.1, false, 0);
             assert_eq!(
-                scheduler.complete(stale.request_id, &stale.frame),
+                scheduler.complete(stale.request_id, &stale.frame, true),
                 PreviewCompletionDecision::Discard
             );
         }
@@ -544,7 +590,7 @@ mod tests {
         );
         assert!(scheduler.take_submission().is_none());
         assert_eq!(
-            scheduler.complete(request.request_id, &request.frame),
+            scheduler.complete(request.request_id, &request.frame, true),
             PreviewCompletionDecision::Publish
         );
         assert!(!scheduler.requires_repaint());
@@ -581,7 +627,7 @@ mod tests {
             "drain the stale worker result"
         );
         assert_eq!(
-            scheduler.complete(request.request_id, &request.frame),
+            scheduler.complete(request.request_id, &request.frame, true),
             PreviewCompletionDecision::Discard
         );
         assert!(!scheduler.requires_repaint());
@@ -603,7 +649,7 @@ mod tests {
         let request = scheduler.take_submission().expect("request");
 
         assert_eq!(
-            scheduler.complete(RenderRequestId::new(999), &request.frame),
+            scheduler.complete(RenderRequestId::new(999), &request.frame, true),
             PreviewCompletionDecision::Discard
         );
         assert_eq!(
@@ -611,9 +657,37 @@ mod tests {
             Some(request.request_id.get())
         );
         assert_eq!(
-            scheduler.complete(request.request_id, &request.frame),
+            scheduler.complete(request.request_id, &request.frame, true),
             PreviewCompletionDecision::Publish
         );
         assert!(!scheduler.requires_repaint());
+    }
+
+    #[test]
+    fn matching_id_with_wrong_frame_requeues_the_original_request() {
+        let project = Project::new("protocol mismatch");
+        let composition_id = Uuid::new_v4();
+        let mut scheduler = PreviewRenderScheduler::default();
+        update(
+            &mut scheduler,
+            &project,
+            composition_id,
+            frame(2.0),
+            false,
+            0,
+        );
+        let request = scheduler.take_submission().expect("request");
+
+        assert_eq!(
+            scheduler.complete(request.request_id, &frame(99.0), true),
+            PreviewCompletionDecision::Discard
+        );
+        assert_eq!(scheduler.diagnostics().in_flight_request, None);
+        assert!(scheduler.diagnostics().desired_pending);
+        let retry = scheduler
+            .take_submission()
+            .expect("protocol mismatch must not stall the single-flight scheduler");
+        assert_ne!(retry.request_id, request.request_id);
+        assert_eq!(retry.frame, request.frame);
     }
 }

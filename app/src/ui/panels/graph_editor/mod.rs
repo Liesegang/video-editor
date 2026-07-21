@@ -21,6 +21,7 @@ use crate::action::HistoryManager;
 use crate::command::CommandRegistry;
 use crate::state::context::EditorContext;
 use crate::state::context_types::SelectionTarget;
+use crate::state::transport::seek_transport;
 
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
@@ -474,7 +475,7 @@ pub fn graph_editor_panel(
         if ruler_response.dragged() || ruler_response.clicked() {
             if let Some(pos) = ruler_response.interact_pointer_pos() {
                 let (t, _) = transform.screen_to_graph(pos);
-                editor_context.timeline.seek_to(t.max(0.0) as f32);
+                seek_transport(editor_context, project_service, t.max(0.0) as f32);
             }
         }
 
