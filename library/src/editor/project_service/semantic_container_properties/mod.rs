@@ -23,11 +23,13 @@ use crate::plugin::{
 };
 use uuid::Uuid;
 
+mod decorator_stack;
 mod effect_stack;
 mod helpers;
 mod stack_projection;
 mod transform;
 
+pub use decorator_stack::SemanticDecoratorStack;
 pub use effect_stack::SemanticEffectStack;
 use helpers::*;
 pub use stack_projection::{
