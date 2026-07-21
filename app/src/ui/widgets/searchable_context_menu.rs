@@ -201,6 +201,25 @@ pub enum SearchNavigation {
     Last,
 }
 
+/// Show a native egui menu that contains interactive searchable content.
+///
+/// A regular `Ui::menu_button` closes on every click inside its popup, which
+/// turns an inline category accordion click into a menu dismissal. Searchable
+/// menus close explicitly when a leaf is chosen, so their popup only needs to
+/// close automatically when the user clicks outside it.
+pub fn searchable_menu_button<R>(
+    ui: &mut Ui,
+    label: impl Into<String>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, contents) = egui::containers::menu::MenuButton::new(label.into())
+        .config(config)
+        .ui(ui, add_contents);
+    egui::InnerResponse::new(contents.map(|contents| contents.inner), response)
+}
+
 #[derive(Clone, Default)]
 struct MenuState {
     query: String,
@@ -943,3 +962,7 @@ mod tests {
         assert!(!placement.clamped);
     }
 }
+
+#[cfg(test)]
+#[path = "searchable_context_menu/nested_menu_tests.rs"]
+mod nested_menu_tests;

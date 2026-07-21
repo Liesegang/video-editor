@@ -21,7 +21,9 @@ use library::{EditorService, LibraryError};
 use uuid::Uuid;
 
 use crate::action::HistoryManager;
-use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
+use crate::ui::widgets::searchable_context_menu::{
+    searchable_menu_button, show_searchable_items_with_qa, SearchableItem,
+};
 
 mod qa;
 
@@ -488,7 +490,7 @@ fn add_menu(
     let menu_id = format!("inspector.semantic.menu.{kind}:{clip_id}:{scope}");
     let response = ui
         .add_enabled_ui(!items.is_empty(), |ui| {
-            ui.menu_button(format!("{} {label}", icons::PLUS), |ui| {
+            searchable_menu_button(ui, format!("{} {label}", icons::PLUS), |ui| {
                 ui.set_min_width(290.0);
                 ui.set_min_height(240.0_f32.min(ui.available_height().max(0.0)));
                 show_searchable_items_with_qa(
