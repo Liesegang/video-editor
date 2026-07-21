@@ -6,12 +6,32 @@ pub(super) fn is_bypassed(node: Option<&Node>) -> bool {
 }
 
 pub(super) fn status(bypassed: bool, inactive: bool) -> (&'static str, &'static str) {
-    if bypassed {
-        (icons::ARROW_RIGHT, "Node is bypassed")
-    } else if inactive {
+    // Disabled and out-of-range Nodes produce NoOutput before bypass is
+    // considered, so the header must show the same authoritative precedence
+    // as the evaluator and Inspector.
+    if inactive {
         (icons::CIRCLE_DASHED, "Node has no output")
+    } else if bypassed {
+        (icons::ARROW_RIGHT, "Node is bypassed")
     } else {
         (icons::CHECK_CIRCLE, "Node is active")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_no_output_state_has_precedence_over_bypass() {
+        assert_eq!(
+            status(true, true),
+            (icons::CIRCLE_DASHED, "Node has no output")
+        );
+        assert_eq!(
+            status(true, false),
+            (icons::ARROW_RIGHT, "Node is bypassed")
+        );
     }
 }
 
