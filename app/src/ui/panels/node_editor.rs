@@ -14,6 +14,7 @@ use crate::ui::widgets::searchable_context_menu::{
 use eframe::egui::{self, Color32};
 #[cfg(test)]
 use egui_snarl::ui::{SnarlPin, SnarlStyle};
+#[cfg(test)]
 use egui_snarl::Snarl;
 use library::model::project::PortOwner;
 #[cfg(test)]
