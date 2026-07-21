@@ -35,9 +35,9 @@ use crate::plugin::traits::{Plugin, PropertyPlugin};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
-    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, SHAPE_TRANSFORM_COMPONENT_ID,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin, TRANSFORM_APPLY_OPERATION,
-    TRANSFORM_CATEGORY,
+    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, PATH_EFFECT_APPLY_OPERATION,
+    PATH_EFFECT_CATEGORY, PathEffectPlugin, SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION,
+    STYLE_CATEGORY, StylePlugin, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 
 fn materialize_validated_operation_properties(
@@ -141,6 +141,20 @@ impl Default for PluginManager {
         manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
         manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
 
+        // Standard Shape Path Effects
+        manager.register_path_effect_plugin(Arc::new(
+            crate::plugin::path_effects::DashPathEffectPlugin,
+        ));
+        manager.register_path_effect_plugin(Arc::new(
+            crate::plugin::path_effects::CornerPathEffectPlugin,
+        ));
+        manager.register_path_effect_plugin(Arc::new(
+            crate::plugin::path_effects::DiscretePathEffectPlugin,
+        ));
+        manager.register_path_effect_plugin(Arc::new(
+            crate::plugin::path_effects::TrimPathEffectPlugin,
+        ));
+
         manager
     }
 }
@@ -156,6 +170,7 @@ impl PluginManager {
                 effector_plugins: PluginRepository::new(),
                 decorator_plugins: PluginRepository::new(),
                 style_plugins: PluginRepository::new(),
+                path_effect_plugins: PluginRepository::new(),
                 property_evaluators: PropertyEvaluatorRegistry::new(),
                 dynamic_libraries: Vec::new(),
                 runtime_plugins: RuntimePluginRegistry::new(),
@@ -245,6 +260,14 @@ impl PluginManager {
         drop(replaced);
     }
 
+    pub fn register_path_effect_plugin(&self, plugin: Arc<dyn PathEffectPlugin>) {
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.path_effect_plugins.register(plugin)
+        };
+        drop(replaced);
+    }
+
     pub fn get_effector_plugin(&self, id: &str) -> Option<Arc<dyn EffectorPlugin>> {
         let inner = self.read_registry();
         inner.effector_plugins.get(id).cloned()
@@ -258,6 +281,11 @@ impl PluginManager {
     pub fn get_style_plugin(&self, id: &str) -> Option<Arc<dyn StylePlugin>> {
         let inner = self.read_registry();
         inner.style_plugins.get(id).cloned()
+    }
+
+    pub fn get_path_effect_plugin(&self, id: &str) -> Option<Arc<dyn PathEffectPlugin>> {
+        let inner = self.read_registry();
+        inner.path_effect_plugins.get(id).cloned()
     }
 
     pub fn get_effect_plugin(&self, id: &str) -> Option<Arc<dyn EffectPlugin>> {
@@ -303,6 +331,15 @@ impl PluginManager {
                 .map_err(|error| LibraryError::Plugin(error.to_string()))?,
             (DECORATOR_CATEGORY, DECORATOR_APPLY_OPERATION) => self
                 .get_decorator_plugin(component_id)
+                .ok_or_else(|| {
+                    LibraryError::Plugin(format!(
+                        "Operation {category}/{component_id}/{operation} not found"
+                    ))
+                })?
+                .descriptor()
+                .map_err(|error| LibraryError::Plugin(error.to_string()))?,
+            (PATH_EFFECT_CATEGORY, PATH_EFFECT_APPLY_OPERATION) => self
+                .get_path_effect_plugin(component_id)
                 .ok_or_else(|| {
                     LibraryError::Plugin(format!(
                         "Operation {category}/{component_id}/{operation} not found"
@@ -376,6 +413,17 @@ impl PluginManager {
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
         self.create_operation_node(DECORATOR_CATEGORY, component_id, DECORATOR_APPLY_OPERATION)
+    }
+
+    pub fn create_path_effect_operation_node(
+        &self,
+        component_id: &str,
+    ) -> Result<crate::model::Node, LibraryError> {
+        self.create_operation_node(
+            PATH_EFFECT_CATEGORY,
+            component_id,
+            PATH_EFFECT_APPLY_OPERATION,
+        )
     }
 
     /// Creates the native whole-Shape absolute placement operation. Its four
@@ -564,6 +612,47 @@ impl PluginManager {
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
 
+    /// Evaluates exactly one explicit Shape Path Effect operation. The
+    /// returned config is transient and is appended by the Shape evaluator in
+    /// wire order; no effect instance is embedded in the source Generator.
+    pub fn evaluate_path_effect_operation(
+        &self,
+        context: &crate::plugin::FrameEvaluationContext,
+        component_id: &str,
+        properties: &crate::model::property::PropertyMap,
+        eval_time: f64,
+    ) -> crate::model::project::EvalResult<crate::model::frame::draw_type::PathEffect> {
+        let Some(plugin) = self.get_path_effect_plugin(component_id) else {
+            log::warn!("Path Effect plugin {component_id} is unavailable; producing NoOutput");
+            return Ok(crate::model::project::EvalOutput::NoOutput);
+        };
+        let descriptor = match self.operation_descriptor(
+            PATH_EFFECT_CATEGORY,
+            component_id,
+            PATH_EFFECT_APPLY_OPERATION,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                log::warn!(
+                    "Path Effect plugin {component_id} has no valid operation descriptor: {error}; producing NoOutput"
+                );
+                return Ok(crate::model::project::EvalOutput::NoOutput);
+            }
+        };
+        let Some(properties) = materialize_validated_operation_properties(
+            context,
+            descriptor.properties(),
+            properties,
+            eval_time,
+            &format!("Path Effect {component_id}"),
+        ) else {
+            return Ok(crate::model::project::EvalOutput::NoOutput);
+        };
+        plugin
+            .evaluate_source(context, &properties, eval_time)
+            .map(crate::model::project::EvalOutput::Produced)
+    }
+
     pub fn get_available_effectors(&self) -> Vec<String> {
         let inner = self.read_registry();
         inner
@@ -591,6 +680,15 @@ impl PluginManager {
             .collect()
     }
 
+    pub fn get_available_path_effects(&self) -> Vec<String> {
+        let inner = self.read_registry();
+        inner
+            .path_effect_plugins
+            .values()
+            .map(|plugin| plugin.id().to_string())
+            .collect()
+    }
+
     pub fn get_effector_properties(&self, id: &str) -> Vec<PropertyDefinition> {
         self.operation_descriptor(EFFECTOR_CATEGORY, id, EFFECTOR_APPLY_OPERATION)
             .map(|descriptor| descriptor.properties().to_vec())
@@ -606,6 +704,12 @@ impl PluginManager {
     pub fn get_style_properties(&self, id: &str) -> Vec<PropertyDefinition> {
         self.get_style_plugin(id)
             .map(|p| p.properties())
+            .unwrap_or_default()
+    }
+
+    pub fn get_path_effect_properties(&self, id: &str) -> Vec<PropertyDefinition> {
+        self.operation_descriptor(PATH_EFFECT_CATEGORY, id, PATH_EFFECT_APPLY_OPERATION)
+            .map(|descriptor| descriptor.properties().to_vec())
             .unwrap_or_default()
     }
 
@@ -1295,6 +1399,17 @@ impl PluginManager {
                 impl_type: p.impl_type(),
             });
         }
+        for p in inner.path_effect_plugins.plugins.values() {
+            let v = p.version();
+            plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(),
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
 
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
@@ -1474,6 +1589,19 @@ mod tests {
                     )),
                 }
             }
+            for plugin in registry.path_effect_plugins.values() {
+                let definitions = plugin.properties();
+                check_definitions(
+                    &format!("path effect {}", plugin.id()),
+                    &definitions,
+                    &mut failures,
+                );
+                operation_contracts.push((
+                    PATH_EFFECT_CATEGORY,
+                    plugin.id().to_string(),
+                    definitions.len(),
+                ));
+            }
         }
 
         for missing in expected_sksl_ids.difference(&registered_effect_ids) {
@@ -1486,6 +1614,7 @@ mod tests {
                 "effector" => manager.create_effector_operation_node(&component_id),
                 "decorator" => manager.create_decorator_operation_node(&component_id),
                 "style" => manager.create_style_operation_node(&component_id),
+                PATH_EFFECT_CATEGORY => manager.create_path_effect_operation_node(&component_id),
                 TRANSFORM_CATEGORY if component_id == SHAPE_TRANSFORM_COMPONENT_ID => {
                     manager.create_shape_transform_operation_node()
                 }

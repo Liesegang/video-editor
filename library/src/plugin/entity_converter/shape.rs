@@ -45,126 +45,13 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
         use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-        use ordered_float::OrderedFloat;
 
-        vec![
-            PropertyDefinition::new(
-                "path",
-                PropertyUiType::MultilineText,
-                "Path Data",
-                PropertyValue::String("".to_string()),
-            ),
-            PropertyDefinition::new(
-                "path_effect",
-                PropertyUiType::Dropdown {
-                    options: vec![
-                        "None".to_string(),
-                        "Dash".to_string(),
-                        "Corner".to_string(),
-                        "Discrete".to_string(),
-                        "Trim".to_string(),
-                    ],
-                },
-                "Path Effect",
-                PropertyValue::String("None".to_string()),
-            ),
-            PropertyDefinition::new(
-                "path_effect_intervals",
-                PropertyUiType::Text,
-                "Dash Intervals",
-                PropertyValue::String("8 4".to_string()),
-            ),
-            PropertyDefinition::new(
-                "path_effect_phase",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 1000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Dash Phase",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "path_effect_radius",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 1000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: false,
-                },
-                "Corner Radius",
-                PropertyValue::Number(OrderedFloat(8.0)),
-            ),
-            PropertyDefinition::new(
-                "path_effect_segment_length",
-                PropertyUiType::Float {
-                    min: 0.1,
-                    max: 1000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: false,
-                },
-                "Discrete Segment",
-                PropertyValue::Number(OrderedFloat(8.0)),
-            ),
-            PropertyDefinition::new(
-                "path_effect_deviation",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 1000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: false,
-                },
-                "Discrete Deviation",
-                PropertyValue::Number(OrderedFloat(2.0)),
-            ),
-            PropertyDefinition::new(
-                "path_effect_seed",
-                PropertyUiType::Integer {
-                    min: 0,
-                    max: i64::MAX,
-                    suffix: String::new(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Discrete Seed",
-                PropertyValue::Integer(0),
-            ),
-            PropertyDefinition::new(
-                "path_effect_trim_start",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 1.0,
-                    step: 0.01,
-                    suffix: String::new(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Trim Start",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "path_effect_trim_end",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 1.0,
-                    step: 0.01,
-                    suffix: String::new(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Trim End",
-                PropertyValue::Number(OrderedFloat(1.0)),
-            ),
-        ]
+        vec![PropertyDefinition::new(
+            "path",
+            PropertyUiType::MultilineText,
+            "Path Data",
+            PropertyValue::String("".to_string()),
+        )]
     }
 
     fn convert_entity(
@@ -199,7 +86,9 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
                 path: path.clone(),
                 bounds: runtime_bounds,
-                path_effects: evaluator.parse_path_effects(props, time),
+                // Authored path effects live only on explicit Shape -> Shape
+                // Path Effect operations. This Vec is render-only state.
+                path_effects: Vec::new(),
                 parts: vec![RuntimePathPart {
                     path,
                     bounds: runtime_bounds,
@@ -233,7 +122,6 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         let eval_time = time;
 
         let path_str = evaluator.require_string(props, "path", eval_time, "shape")?;
-        let path_effects = evaluator.parse_path_effects(props, eval_time);
-        measure_shape_visual_bounds(&path_str, &[], &path_effects)
+        measure_shape_visual_bounds(&path_str, &[], &[])
     }
 }

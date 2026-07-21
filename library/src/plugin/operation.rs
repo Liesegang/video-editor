@@ -21,6 +21,8 @@ pub const EFFECT_CATEGORY: &str = "effect";
 pub const EFFECT_APPLY_OPERATION: &str = "effect.apply.v1";
 pub const EFFECTOR_CATEGORY: &str = "effector";
 pub const EFFECTOR_APPLY_OPERATION: &str = "effector.apply.v1";
+pub const PATH_EFFECT_CATEGORY: &str = "path_effect";
+pub const PATH_EFFECT_APPLY_OPERATION: &str = "path_effect.apply.v1";
 pub const DECORATOR_CATEGORY: &str = "decorator";
 pub const DECORATOR_APPLY_OPERATION: &str = "decorator.apply.v1";
 /// Native whole-Shape spatial placement. This is intentionally distinct from
@@ -198,6 +200,31 @@ impl OperationDescriptor {
             EFFECTOR_CATEGORY,
             component_id,
             EFFECTOR_APPLY_OPERATION,
+            label,
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    pub fn path_effect(
+        component_id: impl Into<String>,
+        label: impl Into<String>,
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            PATH_EFFECT_CATEGORY,
+            component_id,
+            PATH_EFFECT_APPLY_OPERATION,
             label,
             properties,
             [

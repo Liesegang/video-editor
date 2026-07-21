@@ -12,7 +12,7 @@ use crate::plugin::exporters::ExportPlugin;
 use crate::plugin::loaders::LoadRepository;
 use crate::plugin::runtime_native::RuntimePluginRegistry;
 use crate::plugin::traits::Plugin;
-use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
+use crate::plugin::{DecoratorPlugin, EffectorPlugin, PathEffectPlugin, StylePlugin};
 
 /// Generic container for plugins of a specific type.
 pub struct PluginRepository<T: ?Sized> {
@@ -58,6 +58,7 @@ pub(crate) struct PluginRegistry {
     pub effector_plugins: PluginRepository<dyn EffectorPlugin>,
     pub decorator_plugins: PluginRepository<dyn DecoratorPlugin>,
     pub style_plugins: PluginRepository<dyn StylePlugin>,
+    pub path_effect_plugins: PluginRepository<dyn PathEffectPlugin>,
     pub property_evaluators: PropertyEvaluatorRegistry,
     pub dynamic_libraries: Vec<Library>,
     pub runtime_plugins: RuntimePluginRegistry,
