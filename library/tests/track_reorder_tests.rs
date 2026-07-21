@@ -25,21 +25,24 @@ fn project_with_tracks(track_names: &[&str]) -> Result<(Project, Uuid, Vec<Uuid>
     let (mut composition, first_track) = Composition::new(track_names[0], 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
     let mut track_ids = vec![first_track.id];
-    project
-        .add_track(first_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(first_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     for name in &track_names[1..] {
         let track = Track::new(name);
         track_ids.push(track.id);
         composition.track_ids.push(track.id);
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
     }
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     // Keep every Track renderable so FrameEvaluator preserves one top-level
     // item per Track instead of collapsing empty aggregates into a single
@@ -80,9 +83,14 @@ fn evaluated_track_order(project: &Project, composition_id: Uuid) -> Result<Vec<
         .get_composition(composition_id)
         .context("Composition must exist for evaluation")?;
 
-    let items = FrameEvaluator::new(project, composition, property_evaluators, plugin_manager)
-        .evaluate(0, 1.0, None)?
-        .items;
+    let items = FrameEvaluator::new(
+        project,
+        composition,
+        property_evaluators,
+        plugin_manager.as_ref(),
+    )
+    .evaluate(0, 1.0, None)?
+    .items;
     fn collect_tracks(items: &[FrameItem], track_ids: &mut Vec<Uuid>) {
         for item in items {
             let FrameItem::Group(group) = item else {
@@ -144,12 +152,14 @@ fn track_move_rejects_cross_composition_reparenting_without_mutation() -> Result
     let (second_composition, second_track) = Composition::new("Other", 1920, 1080, 30.0, 10.0);
     let second_composition_id = second_composition.id;
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(second_composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(second_composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let before_first = project
         .get_composition(first_composition_id)

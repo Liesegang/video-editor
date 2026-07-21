@@ -1,5 +1,7 @@
+import contextlib
 import importlib.util
 import http.server
+import io
 import pathlib
 import subprocess
 import sys
@@ -34,6 +36,16 @@ if KEYFRAME_SPEC is None or KEYFRAME_SPEC.loader is None:
 KEYFRAME = importlib.util.module_from_spec(KEYFRAME_SPEC)
 sys.modules[KEYFRAME_SPEC.name] = KEYFRAME
 KEYFRAME_SPEC.loader.exec_module(KEYFRAME)
+
+BLEND_PATH = pathlib.Path(__file__).with_name("qa-blend-modes-e2e.py")
+BLEND_SPEC = importlib.util.spec_from_file_location(
+    "ruvie_qa_blend_modes_e2e", BLEND_PATH
+)
+if BLEND_SPEC is None or BLEND_SPEC.loader is None:
+    raise RuntimeError("cannot load qa-blend-modes-e2e.py")
+BLEND = importlib.util.module_from_spec(BLEND_SPEC)
+sys.modules[BLEND_SPEC.name] = BLEND
+BLEND_SPEC.loader.exec_module(BLEND)
 
 
 class EmptyCaptureHandler(http.server.BaseHTTPRequestHandler):
@@ -425,6 +437,11 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
+                "container-output-hit",
+                "blend-modes-normal-darken",
+                "blend-modes-lighten",
+                "blend-modes-contrast",
+                "blend-modes-comparative-hsl",
                 "composition-drop",
                 "node-wire",
                 "node-wire-selection",
@@ -446,8 +463,122 @@ class QaRunnerTests(unittest.TestCase):
             if item.name == "composition-drop"
         )
         self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
+        container_output_hit = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "container-output-hit"
+        )
+        self.assertEqual(
+            container_output_hit.script, "qa-container-output-hit-e2e.py"
+        )
+        self.assertEqual(container_output_hit.fixture, RUNNER.FIXTURE_NAME)
+        self.assertEqual(
+            [item.name for item in RUNNER.suite_specs("blend")],
+            [
+                "blend-modes-normal-darken",
+                "blend-modes-lighten",
+                "blend-modes-contrast",
+                "blend-modes-comparative-hsl",
+            ],
+        )
+        self.assertTrue(
+            all(
+                item.script == "qa-blend-modes-e2e.py"
+                for item in RUNNER.suite_specs("blend")
+            )
+        )
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
+
+    def test_runner_bounds_parallelism_with_a_positive_jobs_argument(self):
+        self.assertEqual(RUNNER.parse_args([]).jobs, 4)
+        self.assertEqual(RUNNER.parse_args(["--jobs", "2"]).jobs, 2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                RUNNER.parse_args(["--jobs", "0"])
+
+    def test_blend_suite_covers_every_catalog_mode_group_and_masks_only_target_blend(self):
+        expected_catalog = (
+            ("normal", "Normal", "normal"),
+            ("dissolve", "Dissolve", "normal"),
+            ("behind", "Behind", "normal"),
+            ("clear", "Clear", "normal"),
+            ("darken", "Darken", "darken"),
+            ("multiply", "Multiply", "darken"),
+            ("color_burn", "ColorBurn", "darken"),
+            ("linear_burn", "LinearBurn", "darken"),
+            ("darker_color", "DarkerColor", "darken"),
+            ("lighten", "Lighten", "lighten"),
+            ("screen", "Screen", "lighten"),
+            ("color_dodge", "ColorDodge", "lighten"),
+            ("linear_dodge", "LinearDodge", "lighten"),
+            ("lighter_color", "LighterColor", "lighten"),
+            ("overlay", "Overlay", "contrast"),
+            ("soft_light", "SoftLight", "contrast"),
+            ("hard_light", "HardLight", "contrast"),
+            ("vivid_light", "VividLight", "contrast"),
+            ("linear_light", "LinearLight", "contrast"),
+            ("pin_light", "PinLight", "contrast"),
+            ("hard_mix", "HardMix", "contrast"),
+            ("difference", "Difference", "comparative"),
+            ("exclusion", "Exclusion", "comparative"),
+            ("subtract", "Subtract", "comparative"),
+            ("divide", "Divide", "comparative"),
+            ("hue", "Hue", "hsl"),
+            ("saturation", "Saturation", "hsl"),
+            ("color", "Color", "hsl"),
+            ("luminosity", "Luminosity", "hsl"),
+        )
+        self.assertEqual(BLEND.CATALOG, expected_catalog)
+        self.assertEqual(
+            RUNNER.BLEND_MODE_NAMES,
+            tuple(serialized for _, serialized, _ in expected_catalog),
+        )
+        self.assertEqual(BLEND.MODES, expected_catalog[2:] + expected_catalog[:2])
+        sharded = [
+            mode
+            for shard in BLEND.MODE_SHARDS.values()
+            for mode in shard
+        ]
+        self.assertEqual(len(sharded), 29)
+        self.assertEqual(set(sharded), set(expected_catalog))
+        self.assertEqual(len(set(sharded)), 29)
+        self.assertEqual(len({item[0] for item in BLEND.MODES}), 29)
+        self.assertEqual(len({item[1] for item in BLEND.MODES}), 29)
+        self.assertEqual(
+            {item[2] for item in BLEND.MODES},
+            {"normal", "darken", "lighten", "contrast", "comparative", "hsl"},
+        )
+        before = {
+            "name": "fixture",
+            "connections": [
+                {"id": "target", "blend_mode": "Normal", "order": 1},
+                {"id": "other", "blend_mode": "Multiply", "order": 2},
+            ],
+        }
+        after = {
+            "name": "fixture",
+            "connections": [
+                {"id": "target", "blend_mode": "LinearBurn", "order": 1},
+                {"id": "other", "blend_mode": "Multiply", "order": 2},
+            ],
+        }
+        BLEND.assert_only_target_blend_changed(
+            before, after, "target", "Normal", "LinearBurn", "test"
+        )
+        changed_other = {
+            **after,
+            "connections": [after["connections"][0], {**after["connections"][1], "order": 3}],
+        }
+        with self.assertRaises(BLEND.QaFailure):
+            BLEND.assert_only_target_blend_changed(
+                before,
+                changed_other,
+                "target",
+                "Normal",
+                "LinearBurn",
+                "test",
+            )
 
     def test_published_endpoint_accepts_only_a_real_ipv4_loopback_port(self):
         self.assertEqual(
@@ -468,6 +599,52 @@ class QaRunnerTests(unittest.TestCase):
         self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {"ok": False}]))
         self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {}]))
 
+    def test_blend_catalog_validation_aggregates_all_shard_evidence(self):
+        representative_hashes = {
+            mode: index
+            for index, mode in enumerate(RUNNER.BLEND_PREVIEW_REPRESENTATIVES, 1)
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            results = []
+            for shard, catalog in BLEND.MODE_SHARDS.items():
+                evidence = root / shard / "evidence.json"
+                RUNNER.write_json_artifact(
+                    evidence,
+                    {
+                        "modes": [mode for _, mode, _ in catalog],
+                        "preview_hashes": {
+                            mode: representative_hashes[mode]
+                            for _, mode, _ in catalog
+                            if mode in representative_hashes
+                        },
+                    },
+                )
+                results.append(
+                    {
+                        "name": "blend-modes-" + shard,
+                        "evidence": str(evidence),
+                    }
+                )
+
+            validation = RUNNER.blend_catalog_validation(results)
+            self.assertTrue(validation["ok"])
+            self.assertEqual(validation["observed_mode_count"], 29)
+            self.assertEqual(validation["distinct_representative_hashes"], 7)
+
+            for result in results:
+                evidence = RUNNER.read_evidence(pathlib.Path(result["evidence"]))
+                evidence["preview_hashes"] = {
+                    mode: 1 for mode in evidence["preview_hashes"]
+                }
+                RUNNER.write_json_artifact(pathlib.Path(result["evidence"]), evidence)
+            validation = RUNNER.blend_catalog_validation(results)
+            self.assertFalse(validation["ok"])
+            self.assertIn(
+                "representative modes produced fewer than four distinct previews",
+                validation["errors"],
+            )
+
     def test_summary_records_failure_log_without_claiming_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -483,11 +660,46 @@ class QaRunnerTests(unittest.TestCase):
                 "full",
                 {"ok": True},
                 [result],
+                jobs_requested=4,
+                jobs_used=1,
+                suite_wall_seconds=0.75,
             )
             self.assertFalse(summary["ok"])
+            self.assertEqual(summary["jobs_requested"], 4)
+            self.assertEqual(summary["jobs_used"], 1)
+            self.assertEqual(summary["suite_wall_seconds"], 0.75)
+            self.assertEqual(summary["sum_suite_seconds"], 1.25)
+            self.assertAlmostEqual(summary["concurrency_factor"], 1.667, places=3)
             text = (root / "summary.txt").read_text(encoding="utf-8")
             self.assertIn("timeline: FAIL", text)
             self.assertIn("coordinate drag failed", text)
+            self.assertIn("0.750s wall / 1.250s summed, jobs 1/4", text)
+            self.assertNotIn("All suites passed", text)
+
+    def test_summary_fails_when_cross_suite_validation_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            summary = RUNNER.write_summary(
+                root,
+                "blend",
+                {"ok": True},
+                [
+                    {
+                        "name": "blend-modes",
+                        "ok": True,
+                        "duration_seconds": 1.0,
+                        "suite_log": str(root / "suite.log"),
+                    }
+                ],
+                validations={
+                    "blend_catalog": {"ok": False, "errors": ["hash collision"]}
+                },
+            )
+
+            self.assertFalse(summary["ok"])
+            text = (root / "summary.txt").read_text(encoding="utf-8")
+            self.assertIn("blend_catalog validation: FAIL", text)
+            self.assertIn("hash collision", text)
             self.assertNotIn("All suites passed", text)
 
     def test_process_group_cleanup_terminates_a_live_process(self):

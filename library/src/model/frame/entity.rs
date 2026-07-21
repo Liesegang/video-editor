@@ -318,9 +318,11 @@ pub enum FrameGroupKind {
     /// rasterized in local space and transformed as one layer. Nested groups
     /// preserve the graph's ordered affine stack.
     ImageTransform,
-    /// A Reference layer consuming a canonical image connection. The nested
-    /// source item remains in its original Project containment and is only
-    /// projected here for this render evaluation.
+    /// One evaluation of a top-level Composition definition through an
+    /// independently timed Composition Instance placement.
+    CompositionInstance,
+    /// A graph Image connection projected into an isolated wrapper while the
+    /// source item remains in its original Project containment.
     ConnectedImage,
 }
 

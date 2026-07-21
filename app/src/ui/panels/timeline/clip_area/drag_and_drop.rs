@@ -262,7 +262,7 @@ pub(super) fn handle_drag_and_drop(
                                 }
 
                                 new_bundle_opt = project_service
-                                    .create_reference_clip(
+                                    .create_composition_instance_clip(
                                         *target_comp_id,
                                         drop_time_f64,
                                         duration_sec,

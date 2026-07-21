@@ -1,14 +1,16 @@
 use crate::state::context_types::{ContainerResizeEdge, ContainerResizeState, NodeEditorState};
 use eframe::egui;
-use library::model::project::PortOwner;
+use library::model::project::{PortDirection, PortOwner, PortSide};
 use library::model::Project;
 
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
-    clipped_qa_rect, container_rect, estimated_node_rect, node_editor_resize_interactions_enabled,
-    qa_container_key, qa_rect_metadata, ContainerVisual, LayoutEdit, AUTO_LAYOUT_NODE_PADDING,
-    CONTAINER_HEADER_HEIGHT, MIN_CONTAINER_SIZE, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH,
+    clipped_qa_rect, container_rect, estimated_node_rect, node_editor_port_interactions_enabled,
+    node_editor_resize_interactions_enabled, qa_container_key, qa_rect_metadata,
+    wire_port_drop_rect, ContainerVisual, LayoutEdit, PortAnchorKind, AUTO_LAYOUT_NODE_PADDING,
+    CONTAINER_HEADER_HEIGHT, MIN_CONTAINER_SIZE, PORT_SOCKET_SIZE, RESIZE_CORNER_SIZE,
+    RESIZE_HIT_WIDTH,
 };
 
 /// Capture a resize press before Snarl gets a chance to treat the same
@@ -16,6 +18,7 @@ use crate::ui::panels::node_editor::{
 /// completed frame, which is also the source of the HTTP QA component rects.
 pub(in crate::ui::panels::node_editor) fn capture_container_resize_before_canvas(
     ui: &egui::Ui,
+    project: &Project,
     containers: &[ContainerVisual],
     to_global: egui::emath::TSTransform,
     canvas_clip: egui::Rect,
@@ -35,7 +38,8 @@ pub(in crate::ui::panels::node_editor) fn capture_container_resize_before_canvas
     }) else {
         return false;
     };
-    let Some((container, edge)) = resize_hit(containers, to_global, canvas_clip, pointer) else {
+    let Some((container, edge)) = resize_hit(project, containers, to_global, canvas_clip, pointer)
+    else {
         return false;
     };
     state.container_resize = Some(ContainerResizeState {
@@ -49,14 +53,17 @@ pub(in crate::ui::panels::node_editor) fn capture_container_resize_before_canvas
     true
 }
 
-fn resize_hit(
-    containers: &[ContainerVisual],
+fn resize_hit<'a>(
+    project: &Project,
+    containers: &'a [ContainerVisual],
     to_global: egui::emath::TSTransform,
     canvas_clip: egui::Rect,
     pointer: egui::Pos2,
-) -> Option<(&ContainerVisual, ContainerResizeEdge)> {
+) -> Option<(&'a ContainerVisual, ContainerResizeEdge)> {
     containers.iter().rev().find_map(|container| {
-        if container.collapsed {
+        if container.collapsed
+            || pointer_hits_container_output(project, container, to_global, canvas_clip, pointer)
+        {
             return None;
         }
         let global = to_global * container.rect();
@@ -64,6 +71,34 @@ fn resize_hit(
             .into_iter()
             .find(|(_, _, rect, _)| rect.intersect(canvas_clip).contains(pointer))
             .map(|(edge, _, _, _)| (container, edge))
+    })
+}
+
+fn pointer_hits_container_output(
+    project: &Project,
+    container: &ContainerVisual,
+    to_global: egui::emath::TSTransform,
+    canvas_clip: egui::Rect,
+    pointer: egui::Pos2,
+) -> bool {
+    if !node_editor_port_interactions_enabled(to_global.scaling) {
+        return false;
+    }
+    let output_count = project
+        .port_definitions(container.owner)
+        .into_iter()
+        .filter(|definition| {
+            definition.direction == PortDirection::Output && definition.side == PortSide::Right
+        })
+        .count();
+    (0..output_count).any(|index| {
+        let graph_rect = egui::Rect::from_center_size(
+            container.embedded_port_center(PortAnchorKind::ExternalOutputs, index),
+            egui::Vec2::splat(PORT_SOCKET_SIZE),
+        );
+        wire_port_drop_rect(to_global * graph_rect)
+            .intersect(canvas_clip)
+            .contains(pointer)
     })
 }
 
@@ -91,6 +126,9 @@ pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
             continue;
         }
         let global = to_global * container.rect();
+        let pointer_on_output = pointer.3.is_some_and(|position| {
+            pointer_hits_container_output(project, container, to_global, canvas_clip, position)
+        });
         for (edge, label, unclipped_rect, cursor) in resize_regions(global) {
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
             let id = format!(
@@ -113,12 +151,13 @@ pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
                     "visible_in_canvas": rect.is_positive(),
                 })),
             );
-            if resize_interactions && rect.is_positive() {
+            if resize_interactions && rect.is_positive() && !pointer_on_output {
                 ui.interact(rect, egui::Id::new(id), egui::Sense::hover())
                     .on_hover_cursor(cursor);
             }
             if resize_interactions
                 && rect.is_positive()
+                && !pointer_on_output
                 && hit.is_none()
                 && pointer.3.is_some_and(|position| rect.contains(position))
             {
@@ -128,6 +167,11 @@ pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
     }
 
     if !resize_interactions {
+        state.container_resize = None;
+        return Vec::new();
+    }
+
+    if state.normal_connect_gesture.is_some() || state.wire_gesture.is_some() {
         state.container_resize = None;
         return Vec::new();
     }
@@ -366,6 +410,7 @@ pub(in crate::ui::panels::node_editor) fn container_child_bounds(
 mod tests {
     use super::*;
     use crate::ui::panels::node_editor::{resolve_node_editor_transform, ContainerKind};
+    use library::model::Composition;
     use uuid::Uuid;
 
     #[test]
@@ -423,6 +468,7 @@ mod tests {
         let edge = (transform * visual.rect()).right_center();
         let context = egui::Context::default();
         let mut state = NodeEditorState::default();
+        let project = Project::new("resize capture");
 
         let output = context.run(
             egui::RawInput {
@@ -442,6 +488,7 @@ mod tests {
                 egui::CentralPanel::default().show(context, |ui| {
                     assert!(capture_container_resize_before_canvas(
                         ui,
+                        &project,
                         std::slice::from_ref(&visual),
                         transform,
                         screen,
@@ -461,5 +508,69 @@ mod tests {
         );
         resolve_node_editor_transform(&mut scene_pan, Some(resize.canvas_transform));
         assert_eq!(scene_pan, transform);
+    }
+
+    #[test]
+    fn container_output_socket_preempts_overlapping_top_right_resize_hit() {
+        let mut project = Project::new("output before resize");
+        let (composition, mut track) = Composition::new("Main", 640, 360, 24.0, 2.0);
+        track.ui_position = [100.0, 80.0];
+        track.ui_size = [600.0, 420.0];
+        let visual = ContainerVisual {
+            owner: PortOwner::Track(track.id),
+            kind: ContainerKind::Track,
+            position: track.ui_position,
+            size: track.ui_size,
+            collapsed: false,
+        };
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        let transform = egui::emath::TSTransform::IDENTITY;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let output = visual.embedded_port_center(PortAnchorKind::ExternalOutputs, 0);
+        let top_right = resize_regions(visual.rect())
+            .into_iter()
+            .find(|(edge, _, _, _)| *edge == ContainerResizeEdge::TopRight)
+            .expect("top-right resize region")
+            .2;
+
+        assert!(top_right.contains(output), "fixture must reproduce overlap");
+        assert!(pointer_hits_container_output(
+            &project, &visual, transform, screen, output,
+        ));
+        assert!(resize_hit(
+            &project,
+            std::slice::from_ref(&visual),
+            transform,
+            screen,
+            output,
+        )
+        .is_none());
+
+        let ordinary_right_edge = visual.rect().right_center();
+        assert!(!pointer_hits_container_output(
+            &project,
+            &visual,
+            transform,
+            screen,
+            ordinary_right_edge,
+        ));
+        assert_eq!(
+            resize_hit(
+                &project,
+                std::slice::from_ref(&visual),
+                transform,
+                screen,
+                ordinary_right_edge,
+            )
+            .map(|(_, edge)| edge),
+            Some(ContainerResizeEdge::Right),
+        );
     }
 }

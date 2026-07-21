@@ -201,12 +201,14 @@ mod tests {
         let mut project = Project::new("malformed foreign image binding");
         let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let first_clip = Clip::new("First", 0.0, 1.0);
         let first_clip_id = first_clip.id;

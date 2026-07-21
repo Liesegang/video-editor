@@ -201,12 +201,14 @@ mod tests {
         let (composition, track) = Composition::new("Main", 640, 360, 30.0, 8.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let clip = Clip::new("Opening", 0.0, 4.0);
         let clip_id = clip.id;

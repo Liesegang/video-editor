@@ -2,6 +2,7 @@ use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+use crate::ui::widgets::searchable_context_menu::show_searchable_items_with_qa;
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
 use library::model::project::{PortOwner, TIME_PORT};
@@ -116,38 +117,39 @@ impl ProjectNodeViewer<'_> {
                             row.connection_id,
                         ))
                         .selected_text(blend_mode_label(row.authored_blend_mode))
-                        .width(72.0)
+                        .width(126.0)
+                        // Search and category accordions are interactive popup
+                        // contents. Keep the popup open until a mode is chosen
+                        // or the user clicks outside it.
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show_ui(ui, |ui| {
-                            for blend_mode in AUTHORED_BLEND_MODES {
-                                let selected = blend_mode == row.authored_blend_mode;
-                                let option = ui.add_enabled(
-                                    !selected,
-                                    egui::Button::selectable(
-                                        selected,
-                                        blend_mode_label(blend_mode),
-                                    )
-                                    .frame(false),
-                                );
-                                register_merge_layer_popup_component(
-                                    format!(
-                                        "node_editor.merge_layer.blend.{}:{merge_id}:{}",
-                                        blend_mode_qa_key(blend_mode),
-                                        row.connection_id
-                                    ),
-                                    "node_editor_merge_layer_blend_option",
-                                    option.rect,
-                                    option.enabled(),
-                                    ui.clip_rect(),
-                                    row.qa_metadata(Some(serde_json::json!({
-                                        "action": "set_authored_blend",
-                                        "blend_mode": blend_mode_qa_key(blend_mode),
-                                        "selected": selected,
-                                    }))),
-                                );
-                                if option.clicked() {
-                                    selected_blend = Some(blend_mode);
-                                    ui.close();
-                                }
+                            let mut items = blend_mode_searchable_items(row.authored_blend_mode);
+                            for item in &mut items {
+                                let blend_mode = item.value;
+                                let selected = !item.enabled;
+                                item.qa_id = Some(format!(
+                                    "node_editor.merge_layer.blend.{}:{merge_id}:{}",
+                                    blend_mode_qa_key(blend_mode),
+                                    row.connection_id
+                                ));
+                                item.qa_metadata = Some(row.qa_metadata(Some(serde_json::json!({
+                                    "action": "set_authored_blend",
+                                    "blend_mode": blend_mode_qa_key(blend_mode),
+                                    "blend_group": blend_mode.group().qa_key(),
+                                    "selected": selected,
+                                    "coordinate_space": "screen_points",
+                                }))));
+                            }
+                            if let Some(blend_mode) = show_searchable_items_with_qa(
+                                ui,
+                                &format!("merge_layer_blend_menu:{merge_id}:{}", row.connection_id),
+                                Some(&format!(
+                                    "node_editor.merge_layer.blend_search:{merge_id}:{}",
+                                    row.connection_id
+                                )),
+                                &items,
+                            ) {
+                                selected_blend = Some(blend_mode);
                             }
                         })
                         .response

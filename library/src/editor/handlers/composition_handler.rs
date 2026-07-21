@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::project::{Composition, Project};
-use crate::model::{NodeContent, ReferenceContent};
+use crate::model::{CompositionInstanceContent, NodeContent};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -104,8 +104,9 @@ impl CompositionHandler {
             for node in proj.nodes.values() {
                 if matches!(
                     node.content(),
-                    NodeContent::Reference(ReferenceContent { target_id, .. })
-                        if *target_id == comp_id
+                    NodeContent::CompositionInstance(CompositionInstanceContent {
+                        composition_id,
+                    }) if *composition_id == comp_id
                 ) {
                     return true;
                 }
@@ -159,12 +160,14 @@ mod tests {
         let mut project = Project::new("composition handler");
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         (project, composition_id)
     }
 

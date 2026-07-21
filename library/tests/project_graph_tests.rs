@@ -20,7 +20,7 @@ use library::model::project::{
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
-    Asset, AssetKind, BlendMode, Clip, Node, NodeContent, ReferenceContent, Track,
+    Asset, AssetKind, BlendMode, Clip, CompositionInstanceContent, Node, NodeContent, Track,
 };
 use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
@@ -35,12 +35,14 @@ fn project_with_composition() -> (Project, Uuid, Uuid) {
     let (composition, track) = Composition::new("main", 320, 180, 30.0, 10.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     (project, composition_id, track_id)
 }
 
@@ -356,7 +358,7 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
         source,
         address(PortOwner::Node(second_merge_id), MERGE_IMAGES_PORT),
     )?;
-    project.set_connection_blend_mode(first_wire, BlendMode::Add)?;
+    project.set_connection_blend_mode(first_wire, BlendMode::LinearDodge)?;
     project.set_connection_blend_mode(second_wire, BlendMode::Multiply)?;
 
     let json = project.save()?;
@@ -372,7 +374,7 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
             .as_str()
             .context("serialized blend mode must be a string")
     };
-    assert_eq!(serialized_blend(first_wire)?, "Add");
+    assert_eq!(serialized_blend(first_wire)?, "LinearDodge");
     assert_eq!(serialized_blend(second_wire)?, "Multiply");
     assert_eq!(Project::load(&json)?, project);
 
@@ -849,9 +851,10 @@ fn containment_is_exact_and_reparenting_does_not_duplicate_ownership() -> Result
     let (mut project, composition_id, first_track_id) = project_with_composition();
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, second_track_id)?;
 
     let clip_id = add_clip(&mut project, first_track_id, "movable")?;
@@ -1102,12 +1105,14 @@ fn track_and_clip_reparent_remap_only_direct_parent_metadata_and_still_render() 
     let (second_composition, second_track) = Composition::new("second", 320, 180, 30.0, 10.0);
     let second_composition_id = second_composition.id;
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(second_composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(second_composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let clip_id = add_clip(&mut project, first_track_id, "movable clip")?;
     let node_id = add_node(
@@ -1204,24 +1209,28 @@ fn direct_node_reparent_remaps_metadata_for_every_container_pair() -> Result<()>
             let (first_composition, first_track) = Composition::new("first", 320, 180, 30.0, 10.0);
             let first_composition_id = first_composition.id;
             let first_track_id = first_track.id;
-            project
-                .add_track(first_track)
-                .expect("container structural Merge insertion must succeed");
-            project
-                .add_composition(first_composition)
-                .expect("container structural Merge insertion must succeed");
+            assert!(
+                project.add_track(first_track).is_ok(),
+                "container structural Merge insertion must succeed"
+            );
+            assert!(
+                project.add_composition(first_composition).is_ok(),
+                "container structural Merge insertion must succeed"
+            );
             let first_clip_id = add_clip(&mut project, first_track_id, "first clip")?;
 
             let (second_composition, second_track) =
                 Composition::new("second", 320, 180, 30.0, 10.0);
             let second_composition_id = second_composition.id;
             let second_track_id = second_track.id;
-            project
-                .add_track(second_track)
-                .expect("container structural Merge insertion must succeed");
-            project
-                .add_composition(second_composition)
-                .expect("container structural Merge insertion must succeed");
+            assert!(
+                project.add_track(second_track).is_ok(),
+                "container structural Merge insertion must succeed"
+            );
+            assert!(
+                project.add_composition(second_composition).is_ok(),
+                "container structural Merge insertion must succeed"
+            );
             let second_clip_id = add_clip(&mut project, second_track_id, "second clip")?;
 
             let sources = [
@@ -1300,9 +1309,10 @@ fn same_parent_reorder_preserves_metadata_connections_and_output_binding() -> Re
     let (mut project, composition_id, first_track_id) = project_with_composition();
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, second_track_id)?;
     project.connect_ports(
         address(PortOwner::Composition(composition_id), TIME_PORT),
@@ -1391,9 +1401,10 @@ fn node_reparent_preserves_graph_image_wires_ids_orders_targets_and_rendering() 
     let (mut project, _composition_id, first_track_id) = project_with_composition();
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let composition_id = project.compositions[0].id;
     project.attach_track_to_composition(composition_id, second_track_id)?;
     let first_source_id = add_node(
@@ -1589,9 +1600,10 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
     let (mut project, composition_id, first_track_id) = project_with_composition();
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, second_track_id)?;
     let first_clip = add_clip(&mut project, first_track_id, "source clip")?;
     let second_clip = add_clip(&mut project, second_track_id, "target clip")?;
@@ -1600,40 +1612,34 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
         NodeContainer::Clip(first_clip),
         solid_node("source"),
     )?;
-    let reference_id = add_node(
+    let transform_id = add_node(
         &mut project,
         NodeContainer::Clip(second_clip),
-        Node::new_reference(
-            "reference",
-            ReferenceContent {
-                target_id: composition_id,
-                sync_global_time: false,
-            },
-        ),
+        PluginManager::default().create_image_transform_operation_node()?,
     )?;
 
     project.connect_ports(
         address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-        address(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
+        address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
     )?;
     assert_eq!(
         project.find_node_container(source_id),
         Some(NodeContainer::Clip(first_clip))
     );
     assert_eq!(
-        project.find_node_container(reference_id),
+        project.find_node_container(transform_id),
         Some(NodeContainer::Clip(second_clip))
     );
 
     let escaped = project.connect_ports(
         address(PortOwner::Composition(composition_id), TIME_PORT),
-        address(PortOwner::Node(reference_id), TIME_PORT),
+        address(PortOwner::Node(transform_id), TIME_PORT),
     );
     assert_eq!(
         escaped,
         Err(ProjectGraphError::InternalPortEscapesContainer {
             source_owner: PortOwner::Composition(composition_id),
-            target_owner: PortOwner::Node(reference_id),
+            target_owner: PortOwner::Node(transform_id),
         })
     );
     Ok(())
@@ -1641,7 +1647,7 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
 
 #[test]
 fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip() -> Result<()> {
-    let (mut project, composition_id, track_id) = project_with_composition();
+    let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "clip")?;
     let first_id = add_node(
         &mut project,
@@ -1653,16 +1659,10 @@ fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip(
         NodeContainer::Clip(clip_id),
         solid_node("second"),
     )?;
-    let reference_id = add_node(
+    let transform_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new_reference(
-            "single",
-            ReferenceContent {
-                target_id: composition_id,
-                sync_global_time: false,
-            },
-        ),
+        PluginManager::default().create_image_transform_operation_node()?,
     )?;
     let merge_id = add_node(
         &mut project,
@@ -1670,7 +1670,7 @@ fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip(
         Node::new_merge("merge"),
     )?;
 
-    let single_target = address(PortOwner::Node(reference_id), IMAGE_INPUT_PORT);
+    let single_target = address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT);
     let first_single = project.connect_ports(
         address(PortOwner::Node(first_id), IMAGE_OUTPUT_PORT),
         single_target.clone(),
@@ -2016,9 +2016,10 @@ fn structural_outputs_are_explicit_and_direct_helpers_remain_unwired() -> Result
 
     let second_track = Track::new("second track");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, second_track_id)?;
     let third_clip_id = add_clip(&mut project, second_track_id, "third clip")?;
     let third_clip_node_id = add_node(
@@ -2240,12 +2241,14 @@ fn cross_container_image_consumers_do_not_change_the_source_output_binding() -> 
     let (mut project, source_composition_id, source_track_id) = project_with_composition();
     let (target_composition, target_track) = Composition::new("target", 320, 180, 30.0, 10.0);
     let target_composition_id = target_composition.id;
-    project
-        .add_track(target_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(target_composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(target_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(target_composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let target_merge_id = add_node(
         &mut project,
         NodeContainer::Composition(target_composition_id),
@@ -2373,7 +2376,7 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
 }
 
 #[test]
-fn reference_materializes_an_empty_nested_composition_as_its_opaque_background() -> Result<()> {
+fn composition_instance_materializes_an_empty_target_as_its_opaque_background() -> Result<()> {
     let (mut project, _parent_id, parent_track_id) = project_with_composition();
     let (mut nested, nested_track) = Composition::new("empty nested", 640, 360, 24.0, 2.0);
     let nested_background = Color {
@@ -2384,27 +2387,28 @@ fn reference_materializes_an_empty_nested_composition_as_its_opaque_background()
     };
     nested.background_color = nested_background.clone();
     let nested_id = nested.id;
-    project
-        .add_track(nested_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(nested)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(nested_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(nested).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
-    let clip_id = add_clip(&mut project, parent_track_id, "reference clip")?;
-    let reference_id = add_node(
+    let clip_id = add_clip(&mut project, parent_track_id, "composition instance clip")?;
+    let instance_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new_reference(
-            "empty composition reference",
-            ReferenceContent {
-                target_id: nested_id,
-                sync_global_time: false,
+        Node::new_composition_instance(
+            "empty composition instance",
+            CompositionInstanceContent {
+                composition_id: nested_id,
             },
         ),
     )?;
     project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(reference_id))
+        .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
         .map_err(|error| anyhow!(error))?;
 
     let rendered = frame(&project, 0)?;
@@ -2429,12 +2433,14 @@ fn merge_keeps_an_empty_nested_composition_as_a_transparent_produced_input() -> 
     };
     nested.background_color = nested_background.clone();
     let nested_id = nested.id;
-    project
-        .add_track(nested_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(nested)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(nested_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(nested).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let merge_id = add_node(
         &mut project,
@@ -2531,7 +2537,7 @@ fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_
         })
         .context("active Clip structural edge must exist")?
         .id;
-    project.set_connection_blend_mode(inactive_connection_id, BlendMode::Add)?;
+    project.set_connection_blend_mode(inactive_connection_id, BlendMode::LinearDodge)?;
     project.set_connection_blend_mode(active_connection_id, BlendMode::Screen)?;
 
     let project_before_render = project.clone();
@@ -2560,7 +2566,7 @@ fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_
             .find(|connection| connection.id == inactive_connection_id)
             .context("inactive connection must exist")?
             .blend_mode,
-        BlendMode::Add,
+        BlendMode::LinearDodge,
     );
     assert_eq!(
         project
@@ -2670,7 +2676,7 @@ fn composition_duration_gates_direct_composition_and_track_nodes() -> Result<()>
 }
 
 #[test]
-fn nested_reference_does_not_materialize_target_background_after_its_duration() -> Result<()> {
+fn composition_instance_does_not_materialize_target_background_after_its_duration() -> Result<()> {
     let (mut project, parent_id, parent_track_id) = project_with_composition();
     let parent_background = Color {
         r: 7,
@@ -2691,12 +2697,14 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
         a: 255,
     };
     let target_id = target.id;
-    project
-        .add_track(target_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(target)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(target_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(target).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let target_node_id = add_node(
         &mut project,
         NodeContainer::Composition(target_id),
@@ -2708,23 +2716,27 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
         PortOwner::Node(target_node_id),
     )?;
 
-    let reference = Node::new_reference(
-        "short target reference",
-        ReferenceContent {
-            target_id,
-            sync_global_time: true,
+    let instance_clip = Clip::new("short target placement", 0.0, 10.0);
+    let instance_clip_id = instance_clip.id;
+    project.add_clip(instance_clip);
+    project.attach_clip_to_track(parent_track_id, instance_clip_id)?;
+    let instance = Node::new_composition_instance(
+        "short target instance",
+        CompositionInstanceContent {
+            composition_id: target_id,
         },
     );
-    let reference_id = add_node(
+    let instance_id = add_node(
         &mut project,
-        NodeContainer::Composition(parent_id),
-        reference,
+        NodeContainer::Clip(instance_clip_id),
+        instance,
     )?;
-    let reference_connection_id = connect_source_to_structural_merge(
-        &mut project,
-        NodeContainer::Composition(parent_id),
-        PortOwner::Node(reference_id),
-    )?;
+    project
+        .set_output_node(NodeContainer::Clip(instance_clip_id), Some(instance_id))
+        .map_err(|error| anyhow!(error))?;
+    project
+        .set_audio_output_node(NodeContainer::Clip(instance_clip_id), Some(instance_id))
+        .map_err(|error| anyhow!(error))?;
 
     assert!(
         object_source_ids(&frame(&project, 29)?.items).contains(&target_node_id),
@@ -2753,34 +2765,32 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
         "Merge must skip an inactive nested Composition without suppressing its active sibling"
     );
 
-    assert!(project.disconnect_connection(reference_connection_id));
     assert!(project.disconnect_connection(sibling_connection_id));
-    let local_clip = Clip::new("local reference", 5.0, 2.0);
+    let local_clip = Clip::new("local composition instance", 5.0, 2.0);
     let local_clip_id = local_clip.id;
     project.add_clip(local_clip);
     project.attach_clip_to_track(parent_track_id, local_clip_id)?;
-    let local_reference = Node::new_reference(
-        "local short target reference",
-        ReferenceContent {
-            target_id,
-            sync_global_time: false,
+    let local_instance = Node::new_composition_instance(
+        "local short target instance",
+        CompositionInstanceContent {
+            composition_id: target_id,
         },
     );
-    let local_reference_id = add_node(
+    let local_instance_id = add_node(
         &mut project,
         NodeContainer::Clip(local_clip_id),
-        local_reference,
+        local_instance,
     )?;
     project
-        .set_output_node(NodeContainer::Clip(local_clip_id), Some(local_reference_id))
+        .set_output_node(NodeContainer::Clip(local_clip_id), Some(local_instance_id))
         .map_err(|error| anyhow!(error))?;
     assert!(
         object_source_ids(&frame(&project, 179)?.items).contains(&target_node_id),
-        "an unsynced Reference must use Clip-local time before the target duration"
+        "an unsynced Composition Instance must use Clip-local time before the target duration"
     );
     assert!(
         frame(&project, 180)?.items.is_empty(),
-        "an unsynced Reference must become NoOutput at the target's local duration boundary"
+        "an unsynced Composition Instance must become NoOutput at the target's local duration boundary"
     );
     Ok(())
 }
@@ -2790,21 +2800,25 @@ fn explicit_fmod_time_loop_cannot_resurrect_a_composition_after_its_duration() -
     let mut project = Project::new("Composition activity before Time remap");
     let (target, target_track) = Composition::new("short target", 320, 180, 30.0, 1.0);
     let target_id = target.id;
-    project
-        .add_track(target_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(target)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(target_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(target).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let (driver, driver_track) = Composition::new("time driver", 320, 180, 30.0, 10.0);
     let driver_id = driver.id;
-    project
-        .add_track(driver_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(driver)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(driver_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(driver).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let target_node_id = add_node(
         &mut project,
@@ -2895,7 +2909,8 @@ fn reverse_stored_duplicate_merge_project() -> Result<(Project, PortAddress, [Uu
     )?;
     let target = address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     let ids = [Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)];
-    let blends = [BlendMode::Add, BlendMode::Multiply, BlendMode::Screen];
+    use BlendMode::{LinearDodge, Multiply, Screen};
+    let blends = [LinearDodge, Multiply, Screen];
     let mut connections = sources
         .into_iter()
         .zip(ids)
@@ -2922,7 +2937,6 @@ fn reorder_duplicate_variadic_orders_uses_uuid_visible_order_and_preserves_wires
     let persisted = project.save()?;
     let mut project = Project::load(&persisted)?;
     let original_connections = project.connections.clone();
-
     assert_eq!(
         project
             .connections

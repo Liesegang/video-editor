@@ -1,5 +1,4 @@
 use super::ProjectNodeViewer;
-use crate::state::context_types::NodeEditorEditableWire;
 use crate::ui::panels::node_editor::*;
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
@@ -209,8 +208,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 }
                 if coordinate_double_clicked {
                     if let Some(node) = self.project.get_node(project_node_id) {
-                        if let NodeContent::Reference(reference) = node.content() {
-                            *self.pending_navigation = Some(reference.target_id);
+                        if let NodeContent::CompositionInstance(instance) = node.content() {
+                            *self.pending_navigation = Some(instance.composition_id);
                         }
                     }
                 }
@@ -671,7 +670,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
-                NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Merge => {}
+                NodeContent::Media(_)
+                | NodeContent::CompositionInstance(_)
+                | NodeContent::Merge => {}
             }
         });
     }
@@ -880,38 +881,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             to.id.input,
             false,
         );
-        let context_target =
-            match &edit {
-                Some(NodeEdit::Disconnect { from, to }) => self
-                    .project
-                    .connections
-                    .iter()
-                    .find(|connection| connection.from == *from && connection.to == *to)
-                    .map(|connection| NodeEditorEditableWire::ProjectConnection {
-                        connection_id: connection.id,
-                    }),
-                Some(NodeEdit::SetOutputNode {
-                    owner,
-                    node_id: None,
-                }) => container_output_node_id(self.project, *owner, PortDataType::Image).map(
-                    |node_id| NodeEditorEditableWire::OutputBinding {
-                        owner: *owner,
-                        node_id,
-                        data_type: PortDataType::Image,
-                    },
-                ),
-                Some(NodeEdit::SetAudioOutputNode {
-                    owner,
-                    node_id: None,
-                }) => container_output_node_id(self.project, *owner, PortDataType::Audio).map(
-                    |node_id| NodeEditorEditableWire::OutputBinding {
-                        owner: *owner,
-                        node_id,
-                        data_type: PortDataType::Audio,
-                    },
-                ),
-                _ => None,
-            };
+        let context_target = edit
+            .as_ref()
+            .and_then(|edit| disconnect_context_target(self.project, edit));
         if let Some(target) = context_target {
             *self.wire_context_request = Some(target);
             return;

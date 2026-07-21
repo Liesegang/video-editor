@@ -13,12 +13,14 @@ pub(super) fn fixture() -> (Project, Uuid, Uuid, Uuid, Uuid, Uuid) {
     track.ui_size = [1100.0, 720.0];
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut clip = library::model::Clip::new("Clip", 1.0, 5.0);
     clip.ui_position = [260.0, 260.0];

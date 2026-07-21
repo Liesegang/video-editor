@@ -319,12 +319,14 @@ mod tests {
         let (composition, track) = Composition::new("Main", 320, 180, 30.0, 2.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let mut context = EditorContext::new(composition_id);
         context.timeline.current_time = 1.25;
         context.timeline.expanded_tracks.insert(track_id);

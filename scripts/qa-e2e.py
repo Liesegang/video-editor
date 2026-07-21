@@ -3077,6 +3077,12 @@ def run_node_wire_suite(client):
             raise QaFailure("Merge row blend selector omitted wire-owned metadata")
         client.click_component(select_id)
 
+        search_id = "node_editor.merge_layer.blend_search:{}:{}".format(
+            MERGE, layer_connection_id
+        )
+        client.wait_component_settled(search_id)
+        client.replace_component_text(search_id, target_blend)
+
         option_id = merge_row_id("blend", layer_connection_id, target_blend)
         _, option_component = client.wait_component_settled(option_id)
         option_metadata = option_component.get("metadata") or {}
@@ -3227,20 +3233,20 @@ def run_node_wire_suite(client):
     blended_preview = dict(blend_one_rendered["editor"]["preview"])
 
     second_blend_before = client.state()
-    click_merge_row_blend(second_blend_connection_id, "normal", "add")
+    click_merge_row_blend(second_blend_connection_id, "normal", "linear_dodge")
     dual_blend_project = client.wait_project(
-        "second Merge row authored Add",
+        "second Merge row authored Linear Dodge (Add)",
         lambda project: (
             project_connection(project, connection_id)["blend_mode"] == "Multiply"
             and project_connection(project, second_blend_connection_id)["blend_mode"]
-            == "Add"
+            == "LinearDodge"
         ),
     )
     assert_history_delta(
         second_blend_before,
         dual_blend_project,
         1,
-        "second Merge row authored Add",
+        "second Merge row authored Linear Dodge (Add)",
     )
     for layer_id, authored in original_by_id.items():
         current = project_connection(dual_blend_project["project"], layer_id)
@@ -3279,7 +3285,7 @@ def run_node_wire_suite(client):
         and front_connection["to"] == original["to"]
         and front_connection["order"] == 2
         and front_connection["blend_mode"] == "Multiply"
-        and second_blended_connection["blend_mode"] == "Add"
+        and second_blended_connection["blend_mode"] == "LinearDodge"
         and second_blended_connection["order"] == 1
     ):
         raise QaFailure("Merge row reorder lost wire identity or independent blend")
@@ -3310,7 +3316,7 @@ def run_node_wire_suite(client):
         front_row_metadata.get("back_to_front_index") == 2
         and front_row_metadata.get("authored_blend_mode") == "multiply"
         and second_row_metadata.get("back_to_front_index") == 1
-        and second_row_metadata.get("authored_blend_mode") == "add"
+        and second_row_metadata.get("authored_blend_mode") == "linear_dodge"
     ):
         raise QaFailure("Merge rows did not retain two independent authored modes")
 
@@ -3340,14 +3346,14 @@ def run_node_wire_suite(client):
     )
     undo_second_blend = undo_project_edit(
         client,
-        "second Merge row authored Add",
+        "second Merge row authored Linear Dodge (Add)",
         lambda project: project["connections"] == blend_one_connections,
     )
     blend_one_restored = wait_preview_hash_after(
         client,
         blended_preview["pixel_hash"],
         dual_restored["editor"]["preview"]["render_revision"],
-        "second Merge row authored Add Undo",
+        "second Merge row authored Linear Dodge (Add) Undo",
     )
     undo_first_blend = undo_project_edit(
         client,
@@ -3384,7 +3390,7 @@ def run_node_wire_suite(client):
     )
     redo_second_blend = redo_project_edit(
         client,
-        "second Merge row authored Add",
+        "second Merge row authored Linear Dodge (Add)",
         lambda project: project["connections"] == dual_blend_connections,
     )
     redo_front = redo_project_edit(
@@ -3406,7 +3412,7 @@ def run_node_wire_suite(client):
     )
     undo_project_edit(
         client,
-        "second Merge row authored Add after Redo",
+        "second Merge row authored Linear Dodge (Add) after Redo",
         lambda project: project["connections"] == blend_one_connections,
     )
     undo_project_edit(

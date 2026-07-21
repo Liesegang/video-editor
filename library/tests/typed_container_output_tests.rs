@@ -15,12 +15,14 @@ fn project_with_clip() -> Result<(Project, Uuid, Uuid, Uuid)> {
     let (composition, track) = Composition::new("main", 64, 64, 24.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let clip = Clip::new("media", 0.0, 2.0);
     let clip_id = clip.id;
     project.add_clip(clip);

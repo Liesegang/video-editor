@@ -361,10 +361,10 @@ fn install_named(
 
     project
         .add_track(track_a)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert primary QA Track: {error}"))?;
     project
         .add_track(track_b)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert secondary QA Track: {error}"))?;
     project.add_clip(clip_a1);
     project.add_clip(clip_a2);
     project.add_clip(clip_b1);
@@ -388,7 +388,7 @@ fn install_named(
     project.add_node(shape_merge);
     project
         .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert QA Composition: {error}"))?;
 
     for (source_owner, source_port, target_node, target_port) in [
         (

@@ -783,6 +783,10 @@ pub struct NodeEditorWireContextMenu {
     pub position: egui::Pos2,
     pub open_time: f64,
     pub inserting: bool,
+    /// Commands stay inert until a new primary/touch press or keyboard input
+    /// occurs after the secondary gesture that opened the menu. This prevents
+    /// the opening release from activating a command rendered under it.
+    pub actions_armed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

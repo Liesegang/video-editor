@@ -70,12 +70,14 @@ fn project_with_graph(graph: NodeGraphBundle) -> AnyResult<Project> {
     let mut project = Project::new("Transform graph");
     let (composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 3.0);
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let clip = Clip::new("graph", 0.0, 3.0);
     let clip_id = clip.id;
     project.add_clip(clip);

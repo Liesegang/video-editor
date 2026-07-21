@@ -102,12 +102,14 @@ fn setup_project() -> (Project, Uuid, Uuid) {
     composition.background_color = Color::black();
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     (project, composition_id, track_id)
 }
 

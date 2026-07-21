@@ -97,10 +97,10 @@ pub(super) fn install(
 
     project
         .add_track(audio_track)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert audio Track: {error}"))?;
     project
         .add_track(video_track)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert video Track: {error}"))?;
     project.add_clip(audio_clip);
     project.add_clip(video_clip);
     project.assets.push(audio_asset);
@@ -109,7 +109,7 @@ pub(super) fn install(
     project.add_node(video_node);
     project
         .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert waveform Composition: {error}"))?;
 
     for (clip_id, node_id) in [
         (AUDIO_CLIP_ID, AUDIO_NODE_ID),

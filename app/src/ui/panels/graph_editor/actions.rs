@@ -463,14 +463,16 @@ mod tests {
         composition.track_ids = vec![track_id];
 
         let mut model = Project::new("graph drag");
-        model
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            model.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         model.add_clip(clip);
         model.add_node(node);
-        model
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            model.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let project = Arc::new(RwLock::new(model));
         let service = EditorService::new(
             Arc::clone(&project),

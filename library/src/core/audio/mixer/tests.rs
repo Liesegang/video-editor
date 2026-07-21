@@ -1,14 +1,15 @@
+use super::property_evaluation::{AudioPropertyContext, volume_at};
 use super::*;
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, PortAddress, PortDefinition, PortExposure, PortSide,
+    AUDIO_OUTPUT_PORT, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
 };
 use crate::model::property::{Property, PropertyMap, PropertyValue};
-use crate::model::{MediaContent, NodeContainer, Track};
+use crate::model::{Clip, MediaContent, NodeContainer, Track};
 use ordered_float::OrderedFloat;
 use std::path::PathBuf;
 
 #[derive(Default)]
-struct TestAudioFiles(Vec<PathBuf>);
+pub(super) struct TestAudioFiles(Vec<PathBuf>);
 
 impl TestAudioFiles {
     fn create(&mut self) -> String {
@@ -30,7 +31,7 @@ impl Drop for TestAudioFiles {
     }
 }
 
-fn add_audio_node(
+pub(super) fn add_audio_node(
     project: &mut Project,
     cache_manager: &CacheManager,
     files: &mut TestAudioFiles,
@@ -105,7 +106,11 @@ fn set_volume(properties: &mut PropertyMap, volume: f64) {
     );
 }
 
-fn attach_audio_output(project: &mut Project, container: NodeContainer, node_id: uuid::Uuid) {
+pub(super) fn attach_audio_output(
+    project: &mut Project,
+    container: NodeContainer,
+    node_id: uuid::Uuid,
+) {
     project
         .attach_node_to_container(container, node_id)
         .unwrap();
@@ -182,12 +187,14 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
     if !matches!(scope, TestNodeScope::Composition) {
         set_volume(&mut track.properties, 0.5);
     }
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let container = match scope {
         TestNodeScope::Composition => NodeContainer::Composition(composition_id),
@@ -276,7 +283,8 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         expected
     );
 
-    let requests = audio_window_requests_for_composition(&project, composition, 0, 4, 4);
+    let requests =
+        audio_window_requests_for_composition(&project, composition, 0, 4, 4, &plugin_manager);
     let requested_sources = requests
         .iter()
         .map(|request| (request.source.path.clone(), request.source.stream_index))
@@ -311,7 +319,10 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         vec![0.0; 4],
         "a disabled Node bound to Audio must be NoOutput"
     );
-    assert!(audio_window_requests_for_composition(&project, composition, 0, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(&project, composition, 0, 4, 4, &plugin_manager,)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -335,18 +346,21 @@ fn mixes_every_top_level_track_and_all_audio_nodes() {
     let (composition, first_track) = Composition::new("main", 1920, 1080, 30.0, 1.0);
     let composition_id = composition.id;
     let first_track_id = first_track.id;
-    project
-        .add_track(first_track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(first_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let second_track = Track::new("second");
     let second_track_id = second_track.id;
-    project
-        .add_track(second_track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(second_track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project
         .attach_track_to_composition(composition_id, second_track_id)
         .unwrap();
@@ -385,12 +399,14 @@ fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     // A directly loaded malformed Project can repeat a child identity. The
     // authoring API rejects it, so reproduce the persisted corruption only
     // after materializing the required structural Merge state.
@@ -426,12 +442,14 @@ fn applies_clip_timing_trim_and_stretch_per_output_frame() {
     let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut clip = Clip::new("retimed", 0.5, 1.0);
     clip.trim_in = OrderedFloat(0.25);
@@ -480,12 +498,14 @@ fn explicit_parent_audio_bindings_override_derived_children() {
     let composition_id = composition.id;
     let track_id = track.id;
     set_volume(&mut track.properties, 0.5);
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let cache_manager = CacheManager::new();
     let mut files = TestAudioFiles::default();
@@ -550,12 +570,14 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let clip = Clip::new("audio clip", 0.0, 1.0);
     let clip_id = clip.id;
@@ -604,6 +626,11 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
         .set_audio_output_node(NodeContainer::Clip(clip_id), Some(operation_id))
         .unwrap();
 
+    assert!(
+        routed_audio_media_nodes(&project, PortOwner::Clip(clip_id)).is_empty(),
+        "waveform discovery must not present unsupported operations as pass-through audio"
+    );
+
     let composition = project.get_composition(composition_id).unwrap();
     assert_eq!(
         mix_samples(
@@ -619,7 +646,17 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
         ),
         vec![0.0; 4]
     );
-    assert!(audio_window_requests_for_composition(&project, composition, 0, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(
+            &project,
+            composition,
+            0,
+            4,
+            4,
+            &PluginManager::default(),
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -628,12 +665,14 @@ fn source_window_uses_clip_local_time_and_explicit_audio_stream() {
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 200.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut clip = Clip::new("late retimed clip", 100.0, 2.0);
     clip.trim_in = OrderedFloat(0.25);
@@ -675,6 +714,7 @@ fn source_window_uses_clip_local_time_and_explicit_audio_stream() {
         399,
         5,
         4,
+        &PluginManager::default(),
     );
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].source.stream_index, Some(2));
@@ -707,12 +747,14 @@ fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
     let mut project = Project::new("composition audio range");
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     let node_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 8]);
@@ -736,5 +778,15 @@ fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
         &PluginManager::default(),
     );
     assert_eq!(mixed, vec![1.0, 1.0, 0.0, 0.0]);
-    assert!(audio_window_requests_for_composition(&project, composition, 4, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(
+            &project,
+            composition,
+            4,
+            4,
+            4,
+            &PluginManager::default(),
+        )
+        .is_empty()
+    );
 }

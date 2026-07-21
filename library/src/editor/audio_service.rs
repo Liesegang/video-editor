@@ -389,6 +389,7 @@ impl AudioService {
                 start_frame,
                 frame_count,
                 sample_rate,
+                self.plugin_manager.as_ref(),
             )
         };
         let mut keys = HashSet::new();
@@ -606,18 +607,22 @@ mod tests {
         let (second, second_track) = Composition::new("second", 16, 16, 30.0, 1.0);
         let first_id = first.id;
         let second_id = second.id;
-        project
-            .add_track(first_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_track(second_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(first)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(second)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(first_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(second_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(first).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(second).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         assert_eq!(
             active_composition(&project, Some(second_id)).unwrap().id,

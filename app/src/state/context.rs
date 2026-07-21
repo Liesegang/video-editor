@@ -320,13 +320,15 @@ mod tests {
         let old_track_id = old_track.id;
         let old_clip = Clip::new("old clip", 0.0, 5.0);
         let old_clip_id = old_clip.id;
-        old_project
-            .add_track(old_track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            old_project.add_track(old_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         old_project.add_clip(old_clip);
-        old_project
-            .add_composition(old_composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            old_project.add_composition(old_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         old_project
             .attach_clip_to_track(old_track_id, old_clip_id)
             .unwrap();
@@ -348,12 +350,14 @@ mod tests {
         let mut replacement = Project::new("replacement");
         let (new_composition, new_track) = Composition::new("new", 1920, 1080, 30.0, 2.0);
         let new_composition_id = new_composition.id;
-        replacement
-            .add_track(new_track)
-            .expect("container structural Merge insertion must succeed");
-        replacement
-            .add_composition(new_composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            replacement.add_track(new_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            replacement.add_composition(new_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         context.reconcile_project_replacement(&replacement);
 
@@ -414,19 +418,22 @@ mod tests {
         let surviving_node = Node::new_merge("surviving node");
         let surviving_node_id = surviving_node.id;
 
-        project
-            .add_track(deleted_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_track(surviving_track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(deleted_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(surviving_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(deleted_clip);
         project.add_clip(surviving_clip);
         project.add_node(deleted_node);
         project.add_node(surviving_node);
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(composition_id, surviving_track_id)
             .unwrap();
@@ -482,14 +489,16 @@ mod tests {
         let mut node = Node::new_merge("deleted node");
         node.id = shared_id;
 
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.add_node(node);
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.attach_clip_to_track(track_id, shared_id).unwrap();
         project
             .attach_node_to_container(NodeContainer::Clip(shared_id), shared_id)
@@ -530,16 +539,18 @@ mod tests {
         let deleted_node_id = deleted_node.id;
         let surviving_node = Node::new_merge("surviving node");
         let surviving_node_id = surviving_node.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(deleted_clip);
         project.add_clip(surviving_clip);
         project.add_node(deleted_node);
         project.add_node(surviving_node);
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_clip_to_track(track_id, deleted_clip_id)
             .unwrap();
@@ -585,14 +596,16 @@ mod tests {
         let clip_id = clip.id;
         let node = Node::new_merge("node");
         let node_id = node.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.add_node(node);
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.attach_clip_to_track(track_id, clip_id).unwrap();
         project
             .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)

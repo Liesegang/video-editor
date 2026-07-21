@@ -126,6 +126,7 @@ fn register_typed_sources(
                 physical_merge_target: false,
                 authored_blend_mode: None,
                 authored_blend_available: false,
+                runtime_first_produced_may_be_normal: false,
             },
             ports,
             canvas_clip,
@@ -154,12 +155,14 @@ mod tests {
         let composition_owner = PortOwner::Composition(composition.id);
         let track_owner = PortOwner::Track(track.id);
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("Video", 0.0, 2.0);
         let clip_owner = PortOwner::Clip(clip.id);
         let clip_id = clip.id;
@@ -264,24 +267,23 @@ mod tests {
                 } if owner == clip && bound == node_id && edge_type == data_type
             )));
         }
-        for data_type in [PortDataType::Audio] {
-            assert!(edges.iter().any(|edge| matches!(
-                edge.kind,
-                RenderedEdgeKind::DerivedOutput {
-                    owner,
-                    source,
-                    data_type: edge_type,
-                } if owner == track && source == clip && edge_type == data_type
-            )));
-            assert!(edges.iter().any(|edge| matches!(
-                edge.kind,
-                RenderedEdgeKind::DerivedOutput {
-                    owner,
-                    source,
-                    data_type: edge_type,
-                } if owner == composition && source == track && edge_type == data_type
-            )));
-        }
+        let data_type = PortDataType::Audio;
+        assert!(edges.iter().any(|edge| matches!(
+            edge.kind,
+            RenderedEdgeKind::DerivedOutput {
+                owner,
+                source,
+                data_type: edge_type,
+            } if owner == track && source == clip && edge_type == data_type
+        )));
+        assert!(edges.iter().any(|edge| matches!(
+            edge.kind,
+            RenderedEdgeKind::DerivedOutput {
+                owner,
+                source,
+                data_type: edge_type,
+            } if owner == composition && source == track && edge_type == data_type
+        )));
         assert!(!edges.iter().any(|edge| matches!(
             edge.kind,
             RenderedEdgeKind::DerivedOutput {

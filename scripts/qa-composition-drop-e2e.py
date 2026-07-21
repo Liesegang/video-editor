@@ -118,15 +118,17 @@ def run_suite(client):
     if abs(float(clip["duration"]) - 3.0) > 1e-6:
         raise QaFailure("Composition Instance Clip did not inherit source duration")
     node_id = clip["output_node_id"]
+    if clip["audio_output_node_id"] != node_id:
+        raise QaFailure("Composition placement did not bind the instance Audio output")
     if clip["node_ids"] != [node_id]:
         raise QaFailure("Composition placement did not create one contained instance Node")
     node = project["nodes"][node_id]
     content = node["content"]
     if not (
-        content.get("type") == "Reference"
-        and content.get("data", {}).get("target_id") == SOURCE_COMPOSITION
+        content.get("type") == "CompositionInstance"
+        and content.get("data", {}).get("composition_id") == SOURCE_COMPOSITION
     ):
-        raise QaFailure("placed Clip does not reference the source Composition")
+        raise QaFailure("placed Clip is not a canonical Composition Instance")
 
     # A placement creates only a Clip and an instance Node. The reusable
     # Composition remains a top-level definition with its own Track tree.

@@ -656,12 +656,14 @@ mod tests {
         composition.background_color = Color::black();
         let composition_id = composition.id;
         let first_track_id = first_track.id;
-        project
-            .add_track(first_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(first_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let mut second_track = Track::new("second");
         let second_track_id = second_track.id;
@@ -669,9 +671,10 @@ mod tests {
             "opacity".into(),
             Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
         );
-        project
-            .add_track(second_track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(second_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(composition_id, second_track_id)
             .unwrap();
@@ -682,7 +685,7 @@ mod tests {
             .expect("Track insertion must create a structural Merge edge")
             .id;
         project
-            .set_connection_blend_mode(second_track_edge_id, BlendMode::Add)
+            .set_connection_blend_mode(second_track_edge_id, BlendMode::LinearDodge)
             .unwrap();
 
         let _ = add_solid(
@@ -734,7 +737,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(
             0,
@@ -774,17 +777,19 @@ mod tests {
     }
 
     #[test]
-    fn referenced_composition_is_composited_as_one_image_output() {
+    fn composition_instance_is_composited_as_one_image_output() {
         let mut project = Project::new("composition output test");
         let (mut parent, parent_track) = Composition::new("parent", 1, 1, 30.0, 1.0);
         parent.background_color = Color::black();
         let parent_track_id = parent_track.id;
-        project
-            .add_track(parent_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(parent)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(parent_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(parent).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let (mut nested, nested_track) = Composition::new("nested", 1, 1, 30.0, 1.0);
         nested.background_color = Color {
@@ -795,12 +800,14 @@ mod tests {
         };
         let nested_id = nested.id;
         let nested_track_id = nested_track.id;
-        project
-            .add_track(nested_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(nested)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(nested_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(nested).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let _ = add_solid(
             &mut project,
             nested_track_id,
@@ -818,26 +825,25 @@ mod tests {
         project
             .attach_clip_to_track(parent_track_id, clip_id)
             .unwrap();
-        let mut reference = Node::new_reference(
+        let mut instance = Node::new_composition_instance(
             "nested instance",
-            crate::model::ReferenceContent {
-                target_id: nested_id,
-                sync_global_time: false,
+            crate::model::CompositionInstanceContent {
+                composition_id: nested_id,
             },
         );
-        let mut persisted = serde_json::to_value(&reference).unwrap();
+        let mut persisted = serde_json::to_value(&instance).unwrap();
         persisted["properties"]["opacity"] = serde_json::to_value(Property::constant(
             PropertyValue::Number(OrderedFloat(50.0)),
         ))
         .unwrap();
-        reference = serde_json::from_value(persisted).unwrap();
-        let reference_id = reference.id;
-        project.add_node(reference);
+        instance = serde_json::from_value(persisted).unwrap();
+        let instance_id = instance.id;
+        project.add_node(instance);
         project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), reference_id)
+            .attach_node_to_container(NodeContainer::Clip(clip_id), instance_id)
             .unwrap();
         project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(reference_id))
+            .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());
@@ -845,7 +851,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(0, 1.0, None)
         .unwrap();
@@ -869,12 +875,14 @@ mod tests {
         let mut project = Project::new("texture path test");
         let (composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let _ = add_solid(&mut project, track_id, Color::white());
 
         let plugin_manager = Arc::new(PluginManager::default());
@@ -882,7 +890,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(0, 1.0, None)
         .unwrap();
@@ -906,12 +914,14 @@ mod tests {
         let (mut composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
         composition.background_color = Color::black();
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let clip = Clip::new("merge clip", 0.0, 1.0);
         let clip_id = clip.id;
@@ -977,7 +987,7 @@ mod tests {
             )
             .unwrap();
         project
-            .set_connection_blend_mode(green_connection, BlendMode::Add)
+            .set_connection_blend_mode(green_connection, BlendMode::LinearDodge)
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());
@@ -986,7 +996,7 @@ mod tests {
                 project,
                 &project.compositions[0],
                 plugin_manager.get_property_evaluators(),
-                Arc::clone(&plugin_manager),
+                plugin_manager.as_ref(),
             )
             .evaluate(0, 1.0, None)
             .unwrap();

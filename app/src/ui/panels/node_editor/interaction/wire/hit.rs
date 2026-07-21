@@ -1,6 +1,6 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorWireDragKind};
 use eframe::egui;
-use library::model::project::{PortAddress, PortDirection, PortOwner};
+use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use library::model::Project;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -312,6 +312,37 @@ pub(in crate::ui::panels::node_editor) fn rendered_normal_port_at_position(
     ports
         .iter()
         .filter(|(_, rect)| rect.is_positive() && rect.contains(position))
+        .min_by(|left, right| {
+            left.1
+                .center()
+                .distance(position)
+                .total_cmp(&right.1.center().distance(position))
+        })
+        .map(|(key, _)| key.clone())
+}
+
+/// Container outputs sit against the integrated header, while their public QA
+/// rectangle includes the fixed reconnect/drop padding around the socket. A
+/// press in that padding must start the wire gesture instead of leaking
+/// through to Snarl's larger container-frame drag surface.
+pub(in crate::ui::panels::node_editor) fn rendered_container_output_at_position(
+    project: &Project,
+    ports: &HashMap<RenderedPortKey, egui::Rect>,
+    position: egui::Pos2,
+    canvas_clip: egui::Rect,
+) -> Option<RenderedPortKey> {
+    canvas_clip.contains(position).then_some(())?;
+    ports
+        .iter()
+        .filter(|(key, rect)| {
+            key.direction == PortDirection::Output
+                && !matches!(key.address.owner, PortOwner::Node(_))
+                && rect.is_positive()
+                && wire_port_drop_rect(**rect).contains(position)
+                && project
+                    .port_definition(&key.address, PortDirection::Output)
+                    .is_some_and(|definition| definition.side == PortSide::Right)
+        })
         .min_by(|left, right| {
             left.1
                 .center()

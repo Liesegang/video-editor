@@ -6,6 +6,7 @@ use crate::model::{BlendMode, GeneratorContent, NodeContent};
 
 use super::{NodeContainer, Project, ProjectGraphError};
 
+mod composition_instances;
 mod container_outputs;
 pub use container_outputs::{
     ContainerAudioSource, ContainerAudioSourceKind, ContainerImageSource, ContainerImageSourceKind,
@@ -103,8 +104,7 @@ impl ContainerGraphSemantics {
 
     /// The first deterministic visual source upstream of the container output.
     /// Runtime enabled/range/availability state deliberately does not affect it.
-    /// For compatibility with the pre-v1 Timeline resolver, Reference Nodes
-    /// are identity terminals and all declared visual input ports share the
+    /// Composition Instance Nodes are identity terminals and all declared visual input ports share the
     /// `(connection order, connection UUID)` tie-break until port roles exist.
     pub fn authored_source(&self) -> Option<PortOwner> {
         self.authored_source
@@ -415,14 +415,11 @@ fn node_ports(
                 _ => {}
             }
         }
-        NodeContent::Reference(_) => {
+        NodeContent::CompositionInstance(_) => {
             ports.push(time_input());
-            ports.push(PortDefinition::input(
-                IMAGE_INPUT_PORT,
-                "Image",
-                PortDataType::Image,
-            ));
+            ports.extend(metadata_catalog(PortDirection::Output, PortExposure::Graph));
             ports.push(image_output());
+            ports.push(audio_output());
         }
         NodeContent::PluginOperation(operation) => {
             include_property_inputs = false;
@@ -667,7 +664,7 @@ impl Project {
                     match node.content() {
                         NodeContent::Media(_)
                         | NodeContent::Generator(_)
-                        | NodeContent::Reference(_) => Some(owner),
+                        | NodeContent::CompositionInstance(_) => Some(owner),
                         NodeContent::PluginOperation(_) | NodeContent::Merge => {
                             visual_inputs.get(&owner).and_then(|connections| {
                                 connections.iter().find_map(|connection| {
@@ -1097,6 +1094,7 @@ impl Project {
 
     pub fn validate_connections(&self) -> Vec<ProjectGraphError> {
         let mut errors = self.validate_containment();
+        errors.extend(self.validate_composition_instances());
         errors.extend(self.validate_plugin_operation_contracts());
         errors.extend(self.validate_container_output_ports());
         let mut targets: HashMap<&PortAddress, Vec<&ProjectConnection>> = HashMap::new();
@@ -1467,16 +1465,13 @@ impl Project {
             }
         }
         for node in self.nodes.values() {
-            let NodeContent::Reference(reference) = node.content() else {
+            let NodeContent::CompositionInstance(instance) = node.content() else {
                 continue;
             };
-            let input = PortAddress::new(PortOwner::Node(node.id), IMAGE_INPUT_PORT);
-            if !connections.iter().any(|item| item.to == input) {
-                dependencies
-                    .entry(PortOwner::Node(node.id))
-                    .or_default()
-                    .push(PortOwner::Composition(reference.target_id));
-            }
+            dependencies
+                .entry(PortOwner::Node(node.id))
+                .or_default()
+                .push(PortOwner::Composition(instance.composition_id));
         }
         dependencies
     }
@@ -1510,7 +1505,7 @@ mod tests {
     use super::*;
     use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::project::Composition;
-    use crate::model::{Clip, Node, ReferenceContent};
+    use crate::model::{Clip, CompositionInstanceContent, Node};
     use crate::plugin::PluginManager;
 
     #[test]
@@ -1539,14 +1534,11 @@ mod tests {
         node_id
     }
 
-    fn add_reference_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
-        let node = Node::new_reference(
-            name,
-            ReferenceContent {
-                target_id: Uuid::new_v4(),
-                sync_global_time: false,
-            },
-        );
+    fn add_single_image_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
+        let mut node = PluginManager::default()
+            .create_image_transform_operation_node()
+            .unwrap();
+        node.name = name.to_string();
         let node_id = node.id;
         project.add_node(node);
         project
@@ -1580,12 +1572,14 @@ mod tests {
         let mut project = Project::new("port order");
         let (composition, track) = Composition::new("main", 640, 360, 30.0, 5.0);
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("port order", 0.0, 5.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -1862,40 +1856,37 @@ mod tests {
     }
 
     #[test]
-    fn reference_remains_the_authored_identity_terminal_with_a_connected_image()
+    fn composition_instance_is_an_authored_identity_terminal_without_an_image_override()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (mut project, clip_id) = project_with_detached_clip("reference", 0.0, 5.0);
+        let mut project = Project::new("composition instance identity");
+        let (target, target_track) = Composition::new("target", 640, 360, 30.0, 5.0);
+        let target_id = target.id;
+        project.add_track(target_track)?;
+        project.add_composition(target)?;
+        let (parent, parent_track) = Composition::new("parent", 640, 360, 30.0, 5.0);
+        let parent_track_id = parent_track.id;
+        project.add_track(parent_track)?;
+        project.add_composition(parent)?;
+        let clip = Clip::new("instance", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(parent_track_id, clip_id)?;
         let container = NodeContainer::Clip(clip_id);
-        let source_id = attach_authored_node(
+        let instance_id = attach_authored_node(
             &mut project,
             container,
-            test_generator_node(
-                "connected source",
-                GeneratorNodeRequest::Solid {
-                    color: crate::model::frame::color::Color::black(),
+            Node::new_composition_instance(
+                "instance",
+                CompositionInstanceContent {
+                    composition_id: target_id,
                 },
             ),
         )?;
-        let reference_id = attach_authored_node(
-            &mut project,
-            container,
-            Node::new_reference(
-                "reference",
-                ReferenceContent {
-                    target_id: Uuid::new_v4(),
-                    sync_global_time: false,
-                },
-            ),
-        )?;
-        project.connect_ports(
-            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
-        )?;
-        project.set_output_node(container, Some(reference_id))?;
+        project.set_output_node(container, Some(instance_id))?;
 
         let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
-        assert_eq!(semantics.authored_source_node_id(), Some(reference_id));
-        assert!(semantics.structurally_reaches_output(PortOwner::Node(source_id)));
+        assert_eq!(semantics.authored_source_node_id(), Some(instance_id));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(instance_id)));
         Ok(())
     }
 
@@ -1944,12 +1935,14 @@ mod tests {
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let plugins = PluginManager::default();
 
         let track_source_id = attach_authored_node(
@@ -2129,12 +2122,14 @@ mod tests {
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let clip = Clip::new("clip", 0.0, 10.0);
         let clip_id = clip.id;
@@ -2246,12 +2241,14 @@ mod tests {
         let mut project = Project::new("connection editing");
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let container = NodeContainer::Composition(composition_id);
         let source = add_node(&mut project, container, "source");
         let alternate_source = add_node(&mut project, container, "alternate source");
@@ -2342,17 +2339,19 @@ mod tests {
         let mut project = Project::new("wire blend contracts");
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let container = NodeContainer::Composition(composition_id);
         let source = add_node(&mut project, container, "source");
         let first_merge = add_node(&mut project, container, "first merge");
         let second_merge = add_node(&mut project, container, "second merge");
-        let reference = add_reference_node(&mut project, container, "reference");
+        let reference = add_single_image_node(&mut project, container, "single image");
 
         let source_output = PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT);
         let first_wire = project
@@ -2368,7 +2367,7 @@ mod tests {
             )
             .unwrap();
         project
-            .set_connection_blend_mode(first_wire, BlendMode::Add)
+            .set_connection_blend_mode(first_wire, BlendMode::LinearDodge)
             .unwrap();
         project
             .set_connection_blend_mode(second_wire, BlendMode::Multiply)
@@ -2380,7 +2379,7 @@ mod tests {
                 .find(|connection| connection.id == first_wire)
                 .unwrap()
                 .blend_mode,
-            BlendMode::Add
+            BlendMode::LinearDodge
         );
         assert_eq!(
             project
@@ -2472,20 +2471,22 @@ mod tests {
         let mut project = Project::new("reconnect contracts");
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let container = NodeContainer::Composition(composition_id);
         let sources = (0..5)
             .map(|index| add_node(&mut project, container, &format!("source {index}")))
             .collect::<Vec<_>>();
         let target_a = add_node(&mut project, container, "target a");
         let target_b = add_node(&mut project, container, "target b");
-        let single_a = add_reference_node(&mut project, container, "single a");
-        let single_b = add_reference_node(&mut project, container, "single b");
+        let single_a = add_single_image_node(&mut project, container, "single a");
+        let single_b = add_single_image_node(&mut project, container, "single b");
 
         let single_a_input = PortAddress::new(PortOwner::Node(single_a), IMAGE_INPUT_PORT);
         let occupied_id = project
@@ -2550,7 +2551,7 @@ mod tests {
             .unwrap()
             .id;
         project
-            .set_connection_blend_mode(moved_variadic, BlendMode::Add)
+            .set_connection_blend_mode(moved_variadic, BlendMode::LinearDodge)
             .unwrap();
         project
             .reconnect_connection(
@@ -2566,7 +2567,7 @@ mod tests {
                 .find(|connection| connection.id == moved_variadic)
                 .unwrap()
                 .blend_mode,
-            BlendMode::Add,
+            BlendMode::LinearDodge,
         );
         let orders = |project: &Project, target: &PortAddress| {
             let mut orders = project
@@ -2593,7 +2594,7 @@ mod tests {
             error,
             ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
                 connection_id,
-                blend_mode: BlendMode::Add,
+                blend_mode: BlendMode::LinearDodge,
                 ..
             } if connection_id == moved_variadic
         ));
@@ -2660,12 +2661,14 @@ mod tests {
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("clip", 0.0, 10.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -2756,16 +2759,18 @@ mod tests {
         let mut project = Project::new("splice rollback");
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let container = NodeContainer::Composition(composition_id);
         let source = add_node(&mut project, container, "source");
         let occupant = add_node(&mut project, container, "occupant");
-        let via = add_reference_node(&mut project, container, "via");
+        let via = add_single_image_node(&mut project, container, "via");
         let target = add_node(&mut project, container, "target");
         let connection_id = project
             .connect_ports(
@@ -2793,7 +2798,7 @@ mod tests {
         );
         assert_eq!(project, before_occupied);
 
-        let empty_via = add_reference_node(&mut project, container, "empty via");
+        let empty_via = add_single_image_node(&mut project, container, "empty via");
         let before_invalid = project.clone();
         let error = project
             .splice_connection(

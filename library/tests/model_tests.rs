@@ -7,12 +7,11 @@ use library::editor::handlers::clip_handler::ClipHandler;
 use library::editor::project_service::GeneratorNodeRequest;
 use library::model::frame::color::Color;
 use library::model::project::{
-    Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner,
-    Project, TIME_PORT,
+    Composition, NodeContainer, PortAddress, PortOwner, Project, TIME_PORT,
 };
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{
-    Clip, GeneratorContent, MediaContent, Node, NodeContent, ReferenceContent, Track,
+    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent, Track,
 };
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -23,12 +22,14 @@ fn add_composition(project: &mut Project, name: &str) -> (Uuid, Uuid) {
     let (composition, track) = Composition::new(name, 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     (composition_id, track_id)
 }
 
@@ -269,9 +270,10 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() -> 
     let (composition_id, first_track_id) = add_composition(&mut project, "Comp");
     let target = Track::new("Target");
     let target_id = target.id;
-    project
-        .add_track(target)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(target).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_track_to_composition(composition_id, target_id)?;
 
     let first_id = add_clip(&mut project, first_track_id, "First", 1.0)?;
@@ -377,7 +379,7 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() -> 
 }
 
 #[test]
-fn removal_cleans_owned_registries_output_pointers_references_and_connections() -> Result<()> {
+fn removal_cleans_owned_registries_output_pointers_instances_and_connections() -> Result<()> {
     let mut project = Project::new("cleanup");
     let (first_composition_id, first_track_id) = add_composition(&mut project, "first");
     let first_clip_id = add_clip(&mut project, first_track_id, "source clip", 0.0)?;
@@ -385,23 +387,22 @@ fn removal_cleans_owned_registries_output_pointers_references_and_connections() 
     project.set_output_node(NodeContainer::Clip(first_clip_id), Some(source_id))?;
 
     let (second_composition_id, second_track_id) = add_composition(&mut project, "second");
-    let second_clip_id = add_clip(&mut project, second_track_id, "reference clip", 0.0)?;
-    let reference_id = add_node(
+    let second_clip_id = add_clip(
+        &mut project,
+        second_track_id,
+        "composition instance clip",
+        0.0,
+    )?;
+    let instance_id = add_node(
         &mut project,
         second_clip_id,
-        Node::new_reference(
-            "reference",
-            ReferenceContent {
-                target_id: first_composition_id,
-                sync_global_time: false,
+        Node::new_composition_instance(
+            "composition instance",
+            CompositionInstanceContent {
+                composition_id: first_composition_id,
             },
         ),
     )?;
-    project.connect_ports(
-        PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
-    )?;
-
     project
         .remove_composition(first_composition_id)
         .context("first Composition must be removable")?;
@@ -409,15 +410,15 @@ fn removal_cleans_owned_registries_output_pointers_references_and_connections() 
     assert!(project.get_track(first_track_id).is_none());
     assert!(project.get_clip(first_clip_id).is_none());
     assert!(project.get_node(source_id).is_none());
-    assert!(project.get_node(reference_id).is_none());
+    assert!(project.get_node(instance_id).is_none());
     assert!(project.connections.iter().all(|connection| {
         !matches!(
             connection.from.owner,
             PortOwner::Composition(id) if id == first_composition_id
         ) && !matches!(connection.from.owner, PortOwner::Track(id) if id == first_track_id)
             && !matches!(connection.from.owner, PortOwner::Clip(id) if id == first_clip_id)
-            && !matches!(connection.from.owner, PortOwner::Node(id) if id == source_id || id == reference_id)
-            && !matches!(connection.to.owner, PortOwner::Node(id) if id == source_id || id == reference_id)
+            && !matches!(connection.from.owner, PortOwner::Node(id) if id == source_id || id == instance_id)
+            && !matches!(connection.to.owner, PortOwner::Node(id) if id == source_id || id == instance_id)
     }));
     assert!(project.get_composition(second_composition_id).is_some());
     assert!(

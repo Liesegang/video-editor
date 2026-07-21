@@ -715,12 +715,7 @@ fn render_semantic_graph_facade(
 fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
     nodes
         .iter()
-        .filter(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_)
-            )
-        })
+        .filter(|node| node.content().is_semantic_visual_source())
         .collect()
 }
 
@@ -1247,7 +1242,7 @@ fn source_kind(node: &Node) -> &'static str {
         NodeContent::Generator(GeneratorContent::Shape) => "Shape",
         NodeContent::Generator(GeneratorContent::Solid) => "Solid",
         NodeContent::Generator(GeneratorContent::SkSL) => "Shader",
-        NodeContent::Reference(_) => "Reference",
+        NodeContent::CompositionInstance(_) => "Composition Instance",
         NodeContent::PluginOperation(operation) => match operation.category.as_str() {
             TRANSFORM_CATEGORY => "Transform",
             "decorator" => "Decorator",
@@ -1735,7 +1730,7 @@ fn node_display_type(node: &Node) -> String {
             GeneratorContent::Solid => "Solid".to_string(),
             GeneratorContent::SkSL => "SkSL Shader".to_string(),
         },
-        NodeContent::Reference(_) => "Reference".to_string(),
+        NodeContent::CompositionInstance(_) => "Composition Instance".to_string(),
         NodeContent::PluginOperation(operation)
             if operation.category.as_str() == TRANSFORM_CATEGORY =>
         {
@@ -1773,12 +1768,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let first = Node::new_merge("first");
         let second = Node::new_merge("second");
         let mut clip = Clip::new("clip", 2.0, 4.0);
@@ -1811,12 +1808,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let node = Node::new_merge("leaf");
         let node_id = node.id;
         let clip = Clip::new("clip", 3.0, 5.0);
@@ -1856,12 +1855,14 @@ mod tests {
         let mut node = Node::new_merge("node with shared UUID");
         node.id = shared_id;
 
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.add_node(node);
         project.attach_clip_to_track(track_id, shared_id).unwrap();
@@ -1895,12 +1896,14 @@ mod tests {
         let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 5.0);
         let composition_id = composition.id;
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let Some(InspectorSelection::Track { track, .. }) = resolve_selection(
             &project,
@@ -1924,12 +1927,14 @@ mod tests {
         let mut project = Project::new("composition scoped inspector");
         let (active, active_track) = Composition::new("active", 1920, 1080, 30.0, 5.0);
         let active_id = active.id;
-        project
-            .add_track(active_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(active)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(active_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(active).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let (other, other_track) = Composition::new("other", 1920, 1080, 30.0, 5.0);
         let other_track_id = other_track.id;
@@ -1938,12 +1943,14 @@ mod tests {
         let other_node = Node::new_merge("other node");
         let other_node_id = other_node.id;
         other_clip.node_ids.push(other_node_id);
-        project
-            .add_track(other_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(other)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(other_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(other).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_node(other_node);
         project.add_clip(other_clip);
         project
@@ -1983,12 +1990,14 @@ mod tests {
         let disconnected_id = disconnected.id;
         let result_id = result.id;
 
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id)?;
         for node in [source, applied, disconnected, result] {

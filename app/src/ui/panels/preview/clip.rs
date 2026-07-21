@@ -56,7 +56,7 @@ pub struct PreviewClip {
     pub content_bounds: Option<(f32, f32, f32, f32)>,
     /// Stable render-branch identity. Project selection remains the source
     /// Node ID, while this path distinguishes fan-out of that Node through
-    /// multiple Merge/Reference branches.
+    /// multiple Merge/Composition Instance branches.
     pub instance_path: Vec<Uuid>,
 }
 

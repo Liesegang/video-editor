@@ -24,16 +24,16 @@ pub(super) fn install(project: &mut Project) -> Result<FixtureInfo, String> {
 
     project
         .add_track(parent_track)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert parent Track: {error}"))?;
     project
         .add_track(source_track)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert source Track: {error}"))?;
     project
         .add_composition(parent)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert parent Composition: {error}"))?;
     project
         .add_composition(source)
-        .expect("container structural Merge insertion must succeed");
+        .map_err(|error| format!("cannot insert source Composition: {error}"))?;
 
     Ok(FixtureInfo {
         composition_id: PARENT_COMPOSITION_ID,

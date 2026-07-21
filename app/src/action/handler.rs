@@ -238,7 +238,8 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                         };
                         if !removed {
                             context.editor_context.interaction.active_modal_error = Some(
-                                format!("Cannot remove Node: structural Merge nodes belong to their Timeline container"),
+                                "Cannot remove Node: structural Merge nodes belong to their Timeline container"
+                                    .to_string(),
                             );
                         }
                         removed
@@ -352,12 +353,14 @@ mod tests {
         clip.id = shared_id;
         let mut node = Node::new_merge("same UUID Node");
         node.id = shared_id;
-        project_model
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project_model
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project_model.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project_model.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project_model.add_clip(clip);
         project_model.add_node(node);
         project_model.attach_clip_to_track(track_id, shared_id)?;
@@ -452,12 +455,14 @@ mod tests {
         let mut initial = Project::new("old project");
         let (composition, track) = Composition::new("old", 320, 180, 30.0, 2.0);
         let old_composition_id = composition.id;
-        initial
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        initial
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            initial.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            initial.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let project = Arc::new(RwLock::new(initial.clone()));
         let mut service = EditorService::new(
             Arc::clone(&project),

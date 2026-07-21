@@ -1750,12 +1750,14 @@ mod tests {
         let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
         let composition_id = composition.id;
         let mut project = Project::new("stateful operation property");
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let composition = project
             .get_composition(composition_id)
             .expect("test composition exists");

@@ -126,12 +126,14 @@ mod tests {
         let first = Track::new("first");
         let second = Track::new("second");
         let track_ids = vec![first.id, second.id];
-        project
-            .add_track(first)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_track(second)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(first).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(second).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         let rows = flatten_tracks_to_rows(&project, &track_ids, &HashSet::new());
         let row_track_ids: Vec<_> = rows.iter().map(DisplayRow::track_id).collect();
@@ -152,18 +154,22 @@ mod tests {
         let composition_id = composition.id;
         let ids = [first.id, second.id, third.id];
         composition.track_ids.extend([second.id, third.id]);
-        project
-            .add_track(first)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_track(second)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_track(third)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(first).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(second).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_track(third).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
 
         project
             .move_track_within_composition(composition_id, ids[2], 0)

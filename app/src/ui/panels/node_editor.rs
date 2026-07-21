@@ -39,6 +39,8 @@ use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+#[cfg(test)]
+mod blend_popup_tests;
 mod canvas;
 mod container_output;
 #[cfg(test)]
@@ -130,12 +132,14 @@ use interaction::resize_regions;
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
-use interaction::{edit_for_wire, embedded_pin_center, graph_item_owner};
+use interaction::{
+    disconnect_context_target, edit_for_wire, embedded_pin_center, graph_item_owner,
+};
 use interaction::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
-    editable_wire_stable_key, knife_segment_hits_edge, rendered_edge_at_position,
-    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
-    wire_secondary_click_hit,
+    editable_wire_stable_key, knife_segment_hits_edge, rendered_container_output_at_position,
+    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
+    rendered_wire_drag_kind, wire_secondary_click_hit,
 };
 use interaction::{overview_wire_graph_points, wire_interactions, WireInteractionFrame};
 use interaction::{
@@ -167,11 +171,11 @@ use commands::{insert_node_on_connection, splice_existing_node_on_connection};
 #[cfg(test)]
 use components::WireOrderMenuState;
 use components::{
-    blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend,
-    merge_images_target_node_id, merge_input_index_for_connection, merge_input_slots,
-    merge_layer_rows, register_merge_layer_component, register_merge_layer_popup_component,
-    wire_order_menu_state, wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot,
-    MergeInputSlotRole, AUTHORED_BLEND_MODES,
+    blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
+    connection_supports_authored_blend, merge_images_target_node_id,
+    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
+    register_merge_layer_component, wire_order_menu_state, wire_order_menu_states,
+    wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
 };
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
@@ -191,7 +195,6 @@ use layout::{
     rects_are_closer_than,
 };
 type CreateAction = Box<dyn FnOnce(&mut Project) -> bool>;
-
 fn create_action_for_request(
     request: NodeCreateRequest,
     project_service: &EditorService,
@@ -714,7 +717,9 @@ fn create_prebuilt_node(
         place_node_in_free_slot(project, node_id, container, position, &[]);
         true
     } else {
-        let _ = project.remove_node(node_id);
+        if let Err(error) = project.remove_node(node_id) {
+            log::warn!("Cannot roll back unattached Node {node_id}: {error}");
+        }
         false
     }
 }
@@ -732,11 +737,10 @@ fn create_composition_node(project: &mut Project, position: egui::Pos2, comp_id:
         return false;
     }
 
-    let mut node = Node::new_reference(
+    let mut node = Node::new_composition_instance(
         "Container",
-        library::model::ReferenceContent {
-            target_id: nested_id,
-            sync_global_time: false,
+        library::model::CompositionInstanceContent {
+            composition_id: nested_id,
         },
     );
     node.ui_position = [position.x, position.y];
@@ -1788,20 +1792,14 @@ fn ensure_structural_merge_layout(project: &mut Project, container: NodeContaine
         egui::pos2(node.ui_position[0], node.ui_position[1]),
         node_size,
     );
-    let content_min = egui::pos2(
-        container_position[0]
-            + match container {
-                NodeContainer::Composition(_) => AUTO_LAYOUT_COMPOSITION_LEFT,
-                NodeContainer::Track(_) => AUTO_LAYOUT_TRACK_LEFT,
-                NodeContainer::Clip(_) => unreachable!(),
-            },
-        container_position[1]
-            + match container {
-                NodeContainer::Composition(_) => AUTO_LAYOUT_COMPOSITION_TOP,
-                NodeContainer::Track(_) => AUTO_LAYOUT_TRACK_TOP,
-                NodeContainer::Clip(_) => unreachable!(),
-            },
-    );
+    let (left, top) = match container {
+        NodeContainer::Composition(_) => {
+            (AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_TOP)
+        }
+        NodeContainer::Track(_) => (AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_TOP),
+        NodeContainer::Clip(_) => return false,
+    };
+    let content_min = egui::pos2(container_position[0] + left, container_position[1] + top);
     let mut occupied = immediate_child_rects(project, &AutoLayoutPlan::default(), container);
     occupied.extend(
         direct_node_ids
@@ -2004,9 +2002,10 @@ fn create_track_at_free_slot(
     }
     track.ui_position = [candidate.min.x, candidate.min.y];
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
+    if let Err(error) = project.add_track(track) {
+        log::warn!("Cannot add Track to project: {error}");
+        return None;
+    }
     if let Err(error) = project.attach_track_to_composition(composition_id, track_id) {
         project.remove_track(track_id);
         log::warn!("Cannot add track to composition: {error}");
@@ -2052,12 +2051,14 @@ mod tests {
         let clip_track_id = clip_track.id;
         let mut collision = Clip::new("same UUID Clip", 0.0, 5.0);
         collision.id = shared_id;
-        project
-            .add_track(clip_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(clip_composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(clip_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(clip_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_clip(collision);
         project
             .attach_clip_to_track(clip_track_id, shared_id)
@@ -2068,12 +2069,14 @@ mod tests {
         let node_composition_id = node_composition.id;
         let mut node = Node::new_merge("same UUID Node");
         node.id = shared_id;
-        project
-            .add_track(node_track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(node_composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(node_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(node_composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project.add_node(node);
         project
             .attach_node_to_container(NodeContainer::Composition(node_composition_id), shared_id)
@@ -3079,7 +3082,7 @@ mod tests {
             &mut project,
             vec![QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
                 connection_id: time_connection.id,
-                blend_mode: BlendMode::Add,
+                blend_mode: BlendMode::LinearDodge,
             })],
             &mut no_op_history,
             &mut state,
@@ -3103,7 +3106,7 @@ mod tests {
             .expect("fixture Merge connection")
             .id;
         project
-            .set_connection_blend_mode(first_connection_id, BlendMode::Add)
+            .set_connection_blend_mode(first_connection_id, BlendMode::LinearDodge)
             .expect("first wire Add");
 
         let mut middle = generator_node(
@@ -3178,7 +3181,7 @@ mod tests {
                     first_connection_id,
                     0,
                     0,
-                    BlendMode::Add,
+                    BlendMode::LinearDodge,
                     PortOwner::Node(solid_id),
                     "Node · Solid",
                 ),
@@ -3205,7 +3208,7 @@ mod tests {
         }));
 
         let estimated = estimated_node_size(&project, merge_id);
-        assert_eq!(estimated.x, 506.0);
+        assert_eq!(estimated.x, 518.0);
         assert_eq!(estimated.x, estimated_merge_node_width());
         assert_eq!(estimated_node_size(&project, solid_id).x, 462.0);
         assert_eq!(estimated_node_width(), 462.0);
@@ -3279,170 +3282,6 @@ mod tests {
         assert!(rects
             .get(&format!("node_editor.merge_layers.empty:{merge_id}"))
             .is_some_and(egui::Rect::is_positive));
-    }
-
-    #[test]
-    fn merge_blend_popup_qa_uses_foreground_clip_and_real_screen_coordinate_click() {
-        fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
-            egui::Event::PointerButton {
-                pos: position,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            }
-        }
-
-        #[allow(
-            clippy::too_many_arguments,
-            reason = "the egui frame harness keeps screen, canvas, input and authored state explicit"
-        )]
-        fn render_frame(
-            context: &egui::Context,
-            screen: egui::Rect,
-            canvas_clip: egui::Rect,
-            events: Vec<egui::Event>,
-            time: f64,
-            merge_id: Uuid,
-            connection_id: Uuid,
-            selected_blend: &mut BlendMode,
-        ) -> egui::Rect {
-            let mut selector_rect = egui::Rect::NOTHING;
-            reset_test_rects();
-            let raw_input = egui::RawInput {
-                screen_rect: Some(screen),
-                events,
-                time: Some(time),
-                ..Default::default()
-            };
-            drop(context.run(raw_input, |context| {
-                egui::Area::new(egui::Id::new("merge-popup-edge-test"))
-                    .fixed_pos(egui::pos2(80.0, 128.0))
-                    .show(context, |ui| {
-                        // This mimics a selector still inside the Node Editor at
-                        // its top edge. The ComboBox popup is a foreground Area
-                        // and is therefore allowed to extend above it.
-                        ui.set_clip_rect(canvas_clip);
-                        selector_rect = egui::ComboBox::from_id_salt((
-                            "merge-popup-edge-combo",
-                            merge_id,
-                            connection_id,
-                        ))
-                        .selected_text(blend_mode_label(*selected_blend))
-                        .width(178.0)
-                        .show_ui(ui, |ui| {
-                            for blend_mode in AUTHORED_BLEND_MODES {
-                                let selected = blend_mode == *selected_blend;
-                                let option = ui.add_enabled(
-                                    !selected,
-                                    egui::Button::selectable(
-                                        selected,
-                                        blend_mode_label(blend_mode),
-                                    )
-                                    .frame(false),
-                                );
-                                register_merge_layer_popup_component(
-                                    format!(
-                                        "node_editor.merge_layer.blend.{}:{merge_id}:{connection_id}",
-                                        blend_mode_qa_key(blend_mode)
-                                    ),
-                                    "node_editor_merge_layer_blend_option",
-                                    option.rect,
-                                    option.enabled(),
-                                    ui.clip_rect(),
-                                    serde_json::json!({
-                                        "merge_id": merge_id,
-                                        "connection_id": connection_id,
-                                        "blend_mode": blend_mode_qa_key(blend_mode),
-                                    }),
-                                );
-                                if option.clicked() {
-                                    *selected_blend = blend_mode;
-                                    ui.close();
-                                }
-                            }
-                        })
-                        .response
-                        .rect;
-                    });
-            }));
-            selector_rect
-        }
-
-        let context = egui::Context::default();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
-        let canvas_clip =
-            egui::Rect::from_min_max(egui::pos2(20.0, 120.0), egui::pos2(420.0, 300.0));
-        let merge_id = Uuid::from_u128(0xface);
-        let connection_id = Uuid::from_u128(0xcafe);
-        let option_id = format!("node_editor.merge_layer.blend.overlay:{merge_id}:{connection_id}");
-        let mut selected_blend = BlendMode::Normal;
-        let mut frame = 0_u64;
-        let mut run = |events, selected_blend: &mut BlendMode| {
-            frame += 1;
-            render_frame(
-                &context,
-                screen,
-                canvas_clip,
-                events,
-                frame as f64 / 60.0,
-                merge_id,
-                connection_id,
-                selected_blend,
-            )
-        };
-
-        let mut selector = egui::Rect::NOTHING;
-        for _ in 0..3 {
-            selector = run(Vec::new(), &mut selected_blend);
-        }
-        assert!(
-            canvas_clip.contains(selector.center()),
-            "selector {selector:?} must be inside canvas {canvas_clip:?}"
-        );
-        selector = run(
-            vec![egui::Event::PointerMoved(selector.center())],
-            &mut selected_blend,
-        );
-        selector = run(
-            vec![pointer_button(selector.center(), true)],
-            &mut selected_blend,
-        );
-        let selector_after_open = run(
-            vec![pointer_button(selector.center(), false)],
-            &mut selected_blend,
-        );
-
-        let option = test_rect(&option_id).expect("foreground popup option is registered");
-        let metadata = test_metadata(&option_id).expect("popup QA metadata is registered");
-        assert!(option.is_positive());
-        assert!(screen.contains(option.center()));
-        assert!(
-            option.center().y < canvas_clip.top(),
-            "foreground option {option:?} from selector {selector_after_open:?} must extend above canvas {canvas_clip:?}"
-        );
-        assert_eq!(metadata["coordinate_space"], "screen_points");
-        assert_eq!(metadata["visible_in_popup"], true);
-        assert!(metadata["popup_clip_rect"]["min_y"]
-            .as_f64()
-            .is_some_and(|min_y| min_y < f64::from(canvas_clip.top())));
-
-        // Use a freshly rendered option rectangle for each pointer lifecycle
-        // step, matching the loopback QA bridge's real-coordinate contract.
-        let _ = run(
-            vec![egui::Event::PointerMoved(option.center())],
-            &mut selected_blend,
-        );
-        let option = test_rect(&option_id).expect("popup remains open after pointer move");
-        let _ = run(
-            vec![pointer_button(option.center(), true)],
-            &mut selected_blend,
-        );
-        let option = test_rect(&option_id).expect("popup remains open after pointer press");
-        let _ = run(
-            vec![pointer_button(option.center(), false)],
-            &mut selected_blend,
-        );
-        assert_eq!(selected_blend, BlendMode::Overlay);
     }
 
     #[test]
@@ -4005,9 +3844,10 @@ mod tests {
         collapsed_track.id = empty_track;
         collapsed_track.ui_collapsed = true;
         collapsed_track.ui_position = [110.0, 140.0];
-        project
-            .add_track(collapsed_track)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(collapsed_track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         project
             .attach_track_to_composition(composition, empty_track)
             .unwrap();
@@ -4958,6 +4798,7 @@ mod tests {
                         physical_merge_target: false,
                         authored_blend_mode: None,
                         authored_blend_available: false,
+                        runtime_first_produced_may_be_normal: false,
                     },
                     &ports,
                     canvas,
@@ -7205,7 +7046,7 @@ mod tests {
             })
             .unwrap_or_default();
         for other_node_id in other_node_ids {
-            let _ = project.remove_node(other_node_id);
+            assert!(project.remove_node(other_node_id).is_ok());
         }
         let Some(composition) = project.get_composition_mut(composition_id) else {
             assert!(project.get_composition(composition_id).is_some());
@@ -8052,6 +7893,16 @@ mod tests {
         }
         if let Some(composition) = project.get_composition_mut(composition_id) {
             composition.ui_size = [2_200.0, 1_400.0];
+        }
+        let track_structural_merge_id = project
+            .get_track(track_id)
+            .expect("fixture Track")
+            .structural_merge_node_id;
+        if let Some(structural_merge) = project.get_node_mut(track_structural_merge_id) {
+            // This test exercises the Solid header gesture itself. Keep the
+            // generated Track sink clear of that header; production performs
+            // the same collision repair before the first interactive frame.
+            structural_merge.ui_position = [1_450.0, 760.0];
         }
         assert!(project
             .set_output_node(NodeContainer::Clip(clip_id), Some(solid_id))

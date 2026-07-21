@@ -19,12 +19,14 @@ fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
     track.ui_size = [1250.0, 760.0];
     let composition_id = composition.id;
     let track_id = track.id;
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
 
     let mut clip = Clip::new("Layers", 0.0, 4.0);
     clip.ui_position = [180.0, 220.0];
@@ -89,7 +91,7 @@ fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
         }
     }
     assert!(project
-        .set_connection_blend_mode(connection_ids[0], BlendMode::Add)
+        .set_connection_blend_mode(connection_ids[0], BlendMode::LinearDodge)
         .is_ok());
     assert!(project
         .set_connection_blend_mode(connection_ids[1], BlendMode::Multiply)

@@ -63,14 +63,16 @@ fn project_with_solid() -> Result<(Project, uuid::Uuid, uuid::Uuid)> {
     .map_err(|error| anyhow!(error))?;
     let node_id = node.id;
 
-    project
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.add_clip(clip);
     project.add_node(node);
-    project
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     project.attach_clip_to_track(track_id, clip_id)?;
     project.attach_node_to_container(NodeContainer::Clip(clip_id), node_id)?;
     project.set_output_node(NodeContainer::Clip(clip_id), Some(node_id))?;
@@ -119,12 +121,14 @@ fn load_and_undo_style_replacement_keep_every_consumer_on_the_same_arc() -> Resu
     let mut loaded = Project::new("loaded");
     let (composition, track) = Composition::new("loaded composition", 640, 360, 24.0, 5.0);
     let loaded_composition_id = composition.id;
-    loaded
-        .add_track(track)
-        .expect("container structural Merge insertion must succeed");
-    loaded
-        .add_composition(composition)
-        .expect("container structural Merge insertion must succeed");
+    assert!(
+        loaded.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        loaded.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
     manager.load_project(&loaded.save()?)?;
 
     assert!(Arc::ptr_eq(&shared, &timeline_consumer));

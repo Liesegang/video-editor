@@ -3,9 +3,10 @@ use egui_snarl::Snarl;
 use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
 use library::model::{NodeContainer, Project};
 
+use crate::state::context_types::NodeEditorEditableWire;
 use crate::ui::panels::node_editor::{
-    input_definitions, merge_images_target_node_id, merge_input_slots, output_definitions,
-    ContainerVisual, GraphItem, NodeEdit,
+    container_output_node_id, input_definitions, merge_images_target_node_id, merge_input_slots,
+    output_definitions, ContainerVisual, GraphItem, NodeEdit,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -61,6 +62,47 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
         }
     }
     edit_for_port_addresses(project, from, to, connect)
+}
+
+pub(in crate::ui::panels::node_editor) fn disconnect_context_target(
+    project: &Project,
+    edit: &NodeEdit,
+) -> Option<NodeEditorEditableWire> {
+    match edit {
+        NodeEdit::DisconnectConnection { connection_id } => {
+            Some(NodeEditorEditableWire::ProjectConnection {
+                connection_id: *connection_id,
+            })
+        }
+        NodeEdit::Disconnect { from, to } => project
+            .connections
+            .iter()
+            .find(|connection| connection.from == *from && connection.to == *to)
+            .map(|connection| NodeEditorEditableWire::ProjectConnection {
+                connection_id: connection.id,
+            }),
+        NodeEdit::SetOutputNode {
+            owner,
+            node_id: None,
+        } => container_output_node_id(project, *owner, PortDataType::Image).map(|node_id| {
+            NodeEditorEditableWire::OutputBinding {
+                owner: *owner,
+                node_id,
+                data_type: PortDataType::Image,
+            }
+        }),
+        NodeEdit::SetAudioOutputNode {
+            owner,
+            node_id: None,
+        } => container_output_node_id(project, *owner, PortDataType::Audio).map(|node_id| {
+            NodeEditorEditableWire::OutputBinding {
+                owner: *owner,
+                node_id,
+                data_type: PortDataType::Audio,
+            }
+        }),
+        _ => None,
+    }
 }
 
 pub(in crate::ui::panels::node_editor) fn edit_for_port_addresses(
@@ -154,12 +196,14 @@ mod tests {
         let mut project = Project::new("typed Node Editor binding");
         let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
         let track_id = track.id;
-        project
-            .add_track(track)
-            .expect("container structural Merge insertion must succeed");
-        project
-            .add_composition(composition)
-            .expect("container structural Merge insertion must succeed");
+        assert!(
+            project.add_track(track).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
+        assert!(
+            project.add_composition(composition).is_ok(),
+            "container structural Merge insertion must succeed"
+        );
         let clip = Clip::new("Video", 0.0, 2.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -186,6 +230,18 @@ mod tests {
             .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
             .unwrap();
         (project, track_id, clip_id, node_id)
+    }
+
+    #[test]
+    fn canonical_disconnect_connection_becomes_an_editable_wire_menu_target() {
+        let project = Project::new("wire context target");
+        let connection_id = uuid::Uuid::new_v4();
+        let edit = NodeEdit::DisconnectConnection { connection_id };
+
+        assert_eq!(
+            disconnect_context_target(&project, &edit),
+            Some(NodeEditorEditableWire::ProjectConnection { connection_id })
+        );
     }
 
     #[test]
