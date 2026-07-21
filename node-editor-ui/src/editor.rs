@@ -12,7 +12,47 @@ use crate::{
 /// Headers, selection chrome, ports, wires, and groups remain editor-owned;
 /// the host renders only its model-specific body controls.
 pub trait NodeBodyRenderer<NodeId> {
-    fn show(&mut self, node: &NodeId, ui: &mut egui::Ui);
+    /// Render host controls and report which interactive child owns the
+    /// current pointer. Use [`NodeBodyResponse::from_response`] for each
+    /// slider, drag value, button, or other interactive response and combine
+    /// them with [`NodeBodyResponse::union`].
+    fn show(&mut self, node: &NodeId, ui: &mut egui::Ui) -> NodeBodyResponse;
+}
+
+/// Frame-local pointer ownership reported by host controls in a Node body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeBodyResponse {
+    pointer_owned: bool,
+}
+
+impl NodeBodyResponse {
+    /// No body control owns the current pointer.
+    pub const NONE: Self = Self {
+        pointer_owned: false,
+    };
+
+    /// Convert one real egui widget response into body pointer ownership.
+    pub fn from_response(response: &egui::Response) -> Self {
+        Self {
+            pointer_owned: response.enabled()
+                && response.sense.interactive()
+                && (response.contains_pointer()
+                    || response.dragged()
+                    || response.is_pointer_button_down_on()),
+        }
+    }
+
+    /// Combine several child widget responses without exposing their IDs.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            pointer_owned: self.pointer_owned || other.pointer_owned,
+        }
+    }
+
+    const fn pointer_owned(self) -> bool {
+        self.pointer_owned
+    }
 }
 
 /// Visual policy for the standalone surface.
@@ -27,7 +67,6 @@ pub struct EditorConfig {
     pub normal_stroke: Stroke,
     pub wire_stroke: Stroke,
     pub port_radius: f32,
-    pub node_header_height: f32,
 }
 
 impl Default for EditorConfig {
@@ -42,7 +81,6 @@ impl Default for EditorConfig {
             normal_stroke: Stroke::new(1.0, Color32::from_rgb(79, 84, 100)),
             wire_stroke: Stroke::new(2.5, Color32::from_rgb(145, 151, 170)),
             port_radius: 5.0,
-            node_header_height: 28.0,
         }
     }
 }
@@ -68,8 +106,14 @@ impl Editor {
         Key: Copy + Eq,
         Renderer: NodeBodyRenderer<NodeId>,
     {
-        paint(ui, frame, renderer, config);
-        interaction::interact(ui, frame, state, InteractionOptions::ALL, false)
+        let body_pointer_owned = paint(ui, frame, renderer, config);
+        interaction::interact(
+            ui,
+            frame,
+            state,
+            InteractionOptions::ALL,
+            body_pointer_owned,
+        )
     }
 
     /// Run the same descriptor and interaction pipeline over host-rendered
@@ -98,7 +142,8 @@ fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(
     frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     renderer: &mut Renderer,
     config: EditorConfig,
-) where
+) -> bool
+where
     NodeId: Clone + Eq,
     PortId: Clone + Eq,
     WireId: Clone + Eq,
@@ -160,8 +205,9 @@ fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(
         painter.add(egui::Shape::line(points, stroke));
     }
 
+    let mut body_pointer_owned = false;
     for node in frame.nodes {
-        paint_node(ui, frame, node, renderer, config);
+        body_pointer_owned |= paint_node(ui, frame, node, renderer, config);
     }
 
     for port in frame.ports {
@@ -195,6 +241,7 @@ fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(
             );
         }
     }
+    body_pointer_owned
 }
 
 fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
@@ -203,7 +250,8 @@ fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
     node: &NodeDescriptor<'_, NodeId, GroupId>,
     renderer: &mut Renderer,
     config: EditorConfig,
-) where
+) -> bool
+where
     NodeId: Clone + Eq,
     WireId: Clone + Eq,
     GroupId: Clone + Eq,
@@ -211,7 +259,7 @@ fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
 {
     let rect = frame.screen_rect(node.rect).intersect(frame.viewport);
     if !rect.is_positive() {
-        return;
+        return false;
     }
     let selected = frame
         .selection
@@ -229,8 +277,10 @@ fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
         },
         StrokeKind::Inside,
     );
-    let header_height = config.node_header_height.min(rect.height());
-    let header = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_height));
+    let header = frame
+        .screen_rect(node.header_rect)
+        .intersect(rect)
+        .intersect(frame.viewport);
     painter.rect_filled(header, CornerRadius::same(7), config.node_header_fill);
     painter.text(
         header.left_center() + Vec2::new(8.0, 0.0),
@@ -248,9 +298,13 @@ fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
         egui::Rect::from_min_max(Pos2::new(rect.left(), header.bottom()), rect.right_bottom())
             .shrink2(Vec2::new(7.0, 5.0));
     if body.is_positive() {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
-            ui.set_clip_rect(body.intersect(frame.viewport));
-            renderer.show(&node.id, ui);
-        });
+        return ui
+            .scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+                ui.set_clip_rect(body.intersect(frame.viewport));
+                renderer.show(&node.id, ui)
+            })
+            .inner
+            .pointer_owned();
     }
+    false
 }

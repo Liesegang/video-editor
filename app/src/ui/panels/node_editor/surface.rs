@@ -23,18 +23,47 @@ use crate::state::context_types::{NodeEditorEditableWire, SelectionTarget};
 use super::{
     container_output_binding_port, container_output_binding_type, container_output_port,
     parent_container_owner, port_owner_for_node_container, ContainerVisual, RenderedEdge,
-    RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT,
+    RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT, PORT_ROW_HEIGHT,
 };
 
 pub(super) type SurfacePortId = PortInstanceId<PortAddress, NodeEditorEditableWire>;
 pub(super) type SurfaceOutput =
     EditorOutput<Uuid, SurfacePortId, NodeEditorEditableWire, ProjectPortOwner>;
 
+/// Frame-local geometry/order observed from Snarl's real draw callbacks.
+///
+/// Hash maps remain lookup accelerators only. Selection and port hit priority
+/// come from these back-to-front vectors, so randomized map iteration can
+/// never change which overlapping production surface wins.
+#[derive(Default)]
+pub(super) struct SurfaceCapture {
+    node_headers: HashMap<Uuid, egui::Rect>,
+    selectable_order: Vec<SelectionTarget>,
+    port_order: Vec<RenderedPortKey>,
+}
+
+impl SurfaceCapture {
+    pub(super) fn record_node_header(&mut self, node_id: Uuid, rect: egui::Rect) {
+        self.node_headers.insert(node_id, rect);
+    }
+
+    pub(super) fn record_selectable(&mut self, target: SelectionTarget) {
+        self.selectable_order.retain(|existing| *existing != target);
+        self.selectable_order.push(target);
+    }
+
+    pub(super) fn record_port(&mut self, key: RenderedPortKey) {
+        self.port_order.retain(|existing| *existing != key);
+        self.port_order.push(key);
+    }
+}
+
 pub(super) struct SurfaceProjection<'a> {
     nodes: Vec<NodeDescriptor<'a, Uuid, ProjectPortOwner>>,
     ports: Vec<PortDescriptor<'static, Uuid, SurfacePortId, ProjectPortOwner, PortDataType>>,
     wires: Vec<WireDescriptor<SurfacePortId, NodeEditorEditableWire>>,
     groups: Vec<GroupDescriptor<'a, ProjectPortOwner>>,
+    selection_order: Vec<ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire>>,
     selection: Vec<ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire>>,
     primary: Option<ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire>>,
     viewport: egui::Rect,
@@ -51,6 +80,7 @@ impl<'a> SurfaceProjection<'a> {
         containers: &[ContainerVisual],
         rendered_node_rects: &HashMap<Uuid, egui::Rect>,
         rendered_ports: &HashMap<RenderedPortKey, egui::Rect>,
+        capture: &SurfaceCapture,
         rendered_edges: &[RenderedEdge],
         selection: &[SelectionTarget],
         primary: Option<SelectionTarget>,
@@ -58,14 +88,35 @@ impl<'a> SurfaceProjection<'a> {
         viewport: egui::Rect,
         transform: egui::emath::TSTransform,
     ) -> Self {
-        let nodes = rendered_node_rects
+        let selection_order = ordered_selection_items(
+            project,
+            containers,
+            rendered_node_rects,
+            &capture.selectable_order,
+        );
+        let nodes = selection_order
             .iter()
-            .filter_map(|(node_id, rect)| {
+            .filter_map(|item| {
+                let ItemId::Node(node_id) = item else {
+                    return None;
+                };
+                let rect = *rendered_node_rects.get(node_id)?;
                 let node = project.get_node(*node_id)?;
+                let header_rect = capture
+                    .node_headers
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        egui::Rect::from_min_size(
+                            rect.min,
+                            egui::vec2(rect.width(), PORT_ROW_HEIGHT.min(rect.height())),
+                        )
+                    });
                 Some(NodeDescriptor {
                     id: *node_id,
                     title: node.name.as_str(),
-                    rect: *rect,
+                    rect,
+                    header_rect,
                     parent: project
                         .find_node_container(*node_id)
                         .map(port_owner_for_node_container),
@@ -73,9 +124,15 @@ impl<'a> SurfaceProjection<'a> {
                 })
             })
             .collect();
-        let groups = containers
+        let groups = selection_order
             .iter()
-            .filter_map(|container| {
+            .filter_map(|item| {
+                let ItemId::Group(owner) = item else {
+                    return None;
+                };
+                let container = containers
+                    .iter()
+                    .find(|container| container.owner == *owner)?;
                 let title = container_name(project, container.owner)?;
                 let rect = container.rect();
                 let header_rect = egui::Rect::from_min_size(
@@ -92,8 +149,8 @@ impl<'a> SurfaceProjection<'a> {
                 })
             })
             .collect();
-        let ports = rendered_ports
-            .keys()
+        let ports = ordered_port_keys(rendered_ports, &capture.port_order)
+            .into_iter()
             .map(|key| {
                 let wire = key.connection_id.map(|connection_id| {
                     NodeEditorEditableWire::ProjectConnection { connection_id }
@@ -132,6 +189,7 @@ impl<'a> SurfaceProjection<'a> {
             ports,
             wires,
             groups,
+            selection_order,
             selection: selected_items,
             primary,
             viewport,
@@ -150,12 +208,97 @@ impl<'a> SurfaceProjection<'a> {
             ports: &self.ports,
             wires: &self.wires,
             groups: &self.groups,
+            selection_order: &self.selection_order,
             selection: AuthoritativeSelection {
                 items: &self.selection,
                 primary: self.primary,
             },
         }
     }
+}
+
+fn ordered_selection_items(
+    project: &Project,
+    containers: &[ContainerVisual],
+    rendered_node_rects: &HashMap<Uuid, egui::Rect>,
+    captured: &[SelectionTarget],
+) -> Vec<ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire>> {
+    let mut ordered = captured
+        .iter()
+        .copied()
+        .filter(|target| match target {
+            SelectionTarget::Node(id) => {
+                rendered_node_rects.contains_key(id) && project.get_node(*id).is_some()
+            }
+            SelectionTarget::Composition(id) => containers
+                .iter()
+                .any(|container| container.owner == ProjectPortOwner::Composition(*id)),
+            SelectionTarget::Track(id) => containers
+                .iter()
+                .any(|container| container.owner == ProjectPortOwner::Track(*id)),
+            SelectionTarget::Clip(id) => containers
+                .iter()
+                .any(|container| container.owner == ProjectPortOwner::Clip(*id)),
+        })
+        .map(surface_selection_item)
+        .collect::<Vec<_>>();
+
+    // A missing callback should degrade deterministically for tests/partial
+    // frames, never by HashMap iteration. Production normally adds nothing in
+    // these fallback loops because every painted selectable was captured.
+    for container in containers {
+        let item = ItemId::Group(container.owner);
+        if !ordered.contains(&item) {
+            ordered.push(item);
+        }
+    }
+    let mut remaining_nodes = rendered_node_rects.keys().copied().collect::<Vec<_>>();
+    remaining_nodes.sort_unstable();
+    for node_id in remaining_nodes {
+        let item = ItemId::Node(node_id);
+        if project.get_node(node_id).is_some() && !ordered.contains(&item) {
+            ordered.push(item);
+        }
+    }
+    ordered
+}
+
+fn ordered_port_keys<'a>(
+    rendered_ports: &'a HashMap<RenderedPortKey, egui::Rect>,
+    captured: &'a [RenderedPortKey],
+) -> Vec<&'a RenderedPortKey> {
+    let mut ordered = captured
+        .iter()
+        .filter(|key| rendered_ports.contains_key(*key))
+        .collect::<Vec<_>>();
+    let mut remaining = rendered_ports
+        .keys()
+        .filter(|key| !ordered.contains(key))
+        .collect::<Vec<_>>();
+    remaining
+        .sort_by(|left, right| rendered_port_sort_key(left).cmp(&rendered_port_sort_key(right)));
+    ordered.extend(remaining);
+    ordered
+}
+
+fn rendered_port_sort_key(key: &RenderedPortKey) -> (u8, Uuid, &str, u8, Option<Uuid>) {
+    let owner_rank = match key.address.owner {
+        ProjectPortOwner::Composition(_) => 0,
+        ProjectPortOwner::Track(_) => 1,
+        ProjectPortOwner::Clip(_) => 2,
+        ProjectPortOwner::Node(_) => 3,
+    };
+    let direction_rank = match key.direction {
+        ProjectPortDirection::Input => 0,
+        ProjectPortDirection::Output => 1,
+    };
+    (
+        owner_rank,
+        key.address.owner.id(),
+        key.address.port.as_str(),
+        direction_rank,
+        key.connection_id,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -312,132 +455,4 @@ fn container_name(project: &Project, owner: ProjectPortOwner) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-
-    use super::*;
-    use library::model::Composition;
-
-    #[test]
-    fn selection_intent_maps_opaque_groups_without_registry_probe_order() {
-        let node = Uuid::from_u128(1);
-        let clip = Uuid::from_u128(2);
-        let outputs = [SurfaceOutput::Select {
-            items: vec![
-                ItemId::Node(node),
-                ItemId::Group(ProjectPortOwner::Clip(clip)),
-            ],
-            primary: Some(ItemId::Group(ProjectPortOwner::Clip(clip))),
-        }];
-
-        assert_eq!(
-            selection_change(&outputs),
-            Some(SurfaceSelectionChange {
-                targets: vec![SelectionTarget::Node(node), SelectionTarget::Clip(clip)],
-                primary: Some(SelectionTarget::Clip(clip)),
-            })
-        );
-    }
-
-    #[test]
-    fn wire_only_selection_does_not_clear_project_item_selection() {
-        let wire = NodeEditorEditableWire::ProjectConnection {
-            connection_id: Uuid::from_u128(3),
-        };
-        let outputs = [SurfaceOutput::Select {
-            items: vec![ItemId::Wire(wire)],
-            primary: Some(ItemId::Wire(wire)),
-        }];
-
-        assert_eq!(selection_change(&outputs), None);
-    }
-
-    #[test]
-    fn production_projection_drives_core_selection_with_real_pointer_input() {
-        let mut project = Project::new("surface adapter");
-        let (composition, track) = Composition::new("Main", 320, 180, 24.0, 2.0);
-        let composition_id = composition.id;
-        let track_id = track.id;
-        assert!(project.add_track(track).is_ok());
-        assert!(project.add_composition(composition).is_ok());
-        let composition = project.get_composition(composition_id);
-        let track = project.get_track(track_id);
-        assert!(composition.is_some());
-        assert!(track.is_some());
-        let containers = [
-            ContainerVisual {
-                owner: ProjectPortOwner::Composition(composition_id),
-                kind: super::super::ContainerKind::Composition,
-                position: composition.map_or([0.0, 0.0], |item| item.ui_position),
-                size: composition.map_or([640.0, 420.0], |item| item.ui_size),
-                collapsed: composition.is_some_and(|item| item.ui_collapsed),
-            },
-            ContainerVisual {
-                owner: ProjectPortOwner::Track(track_id),
-                kind: super::super::ContainerKind::Track,
-                position: track.map_or([100.0, 100.0], |item| item.ui_position),
-                size: track.map_or([480.0, 300.0], |item| item.ui_size),
-                collapsed: track.is_some_and(|item| item.ui_collapsed),
-            },
-        ];
-        let selected = [SelectionTarget::Composition(composition_id)];
-        let node_rects = HashMap::new();
-        let port_rects = HashMap::new();
-        let edges = Vec::new();
-        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_000.0, 700.0));
-        let projection = SurfaceProjection::from_project(
-            &project,
-            &containers,
-            &node_rects,
-            &port_rects,
-            &edges,
-            &selected,
-            Some(selected[0]),
-            None,
-            viewport,
-            egui::emath::TSTransform::IDENTITY,
-        );
-        let click = containers[1].rect().min + egui::vec2(160.0, 20.0);
-        let context = egui::Context::default();
-        let outputs = RefCell::new(Vec::new());
-        let mut state = node_editor_ui::InteractionState::default();
-        drop(context.run(
-            egui::RawInput {
-                screen_rect: Some(viewport),
-                events: vec![
-                    egui::Event::PointerMoved(click),
-                    egui::Event::PointerButton {
-                        pos: click,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-                ..Default::default()
-            },
-            |context| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE)
-                    .show(context, |ui| {
-                        outputs
-                            .borrow_mut()
-                            .extend(node_editor_ui::Editor::interact(
-                                ui,
-                                &projection.frame(),
-                                &mut state,
-                                node_editor_ui::InteractionOptions::SELECTION,
-                                false,
-                            ));
-                    });
-            },
-        ));
-
-        assert_eq!(
-            selection_change(&outputs.into_inner()),
-            Some(SurfaceSelectionChange {
-                targets: vec![SelectionTarget::Track(track_id)],
-                primary: Some(SelectionTarget::Track(track_id)),
-            })
-        );
-    }
-}
+mod tests;

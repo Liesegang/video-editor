@@ -64,6 +64,11 @@ pub struct NodeDescriptor<'a, NodeId, GroupId> {
     pub title: &'a str,
     /// Graph-space rectangle. [`GraphFrame::transform`] maps it to screen.
     pub rect: Rect,
+    /// Graph-space movement handle and header paint surface.
+    ///
+    /// The body is deliberately not a Node movement handle: host controls such
+    /// as sliders and drag values must retain ownership of their drag gesture.
+    pub header_rect: Rect,
     pub parent: Option<GroupId>,
     pub enabled: bool,
 }
@@ -135,6 +140,12 @@ pub struct GraphFrame<'a, NodeId, PortId, WireId, GroupId, Key> {
     pub ports: &'a [PortDescriptor<'a, NodeId, PortId, GroupId, Key>],
     pub wires: &'a [WireDescriptor<PortId, WireId>],
     pub groups: &'a [GroupDescriptor<'a, GroupId>],
+    /// Back-to-front order for Node and Group selection surfaces.
+    ///
+    /// This is a single cross-kind order so overlapping Nodes and Group
+    /// headers use the host's real paint policy for click and marquee primary
+    /// selection. Wires keep their independent authored paint order.
+    pub selection_order: &'a [ItemId<NodeId, GroupId, WireId>],
     pub selection: AuthoritativeSelection<'a, NodeId, GroupId, WireId>,
 }
 

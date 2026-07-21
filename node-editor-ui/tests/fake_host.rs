@@ -3,8 +3,9 @@ use std::cell::RefCell;
 use egui::{pos2, vec2, Event, Modifiers, Pos2, RawInput, Rect};
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, Editor, EditorConfig, EditorOutput, GraphFrame,
-    GroupDescriptor, InteractionState, ItemId, NodeBodyRenderer, NodeDescriptor, PortDescriptor,
-    PortDirection, PortOwner, TypeKey, WireDescriptor,
+    GroupDescriptor, InteractionOptions, InteractionState, ItemId, NodeBodyRenderer,
+    NodeBodyResponse, NodeDescriptor, PortDescriptor, PortDirection, PortOwner, TypeKey,
+    WireDescriptor,
 };
 
 type Output = EditorOutput<u8, u8, u8, u8>;
@@ -20,6 +21,7 @@ struct FakeGraph {
     ports: Vec<PortDescriptor<'static, u8, u8, u8, DataKind>>,
     wires: Vec<WireDescriptor<u8, u8>>,
     groups: Vec<GroupDescriptor<'static, u8>>,
+    selection_order: Vec<ItemId<u8, u8, u8>>,
 }
 
 impl FakeGraph {
@@ -47,6 +49,7 @@ impl FakeGraph {
                 id: 1,
                 title: "Source",
                 rect: Rect::from_min_size(pos2(80.0, 90.0), vec2(150.0, 130.0)),
+                header_rect: Rect::from_min_size(pos2(80.0, 90.0), vec2(150.0, 28.0)),
                 parent: Some(10),
                 enabled: true,
             },
@@ -54,6 +57,7 @@ impl FakeGraph {
                 id: 2,
                 title: "Result",
                 rect: Rect::from_min_size(pos2(430.0, 100.0), vec2(150.0, 130.0)),
+                header_rect: Rect::from_min_size(pos2(430.0, 100.0), vec2(150.0, 28.0)),
                 parent: Some(11),
                 enabled: true,
             },
@@ -95,6 +99,12 @@ impl FakeGraph {
             ports,
             wires,
             groups,
+            selection_order: vec![
+                ItemId::Group(10),
+                ItemId::Group(11),
+                ItemId::Node(1),
+                ItemId::Node(2),
+            ],
         }
     }
 
@@ -110,6 +120,7 @@ impl FakeGraph {
             ports: &self.ports,
             wires: &self.wires,
             groups: &self.groups,
+            selection_order: &self.selection_order,
             selection: AuthoritativeSelection {
                 items: selected,
                 primary,
@@ -124,9 +135,26 @@ struct FakeBodyRenderer {
 }
 
 impl NodeBodyRenderer<u8> for FakeBodyRenderer {
-    fn show(&mut self, node: &u8, ui: &mut egui::Ui) {
+    fn show(&mut self, node: &u8, ui: &mut egui::Ui) -> NodeBodyResponse {
         self.rendered.borrow_mut().push(*node);
         ui.label(format!("fake property for {node}"));
+        NodeBodyResponse::NONE
+    }
+}
+
+struct DragValueBodyRenderer<'a> {
+    value: &'a mut f64,
+    response_rect: &'a RefCell<Rect>,
+}
+
+impl NodeBodyRenderer<u8> for DragValueBodyRenderer<'_> {
+    fn show(&mut self, node: &u8, ui: &mut egui::Ui) -> NodeBodyResponse {
+        if *node != 1 {
+            return NodeBodyResponse::NONE;
+        }
+        let response = ui.add(egui::DragValue::new(self.value).speed(1.0));
+        self.response_rect.replace(response.rect);
+        NodeBodyResponse::from_response(&response)
     }
 }
 
@@ -185,6 +213,37 @@ fn run_frame(
     (outputs.into_inner(), full, rendered)
 }
 
+fn run_interaction_frame(
+    context: &egui::Context,
+    graph: &FakeGraph,
+    state: &mut State,
+    options: InteractionOptions,
+    events: Vec<Event>,
+) -> Vec<Output> {
+    let outputs = RefCell::new(Vec::new());
+    drop(context.run(
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0))),
+            events,
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(context, |ui| {
+                    outputs.borrow_mut().extend(Editor::interact(
+                        ui,
+                        &graph.frame(&[], None),
+                        state,
+                        options,
+                        false,
+                    ));
+                });
+        },
+    ));
+    outputs.into_inner()
+}
+
 #[test]
 fn fake_host_renders_nested_groups_nodes_wires_ports_and_host_bodies() {
     let context = egui::Context::default();
@@ -213,7 +272,7 @@ fn fake_host_emits_select_move_and_nested_reparent_intents() {
     let graph = FakeGraph::new();
     let mut state = State::default();
     let selected = [ItemId::Node(1)];
-    let start = pos2(140.0, 135.0);
+    let start = graph.nodes[0].header_rect.center();
     let nested = pos2(500.0, 260.0);
 
     let (pressed, _, _) = run_frame(
@@ -385,4 +444,173 @@ fn fake_host_emits_group_resize_intent_from_invisible_edge_hit() {
         EditorOutput::ResizeGroup { group: 11, rect }
             if rect.size() == graph.groups[1].rect.size() + vec2(30.0, 25.0)
     )));
+}
+
+#[test]
+fn body_drag_value_owns_pointer_while_header_still_moves_node() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let response_rect = RefCell::new(Rect::NOTHING);
+    let mut value = 0.0;
+
+    // First layout publishes the real DragValue rectangle.
+    {
+        let mut render = |events: Vec<Event>| {
+            let outputs = RefCell::new(Vec::new());
+            let mut renderer = DragValueBodyRenderer {
+                value: &mut value,
+                response_rect: &response_rect,
+            };
+            drop(context.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(context, |ui| {
+                            outputs.borrow_mut().extend(Editor::show(
+                                ui,
+                                &graph.frame(&[ItemId::Node(1)], Some(ItemId::Node(1))),
+                                &mut state,
+                                &mut renderer,
+                                EditorConfig::default(),
+                            ));
+                        });
+                },
+            ));
+            outputs.into_inner()
+        };
+        assert!(render(Vec::new()).is_empty());
+        let control = response_rect.borrow().center();
+        assert!(graph.nodes[0].rect.contains(control));
+        assert!(!graph.nodes[0].header_rect.contains(control));
+
+        let pressed = render(vec![
+            Event::PointerMoved(control),
+            pointer_button(control, true, Modifiers::NONE),
+        ]);
+        let dragged = render(vec![Event::PointerMoved(control + vec2(35.0, 0.0))]);
+        let released = render(vec![pointer_button(
+            control + vec2(35.0, 0.0),
+            false,
+            Modifiers::NONE,
+        )]);
+        assert!(pressed
+            .iter()
+            .all(|output| !matches!(output, EditorOutput::Move { .. })));
+        assert!(dragged
+            .iter()
+            .all(|output| !matches!(output, EditorOutput::Move { .. })));
+        assert!(released
+            .iter()
+            .all(|output| !matches!(output, EditorOutput::Move { .. })));
+        let header = graph.nodes[0].header_rect.center();
+        let _ = render(vec![
+            Event::PointerMoved(header),
+            pointer_button(header, true, Modifiers::NONE),
+        ]);
+        let moved = render(vec![Event::PointerMoved(header + vec2(24.0, 12.0))]);
+        assert!(moved.iter().any(|output| matches!(
+            output,
+            EditorOutput::Move { items, delta }
+                if items == &[ItemId::Node(1)] && *delta == vec2(24.0, 12.0)
+        )));
+    }
+    assert_ne!(value, 0.0, "the real DragValue must receive the drag");
+}
+
+#[test]
+fn cross_kind_overlap_and_marquee_follow_one_host_z_order() {
+    let mut graph = FakeGraph::new();
+    graph.groups[0].header_rect = graph.nodes[0].rect;
+    graph.selection_order = vec![ItemId::Node(1), ItemId::Group(10)];
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let overlap = graph.nodes[0].rect.center();
+
+    let clicked = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::SELECTION,
+        vec![
+            Event::PointerMoved(overlap),
+            pointer_button(overlap, true, Modifiers::NONE),
+        ],
+    );
+    assert!(clicked.contains(&EditorOutput::Select {
+        items: vec![ItemId::Group(10)],
+        primary: Some(ItemId::Group(10)),
+    }));
+
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let start = pos2(70.0, 80.0);
+    let end = pos2(240.0, 230.0);
+    let _ = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::SELECTION,
+        vec![
+            Event::PointerMoved(start),
+            pointer_button(start, true, Modifiers::NONE),
+        ],
+    );
+    let marquee = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::SELECTION,
+        vec![
+            Event::PointerMoved(end),
+            pointer_button(end, false, Modifiers::NONE),
+        ],
+    );
+    assert!(marquee.contains(&EditorOutput::Select {
+        items: vec![ItemId::Node(1), ItemId::Group(10)],
+        primary: Some(ItemId::Group(10)),
+    }));
+}
+
+#[test]
+fn select_false_never_emits_select_for_nodes_groups_wires_or_blank_canvas() {
+    let graph = FakeGraph::new();
+    let options = InteractionOptions {
+        select: false,
+        select_wires: true,
+        marquee: true,
+        move_items: false,
+        connect: false,
+        disconnect: false,
+        delete: false,
+        reparent: false,
+        resize_groups: false,
+    };
+    for point in [
+        graph.nodes[0].rect.center(),
+        graph.groups[0].header_rect.center(),
+        graph.wires[0].curve.point(0.5),
+        pos2(780.0, 480.0),
+    ] {
+        let context = egui::Context::default();
+        let mut state = State::default();
+        let outputs = run_interaction_frame(
+            &context,
+            &graph,
+            &mut state,
+            options,
+            vec![
+                Event::PointerMoved(point),
+                pointer_button(point, true, Modifiers::NONE),
+            ],
+        );
+        assert!(outputs
+            .iter()
+            .all(|output| !matches!(output, EditorOutput::Select { .. })));
+    }
 }

@@ -160,6 +160,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 });
                 let unclipped_header_rect = *self.to_global * response.rect;
                 let header_rect = clipped_qa_rect(unclipped_header_rect, *self.canvas_clip);
+                if let Ok(mut capture) = self.surface_capture.lock() {
+                    capture.record_node_header(project_node_id, response.rect);
+                }
                 let coordinate_double_clicked = ui.input(|input| {
                     input
                         .pointer
@@ -410,6 +413,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             connection_id: merge_connection_id,
             canvas_clip: *self.canvas_clip,
             rendered_ports: Arc::clone(&self.rendered_ports),
+            surface_capture: Arc::clone(&self.surface_capture),
         }
     }
 
@@ -467,6 +471,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             connection_id: None,
             canvas_clip: *self.canvas_clip,
             rendered_ports: Arc::clone(&self.rendered_ports),
+            surface_capture: Arc::clone(&self.surface_capture),
         }
     }
 
@@ -781,6 +786,10 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Node(id) => {
                 self.context_menu_exclusion_rects.push(graph_rect);
+                if let Ok(mut capture) = self.surface_capture.lock() {
+                    capture
+                        .record_selectable(crate::state::context_types::SelectionTarget::Node(id));
+                }
                 if let Ok(mut node_rects) = self.rendered_node_rects.lock() {
                     node_rects.insert(id, graph_rect);
                 }
@@ -827,11 +836,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     })),
                 )
             }
-            GraphItem::Container(_) => {
+            GraphItem::Container(owner) => {
                 // Only the integrated header/control card is a Snarl item;
                 // the separately painted container body remains available to
                 // the global Create menu and Node placement.
                 self.context_menu_exclusion_rects.push(graph_rect);
+                if let Ok(mut capture) = self.surface_capture.lock() {
+                    capture.record_selectable(super::super::selection_target_for_owner(owner));
+                }
             }
             GraphItem::PortAnchor { owner, kind } => {
                 // Transparent Snarl anchor frames can be wider than the

@@ -93,7 +93,7 @@ use interaction::{
     EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
     WireSecondaryClickHit,
 };
-use surface::{deselects_wire, selection_change, SurfaceProjection};
+use surface::{deselects_wire, selection_change, SurfaceCapture, SurfaceProjection};
 mod qa;
 
 #[cfg(test)]

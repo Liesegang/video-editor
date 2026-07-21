@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey};
+use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey, SurfaceCapture};
 
 mod body;
 mod selection;
@@ -46,4 +46,6 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     /// precise enough around nested container boundaries.
     pub(in crate::ui::panels::node_editor) rendered_node_rects:
         Arc<Mutex<HashMap<Uuid, egui::Rect>>>,
+    /// Actual back-to-front Snarl callback order and exact Node header hits.
+    pub(in crate::ui::panels::node_editor) surface_capture: Arc<Mutex<SurfaceCapture>>,
 }

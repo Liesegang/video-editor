@@ -572,6 +572,7 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -643,6 +644,7 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,

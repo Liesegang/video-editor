@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     clipped_qa_rect, node_editor_port_interactions_enabled, qa_container_key, qa_rect_metadata,
-    wire_port_drop_rect,
+    wire_port_drop_rect, SurfaceCapture,
 };
 
 pub(in crate::ui::panels::node_editor) struct QaPin {
@@ -26,6 +26,7 @@ pub(in crate::ui::panels::node_editor) struct QaPin {
     pub(in crate::ui::panels::node_editor) canvas_clip: egui::Rect,
     pub(in crate::ui::panels::node_editor) rendered_ports:
         Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+    pub(in crate::ui::panels::node_editor) surface_capture: Arc<Mutex<SurfaceCapture>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -156,15 +157,16 @@ impl SnarlPin for QaPin {
         let unclipped_drop_rect = wire_port_drop_rect(unclipped_global_rect);
         let drop_rect = clipped_qa_rect(unclipped_drop_rect, self.canvas_clip);
         if let Some(address) = &self.address {
+            let key = RenderedPortKey {
+                address: address.clone(),
+                direction: self.direction,
+                connection_id: self.connection_id,
+            };
             if let Ok(mut ports) = self.rendered_ports.lock() {
-                ports.insert(
-                    RenderedPortKey {
-                        address: address.clone(),
-                        direction: self.direction,
-                        connection_id: self.connection_id,
-                    },
-                    unclipped_global_rect,
-                );
+                ports.insert(key.clone(), unclipped_global_rect);
+            }
+            if let Ok(mut capture) = self.surface_capture.lock() {
+                capture.record_port(key);
             }
         }
         #[cfg(test)]

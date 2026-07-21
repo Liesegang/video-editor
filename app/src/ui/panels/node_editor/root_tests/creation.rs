@@ -124,6 +124,7 @@ fn rendered_ports_stay_vertical_on_their_left_and_right_sides_with_bounded_width
                     rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                     merge_layer_reorder: &mut merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                    surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                 };
                 let style = SnarlStyle {
                     collapsible: Some(false),

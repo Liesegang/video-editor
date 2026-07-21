@@ -28,7 +28,8 @@ use super::{
     selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
     wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
     NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
-    SurfaceProjection, TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
+    SurfaceCapture, SurfaceProjection, TimeContextNode, WireInteractionFrame,
+    WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -205,6 +206,7 @@ pub fn node_editor_panel(
     let mut canvas_clip = canvas_rect;
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
     let rendered_node_rects = Arc::new(Mutex::new(HashMap::new()));
+    let surface_capture = Arc::new(Mutex::new(SurfaceCapture::default()));
     let plugin_manager = project_service.get_plugin_manager();
     {
         let Ok(project) = project_lock.read() else {
@@ -283,6 +285,7 @@ pub fn node_editor_panel(
             rendered_ports: Arc::clone(&rendered_ports),
             merge_layer_reorder: &mut node_editor_state.merge_layer_reorder,
             rendered_node_rects: Arc::clone(&rendered_node_rects),
+            surface_capture: Arc::clone(&surface_capture),
         };
         let snarl_style = node_editor_snarl_style_for(ui.style());
         let graph_id = egui::Id::new(("project_node_editor", comp_id));
@@ -510,14 +513,17 @@ pub fn node_editor_panel(
         }
 
         let surface_was_active = node_editor_state.surface_interaction.is_active();
-        let surface_outputs = if let (Ok(node_rects), Ok(port_rects)) =
-            (rendered_node_rects.lock(), rendered_ports.lock())
-        {
+        let surface_outputs = if let (Ok(node_rects), Ok(port_rects), Ok(capture)) = (
+            rendered_node_rects.lock(),
+            rendered_ports.lock(),
+            surface_capture.lock(),
+        ) {
             let projection = SurfaceProjection::from_project(
                 &project,
                 &containers,
                 &node_rects,
                 &port_rects,
+                &capture,
                 &rendered_edges,
                 editor_context.selection.targets(),
                 editor_context.selection.primary(),
@@ -525,12 +531,17 @@ pub fn node_editor_panel(
                 canvas_clip,
                 to_global,
             );
+            let options = if node_editor_details_visible(to_global.scaling) {
+                node_editor_ui::InteractionOptions::SELECTION
+            } else {
+                node_editor_ui::InteractionOptions::OVERVIEW_SELECTION
+            };
             node_editor_ui::Editor::interact(
                 ui,
                 &projection.frame(),
                 &mut node_editor_state.surface_interaction,
-                node_editor_ui::InteractionOptions::SELECTION,
-                pointer_is_specialized || !node_editor_details_visible(to_global.scaling),
+                options,
+                pointer_is_specialized,
             )
         } else {
             Vec::new()

@@ -52,6 +52,10 @@ pub enum EditorOutput<NodeId, PortId, WireId, GroupId> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InteractionOptions {
     pub select: bool,
+    /// Precise curve selection is independently gated at overview scale.
+    pub select_wires: bool,
+    /// Rectangle selection is independently gated at overview scale.
+    pub marquee: bool,
     pub move_items: bool,
     pub connect: bool,
     pub disconnect: bool,
@@ -63,6 +67,8 @@ pub struct InteractionOptions {
 impl InteractionOptions {
     pub const ALL: Self = Self {
         select: true,
+        select_wires: true,
+        marquee: true,
         move_items: true,
         connect: true,
         disconnect: true,
@@ -76,6 +82,22 @@ impl InteractionOptions {
     /// disabled until their adapters are moved as one transaction.
     pub const SELECTION: Self = Self {
         select: true,
+        select_wires: true,
+        marquee: true,
+        move_items: false,
+        connect: false,
+        disconnect: false,
+        delete: false,
+        reparent: false,
+        resize_groups: false,
+    };
+
+    /// Overview interaction keeps large semantic targets and blank-canvas
+    /// deselection available while precise wire and marquee gestures are off.
+    pub const OVERVIEW_SELECTION: Self = Self {
+        select: true,
+        select_wires: false,
+        marquee: false,
         move_items: false,
         connect: false,
         disconnect: false,
@@ -189,6 +211,11 @@ where
     GroupId: Clone + Eq,
     Key: Copy + Eq,
 {
+    if (!options.select || !options.marquee)
+        && matches!(state.gesture, Some(Gesture::Marquee { .. }))
+    {
+        state.cancel();
+    }
     let mut outputs = keyboard_outputs(ui, frame, state, options);
     let (pressed, down, released, pointer, modifiers) = ui.input(|input| {
         (
@@ -341,25 +368,37 @@ fn begin_gesture<NodeId, PortId, WireId, GroupId, Key>(
                 transform: frame.transform,
             });
             capture_pointer(ui);
-            select_non_wire(
-                frame,
-                ItemId::Group(group.id.clone()),
-                modifiers.shift,
-                outputs,
-            );
+            if options.select {
+                select_non_wire(
+                    frame,
+                    ItemId::Group(group.id.clone()),
+                    modifiers.shift,
+                    outputs,
+                );
+            }
             return;
         }
     }
 
-    if let Some(node) = hit_node(frame, graph_position) {
-        select_non_wire(
-            frame,
-            ItemId::Node(node.id.clone()),
-            modifiers.shift,
-            outputs,
-        );
-        if options.move_items {
-            let items = movable_selection(frame, ItemId::Node(node.id.clone()));
+    if let Some(clicked) = hit_selectable(frame, graph_position) {
+        if options.select {
+            select_non_wire(frame, clicked.clone(), modifiers.shift, outputs);
+        }
+        let move_handle_hit = match &clicked {
+            ItemId::Node(node_id) => frame
+                .nodes
+                .iter()
+                .find(|node| node.id == *node_id)
+                .is_some_and(|node| node.header_rect.contains(graph_position)),
+            ItemId::Group(group_id) => frame
+                .groups
+                .iter()
+                .find(|group| group.id == *group_id)
+                .is_some_and(|group| group.header_rect.contains(graph_position)),
+            ItemId::Wire(_) => false,
+        };
+        if options.move_items && move_handle_hit {
+            let items = movable_selection(frame, clicked);
             state.gesture = Some(Gesture::Move {
                 items,
                 previous: graph_position,
@@ -371,52 +410,38 @@ fn begin_gesture<NodeId, PortId, WireId, GroupId, Key>(
         return;
     }
 
-    if let Some(group) = hit_group_header(frame, graph_position) {
-        select_non_wire(
-            frame,
-            ItemId::Group(group.id.clone()),
-            modifiers.shift,
-            outputs,
-        );
-        if options.move_items {
-            let items = movable_selection(frame, ItemId::Group(group.id.clone()));
-            state.gesture = Some(Gesture::Move {
-                items,
-                previous: graph_position,
-                current: screen_position,
-                transform: frame.transform,
-            });
-            capture_pointer(ui);
+    if options.select_wires || options.disconnect {
+        if let Some(wire) = hit_wire(frame, graph_position) {
+            if modifiers.alt && options.disconnect && wire.editable {
+                outputs.push(EditorOutput::Disconnect {
+                    wire: wire.id.clone(),
+                });
+            } else if options.select {
+                let clicked = ItemId::Wire(wire.id.clone());
+                let (items, primary) = after_click(
+                    frame.selection.items,
+                    frame.selection.primary.clone(),
+                    clicked,
+                    modifiers.shift,
+                );
+                outputs.push(EditorOutput::Select { items, primary });
+            }
+            return;
         }
-        return;
-    }
-
-    if let Some(wire) = hit_wire(frame, graph_position) {
-        if modifiers.alt && options.disconnect && wire.editable {
-            outputs.push(EditorOutput::Disconnect {
-                wire: wire.id.clone(),
-            });
-        } else if options.select {
-            let clicked = ItemId::Wire(wire.id.clone());
-            let (items, primary) = after_click(
-                frame.selection.items,
-                frame.selection.primary.clone(),
-                clicked,
-                modifiers.shift,
-            );
-            outputs.push(EditorOutput::Select { items, primary });
-        }
-        return;
     }
 
     if options.select && !modifiers.alt {
-        state.gesture = Some(Gesture::Marquee {
-            start: screen_position,
-            current: screen_position,
-            additive: modifiers.shift,
-            transform: frame.transform,
-        });
-        capture_pointer(ui);
+        if options.marquee {
+            state.gesture = Some(Gesture::Marquee {
+                start: screen_position,
+                current: screen_position,
+                additive: modifiers.shift,
+                transform: frame.transform,
+            });
+            capture_pointer(ui);
+        } else if !modifiers.shift {
+            clear_selection(frame, outputs);
+        }
     }
 }
 
@@ -514,7 +539,9 @@ fn finish_gesture<NodeId, PortId, WireId, GroupId, Key>(
             current,
             additive,
             transform,
-        } => finish_marquee(frame, start, current, additive, transform, outputs),
+        } if options.select && options.marquee => {
+            finish_marquee(frame, start, current, additive, transform, outputs);
+        }
         Gesture::Connect {
             from, transform, ..
         } if options.connect => {
@@ -569,7 +596,10 @@ fn finish_gesture<NodeId, PortId, WireId, GroupId, Key>(
                 outputs.push(EditorOutput::Reparent { nodes, parent });
             }
         }
-        Gesture::Connect { .. } | Gesture::Move { .. } | Gesture::Resize { .. } => {}
+        Gesture::Marquee { .. }
+        | Gesture::Connect { .. }
+        | Gesture::Move { .. }
+        | Gesture::Resize { .. } => {}
     }
 }
 
@@ -587,30 +617,21 @@ fn finish_marquee<NodeId, PortId, WireId, GroupId, Key>(
 {
     if start.distance(current) < MARQUEE_DRAG_THRESHOLD {
         if !additive {
-            outputs.push(EditorOutput::Select {
-                items: Vec::new(),
-                primary: None,
-            });
-            outputs.extend(frame.selection.items.iter().filter_map(|item| match item {
-                ItemId::Wire(wire) => Some(EditorOutput::DeselectWire { wire: wire.clone() }),
-                ItemId::Node(_) | ItemId::Group(_) => None,
-            }));
+            clear_selection(frame, outputs);
         }
         return;
     }
 
     let screen_rect = Rect::from_two_pos(start, current);
-    let mut hits = Vec::new();
-    for node in frame.nodes {
-        if screen_rect.intersects(transform * node.rect) {
-            hits.push(ItemId::Node(node.id.clone()));
-        }
-    }
-    for group in frame.groups {
-        if screen_rect.intersects(transform * group.header_rect) {
-            hits.push(ItemId::Group(group.id.clone()));
-        }
-    }
+    let hits = frame
+        .selection_order
+        .iter()
+        .filter(|item| {
+            selectable_rect(frame, item)
+                .is_some_and(|rect| screen_rect.intersects(transform * rect))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let current = frame
         .selection
         .items
@@ -691,6 +712,22 @@ fn select_non_wire<NodeId, PortId, WireId, GroupId, Key>(
     }));
 }
 
+fn clear_selection<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
+) where
+    WireId: Clone,
+{
+    outputs.push(EditorOutput::Select {
+        items: Vec::new(),
+        primary: None,
+    });
+    outputs.extend(frame.selection.items.iter().filter_map(|item| match item {
+        ItemId::Wire(wire) => Some(EditorOutput::DeselectWire { wire: wire.clone() }),
+        ItemId::Node(_) | ItemId::Group(_) => None,
+    }));
+}
+
 fn movable_selection<NodeId, PortId, WireId, GroupId, Key>(
     frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     clicked: ItemId<NodeId, GroupId, WireId>,
@@ -719,26 +756,44 @@ where
         .collect()
 }
 
-fn hit_node<'a, NodeId, PortId, WireId, GroupId, Key>(
-    frame: &'a GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+fn hit_selectable<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     position: Pos2,
-) -> Option<&'a crate::NodeDescriptor<'a, NodeId, GroupId>> {
+) -> Option<ItemId<NodeId, GroupId, WireId>>
+where
+    NodeId: Clone + Eq,
+    WireId: Clone,
+    GroupId: Clone + Eq,
+{
     frame
-        .nodes
+        .selection_order
         .iter()
         .rev()
-        .find(|node| node.rect.contains(position))
+        .find(|item| selectable_rect(frame, item).is_some_and(|rect| rect.contains(position)))
+        .cloned()
 }
 
-fn hit_group_header<'a, NodeId, PortId, WireId, GroupId, Key>(
-    frame: &'a GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
-    position: Pos2,
-) -> Option<&'a crate::GroupDescriptor<'a, GroupId>> {
-    frame
-        .groups
-        .iter()
-        .rev()
-        .find(|group| group.header_rect.contains(position))
+fn selectable_rect<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    item: &ItemId<NodeId, GroupId, WireId>,
+) -> Option<Rect>
+where
+    NodeId: Eq,
+    GroupId: Eq,
+{
+    match item {
+        ItemId::Node(node_id) => frame
+            .nodes
+            .iter()
+            .find(|node| node.id == *node_id)
+            .map(|node| node.rect),
+        ItemId::Group(group_id) => frame
+            .groups
+            .iter()
+            .find(|group| group.id == *group_id)
+            .map(|group| group.header_rect),
+        ItemId::Wire(_) => None,
+    }
 }
 
 fn deepest_group_at<'a, NodeId, PortId, WireId, GroupId, Key>(

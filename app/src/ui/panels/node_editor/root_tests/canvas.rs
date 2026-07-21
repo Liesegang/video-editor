@@ -237,6 +237,7 @@ fn overview_canvas_keeps_pan_gestures_while_precision_controls_are_disabled() {
                         rendered_ports,
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -464,6 +465,7 @@ fn extreme_zoom_disables_precision_hits_without_expanding_node_hit_area() {
         connection_id: None,
         canvas_clip: canvas,
         rendered_ports,
+        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
     };
     let pin_rect = pin.pin_rect(0.0, 0.0, 20.0, 13.0);
     assert!(

@@ -287,6 +287,7 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         rendered_ports: Arc::clone(&rendered_ports),
                         merge_layer_reorder: &mut state.merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -432,6 +433,7 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         rendered_ports: Arc::clone(&rendered_ports),
                         merge_layer_reorder: &mut state.merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,

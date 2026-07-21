@@ -90,6 +90,7 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
                     drop(viewer);
@@ -501,6 +502,7 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -591,6 +593,7 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
+                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                     };
                     let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
                     snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);

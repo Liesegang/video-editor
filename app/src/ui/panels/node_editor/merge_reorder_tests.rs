@@ -204,6 +204,7 @@ fn render_merge_frame(
                     rendered_ports: Arc::clone(&rendered_ports),
                     merge_layer_reorder: &mut state.merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                    surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                 };
                 snarl.show(
                     &mut viewer,

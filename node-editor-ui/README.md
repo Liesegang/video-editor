@@ -23,7 +23,9 @@ host graph / selection / history
 
 `GraphFrame` borrows flat descriptor slices for Nodes, concrete Ports,
 authored Wires, and nested Groups. IDs and `TypeKey` values are opaque host
-types. Geometry is frame-local and uses one graph-to-screen transform.
+types. Geometry is frame-local and uses one graph-to-screen transform. Its
+single back-to-front `selection_order` defines cross-kind Node/Group hit and
+marquee-primary policy; lookup-map iteration is never an interaction policy.
 
 `InteractionState` retains only the active pointer gesture. It never retains
 Nodes, positions, connections, authoritative selection, undo data, or a render
@@ -33,8 +35,10 @@ cache. Dropping it loses no project data.
 
 `Editor::show` owns generic group/node chrome, ports, wires, selection
 presentation, and interaction orchestration. A host implements
-`NodeBodyRenderer<NodeId>` for domain-specific body controls. The same frame
-path emits:
+`NodeBodyRenderer<NodeId>` for domain-specific body controls. A Node's explicit
+`header_rect` is its movement handle, while body controls combine their real
+egui responses into `NodeBodyResponse`; a slider or drag value therefore owns
+its drag instead of moving the Node. The same frame path emits:
 
 - `Select` and `DeselectWire`
 - `Move` and `ResizeGroup`
@@ -48,11 +52,13 @@ video type.
 ## RuViE adapter status
 
 RuViE's production Node Editor now projects its authoritative `Project`,
-rendered geometry, and `SelectionState` through
+rendered geometry, actual Snarl draw order, and `SelectionState` through
 `app/src/ui/panels/node_editor/surface.rs`. Blank click, marquee, Node/Group
 selection, and wire deselection use `Editor::interact` and the same
 `InteractionState` as the standalone renderer. Selection is no longer
-implemented as a parallel app-only gesture state machine.
+implemented as a parallel app-only gesture state machine. Overview scale keeps
+large Node/Group click targets and blank deselection while precise marquee and
+wire selection remain gated.
 
 This is a usable reusable-core vertical slice, **not completion of the RuViE
 renderer migration**. The following production behavior still belongs to the

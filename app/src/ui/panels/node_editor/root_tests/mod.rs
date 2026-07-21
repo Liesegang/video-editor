@@ -375,6 +375,7 @@ fn render_test_graph_with_context_menu_exclusions(
                     rendered_ports: Arc::clone(&rendered_ports),
                     merge_layer_reorder: &mut merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                    surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
                 };
                 let style = SnarlStyle {
                     collapsible: Some(false),

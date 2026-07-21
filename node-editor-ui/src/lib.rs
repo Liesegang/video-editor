@@ -13,7 +13,7 @@ mod interaction;
 mod selection;
 mod wire;
 
-pub use editor::{Editor, EditorConfig, NodeBodyRenderer};
+pub use editor::{Editor, EditorConfig, NodeBodyRenderer, NodeBodyResponse};
 pub use graph::{
     AuthoritativeSelection, GraphFrame, GroupDescriptor, ItemId, NodeDescriptor, PortDescriptor,
     PortDirection, PortInstanceId, PortOwner, TypeKey, WireDescriptor,
