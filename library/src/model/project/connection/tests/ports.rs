@@ -122,5 +122,32 @@ fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
             NUMBER_RESULT_OUTPUT_PORT,
         ]
     );
+
+    let rms_id = attach_authored_node(
+        &mut project,
+        container,
+        Node::new_sound_analysis("RMS", crate::model::SoundAnalysisContent::Rms),
+    )?;
+    assert_eq!(
+        project
+            .port_definitions(PortOwner::Node(rms_id))
+            .into_iter()
+            .map(|port| (port.key, port.data_type))
+            .collect::<Vec<_>>(),
+        vec![
+            (SOUND_INPUT_PORT.to_string(), PortDataType::Audio),
+            (
+                ANALYSIS_WINDOW_MS_PROPERTY.to_string(),
+                PortDataType::Numeric,
+            ),
+            (ANALYSIS_HOP_MS_PROPERTY.to_string(), PortDataType::Numeric,),
+            (
+                ANALYSIS_SAMPLE_RATE_PROPERTY.to_string(),
+                PortDataType::Numeric,
+            ),
+            (NUMBER_RESULT_OUTPUT_PORT.to_string(), PortDataType::Number,),
+        ],
+        "Sound settings are canonical wire-overridable Numeric inputs"
+    );
     Ok(())
 }

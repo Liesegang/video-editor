@@ -98,7 +98,7 @@ pub(super) fn render_node_properties(
     editor_context: &mut EditorContext,
     needs_refresh: &mut bool,
 ) {
-    let descriptor_definitions = canonical_value_property_definitions(node).or_else(|| {
+    let descriptor_definitions = canonical_native_property_definitions(node).or_else(|| {
         plugin_operation_property_definitions(project_service.get_plugin_manager().as_ref(), node)
     });
     let mut definitions = descriptor_definitions.unwrap_or_else(|| {
@@ -137,11 +137,14 @@ pub(super) fn render_node_properties(
     }
 }
 
-pub(super) fn canonical_value_property_definitions(node: &Node) -> Option<Vec<PropertyDefinition>> {
-    let NodeContent::Value(value) = node.content() else {
-        return None;
-    };
-    Some(value.property_definitions().to_vec())
+pub(super) fn canonical_native_property_definitions(
+    node: &Node,
+) -> Option<Vec<PropertyDefinition>> {
+    match node.content() {
+        NodeContent::Value(value) => Some(value.property_definitions().to_vec()),
+        NodeContent::SoundAnalysis(analysis) => Some(analysis.property_definitions().to_vec()),
+        _ => None,
+    }
 }
 
 pub(super) fn plugin_operation_property_definitions(

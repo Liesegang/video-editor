@@ -61,6 +61,24 @@ Image:
   outputs:
     - name: value
       type: Image
+Sound:
+  category: Data
+  model: PortDataType.Audio
+  description: Transient decoded/mixed PCM stream; Project persists only typed Audio wires
+  outputs:
+    - name: audio
+      key: audio
+      label: Audio
+      type: Audio
+Spectrum:
+  category: Data
+  model: PortDataType.Spectrum
+  description: Transient frequency-domain Sound data; the payload is never persisted in Project
+  outputs:
+    - name: spectrum
+      key: spectrum
+      label: Spectrum
+      type: Spectrum
 Video:
   category: Data
   description: Video resource
@@ -604,6 +622,206 @@ Merge:
   outputs:
     - name: image
       type: Image
+
+# --- Sound ---
+Sound Merge:
+  category: Sound
+  model: SoundMerge
+  operation_key: sound_merge
+  description: Mix ordered variadic Audio inputs; structural Track/Composition routing uses this same native Node
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: sounds
+      key: sounds
+      label: Sounds
+      type: Audio
+      side: Left
+      exposure: Graph
+      multiplicity: Variadic
+  outputs:
+    - name: audio
+      key: audio
+      label: Audio
+      type: Audio
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+RMS:
+  category: Sound / Analysis
+  model: SoundAnalysis.Rms
+  operation_key: sound_rms
+  description: Root-mean-square amplitude over a Composition-output-timeline analysis window
+  inputs:
+    - name: sound
+      key: sound
+      label: Sound
+      type: Audio
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - &sound_window_input
+      name: window_ms
+      key: window_ms
+      label: Window
+      type: Numeric
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        ui_type: Float
+        default: 50.0
+        min: 1.0
+        max: 2000.0
+        step: 1.0
+        suffix: ms
+        min_hard_limit: true
+        max_hard_limit: true
+    - &sound_hop_input
+      name: hop_ms
+      key: hop_ms
+      label: Hop
+      type: Numeric
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        ui_type: Float
+        default: 10.0
+        min: 1.0
+        max: 2000.0
+        step: 1.0
+        suffix: ms
+        min_hard_limit: true
+        max_hard_limit: true
+    - &sound_sample_rate_input
+      name: sample_rate
+      key: sample_rate
+      label: Sample Rate
+      type: Numeric
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        ui_type: Integer
+        default: 48000
+        min: 8000
+        max: 192000
+        suffix: Hz
+        min_hard_limit: true
+        max_hard_limit: true
+  outputs:
+    - name: result
+      key: result
+      label: Result
+      type: Number
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Peak:
+  category: Sound / Analysis
+  model: SoundAnalysis.Peak
+  operation_key: sound_peak
+  description: Absolute peak amplitude over a Composition-output-timeline analysis window
+  inputs:
+    - name: sound
+      key: sound
+      label: Sound
+      type: Audio
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - *sound_window_input
+    - *sound_hop_input
+    - *sound_sample_rate_input
+  outputs:
+    - name: result
+      key: result
+      label: Result
+      type: Number
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+FFT / Spectrum:
+  category: Sound / Analysis
+  model: SoundAnalysis.Spectrum
+  operation_key: sound_spectrum
+  description: Hann-windowed FFT over a Composition-output-timeline Sound window
+  inputs:
+    - name: sound
+      key: sound
+      label: Sound
+      type: Audio
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - *sound_window_input
+    - *sound_hop_input
+    - *sound_sample_rate_input
+  outputs:
+    - name: spectrum
+      key: spectrum
+      label: Spectrum
+      type: Spectrum
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Band Energy:
+  category: Sound / Analysis
+  model: SoundAnalysis.BandEnergy
+  operation_key: sound_band_energy
+  description: Aggregate one frequency range from a transient Spectrum into a Number
+  inputs:
+    - name: spectrum
+      key: spectrum_in
+      label: Spectrum
+      type: Spectrum
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: low_hz
+      key: low_hz
+      label: Low
+      type: Numeric
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata: &sound_frequency_property
+        ui_type: Float
+        default: 20.0
+        min: 0.0
+        max: 96000.0
+        step: 1.0
+        suffix: Hz
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: high_hz
+      key: high_hz
+      label: High
+      type: Numeric
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        <<: *sound_frequency_property
+        default: 20000.0
+  outputs:
+    - name: result
+      key: result
+      label: Result
+      type: Number
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+
+# TODO(sound-analysis): LUFS loudness and envelope/follower Nodes need a
+# separately reviewed temporal-state/standards contract and are intentionally
+# not implemented in this slice.
 Normal Blend:
   parent: Blend
   category: Compositing

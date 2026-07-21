@@ -1,5 +1,7 @@
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
-use library::model::{Node, Project, SoundAnalysisContent, ValueContent};
+use library::model::{
+    Node, Project, SoundAnalysisContent, ValueContent, SOUND_MERGE_OPERATION_KEY,
+};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
     EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
@@ -49,7 +51,7 @@ impl NodeCreateRequest {
             Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
             Self::Merge => "merge",
-            Self::SoundMerge => "sound_merge",
+            Self::SoundMerge => SOUND_MERGE_OPERATION_KEY,
             Self::SoundAnalysis(analysis) => analysis.operation_key(),
             Self::Clip => "clip",
             Self::Track => "track",

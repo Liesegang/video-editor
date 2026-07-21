@@ -21,6 +21,9 @@ pub use containers::{
 };
 pub use sound_analysis::SoundAnalysisContent;
 
+/// Stable authored/catalog identity of the native ordered Sound mixer.
+pub const SOUND_MERGE_OPERATION_KEY: &str = "sound_merge";
+
 static FMOD_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
     [PropertyDefinition::new(
         FMOD_DIVISOR_INPUT_PORT,

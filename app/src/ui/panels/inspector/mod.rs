@@ -20,7 +20,7 @@ mod selection;
 mod semantic_clip;
 
 use facade::{render_semantic_graph_facade, FacadeOwnerKind};
-use node_inspector::render_node;
+use node_inspector::{node_display_type, render_node};
 use presentation::{render_multi_selection_notice, render_node_time_source};
 use selection::{resolve_selection, InspectorSelection};
 
@@ -34,7 +34,7 @@ use facade::{
 };
 #[cfg(test)]
 use node_inspector::{
-    canonical_value_property_definitions, node_display_type, plugin_operation_property_definitions,
+    canonical_native_property_definitions, plugin_operation_property_definitions,
 };
 #[cfg(test)]
 use property_inference::property_label;
@@ -210,7 +210,11 @@ fn inspector_panel_content(
                 "inspector_owner",
                 heading.rect,
                 true,
-                Some(serde_json::json!({"owner": "node", "id": node.id})),
+                Some(serde_json::json!({
+                    "owner": "node",
+                    "id": node.id,
+                    "node_type": node_display_type(&node),
+                })),
             );
             ui.separator();
             if let Some(time_source) = time_source.as_ref() {

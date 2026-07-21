@@ -373,14 +373,29 @@ impl FrameEvaluator<'_> {
             EvalOutput::Produced(spectrum) => spectrum,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let low = match self.evaluate_analysis_property(node, BAND_LOW_HZ_PROPERTY, scope)? {
-            Some(value) => value,
-            None => return Ok(EvalOutput::NoOutput),
+        let low = match self.evaluate_analysis_property(
+            node,
+            BAND_LOW_HZ_PROPERTY,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) => value,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let high = match self.evaluate_analysis_property(node, BAND_HIGH_HZ_PROPERTY, scope)? {
-            Some(value) => value,
-            None => return Ok(EvalOutput::NoOutput),
+        let high = match self.evaluate_analysis_property(
+            node,
+            BAND_HIGH_HZ_PROPERTY,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) => value,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
+        if high < low {
+            return Ok(EvalOutput::NoOutput);
+        }
         Ok(EvalOutput::Produced(band_energy(&spectrum, low, high)))
     }
 
@@ -415,15 +430,17 @@ impl FrameEvaluator<'_> {
         if !path.insert(source.owner) {
             return Err(cycle_error(source.owner));
         }
-        let result = match self.resolve_sound_window(node, scope, global_time, path)? {
-            EvalOutput::Produced(samples) => {
-                let sample_rate = self.analysis_sample_rate(node, scope).ok_or_else(|| {
-                    LibraryError::Validation("invalid analysis sample rate".into())
-                })?;
-                Ok(EvalOutput::Produced(spectrum(&samples, sample_rate)))
-            }
-            EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
-        };
+        let result = (|| {
+            let samples = match self.resolve_sound_window(node, scope, global_time, path)? {
+                EvalOutput::Produced(samples) => samples,
+                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+            };
+            let sample_rate = match self.analysis_sample_rate(node, scope, global_time, path)? {
+                EvalOutput::Produced(sample_rate) => sample_rate,
+                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+            };
+            Ok(EvalOutput::Produced(spectrum(&samples, sample_rate)))
+        })();
         path.remove(&source.owner);
         result
     }
@@ -433,30 +450,44 @@ impl FrameEvaluator<'_> {
         node: &Node,
         scope: EvaluationScope,
         global_time: f64,
-        _path: &mut HashSet<PortOwner>,
+        path: &mut HashSet<PortOwner>,
     ) -> EvalResult<Vec<f32>> {
         let target = PortAddress::new(PortOwner::Node(node.id), SOUND_INPUT_PORT);
         let connection = match self.single_connection_to(&target)? {
             EvalOutput::Produced(connection) => connection,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let sample_rate = match self.analysis_sample_rate(node, scope) {
-            Some(sample_rate) => sample_rate,
-            None => return Ok(EvalOutput::NoOutput),
+        let sample_rate = match self.analysis_sample_rate(node, scope, global_time, path)? {
+            EvalOutput::Produced(sample_rate) => sample_rate,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let window_ms =
-            match self.evaluate_analysis_property(node, ANALYSIS_WINDOW_MS_PROPERTY, scope)? {
-                Some(value) if value.is_finite() && value > 0.0 => value,
-                _ => return Ok(EvalOutput::NoOutput),
-            };
-        let hop_ms = match self.evaluate_analysis_property(node, ANALYSIS_HOP_MS_PROPERTY, scope)? {
-            Some(value) if value.is_finite() && value > 0.0 => value,
-            _ => return Ok(EvalOutput::NoOutput),
+        let window_ms = match self.evaluate_analysis_property(
+            node,
+            ANALYSIS_WINDOW_MS_PROPERTY,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) if value.is_finite() && value > 0.0 => value,
+            EvalOutput::Produced(_) | EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let hop_ms = match self.evaluate_analysis_property(
+            node,
+            ANALYSIS_HOP_MS_PROPERTY,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) if value.is_finite() && value > 0.0 => value,
+            EvalOutput::Produced(_) | EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
         let window_seconds = window_ms / 1_000.0;
         let hop_seconds = hop_ms / 1_000.0;
-        let local_center = (scope.time / hop_seconds).floor() * hop_seconds;
-        let center_time = global_time + (local_center - scope.time);
+        // Analysis windows are quantized in the current Composition's output
+        // timeline. Each sample is then routed through Clip stretch/trim and
+        // explicit Time wires by AudioGraphEvaluator; quantizing local scope
+        // here would apply those remaps twice.
+        let center_time = (global_time / hop_seconds).floor() * hop_seconds;
         let start_time = (center_time - window_seconds * 0.5).max(0.0);
         let frames = (window_seconds * f64::from(sample_rate))
             .ceil()
@@ -468,7 +499,7 @@ impl FrameEvaluator<'_> {
         Ok(render_owner_samples(
             self.project,
             composition,
-            connection.from.owner,
+            &connection.from,
             &SOUND_ANALYSIS_CACHE,
             start_sample,
             frames,
@@ -479,12 +510,28 @@ impl FrameEvaluator<'_> {
         .map_or(EvalOutput::NoOutput, EvalOutput::Produced))
     }
 
-    fn analysis_sample_rate(&self, node: &Node, scope: EvaluationScope) -> Option<u32> {
-        let value = self
-            .evaluate_analysis_property(node, ANALYSIS_SAMPLE_RATE_PROPERTY, scope)
-            .ok()??;
-        (value.is_finite() && (8_000.0..=192_000.0).contains(&value))
-            .then_some(value.round() as u32)
+    fn analysis_sample_rate(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<u32> {
+        let value = match self.evaluate_analysis_property(
+            node,
+            ANALYSIS_SAMPLE_RATE_PROPERTY,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) => value,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        if value.is_finite() && (8_000.0..=192_000.0).contains(&value) {
+            Ok(EvalOutput::Produced(value.round() as u32))
+        } else {
+            Ok(EvalOutput::NoOutput)
+        }
     }
 
     fn evaluate_analysis_property(
@@ -492,28 +539,51 @@ impl FrameEvaluator<'_> {
         node: &Node,
         key: &str,
         scope: EvaluationScope,
-    ) -> Result<Option<f64>, LibraryError> {
-        let Some(property) = node.properties().get(key) else {
-            return Ok(None);
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<f64> {
+        let target = PortAddress::new(PortOwner::Node(node.id), key);
+        let value = match self.single_connection_to(&target)? {
+            EvalOutput::Produced(connection) => {
+                match self.resolve_metadata_value(&connection.from, global_time, path)? {
+                    EvalOutput::Produced(value) => value,
+                    EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+                }
+            }
+            EvalOutput::NoOutput => {
+                let Some(property) = node.properties().get(key) else {
+                    return Ok(EvalOutput::NoOutput);
+                };
+                let composition = self
+                    .composition_for_owner(PortOwner::Node(node.id))
+                    .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+                let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
+                let context = self.context(composition, Some(&inputs));
+                context
+                    .evaluate_property_value(property, node.properties(), scope.time)
+                    .map_err(|error| {
+                        LibraryError::Validation(format!(
+                            "Sound analysis property '{}.{key}' failed: {error}",
+                            node.id
+                        ))
+                    })?
+            }
         };
-        let composition = self
-            .composition_for_owner(PortOwner::Node(node.id))
-            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
-        let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
-        let context = self.context(composition, Some(&inputs));
-        let value = context
-            .evaluate_property_value(property, node.properties(), scope.time)
-            .map_err(|error| {
-                LibraryError::Validation(format!(
-                    "Sound analysis property '{}.{key}' failed: {error}",
-                    node.id
-                ))
-            })?;
-        Ok(match value {
-            PropertyValue::Number(value) => Some(value.into_inner()),
-            PropertyValue::Integer(value) => Some(value as f64),
-            _ => None,
-        })
+        let numeric = match value {
+            PropertyValue::Number(value) => value.into_inner(),
+            PropertyValue::Integer(value) => value as f64,
+            _ => return Ok(EvalOutput::NoOutput),
+        };
+        let NodeContent::SoundAnalysis(analysis) = node.content() else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        Ok(
+            if analysis.numeric_property_is_in_hard_limits(key, numeric) {
+                EvalOutput::Produced(numeric)
+            } else {
+                EvalOutput::NoOutput
+            },
+        )
     }
 }
 
