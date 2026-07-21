@@ -19,6 +19,82 @@ pub(in crate::ui::panels::node_editor) struct NodePalette {
     pub(in crate::ui::panels::node_editor) accent: Color32,
 }
 
+const NODE_SELECTED_OUTLINE: Color32 = Color32::from_rgb(102, 190, 255);
+const NODE_SELECTED_OUTLINE_SCREEN_WIDTH: f32 = 3.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::ui::panels::node_editor) struct NodeVisualStyle {
+    pub(in crate::ui::panels::node_editor) body_fill: Color32,
+    pub(in crate::ui::panels::node_editor) header_fill: Color32,
+    pub(in crate::ui::panels::node_editor) outer_stroke: egui::Stroke,
+    pub(in crate::ui::panels::node_editor) highlight_state: &'static str,
+    pub(in crate::ui::panels::node_editor) highlight_screen_width: f32,
+}
+
+pub(in crate::ui::panels::node_editor) fn node_visual_style(
+    palette: NodePalette,
+    inactive: bool,
+    selected: bool,
+    scale: f32,
+) -> NodeVisualStyle {
+    let body_fill = if inactive {
+        palette.body.gamma_multiply(0.42)
+    } else {
+        palette.body
+    };
+    let base_header = if inactive {
+        palette.header.gamma_multiply(0.42)
+    } else {
+        palette.header
+    };
+    if selected {
+        return NodeVisualStyle {
+            body_fill,
+            // Keep the category/inactive header state visible under a strong,
+            // stable selection tint instead of replacing all Node semantics.
+            header_fill: mix_color(base_header, NODE_SELECTED_OUTLINE, 0.48),
+            outer_stroke: egui::Stroke::new(
+                screen_stroke_in_graph_units(NODE_SELECTED_OUTLINE_SCREEN_WIDTH, scale),
+                NODE_SELECTED_OUTLINE,
+            ),
+            highlight_state: "selected",
+            highlight_screen_width: NODE_SELECTED_OUTLINE_SCREEN_WIDTH,
+        };
+    }
+
+    let stroke_color = if inactive {
+        palette.accent.gamma_multiply(0.48)
+    } else {
+        palette.accent
+    };
+    let stroke_width = if node_editor_details_visible(scale) {
+        1.25
+    } else {
+        screen_stroke_in_graph_units(1.1, scale)
+    };
+    NodeVisualStyle {
+        body_fill,
+        header_fill: base_header,
+        outer_stroke: egui::Stroke::new(stroke_width, stroke_color),
+        highlight_state: "none",
+        highlight_screen_width: stroke_width * scale.max(f32::EPSILON),
+    }
+}
+
+fn mix_color(base: Color32, tint: Color32, tint_weight: f32) -> Color32 {
+    fn channel(base: u8, tint: u8, tint_weight: f32) -> u8 {
+        (base as f32 * (1.0 - tint_weight) + tint as f32 * tint_weight)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    }
+    Color32::from_rgba_premultiplied(
+        channel(base.r(), tint.r(), tint_weight),
+        channel(base.g(), tint.g(), tint_weight),
+        channel(base.b(), tint.b(), tint_weight),
+        channel(base.a(), tint.a(), tint_weight),
+    )
+}
+
 pub(in crate::ui::panels::node_editor) const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
 
 /// One semantic glyph from the bundled Phosphor font plus its plain-language
@@ -346,4 +422,38 @@ pub(in crate::ui::panels::node_editor) fn pin_info(
         .with_stroke(egui::Stroke::new(if connected { 2.0 } else { 1.25 }, color))
         .with_wire_color(color)
         .with_wire_style(WireStyle::Bezier3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn palette() -> NodePalette {
+        NodePalette {
+            body: Color32::from_rgb(30, 40, 50),
+            header: Color32::from_rgb(60, 70, 80),
+            accent: Color32::from_rgb(150, 160, 170),
+        }
+    }
+
+    #[test]
+    fn selected_outline_stays_three_screen_points_at_every_lod() {
+        for scale in [0.0065, 0.18, 1.0, 1.25] {
+            let selected = node_visual_style(palette(), false, true, scale);
+            assert_eq!(selected.highlight_state, "selected");
+            assert!((selected.highlight_screen_width - 3.0).abs() < f32::EPSILON);
+            assert!((selected.outer_stroke.width * scale - 3.0).abs() < 0.001);
+            assert_eq!(selected.outer_stroke.color, NODE_SELECTED_OUTLINE);
+        }
+    }
+
+    #[test]
+    fn selection_preserves_inactive_body_while_tinting_header_and_outline() {
+        let inactive = node_visual_style(palette(), true, false, 1.0);
+        let selected_inactive = node_visual_style(palette(), true, true, 1.0);
+        assert_eq!(selected_inactive.body_fill, inactive.body_fill);
+        assert_ne!(selected_inactive.header_fill, inactive.header_fill);
+        assert_ne!(selected_inactive.outer_stroke, inactive.outer_stroke);
+        assert_eq!(selected_inactive.highlight_state, "selected");
+    }
 }

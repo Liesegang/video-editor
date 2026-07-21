@@ -14,16 +14,40 @@ impl FloatDragValueConfig {
     }
 
     pub fn from_ui_type(ui_type: &PropertyUiType) -> Option<Self> {
-        let PropertyUiType::Float {
-            min,
-            max,
-            step,
-            suffix,
-            min_hard_limit,
-            max_hard_limit,
-        } = ui_type
-        else {
-            return None;
+        let (min, max, step, suffix, min_hard_limit, max_hard_limit) = match ui_type {
+            PropertyUiType::Float {
+                min,
+                max,
+                step,
+                suffix,
+                min_hard_limit,
+                max_hard_limit,
+            }
+            | PropertyUiType::Vec2 {
+                min,
+                max,
+                step,
+                suffix,
+                min_hard_limit,
+                max_hard_limit,
+            }
+            | PropertyUiType::Vec3 {
+                min,
+                max,
+                step,
+                suffix,
+                min_hard_limit,
+                max_hard_limit,
+            }
+            | PropertyUiType::Vec4 {
+                min,
+                max,
+                step,
+                suffix,
+                min_hard_limit,
+                max_hard_limit,
+            } => (min, max, step, suffix, min_hard_limit, max_hard_limit),
+            _ => return None,
         };
         Some(Self {
             speed: *step,
@@ -44,9 +68,15 @@ impl FloatDragValueConfig {
     }
 
     pub fn widget<'a>(&self, value: &'a mut f64) -> egui::DragValue<'a> {
-        let mut widget = egui::DragValue::new(value)
-            .speed(self.speed)
-            .suffix(&self.suffix);
+        self.widget_with_suffix(value, &self.suffix)
+    }
+
+    pub fn widget_without_suffix<'a>(&self, value: &'a mut f64) -> egui::DragValue<'a> {
+        self.widget_with_suffix(value, "")
+    }
+
+    fn widget_with_suffix<'a>(&self, value: &'a mut f64, suffix: &str) -> egui::DragValue<'a> {
+        let mut widget = egui::DragValue::new(value).speed(self.speed).suffix(suffix);
         if self.hard_min.is_some() || self.hard_max.is_some() {
             widget = widget
                 .range(
@@ -122,5 +152,20 @@ mod tests {
         assert_eq!(frames.hard_min, Some(12.0));
         assert_eq!(frames.hard_max, None);
         assert_eq!(frames.suffix, "fr");
+    }
+
+    #[test]
+    fn vector_components_reuse_float_drag_metadata() {
+        for metadata in [
+            PropertyUiType::vec2_with_range(-10.0, 20.0, 0.5, " px", true, false),
+            PropertyUiType::vec3_with_range(-10.0, 20.0, 0.5, " px", true, false),
+            PropertyUiType::vec4_with_range(-10.0, 20.0, 0.5, " px", true, false),
+        ] {
+            let config = FloatDragValueConfig::from_ui_type(&metadata).unwrap();
+            assert_eq!(config.speed, 0.5);
+            assert_eq!(config.suffix, " px");
+            assert_eq!(config.hard_min, Some(-10.0));
+            assert_eq!(config.hard_max, None);
+        }
     }
 }

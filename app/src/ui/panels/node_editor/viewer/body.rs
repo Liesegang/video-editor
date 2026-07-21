@@ -2,13 +2,18 @@ use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+use crate::ui::widgets::property_mode::{
+    property_for_mode, property_mode_control, toggled_keyframe_property, PropertyModeAction,
+};
 use crate::ui::widgets::searchable_context_menu::show_searchable_items_with_qa;
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
 use library::model::project::{PortOwner, TIME_PORT};
-use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use library::model::property::{Property, PropertyDefinition, PropertyUiType, PropertyValue};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+mod vector;
 
 impl ProjectNodeViewer<'_> {
     pub(super) fn show_merge_input_slot(
@@ -402,28 +407,58 @@ impl ProjectNodeViewer<'_> {
         }
 
         let property_time = node_property_time(self.project, node_id, self.current_time);
-        let evaluated = self
+        let authored_property = self
             .project
             .get_node(node_id)
             .and_then(|node| node.properties().get(property_key))
-            .map(|property| {
-                evaluate_node_property(
-                    self.project,
-                    self.plugin_manager,
-                    node_id,
-                    property,
-                    property_time,
-                )
-            });
+            .cloned();
+        let evaluated = authored_property.as_ref().map(|property| {
+            evaluate_node_property(
+                self.project,
+                self.plugin_manager,
+                node_id,
+                property,
+                property_time,
+            )
+        });
         let value = evaluated
             .as_ref()
             .and_then(|evaluated| evaluated.value().cloned());
+        let mode_value = value
+            .clone()
+            .or_else(|| {
+                authored_property
+                    .as_ref()
+                    .and_then(Property::value)
+                    .cloned()
+            })
+            .or_else(|| property_definition.map(|definition| definition.default_value().clone()));
         let current_value_metadata = value
             .as_ref()
             .map(serde_json::Value::from)
             .unwrap_or(serde_json::Value::Null);
         let row = ui.horizontal(|ui| {
             bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
+            let mode_qa_id = format!("node_editor.property_mode.node:{node_id}:{property_key}");
+            let mode_action =
+                property_mode_control(ui, &mode_qa_id, authored_property.as_ref(), property_time);
+            let replacement = match (mode_action, authored_property.as_ref(), mode_value.clone()) {
+                (Some(PropertyModeAction::SetMode(mode)), current, Some(value)) => {
+                    property_for_mode(current, mode, value, property_time).ok()
+                }
+                (Some(PropertyModeAction::ToggleKeyframe), Some(current), Some(value)) => {
+                    toggled_keyframe_property(current, value, property_time)
+                }
+                _ => None,
+            };
+            if let Some(property) = replacement {
+                self.edits
+                    .push(QueuedNodeEdit::Atomic(NodeEdit::ReplaceProperty {
+                        node_id,
+                        key: property_key.to_string(),
+                        property,
+                    }));
+            }
             if connected {
                 non_selectable_label(
                     ui,
@@ -446,121 +481,160 @@ impl ProjectNodeViewer<'_> {
                 .on_hover_text("No value");
                 return None;
             };
-            let (changed, continuous, finished, control_kind, response) = match &mut value {
-                PropertyValue::Number(number) => {
-                    let response = if let Some(config) =
-                        property_definition.and_then(FloatDragValueConfig::from_definition)
-                    {
-                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], config.widget(&mut number.0))
-                    } else {
-                        ui.add_sized(
-                            [74.0, PORT_ROW_HEIGHT - 2.0],
-                            egui::DragValue::new(&mut number.0).speed(0.05),
-                        )
-                    };
-                    (
-                        response.changed(),
-                        true,
-                        continuous_response_finished(ui, &response),
-                        "float",
-                        response,
-                    )
-                }
-                PropertyValue::Integer(integer) => {
-                    let config = property_definition.and_then(|definition| {
-                        IntegerDragValueConfig::from_ui_type(definition.ui_type())
-                    });
-                    let response = if let Some(config) = config {
-                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], config.widget(integer))
-                    } else {
-                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], egui::DragValue::new(integer))
-                    };
-                    (
-                        response.changed(),
-                        true,
-                        continuous_response_finished(ui, &response),
-                        "integer",
-                        response,
-                    )
-                }
-                PropertyValue::String(text) => {
-                    if let Some(PropertyUiType::Dropdown { options }) =
-                        property_definition.map(PropertyDefinition::ui_type)
-                    {
-                        let before = text.clone();
-                        let response = egui::ComboBox::from_id_salt((node_id, property_key))
-                            .selected_text(text.as_str())
-                            .width(96.0)
-                            .show_ui(ui, |ui| {
-                                for option in options {
-                                    ui.selectable_value(text, option.clone(), option);
-                                }
-                            })
-                            .response;
-                        (
-                            before != *text,
-                            false,
-                            response.lost_focus(),
-                            "dropdown",
-                            response,
-                        )
-                    } else {
-                        let response = ui.add_sized(
-                            [96.0, PORT_ROW_HEIGHT - 2.0],
-                            egui::TextEdit::singleline(text).clip_text(true),
-                        );
+            let (changed, continuous, finished, control_kind, response, vector_components) =
+                match &mut value {
+                    PropertyValue::Number(number) => {
+                        let response = if let Some(config) =
+                            property_definition.and_then(FloatDragValueConfig::from_definition)
+                        {
+                            ui.add_sized(
+                                [74.0, PORT_ROW_HEIGHT - 2.0],
+                                config.widget(&mut number.0),
+                            )
+                        } else {
+                            ui.add_sized(
+                                [74.0, PORT_ROW_HEIGHT - 2.0],
+                                egui::DragValue::new(&mut number.0).speed(0.05),
+                            )
+                        };
                         (
                             response.changed(),
                             true,
                             continuous_response_finished(ui, &response),
-                            "text",
+                            "float",
                             response,
+                            Vec::new(),
                         )
                     }
-                }
-                PropertyValue::Boolean(boolean) => {
-                    let response = ui.checkbox(boolean, "");
-                    (response.changed(), false, false, "boolean", response)
-                }
-                PropertyValue::Color(color) => {
-                    let mut edited =
-                        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a);
-                    let (response, popup_closed) = continuous_color_edit_button(ui, &mut edited);
-                    let changed = response.changed();
-                    if changed {
-                        color.r = edited.r();
-                        color.g = edited.g();
-                        color.b = edited.b();
-                        color.a = edited.a();
+                    PropertyValue::Integer(integer) => {
+                        let config = property_definition.and_then(|definition| {
+                            IntegerDragValueConfig::from_ui_type(definition.ui_type())
+                        });
+                        let response = if let Some(config) = config {
+                            ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], config.widget(integer))
+                        } else {
+                            ui.add_sized(
+                                [74.0, PORT_ROW_HEIGHT - 2.0],
+                                egui::DragValue::new(integer),
+                            )
+                        };
+                        (
+                            response.changed(),
+                            true,
+                            continuous_response_finished(ui, &response),
+                            "integer",
+                            response,
+                            Vec::new(),
+                        )
                     }
-                    (
-                        changed,
-                        true,
-                        popup_closed || continuous_response_finished(ui, &response),
-                        "color",
-                        response,
-                    )
-                }
-                PropertyValue::Vec2(vec) => {
-                    let response = non_selectable_label(
-                        ui,
-                        format!("{:.1}, {:.1}", vec.x.into_inner(), vec.y.into_inner()),
-                    );
-                    (false, false, false, "vec2_readonly", response)
-                }
-                PropertyValue::Vec3(_)
-                | PropertyValue::Vec4(_)
-                | PropertyValue::Array(_)
-                | PropertyValue::Map(_) => {
-                    let response = non_selectable_label(
-                        ui,
-                        egui::RichText::new("complex")
-                            .small()
-                            .color(Color32::from_gray(125)),
-                    );
-                    (false, false, false, "complex_readonly", response)
-                }
-            };
+                    PropertyValue::String(text) => {
+                        if let Some(PropertyUiType::Dropdown { options }) =
+                            property_definition.map(PropertyDefinition::ui_type)
+                        {
+                            let before = text.clone();
+                            let response = egui::ComboBox::from_id_salt((node_id, property_key))
+                                .selected_text(text.as_str())
+                                .width(96.0)
+                                .show_ui(ui, |ui| {
+                                    for option in options {
+                                        ui.selectable_value(text, option.clone(), option);
+                                    }
+                                })
+                                .response;
+                            (
+                                before != *text,
+                                false,
+                                response.lost_focus(),
+                                "dropdown",
+                                response,
+                                Vec::new(),
+                            )
+                        } else {
+                            let response = ui.add_sized(
+                                [96.0, PORT_ROW_HEIGHT - 2.0],
+                                egui::TextEdit::singleline(text).clip_text(true),
+                            );
+                            (
+                                response.changed(),
+                                true,
+                                continuous_response_finished(ui, &response),
+                                "text",
+                                response,
+                                Vec::new(),
+                            )
+                        }
+                    }
+                    PropertyValue::Boolean(boolean) => {
+                        let response = ui.checkbox(boolean, "");
+                        (
+                            response.changed(),
+                            false,
+                            false,
+                            "boolean",
+                            response,
+                            Vec::new(),
+                        )
+                    }
+                    PropertyValue::Color(color) => {
+                        let mut edited =
+                            Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a);
+                        let (response, popup_closed) =
+                            continuous_color_edit_button(ui, &mut edited);
+                        let changed = response.changed();
+                        if changed {
+                            color.r = edited.r();
+                            color.g = edited.g();
+                            color.b = edited.b();
+                            color.a = edited.a();
+                        }
+                        (
+                            changed,
+                            true,
+                            popup_closed || continuous_response_finished(ui, &response),
+                            "color",
+                            response,
+                            Vec::new(),
+                        )
+                    }
+                    PropertyValue::Vec2(_) | PropertyValue::Vec3(_) | PropertyValue::Vec4(_) => {
+                        let Some(rendered) = vector::render(ui, property_definition, &mut value)
+                        else {
+                            log::error!("Vector property {property_key} could not be rendered");
+                            let response = ui
+                                .colored_label(ui.visuals().error_fg_color, "Invalid vector value");
+                            return Some((
+                                response,
+                                "invalid_vector",
+                                serde_json::Value::Null,
+                                Vec::new(),
+                            ));
+                        };
+                        (
+                            rendered.changed,
+                            true,
+                            rendered.finished,
+                            rendered.control_kind,
+                            rendered.response,
+                            rendered.axes,
+                        )
+                    }
+                    PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                        let response = non_selectable_label(
+                            ui,
+                            egui::RichText::new("complex")
+                                .small()
+                                .color(Color32::from_gray(125)),
+                        );
+                        (
+                            false,
+                            false,
+                            false,
+                            "complex_readonly",
+                            response,
+                            Vec::new(),
+                        )
+                    }
+                };
             let qa_value = serde_json::Value::from(&value);
             let edit = changed.then(|| NodeEdit::SetProperty {
                 owner: PortOwner::Node(node_id),
@@ -573,18 +647,19 @@ impl ProjectNodeViewer<'_> {
             } else if let Some(edit) = edit {
                 self.edits.push(QueuedNodeEdit::Atomic(edit));
             }
-            Some((response, control_kind, qa_value))
+            Some((response, control_kind, qa_value, vector_components))
         });
-        let (response, control_kind, enabled, value) = match row.inner {
-            Some((response, control_kind, value)) => {
+        let (response, control_kind, enabled, value, vector_components) = match row.inner {
+            Some((response, control_kind, value, vector_components)) => {
                 let enabled = response.enabled();
-                (response, control_kind, enabled, value)
+                (response, control_kind, enabled, value, vector_components)
             }
             None => (
                 row.response,
                 if connected { "linked" } else { "missing" },
                 false,
                 current_value_metadata,
+                Vec::new(),
             ),
         };
         let component_id = format!("node_editor.property.node:{node_id}:{property_key}");
@@ -623,6 +698,16 @@ impl ProjectNodeViewer<'_> {
                 "unclipped_rect": qa_rect_metadata(unclipped_rect),
                 "visible_in_canvas": rect.is_positive(),
             })),
+        );
+        vector::register_components(
+            self,
+            node_id,
+            property_key,
+            definition,
+            property_definition,
+            connected,
+            property_time,
+            vector_components,
         );
     }
 

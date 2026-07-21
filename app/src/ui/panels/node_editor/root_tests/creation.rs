@@ -114,6 +114,7 @@ fn rendered_ports_stay_vertical_on_their_left_and_right_sides_with_bounded_width
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     pending_selection: &mut selection,
+                    selected_node_ids: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                     wire_context_request: &mut wire_context_request,

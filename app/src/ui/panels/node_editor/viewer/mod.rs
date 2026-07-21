@@ -10,10 +10,8 @@ use uuid::Uuid;
 use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey};
 
 mod body;
+mod selection;
 mod snarl;
-
-#[cfg(test)]
-pub(in crate::ui::panels::node_editor) use snarl::resolve_node_editor_transform;
 
 /// The Snarl payload contains only stable IDs. All labels, pins, positions and
 /// connections are read from `Project` for this frame, so Snarl never becomes
@@ -25,6 +23,9 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     pub(in crate::ui::panels::node_editor) edits: &'a mut Vec<QueuedNodeEdit>,
     pub(in crate::ui::panels::node_editor) pending_navigation: &'a mut Option<Uuid>,
     pub(in crate::ui::panels::node_editor) pending_selection: &'a mut Option<PortOwner>,
+    /// Authoritative Project selection from `EditorContext`, sorted by UUID.
+    /// egui-snarl's transient selection remains an input gesture detail only.
+    pub(in crate::ui::panels::node_editor) selected_node_ids: &'a [Uuid],
     pub(in crate::ui::panels::node_editor) current_time: f64,
     pub(in crate::ui::panels::node_editor) context_menu_exclusion_rects: &'a mut Vec<egui::Rect>,
     pub(in crate::ui::panels::node_editor) wire_context_request:

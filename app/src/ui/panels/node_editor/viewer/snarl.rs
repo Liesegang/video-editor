@@ -6,19 +6,11 @@ use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
 };
-use library::model::project::{
-    PortAddress, PortDataType, PortDirection, PortOwner, MERGE_IMAGES_PORT,
-};
+use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
 use library::model::property::PropertyValue;
-use library::model::{GeneratorContent, NodeContent, Project};
+use library::model::{GeneratorContent, NodeContent};
 use library::plugin::property_name_from_port;
 use std::sync::Arc;
-use uuid::Uuid;
-
-fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
-    let target = PortAddress::new(PortOwner::Node(node_id), MERGE_IMAGES_PORT);
-    merge_images_target_node_id(project, &target).is_some()
-}
 
 impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     fn node_layout(
@@ -52,28 +44,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Container(_) | GraphItem::PortAnchor { .. } => egui::Frame::NONE,
             GraphItem::Node(project_node_id) => {
-                let palette = node_palette(self.project, project_node_id);
-                let inactive = graph_item_inactive(self.project, item, self.current_time);
-                let fill = if inactive {
-                    palette.body.gamma_multiply(0.42)
-                } else {
-                    palette.body
-                };
-                let stroke = if inactive {
-                    palette.accent.gamma_multiply(0.48)
-                } else {
-                    palette.accent
-                };
-                let stroke_width = if node_editor_details_visible(self.to_global.scaling) {
-                    1.25
-                } else {
-                    screen_stroke_in_graph_units(1.1, self.to_global.scaling)
-                };
+                let style = super::selection::node_selection_presentation(
+                    self.project,
+                    self.selected_node_ids,
+                    project_node_id,
+                    self.current_time,
+                    self.to_global.scaling,
+                )
+                .visual;
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(9, 8))
                     .corner_radius(10)
-                    .fill(fill)
-                    .stroke(egui::Stroke::new(stroke_width, stroke))
+                    .fill(style.body_fill)
+                    .stroke(style.outer_stroke)
             }
         }
     }
@@ -92,12 +75,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Container(_) | GraphItem::PortAnchor { .. } => egui::Frame::NONE,
             GraphItem::Node(project_node_id) => {
-                let palette = node_palette(self.project, project_node_id);
-                let fill = if graph_item_inactive(self.project, item, self.current_time) {
-                    palette.header.gamma_multiply(0.42)
-                } else {
-                    palette.header
-                };
+                let style = super::selection::node_selection_presentation(
+                    self.project,
+                    self.selected_node_ids,
+                    project_node_id,
+                    self.current_time,
+                    self.to_global.scaling,
+                )
+                .visual;
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(9, 7))
                     .corner_radius(egui::CornerRadius {
@@ -106,7 +91,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         sw: 3,
                         se: 3,
                     })
-                    .fill(fill)
+                    .fill(style.header_fill)
             }
         }
     }
@@ -126,11 +111,15 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Node(project_node_id) => {
                 let palette = node_palette(self.project, project_node_id);
-                let inactive = graph_item_inactive(
+                let selection = super::selection::node_selection_presentation(
                     self.project,
-                    GraphItem::Node(project_node_id),
+                    self.selected_node_ids,
+                    project_node_id,
                     self.current_time,
+                    self.to_global.scaling,
                 );
+                let (inactive, selected, visual) =
+                    (selection.inactive, selection.selected, selection.visual);
                 ui.set_min_width(NODE_HEADER_WIDTH);
                 let response = if node_editor_details_visible(self.to_global.scaling) {
                     ui.horizontal(|ui| {
@@ -189,8 +178,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             .is_some_and(|position| header_rect.contains(position))
                 });
                 let component_id = format!("node_editor.node_header:{project_node_id}");
+                let highlight_metadata = super::selection::node_highlight_metadata(visual);
                 #[cfg(test)]
-                capture_test_rect(&component_id, header_rect);
+                {
+                    capture_test_rect(&component_id, header_rect);
+                    capture_test_metadata(
+                        &component_id,
+                        &serde_json::json!({
+                            "node_id": project_node_id,
+                            "selected": selected,
+                            "highlight_style": highlight_metadata.clone(),
+                        }),
+                    );
+                }
                 crate::qa::register_component_with_metadata(
                     component_id,
                     "node_header",
@@ -198,6 +198,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     response.enabled(),
                     Some(serde_json::json!({
                         "node_id": project_node_id,
+                        "selected": selected,
+                        "highlight_style": highlight_metadata,
                         "hovered": response.hovered(),
                         "unclipped_rect": qa_rect_metadata(unclipped_header_rect),
                         "visible_in_canvas": header_rect.is_positive(),
@@ -315,7 +317,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
 
     fn inputs(&mut self, item: &GraphItem) -> usize {
         match item {
-            GraphItem::Node(node_id) if is_physical_merge_node(self.project, *node_id) => {
+            GraphItem::Node(node_id)
+                if super::selection::is_physical_merge_node(self.project, *node_id) =>
+            {
                 merge_input_slots(self.project, *node_id).len()
             }
             GraphItem::Node(_) | GraphItem::Container(_) | GraphItem::PortAnchor { .. } => {
@@ -336,7 +340,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     ) -> impl SnarlPin + 'static {
         let item = snarl.get_node(pin.id.node).copied();
         let merge_slot = match item {
-            Some(GraphItem::Node(node_id)) if is_physical_merge_node(self.project, node_id) => {
+            Some(GraphItem::Node(node_id))
+                if super::selection::is_physical_merge_node(self.project, node_id) =>
+            {
                 merge_input_slots(self.project, node_id)
                     .get(pin.id.input)
                     .cloned()
@@ -800,20 +806,39 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 if let Ok(mut node_rects) = self.rendered_node_rects.lock() {
                     node_rects.insert(id, graph_rect);
                 }
+                let selection = super::selection::node_selection_presentation(
+                    self.project,
+                    self.selected_node_ids,
+                    id,
+                    self.current_time,
+                    self.to_global.scaling,
+                );
+                let (inactive, selected, visual) =
+                    (selection.inactive, selection.selected, selection.visual);
+                let highlight_metadata = super::selection::node_highlight_metadata(visual);
+                let component_id = format!("node_editor.node:{id}");
                 #[cfg(test)]
-                capture_test_rect(&format!("node_editor.node:{id}"), rect);
+                {
+                    capture_test_rect(&component_id, rect);
+                    capture_test_metadata(
+                        &component_id,
+                        &serde_json::json!({
+                            "node_id": id,
+                            "selected": selected,
+                            "highlight_style": highlight_metadata.clone(),
+                        }),
+                    );
+                }
                 crate::qa::register_component_with_metadata(
-                    format!("node_editor.node:{id}"),
+                    component_id,
                     "node",
                     rect,
                     true,
                     Some(serde_json::json!({
                         "node_id": id,
-                        "inactive": graph_item_inactive(
-                            self.project,
-                            GraphItem::Node(id),
-                            self.current_time,
-                        ),
+                        "selected": selected,
+                        "highlight_style": highlight_metadata,
+                        "inactive": inactive,
                         "inactive_reason": graph_item_inactive_reason(
                             self.project,
                             GraphItem::Node(id),
@@ -970,20 +995,4 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         self.previous_canvas_transform = Some(*to_global);
         *self.to_global = *to_global;
     }
-}
-
-pub(in crate::ui::panels::node_editor) fn resolve_node_editor_transform(
-    transform: &mut egui::emath::TSTransform,
-    locked: Option<egui::emath::TSTransform>,
-    previous: Option<egui::emath::TSTransform>,
-) {
-    let target = locked.unwrap_or(*transform);
-    *transform = previous.map_or_else(
-        || {
-            let mut target = target;
-            sanitize_node_editor_transform(&mut target);
-            target
-        },
-        |previous| bridge_node_editor_transform(previous, target),
-    );
 }

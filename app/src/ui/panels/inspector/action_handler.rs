@@ -5,8 +5,8 @@
 
 use crate::action::HistoryManager;
 use crate::ui::panels::inspector::property_authoring::{PropertyAction, PropertyAuthoringMode};
-use library::animation::EasingFunction;
-use library::model::property::{Keyframe, Property, PropertyValue};
+use crate::ui::widgets::property_mode::property_for_mode;
+use library::model::property::{Property, PropertyValue};
 use library::{EditorService, PropertyOwner};
 
 /// Context for handling property actions.
@@ -214,32 +214,6 @@ impl<'a> ActionContext<'a> {
         }
         needs_refresh
     }
-}
-
-fn property_for_mode(
-    current: Option<&Property>,
-    mode: PropertyAuthoringMode,
-    current_value: PropertyValue,
-    current_time: f64,
-) -> Result<Property, String> {
-    let authored_value = match current {
-        Some(property) if property.evaluator == "expression" => property
-            .value()
-            .cloned()
-            .ok_or_else(|| "Expression has no authored typed fallback".to_string())?,
-        _ => current_value,
-    };
-    Ok(match mode {
-        PropertyAuthoringMode::Constant => Property::constant(authored_value),
-        PropertyAuthoringMode::Keyframe => Property::keyframe(vec![Keyframe::new(
-            current_time,
-            authored_value,
-            EasingFunction::Linear,
-        )]),
-        PropertyAuthoringMode::Expression => {
-            Property::expression("value".to_string(), authored_value)
-        }
-    })
 }
 
 #[cfg(test)]

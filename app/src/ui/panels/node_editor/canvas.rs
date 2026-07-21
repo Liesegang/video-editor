@@ -5,7 +5,9 @@
 //! interaction, and QA projection.
 
 use eframe::egui;
-use egui_snarl::ui::{BackgroundPattern, PinPlacement, SnarlStyle, WireLayer, WireStyle};
+use egui_snarl::ui::{
+    BackgroundPattern, PinPlacement, SelectionStyle, SnarlStyle, WireLayer, WireStyle,
+};
 use pan_zoom_ui::{
     apply_navigation, sanitize_state, CanvasState, CanvasTheme, GridConfig, NavigationConfig,
     NavigationDelta, ZoomPolicy,
@@ -118,6 +120,22 @@ pub(super) fn bridge_node_editor_transform(
     egui::emath::TSTransform::new(current_state.pan, current_state.zoom.x)
 }
 
+pub(super) fn resolve_node_editor_transform(
+    transform: &mut egui::emath::TSTransform,
+    locked: Option<egui::emath::TSTransform>,
+    previous: Option<egui::emath::TSTransform>,
+) {
+    let target = locked.unwrap_or(*transform);
+    *transform = previous.map_or_else(
+        || {
+            let mut target = target;
+            sanitize_node_editor_transform(&mut target);
+            target
+        },
+        |previous| bridge_node_editor_transform(previous, target),
+    );
+}
+
 pub(super) fn screen_stroke_in_graph_units(screen_width: f32, scale: f32) -> f32 {
     screen_width / sanitized_node_editor_scale(scale)
 }
@@ -151,6 +169,15 @@ pub(super) fn node_editor_snarl_style_for(style: &egui::Style) -> SnarlStyle {
         wire_frame_size: Some(72.0),
         bg_pattern: Some(BackgroundPattern::NoPattern),
         bg_frame: Some(egui::Frame::canvas(style).fill(CanvasTheme::default().background)),
+        // Project selection is the only visual authority. Snarl's private
+        // selection still drives gestures but must not paint a stale second
+        // highlight before `EditorContext` resolves the exact owner.
+        select_style: Some(SelectionStyle {
+            margin: egui::Margin::ZERO,
+            rounding: egui::CornerRadius::ZERO,
+            fill: egui::Color32::TRANSPARENT,
+            stroke: egui::Stroke::NONE,
+        }),
         min_scale: Some(navigation.min_zoom.x),
         max_scale: Some(navigation.max_zoom.x),
         ..Default::default()
@@ -189,6 +216,15 @@ mod tests {
         assert_eq!(
             style.bg_frame.map(|frame| frame.fill),
             Some(CanvasTheme::default().background)
+        );
+        assert_eq!(
+            style.select_style,
+            Some(SelectionStyle {
+                margin: egui::Margin::ZERO,
+                rounding: egui::CornerRadius::ZERO,
+                fill: egui::Color32::TRANSPARENT,
+                stroke: egui::Stroke::NONE,
+            })
         );
         assert_eq!(navigation.zoom_policy, ZoomPolicy::Uniform);
         assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);

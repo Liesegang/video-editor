@@ -365,6 +365,7 @@ fn render_test_graph_with_context_menu_exclusions(
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     pending_selection: &mut selection,
+                    selected_node_ids: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                     wire_context_request: &mut wire_context_request,

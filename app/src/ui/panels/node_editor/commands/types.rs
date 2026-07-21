@@ -1,7 +1,7 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorPendingEdit};
 use eframe::egui;
 use library::model::project::{PortAddress, PortOwner};
-use library::model::property::PropertyValue;
+use library::model::property::{Property, PropertyValue};
 use library::model::{BlendMode, Node};
 use uuid::Uuid;
 
@@ -78,6 +78,11 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
     Rename {
         node_id: Uuid,
         name: String,
+    },
+    ReplaceProperty {
+        node_id: Uuid,
+        key: String,
+        property: Property,
     },
     SetProperty {
         owner: PortOwner,

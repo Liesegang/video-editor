@@ -53,10 +53,10 @@ mod test_fixture;
 mod time_context_tests;
 
 use canvas::{
-    bridge_node_editor_transform, node_editor_canvas_metadata, node_editor_details_visible,
+    node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
-    node_editor_snarl_style_for, paint_node_editor_canvas_grid, sanitize_node_editor_transform,
-    sanitized_node_editor_scale, screen_stroke_in_graph_units,
+    node_editor_snarl_style_for, paint_node_editor_canvas_grid, resolve_node_editor_transform,
+    sanitize_node_editor_transform, sanitized_node_editor_scale, screen_stroke_in_graph_units,
 };
 #[cfg(test)]
 use canvas::{
@@ -106,8 +106,6 @@ mod layout;
 use layout::{AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit};
 mod viewer;
 
-#[cfg(test)]
-use viewer::resolve_node_editor_transform;
 use viewer::ProjectNodeViewer;
 
 mod components;
@@ -118,8 +116,9 @@ use components::{
     port_label_width, property_label, strong_non_selectable_label,
 };
 use components::{
-    container_icon, node_icon, node_palette, paint_container_backdrop, paint_container_foreground,
-    pin_color, pin_info, value_operation_label, VALUE_NODE_CATEGORY_LABEL,
+    container_icon, node_icon, node_palette, node_visual_style, paint_container_backdrop,
+    paint_container_foreground, pin_color, pin_info, value_operation_label, NodeVisualStyle,
+    VALUE_NODE_CATEGORY_LABEL,
 };
 use qa::{
     clipped_qa_rect, edge_endpoint_qa_metadata, qa_container_key, qa_port_id, qa_rect_metadata,

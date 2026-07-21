@@ -1,13 +1,13 @@
 use egui::Ui;
 use library::model::frame::color::Color;
-use library::model::property::{
-    Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
-};
+use library::model::property::{Property, PropertyDefinition, PropertyUiType, PropertyValue};
 use ordered_float::OrderedFloat;
 
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::property_authoring::{render_property_authoring, PropertyAction};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+
+mod vector;
 
 pub struct PropertyRenderContext<'a> {
     pub available_fonts: &'a [String],
@@ -41,45 +41,6 @@ fn handle_prop_response(
     if response.drag_stopped() || response.lost_focus() {
         actions.push(PropertyAction::Commit);
     }
-}
-
-// Helper to render a vector component (label + drag value)
-fn render_vector_component(
-    ui: &mut Ui,
-    label: &str,
-    value: &mut f32,
-    suffix: &str,
-) -> egui::Response {
-    ui.label(label);
-    ui.add(egui::DragValue::new(value).speed(0.1).suffix(suffix))
-}
-
-// Helper to render a generic group of vector components
-fn render_vector_group(
-    ui: &mut Ui,
-    components: &mut [(&str, &mut f32)],
-    suffix: &str,
-) -> (bool, bool, bool) {
-    let mut changed = false;
-    let mut reset = false;
-    let mut committed = false;
-
-    ui.horizontal(|ui| {
-        for (label, value) in components {
-            let response = render_vector_component(ui, label, value, suffix);
-            if response.changed() {
-                changed = true;
-            }
-            if response.middle_clicked() {
-                reset = true;
-            }
-            if response.drag_stopped() || response.lost_focus() {
-                committed = true;
-            }
-        }
-    });
-
-    (changed, reset, committed)
 }
 
 // Helper function to render generic property rows
@@ -501,158 +462,10 @@ where
                     ui.end_row();
                 }
             }
-            PropertyUiType::Vec2 { suffix, .. } => {
-                let val_opt = authored_value.clone();
-                if val_opt.is_none() {
-                    log::warn!(
-                        "[WARN] Missing value for Vec2 property '{}'",
-                        prop_def.name()
-                    );
-                }
-                let current_val = val_opt.and_then(|v| v.get_as::<Vec2>()).unwrap_or_else(|| {
-                    prop_def.default_value().get_as::<Vec2>().unwrap_or(Vec2 {
-                        x: OrderedFloat(0.0),
-                        y: OrderedFloat(0.0),
-                    })
-                });
-
-                let mut x = current_val.x.into_inner() as f32;
-                let mut y = current_val.y.into_inner() as f32;
-
-                let (changed, reset, committed) =
-                    render_vector_group(ui, &mut [("X", &mut x), ("Y", &mut y)], suffix);
-
-                if reset {
-                    actions.push(PropertyAction::Update(
-                        prop_def.name().to_string(),
-                        prop_def.default_value().clone(),
-                    ));
-                    actions.push(PropertyAction::Commit);
-                } else {
-                    if changed {
-                        let new_val = Vec2 {
-                            x: OrderedFloat(x as f64),
-                            y: OrderedFloat(y as f64),
-                        };
-                        actions.push(PropertyAction::Update(
-                            prop_def.name().to_string(),
-                            PropertyValue::Vec2(new_val),
-                        ));
-                    }
-                    if committed {
-                        actions.push(PropertyAction::Commit);
-                    }
-                }
-
-                if context.in_grid {
-                    ui.end_row();
-                }
-            }
-            PropertyUiType::Vec3 { suffix, .. } => {
-                let val_opt = authored_value.clone();
-                if val_opt.is_none() {
-                    log::warn!(
-                        "[WARN] Missing value for Vec3 property '{}'",
-                        prop_def.name()
-                    );
-                }
-                let current_val = val_opt.and_then(|v| v.get_as::<Vec3>()).unwrap_or_else(|| {
-                    prop_def.default_value().get_as::<Vec3>().unwrap_or(Vec3 {
-                        x: OrderedFloat(0.0),
-                        y: OrderedFloat(0.0),
-                        z: OrderedFloat(0.0),
-                    })
-                });
-
-                let mut x = current_val.x.into_inner() as f32;
-                let mut y = current_val.y.into_inner() as f32;
-                let mut z = current_val.z.into_inner() as f32;
-
-                let (changed, reset, committed) = render_vector_group(
-                    ui,
-                    &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z)],
-                    suffix,
-                );
-
-                if reset {
-                    actions.push(PropertyAction::Update(
-                        prop_def.name().to_string(),
-                        prop_def.default_value().clone(),
-                    ));
-                    actions.push(PropertyAction::Commit);
-                } else {
-                    if changed {
-                        let new_val = Vec3 {
-                            x: OrderedFloat(x as f64),
-                            y: OrderedFloat(y as f64),
-                            z: OrderedFloat(z as f64),
-                        };
-                        actions.push(PropertyAction::Update(
-                            prop_def.name().to_string(),
-                            PropertyValue::Vec3(new_val),
-                        ));
-                    }
-                    if committed {
-                        actions.push(PropertyAction::Commit);
-                    }
-                }
-
-                if context.in_grid {
-                    ui.end_row();
-                }
-            }
-            PropertyUiType::Vec4 { suffix, .. } => {
-                let val_opt = authored_value.clone();
-                if val_opt.is_none() {
-                    log::warn!(
-                        "[WARN] Missing value for Vec4 property '{}'",
-                        prop_def.name()
-                    );
-                }
-                let current_val = val_opt.and_then(|v| v.get_as::<Vec4>()).unwrap_or_else(|| {
-                    prop_def.default_value().get_as::<Vec4>().unwrap_or(Vec4 {
-                        x: OrderedFloat(0.0),
-                        y: OrderedFloat(0.0),
-                        z: OrderedFloat(0.0),
-                        w: OrderedFloat(0.0),
-                    })
-                });
-
-                let mut x = current_val.x.into_inner() as f32;
-                let mut y = current_val.y.into_inner() as f32;
-                let mut z = current_val.z.into_inner() as f32;
-                let mut w = current_val.w.into_inner() as f32;
-
-                let (changed, reset, committed) = render_vector_group(
-                    ui,
-                    &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z), ("W", &mut w)],
-                    suffix,
-                );
-
-                if reset {
-                    actions.push(PropertyAction::Update(
-                        prop_def.name().to_string(),
-                        prop_def.default_value().clone(),
-                    ));
-                    actions.push(PropertyAction::Commit);
-                } else {
-                    if changed {
-                        let new_val = Vec4 {
-                            x: OrderedFloat(x as f64),
-                            y: OrderedFloat(y as f64),
-                            z: OrderedFloat(z as f64),
-                            w: OrderedFloat(w as f64),
-                        };
-                        actions.push(PropertyAction::Update(
-                            prop_def.name().to_string(),
-                            PropertyValue::Vec4(new_val),
-                        ));
-                    }
-                    if committed {
-                        actions.push(PropertyAction::Commit);
-                    }
-                }
-
+            PropertyUiType::Vec2 { .. }
+            | PropertyUiType::Vec3 { .. }
+            | PropertyUiType::Vec4 { .. } => {
+                actions.extend(vector::render(ui, prop_def, authored_value, context));
                 if context.in_grid {
                     ui.end_row();
                 }
@@ -745,15 +558,54 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
         PropertyUiType::Dropdown { options } => {
             serde_json::json!({"kind": "dropdown", "options": options})
         }
-        PropertyUiType::Vec2 { suffix, .. } => {
-            serde_json::json!({"kind": "vec2", "suffix": suffix})
-        }
-        PropertyUiType::Vec3 { suffix, .. } => {
-            serde_json::json!({"kind": "vec3", "suffix": suffix})
-        }
-        PropertyUiType::Vec4 { suffix, .. } => {
-            serde_json::json!({"kind": "vec4", "suffix": suffix})
-        }
+        PropertyUiType::Vec2 {
+            min,
+            max,
+            step,
+            suffix,
+            min_hard_limit,
+            max_hard_limit,
+        } => serde_json::json!({
+            "kind": "vec2",
+            "min": min,
+            "max": max,
+            "step": step,
+            "suffix": suffix,
+            "min_hard_limit": min_hard_limit,
+            "max_hard_limit": max_hard_limit,
+        }),
+        PropertyUiType::Vec3 {
+            min,
+            max,
+            step,
+            suffix,
+            min_hard_limit,
+            max_hard_limit,
+        } => serde_json::json!({
+            "kind": "vec3",
+            "min": min,
+            "max": max,
+            "step": step,
+            "suffix": suffix,
+            "min_hard_limit": min_hard_limit,
+            "max_hard_limit": max_hard_limit,
+        }),
+        PropertyUiType::Vec4 {
+            min,
+            max,
+            step,
+            suffix,
+            min_hard_limit,
+            max_hard_limit,
+        } => serde_json::json!({
+            "kind": "vec4",
+            "min": min,
+            "max": max,
+            "step": step,
+            "suffix": suffix,
+            "min_hard_limit": min_hard_limit,
+            "max_hard_limit": max_hard_limit,
+        }),
         PropertyUiType::Color => serde_json::json!({"kind": "color"}),
         PropertyUiType::Text => serde_json::json!({"kind": "text"}),
         PropertyUiType::MultilineText => serde_json::json!({"kind": "multiline_text"}),

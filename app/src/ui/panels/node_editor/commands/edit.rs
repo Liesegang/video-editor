@@ -236,6 +236,13 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
             node.name = name;
             true
         }),
+        NodeEdit::ReplaceProperty {
+            node_id,
+            key,
+            property,
+        } => project
+            .get_node_mut(node_id)
+            .is_some_and(|node| node.set_property(key, property).is_ok()),
         NodeEdit::SetProperty {
             owner,
             key,

@@ -1,46 +1,9 @@
 use egui::{RichText, Ui};
-use egui_phosphor::fill::DIAMOND as ICON_DIAMOND_FILLED;
-use egui_phosphor::regular::DIAMOND as ICON_DIAMOND;
+use egui_phosphor::regular as icons;
 use library::model::property::{Property, PropertyDefinition, PropertyValue};
 
-/// The three authoring modes exposed by every editable Inspector property.
-///
-/// This is deliberately narrower than the persisted evaluator string: a
-/// missing third-party evaluator remains visible as unsupported until the user
-/// explicitly chooses one of these modes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PropertyAuthoringMode {
-    Constant,
-    Keyframe,
-    Expression,
-}
-
-impl PropertyAuthoringMode {
-    pub fn from_evaluator(evaluator: &str) -> Option<Self> {
-        match evaluator {
-            "constant" => Some(Self::Constant),
-            "keyframe" => Some(Self::Keyframe),
-            "expression" => Some(Self::Expression),
-            _ => None,
-        }
-    }
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Constant => "Constant",
-            Self::Keyframe => "Keyframe",
-            Self::Expression => "Expression",
-        }
-    }
-
-    pub const fn qa_key(self) -> &'static str {
-        match self {
-            Self::Constant => "constant",
-            Self::Keyframe => "keyframe",
-            Self::Expression => "expression",
-        }
-    }
-}
+pub(crate) use crate::ui::widgets::property_mode::PropertyAuthoringMode;
+use crate::ui::widgets::property_mode::{property_mode_control, PropertyModeAction};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyAction {
@@ -70,120 +33,27 @@ pub fn render_property_authoring(
 
     ui.horizontal(|ui| {
         if property.is_none() {
-            ui.label(RichText::new("⚠").color(ui.visuals().warn_fg_color))
+            ui.label(RichText::new(icons::WARNING).color(ui.visuals().warn_fg_color))
                 .on_hover_text(format!("Missing authored property '{}'", definition.name()));
         }
 
         ui.label(definition.label());
-
-        let selected_text = match (current_mode, property) {
-            (Some(mode), _) => mode.label().to_string(),
-            (None, Some(property)) => format!("Unsupported · {}", property.evaluator),
-            (None, None) => "Missing".to_string(),
-        };
-        let mut selected_mode = current_mode;
-        let combo =
-            egui::ComboBox::from_id_salt(("inspector_property_mode", qa_scope, definition.name()))
-                .selected_text(selected_text)
-                .width(92.0)
-                .show_ui(ui, |ui| {
-                    for mode in [
-                        PropertyAuthoringMode::Constant,
-                        PropertyAuthoringMode::Keyframe,
-                        PropertyAuthoringMode::Expression,
-                    ] {
-                        let response =
-                            ui.selectable_value(&mut selected_mode, Some(mode), mode.label());
-                        crate::qa::register_component_with_metadata(
-                            format!(
-                                "inspector.property_mode.option.{qa_scope}:{}:{}",
-                                definition.name(),
-                                mode.qa_key(),
-                            ),
-                            "inspector_property_mode_option",
-                            response.rect,
-                            response.enabled(),
-                            Some(serde_json::json!({
-                                "scope": qa_scope,
-                                "property": definition.name(),
-                                "mode": mode.label(),
-                                "mode_key": mode.qa_key(),
-                                "selected": current_mode == Some(mode),
-                            })),
-                        );
-                        #[cfg(test)]
-                        AUTHORING_TEST_RECTS.with(|rects| {
-                            rects
-                                .borrow_mut()
-                                .insert(format!("option.{}", mode.label()), response.rect);
-                        });
-                    }
-                });
-        #[cfg(test)]
-        AUTHORING_TEST_RECTS.with(|rects| {
-            rects
-                .borrow_mut()
-                .insert("mode".to_string(), combo.response.rect);
-        });
-        crate::qa::register_component_with_metadata(
-            format!("inspector.property_mode.{qa_scope}:{}", definition.name()),
-            "inspector_property_mode",
-            combo.response.rect,
-            combo.response.enabled(),
-            Some(serde_json::json!({
-                "scope": qa_scope,
-                "property": definition.name(),
-                "mode": current_mode.map(PropertyAuthoringMode::label),
-                "evaluator": property.map(|property| property.evaluator.as_str()),
-            })),
-        );
-        if selected_mode != current_mode {
-            if let Some(mode) = selected_mode {
+        let qa_id = format!("inspector.property_mode.{qa_scope}:{}", definition.name());
+        match property_mode_control(ui, &qa_id, property, current_time) {
+            Some(PropertyModeAction::SetMode(mode)) => {
                 actions.push(PropertyAction::SetMode(
                     definition.name().to_string(),
                     mode,
                     authored_value.clone(),
                 ));
             }
-        }
-
-        if current_mode == Some(PropertyAuthoringMode::Keyframe) {
-            let is_on_key = property.is_some_and(|property| {
-                property
-                    .keyframes()
-                    .iter()
-                    .any(|key| (key.time.into_inner() - current_time).abs() < 0.001)
-            });
-            let (icon, color) = if is_on_key {
-                (
-                    ICON_DIAMOND_FILLED,
-                    ui.visuals().widgets.active.text_color(),
-                )
-            } else {
-                (ICON_DIAMOND, ui.visuals().text_color())
-            };
-            let button = ui
-                .add(egui::Button::new(RichText::new(icon).color(color)).frame(false))
-                .on_hover_text("Toggle keyframe at current time");
-            crate::qa::register_component_with_metadata(
-                format!("inspector.keyframe.{qa_scope}:{}", definition.name()),
-                "keyframe_control",
-                button.rect,
-                button.enabled(),
-                Some(serde_json::json!({
-                    "scope": qa_scope,
-                    "property": definition.name(),
-                    "is_keyframed": true,
-                    "is_on_key": is_on_key,
-                    "current_time": current_time,
-                })),
-            );
-            if button.clicked() {
+            Some(PropertyModeAction::ToggleKeyframe) => {
                 actions.push(PropertyAction::ToggleKeyframe(
                     definition.name().to_string(),
                     authored_value.clone(),
                 ));
             }
+            None => {}
         }
     });
 
@@ -255,6 +125,9 @@ fn render_expression_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::widgets::property_mode::{
+        property_mode_test_rect, reset_property_mode_test_rects,
+    };
     use library::model::property::PropertyUiType;
     use ordered_float::OrderedFloat;
     use std::error::Error;
@@ -278,7 +151,7 @@ mod tests {
 
     #[test]
     fn real_pointer_selection_emits_an_expression_mode_action() -> TestResult {
-        AUTHORING_TEST_RECTS.with(|rects| rects.borrow_mut().clear());
+        reset_property_mode_test_rects();
         let context = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0));
         let definition = PropertyDefinition::new(
@@ -326,9 +199,8 @@ mod tests {
 
         render(Vec::new());
         render(Vec::new());
-        let mode_rect = AUTHORING_TEST_RECTS
-            .with(|rects| rects.borrow().get("mode").copied())
-            .ok_or_else(|| io::Error::other("Property mode ComboBox was not rendered"))?;
+        let mode_rect = property_mode_test_rect("mode")
+            .ok_or_else(|| io::Error::other("Property mode icon button was not rendered"))?;
         let mode_pos = mode_rect.center();
         render(vec![
             egui::Event::PointerMoved(mode_pos),
@@ -346,8 +218,7 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         }]);
         render(Vec::new());
-        let expression_rect = AUTHORING_TEST_RECTS
-            .with(|rects| rects.borrow().get("option.Expression").copied())
+        let expression_rect = property_mode_test_rect("option.Expression")
             .ok_or_else(|| io::Error::other("Expression mode option was not rendered"))?;
         let expression_pos = expression_rect.center();
         render(vec![
@@ -376,10 +247,4 @@ mod tests {
         )));
         Ok(())
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static AUTHORING_TEST_RECTS: std::cell::RefCell<std::collections::HashMap<String, egui::Rect>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
 }

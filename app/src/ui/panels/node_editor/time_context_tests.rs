@@ -10,6 +10,12 @@ fn render_time_context_test_graph(
     let context = egui::Context::default();
     let (mut snarl, containers) = build_snarl(project, composition_id);
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
+    let mut selected_node_ids = nodes
+        .iter()
+        .filter(|node| node.selected)
+        .map(|node| node.node_id)
+        .collect::<Vec<_>>();
+    selected_node_ids.sort_unstable();
     let mut context_count = 0;
     let mut physical_kinds = Vec::new();
     reset_test_rects();
@@ -41,6 +47,7 @@ fn render_time_context_test_graph(
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
                     pending_selection: &mut selection,
+                    selected_node_ids: &selected_node_ids,
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut exclusions,
                     wire_context_request: &mut wire_context_request,
@@ -101,6 +108,14 @@ fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
     assert_eq!(wire_metadata["selected"], true);
     let implicit_node_rect =
         test_rect(&format!("node_editor.node:{merge_id}")).expect("implicit Merge node geometry");
+    let selected_node =
+        test_metadata(&format!("node_editor.node:{merge_id}")).expect("selected Node QA metadata");
+    assert_eq!(selected_node["selected"], true);
+    assert_eq!(selected_node["highlight_style"]["state"], "selected");
+    assert_eq!(
+        selected_node["highlight_style"]["outer_stroke"]["width_screen"],
+        3.0
+    );
 
     let inherited_badge = test_metadata(&format!("node_editor.time_source.node:{merge_id}"))
         .expect("Merge Time source badge");

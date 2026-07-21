@@ -246,6 +246,7 @@ pub fn node_editor_panel(
             edits: &mut edits,
             pending_navigation: &mut node_editor_state.pending_navigation,
             pending_selection: &mut pending_selection,
+            selected_node_ids: &selected_nodes,
             current_time,
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
             wire_context_request: &mut wire_context_request,
@@ -705,6 +706,10 @@ pub fn node_editor_panel(
     }
     if selection_changed {
         editor_context.interaction.preview_edit_target = None;
+        // Inspector is normally laid out before Node Editor in the dock tree.
+        // Wake one follow-up frame so a Node click replaces the previous
+        // Inspector owner even when playback and all animations are idle.
+        ui.ctx().request_repaint();
     }
 
     let primary_released = ui.input(|input| input.pointer.primary_released());
