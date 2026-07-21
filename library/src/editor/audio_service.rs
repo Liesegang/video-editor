@@ -186,6 +186,9 @@ impl AudioService {
         if self.audio_engine.flush_pending() {
             return;
         }
+        let Some(output_generation) = self.audio_engine.output_generation() else {
+            return;
+        };
         if !self.pump_pending_scrub(sample_rate, channels) {
             return;
         }
@@ -223,13 +226,17 @@ impl AudioService {
             sample_rate,
             u32::from(channels),
         );
-        let written = self.audio_engine.push_samples(&mix_buffer);
-        commit_write_cursor(
-            &self.next_write_sample,
-            start_sample,
-            written,
-            channels_usize,
-        );
+        let written = self
+            .audio_engine
+            .push_samples(&mix_buffer, output_generation);
+        if written > 0 {
+            commit_write_cursor(
+                &self.next_write_sample,
+                start_sample,
+                written,
+                channels_usize,
+            );
+        }
     }
 
     pub fn render_audio(&self, start_time: f64, duration: f64) -> Vec<f32> {
@@ -270,6 +277,9 @@ impl AudioService {
         if self.audio_engine.flush_pending() {
             return false;
         }
+        let Some(output_generation) = self.audio_engine.output_generation() else {
+            return false;
+        };
         let request = self.pending_scrub.lock().ok().and_then(|scrub| *scrub);
         let Some((sample_pos, frames)) = request else {
             return true;
@@ -285,13 +295,17 @@ impl AudioService {
             sample_rate,
             u32::from(channels),
         );
-        let written = self.audio_engine.push_samples(&samples);
-        let written_frames = commit_write_cursor(
-            &self.next_write_sample,
-            sample_pos,
-            written,
-            usize::from(channels),
-        );
+        let written = self.audio_engine.push_samples(&samples, output_generation);
+        let written_frames = if written > 0 {
+            commit_write_cursor(
+                &self.next_write_sample,
+                sample_pos,
+                written,
+                usize::from(channels),
+            )
+        } else {
+            0
+        };
         if let Ok(mut scrub) = self.pending_scrub.lock()
             && *scrub == request
         {
@@ -357,14 +371,43 @@ impl AudioService {
             }
             frame_count = (frame_count / 2).max(1);
         };
+        let mut keys = keys.into_iter().collect::<Vec<_>>();
+        keys.sort_by(|left, right| {
+            left.source
+                .identity
+                .canonical_path
+                .cmp(&right.source.identity.canonical_path)
+                .then_with(|| left.source.stream_index.cmp(&right.source.stream_index))
+                .then_with(|| {
+                    left.source
+                        .format
+                        .sample_rate
+                        .cmp(&right.source.format.sample_rate)
+                })
+                .then_with(|| {
+                    left.source
+                        .format
+                        .channels
+                        .cmp(&right.source.format.channels)
+                })
+                .then_with(|| left.chunk_index.cmp(&right.chunk_index))
+        });
 
         let mut all_ready = true;
         let worker_limit = capacity.min(MAX_CONCURRENT_AUDIO_DECODES);
-        let mut available_workers = worker_limit.saturating_sub(
-            self.pending
-                .lock()
-                .map_or(worker_limit, |pending| pending.len()),
+        let (pending_count, mut busy_sources) = self.pending.lock().map_or_else(
+            |_| (worker_limit, HashSet::new()),
+            |pending| {
+                (
+                    pending.len(),
+                    pending
+                        .iter()
+                        .map(|load| load.key.source.clone())
+                        .collect::<HashSet<_>>(),
+                )
+            },
         );
+        let mut available_workers = worker_limit.saturating_sub(pending_count);
         for key in keys {
             if self.cache_manager.get_audio_chunk(&key).is_some()
                 || self.cache_manager.audio_chunk_failed(&key)
@@ -372,8 +415,11 @@ impl AudioService {
                 continue;
             }
             all_ready = false;
-            if available_workers > 0 && self.schedule_chunk(key) {
+            let source = key.source.clone();
+            if available_workers > 0 && !busy_sources.contains(&source) && self.schedule_chunk(key)
+            {
                 available_workers -= 1;
+                busy_sources.insert(source);
             }
         }
         (frame_count, all_ready)
