@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::model::{BlendMode, NodeContent, native_node_descriptor};
 
 use super::super::{NodeContainer, Project, ProjectGraphError};
-use super::ports::is_graph_connectable_type;
+use super::ports::{is_graph_connectable_output, variadic_target_allows_duplicate_sources};
 use super::{
     DURATION_PORT, MERGE_IMAGES_PORT, PortAddress, PortDataType, PortDirection, PortExposure,
     PortMultiplicity, PortOwner, ProjectConnection, RESOLUTION_PORT, TIME_PORT,
@@ -45,6 +45,8 @@ impl Project {
                             });
                         }
                     }
+                    let allow_duplicate_sources =
+                        variadic_target_allows_duplicate_sources(self, target);
                     let mut sources = HashSet::new();
                     for (expected_order, input) in inputs.into_iter().enumerate() {
                         if input.order != expected_order as i64 {
@@ -54,7 +56,7 @@ impl Project {
                                 actual_order: input.order,
                             });
                         }
-                        if !sources.insert(&input.from) {
+                        if !allow_duplicate_sources && !sources.insert(&input.from) {
                             errors.push(ProjectGraphError::DuplicateVariadicConnection {
                                 target: target.clone(),
                                 from: input.from.clone(),
@@ -225,14 +227,14 @@ impl Project {
                 target_owner: connection.to.owner,
             });
         }
-        if !is_graph_connectable_type(source.data_type) {
+        if !is_graph_connectable_output(self, &connection.from, source.data_type) {
             errors.push(ProjectGraphError::UnsupportedConnectionType {
                 connection_id: connection.id,
                 data_type: source.data_type,
             });
         }
         if source.exposure != PortExposure::Internal
-            && is_graph_connectable_type(source.data_type)
+            && is_graph_connectable_output(self, &connection.from, source.data_type)
             && self.connection_is_cyclic(connection, &self.connections)
         {
             errors.push(ProjectGraphError::ConnectionCycle {
@@ -411,7 +413,7 @@ impl Project {
                 .port_definition(&connection.from, PortDirection::Output)
                 .is_some_and(|port| {
                     port.exposure != PortExposure::Internal
-                        && is_graph_connectable_type(port.data_type)
+                        && is_graph_connectable_output(self, &connection.from, port.data_type)
                 });
             if creates_dependency {
                 dependencies

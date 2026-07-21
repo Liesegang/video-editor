@@ -291,6 +291,7 @@ fn humanize_port_name(name: &str) -> String {
 fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataType, bool) {
     let data_type = match value {
         "Any" => PortDataType::Any,
+        "List<Any>" => PortDataType::List,
         "Image" | "List<Image>" => PortDataType::Image,
         "Shape" => PortDataType::Shape,
         "Audio" => PortDataType::Audio,

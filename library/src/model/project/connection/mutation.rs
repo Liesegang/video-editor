@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::model::BlendMode;
 
 use super::super::{Project, ProjectGraphError};
-use super::ports::is_graph_connectable_type;
+use super::ports::{is_graph_connectable_output, variadic_target_allows_duplicate_sources};
 use super::{PortAddress, PortDirection, PortExposure, PortMultiplicity, ProjectConnection};
 
 impl Project {
@@ -34,16 +34,18 @@ impl Project {
                 target_owner: to.owner,
             });
         }
-        if !is_graph_connectable_type(source.data_type) {
+        if !is_graph_connectable_output(self, &from, source.data_type) {
             return Err(ProjectGraphError::UnsupportedConnectionType {
                 connection_id: Uuid::nil(),
                 data_type: source.data_type,
             });
         }
-        if let Some(existing) = self
-            .connections
-            .iter()
-            .find(|item| item.from == from && item.to == to)
+        if (target.multiplicity == PortMultiplicity::Single
+            || !variadic_target_allows_duplicate_sources(self, &to))
+            && let Some(existing) = self
+                .connections
+                .iter()
+                .find(|item| item.from == from && item.to == to)
         {
             return Ok(existing.id);
         }
@@ -67,7 +69,7 @@ impl Project {
         }
         prospective.push(connection.clone());
         if source.exposure != PortExposure::Internal
-            && is_graph_connectable_type(source.data_type)
+            && is_graph_connectable_output(self, &connection.from, source.data_type)
             && self.connection_is_cyclic(&connection, &prospective)
         {
             return Err(ProjectGraphError::ConnectionCycle {

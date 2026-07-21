@@ -1,5 +1,6 @@
 use super::super::{
-    GeneratorContent, NativeOperationContent, Node, NodeContent, SoundAnalysisContent, ValueContent,
+    GeneratorContent, ListContent, NativeOperationContent, Node, NodeContent, SoundAnalysisContent,
+    ValueContent,
 };
 use crate::model::project::{
     PortDataType, PortDefinition, PortExposure, PortMultiplicity, PortSide,
@@ -25,6 +26,7 @@ impl NativeNodeRuntimeStatus {
 pub enum NativeNodeFactory {
     Generator(GeneratorContent),
     Value(ValueContent),
+    List(ListContent),
     Merge,
     SoundMerge,
     SoundAnalysis(SoundAnalysisContent),
@@ -96,6 +98,7 @@ impl NativeNodeCatalogDescriptor {
                 self.catalog_id
             )),
             NativeNodeFactory::Value(value) => Ok(Node::new_value(self.label, value)),
+            NativeNodeFactory::List(operation) => Ok(Node::new_list(self.label, operation)),
             NativeNodeFactory::Merge => Ok(Node::new_merge(self.label)),
             NativeNodeFactory::SoundMerge => Ok(Node::new_sound_merge(self.label)),
             NativeNodeFactory::SoundAnalysis(analysis) => {

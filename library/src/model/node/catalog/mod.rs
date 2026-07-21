@@ -52,6 +52,9 @@ pub fn native_node_descriptor_for_node(
         NodeContent::Value(value) => native_node_catalog().iter().find(|descriptor| {
             matches!(descriptor.factory(), NativeNodeFactory::Value(candidate) if candidate == *value)
         }),
+        NodeContent::List(operation) => native_node_catalog().iter().find(|descriptor| {
+            matches!(descriptor.factory(), NativeNodeFactory::List(candidate) if candidate == *operation)
+        }),
         NodeContent::Merge => native_node_descriptor("native.merge"),
         NodeContent::SoundMerge => native_node_descriptor("native.sound.merge"),
         NodeContent::SoundAnalysis(analysis) => native_node_catalog().iter().find(|descriptor| {

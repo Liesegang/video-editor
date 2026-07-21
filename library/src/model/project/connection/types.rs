@@ -24,6 +24,13 @@ pub const FMOD_DIVISOR_INPUT_PORT: &str = "divisor";
 pub const NUMERIC_A_INPUT_PORT: &str = "a";
 pub const NUMERIC_B_INPUT_PORT: &str = "b";
 pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
+/// Ordered heterogeneous value input used by the native Make List Node.
+pub const LIST_ITEMS_INPUT_PORT: &str = "item";
+pub const LIST_INPUT_PORT: &str = "list";
+pub const LIST_OUTPUT_PORT: &str = "list";
+pub const LIST_INDEX_INPUT_PORT: &str = "index";
+pub const LIST_ITEM_OUTPUT_PORT: &str = "item";
+pub const LIST_LENGTH_OUTPUT_PORT: &str = "length";
 pub const SOUND_INPUT_PORT: &str = "sound";
 pub const SPECTRUM_INPUT_PORT: &str = "spectrum_in";
 pub const SPECTRUM_OUTPUT_PORT: &str = "spectrum";
@@ -120,6 +127,14 @@ pub enum PortMultiplicity {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PortDataType {
     Any,
+    /// A serializable, heterogeneous
+    /// [`PropertyValue::Array`](crate::model::property::PropertyValue::Array)
+    /// graph value.
+    ///
+    /// This is intentionally distinct from a variadic port. A variadic `Any`
+    /// input receives several individual values; `List` transports one
+    /// ordered array value through a single wire.
+    List,
     Image,
     /// Render-time vector/typographic value. This is distinct from canonical
     /// authored `Path` geometry.
@@ -164,10 +179,15 @@ pub enum PortDataType {
 }
 
 impl PortDataType {
+    /// Return whether a connection is statically possible.
+    ///
+    /// `Any` is dynamic rather than an unchecked cast. Consumers must still
+    /// validate the concrete `PropertyValue` at evaluation time and produce
+    /// `NoOutput` when it does not match their required type.
     pub fn accepts(self, source: Self) -> bool {
-        self == Self::Any
-            || source == Self::Any
-            || self == source
+        self == source
+            || (self == Self::Any && source.is_property_value_family())
+            || (source == Self::Any && self.is_property_value_family())
             || (self == Self::Number && source == Self::Integer)
             || ((self == Self::Numeric || source == Self::Numeric)
                 && self.is_numeric_family()
@@ -178,6 +198,28 @@ impl PortDataType {
         matches!(
             self,
             Self::Numeric | Self::Number | Self::Integer | Self::Vec2 | Self::Vec3 | Self::Vec4
+        )
+    }
+
+    /// Types whose runtime payload is represented by the serializable
+    /// `PropertyValue` graph domain. Media, Shape, and transient analysis/3D
+    /// handles are deliberately excluded from `Any`: accepting those would
+    /// promise a heterogeneous payload representation that does not exist.
+    pub const fn is_property_value_family(self) -> bool {
+        matches!(
+            self,
+            Self::Any
+                | Self::List
+                | Self::Numeric
+                | Self::Number
+                | Self::Integer
+                | Self::Boolean
+                | Self::String
+                | Self::Color
+                | Self::Path
+                | Self::Vec2
+                | Self::Vec3
+                | Self::Vec4
         )
     }
 }

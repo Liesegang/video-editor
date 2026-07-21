@@ -398,18 +398,22 @@ Switch:
       type: Any
 Make List:
   category: Logic
-  catalog_status: design-needed
+  catalog_status: native
+  catalog_id: native.list.make
+  runtime_status: implemented
   description: Create a list from inputs
   inputs:
     - name: item
       type: Any
-      allow_multiple: true
+      multiplicity: Variadic
   outputs:
     - name: list
       type: List<Any>
 Get List Item:
   category: Logic
-  catalog_status: design-needed
+  catalog_status: native
+  catalog_id: native.list.get-item
+  runtime_status: implemented
   inputs:
     - name: list
       type: List<Any>
@@ -420,7 +424,9 @@ Get List Item:
       type: Any
 List Length:
   category: Logic
-  catalog_status: design-needed
+  catalog_status: native
+  catalog_id: native.list.length
+  runtime_status: implemented
   inputs:
     - name: list
       type: List<Any>

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 mod catalog;
 mod containers;
+mod list;
 mod sound_analysis;
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
@@ -24,6 +25,7 @@ pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
+pub use list::ListContent;
 pub use sound_analysis::SoundAnalysisContent;
 
 /// Stable authored/catalog identity of the native ordered Sound mixer.
@@ -532,6 +534,16 @@ impl Node {
         Self::new_value(name, ValueContent::Divide)
     }
 
+    /// Creates a first-party heterogeneous List operation with every authored
+    /// property initialized from its canonical metadata.
+    pub fn new_list(name: &str, content: ListContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::List(content),
+            PropertyMap::from_definitions(content.property_definitions()),
+        )
+    }
+
     /// Creates one of the native descriptor-backed numeric operations.
     pub fn new_value(name: &str, content: ValueContent) -> Self {
         Self::with_properties(
@@ -625,6 +637,10 @@ pub enum NodeContent {
     /// Native, typed numeric operations. Inputs and outputs remain canonical
     /// Project ports; this variant does not introduce a parallel value model.
     Value(ValueContent),
+    /// First-party heterogeneous List operations. Values are evaluated as
+    /// serializable `PropertyValue::Array` payloads; connection order remains
+    /// authoritative on `ProjectConnection::order`.
+    List(ListContent),
     /// A first-party typed operation whose authoring and port contract are
     /// available, while its runtime may still be explicitly design-needed.
     NativeOperation(NativeOperationContent),

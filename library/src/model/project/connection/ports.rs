@@ -1,4 +1,4 @@
-use crate::model::{NodeContent, native_node_descriptor_for_node};
+use crate::model::{ListContent, NodeContent, native_node_descriptor_for_node};
 
 use super::super::Project;
 use super::{
@@ -92,6 +92,7 @@ fn node_ports(
     match node.content() {
         NodeContent::Generator(_)
         | NodeContent::Value(_)
+        | NodeContent::List(_)
         | NodeContent::NativeOperation(_)
         | NodeContent::Merge
         | NodeContent::SoundMerge
@@ -278,8 +279,52 @@ impl Project {
     }
 }
 
-pub(super) fn is_graph_connectable_type(data_type: PortDataType) -> bool {
+fn is_graph_connectable_type(data_type: PortDataType) -> bool {
     data_type != PortDataType::Any
+}
+
+/// Whether one concrete output address can author a graph connection.
+///
+/// `Any` remains denied by default because most catalog placeholders and
+/// plugin contracts do not provide a safe heterogeneous runtime payload. The
+/// native Get List Item output is the narrow exception: its evaluator always
+/// returns an existing serializable `PropertyValue` or `NoOutput`.
+pub(super) fn is_graph_connectable_output(
+    project: &Project,
+    address: &PortAddress,
+    data_type: PortDataType,
+) -> bool {
+    if is_graph_connectable_type(data_type) {
+        return true;
+    }
+    data_type == PortDataType::Any
+        && address.port == super::LIST_ITEM_OUTPUT_PORT
+        && matches!(
+            address.owner,
+            PortOwner::Node(node_id)
+                if project
+                    .get_node(node_id)
+                    .is_some_and(|node| matches!(node.content(), NodeContent::List(ListContent::GetItem)))
+        )
+}
+
+/// Make List is sequence construction rather than set membership: the same
+/// source address may intentionally occupy several independently ordered
+/// slots (for example `[x, x]`). Other variadic operations retain their
+/// existing duplicate-source policy until they explicitly adopt this
+/// contract.
+pub(super) fn variadic_target_allows_duplicate_sources(
+    project: &Project,
+    target: &PortAddress,
+) -> bool {
+    target.port == super::LIST_ITEMS_INPUT_PORT
+        && matches!(
+            target.owner,
+            PortOwner::Node(node_id)
+                if project
+                    .get_node(node_id)
+                    .is_some_and(|node| matches!(node.content(), NodeContent::List(ListContent::Make)))
+        )
 }
 
 #[cfg(test)]
