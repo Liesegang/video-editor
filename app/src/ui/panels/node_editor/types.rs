@@ -39,7 +39,9 @@ pub(super) const NODE_REPARENT_DRAG_THRESHOLD: f32 = 8.0;
 /// reparenting at a boundary.
 pub(super) const NODE_REPARENT_POINTER_OVERLAP_THRESHOLD: f32 = 0.35;
 pub(super) const MIN_CONTAINER_SIZE: egui::Vec2 = egui::vec2(360.0, 220.0);
-pub(super) const AUTO_LAYOUT_COLUMN_GAP: f32 = 112.0;
+/// Compact left-to-right lane spacing. This still clears the 24 px container
+/// output rail while using roughly one third of the previous 112 px gap.
+pub(super) const AUTO_LAYOUT_COLUMN_GAP: f32 = 36.0;
 pub(super) const AUTO_LAYOUT_ROW_GAP: f32 = 52.0;
 pub(super) const AUTO_LAYOUT_NODE_PADDING: f32 = 24.0;
 pub(super) const DETACHED_GRAPH_NODE_GAP: f32 = AUTO_LAYOUT_NODE_PADDING + 0.5;

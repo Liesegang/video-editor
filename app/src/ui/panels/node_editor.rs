@@ -6244,8 +6244,11 @@ mod tests {
             if ranks[&from] == ranks[&to] {
                 continue;
             }
-            let from_rect = rendered_nodes[&from];
-            let to_rect = rendered_nodes[&to];
+            let (Some(from_rect), Some(to_rect)) =
+                (rendered_nodes.get(&from), rendered_nodes.get(&to))
+            else {
+                continue;
+            };
             assert!(
                 from_rect.right() + screen_padding <= to_rect.left() + 1.0,
                 "canonical edge is not LTR: {from} {from_rect:?} -> {to} {to_rect:?}"

@@ -1,5 +1,5 @@
 use eframe::egui;
-use library::model::project::PortOwner;
+use library::model::project::{PortOwner, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT};
 use library::model::{GeneratorContent, Node, NodeContent, Project};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
@@ -177,6 +177,43 @@ pub(in crate::ui::panels::node_editor) fn canonical_edges(
     nodes: &[Uuid],
 ) -> Vec<(Uuid, Uuid)> {
     let node_set = nodes.iter().copied().collect::<HashSet<_>>();
+    let mut edges = canonical_node_edges(project, nodes);
+    edges.extend(project.connections.iter().flat_map(|connection| {
+        let PortOwner::Node(to) = connection.to.owner else {
+            return Vec::new();
+        };
+        if !node_set.contains(&to) || project.get_node(to).is_none() {
+            return Vec::new();
+        }
+
+        let sources = match connection.from.owner {
+            PortOwner::Node(_) => Vec::new(),
+            owner
+                if connection.from.port == IMAGE_OUTPUT_PORT
+                    || connection.from.port == AUDIO_OUTPUT_PORT =>
+            {
+                container_layout_output_nodes(project, owner, &connection.from.port)
+            }
+            _ => Vec::new(),
+        };
+        sources
+            .into_iter()
+            .filter(|from| {
+                node_set.contains(from) && project.get_node(*from).is_some() && *from != to
+            })
+            .map(|from| (from, to))
+            .collect()
+    }));
+    edges.sort_unstable();
+    edges.dedup();
+    edges
+}
+
+pub(in crate::ui::panels::node_editor) fn canonical_node_edges(
+    project: &Project,
+    nodes: &[Uuid],
+) -> Vec<(Uuid, Uuid)> {
+    let node_set = nodes.iter().copied().collect::<HashSet<_>>();
     let mut edges = project
         .connections
         .iter()
@@ -196,6 +233,23 @@ pub(in crate::ui::panels::node_editor) fn canonical_edges(
     edges.sort_unstable();
     edges.dedup();
     edges
+}
+
+fn container_layout_output_nodes(project: &Project, owner: PortOwner, port: &str) -> Vec<Uuid> {
+    match owner {
+        PortOwner::Node(id) => vec![id],
+        owner if port == IMAGE_OUTPUT_PORT => project
+            .container_image_sources(owner)
+            .into_iter()
+            .flat_map(|source| container_layout_output_nodes(project, source.source, port))
+            .collect(),
+        owner if port == AUDIO_OUTPUT_PORT => project
+            .container_audio_sources(owner)
+            .into_iter()
+            .flat_map(|source| container_layout_output_nodes(project, source.source, port))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 pub(in crate::ui::panels::node_editor) fn rank_nodes_by_scc(
@@ -386,4 +440,115 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
         },
         base_height + pin_rows.saturating_sub(4) as f32 * PORT_ROW_HEIGHT,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::project::NodeContainer;
+    use library::model::{Clip, Composition};
+
+    #[test]
+    fn dag_ranking_is_stable_and_every_edge_moves_left_to_right() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let d = Uuid::from_u128(4);
+        let edges = vec![(a, b), (a, c), (b, d), (c, d)];
+        let forward = rank_nodes_by_scc(&[d, b, a, c], &edges);
+        let reverse = rank_nodes_by_scc(
+            &[a, c, b, d],
+            &edges.iter().rev().copied().collect::<Vec<_>>(),
+        );
+
+        assert_eq!(forward, reverse);
+        assert!(edges.iter().all(|(from, to)| forward[from] < forward[to]));
+    }
+
+    #[test]
+    fn structural_container_edges_rank_merges_after_complete_child_bounds() {
+        let mut project = Project::new("structural layout");
+        let (composition, track) = Composition::new("Main", 1_920, 1_080, 30.0, 5.0);
+        let composition_id = composition.id;
+        let composition_merge_id = composition.structural_merge_node_id;
+        let track_id = track.id;
+        let track_merge_id = track.structural_merge_node_id;
+        assert!(project.add_track(track).is_ok());
+        assert!(project.add_composition(composition).is_ok());
+
+        let clip = Clip::new("Clip", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        assert!(project.attach_clip_to_track(track_id, clip_id).is_ok());
+
+        let output = Node::new_merge("Clip output");
+        let output_id = output.id;
+        project.add_node(output);
+        assert!(project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), output_id)
+            .is_ok());
+        let disconnected = Node::new_merge("Disconnected but inside bounds");
+        let disconnected_id = disconnected.id;
+        project.add_node(disconnected);
+        assert!(project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), disconnected_id)
+            .is_ok());
+        assert!(project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(output_id))
+            .is_ok());
+
+        let nodes = vec![
+            composition_merge_id,
+            disconnected_id,
+            output_id,
+            track_merge_id,
+        ];
+        let edges = canonical_edges(&project, &nodes);
+        assert!(edges.contains(&(output_id, track_merge_id)));
+        assert!(!edges.contains(&(disconnected_id, track_merge_id)));
+        assert!(edges.contains(&(track_merge_id, composition_merge_id)));
+
+        let ranks = rank_nodes_by_scc(&nodes, &edges);
+        assert!(
+            edges.iter().all(|(from, to)| ranks[from] < ranks[to]),
+            "acyclic structural edges must never turn back: {edges:?} / {ranks:?}"
+        );
+
+        let columns = node_rank_columns(&project, &nodes, &ranks, 0.0);
+        for (left_rank, right_rank) in [(0, 1), (1, 2)] {
+            let left = columns[&left_rank];
+            let right = columns[&right_rank];
+            assert_eq!(right.x - (left.x + left.width), AUTO_LAYOUT_COLUMN_GAP);
+        }
+        let container_right_padding = crate::ui::panels::node_editor::AUTO_LAYOUT_TRACK_RIGHT;
+        assert!(
+            columns[&0].x + columns[&0].width + container_right_padding < columns[&1].x,
+            "Clip output chrome must stay left of the Track Merge"
+        );
+        assert!(
+            columns[&1].x + columns[&1].width + container_right_padding < columns[&2].x,
+            "Track output chrome must stay left of the Composition Merge"
+        );
+
+        let plan = crate::ui::panels::node_editor::compute_full_composition_layout(
+            &project,
+            composition_id,
+        )
+        .expect("fixture has a complete composition hierarchy");
+        assert!(crate::ui::panels::node_editor::apply_auto_layout(
+            &mut project,
+            composition_id,
+            &plan,
+        ));
+        let clip = project.get_clip(clip_id).expect("Clip remains present");
+        let track_merge = project
+            .get_node(track_merge_id)
+            .expect("Track Merge remains present");
+        assert!(clip.ui_position[0] + clip.ui_size[0] < track_merge.ui_position[0]);
+        let track = project.get_track(track_id).expect("Track remains present");
+        let composition_merge = project
+            .get_node(composition_merge_id)
+            .expect("Composition Merge remains present");
+        assert!(track.ui_position[0] + track.ui_size[0] < composition_merge.ui_position[0]);
+    }
 }
