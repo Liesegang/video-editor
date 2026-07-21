@@ -85,6 +85,7 @@ require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-fea
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked'
 require_gate_command '"${SCRIPT_DIR}/quality-gate-self-test.sh"'
 require_gate_command '"${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"'
+require_gate_command '"${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"'
 require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
 require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
 require_gate_command '-u QUALITY_TOOL_ROOT \'

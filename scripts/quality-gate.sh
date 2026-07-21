@@ -19,6 +19,9 @@ bash -n "${SCRIPT_DIR}"/*.sh
 echo "[quality] Rust file size ratchet"
 "${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
 
+echo "[quality] Node Editor dependency boundary"
+"${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"
+
 echo "[quality] rustfmt"
 cargo fmt --all -- --check
 cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check
