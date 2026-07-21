@@ -167,40 +167,6 @@ impl Default for NavigationDelta {
     }
 }
 
-impl NavigationDelta {
-    pub fn is_empty(self) -> bool {
-        self.pan == Vec2::ZERO && self.zoom_factor == Vec2::ONE
-    }
-
-    /// Describe an externally produced target transform as a generic delta.
-    ///
-    /// This is useful for widgets that retain gesture arbitration internally:
-    /// an adapter can preserve that ownership while still routing the state
-    /// transition through the shared zoom policy and sanitizer.
-    pub fn between(current: CanvasState, target: CanvasState, anchor: Pos2) -> Self {
-        let valid_zoom = |zoom: f32| zoom.is_finite() && zoom > 0.0;
-        let factor = egui::vec2(
-            if valid_zoom(current.zoom.x) && valid_zoom(target.zoom.x) {
-                target.zoom.x / current.zoom.x
-            } else {
-                1.0
-            },
-            if valid_zoom(current.zoom.y) && valid_zoom(target.zoom.y) {
-                target.zoom.y / current.zoom.y
-            } else {
-                1.0
-            },
-        );
-        let anchor_vector = anchor.to_vec2();
-        let zoomed_pan = anchor_vector - (anchor_vector - current.pan) * factor;
-        Self {
-            pan: target.pan - zoomed_pan,
-            zoom_factor: factor,
-            zoom_anchor: Some(anchor),
-        }
-    }
-}
-
 /// Convert sampled input into a generic delta without mutating panel state.
 pub fn navigation_delta(input: NavigationInput, config: NavigationConfig) -> NavigationDelta {
     let mut result = NavigationDelta {
@@ -259,8 +225,8 @@ fn apply_axis_modifiers(
         return;
     }
 
-    // A native pinch has no axis modifier. Supporting it here keeps Graph's
-    // independent wheel controls while retaining full trackpad behavior.
+    // A native pinch has no axis modifier. Supporting it here keeps independent
+    // wheel controls while retaining full trackpad behavior.
     apply_native_zoom(result, input, config);
 
     let scroll = if input.smooth_scroll_delta != Vec2::ZERO {
@@ -395,12 +361,12 @@ fn bounded_zoom(zoom: Vec2, config: NavigationConfig) -> Vec2 {
     if config.zoom_policy == ZoomPolicy::Uniform {
         let lower = min.x.max(min.y);
         let upper = max.x.min(max.y).max(lower);
-        let scalar = valid_positive(zoom.x, lower).clamp(lower, upper);
+        let scalar = valid_positive(zoom.x, 1.0).clamp(lower, upper);
         Vec2::splat(scalar)
     } else {
         egui::vec2(
-            valid_positive(zoom.x, min.x).clamp(min.x, max.x),
-            valid_positive(zoom.y, min.y).clamp(min.y, max.y),
+            valid_positive(zoom.x, 1.0).clamp(min.x, max.x),
+            valid_positive(zoom.y, 1.0).clamp(min.y, max.y),
         )
     }
 }
@@ -542,18 +508,75 @@ mod tests {
     }
 
     #[test]
-    fn delta_between_reconstructs_external_transform() {
-        let current = CanvasState::uniform(egui::vec2(10.0, 20.0), 2.0);
-        let target = CanvasState::uniform(egui::vec2(-7.0, 31.0), 3.0);
-        let mut resolved = current;
-        apply_navigation(
-            &mut resolved,
-            NavigationDelta::between(current, target, egui::pos2(50.0, 80.0)),
-            NavigationConfig::default(),
+    fn trackpad_combines_native_pinch_and_smooth_pan_once() {
+        let anchor = egui::pos2(60.0, 40.0);
+        let start_pan = egui::vec2(10.0, -4.0);
+        let config = NavigationConfig::default();
+        let delta = navigation_delta(
+            NavigationInput {
+                anchor: Some(anchor),
+                hovered: true,
+                smooth_scroll_delta: egui::vec2(3.0, -2.0),
+                zoom_delta: 1.25,
+                ..NavigationInput::default()
+            },
+            config,
         );
+        let mut state = CanvasState::uniform(start_pan, 2.0);
+        apply_navigation(&mut state, delta, config);
 
-        assert_near(resolved.pan.x, target.pan.x);
-        assert_near(resolved.pan.y, target.pan.y);
-        assert_eq!(resolved.zoom, target.zoom);
+        let zoomed_pan = anchor.to_vec2() - (anchor.to_vec2() - start_pan) * 1.25;
+        assert_eq!(state.zoom, Vec2::splat(2.5));
+        assert_eq!(state.pan, zoomed_pan + egui::vec2(3.0, -2.0));
+    }
+
+    #[test]
+    fn axis_policy_keeps_ctrl_wheel_single_axis_and_accepts_native_pinch() {
+        let config = NavigationConfig {
+            zoom_policy: ZoomPolicy::IndependentXY,
+            input_policy: InputPolicy::AxisModifiers,
+            ..NavigationConfig::default()
+        };
+        let ctrl_wheel = navigation_delta(
+            NavigationInput {
+                anchor: Some(Pos2::ZERO),
+                hovered: true,
+                modifiers: Modifiers::COMMAND,
+                raw_scroll_delta: egui::vec2(0.0, 4.0),
+                // Ctrl-wheel is also represented here by egui. It must not
+                // be applied a second time by the axis policy.
+                zoom_delta: 1.1,
+                ..NavigationInput::default()
+            },
+            config,
+        );
+        assert_eq!(ctrl_wheel.zoom_factor, egui::vec2(1.1, 1.0));
+
+        let ctrl_shift_wheel = navigation_delta(
+            NavigationInput {
+                anchor: Some(Pos2::ZERO),
+                hovered: true,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::COMMAND
+                },
+                raw_scroll_delta: egui::vec2(0.0, 4.0),
+                zoom_delta: 1.1,
+                ..NavigationInput::default()
+            },
+            config,
+        );
+        assert_eq!(ctrl_shift_wheel.zoom_factor, egui::vec2(1.0, 1.1));
+
+        let pinch = navigation_delta(
+            NavigationInput {
+                anchor: Some(Pos2::ZERO),
+                hovered: true,
+                zoom_delta: 1.2,
+                ..NavigationInput::default()
+            },
+            config,
+        );
+        assert_eq!(pinch.zoom_factor, Vec2::splat(1.2));
     }
 }

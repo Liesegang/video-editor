@@ -13,7 +13,7 @@ impl GridStroke {
     }
 }
 
-/// Shared visual token used by Node, Graph, and Preview canvases.
+/// Shared visual token for canvas adapters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CanvasTheme {
     pub background: Color32,

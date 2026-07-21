@@ -165,11 +165,11 @@ fn append_axis_lines(
         return;
     }
 
-    for index in first..=last {
+    let mut append_line = |index: i64| {
         let world_position = world_origin + index as f32 * minor;
         let screen_position = origin_screen + index as f32 * screen_step;
         if !world_position.is_finite() || !screen_position.is_finite() {
-            continue;
+            return;
         }
         let kind = if index == 0 {
             GridLineKind::Origin
@@ -184,6 +184,15 @@ fn append_axis_lines(
             world_position,
             screen_position,
         });
+    };
+    if screen_step > 0.0 {
+        for index in first..=last {
+            append_line(index);
+        }
+    } else {
+        for index in (first..=last).rev() {
+            append_line(index);
+        }
     }
 }
 
@@ -320,7 +329,7 @@ mod tests {
     #[test]
     fn grid_generation_is_deterministic_under_negative_pan_and_xy_zoom() {
         let viewport = Rect::from_min_max(egui::pos2(5.0, 7.0), egui::pos2(321.0, 198.0));
-        let state = CanvasState::new(egui::vec2(-113.25, 47.5), egui::vec2(3.5, 0.75));
+        let state = CanvasState::new(egui::vec2(-113.25, 47.5), egui::vec2(3.5, -0.75));
         let config = GridConfig {
             origin: egui::pos2(2.0, -4.0),
             minor_spacing: egui::vec2(0.5, 2.0),

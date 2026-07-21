@@ -1,9 +1,9 @@
-//! Reusable pan, zoom, canvas-theme, and grid primitives for egui panels.
+//! Reusable pan, zoom, canvas-theme, and grid primitives for egui surfaces.
 //!
-//! The crate intentionally has no knowledge of editor projects, clips, nodes,
-//! timelines, or panel-specific gesture owners. Adapters sample input, decide
-//! which gesture owns it, then apply the returned [`NavigationDelta`] to their
-//! own state.
+//! The crate intentionally has no knowledge of application-domain models or
+//! surface-specific gesture owners. Adapters sample input, decide which
+//! gesture owns it, then apply the returned [`NavigationDelta`] to their own
+//! state.
 
 #![forbid(unsafe_code)]
 
