@@ -17,7 +17,7 @@ use library::model::project::{
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{Clip, Node, NodeContent, ValueContent};
-use library::plugin::PluginManager;
+use library::plugin::{PluginManager, property_port_key};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -230,18 +230,31 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() -> Result<()>
 #[test]
 fn scalar_result_can_drive_a_number_property_and_a_time_input() -> Result<()> {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    let transform = PluginManager::default().create_image_transform_operation_node()?;
+    let transform_id = transform.id;
+    fixture.project.add_node(transform);
+    fixture
+        .project
+        .attach_node_to_container(NodeContainer::Clip(fixture.clip_id), transform_id)?;
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Node(fixture.media_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+    )?;
     fixture.project.connect_ports(
         PortAddress::new(PortOwner::Node(fixture.fmod_id), NUMBER_RESULT_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(fixture.media_id), "opacity"),
+        PortAddress::new(PortOwner::Node(transform_id), property_port_key("rotation")),
     )?;
+    fixture
+        .project
+        .set_output_node(NodeContainer::Clip(fixture.clip_id), Some(transform_id))?;
 
     let frame = evaluate(&fixture.project, 15)?;
-    let object = first_video_object(&frame.items).context("Video object must exist")?;
     assert_close(
         video_time(&frame).context("scalar frame must contain Video time")?,
         0.5,
     );
-    assert_close(object.spatial_transform.opacity, 0.005);
+    let transform = find_group(&frame.items, transform_id).context("Image Transform must exist")?;
+    assert_close(transform.transform.rotation, 0.5);
     Ok(())
 }
 

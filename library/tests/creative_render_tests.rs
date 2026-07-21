@@ -18,7 +18,8 @@ use library::model::frame::draw_type::{DrawStyle, PathEffect};
 use library::model::frame::entity::{FrameContent, FrameItem, StyleConfig};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
-    NodeGraphBundle, PortAddress, PortOwner, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
@@ -70,7 +71,7 @@ fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -
 }
 
 fn base_node(name: &str, request: GeneratorNodeRequest) -> Result<Node> {
-    let mut node = generator_node_for_canvas(
+    let node = generator_node_for_canvas(
         name,
         request,
         u64::from(WIDTH),
@@ -78,12 +79,6 @@ fn base_node(name: &str, request: GeneratorNodeRequest) -> Result<Node> {
         u64::from(WIDTH),
         u64::from(HEIGHT),
     );
-    // Image-valued generators still own their raster transform. Text/Shape
-    // intentionally do not; project_with_shape_graph authors a root Transform.
-    if node.properties().get("position").is_some() {
-        set(&mut node, "position", vec2(8.0, 8.0))?;
-        set(&mut node, "anchor", vec2(0.0, 0.0))?;
-    }
     Ok(node)
 }
 
@@ -130,13 +125,15 @@ fn default_text_styles(plugins: &PluginManager) -> Result<Vec<Node>> {
     ])
 }
 
-fn project_with_image_node(node: Node) -> Result<(Project, Uuid)> {
+fn project_with_image_graph(
+    graph: NodeGraphBundle,
+    content_node_id: Uuid,
+) -> Result<(Project, Uuid)> {
     let mut project = Project::new("creative render e2e");
     let (mut composition, track) =
         Composition::new("main", u64::from(WIDTH), u64::from(HEIGHT), FPS, 2.0);
     composition.background_color = Color::black();
     let track_id = track.id;
-    let node_id = node.id;
     let clip = Clip::new("creative clip", 0.0, 2.0);
     let clip_id = clip.id;
     assert!(
@@ -149,11 +146,19 @@ fn project_with_image_node(node: Node) -> Result<(Project, Uuid)> {
     );
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id)?;
-    project.insert_node_graph(
-        NodeContainer::Clip(clip_id),
-        NodeGraphBundle::with_output_node(node),
-    )?;
-    Ok((project, node_id))
+    project.insert_node_graph(NodeContainer::Clip(clip_id), graph)?;
+    Ok((project, content_node_id))
+}
+
+fn find_group(
+    items: &[FrameItem],
+    source_id: Uuid,
+) -> Option<&library::model::frame::entity::FrameGroup> {
+    items.iter().find_map(|item| match item {
+        FrameItem::Object(_) => None,
+        FrameItem::Group(group) if group.source_id == source_id => Some(group),
+        FrameItem::Group(group) => find_group(&group.items, source_id),
+    })
 }
 
 fn evaluate(
@@ -584,8 +589,22 @@ half4 main(float2 fragCoord) {
     )?;
     set(&mut node, "width", 96.0.into())?;
     set(&mut node, "height", 54.0.into())?;
-    set(&mut node, "position", vec2(10.0, 9.0))?;
-    let (project, _) = project_with_image_node(node)?;
+    let node_id = node.id;
+    let mut transform = plugins.create_image_transform_operation_node()?;
+    set(&mut transform, "position", vec2(10.0, 9.0))?;
+    let transform_id = transform.id;
+    let (project, _) = project_with_image_graph(
+        NodeGraphBundle::new(
+            vec![node, transform],
+            vec![ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+                0,
+            )],
+            Some(transform_id),
+        ),
+        node_id,
+    )?;
 
     let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::SkSL {
@@ -599,7 +618,16 @@ half4 main(float2 fragCoord) {
     };
     assert_eq!(converted, shader);
     assert_eq!(*resolution, (96.0, 54.0));
-    assert_eq!((transform.position.x, transform.position.y), (10.0, 9.0));
+    assert_eq!((transform.position.x, transform.position.y), (0.0, 0.0));
+    let image_transform =
+        find_group(&frame.items, transform_id).context("SkSL Image Transform group must exist")?;
+    assert_eq!(
+        (
+            image_transform.transform.position.x,
+            image_transform.transform.position.y
+        ),
+        (10.0, 9.0)
+    );
 
     let first = preview(&project, 0, &plugins)?;
     let late = preview(&project, 9, &plugins)?;

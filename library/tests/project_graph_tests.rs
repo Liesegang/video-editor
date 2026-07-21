@@ -22,7 +22,7 @@ use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
     Asset, AssetKind, BlendMode, Clip, CompositionInstanceContent, Node, NodeContent, Track,
 };
-use library::plugin::PluginManager;
+use library::plugin::{PluginManager, property_port_key};
 use library::rendering::renderer::RenderOutput;
 use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
@@ -1862,7 +1862,7 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id)?;
-    let mut node = media_node_for_canvas(
+    let node = media_node_for_canvas(
         "video",
         MediaNodeRequest::Video {
             asset_id,
@@ -1875,18 +1875,28 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
         320,
         180,
     );
-    node.set_property(
-        "opacity".into(),
-        Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    )
-    .map_err(|error| anyhow!("video converter must initialize opacity: {error}"))?;
     let node_id = add_node(&mut project, NodeContainer::Clip(clip_id), node)?;
+    let mut transform = PluginManager::default().create_image_transform_operation_node()?;
+    transform
+        .set_property(
+            "rotation".into(),
+            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
+        )
+        .map_err(|error| anyhow!("Image Transform must initialize rotation: {error}"))?;
+    let transform_id = add_node(&mut project, NodeContainer::Clip(clip_id), transform)?;
+    project.connect_ports(
+        address(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT),
+        address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+    )?;
     project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .set_output_node(NodeContainer::Clip(clip_id), Some(transform_id))
         .map_err(|error| anyhow!(error))?;
     project.connect_ports(
         address(PortOwner::Clip(clip_id), TIME_PORT),
-        address(PortOwner::Node(node_id), "opacity"),
+        address(
+            PortOwner::Node(transform_id),
+            &property_port_key("rotation"),
+        ),
     )?;
 
     assert_eq!(
@@ -1904,7 +1914,10 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
         bail!("expected video output");
     };
     assert!((*source_time - 3.0).abs() < 1e-9);
-    assert!((surface.transform.opacity - 0.03).abs() < 1e-9);
+    assert_eq!(surface.transform, Default::default());
+    let transform_group =
+        find_group(&rendered.items, transform_id).context("Image Transform group must exist")?;
+    assert!((transform_group.transform.rotation - 3.0).abs() < 1e-9);
     Ok(())
 }
 

@@ -18,7 +18,9 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
-use library::model::project::NodeGraphBundle;
+use library::model::project::{
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner, ProjectConnection,
+};
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
     Asset, AssetKind, Clip, Composition, Node, NodeContainer, NodeContent, Project, Track,
@@ -103,10 +105,50 @@ fn add_clip_graph(
     Ok((clip_id, output_node_id))
 }
 
+fn transformed_image_graph(
+    plugin_manager: &PluginManager,
+    source: Node,
+    position: [f64; 2],
+    anchor: [f64; 2],
+) -> Result<(NodeGraphBundle, Uuid)> {
+    let source_id = source.id;
+    let mut transform = plugin_manager.create_image_transform_operation_node()?;
+    set_declared_property(
+        &mut transform,
+        "position",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(position[0]),
+            y: OrderedFloat(position[1]),
+        }),
+    )?;
+    set_declared_property(
+        &mut transform,
+        "anchor",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(anchor[0]),
+            y: OrderedFloat(anchor[1]),
+        }),
+    )?;
+    let transform_id = transform.id;
+    Ok((
+        NodeGraphBundle::new(
+            vec![source, transform],
+            vec![ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+                0,
+            )],
+            Some(transform_id),
+        ),
+        transform_id,
+    ))
+}
+
 #[derive(Clone, Copy)]
 struct MixedMediaIds {
     video_clip: Uuid,
     video_node: Uuid,
+    video_transform: Uuid,
 }
 
 fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, MixedMediaIds)> {
@@ -153,7 +195,7 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     image_asset.height = Some(6);
     let image_asset_id = image_asset.id;
     project.assets.push(image_asset);
-    let mut image = media_node_for_canvas(
+    let image = media_node_for_canvas(
         "image",
         MediaNodeRequest::Image {
             asset_id: image_asset_id,
@@ -164,12 +206,13 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
         8,
         6,
     );
-    set_declared_property(
-        &mut image,
-        "opacity",
-        PropertyValue::Number(OrderedFloat(70.0)),
-    )?;
-    add_clip_node(&mut project, image_track_id, "image clip", image)?;
+    let (image_graph, _) = transformed_image_graph(plugin_manager, image, [6.0, 4.0], [4.0, 3.0])?;
+    let (image_clip, _) = add_clip_graph(&mut project, image_track_id, "image clip", image_graph)?;
+    project
+        .get_clip_mut(image_clip)
+        .context("image Clip must exist")?
+        .properties
+        .set("opacity".into(), constant(70.0.into()));
 
     let video_track = Track::new("video track");
     let video_track_id = video_track.id;
@@ -186,7 +229,7 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     video_asset.stream_index = Some(0);
     let video_asset_id = video_asset.id;
     project.assets.push(video_asset);
-    let mut video = media_node_for_canvas(
+    let video = media_node_for_canvas(
         "video",
         MediaNodeRequest::Video {
             asset_id: video_asset_id,
@@ -199,13 +242,15 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
         12,
         8,
     );
-    set_declared_property(
-        &mut video,
-        "opacity",
-        PropertyValue::Number(OrderedFloat(65.0)),
-    )?;
-    let (video_clip, video_node) =
-        add_clip_node(&mut project, video_track_id, "video clip", video)?;
+    let video_node = video.id;
+    let (video_graph, video_transform) =
+        transformed_image_graph(plugin_manager, video, [6.0, 4.0], [6.0, 4.0])?;
+    let (video_clip, _) = add_clip_graph(&mut project, video_track_id, "video clip", video_graph)?;
+    project
+        .get_clip_mut(video_clip)
+        .context("video Clip must exist")?
+        .properties
+        .set("opacity".into(), constant(65.0.into()));
 
     let text_track = Track::new("text track");
     let text_track_id = text_track.id;
@@ -258,29 +303,16 @@ half4 main(float2 fragCoord) {
         "height",
         PropertyValue::Number(OrderedFloat(3.0)),
     )?;
-    set_declared_property(
-        &mut shader,
-        "position",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(9.0),
-            y: OrderedFloat(5.0),
-        }),
-    )?;
-    set_declared_property(
-        &mut shader,
-        "anchor",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(0.0),
-            y: OrderedFloat(0.0),
-        }),
-    )?;
-    add_clip_node(&mut project, shader_track_id, "shader clip", shader)?;
+    let (shader_graph, _) =
+        transformed_image_graph(plugin_manager, shader, [9.0, 5.0], [0.0, 0.0])?;
+    add_clip_graph(&mut project, shader_track_id, "shader clip", shader_graph)?;
 
     Ok((
         project,
         MixedMediaIds {
             video_clip,
             video_node,
+            video_transform,
         },
     ))
 }
@@ -1108,15 +1140,18 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() -> Resu
 
     set_declared_property(
         project
-            .get_node_mut(ids.video_node)
-            .context("video Node must exist")?,
-        "opacity",
-        PropertyValue::Number(OrderedFloat(0.0)),
+            .get_node_mut(ids.video_transform)
+            .context("video Image Transform must exist")?,
+        "scale",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(0.0),
+            y: OrderedFloat(0.0),
+        }),
     )?;
     let after_node_edit = preview_frame(&project, 0, &plugins)?;
     assert_ne!(rgba_hash(&initial), rgba_hash(&after_node_edit));
     assert_eq!(
-        project.find_node_container(ids.video_node),
+        project.find_node_container(ids.video_transform),
         Some(NodeContainer::Clip(ids.video_clip))
     );
     assert_eq!(
@@ -1124,15 +1159,18 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() -> Resu
             .get_clip(ids.video_clip)
             .context("video Clip must exist")?
             .node_ids,
-        vec![ids.video_node]
+        vec![ids.video_node, ids.video_transform]
     );
 
     set_declared_property(
         project
-            .get_node_mut(ids.video_node)
-            .context("video Node must exist")?,
-        "opacity",
-        PropertyValue::Number(OrderedFloat(65.0)),
+            .get_node_mut(ids.video_transform)
+            .context("video Image Transform must exist")?,
+        "scale",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(100.0),
+            y: OrderedFloat(100.0),
+        }),
     )?;
     let clip = project
         .get_clip_mut(ids.video_clip)

@@ -10,10 +10,11 @@ use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameGroup, FrameItem};
 use library::model::project::{
     AUDIO_OUTPUT_PORT, Composition, DURATION_PORT, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT,
-    FPS_PORT, FRAME_PORT, IMAGE_OUTPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NodeContainer, PortAddress,
-    PortDataType, PortDirection, PortOwner, Project, ProjectGraphError, RESOLUTION_PORT, TIME_PORT,
+    FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, Project, ProjectGraphError,
+    RESOLUTION_PORT, TIME_PORT,
 };
-use library::model::property::{Property, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue};
 use library::model::{Clip, CompositionInstanceContent, Node, NodeContent};
 use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
@@ -32,13 +33,6 @@ fn add_node(project: &mut Project, container: NodeContainer, node: Node) -> Resu
 
 fn address(owner: PortOwner, port: &str) -> PortAddress {
     PortAddress::new(owner, port)
-}
-
-fn insert_persisted_property(node: &mut Node, key: &str, property: Property) -> Result<()> {
-    let mut value = serde_json::to_value(&*node)?;
-    value["properties"][key] = serde_json::to_value(property)?;
-    *node = serde_json::from_value(value)?;
-    Ok(())
 }
 
 fn evaluate_frame(project: &Project) -> Result<library::model::frame::frame::FrameInfo> {
@@ -120,13 +114,21 @@ fn factory_ports_ownership_and_json_are_canonical() -> Result<()> {
     let node = bundle
         .graph
         .nodes
-        .first()
-        .context("factory must create one Composition Instance Node")?;
+        .iter()
+        .find(|node| matches!(node.content(), NodeContent::CompositionInstance(_)))
+        .context("factory must retain the Composition Instance source")?;
     let node_id = node.id;
-    assert_eq!(bundle.graph.nodes.len(), 1);
-    assert_eq!(bundle.clip.node_ids, vec![node_id]);
-    assert_eq!(bundle.graph.output_node_id, Some(node_id));
-    assert_eq!(bundle.clip.output_node_id, Some(node_id));
+    let transform = bundle
+        .graph
+        .nodes
+        .iter()
+        .find(|node| matches!(node.content(), NodeContent::PluginOperation(_)))
+        .context("factory must create one Image Transform")?;
+    let transform_id = transform.id;
+    assert_eq!(bundle.graph.nodes.len(), 2);
+    assert!(bundle.clip.node_ids.is_empty());
+    assert_eq!(bundle.graph.output_node_id, Some(transform_id));
+    assert_eq!(bundle.clip.output_node_id, None);
     assert_eq!(bundle.clip.audio_output_node_id, Some(node_id));
     assert_eq!(
         node.content(),
@@ -135,12 +137,15 @@ fn factory_ports_ownership_and_json_are_canonical() -> Result<()> {
         })
     );
 
+    assert!(bundle.graph.connections.iter().any(|connection| {
+        connection.from == address(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT)
+            && connection.to == address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT)
+    }));
+
     let clip_id = bundle.clip.id;
     project.add_clip(bundle.clip);
     project.attach_clip_to_track(parent_track_id, clip_id)?;
-    project.add_node(node.clone());
-    project.attach_node_to_container(NodeContainer::Clip(clip_id), node_id)?;
-    project.set_output_node(NodeContainer::Clip(clip_id), Some(node_id))?;
+    project.insert_node_graph(NodeContainer::Clip(clip_id), bundle.graph)?;
     project.set_audio_output_node(NodeContainer::Clip(clip_id), Some(node_id))?;
 
     let ports = project.port_definitions(PortOwner::Node(node_id));
@@ -271,28 +276,34 @@ fn two_instances_render_one_definition_at_independent_explicit_times() -> Result
     }
 
     let mut instance_ids = Vec::new();
+    let mut transform_ids = Vec::new();
     for (name, trim_in, x) in [("left", 0.0, -1.0), ("right", 1.0, 1.0)] {
         let mut clip = Clip::new(name, 0.0, 1.0);
         clip.trim_in = OrderedFloat(trim_in);
         let clip_id = clip.id;
         project.add_clip(clip);
         project.attach_clip_to_track(parent_track_id, clip_id)?;
-        let mut instance = Node::new_composition_instance(
+        let instance = Node::new_composition_instance(
             name,
             CompositionInstanceContent {
                 composition_id: source_id,
             },
         );
-        insert_persisted_property(
-            &mut instance,
-            "position",
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(x),
-                y: OrderedFloat(0.0),
-            })),
-        )?;
         let instance_id = add_node(&mut project, NodeContainer::Clip(clip_id), instance)?;
-        project.set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))?;
+        let mut transform = PluginManager::default().create_image_transform_operation_node()?;
+        transform
+            .set_property(
+                "position".to_string(),
+                Property::constant(library::plugin::transforms::vec2_value(x, 0.0)),
+            )
+            .map_err(anyhow::Error::msg)?;
+        let transform_id = add_node(&mut project, NodeContainer::Clip(clip_id), transform)?;
+        project.connect_ports(
+            address(PortOwner::Node(instance_id), IMAGE_OUTPUT_PORT),
+            address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
+        )?;
+        project.set_output_node(NodeContainer::Clip(clip_id), Some(transform_id))?;
+        transform_ids.push(transform_id);
         if trim_in != 0.0 {
             let mut fmod = Node::new_fmod("two-second source loop");
             fmod.set_property(
@@ -335,13 +346,38 @@ fn two_instances_render_one_definition_at_independent_explicit_times() -> Result
             .effect_time,
         OrderedFloat(1.0)
     );
+    for instance_id in &instance_ids {
+        assert_eq!(
+            find_group(&frame.items, *instance_id)
+                .context("Composition Instance group must render")?
+                .transform,
+            Default::default(),
+            "Composition Instance sources must stay spatially neutral"
+        );
+    }
+    for (transform_id, expected_x) in transform_ids.iter().zip([-1.0, 1.0]) {
+        assert_eq!(
+            find_group(&frame.items, *transform_id)
+                .context("Image Transform group must render")?
+                .transform
+                .position
+                .x,
+            expected_x
+        );
+    }
 
     let image = render(&project)?;
-    assert_eq!(&image.data[0..4], &[255, 0, 0, 255]);
+    assert!(
+        image.data[0] > 230 && image.data[1] < 10 && image.data[2] < 10 && image.data[3] > 230,
+        "the translated first instance must render the red source at the left edge"
+    );
     let right_offset = ((image.width - 2) * 4) as usize;
-    assert_eq!(
-        &image.data[right_offset..right_offset + 4],
-        &[0, 255, 0, 255]
+    assert!(
+        image.data[right_offset] < 10
+            && image.data[right_offset + 1] > 230
+            && image.data[right_offset + 2] < 10
+            && image.data[right_offset + 3] > 230,
+        "the translated second instance must render the green source at the right edge"
     );
     assert_eq!(project.get_composition(source_id), Some(&source_before));
     assert_eq!(

@@ -66,6 +66,13 @@ fn set_property(node: &mut Node, key: &str, property: Property) -> AnyResult<()>
         .map_err(anyhow::Error::msg)
 }
 
+fn insert_stray_property(node: &mut Node, key: &str, property: Property) -> AnyResult<()> {
+    let mut value = serde_json::to_value(&*node)?;
+    value["properties"][key] = serde_json::to_value(property)?;
+    *node = serde_json::from_value(value)?;
+    Ok(())
+}
+
 fn project_with_graph(graph: NodeGraphBundle) -> AnyResult<Project> {
     let mut project = Project::new("Transform graph");
     let (composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 3.0);
@@ -121,7 +128,7 @@ fn group_by_source(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> 
 fn transform_and_style_have_one_explicit_property_authority() -> AnyResult<()> {
     let plugins = PluginManager::default();
     let detached = ["position", "rotation", "scale", "anchor", "opacity"];
-    for kind in ["text", "shape"] {
+    for kind in ["text", "shape", "solid", "sksl", "image", "video"] {
         let definitions = plugins
             .get_entity_converter(kind)
             .with_context(|| format!("{kind} converter is missing"))?
@@ -233,14 +240,114 @@ fn transform_and_style_have_one_explicit_property_authority() -> AnyResult<()> {
         "Opacity Modulation"
     );
 
-    // Raster-valued generators retain their existing embedded image contract.
-    let solid = plugins
-        .get_entity_converter("solid")
-        .context("Solid converter is missing")?
-        .get_property_definitions(WIDTH, HEIGHT, 100, 50);
-    for key in detached {
-        assert!(solid.iter().any(|definition| definition.name() == key));
+    Ok(())
+}
+
+#[test]
+fn raster_clip_factories_wrap_neutral_sources_in_image_transform_nodes() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("raster factory"))),
+        plugins,
+    );
+    let asset_id = Uuid::new_v4();
+
+    let bundles = [
+        manager.create_image_clip(asset_id, "image.png", 0.0, 1.0, WIDTH as u32, HEIGHT as u32)?,
+        manager.create_video_clip(
+            asset_id,
+            "video.mp4",
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            WIDTH as u32,
+            HEIGHT as u32,
+        )?,
+        manager.create_sksl_clip(0.0, 1.0, WIDTH as u32, HEIGHT as u32)?,
+    ];
+
+    for bundle in bundles {
+        assert_eq!(bundle.graph.nodes.len(), 2);
+        assert_eq!(bundle.graph.connections.len(), 1);
+        let source = bundle
+            .graph
+            .nodes
+            .iter()
+            .find(|node| !matches!(node.content(), NodeContent::PluginOperation(_)))
+            .context("raster graph has no source")?;
+        for key in ["position", "rotation", "scale", "anchor", "opacity"] {
+            assert!(
+                source.properties().get(key).is_none(),
+                "{} source still owns {key}",
+                source.name
+            );
+        }
+        let transform_id = operation_id(
+            &bundle.graph,
+            TRANSFORM_CATEGORY,
+            IMAGE_TRANSFORM_COMPONENT_ID,
+        )?;
+        assert_eq!(bundle.graph.output_node_id, Some(transform_id));
+        assert!(bundle.graph.connections.iter().any(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(source.id), IMAGE_OUTPUT_PORT)
+                && connection.to
+                    == PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT)
+        }));
+        let transform = bundle
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.id == transform_id)
+            .context("Image Transform is missing")?;
+        assert_eq!(
+            property_value(transform, "position")?,
+            &library::plugin::transforms::vec2_value(160.0, 90.0)
+        );
+        assert_eq!(
+            property_value(transform, "anchor")?,
+            &library::plugin::transforms::vec2_value(160.0, 90.0)
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn raster_sources_ignore_stray_spatial_properties() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("legacy raster"))),
+        plugins.clone(),
+    );
+    let source =
+        manager.create_solid_node(library::model::frame::color::Color::white(), WIDTH, HEIGHT)?;
+    let source_id = source.id;
+
+    let mut persisted = serde_json::to_value(source)?;
+    for (key, value) in [
+        (
+            "position",
+            library::plugin::transforms::vec2_value(70.0, 40.0),
+        ),
+        ("anchor", library::plugin::transforms::vec2_value(10.0, 5.0)),
+        (
+            "scale",
+            library::plugin::transforms::vec2_value(125.0, 80.0),
+        ),
+        ("rotation", 15.0.into()),
+        ("opacity", 50.0.into()),
+    ] {
+        persisted["properties"][key] = serde_json::to_value(Property::constant(value))?;
+    }
+    let source_with_stray_properties: Node = serde_json::from_value(persisted)?;
+    let project = project_with_graph(NodeGraphBundle::with_output_node(
+        source_with_stray_properties,
+    ))?;
+    let rendered = evaluate(&project, &plugins, 0)?;
+    let object = first_object(&rendered.items).context("neutral raster source is missing")?;
+    assert_eq!(object.source_node_id, source_id);
+    assert_eq!(object.spatial_transform_node_id, None);
+    assert_eq!(object.spatial_transform.as_ref(), &Transform::default());
     Ok(())
 }
 
@@ -341,6 +448,16 @@ fn image_transforms_wrap_complete_image_subtrees_and_compose_as_nested_groups() 
     let merge_id = graph
         .output_node_id
         .context("Shape graph has no Merge output")?;
+    let merge = graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == merge_id)
+        .context("Shape graph Merge is missing")?;
+    insert_stray_property(
+        merge,
+        "position",
+        Property::constant(library::plugin::transforms::vec2_value(999.0, 999.0)),
+    )?;
 
     let mut upstream_transform = plugins.create_image_transform_operation_node()?;
     set_property(
@@ -391,6 +508,7 @@ fn image_transforms_wrap_complete_image_subtrees_and_compose_as_nested_groups() 
     let merge = group_by_source(&upstream.items, merge_id)
         .context("Image Transform discarded the complete Merge subtree")?;
     assert_eq!(merge.kind, FrameGroupKind::Merge);
+    assert_eq!(merge.transform, Transform::default());
 
     let object = first_object(&downstream.items).context("nested image has no object")?;
     assert_eq!(object.source_node_id, generator_id);
