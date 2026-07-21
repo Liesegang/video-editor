@@ -11,10 +11,10 @@ workspace = true
 [features]
 default = ["gl"]
 gl = []
-python-easing = ["dep:pyo3"]
 
 [dependencies]
 ruvie-plugin-api = { version = "0.1.0", path = "../plugin-api" }
+ruvie-python-runtime = { version = "0.1.0", path = "../python-runtime" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 ffmpeg-next = "8.1.0"
@@ -34,7 +34,6 @@ skia-safe = { version = "0.91.0", features = ["gpu", "gl", "textlayout"] }
 log = "0.4.26"
 lru = "0.16.3"
 ordered-float = { version = "5.1.0", features = ["serde"] }
-rustpython-parser = { version = "0.4.0", default-features = false, features = ["location", "num-bigint"] }
 sha2 = "0.10"
 libloading = "0.9"
 glutin = "0.32.3"
@@ -52,7 +51,6 @@ uuid = { version = "1.19.0", features = ["serde", "v4"] }
 #opencv = "0.94.2"
 
 toml = "0.9.8"
-pyo3 = { version = "0.29.0", features = ["auto-initialize"], optional = true }
 cpal = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 rtrb = "0.3"

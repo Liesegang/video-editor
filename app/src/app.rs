@@ -52,6 +52,7 @@ type StartupProject = (Arc<RwLock<Project>>, Uuid, Option<crate::qa::FixtureInfo
 
 impl RuViEApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, LibraryError> {
+        library::initialize_python_runtime()?;
         let app_config = config::load_config();
         setup_theme(&cc.egui_ctx, &app_config);
         setup_fonts(&cc.egui_ctx);

@@ -42,6 +42,14 @@ pub use editor::ProjectService;
 pub use editor::RenderService;
 pub use editor::{ClipBundle, EditorService, KeyframeBatchUpdate, NodeGraphBundle, PropertyOwner};
 
+/// Explicitly starts the trusted in-process CPython host. GUI applications
+/// call this once during startup before projects or plugins can execute code.
+pub fn initialize_python_runtime() -> Result<(), LibraryError> {
+    ruvie_python_runtime::initialize_global(ruvie_python_runtime::PythonHostConfig::default())
+        .map(|_| ())
+        .map_err(|error| LibraryError::Runtime(format!("Cannot initialize CPython: {error}")))
+}
+
 pub fn run(_: Vec<String>) -> Result<(), LibraryError> {
     println!("Library CLI temporarily disabled during Trinity refactor.");
     Ok(())

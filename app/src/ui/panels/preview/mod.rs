@@ -30,6 +30,13 @@ use action::PreviewAction;
 use qa::*;
 use support::*;
 
+/// Clone the authoritative Project while holding the read lock briefly. Frame
+/// evaluation (including trusted CPython Expressions) must happen on this
+/// snapshot after the lock has been released so Python cannot block writers.
+fn snapshot_project_for_preview(project: &Arc<RwLock<Project>>) -> Option<Project> {
+    project.read().ok().map(|project| project.clone())
+}
+
 pub fn preview_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
@@ -264,14 +271,16 @@ pub fn preview_panel(
         editor_context.view.zoom,
     );
 
-    // Lock project once for reading state
+    // Snapshot once; all synchronous frame evaluation below is deliberately
+    // outside the authoritative Project lock because it can execute Python.
     let mut pending_actions = Vec::new();
     let mut current_interaction_visuals = Vec::new();
     let mut frame_evaluation_failed = false;
     let mut requested_frame_info = None;
-    if let Ok(proj_read) = project.read() {
+    let project_snapshot = snapshot_project_for_preview(project);
+    if let Some(proj_read) = project_snapshot.as_ref() {
         let (comp_width, comp_height) =
-            if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+            if let Some(comp) = editor_context.get_current_composition(proj_read) {
                 (comp.width, comp.height)
             } else {
                 (1920, 1080)
@@ -293,7 +302,7 @@ pub fn preview_panel(
         );
 
         // Calculate current frame and Request Render
-        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+        if let Some(comp) = editor_context.get_current_composition(proj_read) {
             let current_frame =
                 (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
@@ -334,7 +343,7 @@ pub fn preview_panel(
 
                 if let Some(valid_region) = region {
                     let frame_info = library::framing::get_frame_from_project(
-                        &proj_read,
+                        proj_read,
                         comp_idx,
                         current_frame,
                         render_scale,
@@ -576,7 +585,7 @@ pub fn preview_panel(
             requested_frame_info.as_ref(),
             editor_context.preview_frame_info.as_ref(),
         )
-        .map(|frame| clip::from_evaluated_frame(&proj_read, frame))
+        .map(|frame| clip::from_evaluated_frame(proj_read, frame))
         .unwrap_or_default();
         let mut ambiguous_facade_candidates = None;
         if let Some(primary) = editor_context.selection.primary() {
@@ -589,7 +598,7 @@ pub fn preview_panel(
                         && routing::exact_visual_for_edit_target(&gui_clips, target).is_some()
                 });
             if !has_matching_explicit_target {
-                match routing::resolve_primary_edit_target(&proj_read, &gui_clips, primary) {
+                match routing::resolve_primary_edit_target(proj_read, &gui_clips, primary) {
                     clip::OwnerEditTargetResolution::Resolved(target) => {
                         editor_context.interaction.preview_edit_target = Some(target);
                     }
@@ -690,7 +699,7 @@ pub fn preview_panel(
             }
         }
         current_interaction_visuals = gui_clips;
-    } // End of project.read() scope
+    } // End of owned Project snapshot scope
 
     // Nested gizmo/path widgets can be the first widgets to recognize a drag.
     // Record that ownership before a later Space press can claim it.

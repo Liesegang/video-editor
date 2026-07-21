@@ -120,7 +120,7 @@ pub(super) fn attach_audio_output(
 }
 
 #[test]
-fn audio_properties_use_composition_expression_context_and_recover_typed_values() {
+fn audio_expression_volume_uses_authored_fallback_without_per_sample_cpython() {
     let plugin_manager = PluginManager::default();
     let evaluators = plugin_manager.get_property_evaluators();
     let context = AudioPropertyContext::new(evaluators.as_ref(), 24.0, (100, 50));
@@ -132,7 +132,9 @@ fn audio_properties_use_composition_expression_context_and_recover_typed_values(
             PropertyValue::Number(OrderedFloat(0.5)),
         ),
     );
-    assert_eq!(volume_at(&properties, 2.0, &context, "node:test"), 27.5);
+    assert_eq!(volume_at(&properties, 2.0, &context, "node:test"), 0.5);
+    assert_eq!(volume_at(&properties, 2.1, &context, "node:test"), 0.5);
+    assert_eq!(context.reported_diagnostic_count(), 1);
 
     properties.set(
         "volume".to_string(),
@@ -142,6 +144,27 @@ fn audio_properties_use_composition_expression_context_and_recover_typed_values(
         ),
     );
     assert_eq!(volume_at(&properties, 2.0, &context, "node:test"), 0.25);
+    assert_eq!(context.reported_diagnostic_count(), 2);
+
+    properties.set(
+        "volume".to_string(),
+        Property::keyframe(vec![
+            crate::model::property::Keyframe::new(
+                0.0,
+                PropertyValue::Number(OrderedFloat(0.75)),
+                crate::animation::EasingFunction::Expression {
+                    text: "t * t".to_string(),
+                },
+            ),
+            crate::model::property::Keyframe::new(
+                1.0,
+                PropertyValue::Number(OrderedFloat(1.0)),
+                crate::animation::EasingFunction::Linear,
+            ),
+        ]),
+    );
+    assert_eq!(volume_at(&properties, 0.5, &context, "node:test"), 0.75);
+    assert_eq!(context.reported_diagnostic_count(), 3);
 }
 
 #[test]

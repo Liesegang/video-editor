@@ -4,8 +4,6 @@ pub mod frame;
 pub mod node;
 pub(crate) mod numeric;
 pub mod project;
-#[cfg(not(feature = "python-easing"))]
-mod python_expression;
 pub mod vector;
 
 pub use blend::{BlendMode, BlendModeGroup, BlendModeInfo};
