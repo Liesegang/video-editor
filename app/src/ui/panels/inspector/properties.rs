@@ -1,7 +1,4 @@
 use egui::Ui;
-use egui_phosphor::fill::DIAMOND as ICON_DIAMOND_FILLED;
-use egui_phosphor::regular::DIAMOND as ICON_DIAMOND;
-use egui_phosphor::regular::TIMER as ICON_TIMER;
 use library::model::frame::color::Color;
 use library::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
@@ -9,6 +6,7 @@ use library::model::property::{
 use ordered_float::OrderedFloat;
 
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
+use super::property_authoring::{render_property_authoring, PropertyAction};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
 pub struct PropertyRenderContext<'a> {
@@ -18,14 +16,6 @@ pub struct PropertyRenderContext<'a> {
     /// Stable owner/target scope used by coordinate-driven QA. Examples:
     /// `node:<uuid>` and `node:<uuid>.effector:<instance-uuid>`.
     pub qa_scope: String,
-}
-
-#[derive(Debug)]
-pub enum PropertyAction {
-    Update(String, PropertyValue),
-    Commit,
-    ToggleKeyframe(String, PropertyValue),
-    SetAttribute(String, String, PropertyValue), // name, attr_key, attr_val
 }
 
 // Helper function to handle common property events
@@ -108,98 +98,31 @@ where
     let mut actions = Vec::new();
 
     for prop_def in properties {
-        // 1. Render Label Column (with Keyframe Icon)
-        ui.horizontal(|ui| {
-            let prop_meta = get_property(prop_def.name());
-
-            if prop_meta.is_none() {
-                // WARN: Missing property metadata. This should not happen if data is consistent.
-                log::warn!(
-                    "[WARN] Property '{}' metadata missing in properties.rs",
-                    prop_def.name()
-                );
-                ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
-                    .on_hover_text(format!(
-                        "Missing metadata for property '{}'",
-                        prop_def.name()
-                    ));
-            }
-
-            // Determine state (default to Constant/False if missing)
-            let (is_keyframed, is_on_key) = if let Some(ref prop) = prop_meta {
-                let is_kf = prop.evaluator == "keyframe";
-                let on_key = if is_kf {
-                    prop.keyframes()
-                        .iter()
-                        .any(|k| (k.time.into_inner() - context.current_time).abs() < 0.001)
-                } else {
-                    false
-                };
-                (is_kf, on_key)
-            } else {
-                (false, false)
-            };
-
-            let (icon, color) = if is_keyframed {
-                if is_on_key {
-                    (
-                        ICON_DIAMOND_FILLED,
-                        ui.visuals().widgets.active.text_color(),
-                    )
-                } else {
-                    (ICON_DIAMOND, ui.visuals().text_color())
-                }
-            } else {
-                (ICON_TIMER, ui.visuals().text_color().gamma_multiply(0.5))
-            };
-
-            let btn =
-                ui.add(egui::Button::new(egui::RichText::new(icon).color(color)).frame(false));
-
-            crate::qa::register_component_with_metadata(
-                format!(
-                    "inspector.keyframe.{}:{}",
-                    context.qa_scope,
-                    prop_def.name()
-                ),
-                "keyframe_control",
-                btn.rect,
-                true,
-                Some(serde_json::json!({
-                    "scope": context.qa_scope,
-                    "property": prop_def.name(),
-                    "is_keyframed": is_keyframed,
-                    "is_on_key": is_on_key,
-                    "current_time": context.current_time,
-                })),
-            );
-
-            if btn.clicked() {
-                // Definitions are authoritative for editable fields. A newly
-                // introduced plugin property may not yet exist in a pre-v1
-                // in-memory instance; the first UI edit materializes its typed
-                // default directly in the same Project model.
-                let value =
-                    get_value(prop_def.name()).unwrap_or_else(|| prop_def.default_value().clone());
-                actions.push(PropertyAction::ToggleKeyframe(
-                    prop_def.name().to_string(),
-                    value,
-                ));
-            }
-
-            if is_keyframed {
-                btn.on_hover_text("Toggle keyframe at current time");
-            } else {
-                btn.on_hover_text("Enable keyframing");
-            }
-
-            ui.label(prop_def.label());
-        });
+        let property = get_property(prop_def.name());
+        let evaluated_value = get_value(prop_def.name());
+        let authored_value = property
+            .as_ref()
+            .filter(|property| property.evaluator == "expression")
+            .and_then(Property::value)
+            .cloned()
+            .or(evaluated_value);
+        let mode_value = authored_value
+            .clone()
+            .unwrap_or_else(|| prop_def.default_value().clone());
+        actions.extend(render_property_authoring(
+            ui,
+            prop_def,
+            property.as_ref(),
+            &mode_value,
+            context.current_time,
+            &context.qa_scope,
+            context.in_grid,
+        ));
 
         // 2. Render Input Column
         match prop_def.ui_type() {
             PropertyUiType::Float { .. } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Float property '{}'",
@@ -250,7 +173,7 @@ where
                 }
             }
             PropertyUiType::Integer { .. } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Integer property '{}'",
@@ -298,7 +221,7 @@ where
                 }
             }
             PropertyUiType::Color => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Color property '{}'",
@@ -407,7 +330,7 @@ where
                 }
             }
             PropertyUiType::Bool => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Bool property '{}'",
@@ -440,7 +363,7 @@ where
                 }
             }
             PropertyUiType::Dropdown { options } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Dropdown property '{}'",
@@ -495,7 +418,7 @@ where
                 }
             }
             PropertyUiType::Font => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Font property '{}'",
@@ -536,7 +459,7 @@ where
                 }
             }
             PropertyUiType::Text | PropertyUiType::MultilineText => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Text property '{}'",
@@ -579,7 +502,7 @@ where
                 }
             }
             PropertyUiType::Vec2 { suffix, .. } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Vec2 property '{}'",
@@ -626,7 +549,7 @@ where
                 }
             }
             PropertyUiType::Vec3 { suffix, .. } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Vec3 property '{}'",
@@ -679,7 +602,7 @@ where
                 }
             }
             PropertyUiType::Vec4 { suffix, .. } => {
-                let val_opt = get_value(prop_def.name());
+                let val_opt = authored_value.clone();
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Vec4 property '{}'",

@@ -4,8 +4,9 @@
 // Action handler is now actively used by mod.rs, effects.rs, and styles.rs
 
 use crate::action::HistoryManager;
-use crate::ui::panels::inspector::properties::PropertyAction;
-use library::model::property::{Property, PropertyValue};
+use crate::ui::panels::inspector::property_authoring::{PropertyAction, PropertyAuthoringMode};
+use library::animation::EasingFunction;
+use library::model::property::{Keyframe, Property, PropertyValue};
 use library::{EditorService, PropertyOwner};
 
 /// Context for handling property actions.
@@ -137,6 +138,51 @@ impl<'a> ActionContext<'a> {
         }
     }
 
+    fn handle_set_mode(
+        &mut self,
+        name: &str,
+        mode: PropertyAuthoringMode,
+        current_value: PropertyValue,
+        get_property: impl Fn(&str) -> Option<Property>,
+    ) -> bool {
+        let current = get_property(name);
+        let replacement =
+            match property_for_mode(current.as_ref(), mode, current_value, self.current_time) {
+                Ok(property) => property,
+                Err(error) => {
+                    log::error!("Failed to change property {name} authoring mode: {error}");
+                    return false;
+                }
+            };
+        match self
+            .project_service
+            .replace_property(self.owner, name, replacement)
+        {
+            Ok(()) => {
+                // A mode selector is an atomic action; capture it immediately.
+                self.handle_commit();
+                true
+            }
+            Err(error) => {
+                log::error!("Failed to replace property {name}: {error}");
+                false
+            }
+        }
+    }
+
+    fn handle_expression_source(&mut self, name: &str, source: String) -> bool {
+        match self
+            .project_service
+            .set_expression_source(self.owner, name, source)
+        {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to update Expression source for {name}: {error}");
+                false
+            }
+        }
+    }
+
     /// Process a list of PropertyActions, handling updates and history commits.
     pub fn handle_actions(
         &mut self,
@@ -158,10 +204,42 @@ impl<'a> ActionContext<'a> {
                 PropertyAction::SetAttribute(name, key, val) => {
                     needs_refresh |= self.handle_set_attribute(&name, &key, val);
                 }
+                PropertyAction::SetMode(name, mode, value) => {
+                    needs_refresh |= self.handle_set_mode(&name, mode, value, &get_property);
+                }
+                PropertyAction::SetExpressionSource(name, source) => {
+                    needs_refresh |= self.handle_expression_source(&name, source);
+                }
             }
         }
         needs_refresh
     }
+}
+
+fn property_for_mode(
+    current: Option<&Property>,
+    mode: PropertyAuthoringMode,
+    current_value: PropertyValue,
+    current_time: f64,
+) -> Result<Property, String> {
+    let authored_value = match current {
+        Some(property) if property.evaluator == "expression" => property
+            .value()
+            .cloned()
+            .ok_or_else(|| "Expression has no authored typed fallback".to_string())?,
+        _ => current_value,
+    };
+    Ok(match mode {
+        PropertyAuthoringMode::Constant => Property::constant(authored_value),
+        PropertyAuthoringMode::Keyframe => Property::keyframe(vec![Keyframe::new(
+            current_time,
+            authored_value,
+            EasingFunction::Linear,
+        )]),
+        PropertyAuthoringMode::Expression => {
+            Property::expression("value".to_string(), authored_value)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -169,11 +247,15 @@ mod tests {
     use super::*;
     use library::cache::CacheManager;
     use library::model::property::PropertyValue;
-    use library::model::{Node, Project};
+    use library::model::{Clip, Node, Project};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
+    use std::error::Error;
+    use std::io;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
+
+    type TestResult = Result<(), Box<dyn Error>>;
 
     fn number(value: f64) -> PropertyValue {
         PropertyValue::Number(OrderedFloat(value))
@@ -279,5 +361,208 @@ mod tests {
         assert_eq!(*project.read().unwrap(), before);
         assert_eq!(history.undo_depth(), initial_depth);
         assert!(node_property(&project.read().unwrap(), node_id, "new_amount").is_none());
+    }
+
+    #[test]
+    fn expression_mode_roundtrip_preserves_its_authored_typed_fallback() -> TestResult {
+        let expression = Property::expression("value * 2".to_string(), number(3.0));
+        let constant = property_for_mode(
+            Some(&expression),
+            PropertyAuthoringMode::Constant,
+            number(999.0),
+            4.0,
+        )
+        .map_err(io::Error::other)?;
+        assert_eq!(constant.evaluator, "constant");
+        assert_eq!(constant.value(), Some(&number(3.0)));
+
+        let keyframed = property_for_mode(
+            Some(&constant),
+            PropertyAuthoringMode::Keyframe,
+            number(8.0),
+            4.0,
+        )
+        .map_err(io::Error::other)?;
+        assert_eq!(keyframed.evaluator, "keyframe");
+        let keyframes = keyframed.keyframes();
+        let keyframe = keyframes
+            .first()
+            .ok_or_else(|| io::Error::other("Keyframe mode created no key"))?;
+        assert_eq!(keyframe.time, OrderedFloat(4.0));
+        assert_eq!(keyframe.value, number(8.0));
+
+        let malformed = Property {
+            evaluator: "expression".to_string(),
+            properties: std::collections::HashMap::from([(
+                "expression".to_string(),
+                PropertyValue::String("1".to_string()),
+            )]),
+        };
+        assert!(property_for_mode(
+            Some(&malformed),
+            PropertyAuthoringMode::Constant,
+            number(1.0),
+            0.0,
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn inspector_authors_expression_source_and_fallback_on_the_project() -> TestResult {
+        let plugins = Arc::new(PluginManager::default());
+        let node = plugins.create_effect_operation_node("blur")?;
+        let node_id = node.id;
+        let mut initial = Project::new("expression authoring");
+        initial.add_node(node);
+        let project = Arc::new(RwLock::new(initial));
+        let mut service =
+            EditorService::new(Arc::clone(&project), plugins, Arc::new(CacheManager::new()))?;
+        let mut history = HistoryManager::new();
+        history.push_project_state(
+            project
+                .read()
+                .map_err(|_| io::Error::other("Project read lock poisoned"))?
+                .clone(),
+        );
+
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.5,
+        );
+        let property_snapshot = |name: &str| {
+            project
+                .read()
+                .ok()
+                .and_then(|project| node_property(&project, node_id, name))
+        };
+        assert!(context.handle_actions(
+            vec![PropertyAction::SetMode(
+                "sigma_x".to_string(),
+                PropertyAuthoringMode::Expression,
+                number(12.0),
+            )],
+            property_snapshot,
+        ));
+        assert!(context.handle_actions(
+            vec![PropertyAction::SetExpressionSource(
+                "sigma_x".to_string(),
+                "value + sin(time)".to_string(),
+            )],
+            property_snapshot,
+        ));
+        assert!(context.handle_actions(
+            vec![PropertyAction::Update("sigma_x".to_string(), number(4.0),)],
+            property_snapshot,
+        ));
+        context.handle_commit();
+
+        let expression = project
+            .read()
+            .ok()
+            .and_then(|project| node_property(&project, node_id, "sigma_x"))
+            .ok_or_else(|| io::Error::other("Expression property disappeared"))?;
+        assert_eq!(expression.evaluator, "expression");
+        assert_eq!(expression.expression_text(), Some("value + sin(time)"));
+        assert_eq!(expression.value(), Some(&number(4.0)));
+
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.5,
+        );
+        assert!(context.handle_actions(
+            vec![PropertyAction::SetMode(
+                "sigma_x".to_string(),
+                PropertyAuthoringMode::Constant,
+                number(999.0),
+            )],
+            |name| {
+                project
+                    .read()
+                    .ok()
+                    .and_then(|project| node_property(&project, node_id, name))
+            },
+        ));
+        let constant = project
+            .read()
+            .ok()
+            .and_then(|project| node_property(&project, node_id, "sigma_x"))
+            .ok_or_else(|| io::Error::other("Constant property disappeared"))?;
+        assert_eq!(constant.evaluator, "constant");
+        assert_eq!(constant.value(), Some(&number(4.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn clip_semantic_inspector_uses_the_same_expression_authoring_action() -> TestResult {
+        let mut clip = Clip::new("semantic clip", 0.0, 5.0);
+        clip.properties
+            .set("amount".to_string(), Property::constant(number(2.0)));
+        let clip_id = clip.id;
+        let mut initial = Project::new("clip expression authoring");
+        initial.add_clip(clip);
+        let project = Arc::new(RwLock::new(initial));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )?;
+        let mut history = HistoryManager::new();
+        history.push_project_state(
+            project
+                .read()
+                .map_err(|_| io::Error::other("Project read lock poisoned"))?
+                .clone(),
+        );
+
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Clip(clip_id),
+            0.5,
+        );
+        let property_snapshot = |name: &str| {
+            project.read().ok().and_then(|project| {
+                project
+                    .get_clip(clip_id)
+                    .and_then(|clip| clip.properties.get(name))
+                    .cloned()
+            })
+        };
+        assert!(context.handle_actions(
+            vec![PropertyAction::SetMode(
+                "amount".to_string(),
+                PropertyAuthoringMode::Expression,
+                number(2.0),
+            )],
+            property_snapshot,
+        ));
+        assert!(context.handle_actions(
+            vec![PropertyAction::SetExpressionSource(
+                "amount".to_string(),
+                "value + time".to_string(),
+            )],
+            property_snapshot,
+        ));
+        assert!(context.handle_actions(
+            vec![PropertyAction::Update("amount".to_string(), number(3.0),)],
+            property_snapshot,
+        ));
+
+        let project = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?;
+        let property = project
+            .get_clip(clip_id)
+            .and_then(|clip| clip.properties.get("amount"))
+            .ok_or_else(|| io::Error::other("Clip Expression property disappeared"))?;
+        assert_eq!(property.evaluator, "expression");
+        assert_eq!(property.expression_text(), Some("value + time"));
+        assert_eq!(property.value(), Some(&number(3.0)));
+        Ok(())
     }
 }

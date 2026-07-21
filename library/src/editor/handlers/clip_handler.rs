@@ -4,10 +4,14 @@ use std::sync::{Arc, RwLock};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-use super::property_ops::{PropertyOwner, set_property_attribute as set_property_attribute_value};
+use super::property_ops::{
+    PropertyOwner, replace_property as replace_property_value,
+    set_expression_source as set_expression_source_value,
+    set_property_attribute as set_property_attribute_value,
+};
 use crate::error::LibraryError;
 use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
-use crate::model::property::PropertyValue;
+use crate::model::property::{Property, PropertyValue};
 use crate::model::{Clip, CompositionInstanceContent, Node, NodeContent};
 
 /// A detached Clip graph prepared by the factory methods on ProjectManager.
@@ -407,6 +411,30 @@ impl ClipHandler {
             attribute_key.to_string(),
             attribute_value,
         )
+    }
+
+    pub fn replace_property(
+        project: &Arc<RwLock<Project>>,
+        owner: PropertyOwner,
+        property_key: &str,
+        property: Property,
+    ) -> Result<(), LibraryError> {
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        replace_property_value(&mut project, owner, property_key, property)
+    }
+
+    pub fn set_expression_source(
+        project: &Arc<RwLock<Project>>,
+        owner: PropertyOwner,
+        property_key: &str,
+        source: String,
+    ) -> Result<(), LibraryError> {
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        set_expression_source_value(&mut project, owner, property_key, source)
     }
 }
 
