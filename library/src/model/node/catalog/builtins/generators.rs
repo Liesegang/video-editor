@@ -24,6 +24,8 @@ const SHAPE_INPUTS: &[PortSpec] = &[
 const SKSL_INPUTS: &[PortSpec] = &[
     PortSpec::single(TIME_PORT, "Time", PortDataType::Number),
     PortSpec::single("shader", "Shader", PortDataType::String),
+    PortSpec::single("width", "Width", PortDataType::Number),
+    PortSpec::single("height", "Height", PortDataType::Number),
 ];
 const IMAGE_OUTPUT: &[PortSpec] = &[PortSpec::single(
     IMAGE_OUTPUT_PORT,

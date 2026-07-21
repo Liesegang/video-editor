@@ -1104,6 +1104,10 @@ SkSL Shader:
       type: Number
     - name: shader
       type: String
+    - name: width
+      type: Number
+    - name: height
+      type: Number
   outputs:
     - name: image
       type: Image

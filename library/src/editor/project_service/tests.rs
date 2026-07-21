@@ -3,13 +3,15 @@ use crate::PropertyOwner;
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
 use crate::model::project::{
-    NodeContainer, NodeGraphBundle, PortAddress, PortOwner, Project, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT,
+    NodeContainer, NodeGraphBundle, PortAddress, PortDataType, PortDirection, PortOwner, Project,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{
     KeyframeUpdate, Property, PropertyDefinition, PropertyUiType, PropertyValue,
 };
-use crate::model::{Clip, Composition, GeneratorContent, Node, NodeContent};
+use crate::model::{
+    Clip, Composition, GeneratorContent, Node, NodeContent, native_node_descriptor_for_node,
+};
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
 use ordered_float::OrderedFloat;
@@ -432,6 +434,86 @@ fn generator_factories_materialize_every_converter_default_and_content_value() {
             panic!("generator {node_id} should survive save/load");
         };
         assert_property_value(node, property_key, expected);
+    }
+}
+
+#[test]
+fn converter_backed_generator_properties_have_typed_catalog_inputs() {
+    let shared = Arc::new(RwLock::new(Project::new("generator catalog contract")));
+    let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+    let nodes = [
+        manager
+            .create_text_node("Text", DEFAULT_TEXT_FONT, 1920, 1080)
+            .expect("Text factory should succeed"),
+        manager
+            .create_shape_node(DEFAULT_SHAPE_PATH, 1920, 1080, 100, 100)
+            .expect("Shape factory should succeed"),
+        manager
+            .create_sksl_node(DEFAULT_SKSL_SHADER, 1920, 1080)
+            .expect("SkSL factory should succeed"),
+        manager
+            .create_solid_node(Color::white(), 1920, 1080)
+            .expect("Solid factory should succeed"),
+    ];
+
+    for node in nodes {
+        let descriptor = native_node_descriptor_for_node(&node)
+            .expect("every native Generator must have a catalog descriptor");
+        let mut property_names = node
+            .properties()
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        property_names.sort_unstable();
+        let mut input_names = descriptor
+            .ports()
+            .iter()
+            .filter(|port| port.direction == PortDirection::Input && port.key != TIME_PORT)
+            .map(|port| port.key.as_str())
+            .collect::<Vec<_>>();
+        input_names.sort_unstable();
+        assert_eq!(
+            input_names,
+            property_names,
+            "{} catalog inputs drifted from its converter-backed properties",
+            descriptor.catalog_id()
+        );
+
+        for port in descriptor
+            .ports()
+            .iter()
+            .filter(|port| port.direction == PortDirection::Input && port.key != TIME_PORT)
+        {
+            let value = node
+                .properties()
+                .get(&port.key)
+                .and_then(Property::value)
+                .expect("catalog property input must reference a materialized property");
+            let expected_type = match (node.content(), port.key.as_str(), value) {
+                (
+                    NodeContent::Generator(GeneratorContent::Shape),
+                    "path",
+                    PropertyValue::String(_),
+                ) => PortDataType::Path,
+                (_, _, PropertyValue::String(_)) => PortDataType::String,
+                (_, _, PropertyValue::Number(_)) => PortDataType::Number,
+                (_, _, PropertyValue::Color(_) | PropertyValue::ColorValue(_)) => {
+                    PortDataType::Color
+                }
+                _ => panic!(
+                    "{} property {} has no asserted graph type for {value:?}",
+                    descriptor.catalog_id(),
+                    port.key
+                ),
+            };
+            assert_eq!(
+                port.data_type,
+                expected_type,
+                "{}.{} catalog type drifted from its runtime property",
+                descriptor.catalog_id(),
+                port.key
+            );
+        }
     }
 }
 
