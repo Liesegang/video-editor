@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "implementation": "cpython",
+  "version": "3.13.14",
+  "gil": "standard",
+  "distribution": "uv-managed",
+  "package_layout": {
+    "manifest": "python-runtime-manifest.json",
+    "stdlib": "python/lib/python3.13",
+    "site_packages": "python/lib/python3.13/site-packages"
+  }
+}

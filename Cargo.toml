@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "plugin-api",
+    "python-runtime",
     "library",
     "app",
 ]

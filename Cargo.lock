@@ -3974,6 +3974,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruvie-python-runtime"
+version = "0.1.0"
+dependencies = [
+ "lru",
+ "pyo3",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
