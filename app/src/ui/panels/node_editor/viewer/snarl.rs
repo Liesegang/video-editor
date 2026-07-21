@@ -187,7 +187,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         &serde_json::json!({
                             "node_id": project_node_id,
                             "selected": selected,
-                            "highlight_style": highlight_metadata.clone(),
+                            "highlight_style": highlight_metadata,
                         }),
                     );
                 }
@@ -825,7 +825,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         &serde_json::json!({
                             "node_id": id,
                             "selected": selected,
-                            "highlight_style": highlight_metadata.clone(),
+                            "highlight_style": highlight_metadata,
                         }),
                     );
                 }

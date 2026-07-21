@@ -56,12 +56,13 @@ use canvas::{
     node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
     node_editor_snarl_style_for, paint_node_editor_canvas_grid, resolve_node_editor_transform,
-    sanitize_node_editor_transform, sanitized_node_editor_scale, screen_stroke_in_graph_units,
+    sanitized_node_editor_scale, screen_stroke_in_graph_units,
 };
 #[cfg(test)]
 use canvas::{
-    node_editor_snarl_style, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
-    NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE,
+    node_editor_snarl_style, sanitize_node_editor_transform, NODE_EDITOR_DETAIL_SCALE,
+    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE,
+    NODE_EDITOR_RESIZE_INTERACTION_SCALE,
 };
 use container_output::{
     container_output_binding_port, container_output_binding_type, container_output_node_id,
