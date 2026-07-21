@@ -422,3 +422,32 @@ fn decorator_can_be_authored_before_the_first_style() -> Result<()> {
     }));
     Ok(())
 }
+
+#[test]
+fn ordinary_backplate_branch_does_not_make_clip_decorator_facade_unusable() -> Result<()> {
+    let fixture = fixture()?;
+    fixture
+        .manager
+        .add_decorator(fixture.transform_id, "backplate")?;
+
+    // A Backplate intentionally creates a second Shape -> Style anchor which
+    // joins the original image at Merge. The semantic facade must discover
+    // anchored Decorator chains independently instead of requiring every
+    // output-reaching Style to share one immediate Shape source.
+    let stack = fixture
+        .manager
+        .semantic_container_decorator_stack(fixture.owner)?;
+    assert_eq!(stack.node_ids().len(), 1, "Backplate remains discoverable");
+
+    let appended = fixture
+        .manager
+        .append_semantic_container_decorator(fixture.owner, "backplate")?;
+    assert!(
+        fixture
+            .manager
+            .semantic_container_decorator_stack(fixture.owner)?
+            .node_ids()
+            .contains(&appended)
+    );
+    Ok(())
+}
