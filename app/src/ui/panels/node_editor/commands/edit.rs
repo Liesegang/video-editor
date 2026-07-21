@@ -33,6 +33,34 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 }
             }
         }
+        NodeEdit::ConnectAtIndex {
+            from,
+            to,
+            canonical_index,
+        } => {
+            if project
+                .connections
+                .iter()
+                .any(|connection| connection.from == from && connection.to == to)
+            {
+                return false;
+            }
+            let mut candidate = project.clone();
+            let connection_id = match candidate.connect_ports(from, to) {
+                Ok(connection_id) => connection_id,
+                Err(error) => {
+                    log::warn!("Cannot connect project ports: {error}");
+                    return false;
+                }
+            };
+            if let Err(error) = candidate.reorder_connection(connection_id, canonical_index as i64)
+            {
+                log::warn!("Cannot place new variadic wire at index {canonical_index}: {error}");
+                return false;
+            }
+            *project = candidate;
+            true
+        }
         NodeEdit::Disconnect { from, to } => project.disconnect_ports(&from, &to),
         NodeEdit::DisconnectConnection { connection_id } => {
             project.disconnect_connection(connection_id)

@@ -6,6 +6,7 @@ use library::model::{BlendMode, NodeContent, Project};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::ui::layer_order::reverse_index;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
@@ -50,7 +51,10 @@ pub(in crate::ui::panels::node_editor) struct MergeLayerRow {
     pub(in crate::ui::panels::node_editor) authored_order: i64,
     pub(in crate::ui::panels::node_editor) authored_blend_mode: BlendMode,
     pub(in crate::ui::panels::node_editor) authored_blend_available: bool,
+    /// Stable index in the canonical persisted/render order (back to front).
     pub(in crate::ui::panels::node_editor) back_to_front_index: usize,
+    /// Physical row index in the Node Editor (front to back, top to bottom).
+    pub(in crate::ui::panels::node_editor) front_to_back_index: usize,
     pub(in crate::ui::panels::node_editor) layer_count: usize,
 }
 
@@ -82,6 +86,9 @@ impl MergeLayerRow {
             "merge_id": self.merge_id,
             "connection_id": self.connection_id,
             "back_to_front_index": self.back_to_front_index,
+            "front_to_back_index": self.front_to_back_index,
+            "visual_index": self.front_to_back_index,
+            "canonical_index": self.back_to_front_index,
             "layer_count": self.layer_count,
             "authored_order": self.authored_order,
             "authored_blend_mode": blend_mode_qa_key(self.authored_blend_mode),
@@ -93,6 +100,8 @@ impl MergeLayerRow {
                 "label": self.source_label,
                 "full_name_available_on_hover": true,
             },
+            "canonical_order_semantics": "back_to_front",
+            "visual_order_semantics": "front_to_back",
             "order_semantics": "back_to_front",
             "blend_ownership": "connection",
             "control_lane": "merge_body",
@@ -145,7 +154,7 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
         .collect::<Vec<_>>();
     connections.sort_by_key(|connection| (connection.order, connection.id));
     let layer_count = connections.len();
-    connections
+    let mut rows = connections
         .into_iter()
         .enumerate()
         .map(|(back_to_front_index, connection)| MergeLayerRow {
@@ -157,9 +166,19 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
             authored_blend_mode: connection.blend_mode,
             authored_blend_available: connection_supports_authored_blend(project, connection),
             back_to_front_index,
+            front_to_back_index: 0,
             layer_count,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    rows.reverse();
+    for (front_to_back_index, row) in rows.iter_mut().enumerate() {
+        debug_assert_eq!(
+            reverse_index(row.back_to_front_index, layer_count),
+            Some(front_to_back_index)
+        );
+        row.front_to_back_index = front_to_back_index;
+    }
+    rows
 }
 
 /// Identify the one input whose variadic connections are projected as
@@ -190,9 +209,10 @@ pub(in crate::ui::panels::node_editor) fn merge_images_target_node_id(
 }
 
 /// Expand only Merge's variadic `images` definition into one physical input
-/// pin per canonical connection plus one vacant append pin. The Project port
-/// remains a single variadic address; this is a view projection, not a second
-/// graph model.
+/// pin per canonical connection plus one vacant back-insertion pin. Connected
+/// rows are physically front-to-back while retaining their canonical logical
+/// indices. The Project port remains a single variadic address; this is a view
+/// projection, not a second graph model.
 pub(in crate::ui::panels::node_editor) fn merge_input_slots(
     project: &Project,
     merge_id: Uuid,

@@ -33,16 +33,17 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
         ),
         GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
     };
-    let merge_connection = target_merge_id.and_then(|merge_id| {
+    let merge_slot = target_merge_id.and_then(|merge_id| {
         merge_input_slots(project, merge_id)
             .get(input_index)
-            .and_then(|slot| match &slot.role {
-                crate::ui::panels::node_editor::MergeInputSlotRole::Connected(row) => {
-                    Some(row.connection_id)
-                }
-                crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
-                | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
-            })
+            .cloned()
+    });
+    let merge_connection = merge_slot.as_ref().and_then(|slot| match &slot.role {
+        crate::ui::panels::node_editor::MergeInputSlotRole::Connected(row) => {
+            Some(row.connection_id)
+        }
+        crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
+        | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
     });
     let input = match target_merge_id {
         Some(merge_id) => merge_input_slots(project, merge_id)
@@ -60,6 +61,20 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
         if let Some(connection_id) = merge_connection {
             return Some(NodeEdit::DisconnectConnection { connection_id });
         }
+    }
+    if connect
+        && merge_slot.as_ref().is_some_and(|slot| {
+            matches!(
+                slot.role,
+                crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages
+            )
+        })
+    {
+        return Some(NodeEdit::ConnectAtIndex {
+            from,
+            to,
+            canonical_index: 0,
+        });
     }
     edit_for_port_addresses(project, from, to, connect)
 }
