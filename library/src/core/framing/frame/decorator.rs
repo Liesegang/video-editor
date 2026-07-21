@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use super::{EvaluationScope, FrameEvaluator, missing_error};
 use crate::model::Node;
 use crate::model::frame::runtime_shape::RuntimeShape;
-use crate::model::project::{BACKGROUND_SHAPE_INPUT_PORT, EvalOutput, EvalResult, PortOwner};
+use crate::model::project::{
+    BACKGROUND_SHAPE_INPUT_PORT, EvalOutput, EvalResult, PortDataType, PortDirection, PortOwner,
+};
 
 impl FrameEvaluator<'_> {
     pub(super) fn apply_decorator_to_shape(
@@ -29,6 +31,25 @@ impl FrameEvaluator<'_> {
             EvalOutput::Produced(shape) => shape,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
+        // The validated persisted contract distinguishes geometry-only v2
+        // from the frozen one-Shape v1 path before plugin code can run.
+        let background = if operation.declared_ports.iter().any(|port| {
+            port.key == BACKGROUND_SHAPE_INPUT_PORT
+                && port.direction == PortDirection::Input
+                && port.data_type == PortDataType::Shape
+        }) {
+            match self.pull_shape_input_from_port(
+                node.id,
+                BACKGROUND_SHAPE_INPUT_PORT,
+                global_time,
+                path,
+            )? {
+                EvalOutput::Produced(shape) => Some(shape),
+                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+            }
+        } else {
+            None
+        };
         let composition = self
             .composition_for_owner(PortOwner::Node(node.id))
             .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
@@ -50,14 +71,8 @@ impl FrameEvaluator<'_> {
                 Ok(EvalOutput::Produced(shape))
             }
             crate::core::ensemble::types::DecoratorConfig::Backplate { .. } => {
-                let background = match self.pull_shape_input_from_port(
-                    node.id,
-                    BACKGROUND_SHAPE_INPUT_PORT,
-                    global_time,
-                    path,
-                )? {
-                    EvalOutput::Produced(shape) => shape,
-                    EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+                let Some(background) = background else {
+                    return Ok(EvalOutput::NoOutput);
                 };
                 Ok(EvalOutput::Produced(shape.into_backplate_geometry(
                     node.id,
