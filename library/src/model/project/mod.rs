@@ -18,8 +18,6 @@ mod path_effect_stack;
 pub mod property;
 mod structural_merge;
 
-pub use error::ProjectGraphError;
-
 pub use connection::{
     AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, ContainerAudioSource, ContainerAudioSourceKind,
     ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
@@ -29,6 +27,7 @@ pub use connection::{
     PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
     RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
+pub use error::ProjectGraphError;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Project {
