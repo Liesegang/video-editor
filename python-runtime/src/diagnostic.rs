@@ -9,8 +9,13 @@ pub enum Phase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DiagnosticKind {
     Parse,
+    UnsupportedSyntax,
+    UnknownName,
+    InvalidArguments,
     TypeMismatch,
+    DivisionByZero,
     NonFinite,
+    ResourceLimit,
     InvalidContext,
     Runtime,
 }

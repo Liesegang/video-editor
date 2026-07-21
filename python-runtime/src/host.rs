@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use lru::LruCache;
-use pyo3::exceptions::{PySyntaxError, PyTypeError};
+use pyo3::exceptions::{PyNameError, PySyntaxError, PyTypeError, PyZeroDivisionError};
 use pyo3::prelude::*;
 use pyo3::types::{
     PyAnyMethods, PyBool, PyCode, PyCodeInput, PyCodeMethods, PyDict, PyDictMethods, PyFloat,
@@ -262,6 +262,7 @@ impl PythonHost {
         let globals = self.base_globals(py)?;
         globals
             .set_item("time", context.time())
+            .and_then(|()| globals.set_item("t", context.time()))
             .and_then(|()| globals.set_item("fps", context.fps()))
             .and_then(|()| globals.set_item("frame", context.frame()))
             .and_then(|()| globals.set_item("frame_index", context.frame()))
@@ -676,6 +677,10 @@ fn diagnostic_from_pyerr(py: Python<'_>, error: &PyErr, source: &str, phase: Pha
     let is_syntax = error.is_instance_of::<PySyntaxError>(py);
     let kind = if is_syntax {
         DiagnosticKind::Parse
+    } else if error.is_instance_of::<PyZeroDivisionError>(py) {
+        DiagnosticKind::DivisionByZero
+    } else if error.is_instance_of::<PyNameError>(py) {
+        DiagnosticKind::UnknownName
     } else if error.is_instance_of::<PyTypeError>(py) {
         DiagnosticKind::TypeMismatch
     } else {
