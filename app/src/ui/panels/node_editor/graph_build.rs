@@ -10,7 +10,7 @@ mod container_outputs;
 use container_outputs::connect_container_output_wires;
 
 use super::{
-    input_definitions, merge_images_target_node_id, merge_input_index_for_connection,
+    input_definitions, merge_input_index_for_connection, native_variadic_merge_target,
     output_definitions, ContainerKind, ContainerVisual, GraphItem, PortAnchorKind,
     CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y, MIN_CONTAINER_SIZE,
 };
@@ -93,8 +93,10 @@ pub(super) fn build_snarl(
         else {
             continue;
         };
-        let input_index = match merge_images_target_node_id(project, &connection.to) {
-            Some(merge_id) => merge_input_index_for_connection(project, merge_id, connection.id),
+        let input_index = match native_variadic_merge_target(project, &connection.to) {
+            Some(target) => {
+                merge_input_index_for_connection(project, target.node_id, connection.id)
+            }
             None => input_definitions(project, target_item)
                 .iter()
                 .position(|input| input.key == connection.to.port),

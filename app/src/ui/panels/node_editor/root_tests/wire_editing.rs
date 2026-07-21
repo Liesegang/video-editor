@@ -339,7 +339,7 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
         rows.iter()
             .map(|row| (
                 row.connection_id,
-                row.back_to_front_index,
+                row.canonical_index,
                 row.authored_order,
                 row.authored_blend_mode,
                 row.source.owner,

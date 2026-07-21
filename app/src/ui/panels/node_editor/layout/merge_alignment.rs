@@ -95,7 +95,7 @@ pub(super) fn merge_anchor_aligned_top(
     // rule; a median would align neither row for an even layer count.
     let front = merge_layer_rows(project, merge_id).into_iter().next()?;
     estimated_source_output_y(project, &front.source, positions, container_output_y)
-        .map(|source_y| source_y - estimated_merge_input_anchor_offset(front.front_to_back_index))
+        .map(|source_y| source_y - estimated_merge_input_anchor_offset(front.visual_index))
 }
 
 fn estimated_source_output_y(

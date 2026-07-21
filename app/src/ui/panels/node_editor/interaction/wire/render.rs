@@ -13,7 +13,7 @@ use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend,
     container_highlight_metadata, container_inactive, container_output_node_id,
     container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
-    merge_images_target_node_id, overview_wire_graph_points, pin_color, qa_container_key,
+    native_variadic_merge_target, overview_wire_graph_points, pin_color, qa_container_key,
     qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
     ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
     RenderedPortKey,
@@ -135,7 +135,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
     let order_states = wire_order_menu_states(project);
     for connection in &project.connections {
         let order = order_states.get(&connection.id).copied();
-        let physical_merge_target = merge_images_target_node_id(project, &connection.to).is_some();
+        let physical_merge_target = native_variadic_merge_target(project, &connection.to).is_some();
         let authored_blend_available = connection_supports_authored_blend(project, connection);
         let edge = register_edge_component(
             EdgeComponent {

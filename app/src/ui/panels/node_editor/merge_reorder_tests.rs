@@ -140,14 +140,14 @@ fn variadic_images_plugin_node() -> Option<Node> {
 }
 
 #[derive(Default)]
-struct RenderedMergeFrame {
-    edits: Vec<QueuedNodeEdit>,
-    layout_edit_count: usize,
-    transform: egui::emath::TSTransform,
-    edges: Vec<RenderedEdge>,
+pub(super) struct RenderedMergeFrame {
+    pub(super) edits: Vec<QueuedNodeEdit>,
+    pub(super) layout_edit_count: usize,
+    pub(super) transform: egui::emath::TSTransform,
+    pub(super) edges: Vec<RenderedEdge>,
 }
 
-fn render_merge_frame(
+pub(super) fn render_merge_frame(
     context: &egui::Context,
     project: &Project,
     composition_id: Uuid,
@@ -224,7 +224,7 @@ fn render_merge_frame(
     result
 }
 
-fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
+pub(super) fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos: position,
         button: egui::PointerButton::Primary,
@@ -241,7 +241,7 @@ fn merge_connections_project_to_distinct_pins_and_disconnect_by_identity() {
         .iter()
         .filter_map(|slot| match &slot.role {
             MergeInputSlotRole::Connected(row) => Some(row.connection_id),
-            MergeInputSlotRole::Canonical | MergeInputSlotRole::VacantImages => None,
+            MergeInputSlotRole::Canonical | MergeInputSlotRole::Vacant(_) => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(connected.len(), 3);
@@ -251,7 +251,7 @@ fn merge_connections_project_to_distinct_pins_and_disconnect_by_identity() {
     );
     assert!(matches!(
         slots.last().map(|slot| &slot.role),
-        Some(MergeInputSlotRole::VacantImages)
+        Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image))
     ));
 
     let (snarl, _) = build_snarl(&project, composition_id);
@@ -532,10 +532,12 @@ fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slo
         .is_ok());
 
     let before_slots = merge_input_slots(&project, merge_id);
-    let Some(vacant_index) = before_slots
-        .iter()
-        .position(|slot| matches!(slot.role, MergeInputSlotRole::VacantImages))
-    else {
+    let Some(vacant_index) = before_slots.iter().position(|slot| {
+        matches!(
+            slot.role,
+            MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image)
+        )
+    }) else {
         return;
     };
     let (snarl, _) = build_snarl(&project, composition_id);
@@ -587,13 +589,13 @@ fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slo
         return;
     };
     assert_eq!(new_back.connection_id, connection_id);
-    assert_eq!(new_back.back_to_front_index, 0);
-    assert_eq!(new_back.front_to_back_index, 3);
+    assert_eq!(new_back.canonical_index, 0);
+    assert_eq!(new_back.visual_index, 3);
     assert!(matches!(
         merge_input_slots(&project, merge_id)
             .last()
             .map(|slot| &slot.role),
-        Some(MergeInputSlotRole::VacantImages)
+        Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image))
     ));
 }
 

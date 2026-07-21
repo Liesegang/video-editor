@@ -359,7 +359,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let merge_connection_id =
             if let (Some(GraphItem::Node(node_id)), Some(slot)) = (item, merge_slot.as_ref()) {
                 match slot.role {
-                    MergeInputSlotRole::Connected(_) | MergeInputSlotRole::VacantImages => {
+                    MergeInputSlotRole::Connected(_) | MergeInputSlotRole::Vacant(_) => {
                         self.show_merge_input_slot(node_id, slot, ui)
                     }
                     MergeInputSlotRole::Canonical => None,
@@ -370,7 +370,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let merge_slot_rendered = merge_slot.as_ref().is_some_and(|slot| {
             matches!(
                 slot.role,
-                MergeInputSlotRole::Connected(_) | MergeInputSlotRole::VacantImages
+                MergeInputSlotRole::Connected(_) | MergeInputSlotRole::Vacant(_)
             )
         });
         if !merge_slot_rendered {

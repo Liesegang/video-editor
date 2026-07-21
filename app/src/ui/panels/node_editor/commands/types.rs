@@ -2,7 +2,7 @@ use crate::state::context_types::{NodeEditorEditableWire, NodeEditorPendingEdit}
 use eframe::egui;
 use library::model::project::{PortAddress, PortOwner};
 use library::model::property::{Property, PropertyValue};
-use library::model::{BlendMode, Node};
+use library::model::{BlendMode, Node, NodeContainer};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -38,6 +38,11 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
     ReorderConnection {
         connection_id: Uuid,
         new_order: i64,
+    },
+    ReorderStructuralChild {
+        container: NodeContainer,
+        child: PortOwner,
+        new_index: usize,
     },
     SpliceExistingNode {
         connection_id: Uuid,
