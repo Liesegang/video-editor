@@ -31,7 +31,6 @@ skia-safe = { version = "0.91.0", features = ["gpu", "gl"] }
 serde_json = "1.0.145"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 sha2 = "0.10"
-egui_dnd = "0.14.0"
 raw-window-handle = "0.6"
 
 [package.metadata.bundle]
