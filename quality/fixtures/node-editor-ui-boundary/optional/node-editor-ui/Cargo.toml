@@ -1,0 +1,11 @@
+[package]
+name = "node-editor-ui"
+version = "0.0.0"
+edition = "2021"
+
+[features]
+default = []
+video-domain = ["dep:library"]
+
+[dependencies]
+library = { path = "../library", optional = true }

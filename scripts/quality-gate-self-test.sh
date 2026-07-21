@@ -22,6 +22,8 @@ RUNTIME_PROPERTY_LOCKFILE="${REPOSITORY_ROOT}/plugins/random_property/Cargo.lock
 QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
 RUST_FILE_SIZE_GATE="${SCRIPT_DIR}/check-rust-file-size.sh"
 RUST_FILE_SIZE_RATCHET="${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
+NODE_EDITOR_BOUNDARY_GATE="${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"
+NODE_EDITOR_BOUNDARY_FIXTURES="${REPOSITORY_ROOT}/quality/fixtures/node-editor-ui-boundary"
 
 if [[ ! -f "${ROOT_LOCKFILE}" ]]; then
     echo "root Cargo.lock is required for reproducible quality gates" >&2
@@ -90,6 +92,27 @@ require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
 require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
 require_gate_command '-u QUALITY_TOOL_ROOT \'
 require_gate_command '"${SCRIPT_DIR}/dependency-audit.sh"'
+
+expect_node_editor_boundary_failure() {
+    local fixture="$1"
+    local log_file="${TEST_LOG_DIR}/node-editor-ui-boundary-${fixture}.log"
+    if "${NODE_EDITOR_BOUNDARY_GATE}" \
+        --root "${NODE_EDITOR_BOUNDARY_FIXTURES}/${fixture}" \
+        >"${log_file}" 2>&1; then
+        echo "Node Editor boundary unexpectedly accepted ${fixture} dependency" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'node-editor-ui must not depend on library' "${log_file}"; then
+        echo "Node Editor ${fixture} boundary fixture failed for the wrong reason" >&2
+        cat "${log_file}" >&2
+        exit 1
+    fi
+}
+
+# Neither a disabled-by-default feature nor a dependency for a non-host target
+# may hide video-domain coupling from the standalone UI boundary.
+expect_node_editor_boundary_failure optional
+expect_node_editor_boundary_failure target-specific
 
 RUST_SIZE_FIXTURE="${TEST_LOG_DIR}/rust-file-size"
 mkdir -p "${RUST_SIZE_FIXTURE}"

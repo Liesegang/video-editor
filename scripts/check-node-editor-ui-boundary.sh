@@ -3,12 +3,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+CHECK_ROOT="${REPOSITORY_ROOT}"
 
-cd "${REPOSITORY_ROOT}"
+if (( $# > 0 )); then
+    if [[ $# -ne 2 || "$1" != "--root" || -z "$2" ]]; then
+        echo "usage: $0 [--root PATH]" >&2
+        exit 2
+    fi
+    CHECK_ROOT="$(cd -- "$2" && pwd)"
+fi
+
+cd "${CHECK_ROOT}"
 
 node_editor_tree="$(
     cargo tree \
         -p node-editor-ui \
+        --all-features \
+        --target all \
         --edges normal,build,dev \
         --locked \
         --prefix none
