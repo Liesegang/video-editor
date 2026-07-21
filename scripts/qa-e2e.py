@@ -671,13 +671,18 @@ class QaClient:
         )
         return start, end
 
-    def key(self, key, pressed, command=False, shift=False):
+    def key(self, key, pressed, command=False, shift=False, alt=False, ctrl=False):
         self.inject(
             "key",
             {
                 "key": key,
                 "pressed": pressed,
-                "modifiers": {"command": command, "shift": shift},
+                "modifiers": {
+                    "command": command,
+                    "shift": shift,
+                    "alt": alt,
+                    "ctrl": ctrl,
+                },
             },
         )
 

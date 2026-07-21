@@ -25,10 +25,26 @@ COMPOSITION = BASE.COMPOSITION
 NODE_TAB = "dock.tab:node_editor"
 TIMELINE_TAB = "dock.tab:timeline"
 SMART_LAYOUT = "node_editor.layout.smart"
+SELECTION_LAYOUT = "node_editor.layout.selection"
+CONTAINER_LAYOUT = "node_editor.layout.container"
+ALL_LAYOUT = "node_editor.layout.all"
 
 
 def execution_id(state):
     return int(state["editor"]["node_editor"]["layout_execution_serial"])
+
+
+def layout_component(client, component_id):
+    snapshot = client.component_snapshot()
+    component = next(
+        (item for item in snapshot["components"] if item["id"] == component_id), None
+    )
+    if component is None:
+        raise QaFailure("layout component {!r} is absent".format(component_id))
+    rect = component["rect_points"]
+    if not component.get("visible", False) or rect["width"] <= 0 or rect["height"] <= 0:
+        raise QaFailure("layout component {!r} is not visible".format(component_id))
+    return snapshot, component
 
 
 def wait_execution(client, previous_id, command, scope):
@@ -50,8 +66,10 @@ def wait_execution(client, previous_id, command, scope):
     return client.wait_until("new {} {} execution".format(scope, command), completed)
 
 
-def inject_layout_icon(client, shift=False):
-    snapshot, component = client.component(SMART_LAYOUT)
+def inject_layout_icon(
+    client, component_id=SMART_LAYOUT, command=False, shift=False, alt=False
+):
+    snapshot, component = layout_component(client, component_id)
     point = client.point(component["rect_points"])
     client.inject(
         "click",
@@ -60,20 +78,81 @@ def inject_layout_icon(client, shift=False):
             "y": point["y"],
             "coordinate_space": "points",
             "button": "primary",
-            "modifiers": {"shift": shift},
+            "modifiers": {"command": command, "shift": shift, "alt": alt},
         },
         {
-            "component_id": SMART_LAYOUT,
+            "component_id": component_id,
             "component_frame": snapshot["frame"],
             "component_rect_points": component["rect_points"],
-            "coordinate_reason": "real TREE_STRUCTURE icon modifier click",
+            "coordinate_reason": "real Node layout icon/modifier click",
         },
     )
 
 
-def inject_layout_key(client, shift=False):
-    client.key("l", True, shift=shift)
-    client.key("l", False, shift=shift)
+def inject_layout_key(client, command=False, shift=False, alt=False):
+    client.key("l", True, command=command, shift=shift, alt=alt)
+    client.key("l", False, command=command, shift=shift, alt=alt)
+
+
+def assert_no_layout_change(client, previous_id, operation, inject):
+    before = client.state()
+    inject()
+    after = client.state()
+    if after["project"] != before["project"]:
+        raise QaFailure("{} mutated Project".format(operation))
+    if after["history"] != before["history"]:
+        raise QaFailure("{} changed history".format(operation))
+    if execution_id(after) != previous_id:
+        raise QaFailure("{} advanced layout execution serial".format(operation))
+
+
+def inject_layout_key_during_middle_pan(client):
+    snapshot, start = BASE.find_free_canvas_point(client)
+    end = {"x": start["x"] + 28.0, "y": start["y"] + 14.0}
+    component_rect = client.component("node_editor.canvas")[1]["rect_points"]
+    client.inject(
+        "press",
+        {
+            "x": start["x"],
+            "y": start["y"],
+            "coordinate_space": "points",
+            "button": "middle",
+        },
+        {
+            "component_id": "node_editor.canvas",
+            "component_frame": snapshot["frame"],
+            "component_rect_points": component_rect,
+            "coordinate_reason": "hold real Node canvas middle-pan gesture",
+        },
+    )
+    try:
+        client.inject(
+            "move",
+            {
+                "x": end["x"],
+                "y": end["y"],
+                "coordinate_space": "points",
+            },
+            {
+                "component_id": "node_editor.canvas",
+                "coordinate_reason": "move while real middle button remains held",
+            },
+        )
+        inject_layout_key(client)
+    finally:
+        client.inject(
+            "release",
+            {
+                "x": end["x"],
+                "y": end["y"],
+                "coordinate_space": "points",
+                "button": "middle",
+            },
+            {
+                "component_id": "node_editor.canvas",
+                "coordinate_reason": "release real Node canvas middle-pan gesture",
+            },
+        )
 
 
 def undo_and_assert_restored(client, before, operation):
@@ -186,15 +265,54 @@ def run_suite(client):
     )
     BASE.activate_dock_tab(client, NODE_TAB, "Node Editor", "layout command QA")
     client.wait_component_settled(SMART_LAYOUT)
-    _, smart = client.component(SMART_LAYOUT)
-    metadata = smart.get("metadata") or {}
-    if metadata.get("command_id") != "node_editor.clean_layout":
-        raise QaFailure("TREE_STRUCTURE command metadata is missing")
-    if metadata.get("label") != "Clean layout" or metadata.get("shortcut") != "L":
-        raise QaFailure("TREE_STRUCTURE accessibility/shortcut metadata is incomplete")
+    expected_controls = {
+        SMART_LAYOUT: ("node_editor.clean_layout", "container", "L"),
+        SELECTION_LAYOUT: (
+            "node_editor.clean_layout.selection",
+            "selection",
+            "Cmd+L" if sys.platform == "darwin" else "Ctrl+L",
+        ),
+        CONTAINER_LAYOUT: (
+            "node_editor.clean_layout.container",
+            "container",
+            "Alt+L",
+        ),
+        ALL_LAYOUT: ("node_editor.clean_layout.all", "all", "Shift+L"),
+    }
+    for component_id, (command_id, scope, shortcut) in expected_controls.items():
+        _, component = layout_component(client, component_id)
+        metadata = component.get("metadata") or {}
+        if metadata.get("presentation") != "icon" or not metadata.get("icon"):
+            raise QaFailure("{} is not an icon control".format(component_id))
+        if metadata.get("command_id") != command_id or metadata.get("scope") != scope:
+            raise QaFailure("{} command/scope metadata is incomplete".format(component_id))
+        if not metadata.get("label") or metadata.get("shortcut") != shortcut:
+            raise QaFailure(
+                "{} accessibility/shortcut metadata is incomplete".format(component_id)
+            )
+
+    # Keep the Selected action discoverable, but disabled and inert until a
+    # Node is selected.
+    _, selection_control = layout_component(client, SELECTION_LAYOUT)
+    if selection_control.get("enabled") is not False:
+        raise QaFailure("selection layout icon should be disabled without selected Nodes")
+    initial_id = execution_id(client.state())
+    assert_no_layout_change(
+        client,
+        initial_id,
+        "disabled selection icon click",
+        lambda: inject_layout_icon(client, SELECTION_LAYOUT),
+    )
 
     ensure_editable_node(client)
+    client.wait_until(
+        "enabled selection layout icon",
+        lambda: component
+        if (component := layout_component(client, SELECTION_LAYOUT)[1]).get("enabled") is True
+        else None,
+    )
     last_id = execution_id(client.state())
+    # Mouse-only smart and explicit scope icons.
     last_id = run_and_undo(
         client,
         last_id,
@@ -206,10 +324,43 @@ def run_suite(client):
     last_id = run_and_undo(
         client,
         last_id,
+        "NodeEditorCleanLayoutSelection",
+        "selection",
+        lambda: inject_layout_icon(client, SELECTION_LAYOUT),
+        selection_only=True,
+    )
+    # Keyboard+mouse scope modifier on the smart icon.
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutSelection",
+        "selection",
+        lambda: inject_layout_icon(client, command=True),
+        selection_only=True,
+    )
+    # Registry-dispatched smart and explicit selection shortcuts.
+    last_id = run_and_undo(
+        client,
+        last_id,
         "NodeEditorCleanLayout",
         "selection",
         lambda: inject_layout_key(client),
         selection_only=True,
+    )
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutSelection",
+        "selection",
+        lambda: inject_layout_key(client, command=True),
+        selection_only=True,
+    )
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutAll",
+        "all",
+        lambda: inject_layout_icon(client, ALL_LAYOUT),
     )
     last_id = run_and_undo(
         client,
@@ -226,13 +377,43 @@ def run_suite(client):
         lambda: inject_layout_key(client, shift=True),
     )
 
+    assert_no_layout_change(
+        client,
+        last_id,
+        "L during real middle-pan gesture",
+        lambda: inject_layout_key_during_middle_pan(client),
+    )
+
     select_current_container(client)
+    _, selection_control = layout_component(client, SELECTION_LAYOUT)
+    if selection_control.get("enabled") is not False:
+        raise QaFailure("selection layout icon stayed enabled for a container selection")
+    assert_no_layout_change(
+        client,
+        last_id,
+        "Cmd-click smart icon without Node selection",
+        lambda: inject_layout_icon(client, command=True),
+    )
     last_id = run_and_undo(
         client,
         last_id,
         "NodeEditorCleanLayout",
         "container",
         lambda: inject_layout_icon(client),
+    )
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutContainer",
+        "container",
+        lambda: inject_layout_icon(client, CONTAINER_LAYOUT),
+    )
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutContainer",
+        "container",
+        lambda: inject_layout_icon(client, alt=True),
     )
 
     # Preserve the stale focused Node Editor, but move the real pointer into
@@ -284,6 +465,13 @@ def run_suite(client):
         "NodeEditorCleanLayout",
         "container",
         lambda: inject_layout_key(client),
+    )
+    last_id = run_and_undo(
+        client,
+        last_id,
+        "NodeEditorCleanLayoutContainer",
+        "container",
+        lambda: inject_layout_key(client, alt=True),
     )
 
     BASE.activate_dock_tab(client, TIMELINE_TAB, "Timeline", "layout scope guard")
