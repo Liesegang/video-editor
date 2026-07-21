@@ -392,8 +392,8 @@ unsafe extern "C" fn test_free_buffer(_context: *mut std::ffi::c_void, buffer: R
     unsafe { ruvie_plugin_api::free_owned_buffer(buffer) };
 }
 
-include!("descriptor.rs");
-include!("appearance.rs");
-include!("registration.rs");
-include!("abi_frames.rs");
-include!("cache.rs");
+mod abi_frames;
+mod appearance;
+mod cache;
+mod descriptor;
+mod registration;
