@@ -25,6 +25,8 @@ use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::property_mode::property_for_mode;
 
+mod stack_controls;
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the semantic Clip projection needs the same timing and authoring context as exact Node properties"
@@ -52,6 +54,14 @@ pub(super) fn render(
 
     let root = ui.scope(|ui| {
         render_stack_diagnostics(ui, clip.id, &stack);
+        stack_controls::render(
+            ui,
+            clip.id,
+            &stack,
+            project_service,
+            history_manager,
+            needs_refresh,
+        );
         for section in stack.sections() {
             if section.group() == SemanticPropertyGroup::Timing {
                 let response = ui.scope(|ui| {
