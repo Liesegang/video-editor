@@ -4,10 +4,25 @@ use ruvie_plugin_api::{
     PROPERTY_EVALUATE_V1, PropertyEvaluateRequestV1, PropertyEvaluateResponseV1,
 };
 
-use crate::model::property::{Property, PropertyValue};
+use super::super::abi::RuntimeComponent;
+use super::super::property_wire::{property_value_from_wire, property_value_to_wire};
+use crate::model::property::{Property, PropertyDefinition, PropertyValue};
 use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluationError, PropertyEvaluator};
+pub(in crate::plugin::runtime_native) struct RuntimePropertyEvaluator {
+    pub(in crate::plugin::runtime_native) component: RuntimeComponent,
+    pub(in crate::plugin::runtime_native) definitions: Vec<PropertyDefinition>,
+    pub(in crate::plugin::runtime_native) output_default: PropertyValue,
+}
 
-use super::{RuntimePropertyEvaluator, property_value_from_wire, property_value_to_wire};
+impl RuntimePropertyEvaluator {
+    pub(super) fn fallback(&self, detail: impl std::fmt::Display) -> PropertyValue {
+        log::error!(
+            "Runtime property evaluator '{}' failed: {detail}",
+            self.component.descriptor.id
+        );
+        self.output_default.clone()
+    }
+}
 
 impl PropertyEvaluator for RuntimePropertyEvaluator {
     fn evaluate(

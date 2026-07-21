@@ -7,20 +7,24 @@ use ruvie_plugin_api::{
     DecoratorTargetV2, InsetsV1, InsetsV2,
 };
 
-use super::{RuntimeComponent, color_from_wire, parse_semver_triplet, resolved_config_properties};
+use super::{parse_semver_triplet, resolved_config_properties};
 use crate::error::LibraryError;
 use crate::model::property::PropertyDefinition;
 use crate::plugin::entity_converter::FrameEvaluationContext;
+use crate::plugin::runtime_native::abi::RuntimeComponent;
+use crate::plugin::runtime_native::property_wire::color_from_wire;
 use crate::plugin::{DecoratorPlugin, Plugin};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RuntimeDecoratorProtocol {
+pub(in crate::plugin::runtime_native) enum RuntimeDecoratorProtocol {
     V1,
     V2,
 }
 
 impl RuntimeDecoratorProtocol {
-    pub(super) fn negotiate(descriptor: &ComponentDescriptorV1) -> Option<Self> {
+    pub(in crate::plugin::runtime_native) fn negotiate(
+        descriptor: &ComponentDescriptorV1,
+    ) -> Option<Self> {
         if descriptor
             .operations
             .iter()
@@ -39,10 +43,10 @@ impl RuntimeDecoratorProtocol {
     }
 }
 
-pub(super) struct RuntimeDecoratorPlugin {
-    pub(super) component: RuntimeComponent,
-    pub(super) definitions: Vec<PropertyDefinition>,
-    pub(super) protocol: RuntimeDecoratorProtocol,
+pub(in crate::plugin::runtime_native) struct RuntimeDecoratorPlugin {
+    pub(in crate::plugin::runtime_native) component: RuntimeComponent,
+    pub(in crate::plugin::runtime_native) definitions: Vec<PropertyDefinition>,
+    pub(in crate::plugin::runtime_native) protocol: RuntimeDecoratorProtocol,
 }
 
 impl Plugin for RuntimeDecoratorPlugin {
@@ -153,7 +157,7 @@ fn safe_decorator_config_from_response(
     }
 }
 
-pub(super) fn decorator_config_from_response(
+pub(in crate::plugin::runtime_native) fn decorator_config_from_response(
     response: serde_json::Value,
 ) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
     let output = serde_json::from_value(response).map_err(|error| {
@@ -206,7 +210,7 @@ fn decorator_config_from_wire(
     }))
 }
 
-pub(super) fn safe_decorator_config_from_response_v2(
+pub(in crate::plugin::runtime_native) fn safe_decorator_config_from_response_v2(
     response: serde_json::Value,
     operation_label: &str,
 ) -> Option<crate::core::ensemble::types::DecoratorConfig> {
@@ -219,7 +223,7 @@ pub(super) fn safe_decorator_config_from_response_v2(
     }
 }
 
-pub(super) fn decorator_config_from_response_v2(
+pub(in crate::plugin::runtime_native) fn decorator_config_from_response_v2(
     response: serde_json::Value,
 ) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
     let output = serde_json::from_value(response).map_err(|error| {
@@ -228,7 +232,7 @@ pub(super) fn decorator_config_from_response_v2(
     decorator_config_from_wire_v2(output)
 }
 
-pub(super) fn decorator_config_from_wire_v2(
+pub(in crate::plugin::runtime_native) fn decorator_config_from_wire_v2(
     output: DecoratorOutputV2,
 ) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
     use crate::core::ensemble::decorators::{BackplateFit, BackplateTarget};
