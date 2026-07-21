@@ -1,6 +1,4 @@
-use super::{
-    EntityConverterPlugin, FrameEvaluationContext, raster_source_transform_property_definitions,
-};
+use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::{GeneratorContent, NodeContent};
@@ -39,26 +37,17 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
 
     fn get_property_definitions(
         &self,
-        canvas_width: u64,
-        canvas_height: u64,
-        clip_width: u64,
-        clip_height: u64,
+        _canvas_width: u64,
+        _canvas_height: u64,
+        _clip_width: u64,
+        _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        let mut definitions = raster_source_transform_property_definitions(
-            canvas_width,
-            canvas_height,
-            clip_width,
-            clip_height,
-        );
-        definitions.push(crate::model::property::PropertyDefinition::new(
+        vec![crate::model::property::PropertyDefinition::new(
             "color",
             crate::model::property::PropertyUiType::Color,
             "Color",
-            crate::model::property::PropertyValue::Color(
-                crate::model::frame::color::Color::white(),
-            ),
-        ));
-        definitions
+            crate::model::property::PropertyValue::Color(crate::model::frame::color::Color::white()),
+        )]
     }
 
     fn convert_entity(
@@ -71,15 +60,14 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
             return None;
         };
         let eval_time = time;
-        let transform = evaluator.build_transform(node.properties(), eval_time);
         let color = evaluator.require_color(node.properties(), "color", eval_time, "solid")?;
         let (width, height) = evaluator.evaluation_resolution();
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
 
         Some(FrameObject {
             source_node_id: node.id,
-            spatial_transform_node_id: Some(node.id),
-            spatial_transform: Box::new(transform.clone()),
+            spatial_transform_node_id: None,
+            spatial_transform: Box::default(),
             content_bounds: Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
             content: FrameContent::Shape {
                 path,
@@ -90,7 +78,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
                 path_effects: Vec::new(),
                 effects: Vec::new(),
                 ensemble: None,
-                transform,
+                transform: Default::default(),
             },
         })
     }

@@ -819,7 +819,7 @@ impl<'a> FrameEvaluator<'a> {
         scope: EvaluationScope,
         global_time: f64,
         path: &mut HashSet<PortOwner>,
-        inputs: &ResolvedNodeInputs,
+        _inputs: &ResolvedNodeInputs,
     ) -> EvalResult<FrameItem> {
         let owner = PortOwner::Node(node.id);
         let target = PortAddress::new(owner, MERGE_IMAGES_PORT);
@@ -886,17 +886,13 @@ impl<'a> FrameEvaluator<'a> {
         if items.is_empty() {
             return Ok(EvalOutput::NoOutput);
         }
-        let composition = self
-            .composition_for_owner(owner)
-            .ok_or_else(|| missing_error(owner))?;
-        let context = self.context(composition, Some(inputs));
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Merge,
             width: scope.width,
             height: scope.height,
             background_color: transparent(),
-            transform: context.build_transform(node.properties(), scope.time),
+            transform: Default::default(),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),

@@ -36,69 +36,12 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
 
     fn get_property_definitions(
         &self,
-        canvas_width: u64,
-        canvas_height: u64,
-        clip_width: u64,
-        clip_height: u64,
+        _canvas_width: u64,
+        _canvas_height: u64,
+        _clip_width: u64,
+        _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
-        use ordered_float::OrderedFloat;
-
-        vec![
-            PropertyDefinition::new(
-                "position",
-                PropertyUiType::vec2("px"),
-                "Position",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "scale",
-                PropertyUiType::vec2_with_range(0.0, 1_000.0, 0.1, "%", true, false),
-                "Scale",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "rotation",
-                PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Rotation",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "anchor",
-                PropertyUiType::vec2("px"),
-                "Anchor",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(clip_width as f64 / 2.0),
-                    y: OrderedFloat(clip_height as f64 / 2.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "opacity",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Opacity",
-                PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        ]
+        Vec::new()
     }
 
     fn convert_entity(
@@ -115,20 +58,18 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         let file_path = asset
             .map(|asset| asset.path.clone())
             .or_else(|| evaluator.require_string(props, "file_path", time, "image"))?;
-        let transform = evaluator.build_transform(props, time);
-
         let surface = ImageSurface {
             file_path,
             effects: Vec::new(),
-            transform: transform.clone(),
+            transform: Default::default(),
             input_color_space: None,
             output_color_space: None,
         };
 
         Some(FrameObject {
             source_node_id: node.id,
-            spatial_transform_node_id: Some(node.id),
-            spatial_transform: Box::new(transform),
+            spatial_transform_node_id: None,
+            spatial_transform: Box::default(),
             content_bounds: asset.and_then(|asset| match (asset.width, asset.height) {
                 (Some(width), Some(height)) => {
                     Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32))

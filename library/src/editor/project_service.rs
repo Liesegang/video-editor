@@ -23,6 +23,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 mod property_evaluation;
+mod raster_source_graph;
 
 pub const DEFAULT_TEXT_FONT: &str = "Arial";
 pub const DEFAULT_SHAPE_PATH: &str =
@@ -625,7 +626,16 @@ impl ProjectManager {
             media_height,
         )?;
 
-        Ok(ClipBundle::with_av_node(clip, node))
+        let audio_output_node_id = node.id;
+        let graph = self.create_image_source_graph(
+            node,
+            u64::from(canvas_width),
+            u64::from(canvas_height),
+            media_width,
+            media_height,
+        )?;
+        clip.audio_output_node_id = Some(audio_output_node_id);
+        Ok(ClipBundle { clip, graph })
     }
 
     pub fn create_image_clip(
@@ -649,10 +659,16 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle::with_image_node(
-            Clip::new("Image Clip", start_time, duration),
-            node,
-        ))
+        Ok(ClipBundle {
+            clip: Clip::new("Image Clip", start_time, duration),
+            graph: self.create_image_source_graph(
+                node,
+                u64::from(canvas_width),
+                u64::from(canvas_height),
+                u64::from(canvas_width),
+                u64::from(canvas_height),
+            )?,
+        })
     }
 
     pub fn create_text_clip(
@@ -710,10 +726,16 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle::with_image_node(
-            Clip::new("SkSL Clip", start_time, duration),
-            node,
-        ))
+        Ok(ClipBundle {
+            clip: Clip::new("SkSL Clip", start_time, duration),
+            graph: self.create_image_source_graph(
+                node,
+                u64::from(canvas_width),
+                u64::from(canvas_height),
+                u64::from(canvas_width),
+                u64::from(canvas_height),
+            )?,
+        })
     }
 
     pub fn create_composition_instance_clip(
@@ -726,10 +748,11 @@ impl ProjectManager {
             "Composition Instance",
             CompositionInstanceContent { composition_id },
         );
-        Ok(ClipBundle::with_av_node(
-            Clip::new("Composition Instance Clip", start_time, duration),
-            node,
-        ))
+        let audio_output_node_id = node.id;
+        let graph = self.create_image_source_graph(node, 0, 0, 0, 0)?;
+        let mut clip = Clip::new("Composition Instance Clip", start_time, duration);
+        clip.audio_output_node_id = Some(audio_output_node_id);
+        Ok(ClipBundle { clip, graph })
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -1811,7 +1834,7 @@ mod keyframe_tests {
         );
         assert_property_value(&solid_node, "color", PropertyValue::Color(color.clone()));
 
-        for node in [&text_node, &shape_node] {
+        for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
             for detached_property in ["position", "scale", "rotation", "anchor", "opacity"] {
                 assert!(
                     node.properties().get(detached_property).is_none(),
@@ -1820,14 +1843,6 @@ mod keyframe_tests {
                 );
             }
         }
-        for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
-            assert!(
-                sksl_node.properties().get(required_transform).is_some(),
-                "{} omitted {required_transform}",
-                sksl_node.name
-            );
-        }
-
         for (node, expected_kind) in [
             (&text_node, "Text"),
             (&shape_node, "Shape"),
@@ -1936,11 +1951,19 @@ mod keyframe_tests {
         let Ok(sksl_bundle) = manager.create_sksl_clip(0.0, 1.0, 640, 480) else {
             panic!("SkSL clip factory should succeed");
         };
-        let Some(clip_sksl) = sksl_bundle.primary_node() else {
-            panic!("SkSL clip should have one output node");
-        };
-        assert_eq!(clip_sksl.content(), direct_sksl.content());
+        let clip_sksl = sksl_bundle
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.content() == direct_sksl.content())
+            .expect("SkSL clip must retain the bare Image source");
         assert_eq!(clip_sksl.properties(), direct_sksl.properties());
+        assert!(matches!(
+            sksl_bundle.primary_node().map(Node::content),
+            Some(NodeContent::PluginOperation(_))
+        ));
+        assert_eq!(sksl_bundle.graph.nodes.len(), 2);
+        assert_eq!(sksl_bundle.graph.connections.len(), 1);
     }
 
     fn manager_with_empty_clip() -> (Arc<RwLock<Project>>, ProjectManager, Uuid, Uuid) {

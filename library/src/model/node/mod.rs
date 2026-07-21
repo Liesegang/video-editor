@@ -672,8 +672,9 @@ pub enum GeneratorContent {
 #[serde(deny_unknown_fields)]
 pub struct CompositionInstanceContent {
     /// Stable identity of the top-level Composition definition evaluated by
-    /// this placement. Timing and transforms remain owned by the containing
-    /// Clip/Node; the referenced definition is never nested or reparented.
+    /// this placement. Timing remains owned by the containing Clip, while
+    /// spatial placement belongs to a downstream Image Transform operation;
+    /// the referenced definition is never nested or reparented.
     pub composition_id: Uuid,
 }
 
