@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod property_authoring;
 mod property_evaluation;
 mod raster_source_graph;
 
@@ -1012,24 +1013,6 @@ impl ProjectManager {
             &self.project,
             track_id,
             clip_id,
-        )
-    }
-
-    pub fn update_property_or_keyframe(
-        &self,
-        owner: PropertyOwner,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_property_or_keyframe(
-            &self.project,
-            owner,
-            property_key,
-            time,
-            value,
-            easing,
         )
     }
 

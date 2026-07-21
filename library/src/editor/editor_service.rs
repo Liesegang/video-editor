@@ -9,7 +9,7 @@ use crate::error::LibraryError;
 use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
 use crate::model::project::{Composition, NodeGraphBundle, Project};
-use crate::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
+use crate::model::property::{KeyframeId, KeyframeUpdate, Property, PropertyValue};
 use crate::model::{Node, Track};
 use crate::plugin::PluginManager;
 use std::rc::Rc;
@@ -600,6 +600,26 @@ impl EditorService {
     ) -> Result<(), LibraryError> {
         self.project_manager
             .update_property_or_keyframe(owner, property_key, time, value, easing)
+    }
+
+    pub fn replace_property(
+        &self,
+        owner: PropertyOwner,
+        property_key: &str,
+        property: Property,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .replace_property(owner, property_key, property)
+    }
+
+    pub fn set_expression_source(
+        &self,
+        owner: PropertyOwner,
+        property_key: &str,
+        source: String,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .set_expression_source(owner, property_key, source)
     }
 
     pub fn update_keyframe_by_id(

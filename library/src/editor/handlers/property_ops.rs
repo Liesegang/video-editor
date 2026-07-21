@@ -187,6 +187,29 @@ pub(crate) fn set_property_attribute(
     }
 }
 
+pub(crate) fn set_expression_source(
+    project: &mut Project,
+    owner: PropertyOwner,
+    property_key: &str,
+    source: String,
+) -> Result<(), LibraryError> {
+    let property = property_map(project, owner)?
+        .get(property_key)
+        .ok_or_else(|| missing_property(owner, property_key))?;
+    if property.evaluator != "expression" {
+        return Err(LibraryError::Project(format!(
+            "Property {property_key} on {owner:?} is not in Expression mode"
+        )));
+    }
+    set_property_attribute(
+        project,
+        owner,
+        property_key,
+        "expression".to_string(),
+        PropertyValue::String(source),
+    )
+}
+
 fn missing_property(owner: PropertyOwner, property_key: &str) -> LibraryError {
     LibraryError::Project(format!("Property {property_key} not found on {owner:?}"))
 }

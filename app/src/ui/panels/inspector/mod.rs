@@ -27,6 +27,7 @@ pub mod action_handler;
 mod evaluation;
 mod presentation;
 pub mod properties;
+mod property_authoring;
 mod property_inference;
 
 use action_handler::ActionContext;
@@ -1292,8 +1293,7 @@ fn render_node(
         needs_refresh,
     );
 
-    // A directly selected Node is a focused view of that authoritative Node.
-    // Appearance and processing are separate operation Nodes and are exposed
+    // A directly selected Node is a focused view; appearance and processing are separate operation Nodes exposed
     // by the owning Clip/Track/Composition facade, never by legacy embedded
     // arrays that would create a second write path.
 }
