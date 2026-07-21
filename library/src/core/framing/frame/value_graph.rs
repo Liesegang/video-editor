@@ -120,12 +120,14 @@ impl FrameEvaluator<'_> {
                 return Err(cycle_error(source.owner));
             }
             let result = (|| {
-                let input = node.bypass_input_for_output(&source.port).ok_or_else(|| {
-                    LibraryError::Validation(format!(
-                        "Node {} cannot bypass output {:?}: no unambiguous same-typed input",
-                        node.id, source.port
-                    ))
-                })?;
+                let Some(input) = node.bypass_input_for_output(&source.port) else {
+                    log::warn!(
+                        "Node {} has an invalid bypass flag for output {:?}; producing NoOutput",
+                        node.id,
+                        source.port
+                    );
+                    return Ok(EvalOutput::NoOutput);
+                };
                 let target = PortAddress::new(source.owner, input);
                 let connection = match self.single_connection_to(&target)? {
                     EvalOutput::Produced(connection) => connection,
@@ -158,6 +160,11 @@ impl FrameEvaluator<'_> {
             && matches!(source_node.map(Node::content), Some(NodeContent::Value(_)))
         {
             return self.evaluate_value_node_output(node_id, &source.port, global_time, path);
+        }
+        if let PortOwner::Node(node_id) = source.owner
+            && matches!(source_node.map(Node::content), Some(NodeContent::List(_)))
+        {
+            return self.evaluate_list_node_output(node_id, &source.port, global_time, path);
         }
         if let PortOwner::Node(node_id) = source.owner
             && matches!(
