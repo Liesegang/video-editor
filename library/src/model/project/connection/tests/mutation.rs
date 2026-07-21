@@ -576,3 +576,58 @@ fn splice_rejects_occupied_single_input_and_any_validation_failure_without_mutat
     ));
     assert_eq!(project, before_invalid);
 }
+
+#[test]
+fn required_image_and_sound_edges_reject_direct_disconnect_but_child_removal_repairs_atomically() {
+    let mut project = Project::new("required typed structural mutation");
+    let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+    let track_id = track.id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    let clip = Clip::new("clip", 0.0, 1.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    let track = project.get_track(track_id).unwrap();
+    let required_ids = [
+        (
+            track.structural_merge_node_id,
+            IMAGE_OUTPUT_PORT,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            track.structural_sound_merge_node_id,
+            AUDIO_OUTPUT_PORT,
+            MERGE_SOUNDS_PORT,
+        ),
+    ]
+    .map(|(merge_id, source_port, target_port)| {
+        project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from == PortAddress::new(PortOwner::Clip(clip_id), source_port)
+                    && connection.to == PortAddress::new(PortOwner::Node(merge_id), target_port)
+            })
+            .unwrap()
+            .id
+    });
+
+    for connection_id in required_ids {
+        let before = project.clone();
+        assert!(!project.disconnect_connection(connection_id));
+        assert_eq!(project, before);
+    }
+    let before_batch = project.clone();
+    assert_eq!(project.disconnect_connections(required_ids), 0);
+    assert_eq!(project, before_batch);
+
+    assert!(project.remove_clip(clip_id).is_some());
+    assert!(project.validate_connections().is_empty());
+    assert!(
+        project
+            .connections
+            .iter()
+            .all(|connection| connection.from.owner != PortOwner::Clip(clip_id))
+    );
+}

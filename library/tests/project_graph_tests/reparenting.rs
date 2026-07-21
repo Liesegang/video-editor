@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use library::model::project::{
-    DURATION_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortDataType,
-    PortDefinition, PortOwner, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT,
-    TIME_PORT,
+    DURATION_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NodeContainer,
+    PortDataType, PortDefinition, PortOwner, Project, ProjectConnection, ProjectGraphError,
+    RESOLUTION_PORT, TIME_PORT,
 };
 use library::model::{BlendMode, Composition, Node, Track};
 use uuid::Uuid;
@@ -362,7 +362,10 @@ fn same_parent_reorder_preserves_metadata_connections_and_output_binding() -> Re
         assert_eq!(current.from, original.from);
         assert_eq!(current.to, original.to);
         assert_eq!(current.blend_mode, original.blend_mode);
-        if original.to.port != MERGE_IMAGES_PORT {
+        if !matches!(
+            original.to.port.as_str(),
+            MERGE_IMAGES_PORT | MERGE_SOUNDS_PORT
+        ) {
             assert_eq!(current.order, original.order);
         }
     }

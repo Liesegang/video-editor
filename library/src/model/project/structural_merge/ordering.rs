@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use uuid::Uuid;
 
@@ -19,19 +19,13 @@ impl Project {
     pub(super) fn reorder_structural_children_for(
         &mut self,
         container: NodeContainer,
-        inserted_connection_id: Option<Uuid>,
+        _inserted_connection_id: Option<Uuid>,
         kind: StructuralMergeKind,
     ) {
         let Some(target) = self.structural_merge_target_for(container, kind) else {
             return;
         };
-        let inserted_connection_id = inserted_connection_id.filter(|id| {
-            self.connections
-                .iter()
-                .any(|connection| connection.id == *id && connection.to == target)
-        });
         let children = self.structural_child_owners(container);
-        let child_set = children.iter().copied().collect::<HashSet<_>>();
         let mut ordered_ids = self
             .connections
             .iter()
@@ -43,66 +37,15 @@ impl Project {
             .into_iter()
             .map(|(_, id)| id)
             .collect::<Vec<_>>();
-
-        if let Some(inserted_id) = inserted_connection_id {
-            let child_for_insert = self
-                .connections
-                .iter()
-                .find(|connection| connection.id == inserted_id)
-                .map(|connection| connection.from.owner);
-            if let Some(child_index) = child_for_insert
-                .and_then(|child| children.iter().position(|candidate| *candidate == child))
-            {
-                ordered_ids.retain(|id| *id != inserted_id);
-                let insertion_index = children[..child_index]
-                    .iter()
-                    .rev()
-                    .find_map(|neighbor| {
-                        self.structural_connection_id(&target, *neighbor)
-                            .and_then(|id| {
-                                ordered_ids.iter().position(|candidate| *candidate == id)
-                            })
-                            .map(|index| index + 1)
-                    })
-                    .or_else(|| {
-                        children[child_index + 1..].iter().find_map(|neighbor| {
-                            self.structural_connection_id(&target, *neighbor)
-                                .and_then(|id| {
-                                    ordered_ids.iter().position(|candidate| *candidate == id)
-                                })
-                        })
-                    })
-                    .unwrap_or(ordered_ids.len());
-                ordered_ids.insert(insertion_index.min(ordered_ids.len()), inserted_id);
-            }
-        }
-
-        let connection_child = self
-            .connections
-            .iter()
-            .filter(|connection| connection.to == target)
-            .map(|connection| (connection.id, connection.from.owner))
-            .collect::<HashMap<_, _>>();
-        let managed_slots = ordered_ids
-            .iter()
-            .enumerate()
-            .filter_map(|(index, id)| {
-                connection_child
-                    .get(id)
-                    .is_some_and(|owner| child_set.contains(owner))
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
         let desired_ids = children
             .iter()
             .filter_map(|child| self.structural_connection_id(&target, *child))
             .collect::<Vec<_>>();
-        if managed_slots.len() == desired_ids.len() {
-            for (slot, id) in managed_slots.into_iter().zip(desired_ids) {
-                ordered_ids[slot] = id;
-            }
-        }
-        self.assign_target_orders(&ordered_ids);
+        let desired_set = desired_ids.iter().copied().collect::<HashSet<_>>();
+        ordered_ids.retain(|id| !desired_set.contains(id));
+        let mut canonical_ids = desired_ids;
+        canonical_ids.extend(ordered_ids);
+        self.assign_target_orders(&canonical_ids);
     }
 
     pub(in crate::model::project) fn sync_child_order_from_structural_target(

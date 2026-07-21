@@ -64,10 +64,39 @@ fn container_insertion_places_typed_structural_merges_without_overlap() {
     project.add_track(track).unwrap();
     project.add_composition(composition).unwrap();
 
-    for (image_merge_id, sound_merge_id) in [
+    let composition = project.get_composition(composition_id).unwrap();
+    let track = project.get_track(track_id).unwrap();
+    let contains = |outer_position: [f32; 2],
+                    outer_size: [f32; 2],
+                    inner_position: [f32; 2],
+                    inner_size: [f32; 2]| {
+        inner_position[0] >= outer_position[0]
+            && inner_position[1] >= outer_position[1]
+            && inner_position[0] + inner_size[0] <= outer_position[0] + outer_size[0]
+            && inner_position[1] + inner_size[1] <= outer_position[1] + outer_size[1]
+    };
+    let overlaps = |left_position: [f32; 2],
+                    left_size: [f32; 2],
+                    right_position: [f32; 2],
+                    right_size: [f32; 2]| {
+        left_position[0] < right_position[0] + right_size[0]
+            && left_position[0] + left_size[0] > right_position[0]
+            && left_position[1] < right_position[1] + right_size[1]
+            && left_position[1] + left_size[1] > right_position[1]
+    };
+    assert!(contains(
+        composition.ui_position,
+        composition.ui_size,
+        track.ui_position,
+        track.ui_size,
+    ));
+
+    for (container_position, container_size, image_merge_id, sound_merge_id) in [
         {
             let track = project.get_track(track_id).unwrap();
             (
+                track.ui_position,
+                track.ui_size,
                 track.structural_merge_node_id,
                 track.structural_sound_merge_node_id,
             )
@@ -75,6 +104,8 @@ fn container_insertion_places_typed_structural_merges_without_overlap() {
         {
             let composition = project.get_composition(composition_id).unwrap();
             (
+                composition.ui_position,
+                composition.ui_size,
                 composition.structural_merge_node_id,
                 composition.structural_sound_merge_node_id,
             )
@@ -82,11 +113,139 @@ fn container_insertion_places_typed_structural_merges_without_overlap() {
     ] {
         let image_merge = project.get_node(image_merge_id).unwrap();
         let sound_merge = project.get_node(sound_merge_id).unwrap();
+        assert!(contains(
+            container_position,
+            container_size,
+            image_merge.ui_position,
+            image_merge.ui_size,
+        ));
+        assert!(contains(
+            container_position,
+            container_size,
+            sound_merge.ui_position,
+            sound_merge.ui_size,
+        ));
         assert_eq!(image_merge.ui_position[0], sound_merge.ui_position[0]);
         assert!(
             image_merge.ui_position[1] + image_merge.ui_size[1] < sound_merge.ui_position[1],
             "model insertion must place Sound Merge below Image Merge before the UI opens"
         );
+    }
+
+    for merge_id in [
+        composition.structural_merge_node_id,
+        composition.structural_sound_merge_node_id,
+    ] {
+        let merge = project.get_node(merge_id).unwrap();
+        assert!(!overlaps(
+            track.ui_position,
+            track.ui_size,
+            merge.ui_position,
+            merge.ui_size,
+        ));
+        assert!(
+            track.ui_position[0] + track.ui_size[0] < merge.ui_position[0],
+            "both typed Track -> Composition structural edges must run left-to-right"
+        );
+    }
+}
+
+#[test]
+fn structural_validation_reports_missing_duplicate_and_noncanonical_typed_edges() {
+    let mut project = Project::new("malformed structural edges");
+    let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
+    let track_id = track.id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+    for name in ["First", "Second"] {
+        let clip = Clip::new(name, 0.0, 1.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+    }
+    assert!(project.validate_connections().is_empty());
+    let track = project.get_track(track_id).unwrap();
+    let first_child = PortOwner::Clip(track.clip_ids[0]);
+    for (merge_id, source_port, target_port) in [
+        (
+            track.structural_merge_node_id,
+            IMAGE_OUTPUT_PORT,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            track.structural_sound_merge_node_id,
+            AUDIO_OUTPUT_PORT,
+            MERGE_SOUNDS_PORT,
+        ),
+    ] {
+        let target = PortAddress::new(PortOwner::Node(merge_id), target_port);
+        let edge = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from == PortAddress::new(first_child, source_port)
+                    && connection.to == target
+            })
+            .unwrap()
+            .clone();
+
+        let mut missing = project.clone();
+        missing
+            .connections
+            .retain(|connection| connection.id != edge.id);
+        assert!(missing.validate_connections().contains(
+            &ProjectGraphError::MissingStructuralEdge {
+                container: NodeContainer::Track(track_id),
+                node_id: merge_id,
+                child: first_child,
+            }
+        ));
+
+        let mut duplicate = project.clone();
+        let mut duplicate_edge = edge.clone();
+        duplicate_edge.id = Uuid::new_v4();
+        duplicate_edge.order = duplicate.connections.len() as i64;
+        duplicate.connections.push(duplicate_edge);
+        assert!(duplicate.validate_connections().contains(
+            &ProjectGraphError::DuplicateStructuralChildEdge {
+                container: NodeContainer::Track(track_id),
+                node_id: merge_id,
+                child: first_child,
+            }
+        ));
+
+        let mut wrong_order = project.clone();
+        wrong_order
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == edge.id)
+            .unwrap()
+            .order = 7;
+        assert!(wrong_order.validate_connections().contains(
+            &ProjectGraphError::StructuralOrderMismatch {
+                container: NodeContainer::Track(track_id),
+                node_id: merge_id,
+                child: first_child,
+                expected_order: 0,
+                actual_order: 7,
+            }
+        ));
+
+        let mut wrong_source_port = project.clone();
+        wrong_source_port
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == edge.id)
+            .unwrap()
+            .from
+            .port = "not_the_typed_output".to_string();
+        assert!(wrong_source_port.validate_connections().contains(
+            &ProjectGraphError::MissingStructuralEdge {
+                container: NodeContainer::Track(track_id),
+                node_id: merge_id,
+                child: first_child,
+            }
+        ));
     }
 }
 

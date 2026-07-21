@@ -212,7 +212,7 @@ fn collision_and_invalid_output_insertion_are_atomic() -> Result<()> {
 }
 
 #[test]
-fn timeline_reorder_preserves_edge_identity_blend_and_custom_input_slots() -> Result<()> {
+fn timeline_reorder_preserves_edge_identity_and_keeps_custom_inputs_after_children() -> Result<()> {
     let (mut project, _, track_id) = one_track_project()?;
     let a = add_clip(&mut project, track_id, "A")?;
     let b = add_clip(&mut project, track_id, "B")?;
@@ -223,7 +223,12 @@ fn timeline_reorder_preserves_edge_identity_blend_and_custom_input_slots() -> Re
         address(PortOwner::Node(custom), IMAGE_OUTPUT_PORT),
         target.clone(),
     )?;
-    project.reorder_connection(custom_id, 1)?;
+    let before_invalid_custom_reorder = project.clone();
+    assert!(matches!(
+        project.reorder_connection(custom_id, 1),
+        Err(ProjectGraphError::StructuralOrderMismatch { .. })
+    ));
+    assert_eq!(project, before_invalid_custom_reorder);
 
     let edge_ids = [a, b, c]
         .into_iter()
@@ -254,9 +259,9 @@ fn timeline_reorder_preserves_edge_identity_blend_and_custom_input_slots() -> Re
             .collect::<Vec<_>>(),
         vec![
             PortOwner::Clip(c),
-            PortOwner::Node(custom),
             PortOwner::Clip(a),
             PortOwner::Clip(b),
+            PortOwner::Node(custom),
         ]
     );
     for clip_id in [a, b, c] {
@@ -277,7 +282,7 @@ fn timeline_reorder_preserves_edge_identity_blend_and_custom_input_slots() -> Re
 }
 
 #[test]
-fn deleted_structural_edge_stays_deleted_across_timeline_mutations() -> Result<()> {
+fn required_structural_edge_rejects_direct_deletion_across_timeline_mutations() -> Result<()> {
     let (mut project, _, track_id) = one_track_project()?;
     let a = add_clip(&mut project, track_id, "A")?;
     let b = add_clip(&mut project, track_id, "B")?;
@@ -286,7 +291,9 @@ fn deleted_structural_edge_stays_deleted_across_timeline_mutations() -> Result<(
     let deleted_id = direct_child_edge(&project, &target, PortOwner::Clip(b))
         .context("structural edge selected for deletion is missing")?
         .id;
-    assert!(project.disconnect_connection(deleted_id));
+    let before_delete = project.clone();
+    assert!(!project.disconnect_connection(deleted_id));
+    assert_eq!(project, before_delete);
 
     project.attach_clip_to_track_at(track_id, c, Some(0))?;
     let d = Clip::new("D", 0.0, 5.0);
@@ -301,19 +308,19 @@ fn deleted_structural_edge_stays_deleted_across_timeline_mutations() -> Result<(
             .clip_ids,
         vec![c, d_id, a, b]
     );
-    assert!(direct_child_edge(&project, &target, PortOwner::Clip(b)).is_none());
+    assert!(direct_child_edge(&project, &target, PortOwner::Clip(b)).is_some());
     assert!(direct_child_edge(&project, &target, PortOwner::Clip(d_id)).is_some());
     assert!(
         project
             .connections
             .iter()
-            .all(|connection| connection.id != deleted_id)
+            .any(|connection| connection.id == deleted_id)
     );
     Ok(())
 }
 
 #[test]
-fn cross_parent_moves_retarget_existing_edges_and_missing_edges_get_fresh_defaults() -> Result<()> {
+fn cross_parent_moves_retarget_existing_required_edges_atomically() -> Result<()> {
     let (mut project, _, first_track, second_track) = two_track_project()?;
     let clip_id = add_clip(&mut project, first_track, "moving Clip")?;
     let first_target = structural_target(&project, NodeContainer::Track(first_track))?;
@@ -330,20 +337,22 @@ fn cross_parent_moves_retarget_existing_edges_and_missing_edges_get_fresh_defaul
     assert_eq!(moved.blend_mode, BlendMode::Screen);
     assert!(direct_child_edge(&project, &first_target, PortOwner::Clip(clip_id)).is_none());
 
-    assert!(project.disconnect_connection(original_id));
+    let before_delete = project.clone();
+    assert!(!project.disconnect_connection(original_id));
+    assert_eq!(project, before_delete);
     project.attach_clip_to_track(first_track, clip_id)?;
-    let recreated = direct_child_edge(&project, &first_target, PortOwner::Clip(clip_id))
-        .context("recreated structural edge is missing")?;
-    assert_ne!(recreated.id, original_id);
-    assert_eq!(recreated.blend_mode, BlendMode::Normal);
+    let returned = direct_child_edge(&project, &first_target, PortOwner::Clip(clip_id))
+        .context("returned structural edge is missing")?;
+    assert_eq!(returned.id, original_id);
+    assert_eq!(returned.blend_mode, BlendMode::Screen);
+    assert!(project.validate_connections().is_empty());
     Ok(())
 }
 
 #[test]
-fn reconnect_connect_splice_disconnect_and_reorder_keep_structural_target_consistent() -> Result<()>
-{
+fn direct_reconnect_splice_and_disconnect_of_required_edges_are_atomic() -> Result<()> {
     let (mut project, _, first_track, second_track) = two_track_project()?;
-    let a = add_clip(&mut project, first_track, "A")?;
+    let _a = add_clip(&mut project, first_track, "A")?;
     let b = add_clip(&mut project, first_track, "B")?;
     let first_target = structural_target(&project, NodeContainer::Track(first_track))?;
     let second_target = structural_target(&project, NodeContainer::Track(second_track))?;
@@ -351,93 +360,37 @@ fn reconnect_connect_splice_disconnect_and_reorder_keep_structural_target_consis
     let b_edge = direct_child_edge(&project, &first_target, PortOwner::Clip(b))
         .context("second Clip structural edge is missing")?
         .id;
-    assert!(project.disconnect_connection(b_edge));
-    let custom = add_merge_node(
-        &mut project,
-        NodeContainer::Track(first_track),
-        "manual wire source",
-    )?;
-    let manual_id = project.connect_ports(
-        address(PortOwner::Node(custom), IMAGE_OUTPUT_PORT),
-        first_target.clone(),
-    )?;
-    project.reconnect_connection(
-        manual_id,
-        address(PortOwner::Clip(b), IMAGE_OUTPUT_PORT),
-        first_target.clone(),
-    )?;
-    assert_eq!(
-        target_inputs(&project, &first_target)
-            .iter()
-            .map(|connection| connection.from.owner)
-            .collect::<Vec<_>>(),
-        vec![PortOwner::Clip(a), PortOwner::Clip(b)]
-    );
-    assert_eq!(
-        project
-            .get_track(first_track)
-            .context("first Track is missing")?
-            .clip_ids,
-        vec![a, b]
-    );
+    let before_disconnect = project.clone();
+    assert!(!project.disconnect_connection(b_edge));
+    assert_eq!(project, before_disconnect);
 
-    project.set_connection_blend_mode(manual_id, BlendMode::Overlay)?;
-    project.reconnect_connection(
-        manual_id,
-        address(PortOwner::Clip(b), IMAGE_OUTPUT_PORT),
-        second_target.clone(),
-    )?;
-    assert!(direct_child_edge(&project, &first_target, PortOwner::Clip(b)).is_none());
-    assert_eq!(
-        direct_child_edge(&project, &second_target, PortOwner::Clip(b))
-            .context("reconnected second Track edge is missing")?
-            .id,
-        manual_id
-    );
-    project.attach_clip_to_track(second_track, b)?;
-    let adopted = direct_child_edge(&project, &second_target, PortOwner::Clip(b))
-        .context("adopted structural edge is missing")?;
-    assert_eq!(adopted.id, manual_id);
-    assert_eq!(adopted.blend_mode, BlendMode::Overlay);
+    let before_reconnect = project.clone();
+    assert!(matches!(
+        project.reconnect_connection(
+            b_edge,
+            address(PortOwner::Clip(b), IMAGE_OUTPUT_PORT),
+            second_target,
+        ),
+        Err(ProjectGraphError::MissingStructuralEdge { .. })
+    ));
+    assert_eq!(project, before_reconnect);
 
     let via = add_merge_node(
         &mut project,
-        NodeContainer::Track(second_track),
+        NodeContainer::Track(first_track),
         "spliced Merge",
     )?;
-    let upstream_id = project.splice_connection(
-        manual_id,
-        address(PortOwner::Node(via), MERGE_IMAGES_PORT),
-        address(PortOwner::Node(via), IMAGE_OUTPUT_PORT),
-    )?;
-    let downstream = project
-        .connections
-        .iter()
-        .find(|connection| connection.id == manual_id)
-        .context("spliced downstream structural edge is missing")?;
-    assert_eq!(downstream.from.owner, PortOwner::Node(via));
-    assert_eq!(downstream.to, second_target);
-    assert_eq!(downstream.blend_mode, BlendMode::Overlay);
-    assert!(direct_child_edge(&project, &second_target, PortOwner::Clip(b)).is_none());
-    assert_eq!(
-        project
-            .get_track(second_track)
-            .context("second Track is missing")?
-            .clip_ids,
-        vec![b]
-    );
-
-    project.reorder_connection(manual_id, 0)?;
-    assert_eq!(
-        project
-            .get_track(second_track)
-            .context("second Track disappeared after reorder")?
-            .clip_ids,
-        vec![b]
-    );
-    assert!(project.disconnect_connection(upstream_id));
-    project.attach_clip_to_track_at(second_track, b, Some(0))?;
-    assert!(direct_child_edge(&project, &second_target, PortOwner::Clip(b)).is_none());
+    let before_splice = project.clone();
+    assert!(matches!(
+        project.splice_connection(
+            b_edge,
+            address(PortOwner::Node(via), MERGE_IMAGES_PORT),
+            address(PortOwner::Node(via), IMAGE_OUTPUT_PORT),
+        ),
+        Err(ProjectGraphError::MissingStructuralEdge { .. })
+    ));
+    assert_eq!(project, before_splice);
+    assert!(project.validate_connections().is_empty());
     Ok(())
 }
 
@@ -467,9 +420,6 @@ fn removing_children_normalizes_orders_and_structural_nodes_require_container_de
         address(PortOwner::Node(custom_two), IMAGE_OUTPUT_PORT),
         target.clone(),
     )?;
-    project.reorder_connection(custom_one_id, 1)?;
-    project.reorder_connection(custom_two_id, 3)?;
-
     project
         .remove_clip(b)
         .context("removed Clip is missing from the Project")?;

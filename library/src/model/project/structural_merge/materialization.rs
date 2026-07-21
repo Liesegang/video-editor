@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::super::{
     NodeContainer, PortAddress, PortOwner, Project, ProjectConnection, ProjectGraphError,
 };
-use super::contract::{StructuralMergeKind, structural_merge_node, structural_sound_merge_node};
+use super::contract::{StructuralMergeKind, StructuralMergePairSpec, structural_merge_pair};
 use crate::model::{Clip, Composition, Track};
 
 impl Project {
@@ -83,16 +83,22 @@ impl Project {
         }
 
         let container = NodeContainer::Composition(composition.id);
-        let structural_merge = structural_merge_node(
-            composition.structural_merge_node_id,
-            "Composition Merge",
-            composition.ui_position,
-        );
-        let structural_sound_merge = structural_sound_merge_node(
-            composition.structural_sound_merge_node_id,
-            "Composition Sound Merge",
-            composition.ui_position,
-        );
+        let after_child_right = composition
+            .track_ids
+            .iter()
+            .filter_map(|track_id| self.get_track(*track_id))
+            .map(|track| track.ui_position[0] + track.ui_size[0])
+            .max_by(f32::total_cmp);
+        let (structural_merge, structural_sound_merge) =
+            structural_merge_pair(StructuralMergePairSpec {
+                image_id: composition.structural_merge_node_id,
+                image_name: "Composition Merge",
+                sound_id: composition.structural_sound_merge_node_id,
+                sound_name: "Composition Sound Merge",
+                container_position: composition.ui_position,
+                container_size: composition.ui_size,
+                after_child_right,
+            });
         let child_ids = composition.track_ids.clone();
         self.nodes.insert(structural_merge.id, structural_merge);
         self.nodes
@@ -174,16 +180,16 @@ impl Project {
         }
 
         let container = NodeContainer::Track(track.id);
-        let structural_merge = structural_merge_node(
-            track.structural_merge_node_id,
-            "Track Merge",
-            track.ui_position,
-        );
-        let structural_sound_merge = structural_sound_merge_node(
-            track.structural_sound_merge_node_id,
-            "Track Sound Merge",
-            track.ui_position,
-        );
+        let (structural_merge, structural_sound_merge) =
+            structural_merge_pair(StructuralMergePairSpec {
+                image_id: track.structural_merge_node_id,
+                image_name: "Track Merge",
+                sound_id: track.structural_sound_merge_node_id,
+                sound_name: "Track Sound Merge",
+                container_position: track.ui_position,
+                container_size: track.ui_size,
+                after_child_right: None,
+            });
         let child_ids = track.clip_ids.clone();
         let track_id = track.id;
         self.nodes.insert(structural_merge.id, structural_merge);
@@ -298,7 +304,7 @@ impl Project {
                     .map(|connection| connection.id),
             );
         }
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
     }
 
     fn create_default_structural_edge(&mut self, container: NodeContainer, child: PortOwner) {

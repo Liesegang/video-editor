@@ -80,19 +80,33 @@ impl Project {
         let Some(target) = self.structural_merge_target_for(container, kind) else {
             return;
         };
-        for child in self.structural_child_owners(container) {
+        let children = self.structural_child_owners(container);
+        for (expected_order, child) in children.into_iter().enumerate() {
             let source = PortAddress::new(child, kind.source_port());
-            if self
+            let matching = self
                 .connections
                 .iter()
                 .filter(|connection| connection.to == target && connection.from == source)
-                .count()
-                > 1
-            {
+                .collect::<Vec<_>>();
+            if matching.is_empty() {
+                errors.push(ProjectGraphError::MissingStructuralEdge {
+                    container,
+                    node_id,
+                    child,
+                });
+            } else if matching.len() > 1 {
                 errors.push(ProjectGraphError::DuplicateStructuralChildEdge {
                     container,
                     node_id,
                     child,
+                });
+            } else if matching[0].order != expected_order as i64 {
+                errors.push(ProjectGraphError::StructuralOrderMismatch {
+                    container,
+                    node_id,
+                    child,
+                    expected_order: expected_order as i64,
+                    actual_order: matching[0].order,
                 });
             }
         }

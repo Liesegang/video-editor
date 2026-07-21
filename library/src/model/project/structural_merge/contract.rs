@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::super::{
-    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NodeContainer,
-    PortAddress, PortDataType, PortDirection, PortOwner, Project, ProjectConnection,
+    AUDIO_OUTPUT_PORT, DEFAULT_GRAPH_CONTENT_INSET, DEFAULT_GRAPH_ITEM_GAP, IMAGE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NodeContainer, PortAddress, PortDataType, PortDirection,
+    PortOwner, Project, ProjectConnection, ProjectGraphError,
 };
 use crate::model::{Node, NodeContent};
 
@@ -89,6 +90,19 @@ impl Project {
             })
     }
 
+    pub(crate) fn structural_sound_merge_owner(&self, node_id: Uuid) -> Option<NodeContainer> {
+        self.compositions
+            .iter()
+            .find(|composition| composition.structural_sound_merge_node_id == node_id)
+            .map(|composition| NodeContainer::Composition(composition.id))
+            .or_else(|| {
+                self.tracks
+                    .values()
+                    .find(|track| track.structural_sound_merge_node_id == node_id)
+                    .map(|track| NodeContainer::Track(track.id))
+            })
+    }
+
     pub(in crate::model::project) fn structural_merge_is_well_formed(
         &self,
         container: NodeContainer,
@@ -96,10 +110,7 @@ impl Project {
         self.structural_merge_is_well_formed_for(container, StructuralMergeKind::Image)
     }
 
-    pub(in crate::model::project) fn structural_sound_merge_is_well_formed(
-        &self,
-        container: NodeContainer,
-    ) -> bool {
+    pub(crate) fn structural_sound_merge_is_well_formed(&self, container: NodeContainer) -> bool {
         self.structural_merge_is_well_formed_for(container, StructuralMergeKind::Sound)
     }
 
@@ -112,10 +123,42 @@ impl Project {
             return false;
         };
         let owner = container_owner(container);
-        self.container_directly_contains_node(owner, node_id)
-            && self
+        if !self.container_directly_contains_node(owner, node_id)
+            || !self
                 .get_node(node_id)
                 .is_some_and(|node| kind.node_matches(node))
+        {
+            return false;
+        }
+        let Some(target) = self.structural_merge_target_for(container, kind) else {
+            return false;
+        };
+        if !self
+            .port_definition(&target, PortDirection::Input)
+            .is_some_and(|definition| {
+                definition.data_type == kind.data_type()
+                    && definition.multiplicity == super::super::PortMultiplicity::Variadic
+            })
+        {
+            return false;
+        }
+        let children = self.structural_child_owners(container);
+        let mut inputs = self
+            .connections
+            .iter()
+            .filter(|connection| connection.to == target)
+            .collect::<Vec<_>>();
+        inputs.sort_by_key(|connection| (connection.order, connection.id));
+        inputs.len() >= children.len()
+            && children.into_iter().zip(inputs).enumerate().all(
+                |(expected_order, (child, connection))| {
+                    connection.from == PortAddress::new(child, kind.source_port())
+                        && connection.order == expected_order as i64
+                        && self
+                            .port_definition(&connection.from, PortDirection::Output)
+                            .is_some_and(|definition| definition.data_type == kind.data_type())
+                },
+            )
     }
 
     pub(in crate::model::project) fn structural_merge_reaches_output(
@@ -275,37 +318,69 @@ impl Project {
                     .map(|track| NodeContainer::Track(track.id))
             })
     }
+
+    pub(in crate::model::project) fn structural_custom_insertion_error(
+        &self,
+        target: &PortAddress,
+        source: &PortAddress,
+        insertion_order: usize,
+    ) -> Option<ProjectGraphError> {
+        let container = self.container_for_structural_target(target)?;
+        let source_port = match target.port.as_str() {
+            MERGE_IMAGES_PORT => IMAGE_OUTPUT_PORT,
+            MERGE_SOUNDS_PORT => AUDIO_OUTPUT_PORT,
+            _ => return None,
+        };
+        let children = self.structural_child_owners(container);
+        if children
+            .iter()
+            .any(|child| *source == PortAddress::new(*child, source_port))
+            || insertion_order >= children.len()
+        {
+            return None;
+        }
+        let PortOwner::Node(node_id) = target.owner else {
+            return None;
+        };
+        Some(ProjectGraphError::StructuralOrderMismatch {
+            container,
+            node_id,
+            child: children[insertion_order],
+            expected_order: insertion_order as i64,
+            actual_order: insertion_order as i64 + 1,
+        })
+    }
 }
 
-const STRUCTURAL_NODE_LEFT_INSET: f32 = 80.0;
-const STRUCTURAL_NODE_TOP_INSET: f32 = 80.0;
-const STRUCTURAL_NODE_ROW_GAP: f32 = 40.0;
-
-pub(super) fn structural_merge_node(id: Uuid, name: &str, container_position: [f32; 2]) -> Node {
-    let mut node = Node::new_merge(name);
-    node.id = id;
-    node.ui_position = [
-        container_position[0] + STRUCTURAL_NODE_LEFT_INSET,
-        container_position[1] + STRUCTURAL_NODE_TOP_INSET,
-    ];
-    node
+pub(super) struct StructuralMergePairSpec<'a> {
+    pub(super) image_id: Uuid,
+    pub(super) image_name: &'a str,
+    pub(super) sound_id: Uuid,
+    pub(super) sound_name: &'a str,
+    pub(super) container_position: [f32; 2],
+    pub(super) container_size: [f32; 2],
+    pub(super) after_child_right: Option<f32>,
 }
 
-pub(super) fn structural_sound_merge_node(
-    id: Uuid,
-    name: &str,
-    container_position: [f32; 2],
-) -> Node {
-    let mut node = Node::new_sound_merge(name);
-    node.id = id;
-    node.ui_position = [
-        container_position[0] + STRUCTURAL_NODE_LEFT_INSET,
-        container_position[1]
-            + STRUCTURAL_NODE_TOP_INSET
-            + node.ui_size[1]
-            + STRUCTURAL_NODE_ROW_GAP,
-    ];
-    node
+pub(super) fn structural_merge_pair(spec: StructuralMergePairSpec<'_>) -> (Node, Node) {
+    let mut image = Node::new_merge(spec.image_name);
+    image.id = spec.image_id;
+    let container_left = spec.container_position[0];
+    let minimum_left = container_left + DEFAULT_GRAPH_CONTENT_INSET;
+    let maximum_left =
+        (container_left + spec.container_size[0] - DEFAULT_GRAPH_CONTENT_INSET - image.ui_size[0])
+            .max(minimum_left);
+    let left = spec
+        .after_child_right
+        .map_or(maximum_left, |right| right + DEFAULT_GRAPH_ITEM_GAP)
+        .clamp(minimum_left, maximum_left);
+    let top = spec.container_position[1] + DEFAULT_GRAPH_CONTENT_INSET;
+    image.ui_position = [left, top];
+
+    let mut sound = Node::new_sound_merge(spec.sound_name);
+    sound.id = spec.sound_id;
+    sound.ui_position = [left, top + image.ui_size[1] + DEFAULT_GRAPH_ITEM_GAP];
+    (image, sound)
 }
 
 pub(super) fn container_owner(container: NodeContainer) -> PortOwner {

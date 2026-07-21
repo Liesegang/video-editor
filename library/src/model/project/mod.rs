@@ -32,6 +32,12 @@ pub use connection::{
 };
 pub use error::ProjectGraphError;
 
+/// Compact model-owned defaults used before the Node Editor has ever opened.
+/// UI auto-layout may refine these positions, but startup state must already
+/// be contained, non-overlapping, and left-to-right routable.
+pub(crate) const DEFAULT_GRAPH_CONTENT_INSET: f32 = 56.0;
+pub(crate) const DEFAULT_GRAPH_ITEM_GAP: f32 = 24.0;
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Project {
     pub name: String,
@@ -198,7 +204,8 @@ impl Composition {
     }
 
     pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, Track) {
-        let first_track = Track::new("Track 1");
+        let mut first_track = Track::new("Track 1");
+        first_track.ui_position = [DEFAULT_GRAPH_CONTENT_INSET, DEFAULT_GRAPH_CONTENT_INSET];
         let structural_merge_node_id = Uuid::new_v4();
         let structural_sound_merge_node_id = Uuid::new_v4();
         (
@@ -420,6 +427,11 @@ impl Project {
             .iter()
             .map(|connection| connection.id)
             .collect::<HashSet<_>>();
+        let affected_connection_targets = graph
+            .connections
+            .iter()
+            .map(|connection| connection.to.clone())
+            .collect::<HashSet<_>>();
         let mut connection_ids = HashSet::new();
         for connection in &graph.connections {
             if !connection_ids.insert(connection.id) {
@@ -463,6 +475,7 @@ impl Project {
             .min(container_node_ids.len());
         container_node_ids.splice(insert_index..insert_index, bundled_node_ids);
         candidate.connections.extend(graph.connections);
+        candidate.normalize_connection_orders_for_targets(&affected_connection_targets);
         if let Some(output_node_id) = graph.output_node_id {
             candidate.set_output_node(container, Some(output_node_id))?;
         }
@@ -1069,7 +1082,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         self.nodes.remove(&node_id)
     }
 
@@ -1085,7 +1098,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         for node_id in clip.node_ids.clone() {
             self.remove_node_unchecked(node_id);
         }
@@ -1104,7 +1117,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         for clip_id in track.clip_ids.clone() {
             self.remove_clip(clip_id);
         }
@@ -1144,7 +1157,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         Some(composition)
     }
 

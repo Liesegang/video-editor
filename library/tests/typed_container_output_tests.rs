@@ -228,7 +228,19 @@ fn detach_and_reparent_clear_source_bindings_and_preserve_destination_bindings()
         PortAddress::new(PortOwner::Node(second_video_id), IMAGE_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(track_merge_id), MERGE_IMAGES_PORT),
     )?;
-    project.set_audio_output_node(NodeContainer::Track(track_id), Some(second_video_id))?;
+    let track_sound_merge_id = project
+        .get_track(track_id)
+        .context("Track disappeared")?
+        .structural_sound_merge_node_id;
+    assert_eq!(
+        project.set_audio_output_node(NodeContainer::Track(track_id), Some(second_video_id)),
+        Err(ProjectGraphError::StructuralMergeDoesNotReachOutput {
+            container: NodeContainer::Track(track_id),
+            node_id: track_sound_merge_id,
+            output_node_id: second_video_id,
+        }),
+        "Track Sound output cannot bypass its structural Sound Merge"
+    );
 
     project.attach_node_to_container(NodeContainer::Track(track_id), first_video)?;
     let clip = project.get_clip(clip_id).context("Clip disappeared")?;
@@ -236,12 +248,12 @@ fn detach_and_reparent_clear_source_bindings_and_preserve_destination_bindings()
     assert_eq!(clip.audio_output_node_id, None);
     let track = project.get_track(track_id).context("Track disappeared")?;
     assert_eq!(track.output_node_id, Some(track_merge_id));
-    assert_eq!(track.audio_output_node_id, Some(second_video_id));
+    assert_eq!(track.audio_output_node_id, Some(track_sound_merge_id));
 
     assert!(project.detach_node(second_video_id));
     let track = project.get_track(track_id).context("Track disappeared")?;
     assert_eq!(track.output_node_id, Some(track_merge_id));
-    assert_eq!(track.audio_output_node_id, None);
+    assert_eq!(track.audio_output_node_id, Some(track_sound_merge_id));
     Ok(())
 }
 

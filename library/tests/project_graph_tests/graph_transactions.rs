@@ -179,7 +179,7 @@ fn node_graph_bundle_commit_and_structural_failure_are_atomic() -> Result<()> {
         .iter()
         .find(|connection| connection.id == connection_id)
         .context("bundled connection must be committed")?;
-    assert_eq!(inserted_connection.order, 3);
+    assert_eq!(inserted_connection.order, 0);
     assert!(project.validate_connections().is_empty());
     Ok(())
 }
@@ -232,7 +232,11 @@ fn containment_is_exact_and_reparenting_does_not_duplicate_ownership() -> Result
         .context("first Track must exist")?;
     assert_eq!(
         first_track.node_ids,
-        vec![first_track.structural_merge_node_id, node_id]
+        vec![
+            first_track.structural_merge_node_id,
+            first_track.structural_sound_merge_node_id,
+            node_id,
+        ]
     );
     assert_eq!(
         project.find_node_container(node_id),

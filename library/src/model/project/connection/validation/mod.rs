@@ -35,12 +35,28 @@ impl Project {
                     })
                 }
                 PortMultiplicity::Variadic => {
-                    inputs.sort_by_key(|item| item.order);
+                    inputs.sort_by_key(|item| (item.order, item.id));
                     for pair in inputs.windows(2) {
                         if pair[0].order == pair[1].order {
                             errors.push(ProjectGraphError::DuplicateConnectionOrder {
                                 target: target.clone(),
                                 order: pair[0].order,
+                            });
+                        }
+                    }
+                    let mut sources = HashSet::new();
+                    for (expected_order, input) in inputs.into_iter().enumerate() {
+                        if input.order != expected_order as i64 {
+                            errors.push(ProjectGraphError::NonCanonicalConnectionOrder {
+                                target: target.clone(),
+                                expected_order: expected_order as i64,
+                                actual_order: input.order,
+                            });
+                        }
+                        if !sources.insert(&input.from) {
+                            errors.push(ProjectGraphError::DuplicateVariadicConnection {
+                                target: target.clone(),
+                                from: input.from.clone(),
                             });
                         }
                     }
