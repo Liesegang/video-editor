@@ -2,8 +2,9 @@ use crate::ui::widgets::searchable_context_menu::SearchableItem;
 use library::model::{Node, Project, ValueContent};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
-    EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_TRANSFORM_COMPONENT_ID,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
+    TRANSFORM_CATEGORY,
 };
 use uuid::Uuid;
 
@@ -15,7 +16,8 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
     Solid,
     Shape,
     SkSL,
-    Transform,
+    ShapeTransform,
+    ImageTransform,
     Value(ValueContent),
     Style(String),
     Effector(String),
@@ -34,7 +36,8 @@ impl NodeCreateRequest {
             Self::Solid => "solid",
             Self::Shape => "shape",
             Self::SkSL => "sksl",
-            Self::Transform => "transform",
+            Self::ShapeTransform => "transform",
+            Self::ImageTransform => "image_transform",
             Self::Value(value) => value.operation_key(),
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
@@ -133,21 +136,28 @@ fn plugin_operation_menu_item(
 
 fn transform_operation_menu_item(
     plugin_manager: &PluginManager,
+    component_id: &'static str,
+    menu_category: &'static str,
+    qa_id: &'static str,
+    request: NodeCreateRequest,
+    content_keyword: &'static str,
 ) -> Option<SearchableItem<NodeCreateRequest>> {
     let descriptor = match plugin_manager.operation_descriptor(
         TRANSFORM_CATEGORY,
-        SHAPE_TRANSFORM_COMPONENT_ID,
+        component_id,
         TRANSFORM_APPLY_OPERATION,
     ) {
         Ok(descriptor) => descriptor,
         Err(error) => {
-            log::warn!("Cannot expose Transform operation in the Node Editor: {error}");
+            log::warn!(
+                "Cannot expose Transform operation {component_id} in the Node Editor: {error}"
+            );
             return None;
         }
     };
     let mut item = node_create_menu_item(
         descriptor.label(),
-        "Shape Operations / Transform",
+        menu_category,
         [
             "root",
             "placement",
@@ -155,13 +165,13 @@ fn transform_operation_menu_item(
             "rotation",
             "scale",
             "anchor",
-            "shape",
+            content_keyword,
             descriptor.category(),
             descriptor.component_id(),
             descriptor.operation(),
         ],
-        "node_editor.menu.create.transform",
-        NodeCreateRequest::Transform,
+        qa_id,
+        request,
     );
     item.qa_metadata = Some(serde_json::json!({
         "action": "create",
@@ -254,7 +264,27 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
         ),
     ]);
 
-    if let Some(transform) = transform_operation_menu_item(plugin_manager) {
+    for transform in [
+        transform_operation_menu_item(
+            plugin_manager,
+            SHAPE_TRANSFORM_COMPONENT_ID,
+            "Shape Operations / Transform",
+            "node_editor.menu.create.transform",
+            NodeCreateRequest::ShapeTransform,
+            "shape",
+        ),
+        transform_operation_menu_item(
+            plugin_manager,
+            IMAGE_TRANSFORM_COMPONENT_ID,
+            "Image Operations / Transform",
+            "node_editor.menu.create.image_transform",
+            NodeCreateRequest::ImageTransform,
+            "image",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    {
         items.push(transform);
     }
 
@@ -345,7 +375,8 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
     plugin_manager: &PluginManager,
 ) -> Option<Node> {
     let result = match request {
-        NodeCreateRequest::Transform => plugin_manager.create_shape_transform_operation_node(),
+        NodeCreateRequest::ShapeTransform => plugin_manager.create_shape_transform_operation_node(),
+        NodeCreateRequest::ImageTransform => plugin_manager.create_image_transform_operation_node(),
         NodeCreateRequest::Style(component_id) => {
             plugin_manager.create_style_operation_node(component_id)
         }
@@ -371,7 +402,7 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
     match result {
         Ok(node) => Some(node),
         Err(error) => {
-            log::warn!("Cannot prepare operation Node for wire insertion: {error}");
+            log::warn!("Cannot prepare operation Node for authoring: {error}");
             None
         }
     }
@@ -406,4 +437,172 @@ pub(in crate::ui::panels::node_editor) fn wire_splice_menu_items(
             Some(item)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::wire::insert_node_on_connection;
+    use super::*;
+    use crate::ui::panels::node_editor::test_fixture::fixture;
+    use library::model::project::{
+        PortAddress, PortDataType, PortDirection, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+        MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    };
+    use library::model::{BlendMode, NodeContainer, NodeContent};
+
+    #[test]
+    fn transform_menu_items_have_distinct_factories_and_typed_ports() {
+        let plugins = PluginManager::default();
+        let items = node_create_menu_items(&plugins);
+
+        for (request, label, category, qa_id, component_id, input, output) in [
+            (
+                NodeCreateRequest::ShapeTransform,
+                "Shape Transform",
+                "Shape Operations / Transform",
+                "node_editor.menu.create.transform",
+                SHAPE_TRANSFORM_COMPONENT_ID,
+                (SHAPE_INPUT_PORT, PortDataType::Shape),
+                (SHAPE_OUTPUT_PORT, PortDataType::Shape),
+            ),
+            (
+                NodeCreateRequest::ImageTransform,
+                "Image Transform",
+                "Image Operations / Transform",
+                "node_editor.menu.create.image_transform",
+                IMAGE_TRANSFORM_COMPONENT_ID,
+                (IMAGE_INPUT_PORT, PortDataType::Image),
+                (IMAGE_OUTPUT_PORT, PortDataType::Image),
+            ),
+        ] {
+            let item = items
+                .iter()
+                .find(|item| item.value == request)
+                .unwrap_or_else(|| panic!("{label} is missing from the Add menu"));
+            assert_eq!(item.label, label);
+            assert_eq!(item.category.as_deref(), Some(category));
+            assert_eq!(item.qa_id.as_deref(), Some(qa_id));
+            assert_eq!(
+                item.qa_metadata.as_ref().unwrap()["component_id"],
+                component_id
+            );
+            assert_eq!(
+                item.qa_metadata.as_ref().unwrap()["operation_category"],
+                TRANSFORM_CATEGORY
+            );
+            assert_eq!(
+                item.qa_metadata.as_ref().unwrap()["operation"],
+                TRANSFORM_APPLY_OPERATION
+            );
+
+            let node = create_operation_node_for_request(&request, &plugins)
+                .unwrap_or_else(|| panic!("{label} factory is unavailable"));
+            assert_eq!(
+                node.properties()
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                ["anchor", "position", "rotation", "scale"]
+                    .into_iter()
+                    .collect()
+            );
+            assert!(node.properties().get("opacity").is_none());
+            let NodeContent::PluginOperation(operation) = node.content() else {
+                panic!("{label} factory did not create a PluginOperation")
+            };
+            assert_eq!(operation.category, TRANSFORM_CATEGORY);
+            assert_eq!(operation.component_id, component_id);
+            assert_eq!(operation.operation, TRANSFORM_APPLY_OPERATION);
+            for (key, direction, data_type) in [
+                (TIME_PORT, PortDirection::Input, PortDataType::Number),
+                (input.0, PortDirection::Input, input.1),
+                (output.0, PortDirection::Output, output.1),
+            ] {
+                assert!(operation.declared_ports.iter().any(|port| {
+                    port.key == key && port.direction == direction && port.data_type == data_type
+                }));
+            }
+            for property in ["position", "rotation", "scale", "anchor"] {
+                assert!(operation
+                    .declared_ports
+                    .iter()
+                    .any(|port| port.key == format!("property:{property}")));
+            }
+        }
+
+        let image_matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
+            &items,
+            "image root placement",
+        );
+        assert!(image_matches
+            .iter()
+            .any(|index| items[*index].value == NodeCreateRequest::ImageTransform));
+    }
+
+    #[test]
+    fn image_transform_wire_menu_and_insert_preserve_the_image_wire() {
+        let plugins = PluginManager::default();
+        let (mut project, composition_id, _, clip_id, source_id, merge_id) = fixture();
+        let connection_id = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from == PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT)
+                    && connection.to
+                        == PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT)
+            })
+            .expect("fixture Image wire is missing")
+            .id;
+        project
+            .set_connection_blend_mode(connection_id, BlendMode::Multiply)
+            .expect("fixture Image wire accepts blend metadata");
+        let original = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .expect("fixture Image wire is missing")
+            .clone();
+
+        let wire_items = wire_splice_menu_items(&project, connection_id, &plugins);
+        assert!(wire_items
+            .iter()
+            .any(|item| item.value == NodeCreateRequest::ImageTransform));
+        assert!(!wire_items
+            .iter()
+            .any(|item| item.value == NodeCreateRequest::ShapeTransform));
+
+        let image_transform =
+            create_operation_node_for_request(&NodeCreateRequest::ImageTransform, &plugins)
+                .expect("Image Transform wire request uses its operation factory");
+        let transform_id = image_transform.id;
+        assert!(insert_node_on_connection(
+            &mut project,
+            connection_id,
+            image_transform,
+            egui::pos2(610.0, 440.0),
+            composition_id,
+        ));
+        assert_eq!(
+            project.find_node_container(transform_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
+
+        let downstream = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .expect("splice replaced the downstream wire identity");
+        assert_eq!(
+            downstream.from,
+            PortAddress::new(PortOwner::Node(transform_id), IMAGE_OUTPUT_PORT)
+        );
+        assert_eq!(downstream.to, original.to);
+        assert_eq!(downstream.order, original.order);
+        assert_eq!(downstream.blend_mode, original.blend_mode);
+        assert!(project.connections.iter().any(|connection| {
+            connection.from == original.from
+                && connection.to
+                    == PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT)
+        }));
+    }
 }

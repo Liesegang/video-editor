@@ -106,32 +106,63 @@ Asset:
 # --- Text ---
 Text:
   category: Text
+  model: Generator.Text
+  description: Shape-valued text source; spatial placement and raster appearance are separate operations
   inputs:
-    - name: string
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: text
+      key: text
+      label: Text
       type: String
-    - name: font
-      type: Font
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        label: Content
+        ui_type: Text
+        default: Text
+    - name: font_family
+      key: font_family
+      label: Font
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        label: Font
+        ui_type: Font
+        default: Arial
     - name: size
-      type: Scalar
-    - name: italic
-      type: Boolean
-    - name: bold
-      type: Scalar
-    - name: split_mode
-      type: Enum
-      options: [None, Line, Character, Stroke]
-    - name: sort_order
-      type: Enum
-      options: [Natural, Random, Reverse, TopLeft, BottomLeft, TopRight, BottomRight, WritingOrder]
+      key: size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property_metadata:
+        label: Font Size
+        ui_type: Float
+        default: 100.0
+        min: 1.0
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
   outputs:
-    - name: path
-      type: Path
-    - name: line_index
-      type: List<Integer>
-    - name: char_index
-      type: List<Integer>
-    - name: stroke_index
-      type: List<Integer>
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Join Strings:
   category: Text
   inputs:
@@ -317,22 +348,180 @@ List Length:
       type: Integer
 
 # --- Compositing ---
-Transform:
-  category: Compositing
+Shape Transform:
+  category: Shape Operations / Transform
+  operation_category: transform
+  component_id: transform
+  operation: transform.apply.v1
+  description: Absolute spatial placement for a complete Shape value; opacity is owned by Style
   inputs:
-    - name: image
-      type: Image
     - name: position
+      key: property:position
+      label: Position
       type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: position
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 0.0, y: 0.0 }
+        suffix: px
     - name: rotation
-      type: Scalar
+      key: property:rotation
+      label: Rotation
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: rotation
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: -360.0
+        max: 360.0
+        step: 1.0
+        suffix: deg
+        min_hard_limit: false
+        max_hard_limit: false
     - name: scale
+      key: property:scale
+      label: Scale
       type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: scale
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 100.0, y: 100.0 }
+        min: 0.0
+        max: 1000.0
+        step: 0.1
+        suffix: "%"
+        min_hard_limit: true
+        max_hard_limit: false
     - name: anchor
+      key: property:anchor
+      label: Anchor
       type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: anchor
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 0.0, y: 0.0 }
+        suffix: px
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Image Transform:
+  category: Image Operations / Transform
+  operation_category: transform
+  component_id: image
+  operation: transform.apply.v1
+  description: Absolute spatial placement for a complete Image subtree; opacity is not a Transform property
+  inputs:
+    - name: position
+      key: property:position
+      label: Position
+      type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: position
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 0.0, y: 0.0 }
+        suffix: px
+    - name: rotation
+      key: property:rotation
+      label: Rotation
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: rotation
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: -360.0
+        max: 360.0
+        step: 1.0
+        suffix: deg
+        min_hard_limit: false
+        max_hard_limit: false
+    - name: scale
+      key: property:scale
+      label: Scale
+      type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: scale
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 100.0, y: 100.0 }
+        min: 0.0
+        max: 1000.0
+        step: 0.1
+        suffix: "%"
+        min_hard_limit: true
+        max_hard_limit: false
+    - name: anchor
+      key: property:anchor
+      label: Anchor
+      type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: anchor
+      property_metadata:
+        ui_type: Vec2
+        default: { x: 0.0, y: 0.0 }
+        suffix: px
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
     - name: image
+      key: image
+      label: Image
       type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Merge:
   category: Compositing
   description: Composite variadic Image inputs in physical wire order from back to front
@@ -1170,42 +1359,240 @@ Render 3D:
       type: Image
 
 # --- Style ---
-Fill Style:
-  category: Style
+Fill:
+  category: Shape Operations / Styles
+  operation_category: style
+  component_id: fill
+  operation: style.apply.v1
+  description: Rasterize one Shape with a fill; owns the Shape branch's base opacity
   inputs:
     - name: color
+      key: property:color
+      label: Color
       type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata:
+        ui_type: Color
+        default: { r: 255, g: 255, b: 255, a: 255 }
     - name: opacity
-      type: Scalar
-    - name: blend_mode
-      type: BlendMode
-      variants: *blend_mode_variants
-      option_groups: *blend_mode_option_groups
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata:
+        ui_type: Float
+        default: 1.0
+        min: 0.0
+        max: 1.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: offset
+      key: property:offset
+      label: Offset
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: offset
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: -50.0
+        max: 50.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: style
-      type: Style
-Stroke Style:
-  category: Style
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Stroke:
+  category: Shape Operations / Styles
+  operation_category: style
+  component_id: stroke
+  operation: style.apply.v1
+  description: Rasterize one Shape with a stroke; owns the Shape branch's base opacity
   inputs:
     - name: color
+      key: property:color
+      label: Color
       type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata:
+        ui_type: Color
+        default: { r: 255, g: 255, b: 255, a: 255 }
     - name: width
-      type: Scalar
+      key: property:width
+      label: Width
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: width
+      property_metadata:
+        ui_type: Float
+        default: 1.0
+        min: 0.0
+        max: 100.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: opacity
-      type: Scalar
-    - name: cap
-      type: Enum
-      options: [Butt, Round, Square]
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata:
+        ui_type: Float
+        default: 1.0
+        min: 0.0
+        max: 1.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: true
+    - name: offset
+      key: property:offset
+      label: Offset
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: offset
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: -50.0
+        max: 50.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: join
-      type: Enum
-      options: [Miter, Round, Bevel]
+      key: property:join
+      label: Join
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: join
+      property_metadata:
+        ui_type: Dropdown
+        default: Round
+        options: [Miter, Round, Bevel]
+    - name: cap
+      key: property:cap
+      label: Cap
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: cap
+      property_metadata:
+        ui_type: Dropdown
+        default: Round
+        options: [Butt, Round, Square]
+    - name: miter_limit
+      key: property:miter_limit
+      label: Miter Limit
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: miter_limit
+      property_metadata:
+        ui_type: Float
+        default: 4.0
+        min: 0.0
+        max: 100.0
+        step: 0.1
+        suffix: ""
+        min_hard_limit: true
+        max_hard_limit: false
     - name: dash_array
-      type: List<Scalar>
+      key: property:dash_array
+      label: Dash Array
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: dash_array
+      property_metadata:
+        ui_type: Text
+        default: ""
     - name: dash_offset
-      type: Scalar
+      key: property:dash_offset
+      label: Dash Offset
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: dash_offset
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: 0.0
+        max: 1000.0
+        step: 1.0
+        suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: style
-      type: Style
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Shadow Style:
   category: Style
   description: Drop Shadow Style

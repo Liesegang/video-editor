@@ -283,21 +283,18 @@ fn create_action_for_request(
                 comp_id,
             )
         })),
-        NodeCreateRequest::Transform => {
-            match plugin_manager.create_shape_transform_operation_node() {
-                Ok(node) => Some(Box::new(move |project| {
-                    insert_prebuilt_graph(
-                        project,
-                        graph_position,
-                        NodeGraphBundle::new(vec![node], Vec::new(), None),
-                        comp_id,
-                    )
-                })),
-                Err(error) => {
-                    log::error!("Cannot create Transform Node: {error}");
-                    None
-                }
-            }
+        transform_request @ (NodeCreateRequest::ShapeTransform
+        | NodeCreateRequest::ImageTransform) => {
+            let node =
+                create_operation_node_for_request(&transform_request, plugin_manager.as_ref())?;
+            Some(Box::new(move |project| {
+                insert_prebuilt_graph(
+                    project,
+                    graph_position,
+                    NodeGraphBundle::new(vec![node], Vec::new(), None),
+                    comp_id,
+                )
+            }))
         }
         NodeCreateRequest::Style(component_id) => {
             match plugin_manager.create_style_operation_node(&component_id) {
@@ -2613,7 +2610,7 @@ mod tests {
 
         let root_transform = items
             .iter()
-            .find(|item| item.value == NodeCreateRequest::Transform)
+            .find(|item| item.value == NodeCreateRequest::ShapeTransform)
             .expect("root Transform is exposed as its own Add request");
         assert_eq!(root_transform.label, "Shape Transform");
         assert_eq!(
@@ -2755,7 +2752,7 @@ mod tests {
         let splice_items = wire_splice_menu_items(&project, shape_connection, plugins.as_ref());
         assert!(splice_items
             .iter()
-            .any(|item| item.value == NodeCreateRequest::Transform));
+            .any(|item| item.value == NodeCreateRequest::ShapeTransform));
         assert!(splice_items.iter().any(|item| {
             matches!(&item.value, NodeCreateRequest::Decorator(id) if id == "backplate")
         }));
@@ -2764,7 +2761,7 @@ mod tests {
         }));
 
         let root =
-            create_operation_node_for_request(&NodeCreateRequest::Transform, plugins.as_ref())
+            create_operation_node_for_request(&NodeCreateRequest::ShapeTransform, plugins.as_ref())
                 .expect("wire insertion uses the root Transform factory");
         let root_id = root.id;
         project.add_node(root);
