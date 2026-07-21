@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     action::HistoryManager,
     state::{context::EditorContext, context_types::SelectionTarget},
+    ui::layer_order::{destination_index_after_removal, reverse_index, reverse_slot},
 };
 
 /// Deferred actions to execute after read lock is released
@@ -34,18 +35,26 @@ enum DeferredTrackAction {
     },
 }
 
-/// Returns insertion slots in Composition order and their screen-space Y
-/// coordinates. Expanded clip rows remain part of their Track's visual group,
-/// so a slot is placed only before a top-level Track or after the final group.
+/// Returns canonical Composition insertion slots with their front-to-back
+/// visual slots and screen-space Y coordinates. Expanded Clip rows remain
+/// part of their Track's visual group, so a marker appears only at a top-level
+/// Track boundary.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TrackInsertionMarker {
+    canonical_slot: usize,
+    visual_slot: usize,
+    y: f32,
+}
+
 fn track_insertion_markers(
     display_rows: &[super::utils::flatten::DisplayRow<'_>],
     list_top: f32,
     scroll_y: f32,
     row_height: f32,
     track_spacing: f32,
-) -> Vec<(usize, f32)> {
+) -> Vec<TrackInsertionMarker> {
     let stride = row_height + track_spacing;
-    let mut markers: Vec<(usize, f32)> = display_rows
+    let header_rows = display_rows
         .iter()
         .filter_map(|row| match row {
             super::utils::flatten::DisplayRow::TrackHeader {
@@ -55,58 +64,56 @@ fn track_insertion_markers(
             } if *depth == 0 => Some(*visible_row_index),
             _ => None,
         })
-        .enumerate()
-        .map(|(slot, row_index)| {
-            (
-                slot,
-                list_top + row_index as f32 * stride - scroll_y - track_spacing * 0.5,
-            )
-        })
-        .collect();
+        .collect::<Vec<_>>();
 
-    if markers.is_empty() {
-        return markers;
+    let track_count = header_rows.len();
+    if track_count == 0 {
+        return Vec::new();
     }
+
+    let mut markers = header_rows
+        .into_iter()
+        .enumerate()
+        .filter_map(|(visual_slot, row_index)| {
+            reverse_slot(visual_slot, track_count).map(|canonical_slot| TrackInsertionMarker {
+                canonical_slot,
+                visual_slot,
+                y: list_top + row_index as f32 * stride - scroll_y - track_spacing * 0.5,
+            })
+        })
+        .collect::<Vec<_>>();
 
     let end_row = display_rows
         .last()
         .map(|row| row.visible_row_index() + 1)
         .unwrap_or(0);
-    markers.push((
-        markers.len(),
-        list_top + end_row as f32 * stride - scroll_y - track_spacing * 0.5,
-    ));
+    markers.push(TrackInsertionMarker {
+        canonical_slot: 0,
+        visual_slot: track_count,
+        y: list_top + end_row as f32 * stride - scroll_y - track_spacing * 0.5,
+    });
     markers
 }
 
-fn nearest_track_insertion_slot(pointer_y: f32, markers: &[(usize, f32)]) -> Option<(usize, f32)> {
-    markers
-        .iter()
-        .copied()
-        .min_by(|(_, first_y), (_, second_y)| {
-            (pointer_y - *first_y)
-                .abs()
-                .total_cmp(&(pointer_y - *second_y).abs())
-        })
+fn nearest_track_insertion_slot(
+    pointer_y: f32,
+    markers: &[TrackInsertionMarker],
+) -> Option<TrackInsertionMarker> {
+    markers.iter().copied().min_by(|first, second| {
+        (pointer_y - first.y)
+            .abs()
+            .total_cmp(&(pointer_y - second.y).abs())
+    })
 }
 
-/// Converts a slot in the original order into the Track's final index after
-/// removing the source Track. The two slots adjacent to the source are both a
-/// no-op, which makes dropping back in place stable.
+/// Converts a canonical slot into the Track's final canonical index after
+/// removing the source Track. The two adjacent slots are stable no-ops.
 fn destination_index_for_slot(
     source_index: usize,
     insertion_slot: usize,
     track_count: usize,
 ) -> Option<usize> {
-    if track_count == 0 || source_index >= track_count || insertion_slot > track_count {
-        return None;
-    }
-
-    Some(if insertion_slot > source_index {
-        insertion_slot - 1
-    } else {
-        insertion_slot
-    })
+    destination_index_after_removal(source_index, insertion_slot, track_count)
 }
 
 fn expanded_clip_label(
@@ -222,9 +229,9 @@ pub fn show_track_list(
         editor_context.interaction.timeline_track_reorder = None;
     }
 
-    // Iterate over visible rows
-    // Calculate Reorder State for Preview
-    let mut reorder_state = None;
+    // Project the exact post-release row order while a Clip is dragged. This
+    // uses the same canonical insertion slot as the release mutation.
+    let mut clip_reorder = None;
     if let (Some(dragged_id), Some(hovered_tid)) = (
         editor_context
             .selection
@@ -234,8 +241,8 @@ pub fn show_track_list(
     ) {
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
             if let Some(ref proj) = proj_read {
-                if let Some((target_index, header_idx)) =
-                    super::clip_area::clips::calculate_insert_index(
+                if let Some((canonical_insertion_slot, _)) =
+                    super::clip_area::reorder::calculate_insert_index(
                         mouse_pos.y,
                         &display_rows,
                         proj,
@@ -252,74 +259,28 @@ pub fn show_track_list(
                         .interaction
                         .dragged_entity_original_track_id
                         .unwrap_or(hovered_tid);
-                    if let Some(dragged_original_index) =
-                        proj.get_track(source_track_id).and_then(|track| {
-                            track
-                                .clip_ids
-                                .iter()
-                                .position(|clip_id| *clip_id == dragged_id)
-                        })
-                    {
-                        reorder_state = Some((
-                            dragged_id,
-                            hovered_tid,
-                            dragged_original_index,
-                            target_index,
-                            header_idx,
-                        ));
-                    }
+                    clip_reorder = super::clip_area::reorder::clip_reorder_preview(
+                        proj,
+                        dragged_id,
+                        source_track_id,
+                        hovered_tid,
+                        canonical_insertion_slot,
+                    );
                 }
             }
         }
     }
+    let clip_reorder_projection = proj_read.as_ref().and_then(|project| {
+        clip_reorder.map(|preview| {
+            super::clip_area::reorder::clip_reorder_projection(&display_rows, project, preview)
+        })
+    });
 
     for row in &display_rows {
-        let mut visible_row_index = row.visible_row_index() as isize;
-
-        // Apply visual shift based on reorder state
-        if let Some((dragged_id, hovered_track_id, original_idx, target_idx, header_idx)) =
-            reorder_state
-        {
-            if let super::utils::flatten::DisplayRow::ClipRow {
-                clip,
-                parent_track,
-                child_index,
-                ..
-            } = row
-            {
-                if clip.id == dragged_id {
-                    visible_row_index = (header_idx + 1 + target_idx) as isize;
-                } else if parent_track.id == hovered_track_id {
-                    let idx = *child_index;
-                    // Check if same track reordering
-                    if let Some(original_track_id) =
-                        editor_context.interaction.dragged_entity_original_track_id
-                    {
-                        if original_track_id == hovered_track_id {
-                            // Same track sort
-                            let src = original_idx;
-                            let dst = target_idx;
-                            if src < dst {
-                                // Moving down: Items between src and dst shift up
-                                if idx > src && idx <= dst {
-                                    visible_row_index -= 1;
-                                }
-                            } else {
-                                // Moving up: Items between dst and src shift down
-                                if idx < src && idx >= dst {
-                                    visible_row_index += 1;
-                                }
-                            }
-                        } else if idx >= target_idx {
-                            // Cross track insert
-                            visible_row_index += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        let visible_row_index = visible_row_index as usize;
+        let visible_row_index = clip_reorder_projection
+            .as_ref()
+            .and_then(|projection| projection.row_for(row))
+            .unwrap_or_else(|| row.visible_row_index());
 
         let y = track_list_rect.min.y + (visible_row_index as f32 * (row_height + track_spacing))
             - editor_context.timeline.scroll_offset.y;
@@ -345,6 +306,8 @@ pub fn show_track_list(
                 let canonical_index = track_ids
                     .iter()
                     .position(|candidate| *candidate == track.id);
+                let visual_index =
+                    canonical_index.and_then(|index| reverse_index(index, track_ids.len()));
                 crate::qa::register_component_with_metadata(
                     format!("timeline.track:{}", track.id),
                     "timeline_track",
@@ -353,6 +316,9 @@ pub fn show_track_list(
                     Some(serde_json::json!({
                         "track_id": track.id,
                         "canonical_index": canonical_index,
+                        "visual_index": visual_index,
+                        "canonical_order_semantics": "back_to_front",
+                        "visual_order_semantics": "front_to_back",
                         "expanded": is_expanded,
                     })),
                 );
@@ -550,7 +516,6 @@ pub fn show_track_list(
                 parent_track: _,
                 depth,
                 visible_row_index: _,
-                child_index: _,
             } => {
                 // Render Clip Name
                 track_list_painter.rect_filled(
@@ -591,18 +556,22 @@ pub fn show_track_list(
     );
     let pointer_position = ui_content.ctx().pointer_latest_pos();
 
-    for (slot, marker_y) in &insertion_markers {
+    for marker in &insertion_markers {
         let rect = egui::Rect::from_min_max(
-            egui::pos2(track_list_rect.left(), *marker_y - 4.0),
-            egui::pos2(track_list_rect.right(), *marker_y + 4.0),
+            egui::pos2(track_list_rect.left(), marker.y - 4.0),
+            egui::pos2(track_list_rect.right(), marker.y + 4.0),
         );
         crate::qa::register_component_with_metadata(
-            format!("timeline.track_insertion_slot:{slot}"),
+            format!("timeline.track_insertion_slot:{}", marker.canonical_slot),
             "timeline_track_insertion_slot",
             rect,
             true,
             Some(serde_json::json!({
-                "slot": slot,
+                "slot": marker.canonical_slot,
+                "canonical_slot": marker.canonical_slot,
+                "visual_slot": marker.visual_slot,
+                "canonical_order_semantics": "back_to_front",
+                "visual_order_semantics": "front_to_back",
                 "composition_id": selected_composition_id,
             })),
         );
@@ -612,7 +581,7 @@ pub fn show_track_list(
         reorder.hover_insertion_slot = pointer_position
             .filter(|pointer| track_list_rect.contains(*pointer))
             .and_then(|pointer| nearest_track_insertion_slot(pointer.y, &insertion_markers))
-            .map(|(slot, _)| slot);
+            .map(|marker| marker.canonical_slot);
 
         ui_content.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         ui_content.ctx().request_repaint();
@@ -622,7 +591,7 @@ pub fn show_track_list(
         if let Some(marker_y) = reorder.hover_insertion_slot.and_then(|slot| {
             insertion_markers
                 .iter()
-                .find_map(|(candidate, y)| (*candidate == slot).then_some(*y))
+                .find_map(|marker| (marker.canonical_slot == slot).then_some(marker.y))
         }) {
             let marker_y =
                 marker_y.clamp(track_list_rect.top() + 1.0, track_list_rect.bottom() - 1.0);
@@ -914,14 +883,38 @@ mod tests {
 
         let markers = track_insertion_markers(&rows, 100.0, 32.0, 30.0, 2.0);
 
-        assert_eq!(markers, vec![(0, 67.0), (1, 99.0), (2, 131.0), (3, 163.0)]);
+        assert_eq!(
+            markers,
+            vec![
+                TrackInsertionMarker {
+                    canonical_slot: 3,
+                    visual_slot: 0,
+                    y: 67.0,
+                },
+                TrackInsertionMarker {
+                    canonical_slot: 2,
+                    visual_slot: 1,
+                    y: 99.0,
+                },
+                TrackInsertionMarker {
+                    canonical_slot: 1,
+                    visual_slot: 2,
+                    y: 131.0,
+                },
+                TrackInsertionMarker {
+                    canonical_slot: 0,
+                    visual_slot: 3,
+                    y: 163.0,
+                },
+            ]
+        );
         assert_eq!(
             nearest_track_insertion_slot(66.0, &markers),
-            Some((0, 67.0))
+            Some(markers[0])
         );
         assert_eq!(
             nearest_track_insertion_slot(164.0, &markers),
-            Some((3, 163.0))
+            Some(markers[3])
         );
     }
 

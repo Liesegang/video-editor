@@ -19,7 +19,6 @@ pub enum DisplayRow<'a> {
         parent_track: &'a Track,
         depth: usize,
         visible_row_index: usize,
-        child_index: usize,
     },
 }
 
@@ -79,14 +78,13 @@ pub fn flatten_tracks_to_rows<'a>(
 
         if is_expanded {
             // Later Clips render on top, so present them first in expanded tracks.
-            for (child_index, clip_id) in track.clip_ids.iter().enumerate().rev() {
+            for clip_id in track.clip_ids.iter().rev() {
                 if let Some(clip) = project.get_clip(*clip_id) {
                     rows.push(DisplayRow::ClipRow {
                         clip,
                         parent_track: track,
                         depth: depth + 1,
                         visible_row_index: *current_row_index,
-                        child_index,
                     });
                     *current_row_index += 1;
                 }
@@ -94,8 +92,9 @@ pub fn flatten_tracks_to_rows<'a>(
         }
     }
 
-    // Composition order is the authoritative timeline order.
-    for track_id in track_ids {
+    // Canonical Composition order is back-to-front. Present front-to-back so
+    // the visually highest Track is also the layer rendered on top.
+    for track_id in track_ids.iter().rev() {
         process_track(
             project,
             *track_id,
@@ -121,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_tracks_keep_composition_order_and_show_headers() {
+    fn top_level_tracks_present_front_to_back_and_show_headers() {
         let mut project = Project::new("test");
         let first = Track::new("first");
         let second = Track::new("second");
@@ -138,7 +137,10 @@ mod tests {
         let rows = flatten_tracks_to_rows(&project, &track_ids, &HashSet::new());
         let row_track_ids: Vec<_> = rows.iter().map(DisplayRow::track_id).collect();
 
-        assert_eq!(row_track_ids, track_ids);
+        assert_eq!(
+            row_track_ids,
+            track_ids.iter().rev().copied().collect::<Vec<_>>()
+        );
         assert!(rows
             .iter()
             .all(|row| matches!(row, DisplayRow::TrackHeader { depth: 0, .. })));
@@ -183,7 +185,7 @@ mod tests {
 
         assert_eq!(
             rows.iter().map(DisplayRow::track_id).collect::<Vec<_>>(),
-            vec![ids[2], ids[0], ids[1]]
+            vec![ids[1], ids[0], ids[2]]
         );
     }
 }

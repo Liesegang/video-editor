@@ -16,6 +16,7 @@ pub mod clips;
 pub mod context_menu;
 pub mod drag_and_drop;
 pub mod interactions;
+pub(in crate::ui::panels::timeline) mod reorder;
 mod waveform;
 
 struct TimelineViewportState<'a> {
