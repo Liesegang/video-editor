@@ -78,6 +78,7 @@ Image:
       type: Image
 Sound:
   category: Data
+  catalog_status: design-needed
   model: PortDataType.Audio
   description: Transient decoded/mixed PCM stream; Project persists only typed Audio wires
   outputs:
@@ -87,6 +88,7 @@ Sound:
       type: Audio
 Spectrum:
   category: Data
+  catalog_status: design-needed
   model: PortDataType.Spectrum
   description: Transient frequency-domain Sound data; the payload is never persisted in Project
   outputs:
@@ -694,6 +696,9 @@ Merge:
 # --- Sound ---
 Sound Merge:
   category: Sound
+  catalog_status: native
+  catalog_id: native.sound.merge
+  runtime_status: implemented
   model: SoundMerge
   operation_key: sound_merge
   description: Mix ordered variadic Audio inputs; structural Track/Composition routing uses this same native Node
@@ -722,6 +727,9 @@ Sound Merge:
       multiplicity: Single
 RMS:
   category: Sound / Analysis
+  catalog_status: native
+  catalog_id: native.sound.rms
+  runtime_status: implemented
   model: SoundAnalysis.Rms
   operation_key: sound_rms
   description: Root-mean-square amplitude over a Composition-output-timeline analysis window
@@ -793,6 +801,9 @@ RMS:
       multiplicity: Single
 Peak:
   category: Sound / Analysis
+  catalog_status: native
+  catalog_id: native.sound.peak
+  runtime_status: implemented
   model: SoundAnalysis.Peak
   operation_key: sound_peak
   description: Absolute peak amplitude over a Composition-output-timeline analysis window
@@ -817,6 +828,9 @@ Peak:
       multiplicity: Single
 FFT / Spectrum:
   category: Sound / Analysis
+  catalog_status: native
+  catalog_id: native.sound.spectrum
+  runtime_status: implemented
   model: SoundAnalysis.Spectrum
   operation_key: sound_spectrum
   description: Hann-windowed FFT over a Composition-output-timeline Sound window
@@ -841,6 +855,9 @@ FFT / Spectrum:
       multiplicity: Single
 Band Energy:
   category: Sound / Analysis
+  catalog_status: native
+  catalog_id: native.sound.band-energy
+  runtime_status: implemented
   model: SoundAnalysis.BandEnergy
   operation_key: sound_band_energy
   description: Aggregate one frequency range from a transient Spectrum into a Number

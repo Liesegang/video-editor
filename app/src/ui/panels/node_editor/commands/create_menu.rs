@@ -1,7 +1,6 @@
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
 use library::model::{
     native_node_catalog, native_node_descriptor, NativeNodeFactory, Node, Project,
-    SoundAnalysisContent, SOUND_MERGE_OPERATION_KEY,
 };
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
@@ -24,8 +23,6 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
     PathEffect(String),
     Decorator(String),
     Effect(String),
-    SoundMerge,
-    SoundAnalysis(SoundAnalysisContent),
     Clip,
     Track,
     Composition,
@@ -42,8 +39,6 @@ impl NodeCreateRequest {
             Self::PathEffect(_) => "path_effect",
             Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
-            Self::SoundMerge => SOUND_MERGE_OPERATION_KEY,
-            Self::SoundAnalysis(analysis) => analysis.operation_key(),
             Self::Clip => "clip",
             Self::Track => "track",
             Self::Composition => "composition",
@@ -215,29 +210,7 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
             item
         })
         .collect::<Vec<_>>();
-    items.extend(SoundAnalysisContent::ALL.into_iter().map(|analysis| {
-        let keywords: &[&str] = match analysis {
-            SoundAnalysisContent::Rms => &["sound", "audio", "rms", "level", "amplitude"],
-            SoundAnalysisContent::Peak => &["sound", "audio", "peak", "level", "amplitude"],
-            SoundAnalysisContent::Spectrum => &["sound", "audio", "fft", "spectrum", "frequency"],
-            SoundAnalysisContent::BandEnergy => &["sound", "audio", "band", "frequency", "energy"],
-        };
-        node_create_menu_item(
-            analysis.label(),
-            "Sound / Analysis",
-            keywords.iter().copied(),
-            format!("node_editor.menu.create.{}", analysis.operation_key()),
-            NodeCreateRequest::SoundAnalysis(analysis),
-        )
-    }));
     items.extend([
-        node_create_menu_item(
-            "Sound Merge",
-            "Sound",
-            ["sound", "audio", "merge", "mix", "layers"],
-            "node_editor.menu.create.sound_merge",
-            NodeCreateRequest::SoundMerge,
-        ),
         node_create_menu_item(
             "Container (Clip)",
             "Containers",
@@ -443,10 +416,6 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
         }
         NodeCreateRequest::Effect(effect_id) => {
             plugin_manager.create_effect_operation_node(effect_id)
-        }
-        NodeCreateRequest::SoundMerge => return Some(Node::new_sound_merge("Sound Merge")),
-        NodeCreateRequest::SoundAnalysis(analysis) => {
-            return Some(Node::new_sound_analysis(analysis.label(), *analysis));
         }
         NodeCreateRequest::Native(_) => return None,
         NodeCreateRequest::Clip | NodeCreateRequest::Track | NodeCreateRequest::Composition => {

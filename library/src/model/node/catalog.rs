@@ -6,11 +6,14 @@
 
 use std::sync::LazyLock;
 
-use super::{GeneratorContent, NativeOperationContent, Node, NodeContent, ValueContent};
+use super::{
+    GeneratorContent, NativeOperationContent, Node, NodeContent, SoundAnalysisContent, ValueContent,
+};
 use crate::model::project::{
-    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-    NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortDataType,
-    PortDefinition, PortExposure, PortMultiplicity, PortSide, SHAPE_OUTPUT_PORT, TIME_PORT,
+    AUDIO_OUTPUT_PORT, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
+    NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortExposure, PortMultiplicity, PortSide,
+    SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::PropertyMap;
 
@@ -34,6 +37,8 @@ pub enum NativeNodeFactory {
     Generator(GeneratorContent),
     Value(ValueContent),
     Merge,
+    SoundMerge,
+    SoundAnalysis(SoundAnalysisContent),
     TypedPlaceholder,
 }
 
@@ -103,6 +108,10 @@ impl NativeNodeCatalogDescriptor {
             )),
             NativeNodeFactory::Value(value) => Ok(Node::new_value(self.label, value)),
             NativeNodeFactory::Merge => Ok(Node::new_merge(self.label)),
+            NativeNodeFactory::SoundMerge => Ok(Node::new_sound_merge(self.label)),
+            NativeNodeFactory::SoundAnalysis(analysis) => {
+                Ok(Node::new_sound_analysis(self.label, analysis))
+            }
             NativeNodeFactory::TypedPlaceholder => Ok(Node::with_properties(
                 self.label,
                 NodeContent::NativeOperation(NativeOperationContent {
@@ -175,13 +184,16 @@ struct DescriptorSpec {
 
 impl DescriptorSpec {
     fn build(self) -> NativeNodeCatalogDescriptor {
-        let ports = self
-            .inputs
-            .iter()
-            .copied()
-            .map(PortSpec::input)
-            .chain(self.outputs.iter().copied().map(PortSpec::output))
-            .collect();
+        let ports = match self.factory {
+            NativeNodeFactory::SoundAnalysis(analysis) => analysis.port_definitions().to_vec(),
+            _ => self
+                .inputs
+                .iter()
+                .copied()
+                .map(PortSpec::input)
+                .chain(self.outputs.iter().copied().map(PortSpec::output))
+                .collect(),
+        };
         NativeNodeCatalogDescriptor {
             catalog_id: self.catalog_id,
             label: self.label,
@@ -195,27 +207,21 @@ impl DescriptorSpec {
     }
 }
 
-const fn descriptor(
-    catalog_id: &'static str,
-    label: &'static str,
-    category: &'static str,
-    qa_id: &'static str,
-    keywords: &'static [&'static str],
-    factory: NativeNodeFactory,
-    inputs: &'static [PortSpec],
-    outputs: &'static [PortSpec],
-) -> DescriptorSpec {
-    DescriptorSpec {
-        catalog_id,
-        label,
-        category,
-        qa_id,
-        keywords,
-        runtime_status: NativeNodeRuntimeStatus::Implemented,
-        factory,
-        inputs,
-        outputs,
-    }
+macro_rules! descriptor {
+    ($catalog_id:expr, $label:expr, $category:expr, $qa_id:expr, $keywords:expr,
+     $factory:expr, $inputs:expr, $outputs:expr $(,)?) => {
+        DescriptorSpec {
+            catalog_id: $catalog_id,
+            label: $label,
+            category: $category,
+            qa_id: $qa_id,
+            keywords: $keywords,
+            runtime_status: NativeNodeRuntimeStatus::Implemented,
+            factory: $factory,
+            inputs: $inputs,
+            outputs: $outputs,
+        }
+    };
 }
 
 const fn placeholder(
@@ -283,6 +289,15 @@ const MERGE_INPUTS: &[PortSpec] = &[
     PortSpec::single(TIME_PORT, "Time", PortDataType::Number),
     PortSpec::variadic(MERGE_IMAGES_PORT, "Images", PortDataType::Image),
 ];
+const SOUND_MERGE_INPUTS: &[PortSpec] = &[
+    PortSpec::single(TIME_PORT, "Time", PortDataType::Number),
+    PortSpec::variadic(MERGE_SOUNDS_PORT, "Sounds", PortDataType::Audio),
+];
+const AUDIO_OUTPUT: &[PortSpec] = &[PortSpec::single(
+    AUDIO_OUTPUT_PORT,
+    "Audio",
+    PortDataType::Audio,
+)];
 
 const PARTICLE: PortSpec = PortSpec::single("particles", "Particles", PortDataType::ParticleSystem);
 const PARTICLE_OUTPUT: &[PortSpec] = &[PARTICLE];
@@ -496,7 +511,7 @@ const MOTION_BEHAVIOR_OUTPUT: &[PortSpec] = &[PortSpec::single(
 )];
 
 static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
-    descriptor(
+    descriptor!(
         "native.text",
         "Text",
         "Text",
@@ -506,7 +521,7 @@ static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
         TEXT_INPUTS,
         SHAPE_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.solid-color",
         "Solid Color",
         "Generators",
@@ -516,7 +531,7 @@ static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
         SOLID_INPUTS,
         IMAGE_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.shape",
         "Shape",
         "Generators",
@@ -526,7 +541,7 @@ static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
         SHAPE_INPUTS,
         SHAPE_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.sksl-shader",
         "SkSL Shader",
         "Generators",
@@ -536,57 +551,57 @@ static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
         SKSL_INPUTS,
         IMAGE_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.math.fmod",
         "Fmod",
         "Math",
         "node_editor.menu.create.value:fmod",
-        &["modulo", "remainder", "loop", "number"],
+        &["modulo", "remainder", "loop", "number", "value"],
         NativeNodeFactory::Value(ValueContent::Fmod),
         FMOD_INPUTS,
         NUMERIC_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.math.add",
         "Add",
         "Math",
         "node_editor.menu.create.value:add",
-        &["plus", "sum", "number"],
+        &["plus", "sum", "number", "value"],
         NativeNodeFactory::Value(ValueContent::Add),
         NUMERIC_INPUTS,
         NUMERIC_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.math.subtract",
         "Subtract",
         "Math",
         "node_editor.menu.create.value:subtract",
-        &["minus", "difference", "number"],
+        &["minus", "difference", "number", "value"],
         NativeNodeFactory::Value(ValueContent::Subtract),
         NUMERIC_INPUTS,
         NUMERIC_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.math.multiply",
         "Multiply",
         "Math",
         "node_editor.menu.create.value:multiply",
-        &["times", "product", "number"],
+        &["times", "product", "number", "value"],
         NativeNodeFactory::Value(ValueContent::Multiply),
         NUMERIC_INPUTS,
         NUMERIC_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.math.divide",
         "Divide",
         "Math",
         "node_editor.menu.create.value:divide",
-        &["quotient", "ratio", "number"],
+        &["quotient", "ratio", "number", "value"],
         NativeNodeFactory::Value(ValueContent::Divide),
         NUMERIC_INPUTS,
         NUMERIC_OUTPUT,
     ),
-    descriptor(
+    descriptor!(
         "native.merge",
         "Merge",
         "Compositing",
@@ -595,6 +610,56 @@ static DESCRIPTOR_SPECS: &[DescriptorSpec] = &[
         NativeNodeFactory::Merge,
         MERGE_INPUTS,
         IMAGE_OUTPUT,
+    ),
+    descriptor!(
+        "native.sound.merge",
+        "Sound Merge",
+        "Sound",
+        "node_editor.menu.create.sound_merge",
+        &["sound", "audio", "merge", "mix", "layers"],
+        NativeNodeFactory::SoundMerge,
+        SOUND_MERGE_INPUTS,
+        AUDIO_OUTPUT,
+    ),
+    descriptor!(
+        "native.sound.rms",
+        "RMS",
+        "Sound / Analysis",
+        "node_editor.menu.create.sound_rms",
+        &["sound", "audio", "rms", "level", "amplitude"],
+        NativeNodeFactory::SoundAnalysis(SoundAnalysisContent::Rms),
+        &[],
+        &[],
+    ),
+    descriptor!(
+        "native.sound.peak",
+        "Peak",
+        "Sound / Analysis",
+        "node_editor.menu.create.sound_peak",
+        &["sound", "audio", "peak", "level", "amplitude"],
+        NativeNodeFactory::SoundAnalysis(SoundAnalysisContent::Peak),
+        &[],
+        &[],
+    ),
+    descriptor!(
+        "native.sound.spectrum",
+        "FFT / Spectrum",
+        "Sound / Analysis",
+        "node_editor.menu.create.sound_spectrum",
+        &["sound", "audio", "fft", "spectrum", "frequency"],
+        NativeNodeFactory::SoundAnalysis(SoundAnalysisContent::Spectrum),
+        &[],
+        &[],
+    ),
+    descriptor!(
+        "native.sound.band-energy",
+        "Band Energy",
+        "Sound / Analysis",
+        "node_editor.menu.create.sound_band_energy",
+        &["sound", "audio", "band", "frequency", "energy"],
+        NativeNodeFactory::SoundAnalysis(SoundAnalysisContent::BandEnergy),
+        &[],
+        &[],
     ),
     placeholder(
         "native.particle.emitter",
@@ -836,6 +901,13 @@ pub fn native_node_descriptor_for_node(
             matches!(descriptor.factory, NativeNodeFactory::Value(candidate) if candidate == *value)
         }),
         NodeContent::Merge => native_node_descriptor("native.merge"),
+        NodeContent::SoundMerge => native_node_descriptor("native.sound.merge"),
+        NodeContent::SoundAnalysis(analysis) => native_node_catalog().iter().find(|descriptor| {
+            matches!(
+                descriptor.factory,
+                NativeNodeFactory::SoundAnalysis(candidate) if candidate == *analysis
+            )
+        }),
         NodeContent::NativeOperation(operation) => native_node_descriptor(&operation.catalog_id),
         NodeContent::Media(_)
         | NodeContent::CompositionInstance(_)

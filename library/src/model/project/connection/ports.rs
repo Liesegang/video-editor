@@ -93,7 +93,9 @@ fn node_ports(
         NodeContent::Generator(_)
         | NodeContent::Value(_)
         | NodeContent::NativeOperation(_)
-        | NodeContent::Merge => {
+        | NodeContent::Merge
+        | NodeContent::SoundMerge
+        | NodeContent::SoundAnalysis(_) => {
             include_property_inputs = false;
             if let Some(descriptor) = native_node_descriptor_for_node(node) {
                 ports.extend(descriptor.ports().iter().cloned());
@@ -125,17 +127,6 @@ fn node_ports(
         NodeContent::PluginOperation(operation) => {
             include_property_inputs = false;
             ports.extend(operation.declared_ports.iter().cloned());
-        }
-        NodeContent::SoundMerge => {
-            ports.push(time_input());
-            ports.push(
-                PortDefinition::input(MERGE_SOUNDS_PORT, "Sounds", PortDataType::Audio).variadic(),
-            );
-            ports.push(audio_output());
-        }
-        NodeContent::SoundAnalysis(analysis) => {
-            include_property_inputs = true;
-            ports.extend(analysis.port_definitions().iter().cloned());
         }
     }
     if include_property_inputs {

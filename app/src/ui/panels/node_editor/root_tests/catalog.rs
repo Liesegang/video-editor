@@ -155,12 +155,13 @@ fn math_add_items_create_every_native_value_and_fmod_accepts_explicit_time() {
     let plugins = PluginManager::default();
     let items = node_create_menu_items(&plugins);
     for value in ValueContent::ALL {
+        let request = NodeCreateRequest::Native(format!("native.math.{}", value.operation_key()));
         let item = items
             .iter()
-            .find(|item| item.value == NodeCreateRequest::Value(value))
+            .find(|item| item.value == request)
             .expect("every native value is exposed by the shared Add catalog");
         assert_eq!(item.label, value.label());
-        assert_eq!(item.category.as_deref(), Some("Math / Values"));
+        assert_eq!(item.category.as_deref(), Some("Math"));
         assert_eq!(
             item.qa_id.as_deref(),
             Some(format!("node_editor.menu.create.value:{}", value.operation_key()).as_str())
@@ -171,7 +172,7 @@ fn math_add_items_create_every_native_value_and_fmod_accepts_explicit_time() {
     }
     let item = items
         .iter()
-        .find(|item| item.value == NodeCreateRequest::Value(ValueContent::Fmod))
+        .find(|item| item.value == NodeCreateRequest::Native("native.math.fmod".to_string()))
         .expect("Fmod is exposed by the shared Add catalog");
     let matches =
         crate::ui::widgets::searchable_context_menu::filter_searchable_items(&items, "loop value");
@@ -534,7 +535,7 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
     assert!(items.iter().all(|item| item.category.is_some()));
     assert!(items
         .iter()
-        .any(|item| matches!(item.value, NodeCreateRequest::SkSL)));
+        .any(|item| { item.value == NodeCreateRequest::Native("native.sksl-shader".to_string()) }));
 
     let root_transform = items
         .iter()
