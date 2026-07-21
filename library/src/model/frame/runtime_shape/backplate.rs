@@ -59,6 +59,7 @@ impl RuntimeShape {
             ));
         }
         validate_layout(padding, offset)?;
+        validate_background_pipeline(&background)?;
 
         let (template_path, template_path_effects) = background_path(&background)?;
         if template_path.is_empty() {
@@ -139,6 +140,20 @@ impl RuntimeShape {
             decorator_configs: Vec::new(),
         })
     }
+}
+
+fn validate_background_pipeline(background: &RuntimeShape) -> Result<(), LibraryError> {
+    if !background.effector_configs.is_empty() {
+        return Err(LibraryError::Validation(
+            "Backplate background Shape has pending Effector configs".to_string(),
+        ));
+    }
+    if !background.decorator_configs.is_empty() {
+        return Err(LibraryError::Validation(
+            "Backplate background Shape has pending Decorator configs".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn background_path(background: &RuntimeShape) -> Result<(Path, Vec<PathEffect>), LibraryError> {

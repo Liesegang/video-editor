@@ -253,6 +253,10 @@ The background input accepts Path and Text Shape geometry, and its evaluated
 spatial transform is baked into the template before fitting. `cover` clips the
 overscaled template to each destination. Negative padding remains valid when a
 concrete destination keeps positive finite dimensions.
+Background Shapes with pending Effector or Decorator configs fail closed rather
+than silently dropping those operations. Root transform and opacity are already
+evaluated Shape state; the transform is baked into geometry, while opacity and
+Image effects remain on the emitted Backplate Shape.
 
 Style and Decorator requests contain only resolved declared properties and
 scalar metadata. They never transport source shapes, raster frames, paths,

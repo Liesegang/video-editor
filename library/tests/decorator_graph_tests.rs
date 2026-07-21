@@ -11,6 +11,7 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::DrawStyle;
+use library::model::frame::effect::ImageEffect;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::runtime_shape::{
     RuntimeBounds, RuntimePathPart, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
@@ -546,6 +547,65 @@ fn transformed_and_text_background_shapes_are_consumed_as_geometry() -> Result<(
     assert!(!text_output.path.is_empty());
     assert!(text_output.bounds.width() > 0.0);
     assert!(text_output.bounds.height() > 0.0);
+    Ok(())
+}
+
+#[test]
+fn background_pending_configs_fail_closed_but_root_state_remains_supported() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let target = runtime_path_shape("M 10 10 H 50 V 30 H 10 Z", &[])?;
+    let (mut text_background, _) = runtime_shapes(&plugins)?;
+    let config = DecoratorConfig::Backplate {
+        target: BackplateTarget::Block,
+        padding: (0.0, 0.0, 0.0, 0.0),
+        offset: (0.0, 0.0),
+        fit: BackplateFit::Stretch,
+    };
+    text_background
+        .effector_configs
+        .push(EffectorConfig::Opacity {
+            target_opacity: 50.0,
+            mode: OpacityMode::Set,
+            target: EffectorTarget::Char,
+        });
+    let error = target
+        .clone()
+        .into_backplate_geometry(Uuid::new_v4(), text_background, config.clone(), 0.0)
+        .expect_err("pending Text Effector config must be rejected");
+    assert!(error.to_string().contains("pending Effector configs"));
+
+    let (mut text_background, _) = runtime_shapes(&plugins)?;
+    text_background.decorator_configs.push(config.clone());
+    let error = target
+        .clone()
+        .into_backplate_geometry(Uuid::new_v4(), text_background, config.clone(), 0.0)
+        .expect_err("pending Text Decorator config must be rejected");
+    assert!(error.to_string().contains("pending Decorator configs"));
+
+    let mut background = runtime_path_shape("M 0 0 L 10 0 L 5 10 Z", &[])?;
+    let effect = ImageEffect {
+        effect_type: "blur".to_string(),
+        properties: std::collections::HashMap::new(),
+    };
+    background.effects.push(effect.clone());
+    background.set_root_transform(
+        Uuid::new_v4(),
+        Transform {
+            rotation: 90.0,
+            opacity: 0.4,
+            ..Transform::default()
+        },
+    )?;
+    let output = target.into_backplate_geometry(Uuid::new_v4(), background, config, 0.0)?;
+    assert_eq!(output.effects, [effect]);
+    let RuntimeShapeGeometry::Path(path) = output.geometry else {
+        bail!("Backplate root-state output was not Path")
+    };
+    assert!(
+        path.parts
+            .iter()
+            .all(|part| (part.opacity - 0.4).abs() < 0.001)
+    );
     Ok(())
 }
 

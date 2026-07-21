@@ -61,6 +61,10 @@ impl ProjectManager {
                 "Backplate requires an existing Image output in {container:?}"
             ))
         })?;
+        let current_output_blend = project
+            .get_node(current_output_id)
+            .map(|node| node.blend_mode)
+            .ok_or_else(|| LibraryError::Project(format!("Node {current_output_id} not found")))?;
 
         let terminal_position = project
             .get_node(terminal_id)
@@ -78,6 +82,12 @@ impl ProjectManager {
         let template_id = template.id;
         let style_id = style.id;
         let merge_id = merge.id;
+        let mut foreground_connection = ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(current_output_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            1,
+        );
+        foreground_connection.blend_mode = current_output_blend;
         let connections = vec![
             ProjectConnection::new(
                 PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT),
@@ -99,11 +109,7 @@ impl ProjectManager {
                 PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
                 0,
             ),
-            ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(current_output_id), IMAGE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
-                1,
-            ),
+            foreground_connection,
         ];
 
         let mut updated = project.clone();
