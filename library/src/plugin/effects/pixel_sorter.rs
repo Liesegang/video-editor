@@ -2,10 +2,12 @@ use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
-use image::Rgba;
 use log::debug;
-use rayon::prelude::*;
-use std::collections::HashMap; // Add rayon prelude
+use std::collections::HashMap;
+
+pub(crate) mod kernel;
+
+use kernel::{PixelSortOptions, rgba8_buffer_layout, sort_rgba8};
 
 #[derive(Default)]
 pub struct PixelSorterPlugin;
@@ -41,37 +43,22 @@ impl EffectPlugin for PixelSorterPlugin {
         params: &HashMap<String, PropertyValue>,
         gpu_context: Option<&mut crate::rendering::skia_utils::GpuContext>,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
-        let threshold_value = params
-            .get("threshold")
-            .and_then(|pv| pv.get_as::<f64>())
-            .unwrap_or(0.5); // Default threshold
+        let threshold_value = numeric_parameter(params, "threshold", 0.5)?;
 
         debug!(
             "PixelSorterPlugin: Applying with threshold_value = {}",
             threshold_value
         );
 
-        let direction_str = params
-            .get("direction")
-            .and_then(|pv| pv.get_as::<String>())
-            .unwrap_or_else(|| {
-                debug!(
-                    "PixelSorterPlugin: 'direction' parameter not found, defaulting to 'horizontal'"
-                );
-                "horizontal".to_string()
-            });
+        let direction = string_parameter(params, "direction", "horizontal")?;
+        let sort_criteria = string_parameter(params, "sort_criteria", "brightness")?;
+        let options = PixelSortOptions::parse(threshold_value, &direction, &sort_criteria)
+            .map_err(|error| LibraryError::Plugin(error.to_string()))?;
 
-        let sort_criteria_str = params
-            .get("sort_criteria")
-            .and_then(|pv| pv.get_as::<String>())
-            .unwrap_or_else(|| {
-                debug!("PixelSorterPlugin: 'sort_criteria' parameter not found, defaulting to 'brightness'");
-                "brightness".to_string()
-            });
-
-        // Resolve Image
-        let image = match input {
-            crate::rendering::renderer::RenderOutput::Image(img) => img.clone(),
+        let (width, height, input_data) = match input {
+            crate::rendering::renderer::RenderOutput::Image(image) => {
+                (image.width, image.height, image.data.as_slice())
+            }
             crate::rendering::renderer::RenderOutput::Texture(info) => {
                 if let Some(ctx) = gpu_context {
                     let sk_image = crate::rendering::skia_utils::create_image_from_texture(
@@ -80,8 +67,9 @@ impl EffectPlugin for PixelSorterPlugin {
                         info.width,
                         info.height,
                     )?;
-                    let row_bytes = (info.width * 4) as usize;
-                    let mut buffer = vec![0u8; (info.height as usize) * row_bytes];
+                    let (row_bytes, frame_bytes) = rgba8_buffer_layout(info.width, info.height)
+                        .map_err(|error| LibraryError::Plugin(error.to_string()))?;
+                    let mut buffer = vec![0u8; frame_bytes];
                     let image_info = skia_safe::ImageInfo::new(
                         skia_safe::ISize::new(info.width as i32, info.height as i32),
                         skia_safe::ColorType::RGBA8888,
@@ -99,7 +87,17 @@ impl EffectPlugin for PixelSorterPlugin {
                             "Failed to read texture pixels".to_string(),
                         ));
                     }
-                    Image::new(info.width, info.height, buffer)
+                    // The former adapter constructed an Image before sorting,
+                    // so transparent RGB was canonicalized before criteria
+                    // evaluation. Preserve that texture-input behavior.
+                    Image::canonicalize_transparent_rgb(&mut buffer);
+                    let processed_data = sort_rgba8(info.width, info.height, &buffer, options)
+                        .map_err(|error| LibraryError::Plugin(error.to_string()))?;
+                    return Ok(crate::rendering::renderer::RenderOutput::Image(Image::new(
+                        info.width,
+                        info.height,
+                        processed_data,
+                    )));
                 } else {
                     return Err(LibraryError::Render(
                         "Cannot read texture without GPU context".to_string(),
@@ -108,137 +106,12 @@ impl EffectPlugin for PixelSorterPlugin {
             }
         };
 
-        let mut processed_data = image.data.clone(); // Start with a mutable copy of the original data
-
-        match direction_str.as_str() {
-            "horizontal" => {
-                processed_data
-                    .par_chunks_mut((image.width * 4) as usize)
-                    .for_each(|row_chunk| {
-                        // Extract pixels for the row
-                        let mut row_pixels: Vec<(u8, Rgba<u8>)> = row_chunk
-                            .chunks_exact(4)
-                            .map(|chunk| {
-                                let pixel = Rgba([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                                (get_pixel_criteria_value(&pixel, &sort_criteria_str), pixel)
-                            })
-                            .collect();
-
-                        // Apply sorting logic
-                        let mut current_run_start: Option<usize> = None;
-                        for x in 0..row_pixels.len() {
-                            let (criteria_value, _) = row_pixels[x];
-                            let pixel_norm = criteria_value as f32 / 255.0;
-
-                            if pixel_norm < threshold_value as f32 {
-                                // Condition met
-                                if current_run_start.is_none() {
-                                    current_run_start = Some(x); // Start a new run
-                                }
-                            } else {
-                                // Condition not met
-                                if let Some(start) = current_run_start {
-                                    // End of run, sort the segment
-                                    row_pixels[start..x].sort_by_key(|(val, _)| *val);
-                                    current_run_start = None; // Reset for next run
-                                }
-                            }
-                        }
-                        // Handle any pending run at the end of the row
-                        if let Some(start) = current_run_start {
-                            let end_index = row_pixels.len(); // Store length first
-                            row_pixels[start..end_index].sort_by_key(|(val, _)| *val);
-                        }
-
-                        // Write sorted pixels back to the row_chunk
-                        for (x, (_, pixel)) in row_pixels.into_iter().enumerate() {
-                            let start_index = x * 4;
-                            row_chunk[start_index] = pixel[0];
-                            row_chunk[start_index + 1] = pixel[1];
-                            row_chunk[start_index + 2] = pixel[2];
-                            row_chunk[start_index + 3] = pixel[3];
-                        }
-                    });
-            }
-            "vertical" => {
-                // Convert to columns for vertical processing
-                let mut columns: Vec<Vec<Rgba<u8>>> = (0..image.width)
-                    .map(|x| {
-                        (0..image.height)
-                            .map(|y| {
-                                let start_index = (y * image.width + x) as usize * 4;
-                                Rgba([
-                                    processed_data[start_index],
-                                    processed_data[start_index + 1],
-                                    processed_data[start_index + 2],
-                                    processed_data[start_index + 3],
-                                ])
-                            })
-                            .collect()
-                    })
-                    .collect();
-
-                // Process each column in parallel
-                columns.par_iter_mut().for_each(|col_pixels| {
-                    let mut column_pixels_with_criteria: Vec<(u8, Rgba<u8>)> = col_pixels
-                        .iter()
-                        .map(|p| (get_pixel_criteria_value(p, &sort_criteria_str), *p))
-                        .collect();
-
-                    let mut current_run_start: Option<usize> = None;
-                    for y in 0..column_pixels_with_criteria.len() {
-                        let (criteria_value, _) = column_pixels_with_criteria[y];
-                        let pixel_norm = criteria_value as f32 / 255.0;
-
-                        if pixel_norm < threshold_value as f32 {
-                            // Condition met
-                            if current_run_start.is_none() {
-                                current_run_start = Some(y); // Start a new run
-                            }
-                        } else {
-                            // Condition not met
-                            if let Some(start) = current_run_start {
-                                // End of run, sort the segment
-                                column_pixels_with_criteria[start..y].sort_by_key(|(val, _)| *val);
-                                current_run_start = None; // Reset for next run
-                            }
-                        }
-                    }
-                    // Handle any pending run at the end of the column
-                    if let Some(start) = current_run_start {
-                        let end_index = column_pixels_with_criteria.len(); // Store length first
-                        column_pixels_with_criteria[start..end_index].sort_by_key(|(val, _)| *val);
-                    }
-
-                    // Write sorted pixels back to col_pixels
-                    for (y, (_, pixel)) in column_pixels_with_criteria.into_iter().enumerate() {
-                        col_pixels[y] = pixel;
-                    }
-                });
-
-                // Write processed columns back to processed_data
-                for x in 0..image.width {
-                    for y in 0..image.height {
-                        let pixel = columns[x as usize][y as usize];
-                        let start_index = (y * image.width + x) as usize * 4;
-                        processed_data[start_index] = pixel[0];
-                        processed_data[start_index + 1] = pixel[1];
-                        processed_data[start_index + 2] = pixel[2];
-                        processed_data[start_index + 3] = pixel[3];
-                    }
-                }
-            }
-            _ => {
-                return Err(LibraryError::Plugin(format!(
-                    "Unsupported sort direction: {}",
-                    direction_str
-                )));
-            }
-        }
+        let processed_data = sort_rgba8(width, height, input_data, options)
+            .map_err(|error| LibraryError::Plugin(error.to_string()))?;
 
         Ok(crate::rendering::renderer::RenderOutput::Image(Image::new(
-            image.width,
-            image.height,
+            width,
+            height,
             processed_data,
         )))
     }
@@ -287,16 +160,31 @@ impl EffectPlugin for PixelSorterPlugin {
     }
 }
 
-fn get_pixel_criteria_value(pixel: &Rgba<u8>, sort_criteria: &str) -> u8 {
-    match sort_criteria {
-        "brightness" => {
-            // Simple brightness calculation (average of RGB)
-            ((pixel[0] as u16 + pixel[1] as u16 + pixel[2] as u16) / 3) as u8
+fn numeric_parameter(
+    params: &HashMap<String, PropertyValue>,
+    name: &str,
+    default: f64,
+) -> Result<f64, LibraryError> {
+    match params.get(name) {
+        Some(value) => value.get_as::<f64>().ok_or_else(|| {
+            LibraryError::Plugin(format!("pixel sorter parameter {name:?} must be a number"))
+        }),
+        None => Ok(default),
+    }
+}
+
+fn string_parameter(
+    params: &HashMap<String, PropertyValue>,
+    name: &str,
+    default: &str,
+) -> Result<String, LibraryError> {
+    match params.get(name) {
+        Some(value) => value.get_as::<String>().ok_or_else(|| {
+            LibraryError::Plugin(format!("pixel sorter parameter {name:?} must be a string"))
+        }),
+        None => {
+            debug!("PixelSorterPlugin: {name:?} parameter not found, defaulting to {default:?}");
+            Ok(default.to_string())
         }
-        "red" => pixel[0],
-        "green" => pixel[1],
-        "blue" => pixel[2],
-        // Add more criteria like hue, saturation, value if needed
-        _ => ((pixel[0] as u16 + pixel[1] as u16 + pixel[2] as u16) / 3) as u8, // Default to brightness
     }
 }
