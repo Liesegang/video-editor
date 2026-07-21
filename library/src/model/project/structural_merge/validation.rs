@@ -80,7 +80,20 @@ impl Project {
         let Some(target) = self.structural_merge_target_for(container, kind) else {
             return;
         };
-        let children = self.structural_child_owners(container);
+        // A parent may be inserted before a prelisted child. Containment
+        // validation reports that missing entity; structural edges become
+        // mandatory as soon as the child exists and exposes its typed port.
+        let children = self
+            .structural_child_owners(container)
+            .into_iter()
+            .filter(|child| {
+                self.port_definition(
+                    &PortAddress::new(*child, kind.source_port()),
+                    super::super::PortDirection::Output,
+                )
+                .is_some()
+            })
+            .collect::<Vec<_>>();
         for (expected_order, child) in children.into_iter().enumerate() {
             let source = PortAddress::new(child, kind.source_port());
             let matching = self

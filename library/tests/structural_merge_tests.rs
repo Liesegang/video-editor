@@ -150,6 +150,50 @@ fn container_insertion_materializes_persisted_merge_nodes_and_prelisted_child_ed
 }
 
 #[test]
+fn prelisted_missing_child_reports_containment_until_late_insertion_materializes_typed_edges()
+-> Result<()> {
+    let mut project = Project::new("late child materialization");
+    let clip = Clip::new("late Clip", 0.0, 1.0);
+    let clip_id = clip.id;
+    let (composition, mut track) = Composition::new("Main", 320, 180, 30.0, 1.0);
+    let track_id = track.id;
+    track.clip_ids.push(clip_id);
+
+    project.add_track(track)?;
+    project.add_composition(composition)?;
+    let incomplete = project.validate_connections();
+    assert!(incomplete.contains(&ProjectGraphError::ClipNotFound(clip_id)));
+    assert!(!incomplete.iter().any(|error| matches!(
+        error,
+        ProjectGraphError::MissingStructuralEdge {
+            child: PortOwner::Clip(id),
+            ..
+        } if *id == clip_id
+    )));
+
+    project.add_clip(clip);
+    assert!(project.validate_connections().is_empty());
+    let track = project.get_track(track_id).context("Track disappeared")?;
+    for merge_id in [
+        track.structural_merge_node_id,
+        track.structural_sound_merge_node_id,
+    ] {
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.from.owner == PortOwner::Clip(clip_id)
+                        && connection.to.owner == PortOwner::Node(merge_id)
+                })
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn required_structural_ids_fail_deserialization_when_omitted() -> Result<()> {
     let (project, _, track_id) = one_track_project()?;
     let persisted = serde_json::to_value(project)?;
