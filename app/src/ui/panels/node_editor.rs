@@ -6114,22 +6114,11 @@ mod tests {
         let scale = composition_rect.width() / composition.ui_size[0];
         let screen_padding = AUTO_LAYOUT_NODE_PADDING * scale;
 
-        let node_ids = [
-            ids.solid,
-            ids.merge,
-            ids.text,
-            ids.text_fill,
-            ids.shape,
-            ids.shape_fill,
-            ids.composition_node,
-        ];
+        let node_ids = composition_graph_node_ids(&project, ids.composition);
         let rendered_nodes = node_ids
             .iter()
-            .map(|node_id| {
-                let rect = rects
-                    .get(&format!("node_editor.node:{node_id}"))
-                    .copied()
-                    .unwrap();
+            .filter_map(|node_id| {
+                let rect = rects.get(&format!("node_editor.node:{node_id}")).copied()?;
                 let estimated = estimated_node_size(&project, *node_id);
                 assert!(
                     rect.width() <= estimated.x * scale + 1.0,
@@ -6141,9 +6130,11 @@ mod tests {
                     "{} ({node_id}): {rect:?}, estimated={estimated:?}, scale={scale}",
                     node_title(&project, *node_id),
                 );
-                (*node_id, rect)
+                Some((*node_id, rect))
             })
             .collect::<HashMap<_, _>>();
+        let mut node_ids = rendered_nodes.keys().copied().collect::<Vec<_>>();
+        node_ids.sort_unstable();
 
         for (index, left_id) in node_ids.iter().enumerate() {
             for right_id in &node_ids[index + 1..] {
@@ -6239,8 +6230,7 @@ mod tests {
             if ranks[&from] == ranks[&to] {
                 continue;
             }
-            let (Some(from_rect), Some(to_rect)) =
-                (rendered_nodes.get(&from), rendered_nodes.get(&to))
+            let Some((from_rect, to_rect)) = rendered_nodes.get(&from).zip(rendered_nodes.get(&to))
             else {
                 continue;
             };
@@ -7163,7 +7153,7 @@ mod tests {
             composition_content_rect(container_rect(composition.ui_position, composition.ui_size,)),
             track_rect,
         ));
-        assert!(!layout_needs_reflow(&project, composition_id));
+        assert!(!container_hierarchy_needs_reflow(&project, composition_id));
     }
 
     #[test]

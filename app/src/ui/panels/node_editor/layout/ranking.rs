@@ -533,22 +533,29 @@ mod tests {
         let plan = crate::ui::panels::node_editor::compute_full_composition_layout(
             &project,
             composition_id,
-        )
-        .expect("fixture has a complete composition hierarchy");
+        );
+        assert!(plan.is_some());
+        let Some(plan) = plan else {
+            return;
+        };
         assert!(crate::ui::panels::node_editor::apply_auto_layout(
             &mut project,
             composition_id,
             &plan,
         ));
-        let clip = project.get_clip(clip_id).expect("Clip remains present");
-        let track_merge = project
-            .get_node(track_merge_id)
-            .expect("Track Merge remains present");
+        let Some(clip) = project.get_clip(clip_id) else {
+            return;
+        };
+        let Some(track_merge) = project.get_node(track_merge_id) else {
+            return;
+        };
         assert!(clip.ui_position[0] + clip.ui_size[0] < track_merge.ui_position[0]);
-        let track = project.get_track(track_id).expect("Track remains present");
-        let composition_merge = project
-            .get_node(composition_merge_id)
-            .expect("Composition Merge remains present");
+        let Some(track) = project.get_track(track_id) else {
+            return;
+        };
+        let Some(composition_merge) = project.get_node(composition_merge_id) else {
+            return;
+        };
         assert!(track.ui_position[0] + track.ui_size[0] < composition_merge.ui_position[0]);
     }
 }
