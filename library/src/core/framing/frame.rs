@@ -21,9 +21,9 @@ use crate::model::{GeneratorContent, Node, NodeContent, ValueContent};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext,
-    IMAGE_TRANSFORM_COMPONENT_ID, PluginManager, PropertyEvaluatorRegistry, ResolvedNodeInputs,
-    STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
-    property_name_from_port,
+    IMAGE_TRANSFORM_COMPONENT_ID, PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PluginManager,
+    PropertyEvaluatorRegistry, ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY,
+    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY, property_name_from_port,
 };
 use crate::util::timing::ScopedTimer;
 
@@ -604,6 +604,12 @@ impl<'a> FrameEvaluator<'a> {
                     self.apply_effector_to_shape(node, operation, scope, global_time, path)
                 }
                 NodeContent::PluginOperation(operation)
+                    if operation.category == PATH_EFFECT_CATEGORY
+                        && operation.operation == PATH_EFFECT_APPLY_OPERATION =>
+                {
+                    self.apply_path_effect_to_shape(node, operation, scope, global_time, path)
+                }
+                NodeContent::PluginOperation(operation)
                     if operation.category == DECORATOR_CATEGORY
                         && operation.operation == DECORATOR_APPLY_OPERATION =>
                 {
@@ -693,6 +699,46 @@ impl<'a> FrameEvaluator<'a> {
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
         shape.apply_effector(config, scope.time as f32)?;
+        Ok(EvalOutput::Produced(shape))
+    }
+
+    fn apply_path_effect_to_shape(
+        &self,
+        node: &Node,
+        operation: &crate::model::PluginOperationContent,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        if !self.operation_contract_matches(operation)? {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
+        if inputs
+            .properties
+            .values()
+            .any(|value| value == &EvalOutput::NoOutput)
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let mut shape = match self.pull_shape_input(node.id, global_time, path)? {
+            EvalOutput::Produced(shape) => shape,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let context = self.context(composition, Some(&inputs));
+        let effect = match self.plugin_manager.evaluate_path_effect_operation(
+            &context,
+            &operation.component_id,
+            node.properties(),
+            scope.time,
+        )? {
+            EvalOutput::Produced(effect) => effect,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        shape.apply_path_effect(node.id, effect)?;
         Ok(EvalOutput::Produced(shape))
     }
 

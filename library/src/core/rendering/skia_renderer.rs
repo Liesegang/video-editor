@@ -400,15 +400,16 @@ impl SkiaRenderer {
         let mut stroke_paint =
             Self::create_stroke_paint(color, width as f32, cap, join, miter as f32);
 
-        // Path Effects (Dash + others)
-        let mut effects_to_apply = Vec::new();
+        // Explicit Shape Path Effects run in graph order. Stroke's authored
+        // dash pattern belongs to this Style boundary and therefore runs
+        // after the upstream Shape operations.
+        let mut effects_to_apply = path_effects.to_vec();
         if !dash_array.is_empty() {
             effects_to_apply.push(PathEffect::Dash {
                 intervals: dash_array.to_vec(),
                 phase: dash_offset,
             });
         }
-        effects_to_apply.extend_from_slice(path_effects);
 
         if offset == 0.0 {
             // Standard Stroke
@@ -615,7 +616,10 @@ fn apply_path_effects(path_effects: &[PathEffect], paint: &mut Paint) -> Result<
             match convert_path_effect(effect) {
                 Ok(sk_path_effect) => {
                     composed_effect = match composed_effect {
-                        Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
+                        // Skia compose(outer, inner) evaluates inner first.
+                        // The accumulated upstream graph is therefore the
+                        // inner effect and this downstream Node is the outer.
+                        Some(upstream) => Some(SkPathEffect::compose(sk_path_effect, upstream)),
                         None => Some(sk_path_effect),
                     };
                 }

@@ -14,6 +14,7 @@ pub mod clip_helpers;
 pub mod connection;
 mod error;
 mod output_binding;
+mod path_effect_stack;
 pub mod property;
 mod structural_merge;
 

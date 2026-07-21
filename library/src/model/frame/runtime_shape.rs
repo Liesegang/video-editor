@@ -532,6 +532,27 @@ impl RuntimeShape {
         self.decorator_configs.push(config);
     }
 
+    /// Append one explicit Path Effect operation to transient render state.
+    /// The Vec order is the upstream-to-downstream graph order. Text remains
+    /// a distinct semantic Shape geometry until a real outline-extraction
+    /// operation can preserve glyph and grouping identity.
+    pub fn apply_path_effect(
+        &mut self,
+        operation_id: Uuid,
+        effect: PathEffect,
+    ) -> Result<(), LibraryError> {
+        match &mut self.geometry {
+            RuntimeShapeGeometry::Path(path) => {
+                path.path_effects.push(effect);
+                Ok(())
+            }
+            RuntimeShapeGeometry::Text(_) => Err(LibraryError::Validation(format!(
+                "Path Effect Node {operation_id} accepts only Path geometry; Text Shape source {} requires explicit outline extraction that preserves glyph grouping",
+                self.source_id
+            ))),
+        }
+    }
+
     /// Cross the Shape -> Image boundary. Geometry-only operations retain
     /// per-part opacity until this point; Style materializes those parts as
     /// independent objects only when their modulation differs from 1.0.

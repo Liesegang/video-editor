@@ -432,12 +432,9 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
         },
     )?;
     set(&mut node, "path", PropertyValue::String(path.to_string()))?;
-    set(
-        &mut node,
-        "path_effect",
-        PropertyValue::String("Corner".to_string()),
-    )?;
-    set(&mut node, "path_effect_radius", 5.0.into())?;
+    let mut corner = plugins.create_path_effect_operation_node("corner")?;
+    set(&mut corner, "radius", 5.0.into())?;
+    let corner_id = corner.id;
     let mut styles = vec![
         fill(
             &plugins,
@@ -463,7 +460,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     for style in &mut styles {
         set(style, "opacity", 0.9.into())?;
     }
-    let (mut project, node_id) = project_with_shape_graph(node, Vec::new(), styles)?;
+    let (mut project, node_id) = project_with_shape_graph(node, vec![corner], styles)?;
     let transform_id = transform_node_id(&project)?;
     let transform_node = project
         .get_node_mut(transform_id)
@@ -499,13 +496,26 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     );
 
     let mut no_effect = project.clone();
-    set(
-        no_effect
-            .get_node_mut(node_id)
-            .context("shape Node must exist for path-effect edit")?,
-        "path_effect",
-        PropertyValue::String("None".to_string()),
-    )?;
+    let input = no_effect
+        .connections
+        .iter()
+        .find(|connection| {
+            connection.to == PortAddress::new(PortOwner::Node(corner_id), SHAPE_INPUT_PORT)
+        })
+        .context("Corner Path Effect input wire must exist")?
+        .clone();
+    let outgoing = no_effect
+        .connections
+        .iter()
+        .filter(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(corner_id), SHAPE_OUTPUT_PORT)
+        })
+        .map(|connection| (connection.id, connection.to.clone()))
+        .collect::<Vec<_>>();
+    for (connection_id, target) in outgoing {
+        no_effect.reconnect_connection(connection_id, input.from.clone(), target)?;
+    }
+    assert!(no_effect.disconnect_connection(input.id));
     assert_ne!(
         hash(&rendered),
         hash(&preview(&no_effect, 0, &plugins)?),

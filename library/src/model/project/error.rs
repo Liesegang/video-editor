@@ -211,6 +211,8 @@ pub enum ProjectGraphError {
     },
     #[error("cannot splice through occupied single input: {target:?}")]
     SpliceInputOccupied { target: PortAddress },
+    #[error("invalid Path Effect stack: {reason}")]
+    InvalidPathEffectStack { reason: String },
     #[error("cannot connect {source_type:?} to {target_type:?}")]
     IncompatiblePortTypes {
         source_type: PortDataType,
