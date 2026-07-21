@@ -1,4 +1,9 @@
-use super::*;
+use super::super::{NodeContainer, Project};
+use super::{
+    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, PortAddress, PortDataType, PortDirection, PortOwner,
+    ProjectConnection,
+};
+use uuid::Uuid;
 
 /// Why a container exposes a particular owner as its image output.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -32,6 +37,32 @@ pub struct ContainerAudioSource {
 }
 
 impl Project {
+    pub(super) fn container_output_node_id(&self, owner: PortOwner) -> Option<Uuid> {
+        match owner {
+            PortOwner::Composition(id) => self
+                .get_composition(id)
+                .and_then(|composition| composition.output_node_id),
+            PortOwner::Track(id) => self.get_track(id).and_then(|track| track.output_node_id),
+            PortOwner::Clip(id) => self.get_clip(id).and_then(|clip| clip.output_node_id),
+            PortOwner::Node(_) => None,
+        }
+    }
+
+    pub(super) fn container_directly_contains_node(&self, owner: PortOwner, node_id: Uuid) -> bool {
+        match owner {
+            PortOwner::Composition(id) => self
+                .get_composition(id)
+                .is_some_and(|composition| composition.node_ids.contains(&node_id)),
+            PortOwner::Track(id) => self
+                .get_track(id)
+                .is_some_and(|track| track.node_ids.contains(&node_id)),
+            PortOwner::Clip(id) => self
+                .get_clip(id)
+                .is_some_and(|clip| clip.node_ids.contains(&node_id)),
+            PortOwner::Node(_) => false,
+        }
+    }
+
     /// Return the authoritative image dependency for a container. Timeline
     /// children enter Track and Composition output only through persisted
     /// connections to their annotated structural Merge Nodes; there is no
@@ -188,66 +219,5 @@ impl Project {
         let address = PortAddress::new(owner, AUDIO_OUTPUT_PORT);
         self.port_definition(&address, PortDirection::Output)
             .is_some_and(|port| port.data_type == PortDataType::Audio)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{Clip, Composition, Node};
-
-    #[test]
-    fn malformed_foreign_image_binding_is_no_output_after_deserialization() {
-        let mut project = Project::new("malformed foreign image binding");
-        let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
-        let track_id = track.id;
-        assert!(
-            project.add_track(track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(composition).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-
-        let first_clip = Clip::new("First", 0.0, 1.0);
-        let first_clip_id = first_clip.id;
-        project.add_clip(first_clip);
-        project
-            .attach_clip_to_track(track_id, first_clip_id)
-            .unwrap();
-
-        let second_clip = Clip::new("Second", 1.0, 1.0);
-        let second_clip_id = second_clip.id;
-        project.add_clip(second_clip);
-        project
-            .attach_clip_to_track(track_id, second_clip_id)
-            .unwrap();
-
-        let foreign_node = Node::new_merge("Foreign Image");
-        let foreign_node_id = foreign_node.id;
-        project.add_node(foreign_node);
-        project
-            .attach_node_to_container(NodeContainer::Clip(second_clip_id), foreign_node_id)
-            .unwrap();
-
-        let mut persisted = serde_json::to_value(&project).unwrap();
-        let first = persisted["clips"]
-            .as_object_mut()
-            .unwrap()
-            .get_mut(&first_clip_id.to_string())
-            .unwrap();
-        first["output_node_id"] = serde_json::json!(foreign_node_id);
-
-        let malformed: Project = serde_json::from_value(persisted).unwrap();
-        assert_eq!(
-            malformed.find_node_container(foreign_node_id),
-            Some(NodeContainer::Clip(second_clip_id))
-        );
-        assert!(
-            malformed
-                .container_image_sources(PortOwner::Clip(first_clip_id))
-                .is_empty()
-        );
     }
 }

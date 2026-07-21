@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
-use super::*;
+use crate::model::NodeContent;
+use crate::model::project::{NodeContainer, Project, ProjectGraphError};
 
 impl Project {
     pub(super) fn validate_composition_instances(&self) -> Vec<ProjectGraphError> {
