@@ -774,3 +774,76 @@ fn property_stack_follows_typed_visual_topology_and_preserves_authored_modes() -
     assert_eq!(*read_project(&shared)?, before);
     Ok(())
 }
+
+#[test]
+fn branch_local_opacity_does_not_hide_the_final_semantic_trunk() -> Result<()> {
+    let (shared, manager, clip_id, source_id) = raster_clip_fixture()?;
+    let owner = NodeContainer::Clip(clip_id);
+    manager.update_semantic_container_property_or_keyframe(
+        owner,
+        "position",
+        0.0,
+        vec2(10.0, 20.0),
+        None,
+    )?;
+    let (global_transform, global_opacity) = {
+        let project = read_project(&shared)?;
+        (
+            *operation_nodes(&project, owner, IMAGE_TRANSFORM_COMPONENT_ID)
+                .first()
+                .context("global Image Transform")?,
+            *operation_nodes(&project, owner, IMAGE_OPACITY_STYLE_COMPONENT_ID)
+                .first()
+                .context("global Image Opacity")?,
+        )
+    };
+    let branch_opacity = {
+        let mut project = write_project(&shared)?;
+        let branch = manager
+            .get_plugin_manager()
+            .create_image_opacity_style_operation_node()?;
+        let merge = Node::new_merge("branch opacity merge");
+        let (branch_id, merge_id) = (branch.id, merge.id);
+        project.insert_node_graph(
+            owner,
+            NodeGraphBundle::new(vec![branch, merge], Vec::new(), None),
+        )?;
+        let transform_input = project
+            .connections
+            .iter_mut()
+            .find(|connection| {
+                connection.from == PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT)
+                    && connection.to
+                        == PortAddress::new(PortOwner::Node(global_transform), IMAGE_INPUT_PORT)
+            })
+            .context("source -> global Transform")?;
+        transform_input.from = PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT);
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(branch_id), IMAGE_INPUT_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(branch_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+        assert!(project.validate_connections().is_empty());
+        branch_id
+    };
+    let before = read_project(&shared)?.clone();
+
+    let projection = manager.semantic_container_property_projection(owner)?;
+    assert_eq!(
+        projection
+            .binding("opacity")
+            .and_then(|binding| binding.node_id),
+        Some(global_opacity),
+        "only the final output-trunk Opacity owns Clip opacity"
+    );
+    assert_ne!(global_opacity, branch_opacity);
+    assert_eq!(*read_project(&shared)?, before);
+    Ok(())
+}
