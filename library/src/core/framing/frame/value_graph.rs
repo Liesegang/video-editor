@@ -26,6 +26,10 @@ use crate::model::{Node, NodeContent, SoundAnalysisContent, ValueContent};
 use crate::plugin::{PropertyEvaluationError, ResolvedNodeInputs, property_name_from_port};
 
 static SOUND_ANALYSIS_CACHE: LazyLock<CacheManager> = LazyLock::new(CacheManager::new);
+// Matches the authoritative hard limits: 2,000 ms at 192 kHz. Spectrum pads
+// this to 524,288 FFT points (about 8 MiB for Complex bins plus magnitudes),
+// which remains bounded without silently shortening a legal authored window.
+const MAX_SOUND_ANALYSIS_WINDOW_SAMPLES: usize = 384_000;
 
 impl FrameEvaluator<'_> {
     pub(super) fn resolve_node_inputs(
@@ -495,9 +499,9 @@ impl FrameEvaluator<'_> {
         // here would apply those remaps twice.
         let center_time = (global_time / hop_seconds).floor() * hop_seconds;
         let start_time = (center_time - window_seconds * 0.5).max(0.0);
-        let frames = (window_seconds * f64::from(sample_rate))
-            .ceil()
-            .clamp(1.0, 262_144.0) as usize;
+        let Some(frames) = sound_analysis_window_frames(window_seconds, sample_rate) else {
+            return Ok(EvalOutput::NoOutput);
+        };
         let start_sample = (start_time * f64::from(sample_rate)).floor() as u64;
         let Some(composition) = self.composition_for_owner(PortOwner::Node(node.id)) else {
             return Ok(EvalOutput::NoOutput);
@@ -593,6 +597,12 @@ impl FrameEvaluator<'_> {
     }
 }
 
+fn sound_analysis_window_frames(window_seconds: f64, sample_rate: u32) -> Option<usize> {
+    let frames = (window_seconds * f64::from(sample_rate)).ceil();
+    (frames.is_finite() && frames >= 1.0 && frames <= MAX_SOUND_ANALYSIS_WINDOW_SAMPLES as f64)
+        .then_some(frames as usize)
+}
+
 fn property_output(
     result: Result<PropertyValue, PropertyEvaluationError>,
     node_id: Uuid,
@@ -604,5 +614,23 @@ fn property_output(
             log::error!("Node '{node_id}' property '{property_key}' produced no output: {error}");
             EvalOutput::NoOutput
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_SOUND_ANALYSIS_WINDOW_SAMPLES, sound_analysis_window_frames};
+
+    #[test]
+    fn legal_maximum_analysis_window_is_not_silently_shortened() {
+        assert_eq!(
+            sound_analysis_window_frames(2.0, 192_000),
+            Some(MAX_SOUND_ANALYSIS_WINDOW_SAMPLES)
+        );
+        assert_eq!(
+            MAX_SOUND_ANALYSIS_WINDOW_SAMPLES.next_power_of_two(),
+            524_288
+        );
+        assert_eq!(sound_analysis_window_frames(2.0, 192_001), None);
     }
 }
