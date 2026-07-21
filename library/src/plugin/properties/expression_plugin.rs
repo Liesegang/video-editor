@@ -183,11 +183,15 @@ fn expression_value_from_property(
             f64::from(value.b) / 255.0,
             f64::from(value.a) / 255.0,
         ])),
+        PropertyValue::ColorValue(_) => Err(evaluation_error(
+            ExpressionDiagnosticKind::TypeMismatch,
+            "Tagged graph colors are not supported by the legacy untagged Expression color bridge",
+        )),
         PropertyValue::Boolean(value) => Ok(ExpressionValue::Bool(*value)),
         PropertyValue::String(value) => Ok(ExpressionValue::String(value.clone())),
         PropertyValue::Array(_) | PropertyValue::Map(_) => Err(evaluation_error(
             ExpressionDiagnosticKind::TypeMismatch,
-            "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, Color, Bool, or String",
+            "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, legacy Color, Bool, or String",
         )),
     }
 }
@@ -231,4 +235,26 @@ fn evaluation_error(
     message: impl Into<String>,
 ) -> ExpressionDiagnostic {
     ExpressionDiagnostic::evaluate(kind, message, None)
+}
+
+#[cfg(test)]
+mod color_value_tests {
+    use super::*;
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+
+    #[test]
+    fn tagged_color_is_not_silently_lowered_to_the_legacy_expression_color()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let value = PropertyValue::ColorValue(ColorValue::new(
+            ColorSpaceRef::new("scene_linear")?,
+            [2.0, -0.25, 0.5, 1.0],
+        )?);
+        let error = match expression_value_from_property(&value) {
+            Ok(_) => return Err("tagged color unexpectedly crossed the legacy bridge".into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, ExpressionDiagnosticKind::TypeMismatch);
+        assert!(error.message.contains("Tagged graph colors"));
+        Ok(())
+    }
 }

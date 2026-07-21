@@ -1,6 +1,4 @@
-use log;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::{HashMap, HashSet};
 
 use ordered_float::OrderedFloat;
@@ -10,8 +8,10 @@ use uuid::Uuid;
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 
+mod color_value;
 mod evaluation;
 
+pub use color_value::{ColorSpaceRef, ColorValue, ColorValueError};
 pub use evaluation::PropertySampleError;
 pub use value::{PropertyValue, TryGetProperty, Vec2, Vec3, Vec4};
 

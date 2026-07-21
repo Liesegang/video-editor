@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use ordered_float::OrderedFloat;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::frame::color::Color;
 
-use super::PropertyUiType;
+use super::{ColorValue, PropertyUiType};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
@@ -56,7 +57,7 @@ impl Hash for Vec4 {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 #[serde(untagged)]
 pub enum PropertyValue {
     // Keep Integer before Number: both serialize as an untagged JSON number,
@@ -69,9 +70,61 @@ pub enum PropertyValue {
     Vec2(Vec2),
     Vec3(Vec3),
     Vec4(Vec4),
+    /// Color-space-tagged, floating-point graph color. The existing `Color`
+    /// variant remains the explicit legacy straight-sRGBA8 boundary.
+    ColorValue(ColorValue),
     Color(Color),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum UntaggedPropertyValue {
+    Integer(i64),
+    Number(OrderedFloat<f64>),
+    String(String),
+    Boolean(bool),
+    Vec2(Vec2),
+    Vec3(Vec3),
+    Vec4(Vec4),
+    Color(Color),
+    Array(Vec<PropertyValue>),
+    Map(HashMap<String, PropertyValue>),
+}
+
+impl From<UntaggedPropertyValue> for PropertyValue {
+    fn from(value: UntaggedPropertyValue) -> Self {
+        match value {
+            UntaggedPropertyValue::Integer(value) => Self::Integer(value),
+            UntaggedPropertyValue::Number(value) => Self::Number(value),
+            UntaggedPropertyValue::String(value) => Self::String(value),
+            UntaggedPropertyValue::Boolean(value) => Self::Boolean(value),
+            UntaggedPropertyValue::Vec2(value) => Self::Vec2(value),
+            UntaggedPropertyValue::Vec3(value) => Self::Vec3(value),
+            UntaggedPropertyValue::Vec4(value) => Self::Vec4(value),
+            UntaggedPropertyValue::Color(value) => Self::Color(value),
+            UntaggedPropertyValue::Array(value) => Self::Array(value),
+            UntaggedPropertyValue::Map(value) => Self::Map(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PropertyValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if super::color_value::is_tagged_color_value_json(&value) {
+            return serde_json::from_value(value)
+                .map(Self::ColorValue)
+                .map_err(D::Error::custom);
+        }
+        serde_json::from_value::<UntaggedPropertyValue>(value)
+            .map(Self::from)
+            .map_err(D::Error::custom)
+    }
 }
 
 impl Hash for PropertyValue {
@@ -85,6 +138,7 @@ impl Hash for PropertyValue {
             PropertyValue::Vec2(v) => v.hash(state),
             PropertyValue::Vec3(v) => v.hash(state),
             PropertyValue::Vec4(v) => v.hash(state),
+            PropertyValue::ColorValue(c) => c.hash(state),
             PropertyValue::Color(c) => c.hash(state),
             PropertyValue::Array(arr) => arr.hash(state),
             PropertyValue::Map(map) => {
@@ -118,7 +172,9 @@ impl PropertyValue {
                     | PropertyUiType::Dropdown { .. }
             ),
             PropertyValue::Boolean(_) => matches!(ui_type, PropertyUiType::Bool),
-            PropertyValue::Color(_) => matches!(ui_type, PropertyUiType::Color),
+            PropertyValue::ColorValue(_) | PropertyValue::Color(_) => {
+                matches!(ui_type, PropertyUiType::Color)
+            }
             PropertyValue::Vec2(_) => matches!(ui_type, PropertyUiType::Vec2 { .. }),
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
@@ -173,6 +229,13 @@ impl From<serde_json::Value> for PropertyValue {
                 PropertyValue::Array(a.into_iter().map(|v| v.into()).collect())
             }
             serde_json::Value::Object(o) => {
+                let object = serde_json::Value::Object(o.clone());
+                if super::color_value::is_tagged_color_value_json(&object)
+                    && let Ok(color) = serde_json::from_value(object)
+                {
+                    return PropertyValue::ColorValue(color);
+                }
+
                 // Try to infer specific types
                 if o.len() == 2
                     && o.contains_key("x")
@@ -274,6 +337,11 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Vec4(v) => {
                 serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner(), "w": v.w.into_inner() })
             }
+            PropertyValue::ColorValue(color) => serde_json::json!({
+                "$type": "color_value",
+                "space": color.color_space().as_str(),
+                "rgba": color.rgba(),
+            }),
             PropertyValue::Color(c) => {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
@@ -410,6 +478,15 @@ impl TryGetProperty<Color> for Color {
     fn try_get(p: &PropertyValue) -> Option<Color> {
         match p {
             PropertyValue::Color(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl TryGetProperty<ColorValue> for ColorValue {
+    fn try_get(p: &PropertyValue) -> Option<ColorValue> {
+        match p {
+            PropertyValue::ColorValue(value) => Some(value.clone()),
             _ => None,
         }
     }

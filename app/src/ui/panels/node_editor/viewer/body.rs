@@ -667,6 +667,27 @@ impl ProjectNodeViewer<'_> {
                             Vec::new(),
                         )
                     }
+                    PropertyValue::ColorValue(color) => {
+                        let [r, g, b, a] = color.rgba();
+                        let response = bounded_non_selectable_label(
+                            ui,
+                            format!("{r:.2},{g:.2},{b:.2},{a:.2} @ {}", color.color_space()),
+                            96.0,
+                            egui::Align::LEFT,
+                        )
+                        .on_hover_text(format!(
+                            "r={r}, g={g}, b={b}, a={a} @ {} (straight alpha)",
+                            color.color_space()
+                        ));
+                        (
+                            false,
+                            false,
+                            false,
+                            "color_value_readonly",
+                            response,
+                            Vec::new(),
+                        )
+                    }
                     PropertyValue::Vec2(_) | PropertyValue::Vec3(_) | PropertyValue::Vec4(_) => {
                         let Some(rendered) = vector::render(ui, property_definition, &mut value)
                         else {

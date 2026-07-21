@@ -79,6 +79,15 @@ pub(super) fn property_views(
                     view.value_type = PROPERTY_VALUE_COLOR_V1;
                     view.color = [value.r, value.g, value.b, value.a];
                 }
+                PropertyValue::ColorValue(value) => {
+                    let value = value.try_to_straight_srgba8().map_err(|error| {
+                        LibraryError::Plugin(format!(
+                            "Runtime Effect property {name:?} cannot cross the legacy color ABI: {error}"
+                        ))
+                    })?;
+                    view.value_type = PROPERTY_VALUE_COLOR_V1;
+                    view.color = [value.r, value.g, value.b, value.a];
+                }
                 PropertyValue::Number(_)
                 | PropertyValue::Vec2(_)
                 | PropertyValue::Vec3(_)
@@ -157,6 +166,17 @@ pub(super) fn property_value_to_wire(
             b: value.b,
             a: value.a,
         }),
+        PropertyValue::ColorValue(value) => {
+            let value = value.try_to_straight_srgba8().map_err(
+                |_| "tagged color must be exactly representable as straight sRGBA8 for ABI v1",
+            )?;
+            Ok(PropertyValueV1::Color {
+                r: value.r,
+                g: value.g,
+                b: value.b,
+                a: value.a,
+            })
+        }
         PropertyValue::Array(_) | PropertyValue::Map(_) => {
             Err("array and map values are not supported by ABI v1")
         }
@@ -232,4 +252,53 @@ pub(super) fn property_output_default(
             component.id
         ))
     })
+}
+
+#[cfg(test)]
+mod color_value_tests {
+    use super::*;
+    use crate::model::frame::color::Color;
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+
+    #[test]
+    fn abi_v1_accepts_only_exact_straight_srgba8_tagged_colors()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = Color {
+            r: 211,
+            g: 37,
+            b: 99,
+            a: 73,
+        };
+        let tagged = PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&legacy));
+        assert_eq!(
+            property_value_to_wire(&tagged),
+            Ok(PropertyValueV1::Color {
+                r: legacy.r,
+                g: legacy.g,
+                b: legacy.b,
+                a: legacy.a,
+            })
+        );
+        let views = property_views(&[("color".to_string(), tagged)])?;
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].value_type, PROPERTY_VALUE_COLOR_V1);
+        assert_eq!(views[0].color, [legacy.r, legacy.g, legacy.b, legacy.a]);
+
+        let hdr = PropertyValue::ColorValue(ColorValue::new(
+            ColorSpaceRef::new("scene_linear")?,
+            [4.0, -0.25, 0.5, 1.0],
+        )?);
+        assert!(property_value_to_wire(&hdr).is_err());
+        assert!(property_views(&[("hdr".to_string(), hdr)]).is_err());
+
+        let from_abi = property_value_from_wire(&PropertyValueV1::Color {
+            r: legacy.r,
+            g: legacy.g,
+            b: legacy.b,
+            a: legacy.a,
+        })?;
+        assert_eq!(from_abi, PropertyValue::Color(legacy));
+        assert!(!matches!(from_abi, PropertyValue::ColorValue(_)));
+        Ok(())
+    }
 }

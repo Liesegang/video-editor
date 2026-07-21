@@ -220,7 +220,7 @@ fn property_value_data_type(value: &crate::model::property::PropertyValue) -> Po
         PropertyValue::String(_) => PortDataType::String,
         PropertyValue::Boolean(_) => PortDataType::Boolean,
         PropertyValue::Vec2(_) => PortDataType::Vec2,
-        PropertyValue::Color(_) => PortDataType::Color,
+        PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PortDataType::Color,
         PropertyValue::Vec3(_) => PortDataType::Vec3,
         PropertyValue::Vec4(_) => PortDataType::Vec4,
         PropertyValue::Array(_) | PropertyValue::Map(_) => PortDataType::Any,
@@ -279,4 +279,20 @@ impl Project {
 
 pub(super) fn is_graph_connectable_type(data_type: PortDataType) -> bool {
     data_type != PortDataType::Any
+}
+
+#[cfg(test)]
+mod color_value_tests {
+    use super::*;
+    use crate::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
+
+    #[test]
+    fn tagged_graph_color_uses_the_color_port_contract() -> Result<(), Box<dyn std::error::Error>> {
+        let color = ColorValue::new(ColorSpaceRef::srgb(), [1.0, 0.0, 0.0, 1.0])?;
+        assert_eq!(
+            property_value_data_type(&PropertyValue::ColorValue(color)),
+            PortDataType::Color
+        );
+        Ok(())
+    }
 }

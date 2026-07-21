@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+/// Legacy encoded straight sRGBA8 value used by raster/plugin boundaries.
+/// Project-authoritative graph colors use `model::property::ColorValue`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Color {
     pub r: u8,

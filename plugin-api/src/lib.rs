@@ -537,6 +537,8 @@ pub const DECORATOR_EVALUATE_V2: &str = "decorator.evaluate.v2";
 /// This is intentionally separate from RuViE's Project model. The tag keeps
 /// integer and floating-point values distinct and lets ABI v1 reject values it
 /// cannot faithfully adapt instead of guessing from untagged JSON.
+/// `Color` remains a legacy encoded straight-sRGBA8 value with no project
+/// color-space tag; HDR graph colors must not be implicitly quantized into it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PropertyValueV1 {
