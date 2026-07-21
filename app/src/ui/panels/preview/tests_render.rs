@@ -4,6 +4,14 @@ mod render_tests {
     use std::cell::Cell;
 
     #[test]
+    fn preview_snapshot_releases_authoritative_lock_before_frame_evaluation() {
+        let shared = Arc::new(RwLock::new(Project::new("snapshot lock boundary")));
+        let snapshot = snapshot_project_for_preview(&shared);
+        assert!(snapshot.is_some());
+        assert!(shared.try_write().is_ok());
+    }
+
+    #[test]
     fn frame_error_is_reported_and_invalidates_stale_preview_without_dispatch() {
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.preview_texture_id = Some(42);
