@@ -339,6 +339,46 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
     Ok(())
 }
 
+#[test]
+fn bypassed_image_effect_routes_input_without_descriptor_or_properties() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let source = manager.create_solid_node(Color::white(), WIDTH, HEIGHT)?;
+    let source_id = source.id;
+    let mut blur = plugins.create_effect_operation_node("blur")?;
+    blur.bypassed = true;
+    assert!(blur.supports_bypass());
+    let blur_id = blur.id;
+    let mut persisted = serde_json::to_value(blur)?;
+    persisted["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-blur".to_string());
+    let blur = serde_json::from_value(persisted)?;
+    let graph = NodeGraphBundle::new(
+        vec![source, blur],
+        vec![image_wire(source_id, blur_id)],
+        Some(blur_id),
+    );
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
+
+    let rendered = evaluate(&project, &plugins, 0)?;
+    assert_eq!(object_source_ids(&rendered.items), [source_id]);
+    assert!(find_group(&rendered.items, blur_id).is_none());
+    assert_eq!(Project::load(&project.save()?)?, project);
+
+    project.connections.clear();
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+
+    project
+        .get_node_mut(blur_id)
+        .context("bypassed Effect remains authored")?
+        .enabled = false;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+    Ok(())
+}
+
 struct DerivedTimingProbe;
 
 impl Plugin for DerivedTimingProbe {

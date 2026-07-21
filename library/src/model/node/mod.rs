@@ -2,7 +2,8 @@ use crate::model::blend::BlendMode;
 use crate::model::numeric::NumericBinaryOperation;
 use crate::model::project::connection::{
     FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
-    NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortExposure, PortSide,
+    NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortDirection, PortExposure,
+    PortMultiplicity, PortSide,
 };
 use crate::model::project::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
@@ -223,6 +224,11 @@ pub struct Node {
     /// Authoritative authored evaluation state. Disabled Nodes produce
     /// NoOutput before resolving descriptors, properties, or upstream values.
     pub enabled: bool,
+    /// Authoritative pass-through state, distinct from `enabled`. A bypassed
+    /// Node routes a compatible single input to its same-typed output without
+    /// evaluating the Node's descriptor or properties.
+    #[serde(default)]
+    pub bypassed: bool,
     #[serde(default)]
     pub blend_mode: BlendMode,
     #[serde(default)]
@@ -359,6 +365,7 @@ impl Node {
             name: name.to_string(),
             content,
             enabled: true,
+            bypassed: false,
             blend_mode: BlendMode::Normal,
             properties,
             ui_position: [0.0, 0.0],
@@ -403,6 +410,67 @@ impl Node {
     /// a complete factory result cannot be cleared or replaced accidentally.
     pub fn properties(&self) -> &PropertyMap {
         &self.properties
+    }
+
+    /// Resolve the canonical pass-through input for one output. Operations
+    /// participate only when one single input has the output's exact type;
+    /// ambiguous multi-input operations require explicit operation metadata
+    /// before they can be bypassed safely.
+    pub fn bypass_input_for_output(&self, output: &str) -> Option<&str> {
+        match self.content() {
+            NodeContent::Value(value) => value.bypass_input_for_output(output),
+            NodeContent::PluginOperation(operation) => {
+                let output_type = operation
+                    .declared_ports
+                    .iter()
+                    .find(|port| port.key == output && port.direction == PortDirection::Output)?
+                    .data_type;
+                let matching = operation
+                    .declared_ports
+                    .iter()
+                    .filter(|port| {
+                        port.direction == PortDirection::Input
+                            && port.multiplicity == PortMultiplicity::Single
+                            && port.data_type == output_type
+                    })
+                    .collect::<Vec<_>>();
+                let [input] = matching.as_slice() else {
+                    return None;
+                };
+                Some(input.key.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn supports_bypass(&self) -> bool {
+        let ports = match self.content() {
+            NodeContent::Value(value) => value.port_definitions(),
+            NodeContent::PluginOperation(operation) => operation.declared_ports.as_slice(),
+            _ => return false,
+        };
+        let outputs = ports
+            .iter()
+            .filter(|port| port.direction == PortDirection::Output)
+            .collect::<Vec<_>>();
+        !outputs.is_empty()
+            && outputs.iter().all(|port| {
+                matches!(
+                    port.data_type,
+                    PortDataType::Image
+                        | PortDataType::Shape
+                        | PortDataType::Numeric
+                        | PortDataType::Number
+                        | PortDataType::Integer
+                        | PortDataType::Boolean
+                        | PortDataType::String
+                        | PortDataType::Color
+                        | PortDataType::Path
+                        | PortDataType::Vec2
+                        | PortDataType::Vec3
+                        | PortDataType::Vec4
+                ) && self.bypass_input_for_output(&port.key).is_some()
+            })
     }
 
     /// Replaces one factory-declared authored property. Unknown keys are not
@@ -611,9 +679,7 @@ impl ValueContent {
         (self.descriptor().port_definitions)()
     }
 
-    /// Declares the primary input that a future bypass state should route to
-    /// each output. This is operation metadata only; it deliberately does not
-    /// add or reinterpret authored Node state.
+    /// Declares the primary input that bypass routes to the result output.
     pub fn bypass_input_for_output(self, output: &str) -> Option<&'static str> {
         let descriptor = self.descriptor();
         if output == descriptor.result_output {
@@ -682,6 +748,17 @@ pub struct CompositionInstanceContent {
 mod tests {
     use super::*;
     use crate::model::property::Property;
+    use crate::plugin::PluginManager;
+
+    fn operation_with_ports(ports: Vec<PortDefinition>) -> Node {
+        let node = PluginManager::default()
+            .create_path_effect_operation_node("trim")
+            .expect("built-in Trim Path factory must exist");
+        let mut persisted = serde_json::to_value(node).expect("operation must serialize");
+        persisted["content"]["data"]["declared_ports"] =
+            serde_json::to_value(ports).expect("ports must serialize");
+        serde_json::from_value(persisted).expect("persisted operation ports must load")
+    }
 
     fn number_definition() -> PropertyDefinition {
         PropertyDefinition::new(
@@ -781,6 +858,75 @@ mod tests {
         let error = serde_json::from_value::<Node>(legacy).unwrap_err();
         assert!(error.to_string().contains("unknown variant `TimeModulo`"));
         Ok(())
+    }
+
+    #[test]
+    fn bypass_state_round_trips_and_missing_pre_v1_state_defaults_off()
+    -> Result<(), serde_json::Error> {
+        let mut node = Node::new_add("persisted bypass");
+        node.bypassed = true;
+        let encoded = serde_json::to_value(&node)?;
+        assert_eq!(serde_json::from_value::<Node>(encoded.clone())?, node);
+
+        let mut without_bypass = encoded;
+        without_bypass
+            .as_object_mut()
+            .expect("Node serializes as an object")
+            .remove("bypassed");
+        assert!(!serde_json::from_value::<Node>(without_bypass)?.bypassed);
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
+        for data_type in [
+            PortDataType::Image,
+            PortDataType::Shape,
+            PortDataType::Numeric,
+            PortDataType::Number,
+            PortDataType::Vec2,
+            PortDataType::Vec3,
+            PortDataType::Vec4,
+        ] {
+            let node = operation_with_ports(vec![
+                PortDefinition::input("source", "Source", data_type),
+                PortDefinition::output(
+                    "result",
+                    "Result",
+                    data_type,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ]);
+            assert!(node.supports_bypass(), "{data_type:?} must pass through");
+            assert_eq!(node.bypass_input_for_output("result"), Some("source"));
+        }
+
+        let audio = operation_with_ports(vec![
+            PortDefinition::input("source", "Source", PortDataType::Audio),
+            PortDefinition::output(
+                "result",
+                "Result",
+                PortDataType::Audio,
+                PortSide::Right,
+                PortExposure::Graph,
+            ),
+        ]);
+        assert!(!audio.supports_bypass());
+
+        let ambiguous = operation_with_ports(vec![
+            PortDefinition::input("left", "Left", PortDataType::Image),
+            PortDefinition::input("right", "Right", PortDataType::Image),
+            PortDefinition::output(
+                "result",
+                "Result",
+                PortDataType::Image,
+                PortSide::Right,
+                PortExposure::Graph,
+            ),
+        ]);
+        assert_eq!(ambiguous.bypass_input_for_output("result"), None);
+        assert!(!ambiguous.supports_bypass());
     }
 
     #[test]

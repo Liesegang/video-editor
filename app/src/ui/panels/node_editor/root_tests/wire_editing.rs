@@ -22,6 +22,45 @@ fn node_enabled_context_command_is_atomic_and_undoable() {
 }
 
 #[test]
+fn node_bypass_context_command_is_capability_checked_atomic_and_undoable() {
+    let (mut project, _, _, clip_id, unsupported_id, _) = fixture();
+    let bypassed = Node::new_add("Bypassed Add");
+    let bypassed_id = bypassed.id;
+    project.add_node(bypassed);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), bypassed_id)
+        .unwrap();
+    let initial = project.clone();
+    let mut history = HistoryManager::new();
+    history.push_project_state(initial.clone());
+    let mut state = NodeEditorState::default();
+
+    assert!(apply_queued_node_edits(
+        &mut project,
+        vec![QueuedNodeEdit::Atomic(NodeEdit::SetBypassed {
+            node_id: bypassed_id,
+            bypassed: true,
+        })],
+        &mut history,
+        &mut state,
+    ));
+    assert!(project.get_node(bypassed_id).unwrap().bypassed);
+    let edited = project.clone();
+    assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+
+    assert!(!apply_queued_node_edits(
+        &mut project,
+        vec![QueuedNodeEdit::Atomic(NodeEdit::SetBypassed {
+            node_id: unsupported_id,
+            bypassed: true,
+        })],
+        &mut history,
+        &mut state,
+    ));
+    assert!(!project.get_node(unsupported_id).unwrap().bypassed);
+}
+
+#[test]
 fn merge_wire_layer_order_and_authored_blend_are_canonical_and_undoable() {
     let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
     let first_connection_id = project

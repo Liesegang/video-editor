@@ -64,6 +64,10 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
         node_id: Uuid,
         enabled: bool,
     },
+    SetBypassed {
+        node_id: Uuid,
+        bypassed: bool,
+    },
     RenameContainer {
         owner: PortOwner,
         name: String,

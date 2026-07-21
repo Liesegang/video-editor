@@ -281,9 +281,34 @@ fn text_shape_reports_the_missing_outline_boundary() -> Result<()> {
 }
 
 #[test]
+fn bypassed_path_effect_routes_shape_without_descriptor_or_properties() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let mut corner = plugins.create_path_effect_operation_node("corner")?;
+    corner.bypassed = true;
+    assert!(corner.supports_bypass());
+    let corner_id = corner.id;
+    let mut persisted = serde_json::to_value(corner)?;
+    persisted["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-corner".to_string());
+    let corner = serde_json::from_value(persisted)?;
+    let (mut project, _) =
+        setup_project(shape_source(Arc::clone(&plugins))?, vec![corner], &plugins)?;
+
+    assert!(rendered_path_effects(&evaluate(&project, &plugins)?)?.is_empty());
+
+    project.connections.retain(|connection| {
+        !(connection.to.owner == PortOwner::Node(corner_id)
+            && connection.to.port == SHAPE_INPUT_PORT)
+    });
+    assert!(evaluate(&project, &plugins)?.items.is_empty());
+    Ok(())
+}
+
+#[test]
 fn disabled_path_effect_keeps_the_global_no_output_contract() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let mut corner = plugins.create_path_effect_operation_node("corner")?;
+    corner.bypassed = true;
     corner.enabled = false;
     let (project, _) = setup_project(shape_source(Arc::clone(&plugins))?, vec![corner], &plugins)?;
     assert!(evaluate(&project, &plugins)?.items.is_empty());

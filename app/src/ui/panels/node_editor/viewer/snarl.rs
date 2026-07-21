@@ -12,6 +12,8 @@ use library::model::{GeneratorContent, NodeContent};
 use library::plugin::property_name_from_port;
 use std::sync::Arc;
 
+mod bypass_menu;
+
 impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     fn node_layout(
         &mut self,
@@ -120,6 +122,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 );
                 let (inactive, selected, visual) =
                     (selection.inactive, selection.selected, selection.visual);
+                let bypassed = bypass_menu::is_bypassed(self.project.get_node(project_node_id));
                 ui.set_min_width(NODE_HEADER_WIDTH);
                 let response = if node_editor_details_visible(self.to_global.scaling) {
                     ui.horizontal(|ui| {
@@ -136,11 +139,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             node_title(self.project, project_node_id),
                             NODE_HEADER_WIDTH - 48.0,
                         );
-                        let (status, status_label) = if inactive {
-                            (icons::CIRCLE_DASHED, "Node has no output")
-                        } else {
-                            (icons::CHECK_CIRCLE, "Node is active")
-                        };
+                        let (status, status_label) = bypass_menu::status(bypassed, inactive);
                         non_selectable_label(ui, egui::RichText::new(status).color(palette.accent))
                             .on_hover_text(status_label);
                     })
@@ -740,6 +739,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             enabled,
                         }));
                     ui.close();
+                    return;
+                }
+                if bypass_menu::show_toggle(ui, node, project_node_id, self.edits) {
                     return;
                 }
             }

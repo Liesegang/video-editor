@@ -171,6 +171,18 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 true
             })
         }
+        NodeEdit::SetBypassed { node_id, bypassed } => {
+            project.get_node_mut(node_id).is_some_and(|node| {
+                if node.bypassed == bypassed {
+                    return false;
+                }
+                if bypassed && !node.supports_bypass() {
+                    return false;
+                }
+                node.bypassed = bypassed;
+                true
+            })
+        }
         NodeEdit::RenameContainer { owner, name } => match owner {
             PortOwner::Composition(id) => {
                 let Some(composition) = project.get_composition_mut(id) else {
