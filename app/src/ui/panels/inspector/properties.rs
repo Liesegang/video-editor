@@ -13,6 +13,9 @@ pub struct PropertyRenderContext<'a> {
     pub available_fonts: &'a [String],
     pub in_grid: bool,
     pub current_time: f64,
+    /// Constant-only facade properties keep their typed value control while
+    /// omitting evaluator/keyframe/expression authoring.
+    pub show_authoring: bool,
     /// Stable owner/target scope used by coordinate-driven QA. Examples:
     /// `node:<uuid>` and `node:<uuid>.effector:<instance-uuid>`.
     pub qa_scope: String,
@@ -70,15 +73,19 @@ where
         let mode_value = authored_value
             .clone()
             .unwrap_or_else(|| prop_def.default_value().clone());
-        actions.extend(render_property_authoring(
-            ui,
-            prop_def,
-            property.as_ref(),
-            &mode_value,
-            context.current_time,
-            &context.qa_scope,
-            context.in_grid,
-        ));
+        if context.show_authoring {
+            actions.extend(render_property_authoring(
+                ui,
+                prop_def,
+                property.as_ref(),
+                &mode_value,
+                context.current_time,
+                &context.qa_scope,
+                context.in_grid,
+            ));
+        } else {
+            ui.label(prop_def.label());
+        }
 
         // 2. Render Input Column
         match prop_def.ui_type() {
@@ -481,6 +488,7 @@ impl Clone for PropertyRenderContext<'_> {
             available_fonts: self.available_fonts,
             in_grid: self.in_grid,
             current_time: self.current_time,
+            show_authoring: self.show_authoring,
             qa_scope: self.qa_scope.clone(),
         }
     }
@@ -755,6 +763,7 @@ mod tests {
             available_fonts: &[],
             in_grid: false,
             current_time: 0.0,
+            show_authoring: true,
             qa_scope: format!("node:{}", node.id),
         };
         let component_id = format!("inspector.property.node:{}:opacity", node.id);

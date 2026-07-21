@@ -230,6 +230,7 @@ mod tests {
             available_fonts: &[],
             in_grid: false,
             current_time: 0.0,
+            show_authoring: true,
             qa_scope: format!("node:{}", node.id),
         };
         let x_component_id = format!("inspector.property_component.node:{}:position:x", node.id);

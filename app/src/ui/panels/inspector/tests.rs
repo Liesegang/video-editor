@@ -10,7 +10,7 @@ use library::plugin::{
 };
 
 #[test]
-fn clip_selection_keeps_every_contained_node_in_order() {
+fn clip_selection_keeps_the_clip_as_its_semantic_identity() {
     let mut project = Project::new("inspector");
     let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
@@ -36,17 +36,16 @@ fn clip_selection_keeps_every_contained_node_in_order() {
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-    let Some(InspectorSelection::Clip { nodes, .. }) = resolve_selection(
+    let Some(InspectorSelection::Clip { clip, track_id }) = resolve_selection(
         &project,
         Some(SelectionTarget::Clip(clip_id)),
         composition_id,
     ) else {
         panic!("Clip selection should resolve");
     };
-    assert_eq!(
-        nodes.iter().map(|node| node.id).collect::<Vec<_>>(),
-        vec![second_id, first_id]
-    );
+    assert_eq!(clip.id, clip_id);
+    assert_eq!(clip.node_ids, vec![second_id, first_id]);
+    assert_eq!(track_id, project.find_track_for_clip(clip_id));
 }
 
 #[test]
@@ -278,18 +277,16 @@ fn structural_status_reuses_the_authoritative_clip_semantics(
         99,
     ));
 
-    let Some(InspectorSelection::Clip {
-        semantics,
-        connections,
-        ..
-    }) = resolve_selection(
+    let Some(InspectorSelection::Clip { clip, .. }) = resolve_selection(
         &project,
         Some(SelectionTarget::Clip(clip_id)),
         composition_id,
-    )
-    else {
+    ) else {
         return Err(std::io::Error::other("Clip selection should resolve").into());
     };
+    assert_eq!(clip.id, clip_id);
+    let semantics = project.container_graph_semantics(PortOwner::Clip(clip_id));
+    let connections = connections_for_nodes(&project, &clip.node_ids);
     assert_eq!(
         semantics,
         project.container_graph_semantics(PortOwner::Clip(clip_id))
@@ -343,17 +340,9 @@ fn structural_status_reuses_the_authoritative_clip_semantics(
 }
 
 #[test]
-fn facade_output_mode_distinguishes_explicit_children_and_no_output() {
+fn facade_output_mode_describes_timeline_child_compositing() {
     let result = Node::new_merge("Composite");
     let nodes = [result.clone()];
-
-    let clip_output = FacadeOwnerKind::Clip.output_mode(Some(result.id));
-    assert_eq!(clip_output, FacadeOutputMode::Explicit(result.id));
-    assert_eq!(clip_output.qa_value(), "explicit");
-    assert_eq!(
-        facade_output_text(FacadeOwnerKind::Clip, clip_output, &nodes),
-        "Result: Composite"
-    );
 
     for owner_kind in [FacadeOwnerKind::Composition, FacadeOwnerKind::Track] {
         let output_mode = owner_kind.output_mode(Some(result.id));
@@ -397,19 +386,6 @@ fn facade_output_mode_distinguishes_explicit_children_and_no_output() {
     let track_metadata = facade_output_metadata(FacadeOwnerKind::Track, track_mode, false);
     assert_eq!(track_metadata["owner_kind"], "track");
     assert_eq!(track_metadata["output_mode"], "timeline_children");
-
-    let clip_mode = FacadeOwnerKind::Clip.output_mode(None);
-    assert_eq!(clip_mode, FacadeOutputMode::NoOutput);
-    assert_eq!(clip_mode.qa_value(), "no_output");
-    assert_eq!(
-        facade_output_text(FacadeOwnerKind::Clip, clip_mode, &nodes),
-        "No output selected (NoOutput)"
-    );
-    let clip_metadata = facade_output_metadata(FacadeOwnerKind::Clip, clip_mode, false);
-    assert_eq!(clip_metadata["owner_kind"], "clip");
-    assert_eq!(clip_metadata["output_mode"], "no_output");
-    assert_eq!(clip_metadata["output_node_id"], serde_json::Value::Null);
-    assert_eq!(clip_metadata["explicit"], false);
 }
 
 #[test]

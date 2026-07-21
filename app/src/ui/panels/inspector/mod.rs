@@ -30,6 +30,7 @@ mod presentation;
 pub mod properties;
 mod property_authoring;
 mod property_inference;
+mod semantic_clip;
 
 use action_handler::ActionContext;
 use evaluation::{evaluate_property_map, render_evaluation_issues};
@@ -62,9 +63,6 @@ enum InspectorSelection {
     },
     Clip {
         clip: Clip,
-        nodes: Vec<Node>,
-        connections: Vec<ProjectConnection>,
-        semantics: ContainerGraphSemantics,
         track_id: Option<Uuid>,
     },
     Node {
@@ -79,7 +77,6 @@ enum InspectorSelection {
 enum FacadeOwnerKind {
     Composition,
     Track,
-    Clip,
 }
 
 const OPERATION_CATEGORY_SECTIONS: [(&str, &str, &str); 6] = [
@@ -96,50 +93,34 @@ impl FacadeOwnerKind {
         match self {
             Self::Composition => "composition",
             Self::Track => "track",
-            Self::Clip => "clip",
         }
     }
 
     fn output_mode(self, output_node_id: Option<Uuid>) -> FacadeOutputMode {
-        match self {
-            Self::Composition | Self::Track => FacadeOutputMode::TimelineChildren(output_node_id),
-            Self::Clip => {
-                output_node_id.map_or(FacadeOutputMode::NoOutput, FacadeOutputMode::Explicit)
-            }
-        }
+        FacadeOutputMode::TimelineChildren(output_node_id)
     }
 
     fn derived_children_label(self) -> Option<&'static str> {
         match self {
             Self::Composition => Some("ordered child Tracks"),
             Self::Track => Some("ordered child Clips"),
-            Self::Clip => None,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FacadeOutputMode {
-    Explicit(Uuid),
     TimelineChildren(Option<Uuid>),
-    NoOutput,
 }
 
 impl FacadeOutputMode {
     fn qa_value(self) -> &'static str {
-        match self {
-            Self::Explicit(_) => "explicit",
-            Self::TimelineChildren(_) => "timeline_children",
-            Self::NoOutput => "no_output",
-        }
+        "timeline_children"
     }
 
     fn explicit_node_id(self) -> Option<Uuid> {
-        match self {
-            Self::Explicit(node_id) => Some(node_id),
-            Self::TimelineChildren(node_id) => node_id,
-            Self::NoOutput => None,
-        }
+        let Self::TimelineChildren(node_id) = self;
+        node_id
     }
 }
 
@@ -272,13 +253,7 @@ fn inspector_panel_content(
                 &mut needs_refresh,
             );
         }
-        InspectorSelection::Clip {
-            clip,
-            nodes,
-            connections,
-            semantics,
-            track_id,
-        } => {
+        InspectorSelection::Clip { clip, track_id } => {
             let heading = ui.heading(format!("Clip: {}", clip.name));
             crate::qa::register_component_with_metadata(
                 format!("inspector.owner.clip:{}", clip.id),
@@ -292,55 +267,17 @@ fn inspector_panel_content(
                 })),
             );
             ui.separator();
-
-            render_clip_timing(
+            let local_time = clip.local_time(global_time);
+            semantic_clip::render(
                 ui,
                 &clip,
-                fps,
-                project_service,
-                history_manager,
-                project,
-                &mut needs_refresh,
-            );
-
-            let local_time = clip.local_time(global_time);
-            let mut clip_definitions = inferred_property_definitions(&clip.properties, local_time);
-            clip_definitions.retain(|definition| !is_clip_timing_property(definition.name()));
-            if !clip_definitions.is_empty() {
-                ui.add_space(10.0);
-                ui.heading("Clip Properties");
-                ui.separator();
-                render_property_map(
-                    ui,
-                    project_service,
-                    history_manager,
-                    editor_context,
-                    PropertyOwner::Clip(clip.id),
-                    &clip.properties,
-                    clip_definitions,
-                    local_time,
-                    fps,
-                    resolution,
-                    &mut needs_refresh,
-                );
-            }
-
-            ui.add_space(12.0);
-            render_semantic_graph_facade(
-                ui,
-                "Clip Output",
-                FacadeOwnerKind::Clip,
-                &semantics,
-                &nodes,
-                &connections,
-                composition_id,
-                track_id,
                 local_time,
                 fps,
                 resolution,
                 project_service,
                 history_manager,
                 editor_context,
+                project,
                 &mut needs_refresh,
             );
         }
@@ -399,12 +336,8 @@ fn resolve_selection(
                 == Some(composition_id) =>
         {
             if let Some(clip) = project.get_clip(clip_id) {
-                let nodes = nodes_for_ids(project, &clip.node_ids);
                 return Some(InspectorSelection::Clip {
                     clip: clip.clone(),
-                    connections: connections_for_nodes(project, &clip.node_ids),
-                    nodes,
-                    semantics: project.container_graph_semantics(PortOwner::Clip(clip.id)),
                     track_id: project.find_track_for_clip(clip_id),
                 });
             }
@@ -1127,15 +1060,9 @@ fn render_merge_category(
 fn facade_output_text(
     owner_kind: FacadeOwnerKind,
     output_mode: FacadeOutputMode,
-    nodes: &[Node],
+    _nodes: &[Node],
 ) -> String {
     match output_mode {
-        FacadeOutputMode::Explicit(node_id) => {
-            nodes.iter().find(|node| node.id == node_id).map_or_else(
-                || "Explicit Result node is unavailable".to_string(),
-                |node| format!("Result: {}", source_semantic_label(node)),
-            )
-        }
         FacadeOutputMode::TimelineChildren(output_node_id) => format!(
             "Composes {} through the structural Merge{}",
             owner_kind
@@ -1147,7 +1074,6 @@ fn facade_output_text(
                 " (NoOutput: no result binding)"
             }
         ),
-        FacadeOutputMode::NoOutput => "No output selected (NoOutput)".to_string(),
     }
 }
 
@@ -1490,6 +1416,7 @@ fn render_property_map(
             available_fonts: &editor_context.available_fonts,
             in_grid: chunk.in_grid,
             current_time,
+            show_authoring: true,
             qa_scope: qa_scope.clone(),
         };
         let actions = if chunk.in_grid {
@@ -1792,10 +1719,6 @@ fn node_display_type(node: &Node) -> String {
         NodeContent::Value(value) => value.label().to_string(),
         NodeContent::Merge => "Merge".to_string(),
     }
-}
-
-fn is_clip_timing_property(name: &str) -> bool {
-    matches!(name, "start_time" | "duration" | "trim_in" | "time_stretch")
 }
 
 #[cfg(test)]
