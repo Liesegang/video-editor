@@ -16,6 +16,8 @@ use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod semantic;
+
 pub struct EditorService {
     project_manager: Arc<ProjectManager>,
     audio_service: Rc<AudioService>,
