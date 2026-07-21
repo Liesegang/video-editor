@@ -103,6 +103,80 @@ fn descriptor_catalogs_are_typed_hierarchical_and_exclude_image_opacity_as_shape
 }
 
 #[test]
+fn anchored_decorator_action_qa_ids_are_unique_extensions_of_their_row_ids() {
+    let clip_id = Uuid::from_u128(1);
+    let node_id = Uuid::from_u128(2);
+    let first_anchor = Uuid::from_u128(3);
+    let second_anchor = Uuid::from_u128(4);
+    let first_row = qa::stack_item_qa_id("decorator", clip_id, node_id, Some(first_anchor));
+    let second_row = qa::stack_item_qa_id("decorator", clip_id, node_id, Some(second_anchor));
+    let first_move = qa::stack_action_qa_id(
+        "decorator",
+        clip_id,
+        node_id,
+        Some(first_anchor),
+        StackQaAction::MoveUp,
+    );
+    let second_move = qa::stack_action_qa_id(
+        "decorator",
+        clip_id,
+        node_id,
+        Some(second_anchor),
+        StackQaAction::MoveUp,
+    );
+
+    assert_ne!(first_row, second_row);
+    assert_ne!(first_move, second_move);
+    assert_eq!(first_move, format!("{first_row}.move_up"));
+    assert_eq!(second_move, format!("{second_row}.move_up"));
+    assert!(first_row.contains(&format!("anchor:{first_anchor}:node:{node_id}")));
+}
+
+#[test]
+fn reorder_and_remove_qa_metadata_publish_distinct_preservation_contracts() {
+    let node_id = Uuid::from_u128(10);
+    let anchor_id = Uuid::from_u128(11);
+    let reorder = qa::stack_action_qa_metadata(
+        "style",
+        node_id,
+        None,
+        StackQaAction::MoveDown,
+        "reorder existing Merge wires",
+    );
+    let remove = qa::stack_action_qa_metadata(
+        "decorator",
+        node_id,
+        Some(anchor_id),
+        StackQaAction::Remove,
+        "typed semantic remove",
+    );
+    let reorder_preserves = reorder["preserves"].as_array().expect("reorder preserves");
+    let remove_preserves = remove["preserves"].as_array().expect("remove preserves");
+
+    assert_eq!(reorder["action"], "reorder");
+    assert!(reorder_preserves.iter().any(|item| item == "node_uuid"));
+    assert!(reorder_preserves
+        .iter()
+        .any(|item| item == "external_property_wires"));
+    assert_eq!(reorder["changes"], serde_json::json!(["merge_input_order"]));
+
+    assert_eq!(remove["action"], "remove");
+    assert_eq!(remove["style_anchor_id"], anchor_id.to_string());
+    for false_claim in [
+        "node_uuid",
+        "properties",
+        "external_property_wires",
+        "fanout",
+    ] {
+        assert!(!remove_preserves.iter().any(|item| item == false_claim));
+    }
+    assert_eq!(
+        remove["changes"],
+        serde_json::json!(["target_node", "incident_wires", "semantic_stack_topology"])
+    );
+}
+
+#[test]
 fn effect_actions_append_at_post_merge_tail_and_reorder_only_main_flow_endpoints() -> TestResult {
     let fixture = fixture()?;
     let mut history = HistoryManager::new();

@@ -23,6 +23,10 @@ use uuid::Uuid;
 use crate::action::HistoryManager;
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
 
+mod qa;
+
+use qa::{register_action_button, register_stack_row, render_query_error, StackQaAction};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StackAction {
     EnsureTransform,
@@ -191,6 +195,7 @@ fn render_effect_stack(
                     clip_id,
                     "effect",
                     node_id,
+                    None,
                     index,
                     ids,
                     StackAction::ReorderEffects,
@@ -240,6 +245,7 @@ fn render_style_stack(
                     clip_id,
                     "style",
                     node_id,
+                    None,
                     index,
                     ids,
                     StackAction::ReorderStyles,
@@ -380,6 +386,7 @@ fn order_buttons(
     clip_id: Uuid,
     kind: &str,
     node_id: Uuid,
+    style_anchor_id: Option<Uuid>,
     index: usize,
     ids: &[Uuid],
     reorder: impl Fn(Vec<Uuid>) -> StackAction,
@@ -392,10 +399,11 @@ fn order_buttons(
         .on_hover_text("Move earlier");
     register_action_button(
         &up,
-        format!("inspector.semantic.{kind}:{clip_id}:{node_id}.move_up"),
+        clip_id,
         kind,
-        "reorder",
         node_id,
+        style_anchor_id,
+        StackQaAction::MoveUp,
         mutation_semantics,
     );
     if up.clicked() {
@@ -411,10 +419,11 @@ fn order_buttons(
         .on_hover_text("Move later");
     register_action_button(
         &down,
-        format!("inspector.semantic.{kind}:{clip_id}:{node_id}.move_down"),
+        clip_id,
         kind,
-        "reorder",
         node_id,
+        style_anchor_id,
+        StackQaAction::MoveDown,
         mutation_semantics,
     );
     if down.clicked() {
@@ -427,10 +436,11 @@ fn order_buttons(
         .on_hover_text(format!("Remove {kind}"));
     register_action_button(
         &remove_button,
-        format!("inspector.semantic.{kind}:{clip_id}:{node_id}.remove"),
+        clip_id,
         kind,
-        "remove",
         node_id,
+        style_anchor_id,
+        StackQaAction::Remove,
         "typed semantic remove",
     );
     if remove_button.clicked() {
@@ -452,6 +462,7 @@ fn decorator_order_buttons(
         clip_id,
         "decorator",
         node_id,
+        Some(style_anchor_id),
         index,
         ids,
         |requested| StackAction::ReorderDecoratorsForStyle {
@@ -870,76 +881,6 @@ fn label_for(labels: &HashMap<Uuid, String>, node_id: Uuid) -> String {
 
 fn short_id(id: Uuid) -> String {
     id.to_string().chars().take(8).collect()
-}
-
-fn register_action_button(
-    response: &egui::Response,
-    id: String,
-    stack: &str,
-    action: &str,
-    node_id: Uuid,
-    mutation_semantics: &str,
-) {
-    crate::qa::register_component_with_metadata(
-        id,
-        "inspector_semantic_stack_action",
-        response.rect,
-        response.enabled(),
-        Some(serde_json::json!({
-            "stack": stack,
-            "action": action,
-            "node_id": node_id,
-            "mutation_semantics": mutation_semantics,
-            "preserves": ["node_uuid", "properties", "external_property_wires", "fanout", "connection_order", "blend_mode"],
-            "selection_identity": "clip",
-        })),
-    );
-}
-
-fn register_stack_row(
-    rect: egui::Rect,
-    clip_id: Uuid,
-    stack: &str,
-    node_id: Uuid,
-    index: usize,
-    order_semantics: &str,
-    style_anchor_id: Option<Uuid>,
-) {
-    let anchor_suffix = style_anchor_id.map_or_else(String::new, |anchor| format!(":{anchor}"));
-    crate::qa::register_component_with_metadata(
-        format!("inspector.semantic.{stack}:{clip_id}:{node_id}{anchor_suffix}"),
-        "inspector_semantic_stack_item",
-        rect,
-        true,
-        Some(serde_json::json!({
-            "clip_id": clip_id,
-            "stack": stack,
-            "node_id": node_id,
-            "style_anchor_id": style_anchor_id,
-            "index": index,
-            "order_semantics": order_semantics,
-            "selection_identity": "clip",
-        })),
-    );
-}
-
-fn render_query_error(ui: &mut Ui, clip_id: Uuid, stack: &str, error: &LibraryError) {
-    let response = ui.colored_label(
-        ui.visuals().error_fg_color,
-        format!("{stack} stack unavailable: {error}"),
-    );
-    crate::qa::register_component_with_metadata(
-        format!("inspector.semantic.{stack}:{clip_id}.query_error"),
-        "inspector_semantic_diagnostic",
-        response.rect,
-        true,
-        Some(serde_json::json!({
-            "clip_id": clip_id,
-            "stack": stack,
-            "message": error.to_string(),
-            "fail_closed": true,
-        })),
-    );
 }
 
 #[cfg(test)]
