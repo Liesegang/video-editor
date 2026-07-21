@@ -1,7 +1,7 @@
 use crate::model::property::{Property, PropertyMap, PropertyValue};
 use crate::plugin::{EvaluationContext, PropertyEvaluationError, PropertyEvaluationOutcome};
 
-use super::ProjectManager;
+use super::super::lifecycle::ProjectManager;
 
 impl ProjectManager {
     pub fn evaluate_property_value(

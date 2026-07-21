@@ -1,4 +1,6 @@
-use super::ProjectManager;
+//! Explicit Image/Audio source graph construction for Clip factories.
+
+use super::super::lifecycle::ProjectManager;
 use crate::editor::handlers::clip_handler::ClipBundle;
 use crate::error::LibraryError;
 use crate::model::project::{

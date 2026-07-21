@@ -7,9 +7,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use uuid::Uuid;
 
+use super::super::lifecycle::ProjectManager;
 use super::helpers::{connected_property_source, container_node_ids, container_properties};
 use super::{build_projection, container_port_owner, resolve_graph_owners};
-use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::{
     NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, Project,

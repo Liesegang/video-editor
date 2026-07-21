@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use super::lifecycle::ProjectManager;
 use crate::animation::EasingFunction;
-use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::NodeContent;
 use crate::model::project::{

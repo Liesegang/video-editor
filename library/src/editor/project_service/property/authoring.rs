@@ -3,7 +3,7 @@ use crate::editor::handlers::property_ops::PropertyOwner;
 use crate::error::LibraryError;
 use crate::model::property::{Property, PropertyValue};
 
-use super::ProjectManager;
+use super::super::lifecycle::ProjectManager;
 
 impl ProjectManager {
     pub fn update_property_or_keyframe(
@@ -52,6 +52,22 @@ impl ProjectManager {
             owner,
             property_key,
             source,
+        )
+    }
+
+    pub fn set_property_attribute(
+        &self,
+        owner: PropertyOwner,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_property_attribute(
+            &self.project,
+            owner,
+            property_key,
+            attribute_key,
+            attribute_value,
         )
     }
 }

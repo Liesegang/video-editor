@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
+use super::super::lifecycle::ProjectManager;
 use super::{absorb_legacy_transform, insert_transform, resolve_graph_owners, validate_candidate};
-use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::NodeContainer;
 

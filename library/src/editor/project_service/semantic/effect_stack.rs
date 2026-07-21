@@ -4,9 +4,9 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
+use super::super::lifecycle::ProjectManager;
 use super::helpers::{container_output_node_id, position_after_source};
 use super::validate_candidate;
-use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortOwner,

@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use crate::editor::project_service::ProjectManager;
+use super::super::lifecycle::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::Node;
 use crate::model::frame::color::Color;

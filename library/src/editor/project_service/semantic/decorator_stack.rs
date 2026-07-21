@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
+use super::super::lifecycle::ProjectManager;
 use super::helpers::{
     container_node_ids, container_port_owner, position_after_source, terminal_shape_source,
     validate_candidate,
 };
-use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::{
     IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortDataType, PortDirection,
