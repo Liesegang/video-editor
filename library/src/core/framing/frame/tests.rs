@@ -1,9 +1,18 @@
-use super::*;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use ordered_float::OrderedFloat;
+
+use super::FrameEvaluator;
+use crate::error::LibraryError;
 use crate::model::project::{
-    Composition, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT, RESOLUTION_PORT,
+    Composition, DURATION_PORT, EvalOutput, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
+    FRAME_PORT, NUMBER_RESULT_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner, Project,
+    ProjectConnection, RESOLUTION_PORT, TIME_PORT,
 };
-use crate::model::property::{Property, Vec2};
-use crate::model::{Clip, CompositionInstanceContent, Node};
+use crate::model::property::{Property, PropertyValue, Vec2};
+use crate::model::{Clip, CompositionInstanceContent, Node, NodeContent};
+use crate::plugin::PluginManager;
 
 fn evaluate_numeric_output_from(
     mut node: Node,

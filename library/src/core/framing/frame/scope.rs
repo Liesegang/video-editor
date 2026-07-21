@@ -1,5 +1,27 @@
-use super::*;
+//! Derivation of timeline-local time, FPS, duration, and resolution.
+//!
+//! Scopes are transient read views over the authoritative Project. Explicit
+//! metadata wires are resolved through `value_graph`; no intermediate project
+//! model or migrated state is created.
 
+use std::collections::{HashMap, HashSet};
+
+use ordered_float::OrderedFloat;
+use uuid::Uuid;
+
+use super::evaluator::{FrameEvaluator, cycle_error, missing_error};
+use crate::error::LibraryError;
+use crate::model::CompositionInstanceContent;
+use crate::model::project::{
+    DURATION_PORT, EvalOutput, EvalResult, FPS_PORT, FRAME_PORT, NodeContainer, PortAddress,
+    PortOwner, RESOLUTION_PORT, TIME_PORT,
+};
+use crate::model::property::{PropertyValue, Vec2};
+
+/// Effective metadata inherited by one graph owner at a timeline time.
+///
+/// This is transient evaluation context derived from the authoritative
+/// Project. It is never persisted as a second model.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EvaluationScope {
     pub(crate) time: f64,
@@ -167,6 +189,25 @@ impl FrameEvaluator<'_> {
         result
     }
 
+    pub(super) fn composition_instance_target_scope(
+        &self,
+        node_id: Uuid,
+        instance: &CompositionInstanceContent,
+        timeline_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<EvaluationScope> {
+        let placement_scope =
+            match self.scope_for_owner(PortOwner::Node(node_id), timeline_time, path)? {
+                EvalOutput::Produced(scope) => scope,
+                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+            };
+        self.scope_for_owner(
+            PortOwner::Composition(instance.composition_id),
+            placement_scope.time,
+            path,
+        )
+    }
+
     fn apply_metadata_inputs(
         &self,
         owner: PortOwner,
@@ -196,4 +237,18 @@ impl FrameEvaluator<'_> {
         }
         Ok(EvalOutput::Produced(()))
     }
+}
+
+fn invalid_value(port: &str) -> LibraryError {
+    LibraryError::Validation(format!("Invalid value for graph port {port}"))
+}
+
+fn required_number(value: PropertyValue, port: &str) -> Result<f64, LibraryError> {
+    value.get_as::<f64>().ok_or_else(|| invalid_value(port))
+}
+
+fn frame_at_time(time: f64, fps: f64) -> i64 {
+    let scaled = time * fps;
+    let epsilon = scaled.abs().max(1.0) * f64::EPSILON * 8.0;
+    (scaled + epsilon).floor() as i64
 }
