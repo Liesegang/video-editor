@@ -185,8 +185,8 @@ class QaRunnerTests(unittest.TestCase):
         self.assertFalse(E2E.selection_matches(state, "node", "shared"))
         E2E.assert_selection(state, "shared", "track", "typed Clip")
 
-    def test_e2e_fixture_contract_names_all_sixteen_explicit_nodes(self):
-        self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 16)
+    def test_e2e_fixture_contract_names_all_nineteen_explicit_nodes(self):
+        self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 19)
         self.assertEqual(
             E2E.EXPECTED_CLIP_NODES[E2E.CLIP_A1],
             [E2E.AUDIO_A, E2E.AUDIO_B, E2E.SOLID, E2E.MERGE],
@@ -209,6 +209,7 @@ class QaRunnerTests(unittest.TestCase):
                 E2E.BACKPLATE_DECORATOR,
                 E2E.BLUR_EFFECT,
                 E2E.TEXT_FILL,
+                E2E.BACKPLATE_FILL,
                 E2E.SHAPE_FILL,
                 E2E.SHAPE_STROKE,
             },
@@ -223,7 +224,7 @@ class QaRunnerTests(unittest.TestCase):
             "clips": {},
             "connections": [],
         }
-        with self.assertRaisesRegex(E2E.QaFailure, "16 explicit Nodes"):
+        with self.assertRaisesRegex(E2E.QaFailure, "19 explicit Nodes"):
             E2E.validate_explicit_operation_fixture(project)
 
     def test_keyframe_suite_uses_direct_operation_node_ids_only(self):

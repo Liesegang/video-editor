@@ -34,6 +34,7 @@ TEXT = "00000000-0000-0000-0000-000000000403"
 SHAPE = "00000000-0000-0000-0000-000000000404"
 AUDIO_A = "00000000-0000-0000-0000-000000000405"
 AUDIO_B = "00000000-0000-0000-0000-000000000406"
+BACKPLATE_SHAPE = "00000000-0000-0000-0000-000000000407"
 TRANSFORM_EFFECTOR = "00000000-0000-0000-0000-000000000501"
 OPACITY_EFFECTOR = "00000000-0000-0000-0000-000000000502"
 BACKPLATE_DECORATOR = "00000000-0000-0000-0000-000000000503"
@@ -44,6 +45,8 @@ TEXT_FILL = "00000000-0000-0000-0000-000000000601"
 SHAPE_FILL = "00000000-0000-0000-0000-000000000602"
 SHAPE_STROKE = "00000000-0000-0000-0000-000000000603"
 SHAPE_MERGE = "00000000-0000-0000-0000-000000000604"
+BACKPLATE_FILL = "00000000-0000-0000-0000-000000000605"
+TEXT_MERGE = "00000000-0000-0000-0000-000000000606"
 
 EXPECTED_FIXTURE_NODES = frozenset(
     {
@@ -53,6 +56,7 @@ EXPECTED_FIXTURE_NODES = frozenset(
         SHAPE,
         AUDIO_A,
         AUDIO_B,
+        BACKPLATE_SHAPE,
         TEXT_TRANSFORM,
         SHAPE_TRANSFORM,
         TRANSFORM_EFFECTOR,
@@ -60,6 +64,8 @@ EXPECTED_FIXTURE_NODES = frozenset(
         BACKPLATE_DECORATOR,
         BLUR_EFFECT,
         TEXT_FILL,
+        BACKPLATE_FILL,
+        TEXT_MERGE,
         SHAPE_FILL,
         SHAPE_STROKE,
         SHAPE_MERGE,
@@ -72,8 +78,11 @@ EXPECTED_CLIP_NODES = {
         TEXT_TRANSFORM,
         TRANSFORM_EFFECTOR,
         OPACITY_EFFECTOR,
+        BACKPLATE_SHAPE,
         BACKPLATE_DECORATOR,
         TEXT_FILL,
+        BACKPLATE_FILL,
+        TEXT_MERGE,
         BLUR_EFFECT,
     ],
     CLIP_B1: [SHAPE, SHAPE_TRANSFORM, SHAPE_FILL, SHAPE_STROKE, SHAPE_MERGE],
@@ -91,6 +100,7 @@ EXPECTED_OPERATIONS = {
     BACKPLATE_DECORATOR: ("decorator", "backplate", "decorator.apply.v1"),
     BLUR_EFFECT: ("effect", "blur", "effect.apply.v1"),
     TEXT_FILL: ("style", "fill", "style.apply.v1"),
+    BACKPLATE_FILL: ("style", "fill", "style.apply.v1"),
     SHAPE_FILL: ("style", "fill", "style.apply.v1"),
     SHAPE_STROKE: ("style", "stroke", "style.apply.v1"),
 }
@@ -1978,13 +1988,22 @@ def ensure_node_editor_ports_interactive(client, component_ids, max_zooms=6):
 def validate_explicit_operation_fixture(project):
     """Reject the retired four-Node/embedded-operation QA fixture."""
     actual_nodes = set(project["nodes"])
-    if actual_nodes != EXPECTED_FIXTURE_NODES:
-        missing = sorted(EXPECTED_FIXTURE_NODES - actual_nodes)
-        extra = sorted(actual_nodes - EXPECTED_FIXTURE_NODES)
+    structural_nodes = {
+        item.get("structural_merge_node_id")
+        for item in project.get("compositions", [])
+    }
+    structural_nodes.update(
+        item.get("structural_merge_node_id")
+        for item in project.get("tracks", {}).values()
+    )
+    structural_nodes.discard(None)
+    expected_nodes = EXPECTED_FIXTURE_NODES | structural_nodes
+    if actual_nodes != expected_nodes:
+        missing = sorted(expected_nodes - actual_nodes)
+        extra = sorted(actual_nodes - expected_nodes)
         raise QaFailure(
-            "fixture must contain the 16 explicit Nodes; missing={}, extra={}".format(
-                missing, extra
-            )
+            "fixture must contain the 19 explicit Nodes plus container structural Merge Nodes; "
+            "missing={}, extra={}".format(missing, extra)
         )
 
     for clip_id, expected_nodes in EXPECTED_CLIP_NODES.items():
