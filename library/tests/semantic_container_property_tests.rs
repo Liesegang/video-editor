@@ -797,16 +797,24 @@ fn branch_local_opacity_does_not_hide_the_final_semantic_trunk() -> Result<()> {
                 .context("global Image Opacity")?,
         )
     };
-    let branch_opacity = {
+    let (branch_transform, branch_opacity) = {
         let mut project = write_project(&shared)?;
-        let branch = manager
+        let branch_opacity = manager
             .get_plugin_manager()
             .create_image_opacity_style_operation_node()?;
+        let branch_transform = manager
+            .get_plugin_manager()
+            .create_image_transform_operation_node()?;
         let merge = Node::new_merge("branch opacity merge");
-        let (branch_id, merge_id) = (branch.id, merge.id);
+        let (branch_transform_id, branch_opacity_id, merge_id) =
+            (branch_transform.id, branch_opacity.id, merge.id);
         project.insert_node_graph(
             owner,
-            NodeGraphBundle::new(vec![branch, merge], Vec::new(), None),
+            NodeGraphBundle::new(
+                vec![branch_transform, branch_opacity, merge],
+                Vec::new(),
+                None,
+            ),
         )?;
         let transform_input = project
             .connections
@@ -820,10 +828,14 @@ fn branch_local_opacity_does_not_hide_the_final_semantic_trunk() -> Result<()> {
         transform_input.from = PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT);
         project.connect_ports(
             PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(branch_id), IMAGE_INPUT_PORT),
+            PortAddress::new(PortOwner::Node(branch_transform_id), IMAGE_INPUT_PORT),
         )?;
         project.connect_ports(
-            PortAddress::new(PortOwner::Node(branch_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(branch_transform_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(branch_opacity_id), IMAGE_INPUT_PORT),
+        )?;
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(branch_opacity_id), IMAGE_OUTPUT_PORT),
             PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
         )?;
         project.connect_ports(
@@ -831,9 +843,24 @@ fn branch_local_opacity_does_not_hide_the_final_semantic_trunk() -> Result<()> {
             PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
         )?;
         assert!(project.validate_connections().is_empty());
-        branch_id
+        (branch_transform_id, branch_opacity_id)
     };
     let before = read_project(&shared)?.clone();
+    let mut branch_wires_before = before
+        .connections
+        .iter()
+        .filter(|connection| {
+            [branch_transform, branch_opacity].contains(&match connection.from.owner {
+                PortOwner::Node(node_id) => node_id,
+                _ => Uuid::nil(),
+            }) || [branch_transform, branch_opacity].contains(&match connection.to.owner {
+                PortOwner::Node(node_id) => node_id,
+                _ => Uuid::nil(),
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    branch_wires_before.sort_by_key(|connection| connection.id);
 
     let projection = manager.semantic_container_property_projection(owner)?;
     assert_eq!(
@@ -845,5 +872,53 @@ fn branch_local_opacity_does_not_hide_the_final_semantic_trunk() -> Result<()> {
     );
     assert_ne!(global_opacity, branch_opacity);
     assert_eq!(*read_project(&shared)?, before);
+
+    manager.update_semantic_container_property_or_keyframe(
+        owner,
+        "rotation",
+        0.0,
+        PropertyValue::from(33.0),
+        None,
+    )?;
+    manager.update_semantic_container_property_or_keyframe(
+        owner,
+        "opacity",
+        0.0,
+        PropertyValue::from(0.4),
+        None,
+    )?;
+    let updated = read_project(&shared)?;
+    assert_eq!(
+        updated
+            .get_node(global_transform)
+            .and_then(|node| node.properties().get_f64("rotation")),
+        Some(33.0)
+    );
+    assert_eq!(
+        updated
+            .get_node(global_opacity)
+            .and_then(|node| node.properties().get_f64("opacity")),
+        Some(0.4)
+    );
+    assert_eq!(
+        updated.get_node(branch_transform),
+        before.get_node(branch_transform)
+    );
+    assert_eq!(
+        updated.get_node(branch_opacity),
+        before.get_node(branch_opacity)
+    );
+    let mut branch_wires_after = updated
+        .connections
+        .iter()
+        .filter(|connection| {
+            branch_wires_before
+                .iter()
+                .any(|before| before.id == connection.id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    branch_wires_after.sort_by_key(|connection| connection.id);
+    assert_eq!(branch_wires_after, branch_wires_before);
     Ok(())
 }

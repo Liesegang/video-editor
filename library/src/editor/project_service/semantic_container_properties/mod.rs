@@ -4,15 +4,15 @@
 //! but placement and alpha are owned by typed operation Nodes. This module is
 //! a derived read/write facade only; it never persists an intermediate model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::animation::EasingFunction;
 use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::NodeContent;
 use crate::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortOwner,
-    Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
+    PortDirection, PortOwner, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use crate::model::property::{
     KeyframeId, KeyframeUpdate, Property, PropertyDefinition, PropertyMap, PropertyValue,
@@ -356,71 +356,283 @@ fn resolve_graph_owners(
     project: &Project,
     owner: NodeContainer,
 ) -> Result<ResolvedGraphOwners, LibraryError> {
-    let semantics = project.container_graph_semantics(container_port_owner(owner));
-    let has_image_output = container_output_node_id(project, owner)?.is_some();
-    let mut transforms = container_node_ids(project, owner)?
-        .iter()
-        .filter_map(|node_id| {
-            let node = project.get_node(*node_id)?;
-            let NodeContent::PluginOperation(operation) = node.content() else {
-                return None;
-            };
-            if operation.category != TRANSFORM_CATEGORY
-                || operation.operation != TRANSFORM_APPLY_OPERATION
-                || (has_image_output
-                    && !semantics.structurally_reaches_output(PortOwner::Node(*node_id)))
-            {
-                return None;
-            }
-            let kind = match operation.component_id.as_str() {
-                SHAPE_TRANSFORM_COMPONENT_ID => TransformKind::Shape,
-                IMAGE_TRANSFORM_COMPONENT_ID => TransformKind::Image,
-                _ => return None,
-            };
-            Some((*node_id, kind))
+    let final_owners = resolve_final_image_owners(project, owner)?;
+    let transform = final_owners
+        .transform
+        .map(|node_id| (node_id, TransformKind::Image))
+        .or_else(|| {
+            dominating_image_transform(project, owner)
+                .map(|node_id| (node_id, TransformKind::Image))
         })
-        .collect::<Vec<_>>();
-    transforms.sort_by_key(|(node_id, _)| *node_id);
-    if transforms.len() > 1 {
-        return Err(LibraryError::Project(format!(
-            "Semantic transform for {owner:?} is ambiguous: output-reaching Nodes {}",
-            transforms
-                .iter()
-                .map(|(node_id, _)| node_id.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-
-    let mut opacity = container_node_ids(project, owner)?
-        .iter()
-        .filter_map(|node_id| {
-            let node = project.get_node(*node_id)?;
-            let NodeContent::PluginOperation(operation) = node.content() else {
-                return None;
-            };
-            (operation.category == STYLE_CATEGORY
-                && operation.component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID
-                && operation.operation == STYLE_APPLY_OPERATION
-                && semantics.structurally_reaches_output(PortOwner::Node(*node_id)))
-            .then_some(*node_id)
-        })
-        .collect::<Vec<_>>();
-    opacity.sort();
-    if opacity.len() > 1 {
-        return Err(LibraryError::Project(format!(
-            "Semantic opacity for {owner:?} is ambiguous: output-reaching Image Opacity Nodes {}",
-            opacity
-                .iter()
-                .map(Uuid::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
+        .or_else(|| {
+            common_shape_transform(project, owner).map(|node_id| (node_id, TransformKind::Shape))
+        });
     Ok(ResolvedGraphOwners {
-        transform: transforms.first().copied(),
-        opacity: opacity.first().copied(),
+        transform,
+        opacity: final_owners.opacity,
     })
+}
+
+#[derive(Default)]
+struct FinalImageOwners {
+    transform: Option<Uuid>,
+    opacity: Option<Uuid>,
+}
+
+fn resolve_final_image_owners(
+    project: &Project,
+    owner: NodeContainer,
+) -> Result<FinalImageOwners, LibraryError> {
+    let Some(mut cursor) = container_output_node_id(project, owner)? else {
+        return Ok(FinalImageOwners::default());
+    };
+    let mut owners = FinalImageOwners::default();
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(cursor) {
+            return Err(LibraryError::Project(format!(
+                "Final semantic Image trunk for {owner:?} contains a cycle"
+            )));
+        }
+        let Some(node) = project.get_node(cursor) else {
+            break;
+        };
+        let NodeContent::PluginOperation(operation) = node.content() else {
+            break;
+        };
+        let slot = if operation.category == TRANSFORM_CATEGORY
+            && operation.component_id == IMAGE_TRANSFORM_COMPONENT_ID
+            && operation.operation == TRANSFORM_APPLY_OPERATION
+        {
+            &mut owners.transform
+        } else if operation.category == STYLE_CATEGORY
+            && operation.component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID
+            && operation.operation == STYLE_APPLY_OPERATION
+        {
+            &mut owners.opacity
+        } else {
+            break;
+        };
+        if let Some(existing) = slot.replace(cursor) {
+            return Err(LibraryError::Project(format!(
+                "Semantic property owner for {owner:?} is ambiguous on the final Image trunk: Nodes {existing}, {cursor}"
+            )));
+        }
+        let incoming = connections_to_port(
+            project,
+            &PortAddress::new(PortOwner::Node(cursor), IMAGE_INPUT_PORT),
+        );
+        let [connection] = incoming.as_slice() else {
+            return Err(LibraryError::Project(format!(
+                "Final semantic Image Node {cursor} has {} Image inputs",
+                incoming.len()
+            )));
+        };
+        let PortOwner::Node(upstream) = connection.from.owner else {
+            break;
+        };
+        cursor = upstream;
+    }
+    Ok(owners)
+}
+
+fn dominating_image_transform(project: &Project, owner: NodeContainer) -> Option<Uuid> {
+    let output_id = container_output_node_id(project, owner).ok().flatten()?;
+    let mut candidates = container_node_ids(project, owner)
+        .ok()?
+        .iter()
+        .copied()
+        .filter(|node_id| project.get_node(*node_id).is_some_and(is_image_transform))
+        .filter(|node_id| image_node_dominates_output(project, output_id, *node_id))
+        .map(|node_id| {
+            (
+                image_distance_from_output(project, output_id, node_id),
+                node_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(distance, node_id)| (*distance, *node_id));
+    candidates.first().map(|(_, node_id)| *node_id)
+}
+
+fn image_node_dominates_output(project: &Project, output_id: Uuid, candidate: Uuid) -> bool {
+    fn visit(
+        project: &Project,
+        cursor: Uuid,
+        candidate: Uuid,
+        visiting: &mut HashSet<Uuid>,
+        memo: &mut HashMap<Uuid, bool>,
+    ) -> bool {
+        if cursor == candidate {
+            return true;
+        }
+        if let Some(result) = memo.get(&cursor) {
+            return *result;
+        }
+        if !visiting.insert(cursor) {
+            return false;
+        }
+        let upstream = image_input_sources(project, cursor);
+        let result = !upstream.is_empty()
+            && upstream
+                .into_iter()
+                .all(|node_id| visit(project, node_id, candidate, visiting, memo));
+        visiting.remove(&cursor);
+        memo.insert(cursor, result);
+        result
+    }
+    visit(
+        project,
+        output_id,
+        candidate,
+        &mut HashSet::new(),
+        &mut HashMap::new(),
+    )
+}
+
+fn image_distance_from_output(project: &Project, output_id: Uuid, candidate: Uuid) -> usize {
+    let mut queue = VecDeque::from([(output_id, 0_usize)]);
+    let mut visited = HashSet::new();
+    while let Some((cursor, distance)) = queue.pop_front() {
+        if cursor == candidate {
+            return distance;
+        }
+        if visited.insert(cursor) {
+            queue.extend(
+                image_input_sources(project, cursor)
+                    .into_iter()
+                    .map(|node_id| (node_id, distance + 1)),
+            );
+        }
+    }
+    usize::MAX
+}
+
+fn image_input_sources(project: &Project, node_id: Uuid) -> Vec<Uuid> {
+    project
+        .connections
+        .iter()
+        .filter(|connection| connection.to.owner == PortOwner::Node(node_id))
+        .filter(|connection| {
+            project
+                .port_definition(&connection.to, PortDirection::Input)
+                .is_some_and(|port| port.data_type == PortDataType::Image)
+        })
+        .filter_map(|connection| match connection.from.owner {
+            PortOwner::Node(upstream) => Some(upstream),
+            _ => None,
+        })
+        .collect()
+}
+
+fn common_shape_transform(project: &Project, owner: NodeContainer) -> Option<Uuid> {
+    let semantics = project.container_graph_semantics(container_port_owner(owner));
+    let mut boundaries = container_node_ids(project, owner)
+        .ok()?
+        .iter()
+        .copied()
+        .filter(|node_id| {
+            semantics.structurally_reaches_output(PortOwner::Node(*node_id))
+                && project.get_node(*node_id).is_some_and(is_shape_style)
+        })
+        .filter_map(|style_id| {
+            let incoming = connections_to_port(
+                project,
+                &PortAddress::new(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
+            );
+            let [connection] = incoming.as_slice() else {
+                return None;
+            };
+            Some(connection.from.clone())
+        })
+        .collect::<Vec<_>>();
+    if boundaries.is_empty()
+        && container_output_node_id(project, owner)
+            .ok()
+            .flatten()
+            .is_none()
+        && let Ok(source) = terminal_shape_source(project, owner)
+    {
+        boundaries.push(source);
+    }
+    let paths = boundaries
+        .into_iter()
+        .map(|source| shape_transform_path(project, source))
+        .collect::<Vec<_>>();
+    let first = paths.first()?;
+    let common = first
+        .iter()
+        .copied()
+        .filter(|node_id| paths.iter().all(|path| path.contains(node_id)))
+        .collect::<Vec<_>>();
+    common.into_iter().min_by_key(|node_id| {
+        paths
+            .iter()
+            .filter_map(|path| path.iter().position(|candidate| candidate == node_id))
+            .max()
+            .unwrap_or(usize::MAX)
+    })
+}
+
+fn shape_transform_path(project: &Project, mut source: PortAddress) -> Vec<Uuid> {
+    let mut transforms = Vec::new();
+    let mut visited = HashSet::new();
+    while let PortOwner::Node(node_id) = source.owner {
+        if !visited.insert(node_id) {
+            break;
+        }
+        if project.get_node(node_id).is_some_and(is_shape_transform) {
+            transforms.push(node_id);
+        }
+        let incoming = connections_to_port(
+            project,
+            &PortAddress::new(PortOwner::Node(node_id), SHAPE_INPUT_PORT),
+        );
+        let [connection] = incoming.as_slice() else {
+            break;
+        };
+        source = connection.from.clone();
+    }
+    transforms
+}
+
+fn connections_to_port(project: &Project, target: &PortAddress) -> Vec<ProjectConnection> {
+    project
+        .connections
+        .iter()
+        .filter(|connection| &connection.to == target)
+        .cloned()
+        .collect()
+}
+
+fn is_image_transform(node: &crate::model::Node) -> bool {
+    matches!(
+        node.content(),
+        NodeContent::PluginOperation(operation)
+            if operation.category == TRANSFORM_CATEGORY
+                && operation.component_id == IMAGE_TRANSFORM_COMPONENT_ID
+                && operation.operation == TRANSFORM_APPLY_OPERATION
+    )
+}
+
+fn is_shape_transform(node: &crate::model::Node) -> bool {
+    matches!(
+        node.content(),
+        NodeContent::PluginOperation(operation)
+            if operation.category == TRANSFORM_CATEGORY
+                && operation.component_id == SHAPE_TRANSFORM_COMPONENT_ID
+                && operation.operation == TRANSFORM_APPLY_OPERATION
+    )
+}
+
+fn is_shape_style(node: &crate::model::Node) -> bool {
+    matches!(
+        node.content(),
+        NodeContent::PluginOperation(operation)
+            if operation.category == STYLE_CATEGORY
+                && operation.component_id != IMAGE_OPACITY_STYLE_COMPONENT_ID
+                && operation.operation == STYLE_APPLY_OPERATION
+    )
 }
 
 fn ensure_graph_owners(
@@ -510,9 +722,8 @@ fn insert_transform(
             .iter()
             .any(|(_, candidate)| candidate != &source)
         {
-            return Err(LibraryError::Project(format!(
-                "Cannot synthesize one Shape Transform for {owner:?}: output-reaching Styles have different Shape sources"
-            )));
+            return insert_image_transform(project, owner, plugins)
+                .map(|node_id| (node_id, TransformKind::Image));
         }
         let mut transform = plugins.create_shape_transform_operation_node()?;
         position_after_source(project, &mut transform, &source, 240.0);

@@ -257,3 +257,97 @@ fn ensure_transform_is_independent_of_ambiguous_opacity_branches() -> Result<()>
     assert_eq!(*read(&shared)?, before);
     Ok(())
 }
+
+#[test]
+fn distinct_shape_branches_synthesize_one_post_merge_image_transform() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let factory = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        Arc::clone(&plugins),
+    );
+    let first_shape = factory.create_generator_node(
+        GeneratorNodeRequest::Shape {
+            path: "M 0 0 H 20 V 20 Z".to_string(),
+        },
+        320,
+        180,
+        20,
+        20,
+    )?;
+    let second_shape = factory.create_generator_node(
+        GeneratorNodeRequest::Shape {
+            path: "M 0 0 H 40 V 10 Z".to_string(),
+        },
+        320,
+        180,
+        40,
+        10,
+    )?;
+    let first_style = plugins.create_style_operation_node("fill")?;
+    let second_style = plugins.create_style_operation_node("fill")?;
+    let merge = library::model::Node::new_merge("independent Shape branches");
+    let (first_shape_id, second_shape_id, first_style_id, second_style_id, merge_id) = (
+        first_shape.id,
+        second_shape.id,
+        first_style.id,
+        second_style.id,
+        merge.id,
+    );
+    let graph = NodeGraphBundle::new(
+        vec![first_shape, second_shape, first_style, second_style, merge],
+        vec![
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(first_shape_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(first_style_id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(second_shape_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(second_style_id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(first_style_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(second_style_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                1,
+            ),
+        ],
+        Some(merge_id),
+    );
+    let (shared, manager, clip_id) = project_with_clip(graph, plugins)?;
+    let before = read(&shared)?.clone();
+    let transform_id = manager.ensure_semantic_container_transform(NodeContainer::Clip(clip_id))?;
+    let project = read(&shared)?;
+    assert_eq!(
+        component_nodes(&project, clip_id, IMAGE_TRANSFORM_COMPONENT_ID),
+        vec![transform_id]
+    );
+    assert!(component_nodes(&project, clip_id, SHAPE_TRANSFORM_COMPONENT_ID).is_empty());
+    assert_eq!(
+        project
+            .get_clip(clip_id)
+            .context("Clip exists")?
+            .output_node_id,
+        Some(transform_id)
+    );
+    assert!(project.connections.iter().any(|connection| {
+        connection.from == PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT)
+            && connection.to == PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT)
+    }));
+    for original in &before.connections {
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == original.id),
+            Some(original),
+            "existing branch wire changed while adding the global Transform"
+        );
+    }
+    Ok(())
+}
