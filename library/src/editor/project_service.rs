@@ -25,6 +25,13 @@ mod backplate;
 mod property_authoring;
 mod property_evaluation;
 mod raster_source_graph;
+mod semantic_container_properties;
+
+pub use semantic_container_properties::{
+    SemanticAnimationSupport, SemanticContainerPropertyProjection, SemanticContainerPropertyStack,
+    SemanticPropertyAccess, SemanticPropertyBinding, SemanticPropertyEntry, SemanticPropertyGroup,
+    SemanticPropertyOwner, SemanticPropertySection,
+};
 
 pub const DEFAULT_TEXT_FONT: &str = "Arial";
 pub const DEFAULT_SHAPE_PATH: &str =

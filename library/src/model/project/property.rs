@@ -400,6 +400,10 @@ impl PropertyMap {
         self.properties.insert(key, property);
     }
 
+    pub(crate) fn remove(&mut self, key: &str) -> Option<Property> {
+        self.properties.remove(key)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {
         self.properties.iter()
     }
