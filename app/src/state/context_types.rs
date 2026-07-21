@@ -6,6 +6,7 @@ use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
 use library::animation::EasingFunction; // Added import
+use library::editor::project_service::SemanticPropertyOwner;
 use library::model::project::{NodeContainer, PortAddress, PortDataType, PortOwner};
 use library::model::property::KeyframeId;
 use library::PropertyOwner;
@@ -18,6 +19,19 @@ pub enum KeyframeValueComponent {
     Y,
     Z,
     W,
+}
+
+/// Stable address for one numeric row in the Graph Editor's transient
+/// property-stack projection. Actions re-resolve this address against the
+/// authoritative Project before every mutation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GraphPropertyAddress {
+    pub target: SelectionTarget,
+    pub section_id: String,
+    pub stable_id: String,
+    pub owner: SemanticPropertyOwner,
+    pub property_key: String,
+    pub component: KeyframeValueComponent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +74,8 @@ pub struct KeyframeDialogState {
     pub property_name: String,
     #[serde(skip)]
     pub owner: Option<PropertyOwner>,
+    #[serde(skip)]
+    pub graph_address: Option<GraphPropertyAddress>,
     pub property_key: String,
     #[serde(skip)]
     pub keyframe_id: Option<KeyframeId>,
@@ -98,6 +114,7 @@ impl Default for KeyframeDialogState {
             is_open: false,
             property_name: String::new(),
             owner: None,
+            graph_address: None,
             property_key: String::new(),
             keyframe_id: None,
             component: KeyframeValueComponent::Scalar,
@@ -256,7 +273,7 @@ impl GraphEditorState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphKeyframeDragOrigin {
-    pub property_name: String,
+    pub address: GraphPropertyAddress,
     pub keyframe_id: KeyframeId,
     pub global_time: f64,
     pub value: f64,

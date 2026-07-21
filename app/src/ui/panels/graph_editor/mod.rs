@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod drawing;
+pub(crate) mod mutation;
 pub mod projection;
 pub mod utils;
 
@@ -473,7 +474,7 @@ pub fn graph_editor_panel(
             &transform,
             &property_rows,
             target,
-            matches!(target, SelectionTarget::Node(_)),
+            true,
             editor_context,
             project_service,
             &mut actions,
@@ -498,18 +499,15 @@ pub fn graph_editor_panel(
         actions.push(Action::FinishMove);
     }
 
-    if let SelectionTarget::Node(entity_id) = target {
-        for action in actions {
-            actions::process_action(
-                action,
-                comp_id,
-                entity_id,
-                project_service,
-                project,
-                editor_context,
-                history_manager,
-            );
-        }
+    for action in actions {
+        actions::process_action(
+            action,
+            comp_id,
+            project_service,
+            project,
+            editor_context,
+            history_manager,
+        );
     }
 }
 

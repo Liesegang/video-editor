@@ -1,13 +1,17 @@
-use super::utils::{property_component_value, replace_property_component, time_mapper_for_owner};
+use super::mutation::{
+    add_keyframe, property_component, remove_keyframe, resolve_graph_property, update_keyframe,
+    validate_keyframe_component, GraphMutationRoute,
+};
+use super::utils::{property_component_value, replace_property_component};
 use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
+use crate::state::context_types::GraphPropertyAddress;
 use crate::utils::lock::read_or_recover;
 use library::animation::EasingFunction;
 use library::model::project::Project;
 use library::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
-use library::model::Node;
-use library::{EditorService, KeyframeBatchUpdate, PropertyOwner};
+use library::{EditorService, KeyframeBatchUpdate};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -16,15 +20,15 @@ pub enum Action {
     Select(String, KeyframeId),
     MoveBatch(Vec<KeyframeMove>),
     FinishMove,
-    Add(String, f64, f64),
-    SetEasing(String, KeyframeId, EasingFunction),
-    Remove(String, KeyframeId),
-    EditKeyframe(String, KeyframeId),
+    Add(GraphPropertyAddress, f64, f64),
+    SetEasing(GraphPropertyAddress, KeyframeId, EasingFunction),
+    Remove(GraphPropertyAddress, KeyframeId),
+    EditKeyframe(GraphPropertyAddress, KeyframeId),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyframeMove {
-    pub property_name: String,
+    pub address: GraphPropertyAddress,
     pub keyframe_id: KeyframeId,
     pub global_time: f64,
     pub value: f64,
@@ -41,6 +45,7 @@ pub fn graph_property_name(property_key: &str, component: PropertyComponent) -> 
     format!("node:{property_key}{suffix}")
 }
 
+#[cfg(test)]
 fn parse_property_name(name: &str) -> Option<(String, Option<PropertyComponent>)> {
     let (base_name, component) = split_component(name);
     match base_name.split(':').collect::<Vec<_>>().as_slice() {
@@ -49,6 +54,7 @@ fn parse_property_name(name: &str) -> Option<(String, Option<PropertyComponent>)
     }
 }
 
+#[cfg(test)]
 fn split_component(name: &str) -> (&str, Option<PropertyComponent>) {
     if let Some(base) = name.strip_suffix(".x") {
         (base, Some(PropertyComponent::X))
@@ -63,45 +69,9 @@ fn split_component(name: &str) -> (&str, Option<PropertyComponent>) {
     }
 }
 
-fn current_keyframe_value(
-    node: &Node,
-    property_key: &str,
-    keyframe_id: KeyframeId,
-) -> Option<PropertyValue> {
-    let property = node.properties().get(property_key)?;
-    property
-        .keyframe_by_id(keyframe_id)
-        .map(|keyframe| keyframe.value)
-}
-
-fn validate_keyframe_component(
-    project: &Project,
-    entity_id: Uuid,
-    property_key: &str,
-    keyframe_id: KeyframeId,
-    component: Option<PropertyComponent>,
-) -> Result<PropertyOwner, String> {
-    let node = project
-        .get_node(entity_id)
-        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
-    let property = node.properties().get(property_key).ok_or_else(|| {
-        format!("Graph property {property_key:?} does not exist on Node {entity_id}")
-    })?;
-    if property.evaluator != "keyframe" {
-        return Err(format!("Graph property {property_key:?} is not keyframed"));
-    }
-    let keyframe = property
-        .keyframe_by_id(keyframe_id)
-        .ok_or_else(|| format!("Graph keyframe {keyframe_id} does not exist"))?;
-    property_component_value(
-        &keyframe.value,
-        component.unwrap_or(PropertyComponent::Scalar),
-    )?;
-    Ok(PropertyOwner::Node(entity_id))
-}
-
 #[derive(Clone)]
 struct PreparedMove {
+    route: GraphMutationRoute,
     property_key: String,
     keyframe_id: KeyframeId,
     source_time: f64,
@@ -109,15 +79,12 @@ struct PreparedMove {
 }
 
 fn prepare_move_batch(
-    project: &Project,
-    entity_id: Uuid,
+    project_service: &EditorService,
+    project: &Arc<RwLock<Project>>,
     moves: &[KeyframeMove],
-) -> Result<(PropertyOwner, Vec<PreparedMove>), String> {
-    let node = project
-        .get_node(entity_id)
-        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
-    let mapper = time_mapper_for_owner(project, PropertyOwner::Node(entity_id));
+) -> Result<Vec<PreparedMove>, String> {
     let mut prepared: Vec<PreparedMove> = Vec::new();
+    let target = moves.first().map(|movement| movement.address.target);
 
     for movement in moves {
         if !movement.global_time.is_finite() || !movement.value.is_finite() {
@@ -126,37 +93,33 @@ fn prepare_move_batch(
                 movement.keyframe_id
             ));
         }
-        let (property_key, component) =
-            parse_property_name(&movement.property_name).ok_or_else(|| {
-                format!(
-                    "invalid scoped Graph property name {:?}",
-                    movement.property_name
-                )
-            })?;
+        if Some(movement.address.target) != target {
+            return Err("Graph move batch spans multiple selected targets".to_string());
+        }
+        let resolved = resolve_graph_property(project_service, project, &movement.address)?;
+        let keyframe =
+            validate_keyframe_component(&resolved, &movement.address, movement.keyframe_id)?;
         let existing_index = prepared.iter().position(|candidate| {
-            candidate.property_key == property_key && candidate.keyframe_id == movement.keyframe_id
+            candidate.route == resolved.route
+                && candidate.property_key == movement.address.property_key
+                && candidate.keyframe_id == movement.keyframe_id
         });
         let current = existing_index
             .map(|index| prepared[index].value.clone())
-            .or_else(|| current_keyframe_value(node, &property_key, movement.keyframe_id))
-            .ok_or_else(|| {
-                format!(
-                    "Graph keyframe {} was not found in property {}",
-                    movement.keyframe_id, property_key
-                )
-            })?;
+            .unwrap_or(keyframe.value);
         let value = replace_property_component(
             &current,
-            component.unwrap_or(PropertyComponent::Scalar),
+            property_component(movement.address.component),
             movement.value,
         )?;
-        let source_time = mapper.to_source_time(movement.global_time);
+        let source_time = resolved.time_mapper.to_source_time(movement.global_time);
         if let Some(index) = existing_index {
             prepared[index].source_time = source_time;
             prepared[index].value = value;
         } else {
             prepared.push(PreparedMove {
-                property_key,
+                route: resolved.route,
+                property_key: movement.address.property_key.clone(),
                 keyframe_id: movement.keyframe_id,
                 source_time,
                 value,
@@ -167,7 +130,58 @@ fn prepare_move_batch(
     if prepared.is_empty() {
         return Err("Graph move batch is empty".to_string());
     }
-    Ok((PropertyOwner::Node(entity_id), prepared))
+    if prepared
+        .iter()
+        .any(|movement| matches!(movement.route, GraphMutationRoute::Semantic(_)))
+        && (prepared.len() != 1 || !matches!(prepared[0].route, GraphMutationRoute::Semantic(_)))
+    {
+        return Err(
+            "Graph semantic drags may update only one property keyframe atomically".to_string(),
+        );
+    }
+    Ok(prepared)
+}
+
+fn apply_move_batch(
+    project_service: &EditorService,
+    prepared: Vec<PreparedMove>,
+) -> Result<(), String> {
+    if let [movement] = prepared.as_slice() {
+        if matches!(movement.route, GraphMutationRoute::Semantic(_)) {
+            return update_keyframe(
+                project_service,
+                movement.route,
+                &movement.property_key,
+                movement.keyframe_id,
+                KeyframeUpdate {
+                    time: Some(movement.source_time),
+                    value: Some(movement.value.clone()),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    let updates = prepared
+        .into_iter()
+        .map(|movement| {
+            let GraphMutationRoute::Direct(owner) = movement.route else {
+                return Err("semantic Graph move escaped the atomicity gate".to_string());
+            };
+            Ok(KeyframeBatchUpdate {
+                owner,
+                property_key: movement.property_key,
+                keyframe_id: movement.keyframe_id,
+                update: KeyframeUpdate {
+                    time: Some(movement.source_time),
+                    value: Some(movement.value),
+                    ..Default::default()
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    project_service
+        .update_keyframes_batch(&updates)
+        .map_err(|error| error.to_string())
 }
 
 fn push_history(project: &Arc<RwLock<Project>>, history_manager: &mut HistoryManager) {
@@ -192,12 +206,11 @@ pub fn finish_pending_move(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "graph actions need stable composition/entity identity plus model, UI, and history services for one atomic edit"
+    reason = "graph actions coordinate composition context, model services, UI state, and history"
 )]
 pub fn process_action(
     action: Action,
     comp_id: Uuid,
-    entity_id: Uuid,
     project_service: &EditorService,
     project: &Arc<RwLock<Project>>,
     editor_context: &mut EditorContext,
@@ -208,28 +221,19 @@ pub fn process_action(
             editor_context.interaction.selected_keyframe = Some((name, keyframe_id));
         }
         Action::MoveBatch(moves) => {
-            let prepared = project
-                .read()
-                .map_err(|error| error.to_string())
-                .and_then(|project| prepare_move_batch(&project, entity_id, &moves));
-            match prepared.and_then(|(owner, prepared)| {
-                let updates = prepared
-                    .into_iter()
-                    .map(|movement| KeyframeBatchUpdate {
-                        owner,
-                        property_key: movement.property_key,
-                        keyframe_id: movement.keyframe_id,
-                        update: KeyframeUpdate {
-                            time: Some(movement.source_time),
-                            value: Some(movement.value),
-                            ..Default::default()
-                        },
-                    })
-                    .collect::<Vec<_>>();
-                project_service
-                    .update_keyframes_batch(&updates)
-                    .map_err(|error| error.to_string())
-            }) {
+            let move_target = moves.first().map(|movement| movement.address.target);
+            if editor_context
+                .graph_editor
+                .keyframe_drag
+                .as_ref()
+                .is_none_or(|drag| Some(drag.target) != move_target)
+            {
+                log::error!("Rejected Graph move batch outside its active typed drag target");
+                return;
+            }
+            match prepare_move_batch(project_service, project, &moves)
+                .and_then(|prepared| apply_move_batch(project_service, prepared))
+            {
                 Ok(()) => {
                     if let Some(drag) = &mut editor_context.graph_editor.keyframe_drag {
                         drag.changed = true;
@@ -241,177 +245,116 @@ pub fn process_action(
         Action::FinishMove => {
             finish_pending_move(editor_context, project, history_manager);
         }
-        Action::Add(name, time, value) => {
-            let Some((property_key, component)) = parse_property_name(&name) else {
-                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
-                return;
-            };
-            let prepared = project
-                .read()
-                .map_err(|error| error.to_string())
-                .and_then(|project| {
+        Action::Add(address, time, value) => {
+            let prepared = (|| {
+                if !time.is_finite() || !value.is_finite() {
+                    return Err("Graph keyframe has a non-finite time or value".to_string());
+                }
+                let resolved = resolve_graph_property(project_service, project, &address)?;
+                if !matches!(
+                    resolved.property.evaluator.as_str(),
+                    "constant" | "keyframe"
+                ) {
+                    return Err("Graph expressions cannot be converted to keyframes".to_string());
+                }
+                let (fps, resolution) = {
+                    let project = project.read().map_err(|error| error.to_string())?;
                     let composition = project
                         .get_composition(comp_id)
                         .ok_or_else(|| format!("Graph composition {comp_id} does not exist"))?;
-                    let node = project
-                        .get_node(entity_id)
-                        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
-                    let source_time =
-                        time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
-                            .to_source_time(time);
-                    let property = node.properties().get(&property_key).ok_or_else(|| {
-                        format!(
-                            "Graph property {property_key:?} does not exist on Node {entity_id}"
-                        )
-                    })?;
-                    let current = project_service
-                        .evaluate_property_value(
-                            property,
-                            node.properties(),
-                            source_time,
-                            composition.fps,
-                            (composition.width, composition.height),
-                        )
-                        .map_err(|error| error.to_string())?;
-                    let value = replace_property_component(
-                        &current,
-                        component.unwrap_or(PropertyComponent::Scalar),
-                        value,
-                    )?;
-                    Ok((PropertyOwner::Node(entity_id), source_time, value))
-                });
-            match prepared {
-                Ok((owner, source_time, value)) => {
-                    if project_service
-                        .add_keyframe(owner, &property_key, source_time, value, None)
-                        .is_ok()
-                    {
-                        push_history(project, history_manager);
-                    }
-                }
+                    (composition.fps, (composition.width, composition.height))
+                };
+                let source_time = resolved.time_mapper.to_source_time(time);
+                let current = project_service
+                    .evaluate_property_value(
+                        &resolved.property,
+                        &resolved.property_map,
+                        source_time,
+                        fps,
+                        resolution,
+                    )
+                    .map_err(|error| error.to_string())?;
+                let value = replace_property_component(
+                    &current,
+                    property_component(address.component),
+                    value,
+                )?;
+                Ok((resolved.route, source_time, value))
+            })();
+            match prepared.and_then(|(route, source_time, value)| {
+                add_keyframe(
+                    project_service,
+                    route,
+                    &address.property_key,
+                    source_time,
+                    value,
+                    None,
+                )
+            }) {
+                Ok(()) => push_history(project, history_manager),
                 Err(error) => log::error!("Rejected Graph keyframe add: {error}"),
             }
         }
-        Action::SetEasing(name, keyframe_id, easing) => {
-            let Some((property_key, component)) = parse_property_name(&name) else {
-                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
-                return;
-            };
-            let owner = project
-                .read()
-                .map_err(|error| error.to_string())
-                .and_then(|project| {
-                    validate_keyframe_component(
-                        &project,
-                        entity_id,
-                        &property_key,
-                        keyframe_id,
-                        component,
-                    )
+        Action::SetEasing(address, keyframe_id, easing) => {
+            let prepared =
+                resolve_graph_property(project_service, project, &address).and_then(|resolved| {
+                    validate_keyframe_component(&resolved, &address, keyframe_id)?;
+                    Ok(resolved.route)
                 });
-            match owner {
-                Ok(owner) => {
-                    if project_service
-                        .update_keyframe_by_id(
-                            owner,
-                            &property_key,
-                            keyframe_id,
-                            KeyframeUpdate {
-                                easing: Some(easing),
-                                ..Default::default()
-                            },
-                        )
-                        .is_ok()
-                    {
-                        push_history(project, history_manager);
-                    }
-                }
+            match prepared.and_then(|route| {
+                update_keyframe(
+                    project_service,
+                    route,
+                    &address.property_key,
+                    keyframe_id,
+                    KeyframeUpdate {
+                        easing: Some(easing),
+                        ..Default::default()
+                    },
+                )
+            }) {
+                Ok(()) => push_history(project, history_manager),
                 Err(error) => log::error!("Rejected Graph easing update: {error}"),
             }
         }
-        Action::Remove(name, keyframe_id) => {
-            let Some((property_key, component)) = parse_property_name(&name) else {
-                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
-                return;
-            };
-            let owner = project
-                .read()
-                .map_err(|error| error.to_string())
-                .and_then(|project| {
-                    validate_keyframe_component(
-                        &project,
-                        entity_id,
-                        &property_key,
-                        keyframe_id,
-                        component,
-                    )
+        Action::Remove(address, keyframe_id) => {
+            let prepared =
+                resolve_graph_property(project_service, project, &address).and_then(|resolved| {
+                    validate_keyframe_component(&resolved, &address, keyframe_id)?;
+                    Ok(resolved.route)
                 });
-            match owner {
-                Ok(owner) => {
-                    if project_service
-                        .remove_keyframe_by_id(owner, &property_key, keyframe_id)
-                        .is_ok()
-                    {
-                        push_history(project, history_manager);
-                    }
-                }
+            match prepared.and_then(|route| {
+                remove_keyframe(project_service, route, &address.property_key, keyframe_id)
+            }) {
+                Ok(()) => push_history(project, history_manager),
                 Err(error) => log::error!("Rejected Graph keyframe removal: {error}"),
             }
         }
-        Action::EditKeyframe(name, keyframe_id) => {
-            let Some((property_key, component)) = parse_property_name(&name) else {
-                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
-                return;
-            };
-            let prepared = project
-                .read()
-                .map_err(|error| error.to_string())
-                .and_then(|project| {
-                    let node = project
-                        .get_node(entity_id)
-                        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
-                    let property = node.properties().get(&property_key).ok_or_else(|| {
-                        format!(
-                            "Graph property {property_key:?} does not exist on Node {entity_id}"
-                        )
-                    })?;
-                    if property.evaluator != "keyframe" {
-                        return Err(format!("Graph property {property_key:?} is not keyframed"));
-                    }
-                    let keyframe = property
-                        .keyframe_by_id(keyframe_id)
-                        .ok_or_else(|| format!("Graph keyframe {keyframe_id} does not exist"))?;
+        Action::EditKeyframe(address, keyframe_id) => {
+            let prepared =
+                resolve_graph_property(project_service, project, &address).and_then(|resolved| {
+                    let keyframe = validate_keyframe_component(&resolved, &address, keyframe_id)?;
                     let value = property_component_value(
                         &keyframe.value,
-                        component.unwrap_or(PropertyComponent::Scalar),
+                        property_component(address.component),
                     )?;
-                    let global_time =
-                        time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
-                            .to_global_time(keyframe.time.into_inner());
-                    Ok((keyframe, PropertyOwner::Node(entity_id), global_time, value))
+                    let global_time = resolved
+                        .time_mapper
+                        .to_global_time(keyframe.time.into_inner());
+                    Ok((keyframe, resolved.route, global_time, value))
                 });
             match prepared {
-                Ok((keyframe, owner, global_time, value)) => {
+                Ok((keyframe, route, global_time, value)) => {
                     editor_context.keyframe_dialog.is_open = true;
-                    editor_context.keyframe_dialog.property_name = name;
-                    editor_context.keyframe_dialog.owner = Some(owner);
-                    editor_context.keyframe_dialog.property_key = property_key;
-                    editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
-                    editor_context.keyframe_dialog.component = match component {
-                        Some(PropertyComponent::X) => {
-                            crate::state::context_types::KeyframeValueComponent::X
-                        }
-                        Some(PropertyComponent::Y) => {
-                            crate::state::context_types::KeyframeValueComponent::Y
-                        }
-                        Some(PropertyComponent::Z) => {
-                            crate::state::context_types::KeyframeValueComponent::Z
-                        }
-                        Some(PropertyComponent::W) => {
-                            crate::state::context_types::KeyframeValueComponent::W
-                        }
-                        _ => crate::state::context_types::KeyframeValueComponent::Scalar,
+                    editor_context.keyframe_dialog.property_name = address.stable_id.clone();
+                    editor_context.keyframe_dialog.owner = match route {
+                        GraphMutationRoute::Direct(owner) => Some(owner),
+                        GraphMutationRoute::Semantic(_) => None,
                     };
+                    editor_context.keyframe_dialog.graph_address = Some(address.clone());
+                    editor_context.keyframe_dialog.property_key = address.property_key.clone();
+                    editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
+                    editor_context.keyframe_dialog.component = address.component;
                     editor_context.keyframe_dialog.time = global_time;
                     editor_context.keyframe_dialog.value = value;
                     editor_context.keyframe_dialog.easing = keyframe.easing;
@@ -427,11 +370,12 @@ pub fn process_action(
 mod tests {
     use super::*;
     use crate::state::context_types::{
-        GraphKeyframeDragOrigin, GraphKeyframeDragState, SelectionTarget,
+        GraphKeyframeDragOrigin, GraphKeyframeDragState, KeyframeValueComponent, SelectionTarget,
     };
     use library::cache::CacheManager;
+    use library::editor::project_service::SemanticPropertyOwner;
     use library::model::property::{Keyframe, Property, Vec2, Vec3, Vec4};
-    use library::model::{Clip, Composition};
+    use library::model::{Clip, Composition, Node};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
@@ -479,6 +423,28 @@ mod tests {
         (keyframe.time.into_inner(), keyframe.value)
     }
 
+    fn exact_address(
+        node_id: Uuid,
+        property_key: &str,
+        component: PropertyComponent,
+    ) -> GraphPropertyAddress {
+        let component = match component {
+            PropertyComponent::Scalar => KeyframeValueComponent::Scalar,
+            PropertyComponent::X => KeyframeValueComponent::X,
+            PropertyComponent::Y => KeyframeValueComponent::Y,
+            PropertyComponent::Z => KeyframeValueComponent::Z,
+            PropertyComponent::W => KeyframeValueComponent::W,
+        };
+        GraphPropertyAddress {
+            target: SelectionTarget::Node(node_id),
+            section_id: format!("node:{node_id}"),
+            stable_id: graph_property_name(property_key, property_component(component)),
+            owner: SemanticPropertyOwner::ExactNode(node_id),
+            property_key: property_key.to_string(),
+            component,
+        }
+    }
+
     #[test]
     fn scoped_names_address_only_the_selected_nodes_direct_properties() {
         let name = graph_property_name("amount", PropertyComponent::X);
@@ -516,16 +482,18 @@ mod tests {
 
         for action in [
             Action::SetEasing(
-                graph_property_name("b", PropertyComponent::W),
+                exact_address(node_id, "b", PropertyComponent::W),
                 keyframe_id,
                 EasingFunction::EaseInQuad,
             ),
-            Action::Remove(graph_property_name("b", PropertyComponent::W), keyframe_id),
+            Action::Remove(
+                exact_address(node_id, "b", PropertyComponent::W),
+                keyframe_id,
+            ),
         ] {
             process_action(
                 action,
                 composition_id,
-                node_id,
                 &service,
                 &project,
                 &mut context,
@@ -537,12 +505,11 @@ mod tests {
 
         process_action(
             Action::SetEasing(
-                graph_property_name("b", PropertyComponent::Z),
+                exact_address(node_id, "b", PropertyComponent::Z),
                 keyframe_id,
                 EasingFunction::EaseInQuad,
             ),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -588,11 +555,11 @@ mod tests {
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().expect("project read").clone());
         let property_name = graph_property_name("b", PropertyComponent::W);
+        let address = exact_address(node_id, "b", PropertyComponent::W);
 
         process_action(
-            Action::Add(property_name.clone(), 1.0, 8.0),
+            Action::Add(address.clone(), 1.0, 8.0),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -626,13 +593,12 @@ mod tests {
         });
         process_action(
             Action::MoveBatch(vec![KeyframeMove {
-                property_name: property_name.clone(),
+                address,
                 keyframe_id,
                 global_time: 2.0,
                 value: 9.0,
             }]),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -651,7 +617,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -668,13 +633,12 @@ mod tests {
         });
         process_action(
             Action::MoveBatch(vec![KeyframeMove {
-                property_name: graph_property_name("b", PropertyComponent::Scalar),
+                address: exact_address(node_id, "b", PropertyComponent::Scalar),
                 keyframe_id,
                 global_time: 3.0,
                 value: 10.0,
             }]),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -692,7 +656,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -757,11 +720,14 @@ mod tests {
         .unwrap();
         let mut context = EditorContext::new(composition_id);
         let anchor_name = graph_property_name("rotation", PropertyComponent::Scalar);
+        let rotation_address = exact_address(node_id, "rotation", PropertyComponent::Scalar);
+        let position_x_address = exact_address(node_id, "position", PropertyComponent::X);
+        let position_y_address = exact_address(node_id, "position", PropertyComponent::Y);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
             target: SelectionTarget::Node(node_id),
             anchor: (anchor_name.clone(), direct_id),
             origins: vec![GraphKeyframeDragOrigin {
-                property_name: anchor_name.clone(),
+                address: rotation_address.clone(),
                 keyframe_id: direct_id,
                 global_time: 2.0,
                 value: 10.0,
@@ -774,19 +740,19 @@ mod tests {
         let movement = |global_time, offset| {
             vec![
                 KeyframeMove {
-                    property_name: anchor_name.clone(),
+                    address: rotation_address.clone(),
                     keyframe_id: direct_id,
                     global_time,
                     value: 10.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: graph_property_name("position", PropertyComponent::X),
+                    address: position_x_address.clone(),
                     keyframe_id: position_id,
                     global_time,
                     value: 20.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: graph_property_name("position", PropertyComponent::Y),
+                    address: position_y_address.clone(),
                     keyframe_id: position_id,
                     global_time,
                     value: 30.0 + offset,
@@ -799,7 +765,6 @@ mod tests {
         process_action(
             Action::MoveBatch(movement(2.2, 2.0)),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -808,7 +773,6 @@ mod tests {
         process_action(
             Action::MoveBatch(movement(2.4, 4.0)),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -838,7 +802,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -848,7 +811,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -859,27 +821,26 @@ mod tests {
         let before_invalid_batch = project.read().unwrap().clone();
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
             target: SelectionTarget::Node(node_id),
-            anchor: (anchor_name.clone(), direct_id),
+            anchor: (anchor_name, direct_id),
             origins: Vec::new(),
             changed: false,
         });
         process_action(
             Action::MoveBatch(vec![
                 KeyframeMove {
-                    property_name: anchor_name,
+                    address: rotation_address,
                     keyframe_id: direct_id,
                     global_time: 3.0,
                     value: 99.0,
                 },
                 KeyframeMove {
-                    property_name: "effect:obsolete:amount".to_string(),
+                    address: exact_address(node_id, "obsolete", PropertyComponent::Scalar),
                     keyframe_id: direct_id,
                     global_time: 3.0,
                     value: 99.0,
                 },
             ]),
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,
@@ -890,7 +851,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            node_id,
             &service,
             &project,
             &mut context,

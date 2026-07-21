@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use library::editor::project_service::{
@@ -11,7 +11,7 @@ use library::model::Node;
 use library::PropertyOwner;
 use uuid::Uuid;
 
-use crate::state::context_types::SelectionTarget;
+use crate::state::context_types::{GraphPropertyAddress, KeyframeValueComponent, SelectionTarget};
 
 use super::actions::graph_property_name;
 use super::utils::{
@@ -21,6 +21,8 @@ use super::utils::{
 #[derive(Clone)]
 pub struct GraphPropertyRow {
     pub stable_id: String,
+    pub section_id: String,
+    pub target: SelectionTarget,
     pub label: String,
     pub property_key: String,
     pub definition: Option<PropertyDefinition>,
@@ -41,6 +43,17 @@ impl GraphPropertyRow {
     pub fn is_editable(&self) -> bool {
         matches!(self.access, SemanticPropertyAccess::Editable)
             && self.animation == SemanticAnimationSupport::Evaluator
+    }
+
+    pub fn address(&self) -> Option<GraphPropertyAddress> {
+        Some(GraphPropertyAddress {
+            target: self.target,
+            section_id: self.section_id.clone(),
+            stable_id: self.stable_id.clone(),
+            owner: self.owner,
+            property_key: self.property_key.clone(),
+            component: keyframe_component(self.component?),
+        })
     }
 
     pub fn access_label(&self) -> Option<String> {
@@ -75,6 +88,7 @@ impl GraphPropertyProjection {
         let property_map = Arc::new(node.properties().clone());
         let owner = SemanticPropertyOwner::ExactNode(node.id);
         let mapper = time_mapper_for_owner(project, PropertyOwner::Node(node.id));
+        let section_id = format!("node:{}", node.id);
         let mut rows = Vec::new();
         let mut known = HashSet::with_capacity(definitions.len());
         for definition in definitions {
@@ -87,7 +101,7 @@ impl GraphPropertyProjection {
             append_rows(
                 &mut rows,
                 SelectionTarget::Node(node.id),
-                "exact",
+                &section_id,
                 definition.name(),
                 definition.label(),
                 Some(definition.clone()),
@@ -109,7 +123,7 @@ impl GraphPropertyProjection {
             append_rows(
                 &mut rows,
                 SelectionTarget::Node(node.id),
-                "exact",
+                &section_id,
                 key,
                 key,
                 None,
@@ -121,10 +135,10 @@ impl GraphPropertyProjection {
                 mapper,
             );
         }
-        Self {
+        let mut projection = Self {
             target: SelectionTarget::Node(node.id),
             sections: vec![GraphPropertySection {
-                stable_id: format!("node:{}", node.id),
+                stable_id: section_id,
                 label: node.name.clone(),
                 group: SemanticPropertyGroup::Other,
                 owner,
@@ -133,7 +147,9 @@ impl GraphPropertyProjection {
                 diagnostics: Vec::new(),
             }],
             diagnostics: Vec::new(),
-        }
+        };
+        projection.disambiguate_row_ids();
+        projection
     }
 
     pub fn semantic(project: &Project, stack: &SemanticContainerPropertyStack) -> Self {
@@ -176,15 +192,33 @@ impl GraphPropertyProjection {
                 }
             })
             .collect();
-        Self {
+        let mut projection = Self {
             target,
             sections,
             diagnostics: stack.diagnostics().to_vec(),
-        }
+        };
+        projection.disambiguate_row_ids();
+        projection
     }
 
     pub fn rows(&self) -> impl Iterator<Item = &GraphPropertyRow> {
         self.sections.iter().flat_map(|section| section.rows.iter())
+    }
+
+    fn disambiguate_row_ids(&mut self) {
+        let mut counts = HashMap::<String, usize>::new();
+        for row in self.sections.iter().flat_map(|section| &section.rows) {
+            *counts.entry(row.stable_id.clone()).or_default() += 1;
+        }
+        for row in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.rows)
+        {
+            if counts.get(&row.stable_id).copied().unwrap_or_default() > 1 {
+                row.stable_id = typed_row_id(row);
+            }
+        }
     }
 }
 
@@ -215,6 +249,8 @@ fn append_rows(
         };
         output.push(GraphPropertyRow {
             stable_id,
+            section_id: section_id.to_string(),
+            target,
             label: label.to_string(),
             property_key: property_key.to_string(),
             definition,
@@ -236,6 +272,8 @@ fn append_rows(
         };
         output.push(GraphPropertyRow {
             stable_id,
+            section_id: section_id.to_string(),
+            target,
             label: format!("{label}.{}", component_label(component)),
             property_key: property_key.to_string(),
             definition: definition.clone(),
@@ -248,6 +286,36 @@ fn append_rows(
             time_mapper,
         });
     }
+}
+
+fn keyframe_component(component: PropertyComponent) -> KeyframeValueComponent {
+    match component {
+        PropertyComponent::Scalar => KeyframeValueComponent::Scalar,
+        PropertyComponent::X => KeyframeValueComponent::X,
+        PropertyComponent::Y => KeyframeValueComponent::Y,
+        PropertyComponent::Z => KeyframeValueComponent::Z,
+        PropertyComponent::W => KeyframeValueComponent::W,
+    }
+}
+
+fn typed_row_id(row: &GraphPropertyRow) -> String {
+    let component = match row.component {
+        None => "none",
+        Some(PropertyComponent::Scalar) => "scalar",
+        Some(PropertyComponent::X) => "x",
+        Some(PropertyComponent::Y) => "y",
+        Some(PropertyComponent::Z) => "z",
+        Some(PropertyComponent::W) => "w",
+    };
+    format!(
+        "typed:{}:{}:{}:{}:{}:{}:{component}",
+        selection_id(row.target),
+        row.section_id.len(),
+        row.section_id,
+        semantic_owner_id(row.owner),
+        row.property_key.len(),
+        row.property_key,
+    )
 }
 
 fn semantic_row_id(
@@ -437,6 +505,40 @@ mod tests {
         );
         assert!(!projection.rows().last().expect("text row").is_plottable());
         assert_eq!(projection.target, SelectionTarget::Node(node.id));
+    }
+
+    #[test]
+    fn colliding_legacy_component_names_receive_distinct_typed_ids() {
+        let mut properties = PropertyMap::new();
+        properties.set(
+            "foo".to_string(),
+            Property::constant(PropertyValue::Vec2(library::model::property::Vec2 {
+                x: OrderedFloat(1.0),
+                y: OrderedFloat(2.0),
+            })),
+        );
+        properties.set("foo.x".to_string(), Property::constant(number(3.0)));
+        let mut node_json =
+            serde_json::to_value(Node::new_merge("collision")).expect("test Node serializes");
+        node_json["properties"] =
+            serde_json::to_value(properties).expect("test properties serialize");
+        let node: Node = serde_json::from_value(node_json).expect("test Node deserializes");
+        let mut project = Project::new("row collision");
+        project.add_node(node.clone());
+
+        let projection = GraphPropertyProjection::exact_node(&project, &node, &[]);
+        let ids = projection
+            .rows()
+            .map(|row| row.stable_id.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            projection
+                .rows()
+                .filter(|row| row.stable_id.starts_with("typed:"))
+                .count(),
+            2
+        );
     }
 
     #[test]

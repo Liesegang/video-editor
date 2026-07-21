@@ -10,12 +10,16 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::{
     KeyframeDialogEditControl, KeyframeDialogState, KeyframeDialogValues, KeyframeValueComponent,
 };
+use crate::ui::panels::graph_editor::mutation::{
+    property_component, resolve_graph_property, update_keyframe, validate_keyframe_component,
+    GraphMutationRoute,
+};
 use crate::ui::panels::graph_editor::utils::{
     replace_property_component, time_mapper_for_owner, PropertyComponent,
 };
 
 struct PreparedKeyframeDialogUpdate {
-    owner: library::PropertyOwner,
+    route: GraphMutationRoute,
     property_key: String,
     keyframe_id: library::model::property::KeyframeId,
     update: KeyframeUpdate,
@@ -64,11 +68,42 @@ fn prepare_keyframe_dialog_update(
     };
     let value = replace_property_component(&current_value, component, state.value)?;
     Ok(PreparedKeyframeDialogUpdate {
-        owner,
+        route: GraphMutationRoute::Direct(owner),
         property_key: state.property_key.clone(),
         keyframe_id,
         update: KeyframeUpdate {
             time: Some(time_mapper_for_owner(project, owner).to_source_time(state.time)),
+            value: Some(value),
+            easing: Some(state.easing.clone()),
+        },
+    })
+}
+
+fn prepare_graph_keyframe_dialog_update(
+    project_service: &EditorService,
+    project: &Arc<RwLock<Project>>,
+    state: &KeyframeDialogState,
+) -> Result<PreparedKeyframeDialogUpdate, String> {
+    let Some(address) = &state.graph_address else {
+        let project = project.read().map_err(|error| error.to_string())?;
+        return prepare_keyframe_dialog_update(&project, state);
+    };
+    let keyframe_id = state
+        .keyframe_id
+        .ok_or_else(|| "Keyframe dialog has no keyframe ID".to_string())?;
+    let resolved = resolve_graph_property(project_service, project, address)?;
+    let keyframe = validate_keyframe_component(&resolved, address, keyframe_id)?;
+    let value = replace_property_component(
+        &keyframe.value,
+        property_component(address.component),
+        state.value,
+    )?;
+    Ok(PreparedKeyframeDialogUpdate {
+        route: resolved.route,
+        property_key: address.property_key.clone(),
+        keyframe_id,
+        update: KeyframeUpdate {
+            time: Some(resolved.time_mapper.to_source_time(state.time)),
             value: Some(value),
             easing: Some(state.easing.clone()),
         },
@@ -81,7 +116,7 @@ fn response_finished(ui: &egui::Ui, response: &egui::Response) -> bool {
         || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
 }
 
-fn flush_keyframe_dialog_transaction(
+pub(crate) fn flush_keyframe_dialog_transaction(
     state: &mut KeyframeDialogState,
     history_manager: &mut HistoryManager,
     project_service: &EditorService,
@@ -104,7 +139,7 @@ fn flush_keyframe_dialog_transaction(
     true
 }
 
-fn apply_keyframe_dialog_change(
+pub(crate) fn apply_keyframe_dialog_change(
     state: &mut KeyframeDialogState,
     control: KeyframeDialogEditControl,
     frame_baseline: KeyframeDialogValues,
@@ -124,10 +159,7 @@ fn apply_keyframe_dialog_change(
     }
     state.transaction.active_control = Some(control);
 
-    let prepared = project
-        .read()
-        .map_err(|error| error.to_string())
-        .and_then(|project| prepare_keyframe_dialog_update(&project, state));
+    let prepared = prepare_graph_keyframe_dialog_update(project_service, project, state);
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -135,8 +167,9 @@ fn apply_keyframe_dialog_change(
             return false;
         }
     };
-    match project_service.update_keyframe_by_id(
-        prepared.owner,
+    match update_keyframe(
+        project_service,
+        prepared.route,
         &prepared.property_key,
         prepared.keyframe_id,
         prepared.update,
@@ -211,6 +244,8 @@ pub fn show_keyframe_dialog(
                         Some(serde_json::json!({
                             "global_time": state.time,
                             "owner": state.owner.map(property_owner_metadata),
+                            "graph_target": state.graph_address.as_ref().map(|address| address.target),
+                            "graph_section": state.graph_address.as_ref().map(|address| address.section_id.as_str()),
                             "property": state.property_key,
                         })),
                     );
@@ -499,6 +534,7 @@ mod tests {
             is_open: true,
             property_name: "node:b.w".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
+            graph_address: None,
             property_key: "b".to_string(),
             keyframe_id: Some(keyframe_id),
             component: KeyframeValueComponent::W,

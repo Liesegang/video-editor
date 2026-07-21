@@ -213,13 +213,16 @@ pub fn draw_properties(
         let Some(component) = row.component else {
             continue;
         };
+        let Some(address) = row.address() else {
+            continue;
+        };
         if !allow_edits || !row.is_editable() || row.property.evaluator != "keyframe" {
             continue;
         }
         for keyframe in row.property.keyframes() {
             match property_component_value(&keyframe.value, component) {
                 Ok(value) => available_drag_origins.push(GraphKeyframeDragOrigin {
-                    property_name: row.stable_id.clone(),
+                    address: address.clone(),
                     keyframe_id: keyframe.id,
                     global_time: row.time_mapper.to_global_time(keyframe.time.into_inner()),
                     value,
@@ -239,6 +242,9 @@ pub fn draw_properties(
             continue;
         }
         let Some(component) = row.component else {
+            continue;
+        };
+        let Some(address) = row.address() else {
             continue;
         };
         let name = &row.stable_id;
@@ -290,7 +296,7 @@ pub fn draw_properties(
                                 {
                                     let (t, _) = transform.screen_to_graph(pointer_pos);
                                     if editable && actions.is_empty() {
-                                        actions.push(Action::Add(name.clone(), t.max(0.0), val));
+                                        actions.push(Action::Add(address.clone(), t.max(0.0), val));
                                     }
                                 }
                             }
@@ -507,7 +513,7 @@ pub fn draw_properties(
                                 .iter()
                                 .filter(|origin| {
                                     editor_context.graph_editor.selected_keyframes.contains(&(
-                                        origin.property_name.clone(),
+                                        origin.address.stable_id.clone(),
                                         origin.keyframe_id,
                                     ))
                                 })
@@ -544,11 +550,7 @@ pub fn draw_properties(
                                 );
 
                                 if let Some(easing) = chosen_easing {
-                                    actions.push(Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        kf.id,
-                                        easing,
-                                    ));
+                                    actions.push(Action::SetEasing(address.clone(), kf.id, easing));
                                     ui.close_kind(UiKind::Menu);
                                 }
 
@@ -565,8 +567,7 @@ pub fn draw_properties(
                                     })),
                                 );
                                 if edit.clicked() {
-                                    actions
-                                        .push(Action::EditKeyframe(name_for_menu.clone(), kf.id));
+                                    actions.push(Action::EditKeyframe(address.clone(), kf.id));
                                     ui.close_kind(UiKind::Menu);
                                 }
 
@@ -585,7 +586,7 @@ pub fn draw_properties(
                                     })),
                                 );
                                 if delete.clicked() {
-                                    actions.push(Action::Remove(name_for_menu.clone(), kf.id));
+                                    actions.push(Action::Remove(address.clone(), kf.id));
                                     ui.close_kind(UiKind::Menu);
                                 }
                             });
@@ -612,7 +613,7 @@ pub fn draw_properties(
                                     drag.origins
                                         .iter()
                                         .map(|origin| KeyframeMove {
-                                            property_name: origin.property_name.clone(),
+                                            address: origin.address.clone(),
                                             keyframe_id: origin.keyframe_id,
                                             global_time: (origin.global_time + time_delta).max(0.0),
                                             value: origin.value + value_delta,
@@ -660,7 +661,11 @@ pub fn draw_properties(
                                 // Distance check
                                 if actions.is_empty() && (pointer_pos.y - curve_pos.y).abs() < 10.0
                                 {
-                                    actions.push(Action::Add(name.clone(), t.max(0.0), val_at_t));
+                                    actions.push(Action::Add(
+                                        address.clone(),
+                                        t.max(0.0),
+                                        val_at_t,
+                                    ));
                                 }
                             }
                         }

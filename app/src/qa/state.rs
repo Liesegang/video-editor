@@ -290,6 +290,14 @@ pub fn snapshot(
             "keyframe_dialog": {
                 "is_open": editor_context.keyframe_dialog.is_open,
                 "owner": editor_context.keyframe_dialog.owner.map(property_owner_json),
+                "graph_address": editor_context.keyframe_dialog.graph_address.as_ref().map(|address| json!({
+                    "target": address.target,
+                    "section_id": address.section_id,
+                    "stable_id": address.stable_id,
+                    "owner": format!("{:?}", address.owner),
+                    "property_key": address.property_key,
+                    "component": format!("{:?}", address.component),
+                })),
                 "property": editor_context.keyframe_dialog.property_key,
                 "keyframe_id": editor_context.keyframe_dialog.keyframe_id,
                 "global_time": editor_context.keyframe_dialog.time,
