@@ -837,5 +837,7 @@ pub(super) fn source_kind(node: &Node) -> &'static str {
         },
         NodeContent::Value(value) => value.label(),
         NodeContent::Merge => "Composite",
+        NodeContent::SoundMerge => "Sound Merge",
+        NodeContent::SoundAnalysis(analysis) => analysis.label(),
     }
 }

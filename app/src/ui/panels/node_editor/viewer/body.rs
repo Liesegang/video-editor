@@ -1,4 +1,5 @@
 use super::ProjectNodeViewer;
+use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
@@ -15,6 +16,20 @@ use uuid::Uuid;
 
 mod vector;
 
+fn merge_row_reorder_edit(row: &MergeLayerRow, new_index: usize) -> NodeEdit {
+    row.structural_child.map_or(
+        NodeEdit::ReorderConnection {
+            connection_id: row.connection_id,
+            new_order: new_index as i64,
+        },
+        |binding| NodeEdit::ReorderStructuralChild {
+            container: binding.container,
+            child: binding.owner,
+            new_index,
+        },
+    )
+}
+
 impl ProjectNodeViewer<'_> {
     pub(super) fn show_merge_input_slot(
         &mut self,
@@ -23,17 +38,28 @@ impl ProjectNodeViewer<'_> {
         ui: &mut egui::Ui,
     ) -> Option<Uuid> {
         let MergeInputSlotRole::Connected(row) = &slot.role else {
-            if matches!(slot.role, MergeInputSlotRole::VacantImages) {
+            if let MergeInputSlotRole::Vacant(kind) = &slot.role {
+                let kind = *kind;
+                let vacant = merge_vacant_slot(self.project, merge_id)?;
                 let response = non_selectable_label(
                     ui,
-                    egui::RichText::new(format!("{} Connect Image as Back", icons::PLUS))
+                    egui::RichText::new(format!(
+                        "{} Connect {}",
+                        icons::PLUS,
+                        kind.display_name()
+                    ))
                         .small()
                         .weak(),
                 )
-                .on_hover_text(
-                    "Vacant variadic input; a new Image wire stays on this bottom row and is inserted behind every existing layer",
-                );
-                let layer_count = merge_layer_rows(self.project, merge_id).len();
+                .on_hover_text(match kind {
+                    NativeVariadicMergeKind::Image if vacant.structural_prefix_len > 0 => {
+                        "Vacant variadic input; inserts behind existing advanced Image inputs while preserving the mandatory Timeline-child prefix"
+                    }
+                    NativeVariadicMergeKind::Image => "Vacant variadic input; inserts a new back layer",
+                    NativeVariadicMergeKind::Sound => {
+                        "Vacant variadic input; a new Sound wire is appended in canonical top-to-bottom order"
+                    }
+                });
                 register_merge_layer_component(
                     format!("node_editor.merge_layer.vacant:{merge_id}"),
                     "node_editor_merge_layer_vacant_input",
@@ -44,15 +70,19 @@ impl ProjectNodeViewer<'_> {
                     serde_json::json!({
                         "merge_id": merge_id,
                         "action": "connect",
-                        "port": library::model::project::MERGE_IMAGES_PORT,
+                        "merge_kind": kind.qa_key(),
+                        "port": kind.input_port(),
                         "variadic": true,
-                        "canonical_insertion_slot": 0,
-                        "visual_slot": layer_count,
-                        "insertion_semantics": "back",
-                        "visual_order_semantics": "front_to_back",
+                        "canonical_insertion_slot": vacant.canonical_index,
+                        "visual_slot": vacant.visual_index,
+                        "layer_count": vacant.layer_count,
+                        "structural_prefix_len": vacant.structural_prefix_len,
+                        "insertion_semantics": vacant.insertion_semantics,
+                        "canonical_order_semantics": kind.canonical_order_semantics(),
+                        "visual_order_semantics": kind.visual_order_semantics(),
                     }),
                 );
-                if layer_count == 0 {
+                if vacant.layer_count == 0 {
                     register_merge_layer_component(
                         format!("node_editor.merge_layers.empty:{merge_id}"),
                         "node_editor_merge_layers_empty",
@@ -63,9 +93,10 @@ impl ProjectNodeViewer<'_> {
                         serde_json::json!({
                             "merge_id": merge_id,
                             "layer_count": 0,
-                            "canonical_order_semantics": "back_to_front",
-                            "visual_order_semantics": "front_to_back",
-                            "order_semantics": "back_to_front",
+                            "merge_kind": kind.qa_key(),
+                            "canonical_order_semantics": kind.canonical_order_semantics(),
+                            "visual_order_semantics": kind.visual_order_semantics(),
+                            "order_semantics": kind.canonical_order_semantics(),
                         }),
                     );
                 }
@@ -79,12 +110,14 @@ impl ProjectNodeViewer<'_> {
             .merge_layer_reorder
             .as_ref()
             .and_then(|gesture| (gesture.merge_id == merge_id).then_some(gesture.target_index));
-        let target_highlight = active_target.flatten() == Some(row.back_to_front_index);
+        let target_highlight = active_target.flatten() == Some(row.canonical_index);
         let mut selected_blend = None;
         let mut requested_order = None;
         let mut drag_response = None;
-        let mut back_response = None;
-        let mut front_response = None;
+        let mut up_response = None;
+        let mut down_response = None;
+        let mut up_target = None;
+        let mut down_target = None;
         let row_response = egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(
                 5,
@@ -98,13 +131,13 @@ impl ProjectNodeViewer<'_> {
             })
             .show(ui, |ui| {
                 ui.set_min_size(egui::vec2(
-                    260.0,
+                    MERGE_BODY_WIDTH,
                     crate::ui::panels::node_editor::types::MERGE_LAYER_BODY_HEIGHT,
                 ));
                 ui.horizontal(|ui| {
                     let handle = ui
                         .add_enabled(
-                            row.layer_count > 1,
+                            row.reorder_min_index < row.reorder_max_index,
                             egui::Label::new(
                                 egui::RichText::new(icons::DOTS_SIX_VERTICAL).strong(),
                             )
@@ -115,11 +148,14 @@ impl ProjectNodeViewer<'_> {
                     drag_response = Some(handle);
                     non_selectable_label(
                         ui,
-                        egui::RichText::new(format!(
-                            "{} / {}",
-                            row.front_to_back_index + 1,
-                            row.layer_count
-                        ))
+                        egui::RichText::new(match row.kind {
+                            NativeVariadicMergeKind::Image => {
+                                format!("Front {} / {}", row.visual_index + 1, row.layer_count)
+                            }
+                            NativeVariadicMergeKind::Sound => {
+                                format!("Input {} / {}", row.canonical_index + 1, row.layer_count)
+                            }
+                        })
                         .small()
                         .strong(),
                     );
@@ -130,82 +166,113 @@ impl ProjectNodeViewer<'_> {
                         egui::Align::LEFT,
                     )
                     .on_hover_text(format!("{} · {}", row.source_label, row.source.port));
-                    let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
-                        egui::ComboBox::from_id_salt((
-                            "merge_layer_authored_blend",
-                            merge_id,
-                            row.connection_id,
-                        ))
-                        .selected_text(blend_mode_label(row.authored_blend_mode))
-                        .width(126.0)
-                        // Search and category accordions are interactive popup
-                        // contents. Keep the popup open until a mode is chosen
-                        // or the user clicks outside it.
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show_ui(ui, |ui| {
-                            let mut items = blend_mode_searchable_items(row.authored_blend_mode);
-                            for item in &mut items {
-                                let blend_mode = item.value;
-                                let selected = !item.enabled;
-                                item.qa_id = Some(format!(
-                                    "node_editor.merge_layer.blend.{}:{merge_id}:{}",
-                                    blend_mode_qa_key(blend_mode),
-                                    row.connection_id
-                                ));
-                                item.qa_metadata = Some(row.qa_metadata(Some(serde_json::json!({
-                                    "action": "set_authored_blend",
-                                    "blend_mode": blend_mode_qa_key(blend_mode),
-                                    "blend_group": blend_mode.group().qa_key(),
-                                    "selected": selected,
-                                    "coordinate_space": "screen_points",
-                                }))));
-                            }
-                            if let Some(blend_mode) = show_searchable_items_with_qa(
-                                ui,
-                                &format!("merge_layer_blend_menu:{merge_id}:{}", row.connection_id),
-                                Some(&format!(
-                                    "node_editor.merge_layer.blend_search:{merge_id}:{}",
-                                    row.connection_id
-                                )),
-                                &items,
-                            ) {
-                                selected_blend = Some(blend_mode);
-                            }
-                        })
-                        .response
-                    });
-                    register_merge_layer_component(
-                        format!(
-                            "node_editor.merge_layer.blend_select:{merge_id}:{}",
-                            row.connection_id
-                        ),
-                        "node_editor_merge_layer_blend_select",
-                        combo.inner.rect,
-                        combo.inner.enabled(),
-                        to_global,
-                        canvas_clip,
-                        row.qa_metadata(Some(serde_json::json!({
-                            "action": "open_authored_blend",
-                        }))),
-                    );
+                    if row.kind == NativeVariadicMergeKind::Image {
+                        let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
+                            egui::ComboBox::from_id_salt((
+                                "merge_layer_authored_blend",
+                                merge_id,
+                                row.connection_id,
+                            ))
+                            .selected_text(blend_mode_label(row.authored_blend_mode))
+                            .width(126.0)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show_ui(ui, |ui| {
+                                let mut items =
+                                    blend_mode_searchable_items(row.authored_blend_mode);
+                                for item in &mut items {
+                                    let blend_mode = item.value;
+                                    let selected = !item.enabled;
+                                    item.qa_id = Some(format!(
+                                        "node_editor.merge_layer.blend.{}:{merge_id}:{}",
+                                        blend_mode_qa_key(blend_mode),
+                                        row.connection_id
+                                    ));
+                                    item.qa_metadata =
+                                        Some(row.qa_metadata(Some(serde_json::json!({
+                                            "action": "set_authored_blend",
+                                            "blend_mode": blend_mode_qa_key(blend_mode),
+                                            "blend_group": blend_mode.group().qa_key(),
+                                            "selected": selected,
+                                            "coordinate_space": "screen_points",
+                                        }))));
+                                }
+                                if let Some(blend_mode) = show_searchable_items_with_qa(
+                                    ui,
+                                    &format!(
+                                        "merge_layer_blend_menu:{merge_id}:{}",
+                                        row.connection_id
+                                    ),
+                                    Some(&format!(
+                                        "node_editor.merge_layer.blend_search:{merge_id}:{}",
+                                        row.connection_id
+                                    )),
+                                    &items,
+                                ) {
+                                    selected_blend = Some(blend_mode);
+                                }
+                            })
+                            .response
+                        });
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.blend_select:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_blend_select",
+                            combo.inner.rect,
+                            combo.inner.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "open_authored_blend",
+                            }))),
+                        );
+                    } else {
+                        bounded_non_selectable_label(
+                            ui,
+                            format!("Canonical {}", row.canonical_index + 1),
+                            92.0,
+                            egui::Align::Center,
+                        )
+                        .on_hover_text("Sound inputs are mixed in canonical top-to-bottom order");
+                    }
 
-                    let front_index = (row.back_to_front_index + 1 < row.layer_count)
-                        .then_some(row.back_to_front_index + 1);
-                    let response = ui
-                        .add_enabled(front_index.is_some(), egui::Button::new(icons::ARROW_UP))
-                        .on_hover_text("Move one layer toward the front");
-                    if response.clicked() {
-                        requested_order = front_index;
+                    let up_index = match row.kind {
+                        NativeVariadicMergeKind::Image => row.canonical_index.checked_add(1),
+                        NativeVariadicMergeKind::Sound => row.canonical_index.checked_sub(1),
                     }
-                    front_response = Some(response);
-                    let back_index = row.back_to_front_index.checked_sub(1);
+                    .filter(|index| {
+                        *index >= row.reorder_min_index && *index <= row.reorder_max_index
+                    });
+                    up_target = up_index;
                     let response = ui
-                        .add_enabled(back_index.is_some(), egui::Button::new(icons::ARROW_DOWN))
-                        .on_hover_text("Move one layer toward the back");
+                        .add_enabled(up_index.is_some(), egui::Button::new(icons::ARROW_UP))
+                        .on_hover_text(match row.kind {
+                            NativeVariadicMergeKind::Image => "Move one layer toward the front",
+                            NativeVariadicMergeKind::Sound => "Move one Sound input earlier",
+                        });
                     if response.clicked() {
-                        requested_order = back_index;
+                        requested_order = up_index;
                     }
-                    back_response = Some(response);
+                    up_response = Some(response);
+                    let down_index = match row.kind {
+                        NativeVariadicMergeKind::Image => row.canonical_index.checked_sub(1),
+                        NativeVariadicMergeKind::Sound => row.canonical_index.checked_add(1),
+                    }
+                    .filter(|index| {
+                        *index >= row.reorder_min_index && *index <= row.reorder_max_index
+                    });
+                    down_target = down_index;
+                    let response = ui
+                        .add_enabled(down_index.is_some(), egui::Button::new(icons::ARROW_DOWN))
+                        .on_hover_text(match row.kind {
+                            NativeVariadicMergeKind::Image => "Move one layer toward the back",
+                            NativeVariadicMergeKind::Sound => "Move one Sound input later",
+                        });
+                    if response.clicked() {
+                        requested_order = down_index;
+                    }
+                    down_response = Some(response);
                 });
             })
             .response;
@@ -218,9 +285,11 @@ impl ProjectNodeViewer<'_> {
             *self.merge_layer_reorder = Some(NodeEditorMergeLayerReorderGesture {
                 merge_id,
                 connection_id: row.connection_id,
-                start_index: row.back_to_front_index,
-                target_index: Some(row.back_to_front_index),
+                start_index: row.canonical_index,
+                target_index: Some(row.canonical_index),
                 layer_count: row.layer_count,
+                reorder_min_index: row.reorder_min_index,
+                reorder_max_index: row.reorder_max_index,
                 row_rects: vec![egui::Rect::NOTHING; row.layer_count],
                 canvas_transform: to_global,
                 finished: false,
@@ -229,8 +298,12 @@ impl ProjectNodeViewer<'_> {
         if let Some(gesture) = self.merge_layer_reorder.as_mut().filter(|gesture| {
             gesture.merge_id == merge_id && gesture.layer_count == row.layer_count
         }) {
-            if let Some(rect) = gesture.row_rects.get_mut(row.back_to_front_index) {
-                *rect = row_response.rect;
+            if row.canonical_index >= gesture.reorder_min_index
+                && row.canonical_index <= gesture.reorder_max_index
+            {
+                if let Some(rect) = gesture.row_rects.get_mut(row.canonical_index) {
+                    *rect = row_response.rect;
+                }
             }
         }
         let owns_drag = self.merge_layer_reorder.as_ref().is_some_and(|gesture| {
@@ -274,10 +347,10 @@ impl ProjectNodeViewer<'_> {
                         .filter(|target| *target != gesture.start_index);
                     if let Some(target_index) = (!escape).then_some(changed_target).flatten() {
                         self.edits
-                            .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
-                                connection_id: gesture.connection_id,
-                                new_order: target_index as i64,
-                            }));
+                            .push(QueuedNodeEdit::Atomic(merge_row_reorder_edit(
+                                row,
+                                target_index,
+                            )));
                     }
                     gesture.finished = true;
                 }
@@ -297,24 +370,20 @@ impl ProjectNodeViewer<'_> {
             canvas_clip,
             row.qa_metadata(Some(serde_json::json!({
                 "action": "physical_reorder_drop_target",
-                "drop_target_index": row.back_to_front_index,
+                "drop_target_index": row.canonical_index,
+                "drop_target_canonical_index": row.canonical_index,
                 "drag_active": active.is_some(),
                 "current_drop_target_index": active.and_then(|gesture| gesture.target_index),
                 "gesture_start_index": active.map(|gesture| gesture.start_index),
             }))),
         );
+        let (up_direction, down_direction) = match row.kind {
+            NativeVariadicMergeKind::Image => ("front", "back"),
+            NativeVariadicMergeKind::Sound => ("earlier", "later"),
+        };
         for (direction, response, target_index) in [
-            (
-                "back",
-                back_response,
-                row.back_to_front_index.checked_sub(1),
-            ),
-            (
-                "front",
-                front_response,
-                (row.back_to_front_index + 1 < row.layer_count)
-                    .then_some(row.back_to_front_index + 1),
-            ),
+            (up_direction, up_response, up_target),
+            (down_direction, down_response, down_target),
         ] {
             if let Some(response) = response {
                 register_merge_layer_component(
@@ -330,7 +399,10 @@ impl ProjectNodeViewer<'_> {
                     row.qa_metadata(Some(serde_json::json!({
                         "action": "reorder",
                         "direction": direction,
-                        "target_back_to_front_index": target_index,
+                        "target_canonical_index": target_index,
+                        "target_back_to_front_index": (row.kind == NativeVariadicMergeKind::Image)
+                            .then_some(target_index)
+                            .flatten(),
                     }))),
                 );
             }
@@ -342,7 +414,7 @@ impl ProjectNodeViewer<'_> {
             ),
             "node_editor_merge_layer_drag_handle",
             drag_response.rect,
-            row.layer_count > 1,
+            row.reorder_min_index < row.reorder_max_index,
             to_global,
             canvas_clip,
             row.qa_metadata(Some(serde_json::json!({
@@ -362,10 +434,9 @@ impl ProjectNodeViewer<'_> {
         }
         if let Some(new_order) = requested_order {
             self.edits
-                .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
-                    connection_id: row.connection_id,
-                    new_order: new_order as i64,
-                }));
+                .push(QueuedNodeEdit::Atomic(merge_row_reorder_edit(
+                    row, new_order,
+                )));
         }
         Some(row.connection_id)
     }

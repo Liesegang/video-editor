@@ -15,7 +15,6 @@ use crate::ui::panels::node_editor::{
 #[derive(Clone, Copy)]
 enum ProjectedSourceKind {
     OutputBinding,
-    DerivedChild,
 }
 
 pub(super) fn register_container_output_edges(
@@ -52,7 +51,6 @@ pub(super) fn register_container_output_edges(
             .map(|source| {
                 let kind = match source.kind {
                     ContainerAudioSourceKind::OutputBinding => ProjectedSourceKind::OutputBinding,
-                    ContainerAudioSourceKind::DerivedChild => ProjectedSourceKind::DerivedChild,
                 };
                 (source.source, kind)
             }),
@@ -83,7 +81,6 @@ fn register_typed_sources(
     let sink = PortAddress::new(owner, binding_port);
     for (source, source_kind) in sources {
         let from = PortAddress::new(source, output_port);
-        let source_key = qa_container_key(source);
         let (id, kind) = match source_kind {
             ProjectedSourceKind::OutputBinding => {
                 let PortOwner::Node(node_id) = source else {
@@ -101,17 +98,6 @@ fn register_typed_sources(
                     },
                 )
             }
-            ProjectedSourceKind::DerivedChild => (
-                format!(
-                    "node_editor.edge.derived:{}:{type_key}:{source_key}",
-                    qa_container_key(owner)
-                ),
-                RenderedEdgeKind::DerivedOutput {
-                    owner,
-                    source,
-                    data_type,
-                },
-            ),
         };
         if let Some(edge) = register_edge_component(
             EdgeComponent {
@@ -141,12 +127,9 @@ fn register_typed_sources(
 mod tests {
     use super::*;
     use crate::test_support::media_node_for_canvas;
-    use crate::ui::panels::node_editor::{AUDIO_OUTPUT_BINDING_PORT, IMAGE_OUTPUT_BINDING_PORT};
     use library::editor::project_service::MediaNodeRequest;
     use library::model::asset::{Asset, AssetKind};
-    use library::model::project::{
-        NodeContainer, PortDirection, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT,
-    };
+    use library::model::project::{NodeContainer, PortDirection};
     use library::model::{Clip, Composition};
 
     fn routed_video_project() -> (Project, PortOwner, PortOwner, PortOwner, uuid::Uuid) {
@@ -215,38 +198,55 @@ mod tests {
     }
 
     #[test]
-    fn rendered_container_edges_include_bound_and_derived_audio_independently() {
+    fn rendered_container_edges_bind_each_typed_structural_output() {
         let (project, composition, track, clip, node_id) = routed_video_project();
+        let composition_model = project.get_composition(composition.id()).unwrap();
+        let track_model = project.get_track(track.id()).unwrap();
+        let expected = [
+            (clip, node_id, PortDataType::Image),
+            (clip, node_id, PortDataType::Audio),
+            (
+                track,
+                track_model.structural_merge_node_id,
+                PortDataType::Image,
+            ),
+            (
+                track,
+                track_model.structural_sound_merge_node_id,
+                PortDataType::Audio,
+            ),
+            (
+                composition,
+                composition_model.structural_merge_node_id,
+                PortDataType::Image,
+            ),
+            (
+                composition,
+                composition_model.structural_sound_merge_node_id,
+                PortDataType::Audio,
+            ),
+        ];
         let mut ports = HashMap::new();
-        for (index, (owner, source)) in [
-            (clip, PortOwner::Node(node_id)),
-            (track, clip),
-            (composition, track),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            for (row, (output, binding)) in [
-                (IMAGE_OUTPUT_PORT, IMAGE_OUTPUT_BINDING_PORT),
-                (AUDIO_OUTPUT_PORT, AUDIO_OUTPUT_BINDING_PORT),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let y = 40.0 + index as f32 * 80.0 + row as f32 * 24.0;
-                insert_port(
-                    &mut ports,
-                    PortAddress::new(source, output),
-                    PortDirection::Output,
-                    egui::pos2(100.0, y),
-                );
-                insert_port(
-                    &mut ports,
-                    PortAddress::new(owner, binding),
-                    PortDirection::Input,
-                    egui::pos2(400.0, y),
-                );
-            }
+        for (index, (owner, node_id, data_type)) in expected.iter().copied().enumerate() {
+            let Some(output) = container_output_port(data_type) else {
+                continue;
+            };
+            let Some(binding) = container_output_binding_port(data_type) else {
+                continue;
+            };
+            let y = 40.0 + index as f32 * 48.0;
+            insert_port(
+                &mut ports,
+                PortAddress::new(PortOwner::Node(node_id), output),
+                PortDirection::Output,
+                egui::pos2(100.0, y),
+            );
+            insert_port(
+                &mut ports,
+                PortAddress::new(owner, binding),
+                PortDirection::Input,
+                egui::pos2(400.0, y),
+            );
         }
 
         let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
@@ -256,40 +256,16 @@ mod tests {
                 register_container_output_edges(&project, owner, &ports, canvas, None)
             })
             .collect::<Vec<_>>();
-        assert_eq!(edges.len(), 4);
-        for data_type in [PortDataType::Image, PortDataType::Audio] {
+        assert_eq!(edges.len(), expected.len());
+        for (owner, bound, data_type) in expected {
             assert!(edges.iter().any(|edge| matches!(
                 edge.kind,
                 RenderedEdgeKind::OutputBinding {
-                    owner,
-                    node_id: bound,
+                    owner: edge_owner,
+                    node_id: edge_bound,
                     data_type: edge_type,
-                } if owner == clip && bound == node_id && edge_type == data_type
+                } if edge_owner == owner && edge_bound == bound && edge_type == data_type
             )));
         }
-        let data_type = PortDataType::Audio;
-        assert!(edges.iter().any(|edge| matches!(
-            edge.kind,
-            RenderedEdgeKind::DerivedOutput {
-                owner,
-                source,
-                data_type: edge_type,
-            } if owner == track && source == clip && edge_type == data_type
-        )));
-        assert!(edges.iter().any(|edge| matches!(
-            edge.kind,
-            RenderedEdgeKind::DerivedOutput {
-                owner,
-                source,
-                data_type: edge_type,
-            } if owner == composition && source == track && edge_type == data_type
-        )));
-        assert!(!edges.iter().any(|edge| matches!(
-            edge.kind,
-            RenderedEdgeKind::DerivedOutput {
-                data_type: PortDataType::Image,
-                ..
-            }
-        )));
     }
 }

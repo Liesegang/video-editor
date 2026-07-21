@@ -70,4 +70,6 @@ pub fn get_frame_from_project(
 }
 
 #[cfg(test)]
+mod sound_analysis_tests;
+#[cfg(test)]
 mod tests;

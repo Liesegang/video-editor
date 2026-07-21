@@ -1,5 +1,6 @@
 use super::*;
 use library::model::project::asset::AssetKind;
+use library::model::project::{AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT};
 
 fn installed_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, FixtureInfo) {
     let project = Arc::new(RwLock::new(Project::new("empty")));
@@ -78,11 +79,19 @@ fn fixture_uses_explicit_operation_nodes_and_output_bindings() {
     assert_eq!(composition.track_ids, info.expanded_tracks);
     assert_eq!(
         composition.node_ids,
-        vec![composition.structural_merge_node_id]
+        vec![
+            composition.structural_merge_node_id,
+            composition.structural_sound_merge_node_id,
+        ],
+        "Composition owns one canonical Image Merge and one canonical Sound Merge"
     );
     assert_eq!(
         composition.output_node_id,
         Some(composition.structural_merge_node_id)
+    );
+    assert_eq!(
+        composition.audio_output_node_id,
+        Some(composition.structural_sound_merge_node_id)
     );
     assert_eq!(
         read.get_track(E2E_TRACK_A_ID).unwrap().clip_ids,
@@ -206,10 +215,24 @@ fn fixture_uses_explicit_operation_nodes_and_output_bindings() {
         assert_operation(&read, &plugin_manager, node_id, category, component_id);
     }
 
-    assert_eq!(read.nodes.len(), 22);
+    assert_eq!(
+        read.nodes.len(),
+        25,
+        "19 authored Nodes plus the Image/Sound structural Merge pair for three containers"
+    );
     for track in read.tracks.values() {
-        assert_eq!(track.node_ids, vec![track.structural_merge_node_id]);
+        assert_eq!(
+            track.node_ids,
+            vec![
+                track.structural_merge_node_id,
+                track.structural_sound_merge_node_id,
+            ]
+        );
         assert_eq!(track.output_node_id, Some(track.structural_merge_node_id));
+        assert_eq!(
+            track.audio_output_node_id,
+            Some(track.structural_sound_merge_node_id)
+        );
     }
     assert!(read.validate_connections().is_empty());
     assert!(read.validate_containment().is_empty());
@@ -350,7 +373,32 @@ fn fixture_wires_shape_and_image_flow_with_stable_merge_order() {
             order,
         );
     }
-    assert_eq!(read.connections.len(), 40);
+    let track_a_sound_merge = read
+        .get_track(E2E_TRACK_A_ID)
+        .unwrap()
+        .structural_sound_merge_node_id;
+    let track_b_sound_merge = read
+        .get_track(E2E_TRACK_B_ID)
+        .unwrap()
+        .structural_sound_merge_node_id;
+    let composition_sound_merge = read.compositions[0].structural_sound_merge_node_id;
+    for (source, target, order) in [
+        (PortOwner::Clip(E2E_CLIP_A1_ID), track_a_sound_merge, 0),
+        (PortOwner::Clip(E2E_CLIP_A2_ID), track_a_sound_merge, 1),
+        (PortOwner::Clip(E2E_CLIP_B1_ID), track_b_sound_merge, 0),
+        (PortOwner::Track(E2E_TRACK_A_ID), composition_sound_merge, 0),
+        (PortOwner::Track(E2E_TRACK_B_ID), composition_sound_merge, 1),
+    ] {
+        assert_connection(
+            &read,
+            source,
+            AUDIO_OUTPUT_PORT,
+            PortOwner::Node(target),
+            MERGE_SOUNDS_PORT,
+            order,
+        );
+    }
+    assert_eq!(read.connections.len(), 45);
     assert!(read.validate_connections().is_empty());
 }
 

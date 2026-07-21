@@ -1,15 +1,14 @@
 use crate::ui::panels::node_editor::{
-    container_inactive, container_visual_style, graph_item_inactive, merge_images_target_node_id,
-    node_palette, ContainerVisual, ContainerVisualStyle, GraphItem,
+    container_inactive, container_visual_style, graph_item_inactive,
+    native_variadic_merge_for_node, node_palette, ContainerVisual, ContainerVisualStyle, GraphItem,
 };
-use library::model::project::{PortAddress, PortOwner, MERGE_IMAGES_PORT};
+use library::model::project::PortOwner;
 use library::model::Project;
 use node_editor_ui::{Editor, NodeVisualStyle};
 use uuid::Uuid;
 
 pub(super) fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
-    let target = PortAddress::new(PortOwner::Node(node_id), MERGE_IMAGES_PORT);
-    merge_images_target_node_id(project, &target).is_some()
+    native_variadic_merge_for_node(project, node_id).is_some()
 }
 
 pub(super) struct NodeSelectionPresentation {

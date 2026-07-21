@@ -797,6 +797,10 @@ pub struct NodeEditorMergeLayerReorderGesture {
     pub start_index: usize,
     pub target_index: Option<usize>,
     pub layer_count: usize,
+    /// Structural children may only move inside their mandatory canonical
+    /// prefix; custom inputs may only move after it.
+    pub reorder_min_index: usize,
+    pub reorder_max_index: usize,
     /// Exact graph-space row geometry sampled from Snarl. Drop resolution
     /// uses these rectangles instead of assuming a fixed row pitch.
     pub row_rects: Vec<egui::Rect>,

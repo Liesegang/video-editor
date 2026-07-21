@@ -149,6 +149,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
                 fixture="composition_drop_e2e",
             ),
             SuiteSpec("node-wire", "qa-e2e.py", ("--suite", "node-wire")),
+            SuiteSpec("sound-graph", "qa-sound-graph-e2e.py"),
             SuiteSpec("node-wire-selection", "qa-wire-selection-e2e.py"),
             SuiteSpec("implicit-time", "qa-implicit-time-e2e.py"),
             SuiteSpec("preview", "qa-preview-e2e.py"),

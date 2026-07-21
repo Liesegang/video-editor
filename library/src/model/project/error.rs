@@ -161,6 +161,24 @@ pub enum ProjectGraphError {
         child: PortOwner,
     },
     #[error(
+        "direct child {child:?} is missing its required structural edge into Merge node {node_id} for {container:?}"
+    )]
+    MissingStructuralEdge {
+        container: NodeContainer,
+        node_id: Uuid,
+        child: PortOwner,
+    },
+    #[error(
+        "direct child {child:?} structural edge into Merge node {node_id} for {container:?} has order {actual_order}; expected {expected_order}"
+    )]
+    StructuralOrderMismatch {
+        container: NodeContainer,
+        node_id: Uuid,
+        child: PortOwner,
+        expected_order: i64,
+        actual_order: i64,
+    },
+    #[error(
         "structural Merge node {node_id} owned by {container:?} cannot be removed directly; remove the container instead"
     )]
     CannotRemoveStructuralMerge {
@@ -227,6 +245,19 @@ pub enum ProjectGraphError {
     DuplicateInputConnection { target: PortAddress },
     #[error("variadic input {target:?} has duplicate order {order}")]
     DuplicateConnectionOrder { target: PortAddress, order: i64 },
+    #[error("variadic input {target:?} repeats source {from:?}")]
+    DuplicateVariadicConnection {
+        target: PortAddress,
+        from: PortAddress,
+    },
+    #[error(
+        "variadic input {target:?} has non-canonical order {actual_order}; expected {expected_order}"
+    )]
+    NonCanonicalConnectionOrder {
+        target: PortAddress,
+        expected_order: i64,
+        actual_order: i64,
+    },
     #[error("connection {connection_id} uses unsupported render-time type {data_type:?}")]
     UnsupportedConnectionType {
         connection_id: Uuid,

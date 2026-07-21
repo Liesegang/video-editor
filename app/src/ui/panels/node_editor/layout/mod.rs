@@ -1,5 +1,6 @@
 mod apply;
 mod auto;
+mod column_packing;
 mod merge_alignment;
 mod node_geometry;
 mod ranking;

@@ -6,6 +6,7 @@ use library::model::Project;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
+use super::column_packing::{enforce_structural_pair_row, pack_column};
 use super::merge_alignment::{merge_anchor_aligned_top, pack_targeted_column};
 use super::node_geometry::{estimated_node_size, estimated_node_width};
 use crate::ui::panels::node_editor::{AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP};
@@ -163,6 +164,10 @@ pub(super) fn layout_node_band(
         }
     }
 
+    for group in groups.values() {
+        enforce_structural_pair_row(project, group, positions, origin_y);
+    }
+
     // Align whole rank blocks after ordering. Forward alignment centers
     // fan-in targets; the reverse pass centers fan-out sources.
     for _ in 0..2 {
@@ -200,20 +205,6 @@ pub(super) fn layout_node_band(
         .max_by(f32::total_cmp)
         .unwrap_or(bounds.height);
     Some(bounds)
-}
-
-fn pack_column(
-    project: &Project,
-    group: &[Uuid],
-    x: f32,
-    origin_y: f32,
-    positions: &mut BTreeMap<Uuid, [f32; 2]>,
-) {
-    let mut y = origin_y;
-    for node_id in group {
-        positions.insert(*node_id, [x, y]);
-        y += estimated_node_size(project, *node_id).y + AUTO_LAYOUT_ROW_GAP;
-    }
 }
 
 fn node_center_y(

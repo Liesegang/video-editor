@@ -2,7 +2,7 @@ use crate::cache::CacheManager;
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::loader::AudioLoader;
 use crate::model::asset::{Asset, AssetKind};
-use crate::model::project::{Composition, PortOwner, Project};
+use crate::model::project::{Composition, PortAddress, PortOwner, Project};
 use crate::model::{Node, NodeContent};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use lru::LruCache;
@@ -91,24 +91,75 @@ fn mix_samples_with_policy(
     decode_policy: DecodePolicy,
     property_evaluators: &PropertyEvaluatorRegistry,
 ) -> Vec<f32> {
-    let channels = channels as usize;
-    let mut mix_buffer = vec![0.0; frames_to_mix.saturating_mul(channels)];
-    if frames_to_mix == 0 || sample_rate == 0 || channels == 0 {
-        return mix_buffer;
-    }
-
     // Composition duration is a half-open output range. Direct Composition
     // and Track Nodes must become NoOutput at the same boundary as Clips;
     // limiting the work here also prevents cold export from decoding source
     // chunks that cannot contribute to the authoritative output.
-    let frames_to_mix =
+    let active_frames =
         frames_inside_composition(composition, start_sample, frames_to_mix, sample_rate);
-    if frames_to_mix == 0 {
+    mix_owner_samples_with_policy(
+        assets,
+        project,
+        composition,
+        PortOwner::Composition(composition.id),
+        None,
+        cache_manager,
+        start_sample,
+        frames_to_mix,
+        active_frames,
+        sample_rate,
+        channels,
+        plugin_manager,
+        decode_policy,
+        property_evaluators,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "typed Sound analysis shares the explicit mixer boundary and additionally selects one graph owner"
+)]
+fn mix_owner_samples_with_policy(
+    assets: &[Asset],
+    project: &Project,
+    composition: &Composition,
+    root_owner: PortOwner,
+    root_output: Option<&PortAddress>,
+    cache_manager: &CacheManager,
+    start_sample: u64,
+    output_frames: usize,
+    active_frames: usize,
+    sample_rate: u32,
+    channels: u32,
+    plugin_manager: &PluginManager,
+    decode_policy: DecodePolicy,
+    property_evaluators: &PropertyEvaluatorRegistry,
+) -> Vec<f32> {
+    let channels = channels as usize;
+    let mut mix_buffer = vec![0.0; output_frames.saturating_mul(channels)];
+    if active_frames == 0 || sample_rate == 0 || channels == 0 {
         return mix_buffer;
     }
-
-    let evaluator =
-        AudioGraphEvaluator::new(project, composition, plugin_manager, property_evaluators);
+    let evaluator = root_output.map_or_else(
+        || {
+            AudioGraphEvaluator::new_for_owner(
+                project,
+                composition,
+                root_owner,
+                plugin_manager,
+                property_evaluators,
+            )
+        },
+        |output| {
+            AudioGraphEvaluator::new_for_output(
+                project,
+                composition,
+                output,
+                plugin_manager,
+                property_evaluators,
+            )
+        },
+    );
     let mut sources = evaluator
         .routes
         .iter()
@@ -120,7 +171,7 @@ fn mix_samples_with_policy(
         })
         .collect::<Vec<_>>();
     let mut scope_path = HashSet::new();
-    for frame in 0..frames_to_mix {
+    for frame in 0..active_frames.min(output_frames) {
         let timeline_time =
             (start_sample.saturating_add(frame as u64)) as f64 / f64::from(sample_rate);
         for (route, source) in evaluator.routes.iter().zip(&mut sources) {
@@ -143,6 +194,57 @@ fn mix_samples_with_policy(
     }
 
     mix_buffer
+}
+
+/// Decode and mix one typed Sound graph owner for a short offline analysis
+/// window. The caller supplies a bounded cache; no PCM enters Project state.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "analysis selects a graph owner in addition to the existing explicit audio boundary"
+)]
+pub(crate) fn render_owner_samples(
+    project: &Project,
+    composition: &Composition,
+    output: &PortAddress,
+    cache_manager: &CacheManager,
+    start_sample: u64,
+    frames: usize,
+    sample_rate: u32,
+    analysis_time: f64,
+    plugin_manager: &PluginManager,
+) -> Option<Vec<f32>> {
+    let property_evaluators = plugin_manager.get_property_evaluators();
+    let evaluator = AudioGraphEvaluator::new_for_output(
+        project,
+        composition,
+        output,
+        plugin_manager,
+        property_evaluators.as_ref(),
+    );
+    let mut path = HashSet::new();
+    if !evaluator.routes.iter().any(|route| {
+        evaluator
+            .evaluate_route(route, analysis_time, &mut path)
+            .is_some()
+    }) {
+        return None;
+    }
+    Some(mix_owner_samples_with_policy(
+        &project.assets,
+        project,
+        composition,
+        output.owner,
+        Some(output),
+        cache_manager,
+        start_sample,
+        frames,
+        frames,
+        sample_rate,
+        1,
+        plugin_manager,
+        DecodePolicy::DecodeMissing,
+        property_evaluators.as_ref(),
+    ))
 }
 
 fn audio_source_for_node(
@@ -429,5 +531,7 @@ pub fn render_samples(
 
 #[cfg(test)]
 mod composition_instance_tests;
+#[cfg(test)]
+mod sound_merge_tests;
 #[cfg(test)]
 mod tests;

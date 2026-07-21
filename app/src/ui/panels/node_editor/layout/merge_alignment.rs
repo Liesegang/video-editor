@@ -3,6 +3,7 @@ use library::model::{Node, NodeContent, Project};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
+use super::column_packing::enforce_structural_pair_order;
 use super::node_geometry::estimated_node_size;
 use super::ranking::{LayoutEdge, NodeRankColumn};
 use crate::ui::panels::node_editor::types::{
@@ -36,6 +37,7 @@ pub(super) fn pack_targeted_column(
             .total_cmp(&desired(right))
             .then_with(|| left.cmp(right))
     });
+    enforce_structural_pair_order(project, group, &mut ordered);
 
     let mut cursor = origin_y;
     for node_id in ordered {
@@ -95,7 +97,7 @@ pub(super) fn merge_anchor_aligned_top(
     // rule; a median would align neither row for an even layer count.
     let front = merge_layer_rows(project, merge_id).into_iter().next()?;
     estimated_source_output_y(project, &front.source, positions, container_output_y)
-        .map(|source_y| source_y - estimated_merge_input_anchor_offset(front.front_to_back_index))
+        .map(|source_y| source_y - estimated_merge_input_anchor_offset(front.visual_index))
 }
 
 fn estimated_source_output_y(

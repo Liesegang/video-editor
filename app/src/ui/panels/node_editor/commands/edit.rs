@@ -134,6 +134,11 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 }
             }
         }
+        NodeEdit::ReorderStructuralChild {
+            container,
+            child,
+            new_index,
+        } => reorder_structural_child(project, container, child, new_index),
         NodeEdit::SpliceExistingNode {
             connection_id,
             node_id,
@@ -269,6 +274,60 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 .is_some_and(|node| node.update_property_or_keyframe(&key, time, value, None)),
             PortOwner::Composition(_) | PortOwner::Track(_) => false,
         },
+    }
+}
+
+fn reorder_structural_child(
+    project: &mut Project,
+    container: library::model::NodeContainer,
+    child: PortOwner,
+    new_index: usize,
+) -> bool {
+    let current_index = match (container, child) {
+        (
+            library::model::NodeContainer::Composition(composition_id),
+            PortOwner::Track(track_id),
+        ) => project
+            .get_composition(composition_id)
+            .and_then(|composition| {
+                composition
+                    .track_ids
+                    .iter()
+                    .position(|candidate| *candidate == track_id)
+            }),
+        (library::model::NodeContainer::Track(track_id), PortOwner::Clip(clip_id)) => {
+            project.get_track(track_id).and_then(|track| {
+                track
+                    .clip_ids
+                    .iter()
+                    .position(|candidate| *candidate == clip_id)
+            })
+        }
+        _ => None,
+    };
+    let Some(current_index) = current_index else {
+        return false;
+    };
+    if current_index == new_index {
+        return false;
+    }
+
+    let result = match (container, child) {
+        (
+            library::model::NodeContainer::Composition(composition_id),
+            PortOwner::Track(track_id),
+        ) => project.attach_track_to_composition_at(composition_id, track_id, Some(new_index)),
+        (library::model::NodeContainer::Track(track_id), PortOwner::Clip(clip_id)) => {
+            project.attach_clip_to_track_at(track_id, clip_id, Some(new_index))
+        }
+        _ => return false,
+    };
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!("Cannot reorder structural Merge child {child:?}: {error}");
+            false
+        }
     }
 }
 

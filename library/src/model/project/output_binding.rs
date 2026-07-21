@@ -52,8 +52,10 @@ impl Project {
     }
 
     /// Select the directly contained Node that provides this container's
-    /// typed Audio output. This binding is independent from the Image output
-    /// selected by [`Self::set_output_node`].
+    /// typed Sound output. This binding is independent from the Image output
+    /// selected by [`Self::set_output_node`]. Track and Composition outputs
+    /// must remain downstream of their canonical structural Sound Merge;
+    /// Clips may bind one directly contained Sound-producing Node.
     pub fn set_audio_output_node(
         &mut self,
         container: NodeContainer,

@@ -137,6 +137,7 @@ fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
         PortDataType::Vec2,
         PortDataType::Vec3,
         PortDataType::Vec4,
+        PortDataType::Audio,
     ] {
         let node = operation_with_ports(vec![
             PortDefinition::input("source", "Source", data_type),
@@ -151,18 +152,6 @@ fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
         assert!(node.supports_bypass(), "{data_type:?} must pass through");
         assert_eq!(node.bypass_input_for_output("result"), Some("source"));
     }
-
-    let audio = operation_with_ports(vec![
-        PortDefinition::input("source", "Source", PortDataType::Audio),
-        PortDefinition::output(
-            "result",
-            "Result",
-            PortDataType::Audio,
-            PortSide::Right,
-            PortExposure::Graph,
-        ),
-    ]);
-    assert!(!audio.supports_bypass());
 
     let ambiguous = operation_with_ports(vec![
         PortDefinition::input("left", "Left", PortDataType::Image),

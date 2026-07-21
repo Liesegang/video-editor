@@ -75,15 +75,26 @@ impl Project {
                 to: connection.to.owner,
             });
         }
+        let baseline = self.validate_connections();
+        let mut candidate = self.clone();
         if target.multiplicity == PortMultiplicity::Single {
-            self.connections.retain(|item| item.to != connection.to);
+            candidate
+                .connections
+                .retain(|item| item.to != connection.to);
         }
         let id = connection.id;
-        let structural_container = self.container_for_structural_target(&connection.to);
-        self.connections.push(connection);
+        let structural_container = candidate.container_for_structural_target(&connection.to);
+        candidate.connections.push(connection);
         if let Some(container) = structural_container {
-            self.reorder_structural_children(container, Some(id));
+            candidate.reorder_structural_children(container, Some(id));
         }
+        if let Some(error) = super::super::first_new_project_validation_error(
+            &baseline,
+            candidate.validate_connections(),
+        ) {
+            return Err(error);
+        }
+        *self = candidate;
         Ok(id)
     }
 
@@ -92,6 +103,7 @@ impl Project {
         connection_id: Uuid,
         new_order: i64,
     ) -> Result<(), ProjectGraphError> {
+        let baseline = self.validate_connections();
         let index = self
             .connections
             .iter()
@@ -101,11 +113,19 @@ impl Project {
         let definition = self
             .port_definition(&target, PortDirection::Input)
             .ok_or_else(|| ProjectGraphError::PortNotFound(target.clone()))?;
+        let mut candidate = self.clone();
         if definition.multiplicity != PortMultiplicity::Variadic {
-            self.connections[index].order = 0;
+            candidate.connections[index].order = 0;
+            if let Some(error) = super::super::first_new_project_validation_error(
+                &baseline,
+                candidate.validate_connections(),
+            ) {
+                return Err(error);
+            }
+            *self = candidate;
             return Ok(());
         }
-        let mut ids = self
+        let mut ids = candidate
             .connections
             .iter()
             .filter(|item| item.to == target)
@@ -115,16 +135,31 @@ impl Project {
         let mut ids = ids.into_iter().map(|item| item.1).collect::<Vec<_>>();
         ids.retain(|id| *id != connection_id);
         let insert_at = new_order.max(0) as usize;
-        ids.insert(insert_at.min(ids.len()), connection_id);
+        let insert_at = insert_at.min(ids.len());
+        if let Some(error) = self.structural_custom_insertion_error(
+            &target,
+            &self.connections[index].from,
+            insert_at,
+        ) {
+            return Err(error);
+        }
+        ids.insert(insert_at, connection_id);
         for (order, id) in ids.into_iter().enumerate() {
-            let connection = self
+            let connection = candidate
                 .connections
                 .iter_mut()
                 .find(|item| item.id == id)
                 .ok_or(ProjectGraphError::ConnectionNotFound(id))?;
             connection.order = order as i64;
         }
-        self.sync_child_order_from_structural_target(&target);
+        candidate.sync_child_order_from_structural_target(&target);
+        if let Some(error) = super::super::first_new_project_validation_error(
+            &baseline,
+            candidate.validate_connections(),
+        ) {
+            return Err(error);
+        }
+        *self = candidate;
         Ok(())
     }
 
@@ -165,6 +200,29 @@ impl Project {
     /// variadic target once. This is the atomic model primitive used by a
     /// multi-wire knife gesture.
     pub fn disconnect_connections(&mut self, ids: impl IntoIterator<Item = Uuid>) -> usize {
+        let ids = ids.into_iter().collect::<HashSet<_>>();
+        let baseline = self.validate_connections();
+        let mut candidate = self.clone();
+        let removed = candidate.disconnect_connections_unchecked(ids);
+        if removed == 0 {
+            return 0;
+        }
+        if super::super::first_new_project_validation_error(
+            &baseline,
+            candidate.validate_connections(),
+        )
+        .is_some()
+        {
+            return 0;
+        }
+        *self = candidate;
+        removed
+    }
+
+    pub(in crate::model::project) fn disconnect_connections_unchecked(
+        &mut self,
+        ids: impl IntoIterator<Item = Uuid>,
+    ) -> usize {
         let ids = ids.into_iter().collect::<HashSet<_>>();
         let affected_targets = self
             .connections
@@ -239,6 +297,14 @@ impl Project {
             };
         }
 
+        if let Some(error) = candidate.structural_custom_insertion_error(
+            &to,
+            &moved.from,
+            moved.order.max(0) as usize,
+        ) {
+            return Err(error);
+        }
+
         candidate
             .connections
             .insert(original_index.min(candidate.connections.len()), moved);
@@ -303,11 +369,26 @@ impl Project {
     }
 
     pub fn disconnect_ports(&mut self, from: &PortAddress, to: &PortAddress) -> bool {
-        let old_len = self.connections.len();
-        self.connections
+        let baseline = self.validate_connections();
+        let mut candidate = self.clone();
+        let old_len = candidate.connections.len();
+        candidate
+            .connections
             .retain(|item| &item.from != from || &item.to != to);
-        self.normalize_connection_orders();
-        old_len != self.connections.len()
+        if old_len == candidate.connections.len() {
+            return false;
+        }
+        candidate.normalize_connection_orders();
+        if super::super::first_new_project_validation_error(
+            &baseline,
+            candidate.validate_connections(),
+        )
+        .is_some()
+        {
+            return false;
+        }
+        *self = candidate;
+        true
     }
 
     fn normalize_connection_orders(&mut self) {
@@ -319,7 +400,10 @@ impl Project {
         self.normalize_connection_orders_for_targets(&targets);
     }
 
-    fn normalize_connection_orders_for_targets(&mut self, targets: &HashSet<PortAddress>) {
+    pub(in crate::model::project) fn normalize_connection_orders_for_targets(
+        &mut self,
+        targets: &HashSet<PortAddress>,
+    ) {
         for target in targets {
             let mut ids = self
                 .connections

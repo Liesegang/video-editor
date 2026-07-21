@@ -204,7 +204,10 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
         .iter()
         .find(|connection| connection.id == connection_id)
         .context("unknown operation connection must round-trip")?;
-    assert_eq!(loaded_connection.order, 7);
+    assert_eq!(
+        loaded_connection.order, 0,
+        "inserting a detached graph canonicalizes variadic connection order"
+    );
     let loaded_shape = loaded
         .get_node(shape_id)
         .context("loaded shape operation Node must exist")?;

@@ -83,7 +83,10 @@ fn reverse_stored_duplicate_merge_project() -> Result<(Project, PortAddress, [Uu
         })
         .collect::<Vec<_>>();
     connections.reverse();
-    project.connections = connections;
+    project
+        .connections
+        .retain(|connection| connection.to != target);
+    project.connections.extend(connections);
     Ok((project, target, ids))
 }
 
@@ -97,6 +100,7 @@ fn reorder_duplicate_variadic_orders_uses_uuid_visible_order_and_preserves_wires
         project
             .connections
             .iter()
+            .filter(|connection| connection.to == target)
             .map(|connection| connection.id)
             .collect::<Vec<_>>(),
         vec![ids[2], ids[1], ids[0]],

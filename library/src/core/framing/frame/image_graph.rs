@@ -658,6 +658,8 @@ impl FrameEvaluator<'_> {
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Merge => "merge",
+            NodeContent::SoundMerge => return Ok(EvalOutput::NoOutput),
+            NodeContent::SoundAnalysis(_) => return Ok(EvalOutput::NoOutput),
         };
         let converter = self
             .plugin_manager

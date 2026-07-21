@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::ui::panels::node_editor::{
     container_output_node_id, container_output_type_key, qa_container_key, wire_port_drop_rect,
     RenderedEdge, RenderedPortKey, WireSecondaryClickHit, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
+    WIRE_RECONNECT_HANDLE_OFFSET, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 
 pub(in crate::ui::panels::node_editor) fn cubic_bezier_point(
@@ -170,6 +171,39 @@ pub(in crate::ui::panels::node_editor) fn rendered_wire_drag_kind(
     }
 }
 
+pub(in crate::ui::panels::node_editor) fn reconnect_handle_position(
+    edge: &RenderedEdge,
+    kind: NodeEditorWireDragKind,
+) -> Option<egui::Pos2> {
+    let (endpoint, toward_wire) = match kind {
+        NodeEditorWireDragKind::ReconnectSource => (edge.start, edge.control_a),
+        NodeEditorWireDragKind::ReconnectTarget => (edge.end, edge.control_b),
+        NodeEditorWireDragKind::Disconnect => return None,
+    };
+    let direction = toward_wire - endpoint;
+    let length = direction.length();
+    if !length.is_finite() || length <= f32::EPSILON {
+        return None;
+    }
+    let direction = direction / length;
+    Some(endpoint + direction * WIRE_RECONNECT_HANDLE_OFFSET)
+}
+
+pub(in crate::ui::panels::node_editor) fn reconnect_handle_at_position(
+    edge: &RenderedEdge,
+    position: egui::Pos2,
+) -> Option<NodeEditorWireDragKind> {
+    [
+        NodeEditorWireDragKind::ReconnectSource,
+        NodeEditorWireDragKind::ReconnectTarget,
+    ]
+    .into_iter()
+    .find(|kind| {
+        reconnect_handle_position(edge, *kind)
+            .is_some_and(|center| center.distance(position) <= WIRE_RECONNECT_HANDLE_RADIUS)
+    })
+}
+
 pub(in crate::ui::panels::node_editor) fn rendered_port_at_position(
     ports: &HashMap<RenderedPortKey, egui::Rect>,
     direction: PortDirection,
@@ -244,30 +278,6 @@ pub(in crate::ui::panels::node_editor) fn rendered_container_output_at_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::model::project::PortDataType;
-
-    #[test]
-    fn derived_wire_secondary_hit_is_display_only_instead_of_blank_canvas() {
-        let derived = RenderedEdge {
-            kind: crate::ui::panels::node_editor::RenderedEdgeKind::DerivedOutput {
-                owner: PortOwner::Track(Uuid::from_u128(0xD001)),
-                source: PortOwner::Clip(Uuid::from_u128(0xD002)),
-                data_type: PortDataType::Image,
-            },
-            start: egui::pos2(100.0, 180.0),
-            control_a: egui::pos2(180.0, 180.0),
-            control_b: egui::pos2(320.0, 180.0),
-            end: egui::pos2(400.0, 180.0),
-        };
-        let hit_point = egui::pos2(250.0, 180.0);
-
-        assert_eq!(
-            wire_secondary_click_hit(&[derived], hit_point),
-            Some(WireSecondaryClickHit::DisplayOnly)
-        );
-        assert_eq!(wire_secondary_click_hit(&[], hit_point), None);
-    }
-
     #[test]
     fn wire_knife_detects_midspan_intersection_of_long_segments() {
         let knife_start = egui::pos2(10.0, -1_000.0);

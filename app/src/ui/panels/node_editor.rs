@@ -45,8 +45,12 @@ mod blend_popup_tests;
 mod canvas;
 mod container_output;
 #[cfg(test)]
+mod merge_connection_contract_tests;
+#[cfg(test)]
 mod merge_reorder_tests;
 mod property_evaluation;
+#[cfg(test)]
+mod sound_merge_reorder_tests;
 mod surface;
 #[cfg(test)]
 mod test_fixture;
@@ -85,7 +89,8 @@ use types::{
     NODE_BODY_WIDTH, NODE_HEADER_WIDTH, NODE_REPARENT_DRAG_THRESHOLD,
     NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, PORT_SOCKET_SIZE,
     PROPERTY_LABEL_WIDTH, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH, WIRE_DRAG_THRESHOLD,
-    WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS,
+    WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS, WIRE_RECONNECT_HANDLE_OFFSET,
+    WIRE_RECONNECT_HANDLE_RADIUS,
 };
 mod interaction;
 
@@ -143,9 +148,10 @@ use interaction::{
 };
 use interaction::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
-    editable_wire_stable_key, knife_segment_hits_edge, rendered_container_output_at_position,
-    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
-    rendered_wire_drag_kind, wire_secondary_click_hit,
+    editable_wire_stable_key, knife_segment_hits_edge, reconnect_handle_at_position,
+    reconnect_handle_position, rendered_container_output_at_position, rendered_edge_at_position,
+    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
+    wire_secondary_click_hit,
 };
 use interaction::{overview_wire_graph_points, wire_interactions, WireInteractionFrame};
 use interaction::{
@@ -174,15 +180,16 @@ use commands::{
 };
 #[cfg(test)]
 use commands::{insert_node_on_connection, splice_existing_node_on_connection};
-#[cfg(test)]
-use components::WireOrderMenuState;
 use components::{
     blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
     connection_supports_authored_blend, estimated_merge_input_anchor_offset,
-    merge_images_target_node_id, merge_input_index_for_connection, merge_input_slots,
-    merge_layer_rows, register_merge_layer_component, wire_order_menu_state,
-    wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
+    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
+    native_variadic_merge_for_node, native_variadic_merge_target, register_merge_layer_component,
+    wire_order_menu_state, wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot,
+    MergeInputSlotRole, MergeLayerRow, NativeVariadicMergeKind,
 };
+#[cfg(test)]
+use components::{merge_images_target_node_id, merge_vacant_slot, WireOrderMenuState};
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]

@@ -13,10 +13,10 @@ use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend,
     container_highlight_metadata, container_inactive, container_output_node_id,
     container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
-    merge_images_target_node_id, overview_wire_graph_points, pin_color, qa_container_key,
-    qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
-    ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey,
+    native_variadic_merge_target, overview_wire_graph_points, pin_color, qa_container_key,
+    qa_rect_metadata, reconnect_handle_position, screen_stroke_in_graph_units,
+    wire_order_menu_states, ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter,
+    RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 
@@ -135,7 +135,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
     let order_states = wire_order_menu_states(project);
     for connection in &project.connections {
         let order = order_states.get(&connection.id).copied();
-        let physical_merge_target = merge_images_target_node_id(project, &connection.to).is_some();
+        let physical_merge_target = native_variadic_merge_target(project, &connection.to).is_some();
         let authored_blend_available = connection_supports_authored_blend(project, connection);
         let edge = register_edge_component(
             EdgeComponent {
@@ -351,11 +351,6 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     let screen_points = [start, control_a, control_b, end];
     if let Some(overview) = overview {
         if let Some(graph_points) = overview_wire_graph_points(screen_points, overview.to_global) {
-            let width = if matches!(edge.kind, RenderedEdgeKind::DerivedOutput { .. }) {
-                1.15
-            } else {
-                1.65
-            };
             overview
                 .painter
                 .add(egui::epaint::CubicBezierShape::from_points_stroke(
@@ -363,7 +358,7 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
                     false,
                     Color32::TRANSPARENT,
                     egui::Stroke::new(
-                        screen_stroke_in_graph_units(width, overview.to_global.scaling),
+                        screen_stroke_in_graph_units(1.65, overview.to_global.scaling),
                         edge.wire_color.gamma_multiply(0.9),
                     ),
                 ));
@@ -393,22 +388,9 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         ),
         _ => (None, None, None),
     };
-    let (derived_owner, derived_source, derived_output_type) = match edge.kind {
-        RenderedEdgeKind::DerivedOutput {
-            owner,
-            source,
-            data_type,
-        } => (
-            Some(qa_container_key(owner)),
-            Some(qa_container_key(source)),
-            container_output_type_key(data_type),
-        ),
-        _ => (None, None, None),
-    };
     let action = match edge.kind {
         RenderedEdgeKind::ProjectConnection { .. } => Some("select_or_edit"),
         RenderedEdgeKind::OutputBinding { .. } => Some("delete_output_binding"),
-        RenderedEdgeKind::DerivedOutput { .. } => None,
     };
     #[cfg(test)]
     capture_test_rect(&edge.id, qa_rect);
@@ -426,15 +408,14 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "binding_owner": binding_owner,
             "binding_node_id": binding_node_id,
             "binding_output_type": binding_output_type,
-            "derived_owner": derived_owner,
-            "derived_source": derived_source,
-            "derived_output_type": derived_output_type,
             "from": {
                 "owner": qa_container_key(edge.from.owner),
                 "port": edge.from.port,
                 "x": start.x,
                 "y": start.y,
             },
+            "control_a": {"x": control_a.x, "y": control_a.y},
+            "control_b": {"x": control_b.x, "y": control_b.y},
             "to": {
                 "owner": qa_container_key(edge.to.owner),
                 "port": edge.to.port,
@@ -457,11 +438,32 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         })),
     );
     if let Some(connection_id) = connection_id {
-        for (suffix, role, position) in [
-            ("from_handle", "source", start),
-            ("to_handle", "target", end),
+        let rendered_edge = RenderedEdge {
+            kind: edge.kind,
+            start,
+            control_a,
+            control_b,
+            end,
+        };
+        for (suffix, role, kind) in [
+            (
+                "from_handle",
+                "source",
+                crate::state::context_types::NodeEditorWireDragKind::ReconnectSource,
+            ),
+            (
+                "to_handle",
+                "target",
+                crate::state::context_types::NodeEditorWireDragKind::ReconnectTarget,
+            ),
         ] {
-            let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
+            let Some(position) = reconnect_handle_position(&rendered_edge, kind) else {
+                continue;
+            };
+            let unclipped_rect = egui::Rect::from_center_size(
+                position,
+                egui::Vec2::splat(WIRE_RECONNECT_HANDLE_RADIUS * 2.0),
+            );
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
             let component_id = format!("node_editor.edge:{connection_id}.{suffix}");
             #[cfg(test)]

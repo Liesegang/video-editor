@@ -368,7 +368,9 @@ fn bypassed_image_effect_routes_input_without_descriptor_or_properties() -> AnyR
     assert!(find_group(&rendered.items, blur_id).is_none());
     assert_eq!(Project::load(&project.save()?)?, project);
 
-    project.connections.clear();
+    project
+        .connections
+        .retain(|connection| connection.to.owner != PortOwner::Node(blur_id));
     assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
 
     project

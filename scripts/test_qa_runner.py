@@ -445,6 +445,7 @@ class QaRunnerTests(unittest.TestCase):
                 "blend-modes-comparative-hsl",
                 "composition-drop",
                 "node-wire",
+                "sound-graph",
                 "node-wire-selection",
                 "implicit-time",
                 "preview",
@@ -473,6 +474,13 @@ class QaRunnerTests(unittest.TestCase):
             container_output_hit.script, "qa-container-output-hit-e2e.py"
         )
         self.assertEqual(container_output_hit.fixture, RUNNER.FIXTURE_NAME)
+        sound_graph = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "sound-graph"
+        )
+        self.assertEqual(sound_graph.script, "qa-sound-graph-e2e.py")
+        self.assertEqual(sound_graph.fixture, RUNNER.FIXTURE_NAME)
         self.assertEqual(
             [item.name for item in RUNNER.suite_specs("blend")],
             [

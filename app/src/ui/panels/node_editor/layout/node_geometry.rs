@@ -11,9 +11,14 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_width() -> f32 {
     (NODE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 70.0).max(NODE_HEADER_WIDTH + 30.0)
 }
 
-#[cfg(test)]
+/// Conservative allowance for Snarl's pin lanes, frame margins, and stroke
+/// around the shared physical Merge body. Keeping this in the sole Merge
+/// width function prevents layout and test helpers from drifting apart.
+const MERGE_HORIZONTAL_CHROME_WIDTH: f32 = 92.0;
+
 pub(in crate::ui::panels::node_editor) fn estimated_merge_node_width() -> f32 {
-    (MERGE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 84.0).max(NODE_HEADER_WIDTH + 30.0)
+    (MERGE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + MERGE_HORIZONTAL_CHROME_WIDTH)
+        .max(NODE_HEADER_WIDTH + 30.0)
 }
 
 pub(in crate::ui::panels::node_editor) fn estimated_node_size(
@@ -31,18 +36,19 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
         | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
         Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
         Some(NodeContent::PluginOperation(_)) => 260.0,
-        Some(NodeContent::Merge) => {
+        Some(NodeContent::Merge | NodeContent::SoundMerge) => {
             let layer_count = merge_layer_rows(project, node_id).len();
             (166.0 + layer_count as f32 * 82.0).max(220.0)
         }
+        Some(NodeContent::SoundAnalysis(_)) => 260.0,
         Some(
             NodeContent::Media(_) | NodeContent::CompositionInstance(_) | NodeContent::Value(_),
         ) => 220.0,
         None => 220.0,
     };
     egui::vec2(
-        if matches!(content, Some(NodeContent::Merge)) {
-            (MERGE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 84.0).max(NODE_HEADER_WIDTH + 30.0)
+        if matches!(content, Some(NodeContent::Merge | NodeContent::SoundMerge)) {
+            estimated_merge_node_width()
         } else {
             estimated_node_width()
         },

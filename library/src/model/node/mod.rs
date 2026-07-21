@@ -14,10 +14,15 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 mod containers;
+mod sound_analysis;
 pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
+pub use sound_analysis::SoundAnalysisContent;
+
+/// Stable authored/catalog identity of the native ordered Sound mixer.
+pub const SOUND_MERGE_OPERATION_KEY: &str = "sound_merge";
 
 static FMOD_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
     [PropertyDefinition::new(
@@ -247,6 +252,12 @@ impl Node {
         Self::with_properties(name, NodeContent::Merge, PropertyMap::new())
     }
 
+    /// Creates an ordered variadic Sound mixer. The input order is stored on
+    /// canonical Project connections, not in a parallel mixer model.
+    pub fn new_sound_merge(name: &str) -> Self {
+        Self::with_properties(name, NodeContent::SoundMerge, PropertyMap::new())
+    }
+
     /// Completion point for converter-backed Media Nodes. Definitions are
     /// validated and materialized here so no caller can inject or omit a raw
     /// property map after selecting the Media content variant.
@@ -444,6 +455,9 @@ impl Node {
     }
 
     pub fn supports_bypass(&self) -> bool {
+        if matches!(self.content(), NodeContent::SoundMerge) {
+            return true;
+        }
         let ports = match self.content() {
             NodeContent::Value(value) => value.port_definitions(),
             NodeContent::PluginOperation(operation) => operation.declared_ports.as_slice(),
@@ -457,7 +471,8 @@ impl Node {
             && outputs.iter().all(|port| {
                 matches!(
                     port.data_type,
-                    PortDataType::Image
+                    PortDataType::Audio
+                        | PortDataType::Image
                         | PortDataType::Shape
                         | PortDataType::Numeric
                         | PortDataType::Number
@@ -600,6 +615,12 @@ pub enum NodeContent {
     /// Ordered variadic image compositor. Input ordering lives on canonical
     /// ProjectConnection::order, never on a UI pin index.
     Merge,
+    /// Ordered variadic Sound mixer. Runtime audio routing traverses these
+    /// typed connections before the sample mixer combines Media leaves.
+    SoundMerge,
+    /// Native frame-time Sound analysis. PCM and Spectrum values are
+    /// transient evaluation data and never become a persisted side model.
+    SoundAnalysis(SoundAnalysisContent),
 }
 
 impl NodeContent {

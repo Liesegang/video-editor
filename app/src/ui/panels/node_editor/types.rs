@@ -16,7 +16,10 @@ pub(super) const EMBEDDED_PORT_LABEL_INSET: f32 = 18.0;
 pub(super) const RESIZE_HIT_WIDTH: f32 = 7.0;
 pub(super) const RESIZE_CORNER_SIZE: f32 = 15.0;
 pub(super) const NODE_BODY_WIDTH: f32 = 200.0;
-pub(super) const MERGE_BODY_WIDTH: f32 = 242.0;
+/// Physical variadic rows need enough room for their handle, source label,
+/// typed controls, and both reorder buttons without outgrowing layout's
+/// estimate at runtime.
+pub(super) const MERGE_BODY_WIDTH: f32 = 260.0;
 pub(super) const NODE_HEADER_WIDTH: f32 = 190.0;
 pub(super) const PORT_LABEL_WIDTH: f32 = 96.0;
 pub(super) const PORT_ROW_HEIGHT: f32 = 22.0;
@@ -24,6 +27,10 @@ pub(super) const PROPERTY_LABEL_WIDTH: f32 = 58.0;
 pub(super) const INLINE_CONTROL_WIDTH: f32 = 126.0;
 pub(super) const WIRE_HIT_RADIUS: f32 = 8.0;
 pub(super) const WIRE_ENDPOINT_RADIUS: f32 = 12.0;
+/// Selected reconnect handles sit on the wire side of a socket so their
+/// centers do not collide with the normal output fan-out gesture.
+pub(super) const WIRE_RECONNECT_HANDLE_OFFSET: f32 = 9.0;
+pub(super) const WIRE_RECONNECT_HANDLE_RADIUS: f32 = 4.0;
 /// The custom endpoint-reconnect path accepts a drop this many screen points
 /// around a rendered port, including at overview zoom where Snarl's normal
 /// port interaction is deliberately disabled.

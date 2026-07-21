@@ -1,7 +1,8 @@
 use super::property_evaluation::{AudioPropertyContext, volume_at};
 use super::*;
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
+    AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT, PortAddress, PortDataType, PortDefinition, PortExposure,
+    PortOwner, PortSide,
 };
 use crate::model::property::{Property, PropertyMap, PropertyValue};
 use crate::model::{Clip, MediaContent, NodeContainer, Track};
@@ -110,13 +111,40 @@ pub(super) fn attach_audio_output(
     project: &mut Project,
     container: NodeContainer,
     node_id: uuid::Uuid,
-) {
+) -> Option<uuid::Uuid> {
     project
         .attach_node_to_container(container, node_id)
         .unwrap();
-    project
-        .set_audio_output_node(container, Some(node_id))
-        .unwrap();
+    connect_attached_audio_output(project, container, node_id)
+}
+
+pub(super) fn connect_attached_audio_output(
+    project: &mut Project,
+    container: NodeContainer,
+    node_id: uuid::Uuid,
+) -> Option<uuid::Uuid> {
+    let merge_id = match container {
+        NodeContainer::Composition(id) => project
+            .get_composition(id)
+            .map(|composition| composition.structural_sound_merge_node_id),
+        NodeContainer::Track(id) => project
+            .get_track(id)
+            .map(|track| track.structural_sound_merge_node_id),
+        NodeContainer::Clip(_) => {
+            project
+                .set_audio_output_node(container, Some(node_id))
+                .unwrap();
+            return None;
+        }
+    }?;
+    Some(
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(node_id), AUDIO_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_SOUNDS_PORT),
+            )
+            .unwrap(),
+    )
 }
 
 #[test]
@@ -238,6 +266,7 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
     let mut enabled_sources = HashSet::new();
     let mut disabled_sources = HashSet::new();
     let mut disabled_node_id = None;
+    let mut enabled_connection_id = None;
     for (sample, kind, stream_index, enabled) in [
         (1.0, AssetKind::Audio, None, true),
         (10.0, AssetKind::Audio, None, false),
@@ -251,14 +280,12 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
             stream_index,
             enabled,
         );
-        project
-            .attach_node_to_container(container, node_id)
-            .unwrap();
         if enabled {
-            project
-                .set_audio_output_node(container, Some(node_id))
-                .unwrap();
+            enabled_connection_id = attach_audio_output(&mut project, container, node_id);
         } else {
+            project
+                .attach_node_to_container(container, node_id)
+                .unwrap();
             disabled_node_id = Some(node_id);
         }
         let source = (path, stream_index);
@@ -281,7 +308,7 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         mix_samples(
             &project.assets,
             &project,
-            composition,
+            project.get_composition(composition_id).unwrap(),
             &cache,
             0,
             4,
@@ -323,15 +350,33 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         (request.first_source_frame, request.last_source_frame) == expected_bounds
     }));
 
-    project
-        .set_audio_output_node(container, disabled_node_id)
-        .unwrap();
+    let disabled_node_id = disabled_node_id.unwrap();
+    if let Some(connection_id) = enabled_connection_id {
+        let target = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap()
+            .to
+            .clone();
+        project
+            .reconnect_connection(
+                connection_id,
+                PortAddress::new(PortOwner::Node(disabled_node_id), AUDIO_OUTPUT_PORT),
+                target,
+            )
+            .unwrap();
+    } else {
+        project
+            .set_audio_output_node(container, Some(disabled_node_id))
+            .unwrap();
+    }
     let composition = project.get_composition(composition_id).unwrap();
     assert_eq!(
         mix_samples(
             &project.assets,
             &project,
-            composition,
+            project.get_composition(composition_id).unwrap(),
             &cache,
             0,
             4,
@@ -417,7 +462,7 @@ fn mixes_every_top_level_track_and_all_audio_nodes() {
 }
 
 #[test]
-fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
+fn malformed_duplicate_container_child_fails_closed_to_silence() {
     let mut project = Project::new("duplicate audio reachability");
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
@@ -456,7 +501,7 @@ fn duplicate_container_reachability_does_not_double_mix_one_media_node() {
         1,
         &PluginManager::default(),
     );
-    assert_eq!(mixed, vec![0.5; 4]);
+    assert_eq!(mixed, vec![0.0; 4]);
 }
 
 #[test]
@@ -515,80 +560,7 @@ fn applies_clip_timing_trim_and_stretch_per_output_frame() {
 }
 
 #[test]
-fn explicit_parent_audio_bindings_override_derived_children() {
-    let mut project = Project::new("audio direct-node test");
-    let (composition, mut track) = Composition::new("main", 1920, 1080, 30.0, 1.0);
-    let composition_id = composition.id;
-    let track_id = track.id;
-    set_volume(&mut track.properties, 0.5);
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-
-    let cache_manager = CacheManager::new();
-    let mut files = TestAudioFiles::default();
-    let composition_node = add_audio_node(&mut project, &cache_manager, &mut files, vec![1.0; 4]);
-    project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), composition_node)
-        .unwrap();
-
-    let track_node = add_audio_node(&mut project, &cache_manager, &mut files, vec![2.0; 4]);
-    project
-        .attach_node_to_container(NodeContainer::Track(track_id), track_node)
-        .unwrap();
-
-    let clip = Clip::new("audio clip", 0.0, 1.0);
-    let clip_id = clip.id;
-    project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let clip_node = add_audio_node(&mut project, &cache_manager, &mut files, vec![4.0; 4]);
-    project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), clip_node)
-        .unwrap();
-    project
-        .set_audio_output_node(NodeContainer::Clip(clip_id), Some(clip_node))
-        .unwrap();
-
-    let mix = |project: &Project| {
-        mix_samples(
-            &project.assets,
-            project,
-            project.get_composition(composition_id).unwrap(),
-            &cache_manager,
-            0,
-            4,
-            4,
-            1,
-            &PluginManager::default(),
-        )
-    };
-
-    // Composition derives Track, Track derives Clip, and Track gain applies.
-    assert_eq!(mix(&project), vec![2.0; 4]);
-
-    project
-        .set_audio_output_node(NodeContainer::Track(track_id), Some(track_node))
-        .unwrap();
-    // Explicit Track output replaces its derived Clip audio.
-    assert_eq!(mix(&project), vec![1.0; 4]);
-
-    project
-        .set_audio_output_node(
-            NodeContainer::Composition(composition_id),
-            Some(composition_node),
-        )
-        .unwrap();
-    // Explicit Composition output replaces all derived Tracks.
-    assert_eq!(mix(&project), vec![1.0; 4]);
-}
-
-#[test]
-fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrough() {
+fn unsupported_audio_plugin_operation_is_no_output_unless_explicitly_bypassed() {
     let mut project = Project::new("unsupported audio operation");
     let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
     let composition_id = composition.id;
@@ -679,6 +651,27 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
             &PluginManager::default(),
         )
         .is_empty()
+    );
+
+    assert!(project.get_node(operation_id).unwrap().supports_bypass());
+    project.get_node_mut(operation_id).unwrap().bypassed = true;
+    assert_eq!(
+        routed_audio_media_nodes(&project, PortOwner::Clip(clip_id)),
+        vec![media_id]
+    );
+    assert_eq!(
+        mix_samples(
+            &project.assets,
+            &project,
+            project.get_composition(composition_id).unwrap(),
+            &cache,
+            0,
+            4,
+            4,
+            1,
+            &PluginManager::default(),
+        ),
+        vec![1.0; 4]
     );
 }
 
@@ -781,12 +774,11 @@ fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
     let node_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 8]);
-    project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
-        .unwrap();
-    project
-        .set_audio_output_node(NodeContainer::Composition(composition_id), Some(node_id))
-        .unwrap();
+    attach_audio_output(
+        &mut project,
+        NodeContainer::Composition(composition_id),
+        node_id,
+    );
     let composition = project.get_composition(composition_id).unwrap();
 
     let mixed = mix_samples(

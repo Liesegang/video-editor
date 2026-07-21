@@ -11,7 +11,7 @@ use library::model::project::{
 use library::model::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
-use library::model::{Clip, Composition, Node, NodeContent};
+use library::model::{Clip, Composition, Node, NodeContent, SoundAnalysisContent};
 use library::plugin::{
     PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
     SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
@@ -480,7 +480,7 @@ fn installed_plugin_operation_uses_authoritative_inspector_ranges() {
 #[test]
 fn fmod_uses_canonical_divisor_metadata_instead_of_inferred_ranges() {
     let node = Node::new_fmod("Fmod");
-    let definitions = canonical_value_property_definitions(&node).unwrap();
+    let definitions = canonical_native_property_definitions(&node).unwrap();
     let divisor = definitions
         .iter()
         .find(|definition| definition.name() == "divisor")
@@ -501,6 +501,32 @@ fn fmod_uses_canonical_divisor_metadata_instead_of_inferred_ranges() {
 
     let inferred = inferred_property_definitions(node.properties(), 0.0);
     assert_ne!(inferred[0].ui_type(), divisor.ui_type());
+}
+
+#[test]
+fn sound_analysis_uses_canonical_frequency_metadata_instead_of_inferred_ranges() {
+    let node = Node::new_sound_analysis("Band Energy", SoundAnalysisContent::BandEnergy);
+    let definitions = canonical_native_property_definitions(&node).unwrap();
+    for key in ["low_hz", "high_hz"] {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.name() == key)
+            .unwrap();
+        assert!(matches!(
+            definition.ui_type(),
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 96_000.0,
+                step: 1.0,
+                suffix,
+                min_hard_limit: true,
+                max_hard_limit: true,
+            } if suffix == " Hz"
+        ));
+    }
+
+    let inferred = inferred_property_definitions(node.properties(), 0.0);
+    assert_ne!(inferred[0].ui_type(), definitions[0].ui_type());
 }
 
 #[test]

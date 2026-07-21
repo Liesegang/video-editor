@@ -4,8 +4,9 @@ use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwne
 use library::model::{NodeContainer, Project};
 
 use crate::state::context_types::NodeEditorEditableWire;
+use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::{
-    container_output_node_id, input_definitions, merge_images_target_node_id, merge_input_slots,
+    container_output_node_id, input_definitions, merge_input_slots, native_variadic_merge_for_node,
     output_definitions, ContainerVisual, GraphItem, NodeEdit,
 };
 
@@ -23,18 +24,12 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
     let output = output_definitions(project, source_item)
         .get(output_index)?
         .clone();
-    let target_merge_id = match target_item {
-        GraphItem::Node(node_id) => merge_images_target_node_id(
-            project,
-            &PortAddress::new(
-                PortOwner::Node(node_id),
-                library::model::project::MERGE_IMAGES_PORT,
-            ),
-        ),
+    let target_merge = match target_item {
+        GraphItem::Node(node_id) => native_variadic_merge_for_node(project, node_id),
         GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
     };
-    let merge_slot = target_merge_id.and_then(|merge_id| {
-        merge_input_slots(project, merge_id)
+    let merge_slot = target_merge.and_then(|merge| {
+        merge_input_slots(project, merge.node_id)
             .get(input_index)
             .cloned()
     });
@@ -43,10 +38,10 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
             Some(row.connection_id)
         }
         crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
-        | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
+        | crate::ui::panels::node_editor::MergeInputSlotRole::Vacant(_) => None,
     });
-    let input = match target_merge_id {
-        Some(merge_id) => merge_input_slots(project, merge_id)
+    let input = match target_merge {
+        Some(merge) => merge_input_slots(project, merge.node_id)
             .get(input_index)?
             .definition
             .clone(),
@@ -62,18 +57,14 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
             return Some(NodeEdit::DisconnectConnection { connection_id });
         }
     }
-    if connect
-        && merge_slot.as_ref().is_some_and(|slot| {
-            matches!(
-                slot.role,
-                crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages
-            )
-        })
+    if let (true, Some(crate::ui::panels::node_editor::MergeInputSlotRole::Vacant(_))) =
+        (connect, merge_slot.as_ref().map(|slot| &slot.role))
     {
+        let vacant = merge_vacant_slot(project, target_merge?.node_id)?;
         return Some(NodeEdit::ConnectAtIndex {
             from,
             to,
-            canonical_index: 0,
+            canonical_index: vacant.canonical_index,
         });
     }
     edit_for_port_addresses(project, from, to, connect)
@@ -330,10 +321,18 @@ mod tests {
             .get_track(track_id)
             .unwrap()
             .structural_merge_node_id;
+        let track_sound_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_sound_merge_node_id;
         let composition_merge_id = project
             .get_composition(composition_id)
             .unwrap()
             .structural_merge_node_id;
+        let composition_sound_merge_id = project
+            .get_composition(composition_id)
+            .unwrap()
+            .structural_sound_merge_node_id;
         for (owner, image_source, audio_source) in [
             (
                 PortOwner::Clip(clip_id),
@@ -343,18 +342,12 @@ mod tests {
             (
                 PortOwner::Track(track_id),
                 GraphItem::Node(track_merge_id),
-                GraphItem::PortAnchor {
-                    owner: PortOwner::Clip(clip_id),
-                    kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
-                },
+                GraphItem::Node(track_sound_merge_id),
             ),
             (
                 PortOwner::Composition(composition_id),
                 GraphItem::Node(composition_merge_id),
-                GraphItem::PortAnchor {
-                    owner: PortOwner::Track(track_id),
-                    kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
-                },
+                GraphItem::Node(composition_sound_merge_id),
             ),
         ] {
             let sink = GraphItem::PortAnchor {

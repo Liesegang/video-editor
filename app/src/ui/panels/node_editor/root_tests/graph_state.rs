@@ -234,17 +234,21 @@ fn clip_activity_and_disabled_state_have_distinct_inactive_reasons() {
 }
 
 #[test]
-fn alt_drag_knife_batches_explicit_and_output_binding_but_preserves_derived_wires(
-) -> Result<(), String> {
-    let (mut project, _, track_id, clip_id, _, merge_id) = fixture();
+fn alt_drag_knife_batches_explicit_and_output_binding() -> Result<(), String> {
+    let (mut project, _, track_id, clip_id, solid_id, merge_id) = fixture();
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
         .map_err(|error| error.to_string())?;
     let connection_ids = project
         .connections
         .iter()
+        .filter(|connection| {
+            matches!(
+                connection.to.owner,
+                PortOwner::Node(node_id) if node_id == solid_id || node_id == merge_id
+            )
+        })
         .map(|connection| connection.id)
-        .take(2)
         .collect::<Vec<_>>();
     assert_eq!(connection_ids.len(), 2);
     let edges = vec![
@@ -276,17 +280,6 @@ fn alt_drag_knife_batches_explicit_and_output_binding_but_preserves_derived_wire
             control_a: egui::pos2(180.0, 260.0),
             control_b: egui::pos2(320.0, 340.0),
             end: egui::pos2(400.0, 300.0),
-        },
-        RenderedEdge {
-            kind: RenderedEdgeKind::DerivedOutput {
-                owner: PortOwner::Track(track_id),
-                source: PortOwner::Clip(clip_id),
-                data_type: PortDataType::Image,
-            },
-            start: egui::pos2(100.0, 350.0),
-            control_a: egui::pos2(180.0, 310.0),
-            control_b: egui::pos2(320.0, 390.0),
-            end: egui::pos2(400.0, 350.0),
         },
     ];
     assert!(knife_segment_hits_edge(

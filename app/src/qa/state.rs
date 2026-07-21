@@ -236,6 +236,8 @@ pub fn snapshot(
                         "start_index": gesture.start_index,
                         "target_index": gesture.target_index,
                         "layer_count": gesture.layer_count,
+                        "reorder_min_index": gesture.reorder_min_index,
+                        "reorder_max_index": gesture.reorder_max_index,
                         "measured_row_count": gesture
                             .row_rects
                             .iter()

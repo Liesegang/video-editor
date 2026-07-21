@@ -2,15 +2,12 @@ use super::*;
 use crate::test_support::generator_node;
 use library::editor::project_service::GeneratorNodeRequest;
 use library::model::frame::color::Color;
-use library::model::project::{
-    PortDataType, PortDefinition, PortExposure, PortSide, ProjectConnection, IMAGE_OUTPUT_PORT,
-    MERGE_IMAGES_PORT,
-};
-use library::model::{BlendMode, Composition, PluginOperationContent};
+use library::model::project::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
+use library::model::{BlendMode, Composition};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
+pub(super) fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
     let mut project = Project::new("physical Merge reorder test");
     let (mut composition, mut track) = Composition::new("Main", 640, 360, 30.0, 4.0);
     composition.ui_position = [10.0, 20.0];
@@ -108,46 +105,77 @@ fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
     )
 }
 
-fn variadic_images_plugin_node() -> Option<Node> {
-    let content = PluginOperationContent {
-        category: "test".to_string(),
-        component_id: "variadic-images".to_string(),
-        operation: "test.variadic-images.v1".to_string(),
-        declared_ports: vec![
-            PortDefinition::input(MERGE_IMAGES_PORT, "Images", PortDataType::Image).variadic(),
-            PortDefinition::output(
-                IMAGE_OUTPUT_PORT,
-                "Image",
-                PortDataType::Image,
-                PortSide::Right,
-                PortExposure::Graph,
-            ),
-            PortDefinition::output(
-                "value",
-                "Value",
-                PortDataType::Any,
-                PortSide::Right,
-                PortExposure::Graph,
-            ),
-        ],
-    };
-    let mut serialized = serde_json::to_value(Node::new_merge("Variadic Images Plugin")).ok()?;
-    *serialized.get_mut("content")? = serde_json::json!({
-        "type": "PluginOperation",
-        "data": content,
+fn structural_image_vacant_fixture() -> (Project, Uuid, Uuid, [Uuid; 2], [Uuid; 2], Uuid) {
+    let mut project = Project::new("structural Image vacant input test");
+    let (mut composition, mut track) = Composition::new("Main", 960, 540, 30.0, 4.0);
+    composition.ui_position = [10.0, 20.0];
+    composition.ui_size = [1650.0, 1080.0];
+    track.ui_position = [70.0, 100.0];
+    track.ui_size = [1460.0, 900.0];
+    let composition_id = composition.id;
+    let track_id = track.id;
+    let merge_id = track.structural_merge_node_id;
+    project.add_track(track).unwrap();
+    project.add_composition(composition).unwrap();
+
+    let mut clip_ids = [Uuid::nil(); 2];
+    for (index, name) in ["Back Clip", "Front Clip"].into_iter().enumerate() {
+        let mut clip = Clip::new(name, 0.0, 4.0);
+        clip.ui_position = [160.0, 190.0 + index as f32 * 250.0];
+        clip.ui_size = [620.0, 220.0];
+        clip_ids[index] = clip.id;
+        project.add_clip(clip);
+        project
+            .attach_clip_to_track(track_id, clip_ids[index])
+            .unwrap();
+    }
+
+    let target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
+    let child_connection_ids = clip_ids.map(|clip_id| {
+        project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from == PortAddress::new(PortOwner::Clip(clip_id), IMAGE_OUTPUT_PORT)
+                    && connection.to == target
+            })
+            .unwrap()
+            .id
     });
-    serde_json::from_value(serialized).ok()
+    project.get_node_mut(merge_id).unwrap().ui_position = [930.0, 260.0];
+
+    let mut source = generator_node(
+        "Advanced Image",
+        GeneratorNodeRequest::Solid {
+            color: Color::white(),
+        },
+    );
+    source.ui_position = [600.0, 510.0];
+    let source_id = source.id;
+    project.add_node(source);
+    project
+        .attach_node_to_container(NodeContainer::Track(track_id), source_id)
+        .unwrap();
+    assert!(project.validate_connections().is_empty());
+    (
+        project,
+        composition_id,
+        merge_id,
+        clip_ids,
+        child_connection_ids,
+        source_id,
+    )
 }
 
 #[derive(Default)]
-struct RenderedMergeFrame {
-    edits: Vec<QueuedNodeEdit>,
-    layout_edit_count: usize,
-    transform: egui::emath::TSTransform,
-    edges: Vec<RenderedEdge>,
+pub(super) struct RenderedMergeFrame {
+    pub(super) edits: Vec<QueuedNodeEdit>,
+    pub(super) layout_edit_count: usize,
+    pub(super) transform: egui::emath::TSTransform,
+    pub(super) edges: Vec<RenderedEdge>,
 }
 
-fn render_merge_frame(
+pub(super) fn render_merge_frame(
     context: &egui::Context,
     project: &Project,
     composition_id: Uuid,
@@ -224,244 +252,13 @@ fn render_merge_frame(
     result
 }
 
-fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
+pub(super) fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos: position,
         button: egui::PointerButton::Primary,
         pressed,
         modifiers: egui::Modifiers::NONE,
     }
-}
-
-#[test]
-fn merge_connections_project_to_distinct_pins_and_disconnect_by_identity() {
-    let (mut project, composition_id, merge_id, source_ids, connection_ids) = three_layer_fixture();
-    let slots = merge_input_slots(&project, merge_id);
-    let connected = slots
-        .iter()
-        .filter_map(|slot| match &slot.role {
-            MergeInputSlotRole::Connected(row) => Some(row.connection_id),
-            MergeInputSlotRole::Canonical | MergeInputSlotRole::VacantImages => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(connected.len(), 3);
-    assert_eq!(
-        connected,
-        connection_ids.iter().rev().copied().collect::<Vec<_>>()
-    );
-    assert!(matches!(
-        slots.last().map(|slot| &slot.role),
-        Some(MergeInputSlotRole::VacantImages)
-    ));
-
-    let (snarl, _) = build_snarl(&project, composition_id);
-    let merge_snarl_id = snarl
-        .nodes_ids_data()
-        .find_map(|(id, node)| (node.value == GraphItem::Node(merge_id)).then_some(id));
-    assert!(merge_snarl_id.is_some());
-    let Some(merge_snarl_id) = merge_snarl_id else {
-        return;
-    };
-    let mut physical_indices = snarl
-        .wires()
-        .filter_map(|(_, input)| (input.node == merge_snarl_id).then_some(input.input))
-        .collect::<Vec<_>>();
-    physical_indices.sort_unstable();
-    physical_indices.dedup();
-    assert_eq!(physical_indices.len(), 3);
-
-    let selected_index = merge_input_index_for_connection(&project, merge_id, connection_ids[1]);
-    assert!(selected_index.is_some());
-    let source_snarl_id = snarl
-        .nodes_ids_data()
-        .find_map(|(id, node)| (node.value == GraphItem::Node(source_ids[1])).then_some(id));
-    assert!(source_snarl_id.is_some());
-    let (Some(source_snarl_id), Some(selected_index)) = (source_snarl_id, selected_index) else {
-        return;
-    };
-    let edit = edit_for_wire(
-        &project,
-        &snarl,
-        source_snarl_id,
-        0,
-        merge_snarl_id,
-        selected_index,
-        false,
-    );
-    assert!(matches!(
-        edit,
-        Some(NodeEdit::DisconnectConnection { connection_id }) if connection_id == connection_ids[1]
-    ));
-    assert!(apply_edit(
-        &mut project,
-        NodeEdit::DisconnectConnection {
-            connection_id: connection_ids[1],
-        },
-    ));
-    assert!(!project
-        .connections
-        .iter()
-        .any(|connection| connection.id == connection_ids[1]));
-    assert!(project
-        .connections
-        .iter()
-        .any(|connection| connection.id == connection_ids[0]));
-}
-
-#[test]
-fn non_merge_variadic_images_keeps_one_generic_pin_and_disconnects_by_address() {
-    let (mut project, composition_id, merge_id, source_ids, _) = three_layer_fixture();
-    let plugin = variadic_images_plugin_node();
-    assert!(plugin.is_some());
-    let Some(plugin) = plugin else {
-        return;
-    };
-    let plugin_id = plugin.id;
-    let container = project.find_node_container(merge_id);
-    assert!(container.is_some());
-    let Some(container) = container else {
-        return;
-    };
-    project.add_node(plugin);
-    assert!(project
-        .attach_node_to_container(container, plugin_id)
-        .is_ok());
-    let target = PortAddress::new(PortOwner::Node(plugin_id), MERGE_IMAGES_PORT);
-    let first_from = PortAddress::new(PortOwner::Node(source_ids[0]), IMAGE_OUTPUT_PORT);
-    let second_from = PortAddress::new(PortOwner::Node(source_ids[1]), IMAGE_OUTPUT_PORT);
-    let first_connection = project.connect_ports(first_from.clone(), target.clone());
-    let second_connection = project.connect_ports(second_from.clone(), target.clone());
-    assert!(first_connection.is_ok() && second_connection.is_ok());
-    assert_eq!(merge_images_target_node_id(&project, &target), None);
-    let plugin_slots = merge_input_slots(&project, plugin_id);
-    assert_eq!(plugin_slots.len(), 1);
-    assert!(matches!(
-        plugin_slots.first().map(|slot| &slot.role),
-        Some(MergeInputSlotRole::Canonical)
-    ));
-    assert!(project
-        .connections
-        .iter()
-        .filter(|connection| connection.to == target)
-        .all(|connection| !connection_supports_authored_blend(&project, connection)));
-
-    let (snarl, _) = build_snarl(&project, composition_id);
-    let plugin_snarl_id = snarl
-        .nodes_ids_data()
-        .find_map(|(id, node)| (node.value == GraphItem::Node(plugin_id)).then_some(id));
-    let second_source_snarl_id = snarl
-        .nodes_ids_data()
-        .find_map(|(id, node)| (node.value == GraphItem::Node(source_ids[1])).then_some(id));
-    assert!(plugin_snarl_id.is_some() && second_source_snarl_id.is_some());
-    let (Some(plugin_snarl_id), Some(second_source_snarl_id)) =
-        (plugin_snarl_id, second_source_snarl_id)
-    else {
-        return;
-    };
-    let mut target_indices = snarl
-        .wires()
-        .filter_map(|(_, input)| (input.node == plugin_snarl_id).then_some(input.input))
-        .collect::<Vec<_>>();
-    target_indices.sort_unstable();
-    assert_eq!(target_indices, vec![0, 0]);
-
-    let edit = edit_for_wire(
-        &project,
-        &snarl,
-        second_source_snarl_id,
-        0,
-        plugin_snarl_id,
-        0,
-        false,
-    );
-    assert!(matches!(
-        &edit,
-        Some(NodeEdit::Disconnect { from, to }) if from == &second_from && to == &target
-    ));
-    assert!(edit.is_some_and(|edit| apply_edit(&mut project, edit)));
-    assert!(project
-        .connections
-        .iter()
-        .any(|connection| connection.from == first_from && connection.to == target));
-    assert!(!project
-        .connections
-        .iter()
-        .any(|connection| connection.from == second_from && connection.to == target));
-}
-
-#[test]
-fn physical_merge_endpoint_identity_is_independent_of_authored_blend_support() {
-    let (mut project, _, merge_id, _, _) = three_layer_fixture();
-    let plugin = variadic_images_plugin_node();
-    assert!(plugin.is_some());
-    let Some(plugin) = plugin else {
-        return;
-    };
-    let plugin_id = plugin.id;
-    let container = project.find_node_container(merge_id);
-    assert!(container.is_some());
-    let Some(container) = container else {
-        return;
-    };
-    project.add_node(plugin);
-    assert!(project
-        .attach_node_to_container(container, plugin_id)
-        .is_ok());
-
-    let any_from = PortAddress::new(PortOwner::Node(plugin_id), "value");
-    let merge_target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
-    // `Any` graph outputs are not newly authorable, but directly loaded or
-    // forward-version Projects can still carry one. Endpoint projection must
-    // be target-owned and must not silently fall back to the vacant Merge pin.
-    let any_connection = ProjectConnection::new(any_from.clone(), merge_target.clone(), 3);
-    let any_connection_id = any_connection.id;
-    project.connections.push(any_connection);
-    let any_connection = project
-        .connections
-        .iter()
-        .find(|connection| connection.id == any_connection_id);
-    assert!(any_connection.is_some_and(|connection| {
-        merge_images_target_node_id(&project, &connection.to) == Some(merge_id)
-            && !connection_supports_authored_blend(&project, connection)
-    }));
-
-    let source_rect = egui::Rect::from_center_size(egui::pos2(40.0, 60.0), egui::vec2(8.0, 8.0));
-    let exact_rect = egui::Rect::from_center_size(egui::pos2(240.0, 100.0), egui::vec2(8.0, 8.0));
-    let vacant_rect = egui::Rect::from_center_size(egui::pos2(240.0, 180.0), egui::vec2(8.0, 8.0));
-    let rendered_ports = Arc::new(Mutex::new(HashMap::from([
-        (
-            RenderedPortKey {
-                address: any_from,
-                direction: PortDirection::Output,
-                connection_id: None,
-            },
-            source_rect,
-        ),
-        (
-            RenderedPortKey {
-                address: merge_target.clone(),
-                direction: PortDirection::Input,
-                connection_id: Some(any_connection_id),
-            },
-            exact_rect,
-        ),
-        (
-            RenderedPortKey {
-                address: merge_target,
-                direction: PortDirection::Input,
-                connection_id: None,
-            },
-            vacant_rect,
-        ),
-    ])));
-    let rendered = register_rendered_edges(&project, &rendered_ports, egui::Rect::EVERYTHING, None);
-    let any_edge = rendered.iter().find(|edge| {
-        edge.kind
-            == (RenderedEdgeKind::ProjectConnection {
-                connection_id: any_connection_id,
-            })
-    });
-    assert_eq!(any_edge.map(|edge| edge.end), Some(exact_rect.center()));
 }
 
 #[test]
@@ -532,10 +329,12 @@ fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slo
         .is_ok());
 
     let before_slots = merge_input_slots(&project, merge_id);
-    let Some(vacant_index) = before_slots
-        .iter()
-        .position(|slot| matches!(slot.role, MergeInputSlotRole::VacantImages))
-    else {
+    let Some(vacant_index) = before_slots.iter().position(|slot| {
+        matches!(
+            slot.role,
+            MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image)
+        )
+    }) else {
         return;
     };
     let (snarl, _) = build_snarl(&project, composition_id);
@@ -587,14 +386,173 @@ fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slo
         return;
     };
     assert_eq!(new_back.connection_id, connection_id);
-    assert_eq!(new_back.back_to_front_index, 0);
-    assert_eq!(new_back.front_to_back_index, 3);
+    assert_eq!(new_back.canonical_index, 0);
+    assert_eq!(new_back.visual_index, 3);
     assert!(matches!(
         merge_input_slots(&project, merge_id)
             .last()
             .map(|slot| &slot.role),
-        Some(MergeInputSlotRole::VacantImages)
+        Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image))
     ));
+}
+
+#[test]
+fn real_pointer_connects_advanced_image_at_structural_boundary_with_one_stable_history_step() {
+    let (mut project, composition_id, merge_id, clip_ids, child_connection_ids, source_id) =
+        structural_image_vacant_fixture();
+    let initial = project.clone();
+    let original_children = child_connection_ids.map(|connection_id| {
+        project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap()
+            .clone()
+    });
+    let vacant = merge_vacant_slot(&project, merge_id).unwrap();
+    assert_eq!(vacant.structural_prefix_len, 2);
+    assert_eq!(vacant.canonical_index, 2);
+    assert_eq!(vacant.visual_index, 0);
+    let before_slots = merge_input_slots(&project, merge_id);
+    let before_vacant_index = before_slots
+        .iter()
+        .position(|slot| {
+            matches!(
+                slot.role,
+                MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image)
+            )
+        })
+        .unwrap();
+    assert!(matches!(
+        before_slots.get(before_vacant_index).map(|slot| &slot.role),
+        Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image))
+    ));
+    assert!(before_slots[..before_vacant_index]
+        .iter()
+        .all(|slot| { !matches!(slot.role, MergeInputSlotRole::Connected(_)) }));
+
+    let context = egui::Context::default();
+    let mut state = NodeEditorState::default();
+    let mut frame = 0;
+    for _ in 0..7 {
+        let rendered = render_merge_frame(
+            &context,
+            &project,
+            composition_id,
+            &mut state,
+            frame,
+            Vec::new(),
+        );
+        assert!(rendered.edits.is_empty());
+        frame += 1;
+    }
+    let source = test_rect(&qa_port_id(
+        &project,
+        Some(GraphItem::Node(source_id)),
+        "output",
+        IMAGE_OUTPUT_PORT,
+    ))
+    .unwrap()
+    .center();
+    let target = test_rect(&qa_port_id(
+        &project,
+        Some(GraphItem::Node(merge_id)),
+        "input",
+        MERGE_IMAGES_PORT,
+    ))
+    .unwrap()
+    .center();
+    let drag_start = source + egui::vec2(WIRE_DRAG_THRESHOLD + 2.0, 0.0);
+    let mut queued = Vec::new();
+    for events in [
+        vec![egui::Event::PointerMoved(source)],
+        vec![pointer_button(source, true)],
+        vec![egui::Event::PointerMoved(drag_start)],
+        vec![egui::Event::PointerMoved(target)],
+        vec![pointer_button(target, false)],
+    ] {
+        let rendered = render_merge_frame(
+            &context,
+            &project,
+            composition_id,
+            &mut state,
+            frame,
+            events,
+        );
+        queued.extend(rendered.edits);
+        frame += 1;
+    }
+    assert!(matches!(
+        queued.as_slice(),
+        [QueuedNodeEdit::Atomic(NodeEdit::ConnectAtIndex {
+            canonical_index: 2,
+            ..
+        })]
+    ));
+
+    let mut history = HistoryManager::new();
+    history.push_project_state(initial.clone());
+    assert!(apply_queued_node_edits(
+        &mut project,
+        queued,
+        &mut history,
+        &mut state,
+    ));
+    assert_eq!(history.undo_depth(), 2);
+    assert!(project.validate_connections().is_empty());
+    for original in original_children {
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == original.id),
+            Some(&original)
+        );
+    }
+    let merge_target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
+    let advanced = project
+        .connections
+        .iter()
+        .find(|connection| {
+            connection.from == PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT)
+                && connection.to == merge_target
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(advanced.order, 2);
+    assert_eq!(
+        merge_input_index_for_connection(&project, merge_id, advanced.id),
+        Some(before_vacant_index),
+        "the connected row must occupy the physical vacant boundary"
+    );
+    let rows = merge_layer_rows(&project, merge_id);
+    let advanced_row = rows
+        .iter()
+        .find(|row| row.connection_id == advanced.id)
+        .unwrap();
+    assert_eq!(advanced_row.reorder_min_index, clip_ids.len());
+
+    let before_forbidden_reorder = project.clone();
+    assert!(!apply_edit(
+        &mut project,
+        NodeEdit::ReorderConnection {
+            connection_id: advanced.id,
+            new_order: 1,
+        },
+    ));
+    assert_eq!(project, before_forbidden_reorder);
+
+    let edited = project.clone();
+    assert_eq!(history.undo(&edited), Some(initial.clone()));
+    assert_eq!(history.redo(&initial), Some(edited.clone()));
+    assert_eq!(
+        edited
+            .connections
+            .iter()
+            .find(|connection| connection.id == advanced.id),
+        Some(&advanced),
+        "undo/redo snapshots must retain the authored wire UUID and order"
+    );
 }
 
 #[test]

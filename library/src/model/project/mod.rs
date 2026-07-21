@@ -17,17 +17,29 @@ mod output_binding;
 mod path_effect_stack;
 pub mod property;
 mod structural_merge;
+mod transaction;
+
+use transaction::{first_new_project_validation_error, port_owner_for_container};
 
 pub use connection::{
-    AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, ContainerAudioSource, ContainerAudioSourceKind,
-    ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
-    EvalOutput, EvalResult, EvaluationError, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
-    FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
+    AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, BAND_HIGH_HZ_PROPERTY, BAND_LOW_HZ_PROPERTY,
+    ContainerAudioSource, ContainerAudioSourceKind, ContainerGraphSemantics, ContainerImageSource,
+    ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult, EvaluationError,
+    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT,
     NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress, PortDataType, PortDefinition,
     PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
-    RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT, SPECTRUM_INPUT_PORT,
+    SPECTRUM_OUTPUT_PORT, TIME_PORT,
 };
 pub use error::ProjectGraphError;
+
+/// Compact model-owned defaults used before the Node Editor has ever opened.
+/// UI auto-layout may refine these positions, but startup state must already
+/// be contained, non-overlapping, and left-to-right routable.
+pub(crate) const DEFAULT_GRAPH_CONTENT_INSET: f32 = 56.0;
+pub(crate) const DEFAULT_GRAPH_ITEM_GAP: f32 = 24.0;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Project {
@@ -126,6 +138,8 @@ pub struct Composition {
     /// image outputs. This required annotation is independent from the
     /// editable downstream output binding.
     pub structural_merge_node_id: Uuid,
+    /// Stable native Sound Merge receiving direct Track Sound outputs.
+    pub structural_sound_merge_node_id: Uuid,
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
     /// Explicit graph result for the Composition audio output. This is
@@ -193,8 +207,10 @@ impl Composition {
     }
 
     pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, Track) {
-        let first_track = Track::new("Track 1");
+        let mut first_track = Track::new("Track 1");
+        first_track.ui_position = [DEFAULT_GRAPH_CONTENT_INSET, DEFAULT_GRAPH_CONTENT_INSET];
         let structural_merge_node_id = Uuid::new_v4();
+        let structural_sound_merge_node_id = Uuid::new_v4();
         (
             Self {
                 id: Uuid::new_v4(),
@@ -210,10 +226,11 @@ impl Composition {
                 blend_mode: BlendMode::Normal,
                 properties: PropertyMap::new(),
                 track_ids: vec![first_track.id],
-                node_ids: vec![structural_merge_node_id],
+                node_ids: vec![structural_merge_node_id, structural_sound_merge_node_id],
                 structural_merge_node_id,
+                structural_sound_merge_node_id,
                 output_node_id: Some(structural_merge_node_id),
-                audio_output_node_id: None,
+                audio_output_node_id: Some(structural_sound_merge_node_id),
                 ui_position: [0.0, 0.0],
                 ui_size: default_composition_ui_size(),
                 ui_collapsed: false,
@@ -413,6 +430,11 @@ impl Project {
             .iter()
             .map(|connection| connection.id)
             .collect::<HashSet<_>>();
+        let affected_connection_targets = graph
+            .connections
+            .iter()
+            .map(|connection| connection.to.clone())
+            .collect::<HashSet<_>>();
         let mut connection_ids = HashSet::new();
         for connection in &graph.connections {
             if !connection_ids.insert(connection.id) {
@@ -456,6 +478,7 @@ impl Project {
             .min(container_node_ids.len());
         container_node_ids.splice(insert_index..insert_index, bundled_node_ids);
         candidate.connections.extend(graph.connections);
+        candidate.normalize_connection_orders_for_targets(&affected_connection_targets);
         if let Some(output_node_id) = graph.output_node_id {
             candidate.set_output_node(container, Some(output_node_id))?;
         }
@@ -1062,7 +1085,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         self.nodes.remove(&node_id)
     }
 
@@ -1078,7 +1101,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         for node_id in clip.node_ids.clone() {
             self.remove_node_unchecked(node_id);
         }
@@ -1097,7 +1120,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         for clip_id in track.clip_ids.clone() {
             self.remove_clip(clip_id);
         }
@@ -1137,7 +1160,7 @@ impl Project {
             })
             .map(|connection| connection.id)
             .collect::<Vec<_>>();
-        self.disconnect_connections(connection_ids);
+        self.disconnect_connections_unchecked(connection_ids);
         Some(composition)
     }
 
@@ -1264,31 +1287,6 @@ impl Project {
             }))
             .collect()
     }
-}
-
-fn port_owner_for_container(container: NodeContainer) -> PortOwner {
-    match container {
-        NodeContainer::Composition(id) => PortOwner::Composition(id),
-        NodeContainer::Track(id) => PortOwner::Track(id),
-        NodeContainer::Clip(id) => PortOwner::Clip(id),
-    }
-}
-
-fn first_new_project_validation_error(
-    baseline: &[ProjectGraphError],
-    current: Vec<ProjectGraphError>,
-) -> Option<ProjectGraphError> {
-    let mut unmatched_baseline = baseline.to_vec();
-    current.into_iter().find(|error| {
-        let Some(index) = unmatched_baseline
-            .iter()
-            .position(|baseline_error| baseline_error == error)
-        else {
-            return true;
-        };
-        unmatched_baseline.remove(index);
-        false
-    })
 }
 
 fn remove_node_id(ids: &mut Vec<Uuid>, node_id: Uuid) -> bool {

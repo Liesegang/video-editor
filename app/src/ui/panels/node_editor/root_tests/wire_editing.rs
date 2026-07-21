@@ -339,7 +339,7 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
         rows.iter()
             .map(|row| (
                 row.connection_id,
-                row.back_to_front_index,
+                row.canonical_index,
                 row.authored_order,
                 row.authored_blend_mode,
                 row.source.owner,
@@ -378,7 +378,7 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
     }));
 
     let estimated = estimated_node_size(&project, merge_id);
-    assert_eq!(estimated.x, 518.0);
+    assert_eq!(estimated.x, 544.0);
     assert_eq!(estimated.x, estimated_merge_node_width());
     assert_eq!(estimated_node_size(&project, solid_id).x, 462.0);
     assert_eq!(estimated_node_width(), 462.0);
@@ -388,7 +388,11 @@ fn merge_body_rows_present_front_to_back_and_keep_canonical_wire_identity() {
     let rendered_merge = rects
         .get(&format!("node_editor.node:{merge_id}"))
         .expect("rendered Merge card");
-    assert!(rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0);
+    assert!(
+        rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0,
+        "rendered Merge width escaped its authoritative estimate: rendered={rendered_merge:?}, estimated={estimated:?}, scale={}",
+        rendered_transform.scaling,
+    );
     assert!(rendered_merge.height() <= estimated.y * rendered_transform.scaling + 1.0);
     let port_rects = [
         qa_port_id(
@@ -706,100 +710,6 @@ fn overview_wire_midpoint_remains_a_body_target_when_endpoint_radii_overlap() {
         rendered_wire_drag_kind(&edge, edge.end),
         NodeEditorWireDragKind::ReconnectTarget
     );
-}
-
-#[test]
-fn endpoint_drag_reconnects_through_real_pointer_frames_without_changing_wire_identity() {
-    let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
-    let mut alternate = generator_node(
-        "Alternate",
-        GeneratorNodeRequest::Solid {
-            color: Color::black(),
-        },
-    );
-    alternate.ui_position = [250.0, 520.0];
-    let alternate_id = alternate.id;
-    project.add_node(alternate);
-    project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), alternate_id)
-        .unwrap();
-    let connection = project
-        .connections
-        .iter()
-        .find(|connection| {
-            connection.from.owner == PortOwner::Node(solid_id)
-                && connection.to.owner == PortOwner::Node(merge_id)
-        })
-        .unwrap()
-        .clone();
-    let edge = RenderedEdge {
-        kind: RenderedEdgeKind::ProjectConnection {
-            connection_id: connection.id,
-        },
-        start: egui::pos2(120.0, 180.0),
-        control_a: egui::pos2(200.0, 180.0),
-        control_b: egui::pos2(300.0, 180.0),
-        end: egui::pos2(380.0, 180.0),
-    };
-    let alternate_position = egui::pos2(480.0, 260.0);
-    let rendered_ports = Arc::new(Mutex::new(HashMap::from([(
-        RenderedPortKey {
-            address: PortAddress::new(PortOwner::Node(alternate_id), IMAGE_OUTPUT_PORT),
-            direction: PortDirection::Output,
-            connection_id: None,
-        },
-        egui::Rect::from_center_size(alternate_position, egui::vec2(14.0, 14.0)),
-    )])));
-    let mut state = NodeEditorState::default();
-    let edits = run_wire_interaction_frames(
-        &project,
-        &edge,
-        &rendered_ports,
-        &mut state,
-        vec![
-            vec![egui::Event::PointerMoved(edge.start)],
-            vec![egui::Event::PointerButton {
-                pos: edge.start,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            vec![egui::Event::PointerMoved(alternate_position)],
-            vec![egui::Event::PointerButton {
-                pos: alternate_position,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ],
-    );
-    let [QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
-        connection_id,
-        from,
-        to,
-    })] = edits.as_slice()
-    else {
-        panic!("endpoint drag did not queue one reconnect: {edits:?}");
-    };
-    assert_eq!(*connection_id, connection.id);
-    assert_eq!(from.owner, PortOwner::Node(alternate_id));
-    assert_eq!(*to, connection.to);
-    assert!(apply_edit(
-        &mut project,
-        NodeEdit::ReconnectConnection {
-            connection_id: *connection_id,
-            from: from.clone(),
-            to: to.clone(),
-        },
-    ));
-    let reconnected = project
-        .connections
-        .iter()
-        .find(|candidate| candidate.id == connection.id)
-        .unwrap();
-    assert_eq!(reconnected.from.owner, PortOwner::Node(alternate_id));
-    assert_eq!(reconnected.to, connection.to);
-    assert_eq!(reconnected.order, connection.order);
 }
 
 #[test]
