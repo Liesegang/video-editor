@@ -154,6 +154,30 @@ pub fn snapshot(
                     .vector_editor_state
                     .as_ref()
                     .is_some_and(|state| state.selected_handle.is_some()),
+                "vector_editor": editor_context.interaction.vector_editor_state.as_ref().map(|state| {
+                    let mut selected_point_indices = state
+                        .selected_point_indices
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>();
+                    selected_point_indices.sort_unstable();
+                    serde_json::json!({
+                        "selected_point_indices": selected_point_indices,
+                        "active_handle": state.selected_handle.map(|(index, handle)| {
+                            serde_json::json!({
+                                "point_index": index,
+                                "handle": format!("{handle:?}").to_lowercase(),
+                            })
+                        }),
+                        "focused_handle": state.focused_handle.map(|(index, handle)| {
+                            serde_json::json!({
+                                "point_index": index,
+                                "handle": format!("{handle:?}").to_lowercase(),
+                            })
+                        }),
+                        "drag_changed": state.has_changed_drag(),
+                    })
+                }),
                 "edit_target": editor_context.interaction.preview_edit_target.as_ref().map(|target| {
                     serde_json::json!({
                         "owner": target.owner,

@@ -105,7 +105,7 @@ fn has_live_project_edit(editor_context: &EditorContext) -> bool {
             .interaction
             .vector_editor_state
             .as_ref()
-            .is_some_and(|state| state.selected_handle.is_some())
+            .is_some_and(|state| state.has_changed_drag())
         || editor_context.interaction.preview_viewport.primary_gesture
             == PreviewPrimaryGesture::Content
         || editor_context.interaction.timeline_track_reorder.is_some()
@@ -147,7 +147,7 @@ pub fn commit_live_project_edits(
     editor_context.interaction.timeline_selection_drag_start = None;
     editor_context.interaction.preview_selection_drag_start = None;
     if let Some(state) = &mut editor_context.interaction.vector_editor_state {
-        state.selected_handle = None;
+        state.cancel_drag();
     }
     editor_context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Idle;
     editor_context.node_editor_state.layout_changed_during_drag = false;

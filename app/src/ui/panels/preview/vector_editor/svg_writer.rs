@@ -19,9 +19,15 @@ pub fn to_svg_path(path_model: &VectorPath) -> String {
         }
 
         let next = &path_model.points[next_idx];
+        let is_closing_segment = path_model.is_closed && next_idx == 0;
 
         if is_zero(current.handle_out) && is_zero(next.handle_in) {
-            path.push_str(&format!("L {},{} ", next.position[0], next.position[1]));
+            // `Z` owns a straight closing segment. Emitting `L first` as well
+            // makes a parser materialize a duplicate first vertex on every
+            // edit/serialize frame.
+            if !is_closing_segment {
+                path.push_str(&format!("L {},{} ", next.position[0], next.position[1]));
+            }
         } else {
             let c1x = current.position[0] + current.handle_out[0];
             let c1y = current.position[1] + current.handle_out[1];

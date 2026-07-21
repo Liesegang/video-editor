@@ -127,6 +127,24 @@ pub fn parse_svg_path(path_data: &str) -> Result<VectorPath, SvgPathParseError> 
         }
     }
 
+    // A curved SVG closing segment must name its first endpoint in the final
+    // `C` command before `Z`. Skia reports that endpoint as another Cubic/Line
+    // record. Fold it back into the first logical vertex instead of allowing
+    // parse -> edit -> write cycles to grow one point per frame.
+    if is_closed
+        && points.len() > 1
+        && points
+            .first()
+            .zip(points.last())
+            .is_some_and(|(first, last)| same_position(first.position, last.position))
+    {
+        if let Some(repeated_first) = points.pop() {
+            if let Some(first) = points.first_mut() {
+                first.handle_in = repeated_first.handle_in;
+            }
+        }
+    }
+
     for pt in &mut points {
         if is_collinear_opposite(pt.handle_in, pt.handle_out) {
             if is_same_length(pt.handle_in, pt.handle_out) {
@@ -144,6 +162,10 @@ pub fn parse_svg_path(path_data: &str) -> Result<VectorPath, SvgPathParseError> 
 
 fn is_zero(v: [f32; 2]) -> bool {
     v[0].abs() < 0.001 && v[1].abs() < 0.001
+}
+
+fn same_position(left: [f32; 2], right: [f32; 2]) -> bool {
+    (left[0] - right[0]).abs() < 0.001 && (left[1] - right[1]).abs() < 0.001
 }
 
 fn is_collinear_opposite(v1: [f32; 2], v2: [f32; 2]) -> bool {
@@ -213,5 +235,35 @@ mod tests {
                 point_count: 0,
             })
         ));
+    }
+
+    #[test]
+    fn closed_path_round_trip_never_grows_duplicate_first_points() {
+        let mut encoded = "M 0 0 H 160 V 90 H 0 Z".to_string();
+        for _ in 0..32 {
+            let parsed = parse_svg_path(&encoded).expect("closed path remains parseable");
+            assert_eq!(parsed.points.len(), 4);
+            assert_eq!(
+                parsed
+                    .points
+                    .iter()
+                    .map(|point| point.position)
+                    .collect::<Vec<_>>(),
+                vec![[0.0, 0.0], [160.0, 0.0], [160.0, 90.0], [0.0, 90.0]]
+            );
+            encoded = to_svg_path(&parsed);
+        }
+        assert!(!encoded.contains("L 0,0 Z"));
+    }
+
+    #[test]
+    fn curved_closing_segment_round_trip_keeps_first_in_handle() {
+        let encoded = "M 0,0 L 100,0 C 100,80 -20,60 0,0 Z";
+        let parsed = parse_svg_path(encoded).expect("curved close parses");
+        assert_eq!(parsed.points.len(), 2);
+        assert_eq!(parsed.points[0].handle_in, [-20.0, 60.0]);
+        let reparsed = parse_svg_path(&to_svg_path(&parsed)).expect("written close parses");
+        assert_eq!(reparsed.points.len(), 2);
+        assert_eq!(reparsed.points[0].handle_in, [-20.0, 60.0]);
     }
 }

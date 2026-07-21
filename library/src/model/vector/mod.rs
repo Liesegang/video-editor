@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+mod edit;
+
+pub use edit::{move_handle, move_vertices, set_point_type};
+
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 pub enum HandleType {
     In,
@@ -7,14 +11,16 @@ pub enum HandleType {
     Vertex,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum PointType {
     Corner,
-    Smooth, // Linked handles, mirror angle but length can differ? Or mirror both? Typically mirror angle.
-    Symmetric, // Mirror angle and length
+    /// Handles share one tangent, while retaining independent lengths.
+    Smooth,
+    /// Handles are mirrored in both angle and length.
+    Symmetric,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct ControlPoint {
     pub position: [f32; 2],
     pub handle_in: [f32; 2],  // Relative to position
@@ -22,7 +28,7 @@ pub struct ControlPoint {
     pub point_type: PointType,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
 pub struct VectorPath {
     pub points: Vec<ControlPoint>,
     pub is_closed: bool,

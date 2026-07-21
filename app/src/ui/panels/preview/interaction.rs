@@ -74,7 +74,7 @@ impl<'a> PreviewInteractions<'a> {
             self.editor_context.interaction.preview_selection_drag_start = None;
             self.editor_context.interaction.gizmo_state = None;
             if let Some(state) = &mut self.editor_context.interaction.vector_editor_state {
-                state.selected_handle = None;
+                state.cancel_drag();
             }
             return;
         }
