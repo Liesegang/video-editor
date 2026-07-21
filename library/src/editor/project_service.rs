@@ -12,9 +12,7 @@ use crate::model::property::{
     KeyframeId, KeyframeUpdate, Property, PropertyDefinition, PropertyMap, PropertyUiType,
     PropertyValue,
 };
-use crate::model::{
-    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent, Track,
-};
+use crate::model::{Clip, GeneratorContent, MediaContent, Node, NodeContent, Track};
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
 use ordered_float::OrderedFloat;
@@ -626,16 +624,12 @@ impl ProjectManager {
             media_height,
         )?;
 
-        let audio_output_node_id = node.id;
-        let graph = self.create_image_source_graph(
+        self.wrap_positioned_av_clip(
+            clip,
             node,
-            u64::from(canvas_width),
-            u64::from(canvas_height),
-            media_width,
-            media_height,
-        )?;
-        clip.audio_output_node_id = Some(audio_output_node_id);
-        Ok(ClipBundle { clip, graph })
+            [u64::from(canvas_width), u64::from(canvas_height)],
+            [media_width, media_height],
+        )
     }
 
     pub fn create_image_clip(
@@ -659,16 +653,12 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle {
-            clip: Clip::new("Image Clip", start_time, duration),
-            graph: self.create_image_source_graph(
-                node,
-                u64::from(canvas_width),
-                u64::from(canvas_height),
-                u64::from(canvas_width),
-                u64::from(canvas_height),
-            )?,
-        })
+        self.wrap_positioned_image_clip(
+            Clip::new("Image Clip", start_time, duration),
+            node,
+            [u64::from(canvas_width), u64::from(canvas_height)],
+            [u64::from(canvas_width), u64::from(canvas_height)],
+        )
     }
 
     pub fn create_text_clip(
@@ -726,33 +716,12 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle {
-            clip: Clip::new("SkSL Clip", start_time, duration),
-            graph: self.create_image_source_graph(
-                node,
-                u64::from(canvas_width),
-                u64::from(canvas_height),
-                u64::from(canvas_width),
-                u64::from(canvas_height),
-            )?,
-        })
-    }
-
-    pub fn create_composition_instance_clip(
-        &self,
-        composition_id: Uuid,
-        start_time: f64,
-        duration: f64,
-    ) -> Result<ClipBundle, LibraryError> {
-        let node = Node::new_composition_instance(
-            "Composition Instance",
-            CompositionInstanceContent { composition_id },
-        );
-        let audio_output_node_id = node.id;
-        let graph = self.create_image_source_graph(node, 0, 0, 0, 0)?;
-        let mut clip = Clip::new("Composition Instance Clip", start_time, duration);
-        clip.audio_output_node_id = Some(audio_output_node_id);
-        Ok(ClipBundle { clip, graph })
+        self.wrap_positioned_image_clip(
+            Clip::new("SkSL Clip", start_time, duration),
+            node,
+            [u64::from(canvas_width), u64::from(canvas_height)],
+            [u64::from(canvas_width), u64::from(canvas_height)],
+        )
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {

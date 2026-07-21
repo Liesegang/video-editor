@@ -1,12 +1,31 @@
 use super::ProjectManager;
+use crate::editor::handlers::clip_handler::ClipBundle;
 use crate::error::LibraryError;
-use crate::model::Node;
 use crate::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner, ProjectConnection,
 };
 use crate::model::property::Property;
+use crate::model::{Clip, CompositionInstanceContent, Node};
 
 impl ProjectManager {
+    pub fn create_composition_instance_clip(
+        &self,
+        composition_id: uuid::Uuid,
+        start_time: f64,
+        duration: f64,
+    ) -> Result<ClipBundle, LibraryError> {
+        let source = Node::new_composition_instance(
+            "Composition Instance",
+            CompositionInstanceContent { composition_id },
+        );
+        self.wrap_positioned_av_clip(
+            Clip::new("Composition Instance Clip", start_time, duration),
+            source,
+            [0, 0],
+            [0, 0],
+        )
+    }
+
     fn create_positioned_image_transform_node(
         &self,
         position: [f64; 2],
@@ -59,5 +78,35 @@ impl ProjectManager {
             )],
             Some(transform_id),
         ))
+    }
+
+    pub(super) fn wrap_positioned_image_clip(
+        &self,
+        clip: Clip,
+        source: Node,
+        canvas: [u64; 2],
+        source_size: [u64; 2],
+    ) -> Result<ClipBundle, LibraryError> {
+        Ok(ClipBundle {
+            clip,
+            graph: self.create_image_source_graph(
+                source,
+                canvas[0],
+                canvas[1],
+                source_size[0],
+                source_size[1],
+            )?,
+        })
+    }
+
+    pub(super) fn wrap_positioned_av_clip(
+        &self,
+        mut clip: Clip,
+        source: Node,
+        canvas: [u64; 2],
+        source_size: [u64; 2],
+    ) -> Result<ClipBundle, LibraryError> {
+        clip.audio_output_node_id = Some(source.id);
+        self.wrap_positioned_image_clip(clip, source, canvas, source_size)
     }
 }

@@ -18,9 +18,7 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
-use library::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner, ProjectConnection,
-};
+use library::model::project::NodeGraphBundle;
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
     Asset, AssetKind, Clip, Composition, Node, NodeContainer, NodeContent, Project, Track,
@@ -37,6 +35,7 @@ use uuid::Uuid;
 
 use support::{
     channel_energy, generator_node_for_canvas, media_node_for_canvas, positive_zero_crossings,
+    transformed_image_graph,
 };
 use text_overlay::text_overlay_graph;
 
@@ -103,45 +102,6 @@ fn add_clip_graph(
         .insert_node_graph(NodeContainer::Clip(clip_id), graph)
         .map_err(|error| anyhow!(error))?;
     Ok((clip_id, output_node_id))
-}
-
-fn transformed_image_graph(
-    plugin_manager: &PluginManager,
-    source: Node,
-    position: [f64; 2],
-    anchor: [f64; 2],
-) -> Result<(NodeGraphBundle, Uuid)> {
-    let source_id = source.id;
-    let mut transform = plugin_manager.create_image_transform_operation_node()?;
-    set_declared_property(
-        &mut transform,
-        "position",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(position[0]),
-            y: OrderedFloat(position[1]),
-        }),
-    )?;
-    set_declared_property(
-        &mut transform,
-        "anchor",
-        PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(anchor[0]),
-            y: OrderedFloat(anchor[1]),
-        }),
-    )?;
-    let transform_id = transform.id;
-    Ok((
-        NodeGraphBundle::new(
-            vec![source, transform],
-            vec![ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
-                0,
-            )],
-            Some(transform_id),
-        ),
-        transform_id,
-    ))
 }
 
 #[derive(Clone, Copy)]
