@@ -387,6 +387,38 @@ fn mix_color(base: Color32, tint: Color32, tint_weight: f32) -> Color32 {
     )
 }
 
+pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> Color32 {
+    match data_type {
+        PortDataType::Image => Color32::from_rgb(238, 207, 109),
+        PortDataType::Shape => Color32::from_rgb(142, 132, 246),
+        PortDataType::Audio => Color32::from_rgb(100, 200, 100),
+        PortDataType::String => Color32::from_rgb(100, 220, 220),
+        PortDataType::Path => Color32::from_rgb(100, 150, 255),
+        PortDataType::Numeric | PortDataType::Number | PortDataType::Integer => {
+            Color32::from_rgb(255, 100, 100)
+        }
+        PortDataType::Color => Color32::from_rgb(220, 120, 220),
+        PortDataType::Vec2 => Color32::from_rgb(120, 170, 255),
+        PortDataType::Vec3 => Color32::from_rgb(105, 195, 235),
+        PortDataType::Vec4 => Color32::from_rgb(145, 145, 245),
+        PortDataType::Boolean => Color32::from_rgb(220, 160, 100),
+        PortDataType::Any => Color32::from_rgb(200, 200, 200),
+    }
+}
+
+pub(in crate::ui::panels::node_editor) fn pin_info(
+    data_type: PortDataType,
+    connected: bool,
+) -> PinInfo {
+    let color = pin_color(data_type);
+    let visual = Editor::port_visual_style(color, connected);
+    PinInfo::circle()
+        .with_fill(visual.fill)
+        .with_stroke(visual.stroke)
+        .with_wire_color(visual.wire_color)
+        .with_wire_style(WireStyle::Bezier3)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,36 +452,4 @@ mod tests {
         assert_eq!(selected.body_fill, inactive.body_fill);
         assert_ne!(selected.header_fill, inactive.header_fill);
     }
-}
-
-pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> Color32 {
-    match data_type {
-        PortDataType::Image => Color32::from_rgb(238, 207, 109),
-        PortDataType::Shape => Color32::from_rgb(142, 132, 246),
-        PortDataType::Audio => Color32::from_rgb(100, 200, 100),
-        PortDataType::String => Color32::from_rgb(100, 220, 220),
-        PortDataType::Path => Color32::from_rgb(100, 150, 255),
-        PortDataType::Numeric | PortDataType::Number | PortDataType::Integer => {
-            Color32::from_rgb(255, 100, 100)
-        }
-        PortDataType::Color => Color32::from_rgb(220, 120, 220),
-        PortDataType::Vec2 => Color32::from_rgb(120, 170, 255),
-        PortDataType::Vec3 => Color32::from_rgb(105, 195, 235),
-        PortDataType::Vec4 => Color32::from_rgb(145, 145, 245),
-        PortDataType::Boolean => Color32::from_rgb(220, 160, 100),
-        PortDataType::Any => Color32::from_rgb(200, 200, 200),
-    }
-}
-
-pub(in crate::ui::panels::node_editor) fn pin_info(
-    data_type: PortDataType,
-    connected: bool,
-) -> PinInfo {
-    let color = pin_color(data_type);
-    let visual = Editor::port_visual_style(color, connected);
-    PinInfo::circle()
-        .with_fill(visual.fill)
-        .with_stroke(visual.stroke)
-        .with_wire_color(visual.wire_color)
-        .with_wire_style(WireStyle::Bezier3)
 }
