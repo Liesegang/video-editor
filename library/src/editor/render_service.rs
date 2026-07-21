@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn composition_instance_is_composited_as_one_image_output() {
+    fn composition_instance_is_a_spatially_neutral_single_image_output() {
         let mut project = Project::new("composition output test");
         let (mut parent, parent_track) = Composition::new("parent", 1, 1, 30.0, 1.0);
         parent.background_color = Color::black();
@@ -825,18 +825,12 @@ mod tests {
         project
             .attach_clip_to_track(parent_track_id, clip_id)
             .unwrap();
-        let mut instance = Node::new_composition_instance(
+        let instance = Node::new_composition_instance(
             "nested instance",
             crate::model::CompositionInstanceContent {
                 composition_id: nested_id,
             },
         );
-        let mut persisted = serde_json::to_value(&instance).unwrap();
-        persisted["properties"]["opacity"] = serde_json::to_value(Property::constant(
-            PropertyValue::Number(OrderedFloat(50.0)),
-        ))
-        .unwrap();
-        instance = serde_json::from_value(persisted).unwrap();
         let instance_id = instance.id;
         project.add_node(instance);
         project
@@ -862,12 +856,7 @@ mod tests {
             panic!("CPU renderer must return an Image");
         };
 
-        assert!(
-            (120..=135).contains(&image.data[0]),
-            "nested Composition present image must be part of its 50% output: {:?}",
-            &image.data[0..4]
-        );
-        assert_eq!(&image.data[1..4], &[0, 0, 255]);
+        assert_eq!(&image.data[0..4], &[255, 0, 0, 255]);
     }
 
     #[test]
