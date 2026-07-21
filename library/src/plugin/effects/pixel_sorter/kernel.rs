@@ -323,3 +323,6 @@ fn write_vertical_line(output: &mut [u8], line: &[SortablePixel], x: usize, row_
         output[offset..offset + RGBA8_BYTES_PER_PIXEL].copy_from_slice(&pixel.rgba);
     }
 }
+
+#[cfg(test)]
+mod tests;
