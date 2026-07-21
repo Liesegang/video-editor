@@ -1,4 +1,83 @@
-use super::*;
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow, bail};
+use library::cache::CacheManager;
+use library::editor::project_service::GeneratorNodeRequest;
+use library::framing::get_frame_from_project;
+use library::model::frame::Image;
+use library::model::frame::color::Color;
+use library::model::frame::entity::{FrameGroupKind, FrameItem};
+use library::model::project::{
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortDataType,
+    PortDefinition, PortDirection, PortOwner, Project, ProjectConnection, ProjectGraphError,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+};
+use library::model::property::{Property, PropertyValue};
+use library::model::{BlendMode, Clip, Composition, CompositionInstanceContent, Node};
+use library::plugin::PluginManager;
+use library::rendering::renderer::RenderOutput;
+use library::{RenderService, SkiaRenderer};
+use uuid::Uuid;
+
+use super::graph_support::{
+    add_clip, add_node, address, bind_downstream_merge, find_group, frame, graph_output,
+    object_source_ids, plugin_operation_node, project_with_composition, solid_node,
+    structural_merge_id,
+};
+use super::support::generator_node_for_canvas;
+
+fn colored_solid_node(name: &str, color: Color) -> Node {
+    let mut node = solid_node(name);
+    assert!(
+        node.set_property(
+            "color".to_string(),
+            Property::constant(PropertyValue::Color(color)),
+        )
+        .is_ok(),
+        "solid factory must initialize color"
+    );
+    node
+}
+
+fn preview(project: &Project) -> Result<Image> {
+    let plugins = Arc::new(PluginManager::default());
+    let frame = get_frame_from_project(
+        project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugins.get_property_evaluators(),
+        &plugins,
+    )?;
+    let renderer = SkiaRenderer::new(
+        frame.width as u32,
+        frame.height as u32,
+        frame.background_color.clone(),
+        false,
+        None,
+        None,
+    )?;
+    let mut service = RenderService::new(
+        renderer,
+        Arc::clone(&plugins),
+        Arc::new(CacheManager::new()),
+    );
+    match service.render_from_frame_info(&frame)? {
+        RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
+    }
+}
+
+fn center_pixel(image: &Image) -> [u8; 4] {
+    let index = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
+    [
+        image.data[index],
+        image.data[index + 1],
+        image.data[index + 2],
+        image.data[index + 3],
+    ]
+}
 
 #[test]
 fn text_and_shape_require_style_before_the_clip_can_output_an_image() -> Result<()> {

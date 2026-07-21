@@ -1,4 +1,16 @@
-use super::*;
+use anyhow::{Context, Result, anyhow};
+use library::model::project::{
+    CompositionSettingsError, DURATION_PORT, FPS_PORT, FRAME_PORT, IMAGE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortDataType, PortDefinition, PortDirection,
+    PortOwner, ProjectConnection, ProjectGraphError, SHAPE_OUTPUT_PORT, TIME_PORT,
+};
+use library::model::{Asset, AssetKind, Node, Track};
+use uuid::Uuid;
+
+use super::graph_support::{
+    add_clip, add_node, address, graph_output, plugin_operation_node, project_with_composition,
+    solid_node,
+};
 
 #[test]
 fn descendant_value_cannot_override_ancestor_scope_but_internal_metadata_can_feed_child()

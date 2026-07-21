@@ -1,4 +1,41 @@
-use super::*;
+use anyhow::{Context, Result, anyhow};
+use library::model::project::{
+    DURATION_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortDataType,
+    PortDefinition, PortOwner, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT,
+    TIME_PORT,
+};
+use library::model::{BlendMode, Composition, Node, Track};
+use uuid::Uuid;
+
+use super::graph_support::{
+    add_clip, add_node, address, bind_downstream_merge, frame, frame_for_composition, graph_output,
+    plugin_operation_node, project_with_composition, solid_node, structural_merge_id,
+};
+
+fn container_owner(container: NodeContainer) -> PortOwner {
+    match container {
+        NodeContainer::Composition(id) => PortOwner::Composition(id),
+        NodeContainer::Track(id) => PortOwner::Track(id),
+        NodeContainer::Clip(id) => PortOwner::Clip(id),
+    }
+}
+
+fn container_output(project: &Project, container: NodeContainer) -> Result<Option<Uuid>> {
+    match container {
+        NodeContainer::Composition(id) => Ok(project
+            .get_composition(id)
+            .with_context(|| format!("Composition {id} must exist"))?
+            .output_node_id),
+        NodeContainer::Track(id) => Ok(project
+            .get_track(id)
+            .with_context(|| format!("Track {id} must exist"))?
+            .output_node_id),
+        NodeContainer::Clip(id) => Ok(project
+            .get_clip(id)
+            .with_context(|| format!("Clip {id} must exist"))?
+            .output_node_id),
+    }
+}
 
 #[test]
 fn attaching_a_node_to_any_missing_container_is_atomic() -> Result<()> {

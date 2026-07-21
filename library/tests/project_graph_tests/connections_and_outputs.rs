@@ -1,4 +1,17 @@
-use super::*;
+use anyhow::{Context, Result, anyhow};
+use library::model::frame::entity::FrameItem;
+use library::model::project::{
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortDirection,
+    PortMultiplicity, PortOwner, Project, ProjectGraphError,
+};
+use library::model::{Node, Track};
+use library::plugin::PluginManager;
+use uuid::Uuid;
+
+use super::graph_support::{
+    add_clip, add_node, address, connect_source_to_structural_merge, find_group, frame,
+    object_source_ids, project_with_composition, solid_node, structural_merge_id,
+};
 
 #[test]
 fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip() -> Result<()> {

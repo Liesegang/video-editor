@@ -1,4 +1,14 @@
-use super::*;
+use anyhow::{Context, Result};
+use library::model::Track;
+use library::model::project::{
+    AUDIO_OUTPUT_PORT, DURATION_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    NodeContainer, PortDataType, PortDirection, PortExposure, PortOwner, PortSide,
+    ProjectGraphError, RESOLUTION_PORT, TIME_PORT,
+};
+use library::plugin::PluginManager;
+
+use super::graph_support::{add_clip, add_node, address, project_with_composition, solid_node};
+use super::support::assert_external_container_output;
 
 #[test]
 fn container_ports_separate_authored_inputs_from_read_only_runtime_outputs() -> Result<()> {

@@ -1,4 +1,29 @@
-use super::*;
+use anyhow::{Context, Result, anyhow, bail};
+use library::animation::EasingFunction;
+use library::model::project::{
+    DURATION_PORT, FPS_PORT, FRAME_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
+    NodeGraphBundle, PortDataType, PortDefinition, PortDirection, PortOwner, Project,
+    ProjectConnection, ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    TIME_PORT,
+};
+use library::model::property::{Keyframe, Property, PropertyValue};
+use library::model::{BlendMode, Node, NodeContent};
+use ordered_float::OrderedFloat;
+use uuid::Uuid;
+
+use super::graph_support::{
+    add_clip, add_node, address, frame, graph_output, plugin_operation_node,
+    project_with_composition, rewrite_persisted_node, solid_node,
+};
+
+fn insert_persisted_property(node: &mut Node, key: &str, property: Property) {
+    let encoded_property = serde_json::to_value(property);
+    assert!(encoded_property.is_ok(), "test Property must serialize");
+    let encoded_property = encoded_property.unwrap_or(serde_json::Value::Null);
+    rewrite_persisted_node(node, |encoded| {
+        encoded["properties"][key] = encoded_property;
+    });
+}
 
 #[test]
 fn direct_pre_v1_schema_roundtrips_without_version_or_legacy_node_timing() -> Result<()> {
