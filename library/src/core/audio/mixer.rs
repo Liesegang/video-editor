@@ -430,4 +430,6 @@ pub fn render_samples(
 #[cfg(test)]
 mod composition_instance_tests;
 #[cfg(test)]
+mod sound_merge_tests;
+#[cfg(test)]
 mod tests;

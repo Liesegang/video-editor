@@ -135,6 +135,7 @@ impl Project {
                             })
                         }
                         NodeContent::Value(_) => None,
+                        NodeContent::SoundMerge => None,
                     }
                 } else {
                     None

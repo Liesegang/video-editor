@@ -57,11 +57,6 @@ pub(in crate::ui::panels::node_editor) enum RenderedEdgeKind {
         node_id: Uuid,
         data_type: PortDataType,
     },
-    DerivedOutput {
-        owner: PortOwner,
-        source: PortOwner,
-        data_type: PortDataType,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +70,6 @@ impl RenderedEdgeKind {
         match self {
             Self::ProjectConnection { .. } => "explicit",
             Self::OutputBinding { .. } => "output_binding",
-            Self::DerivedOutput { .. } => "derived_output",
         }
     }
 
@@ -95,21 +89,18 @@ impl RenderedEdgeKind {
                 node_id,
                 data_type,
             }),
-            Self::DerivedOutput { .. } => None,
         }
     }
 
     pub(in crate::ui::panels::node_editor) fn connection_id(self) -> Option<Uuid> {
         match self {
             Self::ProjectConnection { connection_id } => Some(connection_id),
-            Self::OutputBinding { .. } | Self::DerivedOutput { .. } => None,
+            Self::OutputBinding { .. } => None,
         }
     }
 
     pub(in crate::ui::panels::node_editor) fn blocked_reason(self) -> Option<&'static str> {
-        matches!(self, Self::DerivedOutput { .. }).then_some(
-            "Derived wire follows authoritative containment; reparent or remove the child instead",
-        )
+        None
     }
 }
 

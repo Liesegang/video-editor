@@ -384,7 +384,6 @@ fn surface_wire(
             ),
             PortAddress::new(owner, container_output_binding_port(data_type)?),
         ),
-        RenderedEdgeKind::DerivedOutput { .. } => return None,
     };
     let from = find_port(ports, &from_address, PortDirection::Output, None)?
         .id

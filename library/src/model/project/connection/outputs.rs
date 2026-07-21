@@ -23,10 +23,10 @@ pub struct ContainerImageSource {
 /// This is a derived graph projection, not persisted project state.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ContainerAudioSourceKind {
-    /// The container's `audio_output_node_id` selects one directly contained Node.
+    /// The container's `audio_output_node_id` selects one directly contained
+    /// Node; Track and Composition bindings must remain downstream of their
+    /// canonical structural Sound Merge.
     OutputBinding,
-    /// No audio output binding exists, so ordered direct child containers mix.
-    DerivedChild,
 }
 
 /// One ordered dependency of a Composition, Track, or Clip audio output.
@@ -48,7 +48,11 @@ impl Project {
         }
     }
 
-    pub(super) fn container_directly_contains_node(&self, owner: PortOwner, node_id: Uuid) -> bool {
+    pub(in crate::model::project) fn container_directly_contains_node(
+        &self,
+        owner: PortOwner,
+        node_id: Uuid,
+    ) -> bool {
         match owner {
             PortOwner::Composition(id) => self
                 .get_composition(id)
@@ -73,15 +77,11 @@ impl Project {
 
     /// Return the authoritative, ordered audio dependencies for a container.
     ///
-    /// An explicit Audio binding replaces fallback mixing. Without one, a
-    /// Composition derives from ordered Tracks and a Track derives from
-    /// ordered Clips. A Clip with no binding has a stable typed Audio port
-    /// whose runtime value is NoOutput.
+    /// Track and Composition children enter the output only through their
+    /// canonical structural Sound Merge. A Clip has one explicit typed output
+    /// binding. Missing or malformed bindings produce NoOutput; there is no
+    /// hidden child-mixing fallback.
     pub fn container_audio_sources(&self, owner: PortOwner) -> Vec<ContainerAudioSource> {
-        let derived = |source| ContainerAudioSource {
-            source,
-            kind: ContainerAudioSourceKind::DerivedChild,
-        };
         let bound = |node_id| {
             vec![ContainerAudioSource {
                 source: PortOwner::Node(node_id),
@@ -89,7 +89,7 @@ impl Project {
             }]
         };
 
-        let (container, output_node_id) = match owner {
+        let (container, output_node_id, requires_structural_merge) = match owner {
             PortOwner::Composition(id) => {
                 let Some(composition) = self.get_composition(id) else {
                     return Vec::new();
@@ -97,34 +97,42 @@ impl Project {
                 (
                     NodeContainer::Composition(id),
                     composition.audio_output_node_id,
+                    true,
                 )
             }
             PortOwner::Track(id) => {
                 let Some(track) = self.get_track(id) else {
                     return Vec::new();
                 };
-                (NodeContainer::Track(id), track.audio_output_node_id)
+                (NodeContainer::Track(id), track.audio_output_node_id, true)
             }
             PortOwner::Clip(id) => {
                 let Some(clip) = self.get_clip(id) else {
                     return Vec::new();
                 };
-                (NodeContainer::Clip(id), clip.audio_output_node_id)
+                (NodeContainer::Clip(id), clip.audio_output_node_id, false)
             }
             PortOwner::Node(_) => return Vec::new(),
         };
-        if let Some(output_node_id) = output_node_id {
-            if !self.container_directly_contains_node(owner, output_node_id) {
-                return Vec::new();
-            }
-            return bound(output_node_id);
+        if requires_structural_merge && !self.structural_sound_merge_is_well_formed(container) {
+            return Vec::new();
         }
-
-        self.direct_child_owners(container)
-            .into_iter()
-            .filter(|source| self.owner_has_audio_output(*source))
-            .map(derived)
-            .collect()
+        let Some(output_node_id) = output_node_id else {
+            return Vec::new();
+        };
+        if !self.container_directly_contains_node(owner, output_node_id) {
+            return Vec::new();
+        }
+        if requires_structural_merge
+            && !self.structural_sound_merge_reaches_output(
+                container,
+                output_node_id,
+                &self.connections,
+            )
+        {
+            return Vec::new();
+        }
+        bound(output_node_id)
     }
 
     pub(super) fn container_image_sources_with_connections(
@@ -179,34 +187,6 @@ impl Project {
             return Vec::new();
         }
         bound(output_node_id)
-    }
-
-    fn direct_child_owners(&self, container: NodeContainer) -> Vec<PortOwner> {
-        match container {
-            NodeContainer::Composition(id) => self
-                .get_composition(id)
-                .map(|composition| {
-                    composition
-                        .track_ids
-                        .iter()
-                        .copied()
-                        .map(PortOwner::Track)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            NodeContainer::Track(id) => self
-                .get_track(id)
-                .map(|track| {
-                    track
-                        .clip_ids
-                        .iter()
-                        .copied()
-                        .map(PortOwner::Clip)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            NodeContainer::Clip(_) => Vec::new(),
-        }
     }
 
     pub(super) fn owner_has_image_output(&self, owner: PortOwner) -> bool {

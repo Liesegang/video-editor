@@ -330,10 +330,18 @@ mod tests {
             .get_track(track_id)
             .unwrap()
             .structural_merge_node_id;
+        let track_sound_merge_id = project
+            .get_track(track_id)
+            .unwrap()
+            .structural_sound_merge_node_id;
         let composition_merge_id = project
             .get_composition(composition_id)
             .unwrap()
             .structural_merge_node_id;
+        let composition_sound_merge_id = project
+            .get_composition(composition_id)
+            .unwrap()
+            .structural_sound_merge_node_id;
         for (owner, image_source, audio_source) in [
             (
                 PortOwner::Clip(clip_id),
@@ -343,18 +351,12 @@ mod tests {
             (
                 PortOwner::Track(track_id),
                 GraphItem::Node(track_merge_id),
-                GraphItem::PortAnchor {
-                    owner: PortOwner::Clip(clip_id),
-                    kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
-                },
+                GraphItem::Node(track_sound_merge_id),
             ),
             (
                 PortOwner::Composition(composition_id),
                 GraphItem::Node(composition_merge_id),
-                GraphItem::PortAnchor {
-                    owner: PortOwner::Track(track_id),
-                    kind: crate::ui::panels::node_editor::PortAnchorKind::ExternalOutputs,
-                },
+                GraphItem::Node(composition_sound_merge_id),
             ),
         ] {
             let sink = GraphItem::PortAnchor {

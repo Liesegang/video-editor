@@ -351,11 +351,6 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     let screen_points = [start, control_a, control_b, end];
     if let Some(overview) = overview {
         if let Some(graph_points) = overview_wire_graph_points(screen_points, overview.to_global) {
-            let width = if matches!(edge.kind, RenderedEdgeKind::DerivedOutput { .. }) {
-                1.15
-            } else {
-                1.65
-            };
             overview
                 .painter
                 .add(egui::epaint::CubicBezierShape::from_points_stroke(
@@ -363,7 +358,7 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
                     false,
                     Color32::TRANSPARENT,
                     egui::Stroke::new(
-                        screen_stroke_in_graph_units(width, overview.to_global.scaling),
+                        screen_stroke_in_graph_units(1.65, overview.to_global.scaling),
                         edge.wire_color.gamma_multiply(0.9),
                     ),
                 ));
@@ -393,22 +388,9 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         ),
         _ => (None, None, None),
     };
-    let (derived_owner, derived_source, derived_output_type) = match edge.kind {
-        RenderedEdgeKind::DerivedOutput {
-            owner,
-            source,
-            data_type,
-        } => (
-            Some(qa_container_key(owner)),
-            Some(qa_container_key(source)),
-            container_output_type_key(data_type),
-        ),
-        _ => (None, None, None),
-    };
     let action = match edge.kind {
         RenderedEdgeKind::ProjectConnection { .. } => Some("select_or_edit"),
         RenderedEdgeKind::OutputBinding { .. } => Some("delete_output_binding"),
-        RenderedEdgeKind::DerivedOutput { .. } => None,
     };
     #[cfg(test)]
     capture_test_rect(&edge.id, qa_rect);
@@ -426,9 +408,6 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "binding_owner": binding_owner,
             "binding_node_id": binding_node_id,
             "binding_output_type": binding_output_type,
-            "derived_owner": derived_owner,
-            "derived_source": derived_source,
-            "derived_output_type": derived_output_type,
             "from": {
                 "owner": qa_container_key(edge.from.owner),
                 "port": edge.from.port,

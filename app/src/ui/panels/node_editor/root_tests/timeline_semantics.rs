@@ -32,7 +32,8 @@ fn moving_composition_moves_track_clip_and_nodes_without_changing_containment() 
         project.get_clip(clip_id).unwrap().node_ids,
         original_node_ids
     );
-    assert_eq!(project.connections.len(), 4);
+    assert_eq!(project.connections.len(), 6);
+    assert!(project.validate_connections().is_empty());
 }
 
 #[test]
@@ -419,9 +420,17 @@ fn deleting_a_clip_removes_only_its_owned_leaf_nodes() {
         .get_track(track_id)
         .unwrap()
         .structural_merge_node_id;
-    assert_eq!(project.connections.len(), 1);
+    let track_sound_merge_id = project
+        .get_track(track_id)
+        .unwrap()
+        .structural_sound_merge_node_id;
+    assert_eq!(project.connections.len(), 2);
     assert!(project.connections.iter().all(|connection| {
         connection.from.owner == PortOwner::Track(track_id)
-            || connection.to.owner == PortOwner::Node(track_merge_id)
+            || matches!(
+                connection.to.owner,
+                PortOwner::Node(id) if id == track_merge_id || id == track_sound_merge_id
+            )
     }));
+    assert!(project.validate_connections().is_empty());
 }

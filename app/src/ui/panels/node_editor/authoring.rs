@@ -174,6 +174,14 @@ pub(super) fn create_action_for_request(
         NodeCreateRequest::Merge => Some(Box::new(move |project| {
             create_merge_node(project, graph_position, comp_id)
         })),
+        NodeCreateRequest::SoundMerge => Some(Box::new(move |project| {
+            create_prebuilt_node(
+                project,
+                graph_position,
+                Node::new_sound_merge("Sound Merge"),
+                comp_id,
+            )
+        })),
         NodeCreateRequest::Clip => Some(Box::new(move |project| {
             create_clip_at_free_slot(project, graph_position, comp_id, "Clip").is_some()
         })),

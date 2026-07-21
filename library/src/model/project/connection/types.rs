@@ -7,6 +7,8 @@ pub const IMAGE_OUTPUT_PORT: &str = "image";
 pub const AUDIO_OUTPUT_PORT: &str = "audio";
 pub const IMAGE_INPUT_PORT: &str = "image_in";
 pub const MERGE_IMAGES_PORT: &str = "images";
+/// Ordered variadic Sound input used by native Sound Merge Nodes.
+pub const MERGE_SOUNDS_PORT: &str = "sounds";
 pub const SHAPE_OUTPUT_PORT: &str = "shape";
 pub const SHAPE_INPUT_PORT: &str = "shape_in";
 /// Separately addressed geometry template used by two-Shape operations such

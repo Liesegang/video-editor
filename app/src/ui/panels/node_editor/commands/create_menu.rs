@@ -26,6 +26,7 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
     Decorator(String),
     Effect(String),
     Merge,
+    SoundMerge,
     Clip,
     Track,
     Composition,
@@ -47,6 +48,7 @@ impl NodeCreateRequest {
             Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
             Self::Merge => "merge",
+            Self::SoundMerge => "sound_merge",
             Self::Clip => "clip",
             Self::Track => "track",
             Self::Composition => "composition",
@@ -245,6 +247,13 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
             NodeCreateRequest::Merge,
         ),
         node_create_menu_item(
+            "Sound Merge",
+            "Sound",
+            ["sound", "audio", "merge", "mix", "layers"],
+            "node_editor.menu.create.sound_merge",
+            NodeCreateRequest::SoundMerge,
+        ),
+        node_create_menu_item(
             "Container (Clip)",
             "Containers",
             ["clip", "container", "timeline"],
@@ -435,6 +444,7 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
             plugin_manager.create_effect_operation_node(effect_id)
         }
         NodeCreateRequest::Merge => return Some(Node::new_merge("Merge")),
+        NodeCreateRequest::SoundMerge => return Some(Node::new_sound_merge("Sound Merge")),
         NodeCreateRequest::Value(value) => return Some(Node::new_value(value.label(), *value)),
         NodeCreateRequest::Text
         | NodeCreateRequest::Solid

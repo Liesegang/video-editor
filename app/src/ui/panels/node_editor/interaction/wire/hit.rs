@@ -244,30 +244,6 @@ pub(in crate::ui::panels::node_editor) fn rendered_container_output_at_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::model::project::PortDataType;
-
-    #[test]
-    fn derived_wire_secondary_hit_is_display_only_instead_of_blank_canvas() {
-        let derived = RenderedEdge {
-            kind: crate::ui::panels::node_editor::RenderedEdgeKind::DerivedOutput {
-                owner: PortOwner::Track(Uuid::from_u128(0xD001)),
-                source: PortOwner::Clip(Uuid::from_u128(0xD002)),
-                data_type: PortDataType::Image,
-            },
-            start: egui::pos2(100.0, 180.0),
-            control_a: egui::pos2(180.0, 180.0),
-            control_b: egui::pos2(320.0, 180.0),
-            end: egui::pos2(400.0, 180.0),
-        };
-        let hit_point = egui::pos2(250.0, 180.0);
-
-        assert_eq!(
-            wire_secondary_click_hit(&[derived], hit_point),
-            Some(WireSecondaryClickHit::DisplayOnly)
-        );
-        assert_eq!(wire_secondary_click_hit(&[], hit_point), None);
-    }
-
     #[test]
     fn wire_knife_detects_midspan_intersection_of_long_segments() {
         let knife_start = egui::pos2(10.0, -1_000.0);

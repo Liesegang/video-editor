@@ -573,13 +573,15 @@ fn node_metadata(
             diagnostic: None,
             unavailable_reason: None,
         },
-        NodeContent::CompositionInstance(_) | NodeContent::Merge => NodeMetadata {
-            label: node.name.clone(),
-            group: SemanticPropertyGroup::Source,
-            definitions: Vec::new(),
-            diagnostic: None,
-            unavailable_reason: None,
-        },
+        NodeContent::CompositionInstance(_) | NodeContent::Merge | NodeContent::SoundMerge => {
+            NodeMetadata {
+                label: node.name.clone(),
+                group: SemanticPropertyGroup::Source,
+                definitions: Vec::new(),
+                diagnostic: None,
+                unavailable_reason: None,
+            }
+        }
     }
 }
 

@@ -6,7 +6,8 @@ use super::property_evaluation::{AudioPropertyContext, volume_at};
 use crate::core::framing::FrameEvaluator;
 use crate::model::NodeContent;
 use crate::model::project::{
-    Composition, EvalOutput, NodeContainer, PortDataType, PortDirection, PortOwner, Project,
+    AUDIO_OUTPUT_PORT, Composition, EvalOutput, MERGE_SOUNDS_PORT, NodeContainer, PortDataType,
+    PortDirection, PortOwner, Project,
 };
 use crate::model::property::PropertyMap;
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
@@ -60,6 +61,22 @@ impl<'a> AudioGraphEvaluator<'a> {
         plugin_manager: &'a PluginManager,
         property_evaluators: &'a PropertyEvaluatorRegistry,
     ) -> Self {
+        Self::new_for_owner(
+            project,
+            composition,
+            PortOwner::Composition(composition.id),
+            plugin_manager,
+            property_evaluators,
+        )
+    }
+
+    pub(super) fn new_for_owner(
+        project: &'a Project,
+        composition: &'a Composition,
+        root_owner: PortOwner,
+        plugin_manager: &'a PluginManager,
+        property_evaluators: &'a PropertyEvaluatorRegistry,
+    ) -> Self {
         let property_contexts = project
             .compositions
             .iter()
@@ -74,7 +91,7 @@ impl<'a> AudioGraphEvaluator<'a> {
                 )
             })
             .collect();
-        let routes = plan_audio_routes(project, PortOwner::Composition(composition.id));
+        let routes = plan_audio_routes(project, root_owner);
         Self {
             frame_evaluator: FrameEvaluator::new(
                 project,
@@ -252,17 +269,56 @@ fn collect_audio_routes<'a>(
                         }
                     }
                     NodeContent::PluginOperation(operation) => {
-                        // Audio operations need a runtime evaluator. Never
-                        // reinterpret their inputs as an implicit sum or
-                        // pass-through.
-                        log::trace!(
-                            "audio mixer skipped unsupported PluginOperation {} ({}/{})",
-                            node.id,
-                            operation.category,
-                            operation.component_id
-                        );
+                        if node.bypassed {
+                            let source = node
+                                .bypass_input_for_output(AUDIO_OUTPUT_PORT)
+                                .and_then(|input| {
+                                    project.connections.iter().find(|connection| {
+                                        connection.to.owner == owner && connection.to.port == input
+                                    })
+                                })
+                                .map(|connection| connection.from.owner);
+                            if let Some(source) = source {
+                                collect_audio_routes(project, source, path, steps, emitted, routes);
+                            }
+                        } else {
+                            // Audio operations need a runtime evaluator.
+                            // Never reinterpret an unavailable operation as
+                            // an implicit pass-through unless it is authored
+                            // in bypass state.
+                            log::trace!(
+                                "audio mixer skipped unsupported PluginOperation {} ({}/{})",
+                                node.id,
+                                operation.category,
+                                operation.component_id
+                            );
+                        }
                     }
-                    NodeContent::Generator(_) | NodeContent::Value(_) | NodeContent::Merge => {}
+                    NodeContent::SoundMerge => {
+                        let mut inputs = project
+                            .connections
+                            .iter()
+                            .filter(|connection| {
+                                connection.to.owner == owner
+                                    && connection.to.port == MERGE_SOUNDS_PORT
+                            })
+                            .collect::<Vec<_>>();
+                        inputs.sort_by_key(|connection| (connection.order, connection.id));
+                        let input_count = if node.bypassed { 1 } else { inputs.len() };
+                        for connection in inputs.into_iter().take(input_count) {
+                            collect_audio_routes(
+                                project,
+                                connection.from.owner,
+                                path,
+                                steps,
+                                emitted,
+                                routes,
+                            );
+                        }
+                    }
+                    NodeContent::Generator(_)
+                    | NodeContent::Value(_)
+                    | NodeContent::Merge => {}
                 }
             }
         }

@@ -22,10 +22,10 @@ pub use connection::{
     AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, ContainerAudioSource, ContainerAudioSourceKind,
     ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
     EvalOutput, EvalResult, EvaluationError, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
-    FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
-    NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress, PortDataType, PortDefinition,
-    PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
-    RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
+    NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress,
+    PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
+    PortSide, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 pub use error::ProjectGraphError;
 
@@ -126,6 +126,8 @@ pub struct Composition {
     /// image outputs. This required annotation is independent from the
     /// editable downstream output binding.
     pub structural_merge_node_id: Uuid,
+    /// Stable native Sound Merge receiving direct Track Sound outputs.
+    pub structural_sound_merge_node_id: Uuid,
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
     /// Explicit graph result for the Composition audio output. This is
@@ -195,6 +197,7 @@ impl Composition {
     pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, Track) {
         let first_track = Track::new("Track 1");
         let structural_merge_node_id = Uuid::new_v4();
+        let structural_sound_merge_node_id = Uuid::new_v4();
         (
             Self {
                 id: Uuid::new_v4(),
@@ -210,10 +213,11 @@ impl Composition {
                 blend_mode: BlendMode::Normal,
                 properties: PropertyMap::new(),
                 track_ids: vec![first_track.id],
-                node_ids: vec![structural_merge_node_id],
+                node_ids: vec![structural_merge_node_id, structural_sound_merge_node_id],
                 structural_merge_node_id,
+                structural_sound_merge_node_id,
                 output_node_id: Some(structural_merge_node_id),
-                audio_output_node_id: None,
+                audio_output_node_id: Some(structural_sound_merge_node_id),
                 ui_position: [0.0, 0.0],
                 ui_size: default_composition_ui_size(),
                 ui_collapsed: false,

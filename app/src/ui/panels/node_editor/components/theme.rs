@@ -99,6 +99,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(68, 70, 79),
             accent: Color32::from_rgb(177, 182, 198),
         },
+        Some(NodeContent::SoundMerge) => NodePalette {
+            body: Color32::from_rgb(38, 33, 48),
+            header: Color32::from_rgb(76, 55, 104),
+            accent: Color32::from_rgb(190, 145, 229),
+        },
     }
 }
 
@@ -147,6 +152,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
         },
         Some(NodeContent::Merge) => NodeEditorIcon::new(icons::ARROWS_MERGE, "Merge operation"),
+        Some(NodeContent::SoundMerge) => {
+            NodeEditorIcon::new(icons::WAVEFORM, "Sound Merge operation")
+        }
         None => NodeEditorIcon::new(icons::QUESTION, "Missing node"),
     }
 }

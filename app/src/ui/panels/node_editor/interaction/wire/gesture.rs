@@ -419,7 +419,6 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
             RenderedEdgeKind::OutputBinding { .. } => Some(
                 "Container output binding. Drag its source endpoint to rebind; right-click or use the Alt knife to clear it.",
             ),
-            RenderedEdgeKind::DerivedOutput { .. } => edge.kind.blocked_reason(),
             RenderedEdgeKind::ProjectConnection { .. } => None,
         };
         if let Some(hover_text) = hover_text {
@@ -430,9 +429,6 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                 egui::Sense::hover(),
             )
             .on_hover_text(hover_text);
-            if matches!(edge.kind, RenderedEdgeKind::DerivedOutput { .. }) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-            }
         }
     }
 
