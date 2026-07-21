@@ -36,6 +36,7 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
         | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
         Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
         Some(NodeContent::PluginOperation(_)) => 260.0,
+        Some(NodeContent::NativeOperation(_)) => 260.0,
         Some(NodeContent::Merge | NodeContent::SoundMerge) => {
             let layer_count = merge_layer_rows(project, node_id).len();
             (166.0 + layer_count as f32 * 82.0).max(220.0)

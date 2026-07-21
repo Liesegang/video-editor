@@ -15,7 +15,7 @@ use crate::model::project::{
     NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, Project,
 };
 use crate::model::property::{Property, PropertyDefinition, PropertyUiType, PropertyValue};
-use crate::model::{GeneratorContent, Node, NodeContent};
+use crate::model::{GeneratorContent, Node, NodeContent, native_node_descriptor};
 use crate::plugin::{
     DECORATOR_CATEGORY, EFFECT_CATEGORY, EFFECTOR_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
     IMAGE_TRANSFORM_COMPONENT_ID, SHAPE_TRANSFORM_COMPONENT_ID, STYLE_CATEGORY, TRANSFORM_CATEGORY,
@@ -580,6 +580,20 @@ fn node_metadata(
             diagnostic: None,
             unavailable_reason: None,
         },
+        NodeContent::NativeOperation(operation) => {
+            let descriptor = native_node_descriptor(&operation.catalog_id);
+            let reason = descriptor
+                .and_then(|descriptor| descriptor.runtime_diagnostic())
+                .unwrap_or_else(|| format!("Unknown native catalog id '{}'", operation.catalog_id));
+            NodeMetadata {
+                label: descriptor
+                    .map_or_else(|| node.name.clone(), |item| item.label().to_string()),
+                group: SemanticPropertyGroup::Other,
+                definitions: Vec::new(),
+                diagnostic: Some(reason.clone()),
+                unavailable_reason: Some(reason),
+            }
+        }
         NodeContent::CompositionInstance(_) | NodeContent::Merge | NodeContent::SoundMerge => {
             NodeMetadata {
                 label: node.name.clone(),

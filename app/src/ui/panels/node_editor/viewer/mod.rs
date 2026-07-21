@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::{ContainerVisual, QueuedNodeEdit, RenderedPortKey, SurfaceCapture};
 
 mod body;
+mod native_operation;
 mod selection;
 mod snarl;
 

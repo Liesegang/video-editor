@@ -24,10 +24,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         _outputs: &[OutPin],
         _snarl: &Snarl<GraphItem>,
     ) -> NodeLayout {
-        // Coil keeps inputs on the left and outputs on the right. Each side is
-        // a top-down list, so pins remain one-per-row without turning the data
-        // flow into a top-to-bottom graph. Width is bounded by the label/body
-        // helpers below instead of changing pin sides.
+        // Coil keeps inputs left and outputs right in top-down lists. Pins remain
+        // one-per-row without changing graph flow; label/body helpers bound width
+        // without changing pin sides.
         NodeLayout::coil()
             .with_min_pin_row_height(PORT_ROW_HEIGHT)
             .with_equal_pin_rows()
@@ -668,6 +667,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
+                NodeContent::NativeOperation(_) => self.show_native_body(ui, project_node_id),
                 NodeContent::Media(_)
                 | NodeContent::CompositionInstance(_)
                 | NodeContent::Merge

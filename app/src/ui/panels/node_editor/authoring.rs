@@ -10,74 +10,13 @@ pub(super) fn create_action_for_request(
 ) -> Option<CreateAction> {
     let plugin_manager = project_service.get_plugin_manager();
     match request {
-        NodeCreateRequest::Text => match project_service.create_text_node(
-            "Hello World",
-            library::editor::project_service::DEFAULT_TEXT_FONT,
-            canvas_size.0,
-            canvas_size.1,
-        ) {
-            Ok(node) => Some(Box::new(move |project| {
-                create_prebuilt_node(project, graph_position, node, comp_id)
-            })),
-            Err(error) => {
-                log::error!("Cannot create Text Node: {error}");
-                None
-            }
-        },
-        NodeCreateRequest::Solid => match project_service.create_solid_node(
-            library::model::frame::color::Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            canvas_size.0,
-            canvas_size.1,
-        ) {
-            Ok(node) => Some(Box::new(move |project| {
-                create_prebuilt_node(project, graph_position, node, comp_id)
-            })),
-            Err(error) => {
-                log::error!("Cannot create Solid Node: {error}");
-                None
-            }
-        },
-        NodeCreateRequest::Shape => match project_service.create_shape_node(
-            library::editor::project_service::DEFAULT_SHAPE_PATH,
-            canvas_size.0,
-            canvas_size.1,
-            100,
-            100,
-        ) {
-            Ok(node) => Some(Box::new(move |project| {
-                create_prebuilt_node(project, graph_position, node, comp_id)
-            })),
-            Err(error) => {
-                log::error!("Cannot create Shape Node: {error}");
-                None
-            }
-        },
-        NodeCreateRequest::SkSL => match project_service.create_sksl_node(
-            library::editor::project_service::DEFAULT_SKSL_SHADER,
-            canvas_size.0,
-            canvas_size.1,
-        ) {
-            Ok(node) => Some(Box::new(move |project| {
-                create_prebuilt_node(project, graph_position, node, comp_id)
-            })),
-            Err(error) => {
-                log::error!("Cannot create SkSL Node: {error}");
-                None
-            }
-        },
-        NodeCreateRequest::Value(value) => Some(Box::new(move |project| {
-            create_prebuilt_node(
-                project,
-                graph_position,
-                Node::new_value(value.label(), value),
-                comp_id,
-            )
-        })),
+        NodeCreateRequest::Native(catalog_id) => create_native_action(
+            &catalog_id,
+            project_service,
+            canvas_size,
+            graph_position,
+            comp_id,
+        ),
         transform_request @ (NodeCreateRequest::ShapeTransform
         | NodeCreateRequest::ImageTransform) => {
             let node =
@@ -171,9 +110,6 @@ pub(super) fn create_action_for_request(
                 }
             }
         }
-        NodeCreateRequest::Merge => Some(Box::new(move |project| {
-            create_merge_node(project, graph_position, comp_id)
-        })),
         NodeCreateRequest::SoundMerge => Some(Box::new(move |project| {
             create_prebuilt_node(
                 project,
@@ -199,6 +135,68 @@ pub(super) fn create_action_for_request(
         NodeCreateRequest::Composition => Some(Box::new(move |project| {
             create_composition_node(project, graph_position, comp_id)
         })),
+    }
+}
+
+fn create_native_action(
+    catalog_id: &str,
+    project_service: &EditorService,
+    canvas_size: (u64, u64),
+    graph_position: egui::Pos2,
+    comp_id: Uuid,
+) -> Option<CreateAction> {
+    use library::model::{native_node_descriptor, GeneratorContent, NativeNodeFactory};
+
+    let descriptor = native_node_descriptor(catalog_id)?;
+    let result = match descriptor.factory() {
+        NativeNodeFactory::Generator(GeneratorContent::Text) => project_service.create_text_node(
+            "Hello World",
+            library::editor::project_service::DEFAULT_TEXT_FONT,
+            canvas_size.0,
+            canvas_size.1,
+        ),
+        NativeNodeFactory::Generator(GeneratorContent::Solid) => project_service.create_solid_node(
+            library::model::frame::color::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            canvas_size.0,
+            canvas_size.1,
+        ),
+        NativeNodeFactory::Generator(GeneratorContent::Shape) => project_service.create_shape_node(
+            library::editor::project_service::DEFAULT_SHAPE_PATH,
+            canvas_size.0,
+            canvas_size.1,
+            100,
+            100,
+        ),
+        NativeNodeFactory::Generator(GeneratorContent::SkSL) => project_service.create_sksl_node(
+            library::editor::project_service::DEFAULT_SKSL_SHADER,
+            canvas_size.0,
+            canvas_size.1,
+        ),
+        NativeNodeFactory::Value(_)
+        | NativeNodeFactory::Merge
+        | NativeNodeFactory::TypedPlaceholder => descriptor
+            .create_detached_node()
+            .map_err(library::error::LibraryError::Validation),
+    };
+    match result {
+        Ok(mut node) => {
+            node.name = descriptor.label().to_string();
+            Some(Box::new(move |project| {
+                create_prebuilt_node(project, graph_position, node, comp_id)
+            }))
+        }
+        Err(error) => {
+            log::error!(
+                "Cannot create native catalog Node '{}': {error}",
+                descriptor.catalog_id()
+            );
+            None
+        }
     }
 }
 
@@ -594,14 +592,6 @@ pub(super) fn create_composition_node(
     } else {
         false
     }
-}
-
-pub(super) fn create_merge_node(
-    project: &mut Project,
-    position: egui::Pos2,
-    comp_id: Uuid,
-) -> bool {
-    create_prebuilt_node(project, position, Node::new_merge("Merge"), comp_id)
 }
 
 pub(super) fn attach_node_at_position(

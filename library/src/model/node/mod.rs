@@ -13,8 +13,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
+mod catalog;
 mod containers;
 mod sound_analysis;
+pub use catalog::{
+    NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
+    native_node_descriptor, native_node_descriptor_for_node,
+};
 pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
@@ -536,6 +541,14 @@ impl Node {
         )
     }
 
+    /// Creates a detached native Node from its stable catalog identity.
+    /// Canvas-backed Generators deliberately remain ProjectManager factories.
+    pub fn new_catalog_node(catalog_id: &str) -> Result<Self, String> {
+        let descriptor = native_node_descriptor(catalog_id)
+            .ok_or_else(|| format!("Unknown native Node catalog id '{catalog_id}'"))?;
+        descriptor.create_detached_node()
+    }
+
     pub fn update_property_or_keyframe(
         &mut self,
         property_key: &str,
@@ -612,6 +625,9 @@ pub enum NodeContent {
     /// Native, typed numeric operations. Inputs and outputs remain canonical
     /// Project ports; this variant does not introduce a parallel value model.
     Value(ValueContent),
+    /// A first-party typed operation whose authoring and port contract are
+    /// available, while its runtime may still be explicitly design-needed.
+    NativeOperation(NativeOperationContent),
     /// Ordered variadic image compositor. Input ordering lives on canonical
     /// ProjectConnection::order, never on a UI pin index.
     Merge,
@@ -726,6 +742,14 @@ pub struct PluginOperationContent {
     pub declared_ports: Vec<PortDefinition>,
 }
 
+/// Persisted stable identity for a first-party catalog operation. Its typed
+/// ports and runtime status come from the central native catalog.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOperationContent {
+    pub catalog_id: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct MediaContent {
     pub asset_id: Uuid,
@@ -747,7 +771,7 @@ where
     Option::<usize>::deserialize(deserializer)
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GeneratorContent {
     Shape,
     Text,

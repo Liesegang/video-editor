@@ -299,6 +299,18 @@ pub(super) fn node_display_type(node: &Node) -> String {
             operation.category, operation.operation
         ),
         NodeContent::Value(value) => value.label().to_string(),
+        NodeContent::NativeOperation(operation) => {
+            library::model::native_node_descriptor(&operation.catalog_id).map_or_else(
+                || format!("Native Operation · unknown ({})", operation.catalog_id),
+                |descriptor| {
+                    format!(
+                        "Native Operation · {} · {}",
+                        descriptor.category(),
+                        descriptor.runtime_status().key()
+                    )
+                },
+            )
+        }
         NodeContent::Merge => "Merge".to_string(),
         NodeContent::SoundMerge => "Sound Merge".to_string(),
         NodeContent::SoundAnalysis(analysis) => analysis.label().to_string(),

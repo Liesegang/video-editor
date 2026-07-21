@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
-use crate::model::{BlendMode, NodeContent};
+use crate::model::{BlendMode, NodeContent, native_node_descriptor};
 
 use super::super::{NodeContainer, Project, ProjectGraphError};
 use super::ports::is_graph_connectable_type;
@@ -18,6 +18,7 @@ impl Project {
         let mut errors = self.validate_containment();
         errors.extend(self.validate_composition_instances());
         errors.extend(self.validate_plugin_operation_contracts());
+        errors.extend(self.validate_native_catalog_contracts());
         errors.extend(self.validate_container_output_ports());
         let mut targets: HashMap<&PortAddress, Vec<&ProjectConnection>> = HashMap::new();
         for connection in &self.connections {
@@ -173,6 +174,23 @@ impl Project {
             }
         }
         errors
+    }
+
+    fn validate_native_catalog_contracts(&self) -> Vec<ProjectGraphError> {
+        self.nodes
+            .values()
+            .filter_map(|node| {
+                let NodeContent::NativeOperation(operation) = node.content() else {
+                    return None;
+                };
+                native_node_descriptor(&operation.catalog_id)
+                    .is_none()
+                    .then(|| ProjectGraphError::UnknownNativeCatalogId {
+                        node_id: node.id,
+                        catalog_id: operation.catalog_id.clone(),
+                    })
+            })
+            .collect()
     }
 
     /// Returns structured, serializable diagnostics for the complete

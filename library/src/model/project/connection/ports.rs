@@ -1,12 +1,12 @@
-use crate::model::{GeneratorContent, NodeContent};
+use crate::model::{NodeContent, native_node_descriptor_for_node};
 
 use super::super::Project;
 use super::{
     AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, DURATION_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
     FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
     NUMERIC_A_INPUT_PORT, PortAddress, PortDataType, PortDefinition, PortDirection, PortExposure,
-    PortOwner, PortSide, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT,
-    SPECTRUM_INPUT_PORT, TIME_PORT,
+    PortOwner, PortSide, RESOLUTION_PORT, SHAPE_INPUT_PORT, SOUND_INPUT_PORT, SPECTRUM_INPUT_PORT,
+    TIME_PORT,
 };
 
 fn metadata_catalog(direction: PortDirection, exposure: PortExposure) -> Vec<PortDefinition> {
@@ -90,47 +90,19 @@ fn node_ports(
     };
     let mut include_property_inputs = true;
     match node.content() {
-        NodeContent::Generator(GeneratorContent::Text) => {
-            ports.extend([
-                time_input(),
-                PortDefinition::input("text", "Text", PortDataType::String),
-                PortDefinition::input("font_family", "Font", PortDataType::String),
-                PortDefinition::input("size", "Size", PortDataType::Number),
-            ]);
-            ports.push(PortDefinition::output(
-                SHAPE_OUTPUT_PORT,
-                "Shape",
-                PortDataType::Shape,
-                PortSide::Right,
-                PortExposure::Graph,
-            ));
-        }
-        NodeContent::Generator(GeneratorContent::Solid) => {
-            ports.push(time_input());
-            ports.push(PortDefinition::input("color", "Color", PortDataType::Color));
-            ports.push(image_output());
-        }
-        NodeContent::Generator(GeneratorContent::Shape) => {
-            ports.extend([
-                time_input(),
-                PortDefinition::input("path", "Path", PortDataType::Path),
-            ]);
-            ports.push(PortDefinition::output(
-                SHAPE_OUTPUT_PORT,
-                "Shape",
-                PortDataType::Shape,
-                PortSide::Right,
-                PortExposure::Graph,
-            ));
-        }
-        NodeContent::Generator(GeneratorContent::SkSL) => {
-            ports.push(time_input());
-            ports.push(PortDefinition::input(
-                "shader",
-                "Shader",
-                PortDataType::String,
-            ));
-            ports.push(image_output());
+        NodeContent::Generator(_)
+        | NodeContent::Value(_)
+        | NodeContent::NativeOperation(_)
+        | NodeContent::Merge => {
+            include_property_inputs = false;
+            if let Some(descriptor) = native_node_descriptor_for_node(node) {
+                ports.extend(descriptor.ports().iter().cloned());
+            } else {
+                log::error!(
+                    "Native Node {} has no catalog descriptor; exposing no graph ports",
+                    node.id
+                );
+            }
         }
         NodeContent::Media(_) => {
             ports.push(time_input());
@@ -153,17 +125,6 @@ fn node_ports(
         NodeContent::PluginOperation(operation) => {
             include_property_inputs = false;
             ports.extend(operation.declared_ports.iter().cloned());
-        }
-        NodeContent::Value(value) => {
-            include_property_inputs = false;
-            ports.extend(value.port_definitions().iter().cloned());
-        }
-        NodeContent::Merge => {
-            ports.push(time_input());
-            ports.push(
-                PortDefinition::input(MERGE_IMAGES_PORT, "Images", PortDataType::Image).variadic(),
-            );
-            ports.push(image_output());
         }
         NodeContent::SoundMerge => {
             ports.push(time_input());

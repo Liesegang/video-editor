@@ -187,6 +187,8 @@ pub enum ProjectGraphError {
     },
     #[error("plugin operation node {node_id} has an empty {field} identifier")]
     EmptyPluginOperationIdentifier { node_id: Uuid, field: String },
+    #[error("native operation node {node_id} references unknown catalog id '{catalog_id}'")]
+    UnknownNativeCatalogId { node_id: Uuid, catalog_id: String },
     #[error("plugin operation node {node_id} declares an empty {direction:?} port key")]
     EmptyNodePortKey {
         node_id: Uuid,

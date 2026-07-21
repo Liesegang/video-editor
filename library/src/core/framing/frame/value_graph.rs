@@ -185,6 +185,18 @@ impl FrameEvaluator<'_> {
                 return Ok(EvalOutput::NoOutput);
             }
         }
+        if let Some(NodeContent::NativeOperation(operation)) = source_node.map(Node::content) {
+            let diagnostic = crate::model::native_node_descriptor(&operation.catalog_id)
+                .and_then(|descriptor| descriptor.runtime_diagnostic())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Unknown native catalog id '{}'; evaluation produces No Output",
+                        operation.catalog_id
+                    )
+                });
+            log::warn!("Native catalog node {}: {diagnostic}", source.owner.id());
+            return Ok(EvalOutput::NoOutput);
+        }
         match self.scope_for_owner(source.owner, global_time, path)? {
             EvalOutput::Produced(scope) => scope
                 .value(&source.port)

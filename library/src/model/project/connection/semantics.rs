@@ -123,17 +123,17 @@ impl Project {
                         NodeContent::Media(_)
                         | NodeContent::Generator(_)
                         | NodeContent::CompositionInstance(_) => Some(owner),
-                        NodeContent::PluginOperation(_) | NodeContent::Merge => {
-                            visual_inputs.get(&owner).and_then(|connections| {
-                                connections.iter().find_map(|connection| {
-                                    self.first_authored_visual_source(
-                                        connection.from.owner,
-                                        visual_inputs,
-                                        path,
-                                    )
-                                })
+                        NodeContent::PluginOperation(_)
+                        | NodeContent::NativeOperation(_)
+                        | NodeContent::Merge => visual_inputs.get(&owner).and_then(|connections| {
+                            connections.iter().find_map(|connection| {
+                                self.first_authored_visual_source(
+                                    connection.from.owner,
+                                    visual_inputs,
+                                    path,
+                                )
                             })
-                        }
+                        }),
                         NodeContent::Value(_) => None,
                         NodeContent::SoundMerge => None,
                         NodeContent::SoundAnalysis(_) => None,

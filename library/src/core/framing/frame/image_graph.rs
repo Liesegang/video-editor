@@ -89,6 +89,19 @@ impl FrameEvaluator<'_> {
             path.remove(&owner);
             return Ok(item);
         }
+        if let NodeContent::NativeOperation(operation) = node.content() {
+            let diagnostic = crate::model::native_node_descriptor(&operation.catalog_id)
+                .and_then(|descriptor| descriptor.runtime_diagnostic())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Unknown native catalog id '{}'; evaluation produces No Output",
+                        operation.catalog_id
+                    )
+                });
+            log::warn!("Native catalog node {}: {diagnostic}", node.id);
+            path.remove(&owner);
+            return Ok(EvalOutput::NoOutput);
+        }
         let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
         if inputs
             .properties
@@ -657,6 +670,7 @@ impl FrameEvaluator<'_> {
             NodeContent::CompositionInstance(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),
+            NodeContent::NativeOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Merge => "merge",
             NodeContent::SoundMerge => return Ok(EvalOutput::NoOutput),
             NodeContent::SoundAnalysis(_) => return Ok(EvalOutput::NoOutput),

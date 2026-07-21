@@ -1,6 +1,7 @@
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
 use library::model::{
-    Node, Project, SoundAnalysisContent, ValueContent, SOUND_MERGE_OPERATION_KEY,
+    native_node_catalog, native_node_descriptor, NativeNodeFactory, Node, Project,
+    SoundAnalysisContent, SOUND_MERGE_OPERATION_KEY,
 };
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
@@ -15,19 +16,14 @@ use crate::ui::panels::node_editor::node_can_splice_connection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
-    Text,
-    Solid,
-    Shape,
-    SkSL,
+    Native(String),
     ShapeTransform,
     ImageTransform,
-    Value(ValueContent),
     Style(String),
     Effector(String),
     PathEffect(String),
     Decorator(String),
     Effect(String),
-    Merge,
     SoundMerge,
     SoundAnalysis(SoundAnalysisContent),
     Clip,
@@ -36,21 +32,16 @@ pub(in crate::ui::panels::node_editor) enum NodeCreateRequest {
 }
 
 impl NodeCreateRequest {
-    pub(in crate::ui::panels::node_editor) fn qa_kind(&self) -> &'static str {
+    pub(in crate::ui::panels::node_editor) fn qa_kind(&self) -> &str {
         match self {
-            Self::Text => "text",
-            Self::Solid => "solid",
-            Self::Shape => "shape",
-            Self::SkSL => "sksl",
+            Self::Native(catalog_id) => catalog_id,
             Self::ShapeTransform => "transform",
             Self::ImageTransform => "image_transform",
-            Self::Value(value) => value.operation_key(),
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
             Self::PathEffect(_) => "path_effect",
             Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
-            Self::Merge => "merge",
             Self::SoundMerge => SOUND_MERGE_OPERATION_KEY,
             Self::SoundAnalysis(analysis) => analysis.operation_key(),
             Self::Clip => "clip",
@@ -196,52 +187,34 @@ fn transform_operation_menu_item(
 pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
     plugin_manager: &PluginManager,
 ) -> Vec<SearchableItem<NodeCreateRequest>> {
-    let mut items = vec![
-        node_create_menu_item(
-            "Text",
-            "Generators",
-            ["title", "caption", "shape"],
-            "node_editor.menu.create.text",
-            NodeCreateRequest::Text,
-        ),
-        node_create_menu_item(
-            "Solid Color",
-            "Generators",
-            ["solid", "color", "image"],
-            "node_editor.menu.create.solid",
-            NodeCreateRequest::Solid,
-        ),
-        node_create_menu_item(
-            "Shape (Rectangle)",
-            "Generators",
-            ["shape", "rectangle", "path"],
-            "node_editor.menu.create.shape",
-            NodeCreateRequest::Shape,
-        ),
-        node_create_menu_item(
-            "SkSL Shader",
-            "Generators",
-            ["sksl", "shader", "procedural", "image"],
-            "node_editor.menu.create.sksl",
-            NodeCreateRequest::SkSL,
-        ),
-    ];
-    items.extend(ValueContent::ALL.into_iter().map(|value| {
-        let keywords: &[&str] = match value {
-            ValueContent::Fmod => &["fmod", "modulo", "remainder", "loop", "value", "number"],
-            ValueContent::Add => &["add", "plus", "sum", "value", "number"],
-            ValueContent::Subtract => &["subtract", "minus", "difference", "value", "number"],
-            ValueContent::Multiply => &["multiply", "times", "product", "value", "number"],
-            ValueContent::Divide => &["divide", "quotient", "ratio", "value", "number"],
-        };
-        node_create_menu_item(
-            value.label(),
-            "Math / Values",
-            keywords.iter().copied(),
-            format!("node_editor.menu.create.value:{}", value.operation_key()),
-            NodeCreateRequest::Value(value),
-        )
-    }));
+    let mut items = native_node_catalog()
+        .iter()
+        .map(|descriptor| {
+            let mut keywords = descriptor
+                .keywords()
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            keywords.push(descriptor.catalog_id().to_string());
+            let mut item = node_create_menu_item(
+                descriptor.label(),
+                descriptor.category(),
+                keywords,
+                descriptor.qa_id(),
+                NodeCreateRequest::Native(descriptor.catalog_id().to_string()),
+            );
+            item.qa_metadata = Some(serde_json::json!({
+                "action": "create",
+                "kind": "native",
+                "catalog_id": descriptor.catalog_id(),
+                "label": descriptor.label(),
+                "category": descriptor.category(),
+                "runtime_status": descriptor.runtime_status().key(),
+            }));
+            item
+        })
+        .collect::<Vec<_>>();
     items.extend(SoundAnalysisContent::ALL.into_iter().map(|analysis| {
         let keywords: &[&str] = match analysis {
             SoundAnalysisContent::Rms => &["sound", "audio", "rms", "level", "amplitude"],
@@ -258,13 +231,6 @@ pub(in crate::ui::panels::node_editor) fn node_create_menu_items(
         )
     }));
     items.extend([
-        node_create_menu_item(
-            "Merge",
-            "Compositing",
-            ["merge", "composite", "blend", "layers"],
-            "node_editor.menu.create.merge",
-            NodeCreateRequest::Merge,
-        ),
         node_create_menu_item(
             "Sound Merge",
             "Sound",
@@ -444,6 +410,22 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
     request: &NodeCreateRequest,
     plugin_manager: &PluginManager,
 ) -> Option<Node> {
+    if let NodeCreateRequest::Native(catalog_id) = request {
+        let descriptor = native_node_descriptor(catalog_id)?;
+        if matches!(descriptor.factory(), NativeNodeFactory::Generator(_)) {
+            return None;
+        }
+        return match descriptor.create_detached_node() {
+            Ok(node) => Some(node),
+            Err(error) => {
+                log::warn!(
+                    "Cannot prepare native catalog Node '{}' for authoring: {error}",
+                    descriptor.catalog_id()
+                );
+                None
+            }
+        };
+    }
     let result = match request {
         NodeCreateRequest::ShapeTransform => plugin_manager.create_shape_transform_operation_node(),
         NodeCreateRequest::ImageTransform => plugin_manager.create_image_transform_operation_node(),
@@ -462,19 +444,14 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
         NodeCreateRequest::Effect(effect_id) => {
             plugin_manager.create_effect_operation_node(effect_id)
         }
-        NodeCreateRequest::Merge => return Some(Node::new_merge("Merge")),
         NodeCreateRequest::SoundMerge => return Some(Node::new_sound_merge("Sound Merge")),
         NodeCreateRequest::SoundAnalysis(analysis) => {
             return Some(Node::new_sound_analysis(analysis.label(), *analysis));
         }
-        NodeCreateRequest::Value(value) => return Some(Node::new_value(value.label(), *value)),
-        NodeCreateRequest::Text
-        | NodeCreateRequest::Solid
-        | NodeCreateRequest::Shape
-        | NodeCreateRequest::SkSL
-        | NodeCreateRequest::Clip
-        | NodeCreateRequest::Track
-        | NodeCreateRequest::Composition => return None,
+        NodeCreateRequest::Native(_) => return None,
+        NodeCreateRequest::Clip | NodeCreateRequest::Track | NodeCreateRequest::Composition => {
+            return None
+        }
     };
     match result {
         Ok(node) => Some(node),

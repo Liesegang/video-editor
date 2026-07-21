@@ -422,6 +422,13 @@ fn collect_audio_routes<'a>(
                         }
                         steps.pop();
                     }
+                    NodeContent::NativeOperation(operation) => {
+                        log::warn!(
+                            "Native catalog node {} ({}) has no audio runtime; producing No Output",
+                            node.id,
+                            operation.catalog_id
+                        );
+                    }
                     NodeContent::Generator(_)
                     | NodeContent::Value(_)
                     | NodeContent::SoundAnalysis(_)

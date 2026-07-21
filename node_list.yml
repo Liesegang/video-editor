@@ -1,5 +1,12 @@
+# `catalog_status` is mandatory for every design entry. `native` entries are
+# checked bidirectionally against the compiled catalog; `design-needed` entries
+# may remain unimplemented, and `plugin-managed` entries belong to the dynamic
+# plugin descriptor registry. Native entries also declare a stable `catalog_id`
+# and their current runtime status.
+
 Expression:
   category: Scripting
+  catalog_status: design-needed
   type: python
   description: Execute custom Python scripts
   inputs:
@@ -15,48 +22,56 @@ Expression:
 # --- Data Types ---
 Scalar:
   category: Data
+  catalog_status: design-needed
   description: Single numeric value
   outputs:
     - name: value
       type: Scalar
 Vector:
   category: Data
+  catalog_status: design-needed
   description: Generic Vector
   outputs:
     - name: value
       type: Vector
 Blank:
   category: Data
+  catalog_status: design-needed
   description: Empty generic data/image
   outputs:
     - name: value
       type: Any
 Vector2:
   category: Data
+  catalog_status: design-needed
   description: 2D Vector
   outputs:
     - name: value
       type: Vector2
 Vector3:
   category: Data
+  catalog_status: design-needed
   description: 3D Vector
   outputs:
     - name: value
       type: Vector3
 Color:
   category: Data
+  catalog_status: design-needed
   description: RGBA Color
   outputs:
     - name: value
       type: Color
 String:
   category: Data
+  catalog_status: design-needed
   description: Text string
   outputs:
     - name: value
       type: String
 Image:
   category: Data
+  catalog_status: design-needed
   description: Generic Image buffer
   outputs:
     - name: value
@@ -81,6 +96,7 @@ Spectrum:
       type: Spectrum
 Video:
   category: Data
+  catalog_status: design-needed
   description: Video resource
   inputs:
     - name: path
@@ -90,30 +106,35 @@ Video:
       type: Video
 RGB Image:
   category: Data
+  catalog_status: design-needed
   description: Image in RGB color space
   outputs:
      - name: output
        type: RGB Image
 YUV Image:
   category: Data
+  catalog_status: design-needed
   description: Image in YUV color space
   outputs:
      - name: output
        type: YUV Image
 Gradient:
   category: Data
+  catalog_status: design-needed
   description: Color gradient (Color Ramp)
   outputs:
      - name: output
        type: Gradient
 Curve:
   category: Data
+  catalog_status: design-needed
   description: 1D Value Curve (Profile/Timeline)
   outputs:
      - name: output
        type: Curve
 Asset:
   category: Data
+  catalog_status: design-needed
   inputs:
     - name: asset_id
       type: String
@@ -124,6 +145,9 @@ Asset:
 # --- Text ---
 Text:
   category: Text
+  catalog_status: native
+  catalog_id: native.text
+  runtime_status: implemented
   model: Generator.Text
   description: Shape-valued text source; spatial placement and raster appearance are separate operations
   inputs:
@@ -183,6 +207,7 @@ Text:
       multiplicity: Single
 Join Strings:
   category: Text
+  catalog_status: design-needed
   inputs:
     - name: strings
       type: List<String>
@@ -193,6 +218,7 @@ Join Strings:
       type: String
 Replace String:
   category: Text
+  catalog_status: design-needed
   inputs:
     - name: source
       type: String
@@ -205,9 +231,25 @@ Replace String:
       type: String
 
 # --- Math ---
+Fmod:
+  category: Math
+  catalog_status: native
+  catalog_id: native.math.fmod
+  runtime_status: implemented
+  inputs:
+    - name: x
+      type: Scalar/Vector
+    - name: divisor
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
 Add:
   parent: Math
   category: Math
+  catalog_status: native
+  catalog_id: native.math.add
+  runtime_status: implemented
   inputs:
     - name: a
       type: Scalar/Vector
@@ -219,6 +261,9 @@ Add:
 Subtract:
   parent: Math
   category: Math
+  catalog_status: native
+  catalog_id: native.math.subtract
+  runtime_status: implemented
   inputs:
     - name: a
       type: Scalar/Vector
@@ -230,6 +275,9 @@ Subtract:
 Multiply:
   parent: Math
   category: Math
+  catalog_status: native
+  catalog_id: native.math.multiply
+  runtime_status: implemented
   inputs:
     - name: a
       type: Scalar/Vector
@@ -241,6 +289,9 @@ Multiply:
 Divide:
   parent: Math
   category: Math
+  catalog_status: native
+  catalog_id: native.math.divide
+  runtime_status: implemented
   inputs:
     - name: a
       type: Scalar/Vector
@@ -252,6 +303,7 @@ Divide:
 Power:
   parent: Math
   category: Math
+  catalog_status: design-needed
   inputs:
     - name: base
       type: Scalar/Vector
@@ -262,6 +314,7 @@ Power:
       type: Scalar/Vector
 Clamp:
   category: Math
+  catalog_status: design-needed
   inputs:
     - name: value
       type: Scalar/Vector
@@ -274,6 +327,7 @@ Clamp:
       type: Scalar/Vector
 Remap:
   category: Math
+  catalog_status: design-needed
   description: Remap value from input range to output range
   inputs:
     - name: value
@@ -294,6 +348,7 @@ Remap:
 Dot Product:
   parent: Vector Math
   category: Math
+  catalog_status: design-needed
   inputs:
     - name: a
       type: Vector
@@ -305,6 +360,7 @@ Dot Product:
 Cross Product:
   parent: Vector Math
   category: Math
+  catalog_status: design-needed
   inputs:
     - name: a
       type: Vector
@@ -316,6 +372,7 @@ Cross Product:
 Normalize:
   parent: Vector Math
   category: Math
+  catalog_status: design-needed
   inputs:
     - name: vector
       type: Vector
@@ -326,6 +383,7 @@ Normalize:
 # --- Logic ---
 Switch:
   category: Logic
+  catalog_status: design-needed
   inputs:
     - name: condition
       type: Boolean
@@ -338,6 +396,7 @@ Switch:
       type: Any
 Make List:
   category: Logic
+  catalog_status: design-needed
   description: Create a list from inputs
   inputs:
     - name: item
@@ -348,6 +407,7 @@ Make List:
       type: List<Any>
 Get List Item:
   category: Logic
+  catalog_status: design-needed
   inputs:
     - name: list
       type: List<Any>
@@ -358,6 +418,7 @@ Get List Item:
       type: Any
 List Length:
   category: Logic
+  catalog_status: design-needed
   inputs:
     - name: list
       type: List<Any>
@@ -368,6 +429,7 @@ List Length:
 # --- Compositing ---
 Shape Transform:
   category: Shape Operations / Transform
+  catalog_status: design-needed
   operation_category: transform
   component_id: transform
   operation: transform.apply.v1
@@ -455,6 +517,7 @@ Shape Transform:
       multiplicity: Single
 Image Transform:
   category: Image Operations / Transform
+  catalog_status: design-needed
   operation_category: transform
   component_id: image
   operation: transform.apply.v1
@@ -542,8 +605,13 @@ Image Transform:
       multiplicity: Single
 Merge:
   category: Compositing
+  catalog_status: native
+  catalog_id: native.merge
+  runtime_status: implemented
   description: Composite variadic Image inputs in physical wire order from back to front
   inputs:
+    - name: time
+      type: Number
     - name: images
       type: List<Image>
       variadic: true
@@ -825,6 +893,7 @@ Band Energy:
 Normal Blend:
   parent: Blend
   category: Compositing
+  catalog_status: design-needed
   inputs:
     - name: foreground
       type: Image
@@ -838,6 +907,7 @@ Normal Blend:
 Multiply Blend:
   parent: Blend
   category: Compositing
+  catalog_status: design-needed
   inputs:
     - name: foreground
       type: Image
@@ -851,6 +921,7 @@ Multiply Blend:
 Screen Blend:
   parent: Blend
   category: Compositing
+  catalog_status: design-needed
   inputs:
     - name: foreground
       type: Image
@@ -864,6 +935,7 @@ Screen Blend:
 Overlay Blend:
   parent: Blend
   category: Compositing
+  catalog_status: design-needed
   inputs:
     - name: foreground
       type: Image
@@ -876,6 +948,7 @@ Overlay Blend:
       type: Image
 Mask:
   category: Compositing
+  catalog_status: design-needed
   inputs:
     - name: source
       type: Image
@@ -891,6 +964,7 @@ Mask:
 # --- Color ---
 Color Correction:
   category: Color
+  catalog_status: design-needed
   description: Lift, Gamma, Gain 3-way color correction
   inputs:
     - name: image
@@ -908,6 +982,7 @@ Color Correction:
       type: Image
 Brightness Contrast:
   category: Color
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -920,6 +995,7 @@ Brightness Contrast:
       type: Image
 Hue Saturation:
   category: Color
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -934,6 +1010,7 @@ Hue Saturation:
       type: Image
 Levels:
   category: Color
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -952,6 +1029,7 @@ Levels:
       type: Image
 Invert:
   category: Color
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -960,6 +1038,7 @@ Invert:
       type: Image
 Hue Shift:
   category: Color
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -970,6 +1049,7 @@ Hue Shift:
       type: Image
 Color Map:
   category: Color
+  catalog_status: design-needed
   description: Map luminance to a color gradient
   inputs:
     - name: image
@@ -983,9 +1063,41 @@ Color Map:
       type: Image
 
 # --- Generators ---
+Shape:
+  category: Generators
+  catalog_status: native
+  catalog_id: native.shape
+  runtime_status: implemented
+  description: Authored SVG path source that produces typed Shape geometry
+  inputs:
+    - name: time
+      type: Number
+    - name: path
+      type: Path
+  outputs:
+    - name: shape
+      type: Shape
+SkSL Shader:
+  category: Generators
+  catalog_status: native
+  catalog_id: native.sksl-shader
+  runtime_status: implemented
+  inputs:
+    - name: time
+      type: Number
+    - name: shader
+      type: String
+  outputs:
+    - name: image
+      type: Image
 Solid Color:
   category: Generators
+  catalog_status: native
+  catalog_id: native.solid-color
+  runtime_status: implemented
   inputs:
+    - name: time
+      type: Number
     - name: color
       type: Color
   outputs:
@@ -994,6 +1106,7 @@ Solid Color:
 Linear Gradient:
   parent: Gradient
   category: Generators
+  catalog_status: design-needed
   inputs:
     - name: start_point
       type: Vector2
@@ -1007,6 +1120,7 @@ Linear Gradient:
 Radial Gradient:
   parent: Gradient
   category: Generators
+  catalog_status: design-needed
   inputs:
     - name: center
       type: Vector2
@@ -1019,6 +1133,7 @@ Radial Gradient:
       type: Image
 Construct Gradient:
   category: Generators
+  catalog_status: design-needed
   description: Create a gradient from color stops
   inputs:
     - name: colors
@@ -1030,6 +1145,7 @@ Construct Gradient:
       type: Gradient
 Sample Gradient:
   category: Generators
+  catalog_status: design-needed
   inputs:
     - name: gradient
       type: Gradient
@@ -1040,6 +1156,7 @@ Sample Gradient:
       type: Color
 Evaluate Curve:
   category: Generators
+  catalog_status: design-needed
   inputs:
     - name: curve
       type: Curve
@@ -1050,6 +1167,7 @@ Evaluate Curve:
       type: Scalar
 Noise:
   category: Generators
+  catalog_status: design-needed
   inputs:
     - name: scale
       type: Scalar
@@ -1064,6 +1182,7 @@ Noise:
 # --- Filters ---
 Blur:
   category: Filters
+  catalog_status: design-needed
   description: Gaussian blur
   inputs:
     - name: image
@@ -1077,6 +1196,7 @@ Blur:
       type: Image
 Glow:
   category: Filters
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -1091,6 +1211,7 @@ Glow:
       type: Image
 Drop Shadow:
   category: Filters
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -1109,6 +1230,7 @@ Drop Shadow:
 # --- Distortion ---
 Displacement Map:
   category: Distortion
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -1125,6 +1247,7 @@ Displacement Map:
 # --- Path Operations ---
 Offset Path:
   category: Path
+  catalog_status: design-needed
   inputs:
     - name: path
       type: Path
@@ -1135,6 +1258,7 @@ Offset Path:
       type: Path
 Fill Path:
   category: Path
+  catalog_status: design-needed
   inputs:
     - name: path
       type: Path
@@ -1145,6 +1269,7 @@ Fill Path:
       type: Image
 Stroke Path:
   category: Path
+  catalog_status: design-needed
   inputs:
     - name: path
       type: Path
@@ -1157,6 +1282,7 @@ Stroke Path:
       type: Image
 Union Path:
   category: Path
+  catalog_status: design-needed
   inputs:
     - name: paths
       type: List<Path>
@@ -1165,6 +1291,7 @@ Union Path:
       type: Path
 Dash Path Effect:
   category: Shape Operations / Path Effects
+  catalog_status: design-needed
   operation_category: path_effect
   component_id: dash
   operation: path_effect.apply.v1
@@ -1223,6 +1350,7 @@ Dash Path Effect:
       multiplicity: Single
 Corner Path Effect:
   category: Shape Operations / Path Effects
+  catalog_status: design-needed
   operation_category: path_effect
   component_id: corner
   operation: path_effect.apply.v1
@@ -1270,6 +1398,7 @@ Corner Path Effect:
       multiplicity: Single
 Discrete Path Effect:
   category: Shape Operations / Path Effects
+  catalog_status: design-needed
   operation_category: path_effect
   component_id: discrete
   operation: path_effect.apply.v1
@@ -1350,6 +1479,7 @@ Discrete Path Effect:
       multiplicity: Single
 Trim Path Effect:
   category: Shape Operations / Path Effects
+  catalog_status: design-needed
   operation_category: path_effect
   component_id: trim
   operation: path_effect.apply.v1
@@ -1414,6 +1544,7 @@ Trim Path Effect:
       multiplicity: Single
 Simplify Path:
   category: Path
+  catalog_status: design-needed
   description: Reduce points in path
   inputs:
     - name: path
@@ -1427,6 +1558,7 @@ Simplify Path:
 # --- Time ---
 Time Shift:
   category: Time
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -1439,6 +1571,7 @@ Time Shift:
 # --- Advanced Image Effects ---
 Channel Split:
   category: Image
+  catalog_status: design-needed
   inputs:
     - name: image
       type: Image
@@ -1453,6 +1586,7 @@ Channel Split:
       type: Image
 Channel Combine:
   category: Image
+  catalog_status: design-needed
   inputs:
     - name: r
       type: Image
@@ -1467,6 +1601,7 @@ Channel Combine:
       type: Image
 RGB to YUV:
   category: Image
+  catalog_status: design-needed
   inputs:
     - name: rgb_image
       type: RGB Image
@@ -1475,6 +1610,7 @@ RGB to YUV:
       type: YUV Image
 YUV to RGB:
   category: Image
+  catalog_status: design-needed
   inputs:
     - name: yuv_image
       type: YUV Image
@@ -1485,6 +1621,9 @@ YUV to RGB:
 # --- Particles ---
 Particle Emitter:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.emitter
+  runtime_status: design-needed
   description: Base emitter context (GPU Compute)
   inputs:
     - name: capacity
@@ -1506,6 +1645,9 @@ Particle Emitter:
       type: ParticleSystem
 Spawn Burst:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.spawn-burst
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1518,6 +1660,9 @@ Spawn Burst:
       type: ParticleSystem
 Shape Location:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.shape-location
+  runtime_status: design-needed
   description: Initialize particle positions on a shape
   inputs:
     - name: particles
@@ -1536,6 +1681,9 @@ Shape Location:
       type: ParticleSystem
 Initialize Particle:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.initialize
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1556,6 +1704,9 @@ Initialize Particle:
       type: ParticleSystem
 Set Attribute:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.set-attribute
+  runtime_status: design-needed
   description: Set custom particle attribute (GPU Buffer Write)
   inputs:
     - name: particles
@@ -1569,6 +1720,9 @@ Set Attribute:
       type: ParticleSystem
 Gravity Force:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.gravity-force
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1579,6 +1733,9 @@ Gravity Force:
       type: ParticleSystem
 Drag Force:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.drag-force
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1589,6 +1746,9 @@ Drag Force:
       type: ParticleSystem
 Point Force:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.point-force
+  runtime_status: design-needed
   description: Attract or repel particles
   inputs:
     - name: particles
@@ -1606,6 +1766,9 @@ Point Force:
       type: ParticleSystem
 Vortex Force:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.vortex-force
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1618,6 +1781,9 @@ Vortex Force:
       type: ParticleSystem
 Vector Field Force:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.vector-field-force
+  runtime_status: design-needed
   description: 3D Vector Field interaction (GPU Texture 3D)
   inputs:
     - name: particles
@@ -1633,6 +1799,9 @@ Vector Field Force:
       type: ParticleSystem
 Turbulence:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.turbulence
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1647,6 +1816,9 @@ Turbulence:
       type: ParticleSystem
 Color Over Life:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.color-over-life
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1657,6 +1829,9 @@ Color Over Life:
       type: ParticleSystem
 Size Over Life:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.size-over-life
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1667,6 +1842,9 @@ Size Over Life:
       type: ParticleSystem
 Collision Plane:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.collision-plane
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1683,6 +1861,9 @@ Collision Plane:
       type: ParticleSystem
 Collision Depth:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.collision-depth
+  runtime_status: design-needed
   description: Screen-space depth collision (GPU)
   inputs:
     - name: particles
@@ -1696,6 +1877,9 @@ Collision Depth:
       type: ParticleSystem
 Sprite Renderer:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.sprite-renderer
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1714,6 +1898,9 @@ Sprite Renderer:
       type: Image
 Mesh Renderer:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.mesh-renderer
+  runtime_status: design-needed
   inputs:
     - name: particles
       type: ParticleSystem
@@ -1726,6 +1913,9 @@ Mesh Renderer:
       type: Image
 Ribbon Renderer:
   category: Particles
+  catalog_status: native
+  catalog_id: native.particle.ribbon-renderer
+  runtime_status: design-needed
   description: Connect particles with a trail
   inputs:
     - name: particles
@@ -1743,6 +1933,9 @@ Ribbon Renderer:
 # --- 3D ---
 Camera 3D:
   category: 3D
+  catalog_status: native
+  catalog_id: native.3d.camera
+  runtime_status: design-needed
   inputs:
     - name: position
       type: Vector3
@@ -1757,6 +1950,9 @@ Camera 3D:
       type: Camera3D
 Transform 3D:
   category: 3D
+  catalog_status: native
+  catalog_id: native.3d.transform
+  runtime_status: design-needed
   inputs:
     - name: object
       type: Object3D
@@ -1771,6 +1967,9 @@ Transform 3D:
       type: Object3D
 Mesh Instance:
   category: 3D
+  catalog_status: native
+  catalog_id: native.3d.mesh-instance
+  runtime_status: design-needed
   inputs:
     - name: mesh_asset
       type: Asset
@@ -1781,18 +1980,141 @@ Mesh Instance:
       type: Object3D
 Render 3D:
   category: 3D
+  catalog_status: native
+  catalog_id: native.3d.render
+  runtime_status: design-needed
   inputs:
     - name: scene
       type: List<Object3D>
     - name: camera
       type: Camera3D
+    - name: instances
+      type: Instance3D
   outputs:
     - name: image
       type: Image
+Point Source 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.point-source
+  runtime_status: design-needed
+  description: Typed point/count distribution source for instancing
+  inputs:
+    - name: geometry
+      type: Geometry3D
+    - name: count
+      type: Integer
+    - name: distribution
+      type: Enum
+      options: [Vertices, Surface, Volume, Grid]
+  outputs:
+    - name: points
+      type: PointSource
+Cloner 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.cloner
+  runtime_status: design-needed
+  description: Cinema 4D MoGraph-style typed instancing boundary; GPU instancing is not implemented
+  inputs:
+    - name: geometry
+      type: Geometry3D
+    - name: object
+      type: Object3D
+    - name: points
+      type: PointSource
+    - name: count
+      type: Integer
+    - name: effectors
+      type: EffectorStack
+    - name: fields
+      type: FieldStack
+    - name: motion_behavior
+      type: MotionBehavior
+  outputs:
+    - name: instances
+      type: Instance3D
+Transform Effector 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.transform-effector
+  runtime_status: design-needed
+  inputs:
+    - name: field
+      type: Field3D
+    - name: translation
+      type: Vector3
+    - name: rotation
+      type: Vector3
+    - name: scale
+      type: Vector3
+    - name: motion_behavior
+      type: MotionBehavior
+  outputs:
+    - name: effector
+      type: Effector3D
+Effector Stack 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.effector-stack
+  runtime_status: design-needed
+  inputs:
+    - name: effectors
+      type: Effector3D
+      variadic: true
+  outputs:
+    - name: effectors
+      type: EffectorStack
+Field 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.field
+  runtime_status: design-needed
+  inputs:
+    - name: field_type
+      type: Enum
+      options: [Linear, Spherical, Box, Noise]
+    - name: position
+      type: Vector3
+    - name: size
+      type: Vector3
+    - name: falloff
+      type: Scalar
+  outputs:
+    - name: field
+      type: Field3D
+Field Stack 3D:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.3d.field-stack
+  runtime_status: design-needed
+  inputs:
+    - name: fields
+      type: Field3D
+      variadic: true
+  outputs:
+    - name: fields
+      type: FieldStack
+Motion Behavior:
+  category: 3D
+  catalog_status: native
+  catalog_id: native.motion.behavior
+  runtime_status: design-needed
+  description: Shared descriptor boundary for future Delay, Spring, and Elastic motion behavior
+  inputs:
+    - name: mode
+      type: Enum
+      options: [Delay, Spring, Elastic]
+    - name: strength
+      type: Scalar
+  outputs:
+    - name: motion_behavior
+      type: MotionBehavior
 
 # --- Style ---
 Image Opacity:
   category: Image Operations / Styles
+  catalog_status: design-needed
   operation_category: style
   component_id: image_opacity
   operation: style.apply.v1
@@ -1839,6 +2161,7 @@ Image Opacity:
       multiplicity: Single
 Fill:
   category: Shape Operations / Styles
+  catalog_status: design-needed
   operation_category: style
   component_id: fill
   operation: style.apply.v1
@@ -1913,6 +2236,7 @@ Fill:
       multiplicity: Single
 Stroke:
   category: Shape Operations / Styles
+  catalog_status: design-needed
   operation_category: style
   component_id: stroke
   operation: style.apply.v1
@@ -2073,6 +2397,7 @@ Stroke:
       multiplicity: Single
 Shadow Style:
   category: Style
+  catalog_status: design-needed
   description: Drop Shadow Style
   inputs:
     - name: color
@@ -2088,6 +2413,7 @@ Shadow Style:
 # --- Ensemble ---
 Transform Effector:
   category: Ensemble
+  catalog_status: design-needed
   inputs:
     - name: translate
       type: Vector2
@@ -2104,6 +2430,7 @@ Transform Effector:
 
 Step Delay Effector:
   category: Ensemble
+  catalog_status: design-needed
   inputs:
     - name: delay
       type: Scalar
@@ -2119,6 +2446,7 @@ Step Delay Effector:
 
 Randomize Effector:
   category: Ensemble
+  catalog_status: design-needed
   inputs:
     - name: seed
       type: Scalar
@@ -2136,6 +2464,7 @@ Randomize Effector:
 
 Opacity Effector:
   category: Ensemble
+  catalog_status: design-needed
   inputs:
     - name: opacity
       type: Scalar
@@ -2148,6 +2477,7 @@ Opacity Effector:
 
 Backplate Decorator:
   category: Ensemble
+  catalog_status: design-needed
   description: Fit arbitrary background Shape geometry to Char, Line, or Block bounds; use downstream Fill/Stroke Style nodes for appearance
   inputs:
     - name: target_shape

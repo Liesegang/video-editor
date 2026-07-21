@@ -140,6 +140,26 @@ pub enum PortDataType {
     Vec2,
     Vec3,
     Vec4,
+    /// A catalog-defined option value. Concrete option sets belong to the
+    /// descriptor rather than to the connection type.
+    Enum,
+    Asset,
+    Gradient,
+    Curve,
+    ParticleSystem,
+    Material,
+    Geometry3D,
+    Object3D,
+    Object3DList,
+    Camera3D,
+    PointSource,
+    Instance3D,
+    Effector3D,
+    EffectorStack,
+    Field3D,
+    FieldStack,
+    /// Shared boundary for future Delay, Spring, and Elastic behaviors.
+    MotionBehavior,
 }
 
 impl PortDataType {

@@ -94,6 +94,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(39, 83, 95),
             accent: Color32::from_rgb(91, 197, 218),
         },
+        Some(NodeContent::NativeOperation(_)) => NodePalette {
+            body: Color32::from_rgb(48, 38, 29),
+            header: Color32::from_rgb(106, 72, 38),
+            accent: Color32::from_rgb(238, 170, 92),
+        },
         Some(NodeContent::Merge) | None => NodePalette {
             body: Color32::from_rgb(38, 39, 43),
             header: Color32::from_rgb(68, 70, 79),
@@ -156,6 +161,16 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             ValueContent::Multiply => NodeEditorIcon::new(icons::X, "Multiply value operation"),
             ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
         },
+        Some(NodeContent::NativeOperation(operation)) => {
+            let descriptor = library::model::native_node_descriptor(&operation.catalog_id);
+            match descriptor.map(|item| item.category()) {
+                Some("3D") => NodeEditorIcon::new(icons::CUBE, "3D design placeholder"),
+                Some("Particles") => {
+                    NodeEditorIcon::new(icons::SPARKLE, "Particle design placeholder")
+                }
+                _ => NodeEditorIcon::new(icons::WARNING, "Native design placeholder"),
+            }
+        }
         Some(NodeContent::Merge) => NodeEditorIcon::new(icons::ARROWS_MERGE, "Merge operation"),
         Some(NodeContent::SoundMerge) => {
             NodeEditorIcon::new(icons::WAVEFORM, "Sound Merge operation")
@@ -419,6 +434,21 @@ pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> 
         PortDataType::Vec3 => Color32::from_rgb(105, 195, 235),
         PortDataType::Vec4 => Color32::from_rgb(145, 145, 245),
         PortDataType::Boolean => Color32::from_rgb(220, 160, 100),
+        PortDataType::Enum => Color32::from_rgb(225, 154, 91),
+        PortDataType::Asset | PortDataType::Material => Color32::from_rgb(105, 145, 180),
+        PortDataType::Gradient | PortDataType::Curve => Color32::from_rgb(205, 120, 205),
+        PortDataType::ParticleSystem => Color32::from_rgb(105, 205, 145),
+        PortDataType::Geometry3D
+        | PortDataType::Object3D
+        | PortDataType::Object3DList
+        | PortDataType::Camera3D
+        | PortDataType::PointSource
+        | PortDataType::Instance3D => Color32::from_rgb(105, 165, 225),
+        PortDataType::Effector3D
+        | PortDataType::EffectorStack
+        | PortDataType::Field3D
+        | PortDataType::FieldStack => Color32::from_rgb(185, 125, 225),
+        PortDataType::MotionBehavior => Color32::from_rgb(235, 145, 105),
         PortDataType::Any => Color32::from_rgb(200, 200, 200),
     }
 }
