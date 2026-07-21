@@ -6,7 +6,10 @@ use std::io::Write;
 
 use library::EditorService;
 
-use crate::action::{activate_composition_with_history, commit_live_project_edits, HistoryManager};
+use crate::action::{
+    activate_composition_with_history, commit_live_project_edits, request_node_layout_command,
+    HistoryManager,
+};
 use crate::command::CommandId;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
@@ -55,6 +58,14 @@ pub fn handle_command(
         }
         CommandId::ShowCommandPalette => {
             // Handled in MyApp::update explicitly to open dialog
+        }
+        CommandId::NodeEditorCleanLayout
+        | CommandId::NodeEditorCleanLayoutSelection
+        | CommandId::NodeEditorCleanLayoutContainer
+        | CommandId::NodeEditorCleanLayoutAll => {
+            if !ctx.input(|input| input.pointer.primary_down()) {
+                request_node_layout_command(&mut context.editor_context.node_editor_state, action);
+            }
         }
         CommandId::Quit => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

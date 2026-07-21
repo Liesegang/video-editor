@@ -175,6 +175,9 @@ impl EditorContext {
         self.interaction.rename_buffer.clear();
 
         self.node_editor_context_menu = None;
+        self.node_editor_state.panel_rect = None;
+        self.node_editor_state.pending_layout_command = None;
+        self.node_editor_state.last_layout_execution = None;
         self.node_editor_state.pending_navigation = None;
         self.node_editor_state.layout_changed_during_drag = false;
         self.node_editor_state.node_reparent = None;

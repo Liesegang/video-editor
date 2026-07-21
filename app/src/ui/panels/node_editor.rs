@@ -120,7 +120,8 @@ mod components;
 
 use components::{
     bounded_non_selectable_label, continuous_color_edit_button, continuous_response_finished,
-    non_selectable_label, port_label_width, property_label, strong_non_selectable_label,
+    layout_toolbar, non_selectable_label, port_label_width, property_label,
+    strong_non_selectable_label,
 };
 use components::{
     container_highlight_metadata, container_icon, container_visual_style, node_icon, node_palette,

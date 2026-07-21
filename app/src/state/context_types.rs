@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use crate::command::CommandId;
 use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
@@ -667,6 +668,19 @@ impl ContextMenuState {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeEditorState {
+    /// Last rendered Node Editor content rectangle. Area-scoped shortcuts use
+    /// this actual panel hit region instead of egui_dock's stale leaf bounds.
+    #[serde(skip)]
+    pub panel_rect: Option<egui::Rect>,
+    /// Command requests are routed here from toolbar, shortcut, and palette,
+    /// then consumed by the focused Node Editor against its current selection.
+    #[serde(skip)]
+    pub pending_layout_command: Option<CommandId>,
+    #[serde(skip)]
+    pub layout_execution_serial: u64,
+    /// Last consumed request is exposed only through the QA state snapshot.
+    #[serde(skip)]
+    pub last_layout_execution: Option<NodeEditorLayoutExecution>,
     #[serde(skip)]
     pub pending_navigation: Option<Uuid>,
     #[serde(skip)]
@@ -747,6 +761,14 @@ pub struct NodeEditorState {
     /// undo/redo transaction.
     #[serde(skip)]
     pub merge_layer_reorder: Option<NodeEditorMergeLayerReorderGesture>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeEditorLayoutExecution {
+    pub execution_id: u64,
+    pub command: CommandId,
+    pub scope: String,
+    pub changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

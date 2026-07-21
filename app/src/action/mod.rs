@@ -2,11 +2,33 @@ use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+use crate::command::CommandId;
 use crate::state::context::EditorContext;
-use crate::state::context_types::PreviewPrimaryGesture;
+use crate::state::context_types::{NodeEditorState, PreviewPrimaryGesture};
 use crate::utils::lock::read_or_recover;
 
 pub mod handler;
+
+pub fn node_layout_command_blocked(state: &NodeEditorState) -> bool {
+    state.layout_changed_during_drag
+        || !state.moved_node_ids.is_empty()
+        || state.node_reparent.is_some()
+        || state.container_resize.is_some()
+        || state.wire_gesture.is_some()
+        || state.normal_wire_drag_active
+        || state.normal_connect_gesture.is_some()
+        || state.wire_knife.is_some()
+        || state.merge_layer_reorder.is_some()
+}
+
+pub fn request_node_layout_command(state: &mut NodeEditorState, command: CommandId) -> bool {
+    if !command.is_node_editor_layout() || node_layout_command_blocked(state) {
+        return false;
+    }
+    state.last_layout_execution = None;
+    state.pending_layout_command = Some(command);
+    true
+}
 
 pub struct HistoryManager {
     undo_stack: Vec<Project>,
@@ -174,7 +196,8 @@ pub fn activate_composition_with_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{activate_composition_with_history, HistoryManager};
+    use super::{activate_composition_with_history, request_node_layout_command, HistoryManager};
+    use crate::command::CommandId;
     use crate::state::context::EditorContext;
     use crate::state::context_types::{
         BodyDragState, GraphKeyframeDragState, NodeEditorPendingEdit, PreviewPrimaryGesture,
@@ -185,6 +208,29 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
+
+    #[test]
+    fn node_layout_requests_accept_only_layout_commands() {
+        let mut state = crate::state::context_types::NodeEditorState::default();
+        assert!(!request_node_layout_command(&mut state, CommandId::Save));
+        assert_eq!(state.pending_layout_command, None);
+        assert!(request_node_layout_command(
+            &mut state,
+            CommandId::NodeEditorCleanLayoutAll
+        ));
+        assert_eq!(
+            state.pending_layout_command,
+            Some(CommandId::NodeEditorCleanLayoutAll)
+        );
+
+        state.pending_layout_command = None;
+        state.layout_changed_during_drag = true;
+        assert!(!request_node_layout_command(
+            &mut state,
+            CommandId::NodeEditorCleanLayout
+        ));
+        assert_eq!(state.pending_layout_command, None);
+    }
 
     #[test]
     fn undo_redo_restores_committed_project_states() {

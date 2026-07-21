@@ -190,6 +190,18 @@ pub fn snapshot(
             },
             "node_editor": {
                 "context_menu_open": editor_context.node_editor_context_menu.is_some(),
+                "pending_layout_command": editor_context.node_editor_state.pending_layout_command,
+                "layout_execution_serial": editor_context.node_editor_state.layout_execution_serial,
+                "last_layout_execution": editor_context
+                    .node_editor_state
+                    .last_layout_execution
+                    .as_ref()
+                    .map(|execution| serde_json::json!({
+                        "execution_id": execution.execution_id,
+                        "command": execution.command,
+                        "scope": execution.scope,
+                        "changed": execution.changed,
+                    })),
                 "pending_navigation": editor_context.node_editor_state.pending_navigation,
                 "selected_connection_id": editor_context.node_editor_state.selected_connection_id,
                 "reparent_gesture": editor_context.node_editor_state.node_reparent.as_ref().map(|gesture| {

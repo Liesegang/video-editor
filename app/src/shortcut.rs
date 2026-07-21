@@ -1,4 +1,4 @@
-use crate::command::{CommandId, CommandRegistry};
+use crate::command::{CommandContext, CommandId, CommandRegistry};
 use crate::state::context::EditorContext;
 use eframe::egui::{Context, Modifiers};
 
@@ -14,10 +14,20 @@ impl ShortcutManager {
         ctx: &Context,
         registry: &CommandRegistry,
         editor_ctx: &mut EditorContext,
+        command_context: CommandContext,
     ) -> Option<CommandId> {
         let wants_keyboard_input = ctx.wants_keyboard_input();
 
         for cmd in &registry.commands {
+            if !cmd.is_available_in(command_context) {
+                continue;
+            }
+            if cmd.id.is_node_editor_layout()
+                && (ctx.input(|input| input.pointer.primary_down())
+                    || crate::action::node_layout_command_blocked(&editor_ctx.node_editor_state))
+            {
+                continue;
+            }
             // If the UI wants input (e.g. typing in text box),
             // ONLY trigger commands that are:
             // 1. Explicitly allowed when focused

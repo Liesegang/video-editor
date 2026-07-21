@@ -1,8 +1,9 @@
-use crate::action::HistoryManager;
+use crate::action::{request_node_layout_command, HistoryManager};
+use crate::command::{CommandId, CommandRegistry};
 use crate::state::context::EditorContext;
 use crate::state::context_types::{
-    NodeEditorEditableWire, NodeEditorState, NodeEditorWireContextMenu, SelectionState,
-    SelectionTarget,
+    NodeEditorEditableWire, NodeEditorLayoutExecution, NodeEditorState, NodeEditorWireContextMenu,
+    SelectionState, SelectionTarget,
 };
 use eframe::egui;
 use library::model::project::PortOwner;
@@ -17,19 +18,19 @@ use super::{
     capture_container_resize_before_canvas, captured_snarl_drag_node, captured_snarl_drag_target,
     collect_layout_edits_for_selection, compute_auto_layout, compute_full_composition_layout,
     container_inactive, container_resize_interactions, final_node_positions, finish_node_reparent,
-    flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow,
+    flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow, layout_toolbar,
     native_variadic_merge_target, node_can_splice_connection, node_drop_intents,
     node_editor_canvas_metadata, node_editor_details_visible,
-    node_editor_port_interactions_enabled, node_editor_snarl_style_for, non_selectable_label,
-    paint_container_foreground, port_owner_composition, port_owner_for_node_container,
-    primary_node_drop_intent, push_history_snapshot, record_node_reparent_origins,
-    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
-    register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
-    selected_container_owners, selection_target_for_owner, show_wire_context_menu,
-    splice_node_for_release, wire_interactions, wire_port_drop_rect, wire_secondary_click_hit,
-    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
-    ProjectNodeViewer, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
-    WireInteractionFrame, WireSecondaryClickHit,
+    node_editor_port_interactions_enabled, node_editor_snarl_style_for, paint_container_foreground,
+    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
+    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
+    register_implicit_time_context_wires, register_rendered_edges, register_reparent_drop_targets,
+    rendered_edge_at_position, select_logical_item, selected_container_owners,
+    selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
+    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
+    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
+    SurfaceCapture, SurfaceProjection, TimeContextNode, WireInteractionFrame,
+    WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -51,18 +52,24 @@ fn replace_selection_if_changed(
     true
 }
 
+fn discard_layout_request_without_composition(state: &mut NodeEditorState) -> bool {
+    state.pending_layout_command.take().is_some()
+}
+
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
     project_lock: &Arc<RwLock<Project>>,
     project_service: &EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
+    command_registry: &CommandRegistry,
 ) {
     let comp_id = editor_context.active_composition_id;
     let current_time = f64::from(editor_context.timeline.current_time);
     let context_menu_state = &mut editor_context.node_editor_context_menu;
     let node_editor_state = &mut editor_context.node_editor_state;
     let Some(comp_id) = comp_id else {
+        discard_layout_request_without_composition(node_editor_state);
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
         ui.centered_and_justified(|ui| ui.label("No Composition Selected"));
         return;
@@ -102,7 +109,6 @@ pub fn node_editor_panel(
         node_editor_state.merge_layer_reorder = None;
     }
 
-    let mut requested_layout = None;
     let mut selected_nodes = editor_context
         .selection
         .targets()
@@ -125,33 +131,28 @@ pub fn node_editor_panel(
                 .map(port_owner_for_node_container),
         })
         .unwrap_or(PortOwner::Composition(comp_id));
-    ui.horizontal(|ui| {
-        non_selectable_label(ui, "Clean layout");
-        let all = ui
-            .button("All")
-            .on_hover_text("Lay out every track and node in this composition");
-        register_layout_button(ui, &all, "node_editor.layout.all", "all");
-        if all.clicked() {
-            requested_layout = Some(AutoLayoutScope::All);
-        }
-        let selection = ui
-            .add_enabled(!selected_nodes.is_empty(), egui::Button::new("Selection"))
-            .on_hover_text("Lay out selected nodes without moving unselected nodes");
-        register_layout_button(ui, &selection, "node_editor.layout.selection", "selection");
-        if selection.clicked() {
-            requested_layout = Some(AutoLayoutScope::Selection(selected_nodes.clone()));
-        }
-        let container = ui.button("Container").on_hover_text(
-            "Lay out the selected track, or the composition if no track is selected",
-        );
-        register_layout_button(ui, &container, "node_editor.layout.container", "container");
-        if container.clicked() {
-            requested_layout = Some(AutoLayoutScope::Container(selected_container));
-        }
-    });
+    let container_label = match selected_container {
+        PortOwner::Composition(_) => "Current composition",
+        PortOwner::Track(_) => "Current track",
+        PortOwner::Clip(_) => "Current clip",
+        PortOwner::Node(_) => "Current container",
+    };
+    if let Some(command) = layout_toolbar(
+        ui,
+        command_registry,
+        !selected_nodes.is_empty(),
+        container_label,
+    ) {
+        request_node_layout_command(node_editor_state, command);
+    }
     ui.separator();
 
-    if requested_layout.is_some() {
+    let requested_command = node_editor_state.pending_layout_command.take();
+    let resolved_layout = requested_command
+        .and_then(|command| resolve_layout_scope(command, &selected_nodes, selected_container));
+    let requested_scope = resolved_layout.as_ref().map(|(_, scope)| *scope);
+
+    if resolved_layout.is_some() {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
     }
 
@@ -183,7 +184,7 @@ pub fn node_editor_panel(
         false
     };
 
-    let explicit_layout_changed = requested_layout.is_some_and(|scope| {
+    let explicit_layout_changed = resolved_layout.is_some_and(|(scope, _)| {
         let Ok(mut project) = project_lock.write() else {
             return false;
         };
@@ -192,6 +193,16 @@ pub fn node_editor_panel(
         };
         apply_auto_layout(&mut project, comp_id, &plan)
     });
+    if let (Some(command), Some(scope)) = (requested_command, requested_scope) {
+        node_editor_state.layout_execution_serial =
+            node_editor_state.layout_execution_serial.saturating_add(1);
+        node_editor_state.last_layout_execution = Some(NodeEditorLayoutExecution {
+            execution_id: node_editor_state.layout_execution_serial,
+            command,
+            scope: scope.to_string(),
+            changed: explicit_layout_changed,
+        });
+    }
 
     let mut snarl;
     let layout_edits;
@@ -760,15 +771,90 @@ pub fn node_editor_panel(
     }
 }
 
-fn register_layout_button(ui: &egui::Ui, response: &egui::Response, id: &str, scope: &str) {
-    crate::qa::register_component_with_metadata(
-        id,
-        "node_editor_layout_button",
-        response.rect,
-        response.enabled(),
-        Some(serde_json::json!({
-            "scope": scope,
-            "visible": ui.is_rect_visible(response.rect),
-        })),
-    );
+fn resolve_layout_scope(
+    command: CommandId,
+    selected_nodes: &[Uuid],
+    selected_container: PortOwner,
+) -> Option<(AutoLayoutScope, &'static str)> {
+    match command {
+        CommandId::NodeEditorCleanLayout if !selected_nodes.is_empty() => Some((
+            AutoLayoutScope::Selection(selected_nodes.to_vec()),
+            "selection",
+        )),
+        CommandId::NodeEditorCleanLayout => {
+            Some((AutoLayoutScope::Container(selected_container), "container"))
+        }
+        CommandId::NodeEditorCleanLayoutSelection if !selected_nodes.is_empty() => Some((
+            AutoLayoutScope::Selection(selected_nodes.to_vec()),
+            "selection",
+        )),
+        CommandId::NodeEditorCleanLayoutContainer => {
+            Some((AutoLayoutScope::Container(selected_container), "container"))
+        }
+        CommandId::NodeEditorCleanLayoutAll => Some((AutoLayoutScope::All, "all")),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{discard_layout_request_without_composition, resolve_layout_scope};
+    use crate::command::CommandId;
+    use crate::ui::panels::node_editor::AutoLayoutScope;
+    use library::model::project::PortOwner;
+    use uuid::Uuid;
+
+    #[test]
+    fn smart_layout_prefers_selection_then_falls_back_to_container() {
+        let node = Uuid::new_v4();
+        let container = PortOwner::Track(Uuid::new_v4());
+        let Some((scope, label)) =
+            resolve_layout_scope(CommandId::NodeEditorCleanLayout, &[node], container)
+        else {
+            panic!("selection scope");
+        };
+        assert!(matches!(scope, AutoLayoutScope::Selection(ids) if ids == vec![node]));
+        assert_eq!(label, "selection");
+
+        let Some((scope, label)) =
+            resolve_layout_scope(CommandId::NodeEditorCleanLayout, &[], container)
+        else {
+            panic!("container scope");
+        };
+        assert!(matches!(scope, AutoLayoutScope::Container(owner) if owner == container));
+        assert_eq!(label, "container");
+    }
+
+    #[test]
+    fn explicit_all_layout_ignores_selection() {
+        let Some((scope, label)) = resolve_layout_scope(
+            CommandId::NodeEditorCleanLayoutAll,
+            &[Uuid::new_v4()],
+            PortOwner::Composition(Uuid::new_v4()),
+        ) else {
+            panic!("all scope");
+        };
+        assert!(matches!(scope, AutoLayoutScope::All));
+        assert_eq!(label, "all");
+    }
+
+    #[test]
+    fn explicit_selection_layout_is_unavailable_without_selected_nodes() {
+        assert!(resolve_layout_scope(
+            CommandId::NodeEditorCleanLayoutSelection,
+            &[],
+            PortOwner::Composition(Uuid::new_v4()),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn layout_request_is_discarded_when_there_is_no_active_composition() {
+        let mut state = crate::state::context_types::NodeEditorState {
+            pending_layout_command: Some(CommandId::NodeEditorCleanLayoutAll),
+            ..Default::default()
+        };
+        assert!(discard_layout_request_without_composition(&mut state));
+        assert_eq!(state.pending_layout_command, None);
+    }
 }

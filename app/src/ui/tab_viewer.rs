@@ -4,7 +4,7 @@ use egui_phosphor::regular as icons;
 use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
-use crate::command::CommandRegistry;
+use crate::command::{CommandRegistry, CommandScope};
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::{activate_composition_with_history, HistoryManager},
@@ -55,6 +55,8 @@ impl<'a> AppTabViewer<'a> {
                 self.history_manager,
                 &mut self.editor_context.node_editor_state,
             );
+            self.editor_context.node_editor_state.panel_rect = None;
+            self.editor_context.node_editor_state.pending_layout_command = None;
         }
     }
 }
@@ -108,12 +110,15 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             }
             Tab::NodeEditor => {
                 self.node_editor_rendered_this_frame = true;
+                self.editor_context.node_editor_state.panel_rect =
+                    Some(ui.max_rect().intersect(ui.clip_rect()));
                 node_editor::node_editor_panel(
                     ui,
                     self.project,
                     self.project_service,
                     self.history_manager,
                     self.editor_context,
+                    self.command_registry,
                 );
 
                 // Handle Navigation Requests
@@ -163,6 +168,34 @@ impl<'a> TabViewer for AppTabViewer<'a> {
     }
 }
 
+pub fn active_command_scope(
+    dock_state: &DockState<Tab>,
+    pointer_hover_pos: Option<egui::Pos2>,
+    node_editor_rect: Option<egui::Rect>,
+    has_active_composition: bool,
+) -> CommandScope {
+    if !has_active_composition {
+        return CommandScope::Global;
+    }
+    if let Some(pointer) = pointer_hover_pos {
+        return if node_editor_rect.is_some_and(|rect| rect.contains(pointer)) {
+            CommandScope::NodeEditor
+        } else {
+            CommandScope::Global
+        };
+    }
+    let Some((surface, node)) = dock_state.focused_leaf() else {
+        return CommandScope::Global;
+    };
+    let Some(leaf) = dock_state[surface][node].get_leaf() else {
+        return CommandScope::Global;
+    };
+    match leaf.tabs.get(leaf.active.0) {
+        Some(Tab::NodeEditor) => CommandScope::NodeEditor,
+        _ => CommandScope::Global,
+    }
+}
+
 pub fn create_initial_dock_state() -> DockState<Tab> {
     let mut dock_state = DockState::new(vec![Tab::Preview]);
     let surface = dock_state.main_surface_mut();
@@ -183,4 +216,62 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
     surface.split_left(main_area, 0.25, vec![Tab::Assets]);
 
     dock_state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{active_command_scope, create_initial_dock_state};
+    use crate::command::CommandScope;
+    use crate::model::ui_types::Tab;
+
+    #[test]
+    fn node_editor_commands_require_the_focused_node_editor_leaf() {
+        let mut dock = create_initial_dock_state();
+        assert_eq!(
+            active_command_scope(&dock, None, None, true),
+            CommandScope::Global
+        );
+
+        let (surface, node, tab) = dock.find_tab(&Tab::NodeEditor).expect("node editor tab");
+        dock.set_active_tab((surface, node, tab));
+        dock.set_focused_node_and_surface((surface, node));
+        assert_eq!(
+            active_command_scope(&dock, None, None, true),
+            CommandScope::NodeEditor
+        );
+
+        let (surface, node, tab) = dock.find_tab(&Tab::Preview).expect("preview tab");
+        dock.set_active_tab((surface, node, tab));
+        dock.set_focused_node_and_surface((surface, node));
+        assert_eq!(
+            active_command_scope(&dock, None, None, true),
+            CommandScope::Global
+        );
+    }
+
+    #[test]
+    fn pointer_hover_scope_overrides_stale_dock_focus_in_both_directions() {
+        let mut dock = create_initial_dock_state();
+        let node_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+        let (node_surface, node_leaf, node_tab) =
+            dock.find_tab(&Tab::NodeEditor).expect("node editor tab");
+        dock.set_active_tab((node_surface, node_leaf, node_tab));
+
+        dock.set_focused_node_and_surface((node_surface, node_leaf));
+        assert_eq!(
+            active_command_scope(&dock, Some(egui::pos2(150.0, 50.0)), Some(node_rect), true,),
+            CommandScope::Global
+        );
+
+        let (preview_surface, preview_leaf, _) = dock.find_tab(&Tab::Preview).expect("preview tab");
+        dock.set_focused_node_and_surface((preview_surface, preview_leaf));
+        assert_eq!(
+            active_command_scope(&dock, Some(egui::pos2(50.0, 50.0)), Some(node_rect), true,),
+            CommandScope::NodeEditor
+        );
+        assert_eq!(
+            active_command_scope(&dock, Some(egui::pos2(50.0, 50.0)), Some(node_rect), false,),
+            CommandScope::Global
+        );
+    }
 }

@@ -28,6 +28,51 @@ pub enum CommandId {
     // Tools
     HandTool,
     ShowCommandPalette,
+
+    // Node Editor
+    NodeEditorCleanLayout,
+    NodeEditorCleanLayoutSelection,
+    NodeEditorCleanLayoutContainer,
+    NodeEditorCleanLayoutAll,
+}
+
+impl CommandId {
+    pub fn is_node_editor_layout(self) -> bool {
+        matches!(
+            self,
+            Self::NodeEditorCleanLayout
+                | Self::NodeEditorCleanLayoutSelection
+                | Self::NodeEditorCleanLayoutContainer
+                | Self::NodeEditorCleanLayoutAll
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandScope {
+    Global,
+    NodeEditor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandContext {
+    pub scope: CommandScope,
+    pub has_node_selection: bool,
+}
+
+impl CommandContext {
+    pub fn palette_origin(area: Self, focused: Self) -> Self {
+        Self {
+            scope: if area.scope == CommandScope::NodeEditor
+                || focused.scope == CommandScope::NodeEditor
+            {
+                CommandScope::NodeEditor
+            } else {
+                CommandScope::Global
+            },
+            has_node_selection: area.has_node_selection || focused.has_node_selection,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -38,6 +83,7 @@ pub struct Command {
     pub shortcut_text: String,
     pub allow_when_focused: bool,
     pub trigger_on_release: bool,
+    pub scope: CommandScope,
 }
 
 #[derive(Clone)]
@@ -84,7 +130,20 @@ impl Command {
             shortcut_text,
             allow_when_focused,
             trigger_on_release,
+            scope: CommandScope::Global,
         }
+    }
+
+    fn in_scope(mut self, scope: CommandScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub fn is_available_in(&self, context: CommandContext) -> bool {
+        let scope_matches = self.scope == CommandScope::Global || self.scope == context.scope;
+        let selection_matches =
+            self.id != CommandId::NodeEditorCleanLayoutSelection || context.has_node_selection;
+        scope_matches && selection_matches
     }
 }
 // ...
@@ -188,6 +247,38 @@ impl CommandRegistry {
                 true,
                 false,
             ),
+            Command::new(
+                CommandId::NodeEditorCleanLayout,
+                "Node Editor: Clean Layout",
+                Some((Modifiers::NONE, Key::L)),
+                false,
+                false,
+            )
+            .in_scope(CommandScope::NodeEditor),
+            Command::new(
+                CommandId::NodeEditorCleanLayoutSelection,
+                "Node Editor: Clean Layout Selection",
+                None,
+                false,
+                false,
+            )
+            .in_scope(CommandScope::NodeEditor),
+            Command::new(
+                CommandId::NodeEditorCleanLayoutContainer,
+                "Node Editor: Clean Layout Current Container",
+                None,
+                false,
+                false,
+            )
+            .in_scope(CommandScope::NodeEditor),
+            Command::new(
+                CommandId::NodeEditorCleanLayoutAll,
+                "Node Editor: Clean Layout All",
+                Some((Modifiers::SHIFT, Key::L)),
+                false,
+                false,
+            )
+            .in_scope(CommandScope::NodeEditor),
         ];
 
         // Register TogglePanel commands
@@ -216,5 +307,69 @@ impl CommandRegistry {
 
     pub fn find(&self, id: CommandId) -> Option<&Command> {
         self.commands.iter().find(|&cmd| cmd.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandContext, CommandId, CommandRegistry, CommandScope};
+    use crate::config::AppConfig;
+    use eframe::egui::{Key, Modifiers};
+
+    #[test]
+    fn node_layout_commands_are_stable_contextual_commands() {
+        let registry = CommandRegistry::new(&AppConfig::new());
+        let smart = registry
+            .find(CommandId::NodeEditorCleanLayout)
+            .expect("smart layout command");
+        assert_eq!(smart.scope, CommandScope::NodeEditor);
+        assert_eq!(smart.shortcut, Some((Modifiers::NONE, Key::L)));
+        assert!(!smart.is_available_in(CommandContext {
+            scope: CommandScope::Global,
+            has_node_selection: false,
+        }));
+        assert!(smart.is_available_in(CommandContext {
+            scope: CommandScope::NodeEditor,
+            has_node_selection: false,
+        }));
+
+        let all = registry
+            .find(CommandId::NodeEditorCleanLayoutAll)
+            .expect("all layout command");
+        assert_eq!(all.shortcut, Some((Modifiers::SHIFT, Key::L)));
+
+        assert!(registry
+            .find(CommandId::NodeEditorCleanLayoutSelection)
+            .is_some());
+        assert!(registry
+            .find(CommandId::NodeEditorCleanLayoutContainer)
+            .is_some());
+
+        let selection = registry
+            .find(CommandId::NodeEditorCleanLayoutSelection)
+            .expect("selection layout command");
+        assert!(!selection.is_available_in(CommandContext {
+            scope: CommandScope::NodeEditor,
+            has_node_selection: false,
+        }));
+        assert!(selection.is_available_in(CommandContext {
+            scope: CommandScope::NodeEditor,
+            has_node_selection: true,
+        }));
+    }
+
+    #[test]
+    fn palette_origin_accepts_area_or_focused_node_context() {
+        let global = CommandContext {
+            scope: CommandScope::Global,
+            has_node_selection: false,
+        };
+        let node = CommandContext {
+            scope: CommandScope::NodeEditor,
+            has_node_selection: true,
+        };
+        assert_eq!(CommandContext::palette_origin(node, global), node);
+        assert_eq!(CommandContext::palette_origin(global, node), node);
+        assert_eq!(CommandContext::palette_origin(global, global), global);
     }
 }

@@ -1,4 +1,7 @@
+mod layout_toolbar;
 mod property_controls;
+
+pub(in crate::ui::panels::node_editor) use layout_toolbar::layout_toolbar;
 
 pub(in crate::ui::panels::node_editor) use property_controls::{
     bounded_non_selectable_label, continuous_color_edit_button, continuous_response_finished,

@@ -1,4 +1,4 @@
-use crate::command::{Command, CommandId, CommandRegistry};
+use crate::command::{Command, CommandContext, CommandId, CommandRegistry};
 use eframe::egui::{self, Align2, Key, RichText, Window};
 
 pub struct CommandPalette {
@@ -6,6 +6,7 @@ pub struct CommandPalette {
     query: String,
     selected_index: usize,
     filtered_commands: Vec<Command>,
+    command_context: Option<CommandContext>,
 }
 
 impl CommandPalette {
@@ -15,15 +16,19 @@ impl CommandPalette {
             query: String::new(),
             selected_index: 0,
             filtered_commands: Vec::new(),
+            command_context: None,
         }
     }
 
-    pub fn toggle(&mut self) {
+    pub fn toggle(&mut self, command_context: CommandContext) {
         self.is_open = !self.is_open;
         if self.is_open {
+            self.command_context = Some(command_context);
             self.query.clear();
             self.selected_index = 0;
             // potential optimization: don't filter immediately, wait for update or pre-fill
+        } else {
+            self.command_context = None;
         }
     }
 
@@ -31,6 +36,10 @@ impl CommandPalette {
         if !self.is_open {
             return None;
         }
+        let command_context = self.command_context.unwrap_or(CommandContext {
+            scope: crate::command::CommandScope::Global,
+            has_node_selection: false,
+        });
 
         let mut executed_command = None;
 
@@ -46,6 +55,9 @@ impl CommandPalette {
             .commands
             .iter()
             .filter(|cmd| {
+                if !cmd.is_available_in(command_context) {
+                    return false;
+                }
                 if self.query.is_empty() {
                     return true;
                 }
@@ -181,10 +193,38 @@ impl CommandPalette {
                     });
             });
 
-        if !open {
+        if !open || !self.is_open {
             self.is_open = false;
+            self.command_context = None;
         }
 
         executed_command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommandPalette;
+    use crate::command::{CommandContext, CommandScope};
+
+    #[test]
+    fn palette_latches_its_origin_context_until_close() {
+        let origin = CommandContext {
+            scope: CommandScope::NodeEditor,
+            has_node_selection: true,
+        };
+        let mut palette = CommandPalette::new();
+        palette.toggle(origin);
+        assert_eq!(palette.command_context, Some(origin));
+
+        // Live pointer context is intentionally absent from `show`; moving
+        // into the palette cannot replace the opening context.
+        assert_eq!(palette.command_context, Some(origin));
+
+        palette.toggle(CommandContext {
+            scope: CommandScope::Global,
+            has_node_selection: false,
+        });
+        assert_eq!(palette.command_context, None);
     }
 }

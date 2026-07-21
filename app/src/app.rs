@@ -14,7 +14,7 @@ use crate::action::{
     handler::{handle_command, ActionContext},
     HistoryManager,
 };
-use crate::command::{CommandId, CommandRegistry};
+use crate::command::{CommandContext, CommandId, CommandRegistry};
 use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
@@ -23,7 +23,7 @@ use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
+use crate::ui::tab_viewer::{active_command_scope, create_initial_dock_state, AppTabViewer};
 use crate::utils::lock::read_or_recover;
 use library::RenderServer;
 
@@ -191,6 +191,32 @@ impl eframe::App for RuViEApp {
             );
         }
 
+        let command_context = CommandContext {
+            scope: active_command_scope(
+                &self.dock_state,
+                ctx.pointer_hover_pos(),
+                self.editor_context.node_editor_state.panel_rect,
+                self.editor_context.active_composition_id.is_some(),
+            ),
+            has_node_selection: self
+                .editor_context
+                .selection
+                .targets()
+                .iter()
+                .any(|target| target.node_id().is_some()),
+        };
+        let focused_command_context = CommandContext {
+            scope: active_command_scope(
+                &self.dock_state,
+                None,
+                self.editor_context.node_editor_state.panel_rect,
+                self.editor_context.active_composition_id.is_some(),
+            ),
+            has_node_selection: command_context.has_node_selection,
+        };
+        let palette_origin_context =
+            CommandContext::palette_origin(command_context, focused_command_context);
+
         // Palette
         if let Some(cmd_id) = self.command_palette.show(ctx, &self.command_registry) {
             self.triggered_action = Some(cmd_id);
@@ -283,6 +309,7 @@ impl eframe::App for RuViEApp {
                 ctx,
                 &self.command_registry,
                 &mut self.editor_context,
+                command_context,
             ) {
                 self.triggered_action = Some(action_id);
             }
@@ -301,7 +328,7 @@ impl eframe::App for RuViEApp {
             if action == CommandId::Export {
                 self.export_dialog.open();
             } else if action == CommandId::ShowCommandPalette {
-                self.command_palette.toggle();
+                self.command_palette.toggle(palette_origin_context);
             }
 
             handle_command(ctx, action, context, &mut trigger_settings);
