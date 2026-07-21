@@ -9,7 +9,7 @@ use library::model::frame::color::Color;
 use library::model::project::{
     Composition, NodeContainer, PortAddress, PortOwner, Project, TIME_PORT,
 };
-use library::model::property::{Property, PropertyMap, PropertyValue};
+use library::model::property::{Property, PropertyMap, PropertyValue, Vec2, Vec3, Vec4};
 use library::model::{
     Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent, Track,
 };
@@ -79,6 +79,34 @@ fn property_serialization_roundtrip() -> Result<()> {
         loaded.get("opacity").and_then(Property::value),
         Some(&PropertyValue::Number(OrderedFloat(0.5)))
     );
+    Ok(())
+}
+
+#[test]
+fn every_vector_arity_roundtrips_without_collapsing_to_vec2() -> Result<()> {
+    let values = [
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(1.0),
+            y: OrderedFloat(2.0),
+        }),
+        PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(1.0),
+            y: OrderedFloat(2.0),
+            z: OrderedFloat(3.0),
+        }),
+        PropertyValue::Vec4(Vec4 {
+            x: OrderedFloat(1.0),
+            y: OrderedFloat(2.0),
+            z: OrderedFloat(3.0),
+            w: OrderedFloat(4.0),
+        }),
+    ];
+
+    for value in values {
+        let json = serde_json::to_string(&value)?;
+        let loaded: PropertyValue = serde_json::from_str(&json)?;
+        assert_eq!(loaded, value);
+    }
     Ok(())
 }
 

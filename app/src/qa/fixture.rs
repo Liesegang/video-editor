@@ -34,6 +34,7 @@ use transform_preview::{
 
 pub const QA_FIXTURE_ENV: &str = "RUVIE_QA_FIXTURE";
 pub const NODE_EDITOR_E2E_FIXTURE: &str = "node_editor_e2e";
+pub const NODE_INSPECTOR_E2E_FIXTURE: &str = "node_inspector_e2e";
 pub const TRANSFORM_PREVIEW_E2E_FIXTURE: &str = "transform_preview_e2e";
 pub const AUDIO_WAVEFORM_E2E_FIXTURE: &str = "audio_waveform_e2e";
 pub const COMPOSITION_DROP_E2E_FIXTURE: &str = "composition_drop_e2e";
@@ -65,6 +66,7 @@ pub const E2E_SHAPE_STROKE_ID: Uuid = Uuid::from_u128(0x603);
 pub const E2E_SHAPE_MERGE_ID: Uuid = Uuid::from_u128(0x604);
 pub const E2E_BACKPLATE_FILL_ID: Uuid = Uuid::from_u128(0x605);
 pub const E2E_TEXT_MERGE_ID: Uuid = Uuid::from_u128(0x606);
+pub const E2E_INSPECTOR_VECTOR_ID: Uuid = Uuid::from_u128(0x608);
 
 #[derive(Clone, Debug)]
 pub struct FixtureInfo {
@@ -100,12 +102,14 @@ fn install_named(
     if !matches!(
         name,
         NODE_EDITOR_E2E_FIXTURE
+            | NODE_INSPECTOR_E2E_FIXTURE
             | TRANSFORM_PREVIEW_E2E_FIXTURE
             | AUDIO_WAVEFORM_E2E_FIXTURE
             | COMPOSITION_DROP_E2E_FIXTURE
     ) {
         return Err(format!("unknown {QA_FIXTURE_ENV} value {name:?}"));
     }
+    let include_inspector_probe = name == NODE_INSPECTOR_E2E_FIXTURE;
     let include_transform_ambiguity = name == TRANSFORM_PREVIEW_E2E_FIXTURE;
     let factory = ProjectService::new(Arc::clone(project), Arc::clone(plugin_manager));
     let mut project = project
@@ -401,6 +405,10 @@ fn install_named(
     project.add_node(shape_fill);
     project.add_node(shape_stroke);
     project.add_node(shape_merge);
+    if include_inspector_probe {
+        composition.node_ids.push(E2E_INSPECTOR_VECTOR_ID);
+        project.add_node(inspector_vector_probe_node()?);
+    }
     project
         .add_composition(composition)
         .map_err(|error| format!("cannot insert QA Composition: {error}"))?;
@@ -570,6 +578,57 @@ fn install_named(
         composition_id: E2E_COMPOSITION_ID,
         expanded_tracks: vec![E2E_TRACK_A_ID, E2E_TRACK_B_ID],
     })
+}
+
+/// A disconnected, unresolved Plugin operation is intentional here: it proves
+/// both editor surfaces can edit persisted Vec4 state without consulting
+/// plugin code. This is the same late-bound contract used by real third-party
+/// Nodes when their plugin is not installed in the current process.
+fn inspector_vector_probe_node() -> Result<Node, String> {
+    serde_json::from_value(serde_json::json!({
+        "id": E2E_INSPECTOR_VECTOR_ID,
+        "name": "QA Vec4 Inspector Probe",
+        "content": {
+            "type": "PluginOperation",
+            "data": {
+                "category": "qa",
+                "component_id": "vec4-probe",
+                "operation": "qa.vec4-probe.v1",
+                "declared_ports": [
+                    {
+                        "key": "property:vector",
+                        "label": "Vector",
+                        "direction": "Input",
+                        "data_type": "Vec4",
+                        "side": "Left",
+                        "multiplicity": "Single",
+                        "exposure": "Graph"
+                    },
+                    {
+                        "key": "result",
+                        "label": "Result",
+                        "direction": "Output",
+                        "data_type": "Vec4",
+                        "side": "Right",
+                        "multiplicity": "Single",
+                        "exposure": "Graph"
+                    }
+                ]
+            }
+        },
+        "enabled": true,
+        "blend_mode": "Normal",
+        "properties": {
+            "vector": {
+                "type": "constant",
+                "properties": {"value": {"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0}}
+            }
+        },
+        "ui_position": [2200.0, 720.0],
+        "ui_size": [360.0, 160.0],
+        "ui_collapsed": false
+    }))
+    .map_err(|error| format!("cannot create QA Vec4 Inspector probe: {error}"))
 }
 
 fn solid_node(

@@ -9,12 +9,14 @@ use crate::model::frame::color::Color;
 use super::PropertyUiType;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Vec2 {
     pub x: OrderedFloat<f64>,
     pub y: OrderedFloat<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Vec3 {
     pub x: OrderedFloat<f64>,
     pub y: OrderedFloat<f64>,
@@ -22,6 +24,7 @@ pub struct Vec3 {
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Vec4 {
     pub x: OrderedFloat<f64>,
     pub y: OrderedFloat<f64>,
