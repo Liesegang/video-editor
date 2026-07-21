@@ -1,16 +1,16 @@
 use crate::state::context_types::{ContainerResizeEdge, ContainerResizeState, NodeEditorState};
 use eframe::egui;
-use library::model::project::{PortDirection, PortOwner, PortSide};
+use library::model::project::PortOwner;
 use library::model::Project;
 
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
-    clipped_qa_rect, container_rect, estimated_node_rect, node_editor_port_interactions_enabled,
-    node_editor_resize_interactions_enabled, qa_container_key, qa_rect_metadata,
-    wire_port_drop_rect, ContainerVisual, LayoutEdit, PortAnchorKind, AUTO_LAYOUT_NODE_PADDING,
-    CONTAINER_HEADER_HEIGHT, MIN_CONTAINER_SIZE, PORT_SOCKET_SIZE, RESIZE_CORNER_SIZE,
-    RESIZE_HIT_WIDTH,
+    clipped_qa_rect, container_rect, estimated_node_rect, input_definitions,
+    node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
+    output_definitions, qa_container_key, qa_rect_metadata, wire_port_drop_rect, ContainerVisual,
+    GraphItem, LayoutEdit, PortAnchorKind, AUTO_LAYOUT_NODE_PADDING, CONTAINER_HEADER_HEIGHT,
+    MIN_CONTAINER_SIZE, PORT_SOCKET_SIZE, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH,
 };
 
 /// Capture a resize press before Snarl gets a chance to treat the same
@@ -62,7 +62,7 @@ fn resize_hit<'a>(
 ) -> Option<(&'a ContainerVisual, ContainerResizeEdge)> {
     containers.iter().rev().find_map(|container| {
         if container.collapsed
-            || pointer_hits_container_output(project, container, to_global, canvas_clip, pointer)
+            || pointer_hits_container_port(project, container, to_global, canvas_clip, pointer)
         {
             return None;
         }
@@ -74,7 +74,7 @@ fn resize_hit<'a>(
     })
 }
 
-fn pointer_hits_container_output(
+fn pointer_hits_container_port(
     project: &Project,
     container: &ContainerVisual,
     to_global: egui::emath::TSTransform,
@@ -84,21 +84,30 @@ fn pointer_hits_container_output(
     if !node_editor_port_interactions_enabled(to_global.scaling) {
         return false;
     }
-    let output_count = project
-        .port_definitions(container.owner)
-        .into_iter()
-        .filter(|definition| {
-            definition.direction == PortDirection::Output && definition.side == PortSide::Right
+    [
+        PortAnchorKind::ExternalInputs,
+        PortAnchorKind::InternalMetadata,
+        PortAnchorKind::OutputSinks,
+        PortAnchorKind::ExternalOutputs,
+    ]
+    .into_iter()
+    .any(|kind| {
+        let item = GraphItem::PortAnchor {
+            owner: container.owner,
+            kind,
+        };
+        let count = input_definitions(project, item)
+            .len()
+            .max(output_definitions(project, item).len());
+        (0..count).any(|index| {
+            let graph_rect = egui::Rect::from_center_size(
+                container.embedded_port_center(kind, index),
+                egui::Vec2::splat(PORT_SOCKET_SIZE),
+            );
+            wire_port_drop_rect(to_global * graph_rect)
+                .intersect(canvas_clip)
+                .contains(pointer)
         })
-        .count();
-    (0..output_count).any(|index| {
-        let graph_rect = egui::Rect::from_center_size(
-            container.embedded_port_center(PortAnchorKind::ExternalOutputs, index),
-            egui::Vec2::splat(PORT_SOCKET_SIZE),
-        );
-        wire_port_drop_rect(to_global * graph_rect)
-            .intersect(canvas_clip)
-            .contains(pointer)
     })
 }
 
@@ -127,7 +136,7 @@ pub(in crate::ui::panels::node_editor) fn container_resize_interactions(
         }
         let global = to_global * container.rect();
         let pointer_on_output = pointer.3.is_some_and(|position| {
-            pointer_hits_container_output(project, container, to_global, canvas_clip, position)
+            pointer_hits_container_port(project, container, to_global, canvas_clip, position)
         });
         for (edge, label, unclipped_rect, cursor) in resize_regions(global) {
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
@@ -535,7 +544,7 @@ mod tests {
             .2;
 
         assert!(top_right.contains(output), "fixture must reproduce overlap");
-        assert!(pointer_hits_container_output(
+        assert!(pointer_hits_container_port(
             &project, &visual, transform, screen, output,
         ));
         assert!(resize_hit(
@@ -547,8 +556,26 @@ mod tests {
         )
         .is_none());
 
+        let input = visual.embedded_port_center(PortAnchorKind::ExternalInputs, 0);
+        let input_drop_padding = egui::pos2(visual.rect().left(), input.y);
+        assert!(pointer_hits_container_port(
+            &project,
+            &visual,
+            transform,
+            screen,
+            input_drop_padding,
+        ));
+        assert!(resize_hit(
+            &project,
+            std::slice::from_ref(&visual),
+            transform,
+            screen,
+            input_drop_padding,
+        )
+        .is_none());
+
         let ordinary_right_edge = visual.rect().right_center();
-        assert!(!pointer_hits_container_output(
+        assert!(!pointer_hits_container_port(
             &project,
             &visual,
             transform,
