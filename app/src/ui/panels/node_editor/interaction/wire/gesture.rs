@@ -521,6 +521,7 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                 // Snarl has already received this frame's press. Preserve that
                 // ownership until release so foreground wire surfaces cannot
                 // claim the rest of the physical gesture.
+                state.container_resize = None;
                 state.normal_wire_drag_active = true;
             }
             return Vec::new();
@@ -591,6 +592,7 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                     kind: rendered_wire_drag_kind(edge, position),
                     start: position,
                     current: position,
+                    canvas_transform: frame.to_global,
                 });
             }
         }

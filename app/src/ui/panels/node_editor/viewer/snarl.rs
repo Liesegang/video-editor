@@ -787,6 +787,11 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             return;
         };
         let graph_rect = rect;
+        if let Some(owner) = graph_item_owner(item) {
+            if let Ok(mut hits) = self.rendered_selection_hits.lock() {
+                hits.push((owner, graph_rect));
+            }
+        }
         let unclipped_rect = *self.to_global * graph_rect;
         let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
         match item {

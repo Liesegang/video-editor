@@ -51,6 +51,7 @@ fn render_time_context_test_graph(
                     rendered_ports: Arc::clone(&rendered_ports),
                     merge_layer_reorder: &mut merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
+                    rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                 };
                 snarl.show(
                     &mut viewer,

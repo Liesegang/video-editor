@@ -18,9 +18,11 @@ pub(in crate::ui::panels::node_editor) use ranking::{
     estimated_node_size, estimated_node_width, rank_nodes_by_scc, rects_are_closer_than,
 };
 #[cfg(test)]
+pub(in crate::ui::panels::node_editor) use reflow::collect_layout_edits;
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) use reflow::padded_intersection;
 pub(in crate::ui::panels::node_editor) use reflow::{
-    apply_layout_edit, collect_layout_edits, composition_content_rect,
+    apply_layout_edit, collect_layout_edits_for_selection, composition_content_rect,
     container_hierarchy_needs_reflow, estimated_node_rect, layout_needs_reflow,
     nested_content_rect, rect_contains_rect,
 };
