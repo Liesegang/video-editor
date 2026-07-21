@@ -101,7 +101,6 @@ fn rendered_ports_stay_vertical_on_their_left_and_right_sides_with_bounded_width
                 let (mut snarl, containers) = build_snarl(&project, composition_id);
                 let mut edits = Vec::new();
                 let mut navigation = None;
-                let mut selection = None;
                 let mut wire_context_request = None;
                 let mut context_menu_exclusion_rects = Vec::new();
                 let mut to_global = egui::emath::TSTransform::default();
@@ -113,7 +112,6 @@ fn rendered_ports_stay_vertical_on_their_left_and_right_sides_with_bounded_width
                     containers: &containers,
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
-                    pending_selection: &mut selection,
                     selected_node_ids: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
@@ -126,7 +124,6 @@ fn rendered_ports_stay_vertical_on_their_left_and_right_sides_with_bounded_width
                     rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                     merge_layer_reorder: &mut merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                    rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                 };
                 let style = SnarlStyle {
                     collapsible: Some(false),

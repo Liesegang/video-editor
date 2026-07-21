@@ -31,10 +31,27 @@ for forbidden_package in app library; do
     fi
 done
 
+if grep -REn '(^|[^[:alnum:]_])(app|library|uuid)::' node-editor-ui/src node-editor-ui/tests; then
+    echo "node-editor-ui sources must use opaque host IDs and contain no RuViE domain imports" >&2
+    exit 1
+fi
+
 app_tree="$(cargo tree -p app --edges normal --locked --prefix none)"
 if ! grep -Eq '^node-editor-ui v' <<<"${app_tree}"; then
     echo "app must consume node-editor-ui through its adapter boundary" >&2
     exit 1
+fi
+
+adapter_path="app/src/ui/panels/node_editor/surface.rs"
+panel_path="app/src/ui/panels/node_editor/panel.rs"
+if [[ -d "app/src/ui/panels/node_editor" ]]; then
+    if [[ ! -f "${adapter_path}" ]] \
+        || ! grep -Fq 'SurfaceProjection' "${adapter_path}" \
+        || ! grep -Fq 'node_editor_ui::Editor::interact' "${panel_path}" \
+        || ! grep -Fq 'InteractionOptions::SELECTION' "${panel_path}"; then
+        echo "app must drive production Node selection through the node-editor-ui frame adapter" >&2
+        exit 1
+    fi
 fi
 
 echo "[quality] node-editor-ui dependency boundary passed"

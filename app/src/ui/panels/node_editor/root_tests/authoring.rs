@@ -549,7 +549,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -561,7 +560,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         containers: &containers,
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -574,7 +572,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -623,7 +620,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -635,7 +631,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         containers: &containers,
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -648,7 +643,6 @@ fn node_editor_effector_control_responds_to_real_pointer_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(
                         &mut viewer,

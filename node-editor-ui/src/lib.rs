@@ -1,12 +1,23 @@
-//! Domain-neutral UI primitives for an egui node editor.
+//! A domain-neutral, immediate-mode node-editor surface for egui.
 //!
-//! This crate owns no graph model. Hosts provide their authoritative graph on
-//! every frame and translate UI results back into host-domain commands. The
-//! first extraction phase contains stateless wire geometry and selection
-//! policies; descriptor-to-intent orchestration will be added only after its
-//! host contract is exercised by both the video-editor adapter and a fake host.
+//! The host remains authoritative. It lends this crate a [`GraphFrame`] for
+//! one UI frame and applies the returned [`EditorOutput`] intents to its own
+//! model and history. The only retained state is an in-progress pointer
+//! gesture in [`InteractionState`].
 
 #![forbid(unsafe_code)]
 
-pub mod selection;
-pub mod wire;
+mod editor;
+mod graph;
+mod interaction;
+mod selection;
+mod wire;
+
+pub use editor::{Editor, EditorConfig, NodeBodyRenderer};
+pub use graph::{
+    AuthoritativeSelection, GraphFrame, GroupDescriptor, ItemId, NodeDescriptor, PortDescriptor,
+    PortDirection, PortInstanceId, PortOwner, TypeKey, WireDescriptor,
+};
+pub use interaction::{EditorOutput, InteractionOptions, InteractionState};
+pub use selection::{after_click, after_marquee, topmost_hit};
+pub use wire::{CubicBezier, HitRegion};

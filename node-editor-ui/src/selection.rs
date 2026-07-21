@@ -6,17 +6,17 @@ use egui::{Pos2, Rect};
 ///
 /// The host controls z-order by descriptor order. Multiple visual subregions
 /// may deliberately carry the same logical ID.
-pub fn topmost_hit<Id: Copy>(hits: &[(Id, Rect)], position: Pos2) -> Option<Id> {
+pub fn topmost_hit<Id: Clone>(hits: &[(Id, Rect)], position: Pos2) -> Option<Id> {
     hits.iter()
         .rev()
-        .find_map(|(id, rect)| rect.contains(position).then_some(*id))
+        .find_map(|(id, rect)| rect.contains(position).then(|| id.clone()))
 }
 
 /// Applies a logical click to an ordered selection and its primary item.
 ///
 /// With `additive`, clicking an existing item toggles it off. Without it, an
 /// existing item becomes primary without disturbing the rest of the selection.
-pub fn after_click<Id: Copy + Eq>(
+pub fn after_click<Id: Clone + Eq>(
     current: &[Id],
     primary: Option<Id>,
     clicked: Id,
@@ -26,38 +26,38 @@ pub fn after_click<Id: Copy + Eq>(
         if current.contains(&clicked) {
             let targets = current
                 .iter()
-                .copied()
-                .filter(|target| *target != clicked)
+                .filter(|target| **target != clicked)
+                .cloned()
                 .collect::<Vec<_>>();
             let primary = primary
                 .filter(|target| targets.contains(target))
-                .or_else(|| targets.last().copied());
+                .or_else(|| targets.last().cloned());
             return (targets, primary);
         }
 
         let mut targets = current.to_vec();
-        targets.push(clicked);
+        targets.push(clicked.clone());
         return (targets, Some(clicked));
     }
 
     if current.contains(&clicked) {
         let mut targets = current.to_vec();
         targets.retain(|target| *target != clicked);
-        targets.push(clicked);
+        targets.push(clicked.clone());
         return (targets, Some(clicked));
     }
 
-    (vec![clicked], Some(clicked))
+    (vec![clicked.clone()], Some(clicked))
 }
 
 /// Applies the ordered, possibly duplicated results of a marquee hit test.
-pub fn after_marquee<Id: Copy + Eq>(
+pub fn after_marquee<Id: Clone + Eq>(
     current: &[Id],
     marquee_hits: &[Id],
     additive: bool,
 ) -> (Vec<Id>, Option<Id>) {
     let mut unique = Vec::new();
-    for target in marquee_hits.iter().copied() {
+    for target in marquee_hits.iter().cloned() {
         if !unique.contains(&target) {
             unique.push(target);
         }
@@ -70,10 +70,10 @@ pub fn after_marquee<Id: Copy + Eq>(
                 targets.push(target);
             }
         }
-        let primary = targets.last().copied();
+        let primary = targets.last().cloned();
         (targets, primary)
     } else {
-        let primary = unique.last().copied();
+        let primary = unique.last().cloned();
         (unique, primary)
     }
 }

@@ -67,7 +67,6 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -79,7 +78,6 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
                         containers: &containers,
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -92,7 +90,6 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
                     drop(viewer);
@@ -481,7 +478,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -493,7 +489,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         containers: &containers,
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -506,7 +501,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -574,7 +568,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -586,7 +579,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         containers: &containers,
                         edits: &mut edits,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -599,7 +591,6 @@ fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         merge_layer_reorder: &mut merge_layer_reorder,
                         rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
                     snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);

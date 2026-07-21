@@ -14,22 +14,21 @@ use uuid::Uuid;
 
 use super::{
     apply_auto_layout, apply_edit, apply_layout_edit, apply_queued_node_edits, build_snarl,
-    canvas_marquee_interaction, capture_container_resize_before_canvas, captured_snarl_drag_node,
-    captured_snarl_drag_target, collect_layout_edits_for_selection, compute_auto_layout,
-    compute_full_composition_layout, container_inactive, container_resize_interactions,
-    final_node_positions, finish_node_reparent, flush_pending_continuous_edit, handle_context_menu,
-    layout_needs_reflow, logical_hit_owner, merge_images_target_node_id,
-    node_can_splice_connection, node_drop_intents, node_editor_canvas_metadata,
-    node_editor_details_visible, node_editor_port_interactions_enabled,
-    node_editor_snarl_style_for, non_selectable_label, paint_container_foreground,
-    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
-    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
-    register_implicit_time_context_wires, register_rendered_edges, register_reparent_drop_targets,
-    rendered_edge_at_position, selection_after_logical_click, selection_after_marquee,
+    capture_container_resize_before_canvas, captured_snarl_drag_node, captured_snarl_drag_target,
+    collect_layout_edits_for_selection, compute_auto_layout, compute_full_composition_layout,
+    container_inactive, container_resize_interactions, final_node_positions, finish_node_reparent,
+    flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow,
+    merge_images_target_node_id, node_can_splice_connection, node_drop_intents,
+    node_editor_canvas_metadata, node_editor_details_visible,
+    node_editor_port_interactions_enabled, node_editor_snarl_style_for, non_selectable_label,
+    paint_container_foreground, port_owner_composition, port_owner_for_node_container,
+    primary_node_drop_intent, push_history_snapshot, record_node_reparent_origins,
+    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
+    register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
     selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
-    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, CanvasSelectionOutcome,
-    GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
-    ReparentReleaseOutcome, TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
+    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
+    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
+    SurfaceProjection, TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -198,9 +197,6 @@ pub fn node_editor_panel(
     let mut suppress_wire_secondary_click = false;
     let mut edits = Vec::new();
     let mut drop_intents = Vec::new();
-    let mut pending_selection = None;
-    let mut pending_blank_click = false;
-    let mut pending_marquee_selection = None;
     let mut selection_changed = false;
     let mut context_menu_exclusion_rects = Vec::new();
     let mut wire_context_request = None;
@@ -209,7 +205,6 @@ pub fn node_editor_panel(
     let mut canvas_clip = canvas_rect;
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
     let rendered_node_rects = Arc::new(Mutex::new(HashMap::new()));
-    let rendered_selection_hits = Arc::new(Mutex::new(Vec::new()));
     let plugin_manager = project_service.get_plugin_manager();
     {
         let Ok(project) = project_lock.read() else {
@@ -245,7 +240,6 @@ pub fn node_editor_panel(
             containers: &containers,
             edits: &mut edits,
             pending_navigation: &mut node_editor_state.pending_navigation,
-            pending_selection: &mut pending_selection,
             selected_node_ids: &selected_nodes,
             current_time,
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
@@ -258,12 +252,7 @@ pub fn node_editor_panel(
                 .container_resize
                 .as_ref()
                 .map(|resize| resize.canvas_transform)
-                .or_else(|| {
-                    node_editor_state
-                        .canvas_marquee
-                        .as_ref()
-                        .map(|gesture| gesture.canvas_transform)
-                })
+                .or_else(|| node_editor_state.surface_interaction.locked_transform())
                 .or_else(|| {
                     node_editor_state
                         .wire_gesture
@@ -294,7 +283,6 @@ pub fn node_editor_panel(
             rendered_ports: Arc::clone(&rendered_ports),
             merge_layer_reorder: &mut node_editor_state.merge_layer_reorder,
             rendered_node_rects: Arc::clone(&rendered_node_rects),
-            rendered_selection_hits: Arc::clone(&rendered_selection_hits),
         };
         let snarl_style = node_editor_snarl_style_for(ui.style());
         let graph_id = egui::Id::new(("project_node_editor", comp_id));
@@ -483,27 +471,16 @@ pub fn node_editor_panel(
         );
         let resize_owned_layout =
             resize_owned_layout_before || node_editor_state.container_resize.is_some();
-        let selection_hits = rendered_selection_hits
-            .lock()
-            .map(|hits| hits.clone())
-            .unwrap_or_default();
-        let (
-            primary_pressed,
-            primary_down,
-            primary_released,
-            primary_clicked,
-            pointer_position,
-            modifiers,
-        ) = ui.input(|input| {
-            (
-                input.pointer.primary_pressed(),
-                input.pointer.primary_down(),
-                input.pointer.primary_released(),
-                input.pointer.primary_clicked(),
-                input.pointer.interact_pos(),
-                input.modifiers,
-            )
-        });
+        let (primary_pressed, primary_down, primary_released, pointer_position, modifiers) = ui
+            .input(|input| {
+                (
+                    input.pointer.primary_pressed(),
+                    input.pointer.primary_down(),
+                    input.pointer.primary_released(),
+                    input.pointer.interact_pos(),
+                    input.modifiers,
+                )
+            });
         let pointer_on_port = node_editor_port_interactions_enabled(to_global.scaling)
             && pointer_position.is_some_and(|position| {
                 canvas_clip.contains(position)
@@ -527,61 +504,56 @@ pub fn node_editor_panel(
                     .is_some_and(|resize| resize.owner == *owner)
             }) {
                 let clicked = selection_target_for_owner(owner);
-                let (targets, primary) = selection_after_logical_click(
-                    editor_context.selection.targets(),
-                    editor_context.selection.primary(),
-                    clicked,
-                    modifiers.shift,
-                );
                 selection_changed |=
-                    replace_selection_if_changed(&mut editor_context.selection, targets, primary);
+                    select_logical_item(&mut editor_context.selection, clicked, modifiers.shift);
             }
         }
 
-        let marquee_was_active = node_editor_state.canvas_marquee.is_some();
-        let marquee_outcome = canvas_marquee_interaction(
-            ui,
-            node_editor_state,
-            &selection_hits,
-            to_global,
-            canvas_clip,
-            node_editor_details_visible(to_global.scaling),
-            pointer_is_specialized,
-        );
-        let marquee_owned_layout = marquee_was_active
-            || node_editor_state.canvas_marquee.is_some()
-            || marquee_outcome.is_some();
-        if let Some(outcome) = marquee_outcome {
-            pending_marquee_selection = Some(outcome);
+        let surface_was_active = node_editor_state.surface_interaction.is_active();
+        let surface_outputs = if let (Ok(node_rects), Ok(port_rects)) =
+            (rendered_node_rects.lock(), rendered_ports.lock())
+        {
+            let projection = SurfaceProjection::from_project(
+                &project,
+                &containers,
+                &node_rects,
+                &port_rects,
+                &rendered_edges,
+                editor_context.selection.targets(),
+                editor_context.selection.primary(),
+                node_editor_state.selected_connection_id,
+                canvas_clip,
+                to_global,
+            );
+            node_editor_ui::Editor::interact(
+                ui,
+                &projection.frame(),
+                &mut node_editor_state.surface_interaction,
+                node_editor_ui::InteractionOptions::SELECTION,
+                pointer_is_specialized || !node_editor_details_visible(to_global.scaling),
+            )
+        } else {
+            Vec::new()
+        };
+        if let Some(change) = super::selection_change(&surface_outputs) {
+            selection_changed |= replace_selection_if_changed(
+                &mut editor_context.selection,
+                change.targets,
+                change.primary,
+            );
         }
-
-        if primary_clicked && !pointer_is_specialized && !marquee_owned_layout {
-            pending_selection = pointer_position
-                .map(|position| to_global.inverse() * position)
-                .and_then(|position| logical_hit_owner(&selection_hits, position));
-            pending_blank_click = pending_selection.is_none();
-        } else if pointer_is_specialized {
-            // Header coordinate checks are intentionally broad. A real socket,
-            // wire, or resize gesture owns the same pixels and must suppress
-            // the header's fallback selection request.
-            pending_selection = None;
+        if super::deselects_wire(&surface_outputs) {
+            node_editor_state.selected_connection_id = None;
         }
+        let surface_owned_layout =
+            surface_was_active || node_editor_state.surface_interaction.is_active();
 
-        let layout_pointer_owned = wire_owned_layout || resize_owned_layout || marquee_owned_layout;
+        let layout_pointer_owned = wire_owned_layout || resize_owned_layout || surface_owned_layout;
         if primary_down && !layout_pointer_owned {
             if let Some(target) = captured_drag_target {
                 if node_editor_state.active_drag_selection != Some(target) {
-                    let (targets, primary) = selection_after_logical_click(
-                        editor_context.selection.targets(),
-                        editor_context.selection.primary(),
-                        target,
-                        modifiers.shift,
-                    );
-                    selection_changed |= replace_selection_if_changed(
-                        &mut editor_context.selection,
-                        targets,
-                        primary,
-                    );
+                    selection_changed |=
+                        select_logical_item(&mut editor_context.selection, target, modifiers.shift);
                     node_editor_state.active_drag_selection = Some(target);
                 }
             }
@@ -602,7 +574,7 @@ pub fn node_editor_panel(
         collected.extend(resize_edits);
         let gesture_allowed = (primary_down || primary_released)
             && node_editor_state.container_resize.is_none()
-            && node_editor_state.canvas_marquee.is_none()
+            && !node_editor_state.surface_interaction.is_marquee_active()
             && node_editor_state.wire_gesture.is_none()
             && node_editor_state.normal_connect_gesture.is_none()
             && node_editor_state.wire_knife.is_none()
@@ -659,51 +631,6 @@ pub fn node_editor_panel(
         layout_edits = collected;
     }
 
-    let selection_modifiers = ui.input(|input| input.modifiers);
-    if let Some(outcome) = pending_marquee_selection {
-        match outcome {
-            CanvasSelectionOutcome::BlankClick { additive } => {
-                if !additive {
-                    selection_changed |= replace_selection_if_changed(
-                        &mut editor_context.selection,
-                        Vec::new(),
-                        None,
-                    );
-                }
-            }
-            CanvasSelectionOutcome::Marquee { targets, additive } => {
-                let (targets, primary) =
-                    selection_after_marquee(editor_context.selection.targets(), &targets, additive);
-                selection_changed |=
-                    replace_selection_if_changed(&mut editor_context.selection, targets, primary);
-            }
-        }
-    }
-    if let Some(owner) = pending_selection {
-        if let Ok(project) = project_lock.read() {
-            let exists = match owner {
-                PortOwner::Node(id) => project.get_node(id).is_some(),
-                PortOwner::Clip(id) => project.get_clip(id).is_some(),
-                PortOwner::Track(id) => project.get_track(id).is_some(),
-                PortOwner::Composition(id) => id == comp_id,
-            };
-            if exists {
-                let clicked = selection_target_for_owner(owner);
-                let (targets, primary) = selection_after_logical_click(
-                    editor_context.selection.targets(),
-                    editor_context.selection.primary(),
-                    clicked,
-                    selection_modifiers.shift,
-                );
-                selection_changed |=
-                    replace_selection_if_changed(&mut editor_context.selection, targets, primary);
-            }
-        }
-    }
-    if pending_blank_click && !selection_modifiers.shift {
-        selection_changed |=
-            replace_selection_if_changed(&mut editor_context.selection, Vec::new(), None);
-    }
     if selection_changed {
         editor_context.interaction.preview_edit_target = None;
         // Inspector is normally laid out before Node Editor in the dock tree.

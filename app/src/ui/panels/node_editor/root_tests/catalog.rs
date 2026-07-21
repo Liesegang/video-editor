@@ -263,7 +263,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                 egui::CentralPanel::default().show(context, |ui| {
                     rendered_ports.lock().unwrap().clear();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::default();
@@ -274,7 +273,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         containers: &containers,
                         edits: &mut queued,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -289,7 +287,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         rendered_ports: Arc::clone(&rendered_ports),
                         merge_layer_reorder: &mut state.merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(
                         &mut viewer,
@@ -408,7 +405,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                 egui::CentralPanel::default().show(context, |ui| {
                     rendered_ports.lock().unwrap().clear();
                     let mut navigation = None;
-                    let mut selection = None;
                     let mut wire_context_request = None;
                     let mut exclusions = Vec::new();
                     let mut to_global = egui::emath::TSTransform::default();
@@ -419,7 +415,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         containers: &containers,
                         edits: &mut queued,
                         pending_navigation: &mut navigation,
-                        pending_selection: &mut selection,
                         selected_node_ids: &[],
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut exclusions,
@@ -437,7 +432,6 @@ fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan()
                         rendered_ports: Arc::clone(&rendered_ports),
                         merge_layer_reorder: &mut state.merge_layer_reorder,
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                        rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                     };
                     snarl.show(
                         &mut viewer,

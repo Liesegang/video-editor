@@ -177,7 +177,6 @@ fn render_merge_frame(
             egui::CentralPanel::default().show(context, |ui| {
                 let (mut snarl, containers) = build_snarl(project, composition_id);
                 let mut navigation = None;
-                let mut selection = None;
                 let mut wire_context_request = None;
                 let mut exclusions = Vec::new();
                 let mut to_global = egui::emath::TSTransform::IDENTITY;
@@ -193,7 +192,6 @@ fn render_merge_frame(
                     containers: &containers,
                     edits: &mut result.edits,
                     pending_navigation: &mut navigation,
-                    pending_selection: &mut selection,
                     selected_node_ids: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut exclusions,
@@ -206,7 +204,6 @@ fn render_merge_frame(
                     rendered_ports: Arc::clone(&rendered_ports),
                     merge_layer_reorder: &mut state.merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                    rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                 };
                 snarl.show(
                     &mut viewer,

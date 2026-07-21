@@ -690,11 +690,16 @@ pub struct NodeEditorState {
     /// uses absolute drag delta and produces one coalesced history entry.
     #[serde(skip)]
     pub container_resize: Option<ContainerResizeState>,
-    /// Blank-canvas primary drag captured as a marquee selection gesture.
-    /// The graph transform is frozen for the lifetime of the gesture so
-    /// Snarl's scene navigation cannot reinterpret the same pointer as pan.
+    /// Domain-neutral pointer-lifetime state. Descriptors and authoritative
+    /// selection are lent from Project every frame; this retains no graph
+    /// model, positions, connections, or history.
     #[serde(skip)]
-    pub canvas_marquee: Option<NodeEditorCanvasMarqueeGesture>,
+    pub surface_interaction: node_editor_ui::InteractionState<
+        Uuid,
+        node_editor_ui::PortInstanceId<PortAddress, NodeEditorEditableWire>,
+        NodeEditorEditableWire,
+        PortOwner,
+    >,
     /// Logical Project item whose Snarl frame currently owns the pointer.
     /// This bridges Snarl's transient node IDs to the typed selection model
     /// exactly once per physical drag (important for Shift toggle semantics).
@@ -782,14 +787,6 @@ pub struct NodeEditorWireGesture {
     pub current: egui::Pos2,
     /// Keep the scene fixed while the foreground wire gesture owns primary
     /// input. Without this, the same drag can move the wire and pan the graph.
-    pub canvas_transform: egui::emath::TSTransform,
-}
-
-#[derive(Clone, Debug)]
-pub struct NodeEditorCanvasMarqueeGesture {
-    pub start: egui::Pos2,
-    pub current: egui::Pos2,
-    pub additive: bool,
     pub canvas_transform: egui::emath::TSTransform,
 }
 

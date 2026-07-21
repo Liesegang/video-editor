@@ -351,7 +351,6 @@ fn render_test_graph_with_context_menu_exclusions(
             egui::CentralPanel::default().show(context, |ui| {
                 let mut edits = Vec::new();
                 let mut navigation = None;
-                let mut selection = None;
                 let mut wire_context_request = None;
                 let mut context_menu_exclusion_rects = Vec::new();
                 let mut to_global = egui::emath::TSTransform::default();
@@ -364,7 +363,6 @@ fn render_test_graph_with_context_menu_exclusions(
                     containers: &containers,
                     edits: &mut edits,
                     pending_navigation: &mut navigation,
-                    pending_selection: &mut selection,
                     selected_node_ids: &[],
                     current_time: 0.0,
                     context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
@@ -377,7 +375,6 @@ fn render_test_graph_with_context_menu_exclusions(
                     rendered_ports: Arc::clone(&rendered_ports),
                     merge_layer_reorder: &mut merge_layer_reorder,
                     rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
-                    rendered_selection_hits: Arc::new(Mutex::new(Vec::new())),
                 };
                 let style = SnarlStyle {
                     collapsible: Some(false),

@@ -160,13 +160,6 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 });
                 let unclipped_header_rect = *self.to_global * response.rect;
                 let header_rect = clipped_qa_rect(unclipped_header_rect, *self.canvas_clip);
-                let coordinate_clicked = ui.input(|input| {
-                    input.pointer.primary_clicked()
-                        && input
-                            .pointer
-                            .interact_pos()
-                            .is_some_and(|position| header_rect.contains(position))
-                });
                 let coordinate_double_clicked = ui.input(|input| {
                     input
                         .pointer
@@ -204,9 +197,6 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         "visible_in_canvas": header_rect.is_positive(),
                     })),
                 );
-                if coordinate_clicked {
-                    *self.pending_selection = Some(PortOwner::Node(project_node_id));
-                }
                 if coordinate_double_clicked {
                     if let Some(node) = self.project.get_node(project_node_id) {
                         if let NodeContent::CompositionInstance(instance) = node.content() {
@@ -294,15 +284,6 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         "visible_in_canvas": header_rect.is_positive(),
                     })),
                 );
-                if ui.input(|input| {
-                    input.pointer.primary_clicked()
-                        && input
-                            .pointer
-                            .interact_pos()
-                            .is_some_and(|position| header_rect.contains(position))
-                }) {
-                    *self.pending_selection = Some(owner);
-                }
             }
             GraphItem::PortAnchor { .. } => {
                 ui.allocate_space(egui::Vec2::ZERO);
@@ -795,11 +776,6 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             return;
         };
         let graph_rect = rect;
-        if let Some(owner) = graph_item_owner(item) {
-            if let Ok(mut hits) = self.rendered_selection_hits.lock() {
-                hits.push((owner, graph_rect));
-            }
-        }
         let unclipped_rect = *self.to_global * graph_rect;
         let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
         match item {

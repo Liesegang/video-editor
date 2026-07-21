@@ -2,7 +2,7 @@ use crate::state::context_types::{NodeEditorEditableWire, NodeEditorWireDragKind
 use eframe::egui;
 use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use library::model::Project;
-use node_editor_ui::wire::{CubicBezier, HitRegion};
+use node_editor_ui::{CubicBezier, HitRegion};
 use std::collections::HashMap;
 use uuid::Uuid;
 

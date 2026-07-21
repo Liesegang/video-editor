@@ -47,6 +47,7 @@ mod container_output;
 #[cfg(test)]
 mod merge_reorder_tests;
 mod property_evaluation;
+mod surface;
 #[cfg(test)]
 mod test_fixture;
 #[cfg(test)]
@@ -92,6 +93,7 @@ use interaction::{
     EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
     WireSecondaryClickHit,
 };
+use surface::{deselects_wire, selection_change, SurfaceProjection};
 mod qa;
 
 #[cfg(test)]
@@ -130,12 +132,11 @@ mod queries;
 use interaction::node_selection_after_snarl_click;
 #[cfg(test)]
 use interaction::resize_regions;
-use interaction::{
-    canvas_marquee_interaction, captured_snarl_drag_node, captured_snarl_drag_target,
-    logical_hit_owner, selection_after_logical_click, selection_after_marquee,
-    selection_target_for_owner, CanvasSelectionOutcome,
-};
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
+use interaction::{
+    captured_snarl_drag_node, captured_snarl_drag_target, select_logical_item,
+    selection_target_for_owner,
+};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
 use interaction::{

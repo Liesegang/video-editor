@@ -1,6 +1,5 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorMergeLayerReorderGesture};
 use eframe::egui;
-use library::model::project::PortOwner;
 use library::model::Project;
 use library::plugin::PluginManager;
 use std::collections::HashMap;
@@ -22,7 +21,6 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     pub(in crate::ui::panels::node_editor) containers: &'a [ContainerVisual],
     pub(in crate::ui::panels::node_editor) edits: &'a mut Vec<QueuedNodeEdit>,
     pub(in crate::ui::panels::node_editor) pending_navigation: &'a mut Option<Uuid>,
-    pub(in crate::ui::panels::node_editor) pending_selection: &'a mut Option<PortOwner>,
     /// Authoritative Project selection from `EditorContext`, sorted by UUID.
     /// egui-snarl's transient selection remains an input gesture detail only.
     pub(in crate::ui::panels::node_editor) selected_node_ids: &'a [Uuid],
@@ -48,9 +46,4 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     /// precise enough around nested container boundaries.
     pub(in crate::ui::panels::node_editor) rendered_node_rects:
         Arc<Mutex<HashMap<Uuid, egui::Rect>>>,
-    /// Draw-order list of every transient Snarl frame mapped to its canonical
-    /// Project owner. Container cards and port anchors intentionally share an
-    /// owner so hit testing cannot create separate selection identities.
-    pub(in crate::ui::panels::node_editor) rendered_selection_hits:
-        Arc<Mutex<Vec<(PortOwner, egui::Rect)>>>,
 }
