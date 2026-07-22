@@ -148,6 +148,17 @@ impl PartialEq for DrawStyle {
 }
 impl Eq for DrawStyle {}
 
+/// Unit space used by a Trim Path operation.
+///
+/// `Normalized` treats one unit as the accumulated length of all contours.
+/// `Length` evaluates authored values in path-local pixels.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TrimPathUnits {
+    Normalized,
+    Length,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)] // Removed PartialEq, Eq
 #[serde(tag = "type")]
 pub enum PathEffect {
@@ -166,6 +177,8 @@ pub enum PathEffect {
     Trim {
         start: f64,
         end: f64,
+        offset: f64,
+        units: TrimPathUnits,
     },
 }
 
@@ -191,9 +204,16 @@ impl Hash for PathEffect {
                 OrderedFloat(*deviation).hash(state);
                 seed.hash(state);
             }
-            PathEffect::Trim { start, end } => {
+            PathEffect::Trim {
+                start,
+                end,
+                offset,
+                units,
+            } => {
                 OrderedFloat(*start).hash(state);
                 OrderedFloat(*end).hash(state);
+                OrderedFloat(*offset).hash(state);
+                units.hash(state);
             }
         }
     }
@@ -237,8 +257,24 @@ impl PartialEq for PathEffect {
                     && OrderedFloat(*d1) == OrderedFloat(*d2)
                     && seed1 == seed2
             }
-            (PathEffect::Trim { start: s1, end: e1 }, PathEffect::Trim { start: s2, end: e2 }) => {
-                OrderedFloat(*s1) == OrderedFloat(*s2) && OrderedFloat(*e1) == OrderedFloat(*e2)
+            (
+                PathEffect::Trim {
+                    start: s1,
+                    end: e1,
+                    offset: o1,
+                    units: u1,
+                },
+                PathEffect::Trim {
+                    start: s2,
+                    end: e2,
+                    offset: o2,
+                    units: u2,
+                },
+            ) => {
+                OrderedFloat(*s1) == OrderedFloat(*s2)
+                    && OrderedFloat(*e1) == OrderedFloat(*e2)
+                    && OrderedFloat(*o1) == OrderedFloat(*o2)
+                    && u1 == u2
             }
             _ => false,
         }

@@ -7,7 +7,7 @@ use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
-use library::model::frame::draw_type::PathEffect;
+use library::model::frame::draw_type::{PathEffect, TrimPathUnits};
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
@@ -164,6 +164,31 @@ fn image_hash(image: &Image) -> u64 {
 }
 
 #[test]
+fn default_trim_is_a_renderable_full_traversal() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let source = shape_source(Arc::clone(&plugins))?;
+    let (without_trim, _) = setup_project(source.clone(), Vec::new(), &plugins)?;
+    let default_trim = plugins.create_path_effect_operation_node("trim")?;
+    let (with_trim, _) = setup_project(source, vec![default_trim], &plugins)?;
+
+    assert_eq!(
+        rendered_path_effects(&evaluate(&with_trim, &plugins)?)?,
+        [PathEffect::Trim {
+            start: 0.0,
+            end: 1.0,
+            offset: 0.0,
+            units: TrimPathUnits::Normalized,
+        }]
+    );
+    assert_eq!(
+        image_hash(&render(&with_trim, &plugins)?),
+        image_hash(&render(&without_trim, &plugins)?),
+        "the default full traversal must be a renderable identity"
+    );
+    Ok(())
+}
+
+#[test]
 fn explicit_nodes_apply_in_wire_order_and_reorder_preserves_authored_state() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let source = shape_source(Arc::clone(&plugins))?;
@@ -196,6 +221,8 @@ fn explicit_nodes_apply_in_wire_order_and_reorder_preserves_authored_state() -> 
             PathEffect::Trim {
                 start: 0.08,
                 end: 0.81,
+                offset: 0.0,
+                units: TrimPathUnits::Normalized,
             },
         ]
     );
@@ -233,6 +260,8 @@ fn explicit_nodes_apply_in_wire_order_and_reorder_preserves_authored_state() -> 
             PathEffect::Trim {
                 start: 0.08,
                 end: 0.81,
+                offset: 0.0,
+                units: TrimPathUnits::Normalized,
             },
             PathEffect::Dash {
                 intervals: vec![13.0, 5.0],

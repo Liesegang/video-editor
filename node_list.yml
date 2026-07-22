@@ -2079,7 +2079,7 @@ Trim:
   component_id: trim
   operation: path_effect.apply.v1
   shape_geometry: Path
-  description: Apply one Trim config to Path geometry; Text requires an explicit outline-extraction operation
+  description: Trim cumulative Path contour length with cyclic start/end/offset values in normalized turns or path-local pixels; Text requires an explicit outline-extraction operation
   inputs:
     - name: time
       key: time
@@ -2088,6 +2088,18 @@ Trim:
       side: Left
       exposure: Graph
       multiplicity: Single
+    - name: mode
+      key: property:mode
+      label: Mode / Units
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: mode
+      property_metadata:
+        ui_type: Dropdown
+        default: Normalized (1 = full path)
+        options: [Normalized (1 = full path), Length (px)]
     - name: start
       key: property:start
       label: Start
@@ -2099,12 +2111,12 @@ Trim:
       property_metadata:
         ui_type: Float
         default: 0.0
-        min: 0.0
-        max: 1.0
+        min: -1000.0
+        max: 1000.0
         step: 0.01
         suffix: ""
-        min_hard_limit: true
-        max_hard_limit: true
+        min_hard_limit: false
+        max_hard_limit: false
     - name: end
       key: property:end
       label: End
@@ -2116,12 +2128,29 @@ Trim:
       property_metadata:
         ui_type: Float
         default: 1.0
-        min: 0.0
-        max: 1.0
+        min: -1000.0
+        max: 1000.0
         step: 0.01
         suffix: ""
-        min_hard_limit: true
-        max_hard_limit: true
+        min_hard_limit: false
+        max_hard_limit: false
+    - name: offset
+      key: property:offset
+      label: Offset
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: offset
+      property_metadata:
+        ui_type: Float
+        default: 0.0
+        min: -1000.0
+        max: 1000.0
+        step: 0.01
+        suffix: ""
+        min_hard_limit: false
+        max_hard_limit: false
     - name: shape
       key: shape_in
       label: Shape

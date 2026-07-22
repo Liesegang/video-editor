@@ -573,7 +573,7 @@ mod tests {
                 "discrete",
                 ["deviation", "seed", "segment_length"].as_slice(),
             ),
-            ("trim", ["end", "start"].as_slice()),
+            ("trim", ["end", "mode", "offset", "start"].as_slice()),
         ];
         for (component_id, property_names) in expected {
             let request = NodeCreateRequest::PathEffect(component_id.to_string());

@@ -5,7 +5,7 @@
 //! travels through explicit Shape -> Shape graph wiring.
 
 use crate::error::LibraryError;
-use crate::model::frame::draw_type::PathEffect;
+use crate::model::frame::draw_type::{PathEffect, TrimPathUnits};
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
@@ -14,6 +14,9 @@ pub const DASH_PATH_EFFECT_COMPONENT_ID: &str = "dash";
 pub const CORNER_PATH_EFFECT_COMPONENT_ID: &str = "corner";
 pub const DISCRETE_PATH_EFFECT_COMPONENT_ID: &str = "discrete";
 pub const TRIM_PATH_EFFECT_COMPONENT_ID: &str = "trim";
+
+const TRIM_NORMALIZED_MODE: &str = "Normalized (1 = full path)";
+const TRIM_LENGTH_MODE: &str = "Length (px)";
 
 pub trait PathEffectPlugin: Plugin {
     fn properties(&self) -> Vec<PropertyDefinition>;
@@ -67,6 +70,17 @@ fn required_number(properties: &PropertyMap, key: &str) -> Result<f64, LibraryEr
             "Path Effect property {key:?} was not materialized as a number"
         ))
     })
+}
+
+fn required_finite_number(properties: &PropertyMap, key: &str) -> Result<f64, LibraryError> {
+    let value = required_number(properties, key)?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(LibraryError::Validation(format!(
+            "Path Effect property {key:?} must be finite"
+        )))
+    }
 }
 
 fn required_integer(properties: &PropertyMap, key: &str) -> Result<i64, LibraryError> {
@@ -305,8 +319,44 @@ impl Plugin for TrimPathEffectPlugin {
 impl PathEffectPlugin for TrimPathEffectPlugin {
     fn properties(&self) -> Vec<PropertyDefinition> {
         vec![
-            float_property("start", "Start", 0.0, 0.0..=1.0, 0.01, "", (true, true)),
-            float_property("end", "End", 1.0, 0.0..=1.0, 0.01, "", (true, true)),
+            PropertyDefinition::new(
+                "mode",
+                PropertyUiType::Dropdown {
+                    options: vec![
+                        TRIM_NORMALIZED_MODE.to_string(),
+                        TRIM_LENGTH_MODE.to_string(),
+                    ],
+                },
+                "Mode / Units",
+                PropertyValue::String(TRIM_NORMALIZED_MODE.to_string()),
+            ),
+            float_property(
+                "start",
+                "Start",
+                0.0,
+                -1000.0..=1000.0,
+                0.01,
+                "",
+                (false, false),
+            ),
+            float_property(
+                "end",
+                "End",
+                1.0,
+                -1000.0..=1000.0,
+                0.01,
+                "",
+                (false, false),
+            ),
+            float_property(
+                "offset",
+                "Offset",
+                0.0,
+                -1000.0..=1000.0,
+                0.01,
+                "",
+                (false, false),
+            ),
         ]
     }
 
@@ -316,14 +366,26 @@ impl PathEffectPlugin for TrimPathEffectPlugin {
         properties: &PropertyMap,
         _eval_time: f64,
     ) -> Result<PathEffect, LibraryError> {
-        let start = required_number(properties, "start")?;
-        let end = required_number(properties, "end")?;
-        if start >= end {
-            return Err(LibraryError::Validation(
-                "Trim Path Effect requires start to be less than end".to_string(),
-            ));
-        }
-        Ok(PathEffect::Trim { start, end })
+        let mode = properties.get_string("mode").ok_or_else(|| {
+            LibraryError::Validation(
+                "Trim Path Effect mode was not materialized as text".to_string(),
+            )
+        })?;
+        let units = match mode.as_str() {
+            TRIM_NORMALIZED_MODE => TrimPathUnits::Normalized,
+            TRIM_LENGTH_MODE => TrimPathUnits::Length,
+            _ => {
+                return Err(LibraryError::Validation(format!(
+                    "Trim Path Effect mode {mode:?} is not supported"
+                )));
+            }
+        };
+        Ok(PathEffect::Trim {
+            start: required_finite_number(properties, "start")?,
+            end: required_finite_number(properties, "end")?,
+            offset: required_finite_number(properties, "offset")?,
+            units,
+        })
     }
 }
 
