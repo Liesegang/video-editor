@@ -2,6 +2,7 @@
 
 use super::descriptor::DescriptorSpec;
 
+mod color;
 mod compositing;
 mod data;
 mod generators;
@@ -14,6 +15,7 @@ pub(super) fn specs() -> impl Iterator<Item = &'static DescriptorSpec> {
     generators::specs()
         .iter()
         .chain(data::specs())
+        .chain(color::specs())
         .chain(math::specs())
         .chain(list::specs())
         .chain(path::specs())

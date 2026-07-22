@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 mod catalog;
+mod color;
 mod containers;
 mod data;
 mod list;
@@ -22,6 +23,11 @@ mod sound_analysis;
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
     native_node_descriptor, native_node_descriptor_for_node,
+};
+pub use color::{
+    COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_VALUE_PORT,
+    ColorContent,
 };
 pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
@@ -510,16 +516,16 @@ impl Node {
                 self.name
             ));
         }
-        if matches!(self.content(), NodeContent::Data(_)) {
+        if matches!(self.content(), NodeContent::Data(_) | NodeContent::Color(_)) {
             let value = property.value().ok_or_else(|| {
                 format!(
-                    "Data Node '{}' property '{key}' has no authored value",
+                    "Typed metadata Node '{}' property '{key}' has no authored value",
                     self.name
                 )
             })?;
             if !self.accepts_authored_property_value(&key, value) {
                 return Err(format!(
-                    "Data Node '{}' rejects an incompatible '{key}' value",
+                    "Typed metadata Node '{}' rejects an incompatible '{key}' value",
                     self.name,
                 ));
             }
@@ -559,6 +565,15 @@ impl Node {
         Self::with_properties(
             name,
             NodeContent::List(content),
+            PropertyMap::from_definitions(content.property_definitions()),
+        )
+    }
+
+    /// Creates a lossless, color-space-tagged metadata operation.
+    pub fn new_color(name: &str, content: ColorContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::Color(content),
             PropertyMap::from_definitions(content.property_definitions()),
         )
     }
@@ -650,6 +665,7 @@ impl Node {
     fn accepts_authored_property_value(&self, key: &str, value: &PropertyValue) -> bool {
         match self.content() {
             NodeContent::Data(data) => key == DATA_VALUE_PROPERTY && data.accepts_value(value),
+            NodeContent::Color(operation) => operation.accepts_property(key, value),
             _ => true,
         }
     }
@@ -696,6 +712,9 @@ pub enum NodeContent {
     /// serializable `PropertyValue::Array` payloads; connection order remains
     /// authoritative on `ProjectConnection::order`.
     List(ListContent),
+    /// Lossless straight-alpha floating-point Color operations. These stay in
+    /// the metadata graph and do not cross the current RGBA8 image boundary.
+    Color(ColorContent),
     /// First-party authored Color and Path leaves. Their values live only in
     /// the canonical Project property map and retain their tagged precision.
     Data(DataContent),

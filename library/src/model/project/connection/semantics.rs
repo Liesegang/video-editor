@@ -135,6 +135,7 @@ impl Project {
                             })
                         }),
                         NodeContent::Value(_)
+                        | NodeContent::Color(_)
                         | NodeContent::Data(_)
                         | NodeContent::List(_)
                         | NodeContent::Path(_) => None,

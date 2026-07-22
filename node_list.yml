@@ -72,6 +72,109 @@ Color:
       side: Right
       exposure: Graph
       multiplicity: Single
+Compose Color:
+  category: Color
+  catalog_status: native
+  catalog_id: native.color.compose
+  runtime_status: implemented
+  model: Color.Compose
+  description: Compose a tagged straight-alpha floating-point Color without clipping HDR or negative RGB
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+    - name: space
+      key: space
+      label: Color Space
+      type: String
+    - name: r
+      key: r
+      label: Red
+      type: Number
+    - name: g
+      key: g
+      label: Green
+      type: Number
+    - name: b
+      key: b
+      label: Blue
+      type: Number
+    - name: a
+      key: a
+      label: Alpha
+      type: Number
+  outputs:
+    - name: color
+      key: color
+      label: Color
+      type: Color
+Split Color:
+  category: Color
+  catalog_status: native
+  catalog_id: native.color.split
+  runtime_status: implemented
+  model: Color.Split
+  description: Split a tagged straight-alpha floating-point Color into its exact space and RGBA components
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+    - name: color
+      key: color
+      label: Color
+      type: Color
+  outputs:
+    - name: space
+      key: space
+      label: Color Space
+      type: String
+    - name: r
+      key: r
+      label: Red
+      type: Number
+    - name: g
+      key: g
+      label: Green
+      type: Number
+    - name: b
+      key: b
+      label: Blue
+      type: Number
+    - name: a
+      key: a
+      label: Alpha
+      type: Number
+Mix Color:
+  category: Color
+  catalog_status: native
+  catalog_id: native.color.mix
+  runtime_status: implemented
+  model: Color.Mix
+  description: Straight-alpha interpolation of two Colors in the same explicit color space
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+    - name: a
+      key: a
+      label: A
+      type: Color
+    - name: b
+      key: b
+      label: B
+      type: Color
+    - name: factor
+      key: factor
+      label: Factor
+      type: Number
+  outputs:
+    - name: color
+      key: color
+      label: Color
+      type: Color
 Path:
   category: Data
   catalog_status: native
@@ -1010,6 +1113,10 @@ Mask:
       type: Image
 
 # --- Color ---
+# Image Color Effects remain design-needed while the renderer surface is
+# RGBA8888. Promoting them to implemented before a floating-point working-
+# space image contract exists would clip HDR/negative RGB and erase the
+# explicit ColorValue color-space tag.
 Color Correction:
   category: Color
   catalog_status: design-needed

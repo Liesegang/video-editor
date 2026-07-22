@@ -1,6 +1,6 @@
 use super::super::{
-    DataContent, GeneratorContent, ListContent, NativeOperationContent, Node, NodeContent,
-    PathOperationContent, SoundAnalysisContent, ValueContent,
+    ColorContent, DataContent, GeneratorContent, ListContent, NativeOperationContent, Node,
+    NodeContent, PathOperationContent, SoundAnalysisContent, ValueContent,
 };
 use crate::model::project::{
     PortDataType, PortDefinition, PortExposure, PortMultiplicity, PortSide,
@@ -27,6 +27,7 @@ pub enum NativeNodeFactory {
     Generator(GeneratorContent),
     Value(ValueContent),
     Data(DataContent),
+    Color(ColorContent),
     List(ListContent),
     Path(PathOperationContent),
     Merge,
@@ -101,6 +102,7 @@ impl NativeNodeCatalogDescriptor {
             )),
             NativeNodeFactory::Value(value) => Ok(Node::new_value(self.label, value)),
             NativeNodeFactory::Data(data) => Ok(Node::new_data(self.label, data)),
+            NativeNodeFactory::Color(operation) => Ok(Node::new_color(self.label, operation)),
             NativeNodeFactory::List(operation) => Ok(Node::new_list(self.label, operation)),
             NativeNodeFactory::Path(operation) => {
                 Ok(Node::new_path_operation(self.label, operation))

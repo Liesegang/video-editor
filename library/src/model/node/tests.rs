@@ -314,6 +314,54 @@ fn every_list_catalog_factory_is_complete_typed_and_roundtrips() {
 }
 
 #[test]
+fn every_color_catalog_factory_initializes_typed_defaults_and_roundtrips() {
+    use crate::model::project::{PortDataType, PortDirection};
+
+    for operation in ColorContent::ALL {
+        let descriptor = native_node_descriptor(operation.catalog_id()).unwrap();
+        assert_eq!(descriptor.label(), operation.label());
+        assert_eq!(descriptor.category(), "Color");
+        assert_eq!(
+            descriptor.runtime_status(),
+            NativeNodeRuntimeStatus::Implemented
+        );
+        assert_eq!(descriptor.factory(), NativeNodeFactory::Color(operation));
+        let node = Node::new_catalog_node(operation.catalog_id()).unwrap();
+        assert_eq!(node.content(), &NodeContent::Color(operation));
+        assert_eq!(
+            node.properties(),
+            &PropertyMap::from_definitions(operation.property_definitions())
+        );
+        assert!(!node.supports_bypass());
+        assert!(descriptor.ports().iter().any(|port| {
+            port.direction == PortDirection::Output
+                && matches!(
+                    port.data_type,
+                    PortDataType::Color | PortDataType::Number | PortDataType::String
+                )
+        }));
+        let restored: Node = serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        assert_eq!(restored, node);
+    }
+
+    let compose = Node::new_catalog_node(ColorContent::Compose.catalog_id()).unwrap();
+    assert_eq!(
+        compose
+            .properties()
+            .get(COLOR_SPACE_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::String("srgb".to_string()))
+    );
+    let mix = Node::new_catalog_node(ColorContent::Mix.catalog_id()).unwrap();
+    assert_eq!(
+        mix.properties()
+            .get(COLOR_MIX_FACTOR_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::Number(OrderedFloat(0.5)))
+    );
+}
+
+#[test]
 fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
     use crate::model::path::{FillRule, PathValue};
     use crate::model::project::connection::DATA_VALUE_OUTPUT_PORT;

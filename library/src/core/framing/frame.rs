@@ -8,6 +8,7 @@ use crate::model::project::{Composition, Project};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use crate::util::timing::ScopedTimer;
 
+mod color_graph;
 mod container_graph;
 mod data_graph;
 mod evaluator;
@@ -72,6 +73,8 @@ pub fn get_frame_from_project(
     Ok(frame)
 }
 
+#[cfg(test)]
+mod color_graph_tests;
 #[cfg(test)]
 mod data_graph_tests;
 #[cfg(test)]

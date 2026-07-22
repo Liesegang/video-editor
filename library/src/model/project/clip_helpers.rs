@@ -44,6 +44,7 @@ impl Node {
             NodeContent::CompositionInstance(_) => (255, 150, 255),
             NodeContent::PluginOperation(_) => (180, 140, 220),
             NodeContent::Value(_) => (125, 190, 210),
+            NodeContent::Color(_) => (205, 145, 105),
             NodeContent::Data(_) => (170, 130, 205),
             NodeContent::List(_) => (110, 180, 155),
             NodeContent::Path(_) => (170, 130, 205),
