@@ -7,8 +7,8 @@
 
 use crate::model::project::{
     BACKGROUND_SHAPE_INPUT_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
-    PortDataType, PortDefinition, PortDirection, PortExposure, PortSide, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT, TIME_PORT,
+    PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortSide,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyUiType};
 use crate::model::{Node, PluginOperationContent};
@@ -52,6 +52,10 @@ pub enum OperationDescriptorError {
     InvalidProperty { name: String, reason: String },
     #[error("operation descriptor has duplicate or colliding port {key:?}")]
     PortCollision { key: String },
+    #[error("operation descriptor declares {count} Time ports; at most one is allowed")]
+    MultipleTimePorts { count: usize },
+    #[error("operation descriptor Time port is invalid: {reason}")]
+    InvalidTimePort { reason: &'static str },
     #[error("operation descriptor operation port {key:?} has an invalid key")]
     InvalidOperationPortKey { key: String },
     #[error("operation descriptor port {key:?} label must not be empty")]
@@ -111,9 +115,14 @@ impl OperationNodeParts {
 
 impl OperationDescriptor {
     /// Builds a descriptor from one authoritative list of property
-    /// definitions. A common Time input is placed first, followed by typed
-    /// property inputs, payload inputs, and outputs. This keeps shared graph
-    /// controls stable without coupling validation to positional counts.
+    /// definitions. An optional common Time input is placed first, followed by
+    /// typed property inputs, payload inputs, and outputs. Relative order is
+    /// preserved within the payload-input and output groups.
+    ///
+    /// Time remains optional for the general-purpose constructor so an
+    /// external operation with no temporal dependency does not need to expose
+    /// a meaningless port. Every specialized bundled operation constructor
+    /// supplies Time explicitly.
     pub fn new(
         category: impl Into<String>,
         component_id: impl Into<String>,
@@ -132,16 +141,39 @@ impl OperationDescriptor {
                 )
             })
             .collect::<Vec<_>>();
-        let mut operation_ports = operation_ports.into_iter().collect::<Vec<_>>();
-        let time_input = operation_ports
+        let operation_ports = operation_ports.into_iter().collect::<Vec<_>>();
+        let time_count = operation_ports
             .iter()
-            .position(|port| port.direction == PortDirection::Input && port.key == TIME_PORT)
-            .map(|index| operation_ports.remove(index));
-        let mut declared_ports =
-            Vec::with_capacity(property_ports.len() + operation_ports.len() + 1);
+            .filter(|port| port.key == TIME_PORT)
+            .count();
+        if time_count > 1 {
+            return Err(OperationDescriptorError::MultipleTimePorts { count: time_count });
+        }
+
+        let mut time_input = None;
+        let mut payload_inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for port in operation_ports {
+            if port.key == TIME_PORT {
+                validate_time_port(&port)?;
+                time_input = Some(port);
+            } else if port.direction == PortDirection::Input {
+                payload_inputs.push(port);
+            } else {
+                outputs.push(port);
+            }
+        }
+
+        let mut declared_ports = Vec::with_capacity(
+            usize::from(time_input.is_some())
+                + property_ports.len()
+                + payload_inputs.len()
+                + outputs.len(),
+        );
         declared_ports.extend(time_input);
         declared_ports.extend(property_ports);
-        declared_ports.extend(operation_ports);
+        declared_ports.extend(payload_inputs);
+        declared_ports.extend(outputs);
         let descriptor = Self {
             category: category.into(),
             component_id: component_id.into(),
@@ -520,6 +552,26 @@ impl OperationDescriptor {
             }
         }
         Ok(())
+    }
+}
+
+fn validate_time_port(port: &PortDefinition) -> Result<(), OperationDescriptorError> {
+    let reason = if port.direction != PortDirection::Input {
+        Some("direction must be Input")
+    } else if port.data_type != PortDataType::Number {
+        Some("data type must be Number")
+    } else if port.multiplicity != PortMultiplicity::Single {
+        Some("multiplicity must be Single")
+    } else if port.exposure != PortExposure::Graph {
+        Some("exposure must be Graph")
+    } else if port.side != PortSide::Left {
+        Some("side must be Left")
+    } else {
+        None
+    };
+    match reason {
+        Some(reason) => Err(OperationDescriptorError::InvalidTimePort { reason }),
+        None => Ok(()),
     }
 }
 
