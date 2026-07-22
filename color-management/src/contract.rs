@@ -14,20 +14,22 @@ pub enum BackendBuild {
 pub struct BackendCapabilities {
     pub enumerate_color_spaces: bool,
     /// `None` means that no CPU processor is available. The precision describes
-    /// the processor's internal math, not the f64 authoring values at its API
-    /// boundary.
-    pub cpu_processor_compute_precision: Option<CpuComputePrecision>,
+    /// the RGB samples submitted to and returned from the backend processor,
+    /// not its internal arithmetic or the f64 authoring API boundary.
+    pub cpu_processor_sample_precision: Option<CpuSamplePrecision>,
     pub gpu_shader_lut: bool,
     pub extended_range_rgb: bool,
 }
 
-/// Internal arithmetic precision used by a CPU color processor.
+/// Component precision at a CPU color processor's sample boundary.
 ///
 /// This is deliberately independent of Project/authoring scalar precision and
-/// image-buffer component storage. For example, an OpenColorIO processor may
-/// accept f64 authoring values at this crate's boundary while computing in f32.
+/// image-buffer component storage. For example, this crate may accept f64
+/// authoring values and explicitly quantize them to f32 before calling a
+/// processor whose sample API is f32. This does not claim how that processor
+/// performs its internal arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CpuComputePrecision {
+pub enum CpuSamplePrecision {
     Float32,
     Float64,
 }
@@ -96,7 +98,7 @@ pub const TARGET_COLOR_PIPELINE: ColorPipelineContract = ColorPipelineContract {
 mod tests {
     use super::{
         AlphaRepresentation, AuthoringScalarPrecision, BackendCapabilities, ComponentStorage,
-        CpuComputePrecision, TARGET_COLOR_PIPELINE,
+        CpuSamplePrecision, TARGET_COLOR_PIPELINE,
     };
     use crate::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 
@@ -126,10 +128,10 @@ mod tests {
     }
 
     #[test]
-    fn f64_authoring_does_not_imply_f64_backend_compute() {
+    fn f64_authoring_does_not_imply_f64_backend_samples() {
         let capabilities = BackendCapabilities {
             enumerate_color_spaces: true,
-            cpu_processor_compute_precision: Some(CpuComputePrecision::Float32),
+            cpu_processor_sample_precision: Some(CpuSamplePrecision::Float32),
             gpu_shader_lut: false,
             extended_range_rgb: true,
         };
@@ -139,8 +141,8 @@ mod tests {
             AuthoringScalarPrecision::Float64
         );
         assert_eq!(
-            capabilities.cpu_processor_compute_precision,
-            Some(CpuComputePrecision::Float32)
+            capabilities.cpu_processor_sample_precision,
+            Some(CpuSamplePrecision::Float32)
         );
     }
 }

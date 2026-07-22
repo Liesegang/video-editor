@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::contract::{BackendBuild, BackendCapabilities, CpuComputePrecision, ProcessorCacheKey};
+use crate::contract::{BackendBuild, BackendCapabilities, CpuSamplePrecision, ProcessorCacheKey};
 
 pub const SRGB_SPACE_ID: &str = "srgb";
 pub const LINEAR_SRGB_SPACE_ID: &str = "linear-srgb";
@@ -116,6 +116,7 @@ pub enum ColorManagementError {
     NonFiniteComponent { component: &'static str },
     AlphaOutOfRange,
     UnsupportedTransform { source: String, target: String },
+    UnsupportedDisplayView { backend_id: String, view: String },
     GpuTransformUnavailable { backend_id: String },
 }
 
@@ -138,6 +139,12 @@ impl fmt::Display for ColorManagementError {
                     "unsupported color transform '{source}' -> '{target}'"
                 )
             }
+            Self::UnsupportedDisplayView { backend_id, view } => {
+                write!(
+                    formatter,
+                    "color backend '{backend_id}' does not support display view '{view}'"
+                )
+            }
             Self::GpuTransformUnavailable { backend_id } => {
                 write!(
                     formatter,
@@ -153,9 +160,10 @@ impl std::error::Error for ColorManagementError {}
 pub trait CpuColorProcessor: Send + Sync {
     /// Transform one straight-alpha authoring color without clipping RGB.
     ///
-    /// f64 is the lossless Project/API interchange representation. A backend
-    /// may compute internally at the precision reported by
-    /// [`BackendCapabilities::cpu_processor_compute_precision`].
+    /// f64 is the canonical Project/API interchange representation. A backend
+    /// may quantize RGB at the sample boundary reported by
+    /// [`BackendCapabilities::cpu_processor_sample_precision`]; that capability
+    /// does not claim the backend's internal arithmetic precision.
     fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError>;
 }
 
@@ -205,6 +213,12 @@ impl BuiltinColorTransform {
         if request.source_space.trim().is_empty() || request.target_space.trim().is_empty() {
             return Err(ColorManagementError::EmptyColorSpace);
         }
+        if let TransformRole::WorkingToDisplay { view: Some(view) } = &request.role {
+            return Err(ColorManagementError::UnsupportedDisplayView {
+                backend_id: self.backend_id().to_string(),
+                view: view.clone(),
+            });
+        }
         let source_supported = matches!(
             request.source_space.as_str(),
             SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID
@@ -243,7 +257,7 @@ impl ColorTransformBackend for BuiltinColorTransform {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             enumerate_color_spaces: true,
-            cpu_processor_compute_precision: Some(CpuComputePrecision::Float64),
+            cpu_processor_sample_precision: Some(CpuSamplePrecision::Float64),
             gpu_shader_lut: false,
             extended_range_rgb: true,
         }
@@ -384,7 +398,7 @@ mod tests {
         BuiltinColorTransform, ColorManagementError, ColorTransformBackend, ColorTransformRequest,
         GpuShaderLanguage, LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
     };
-    use crate::{BackendBuild, CpuComputePrecision, TransformRole};
+    use crate::{BackendBuild, CpuSamplePrecision, TransformRole};
 
     fn assert_near(actual: f64, expected: f64) {
         assert!(
@@ -400,8 +414,8 @@ mod tests {
         let capabilities = backend.capabilities();
         assert!(capabilities.enumerate_color_spaces);
         assert_eq!(
-            capabilities.cpu_processor_compute_precision,
-            Some(CpuComputePrecision::Float64)
+            capabilities.cpu_processor_sample_precision,
+            Some(CpuSamplePrecision::Float64)
         );
         assert!(!capabilities.gpu_shader_lut);
         assert!(capabilities.extended_range_rgb);
@@ -461,19 +475,41 @@ mod tests {
     }
 
     #[test]
-    fn role_participates_in_processor_cache_identity() {
+    fn supported_role_participates_in_processor_cache_identity() {
         let backend = BuiltinColorTransform;
         let explicit = ColorTransformRequest::explicit(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
-        let display = ColorTransformRequest::working_to_display(
-            SRGB_SPACE_ID,
-            LINEAR_SRGB_SPACE_ID,
-            Some("qa-view".to_string()),
-        );
+        let display =
+            ColorTransformRequest::working_to_display(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID, None);
         assert_eq!(explicit.role, TransformRole::Explicit);
         assert_ne!(
             backend.processor_cache_key(&explicit).unwrap(),
             backend.processor_cache_key(&display).unwrap()
         );
+    }
+
+    #[test]
+    fn builtin_rejects_named_display_views_instead_of_ignoring_them() {
+        let backend = BuiltinColorTransform;
+        let request = ColorTransformRequest::working_to_display(
+            LINEAR_SRGB_SPACE_ID,
+            SRGB_SPACE_ID,
+            Some("qa-view".to_string()),
+        );
+
+        assert!(matches!(
+            backend.processor_cache_key(&request),
+            Err(ColorManagementError::UnsupportedDisplayView {
+                ref backend_id,
+                ref view,
+            }) if backend_id == "builtin.extended-srgb" && view == "qa-view"
+        ));
+        assert!(matches!(
+            backend.create_cpu_processor(&request),
+            Err(ColorManagementError::UnsupportedDisplayView {
+                ref backend_id,
+                ref view,
+            }) if backend_id == "builtin.extended-srgb" && view == "qa-view"
+        ));
     }
 
     #[test]
