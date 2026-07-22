@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::ui::panels::node_editor::{
+    immediate_child_rects, AutoLayoutPlan, AUTO_LAYOUT_TRACK_TOP,
+};
 use library::model::project::{
     PortAddress, PortOwner, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
 };
@@ -90,6 +93,12 @@ impl Fixture {
         connection.id =
             Uuid::from_u128(100_000 + self.project.connections.len().try_into().unwrap_or(0));
         self.project.connections.push(connection);
+    }
+
+    fn move_track_away_from_composition_nodes(&mut self) {
+        let track = self.project.get_track_mut(self.track_id).unwrap();
+        track.ui_position = [900.0, 100.0];
+        track.ui_size = [300.0, 300.0];
     }
 
     fn request<'a>(
@@ -578,6 +587,7 @@ fn variable_width_chain_uses_edge_to_edge_gap_not_center_distance() {
 #[test]
 fn anchor_stays_fixed_for_align_distribute_and_upstream_distribution() {
     let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
     let owner = NodeContainer::Composition(fixture.composition_id);
     let first = fixture.add_node(owner, 60, "First", [0.0, 300.0], [80.0, 60.0]);
     let middle = fixture.add_node(owner, 61, "Middle", [300.0, 500.0], [160.0, 100.0]);
@@ -613,6 +623,7 @@ fn anchor_stays_fixed_for_align_distribute_and_upstream_distribution() {
 #[test]
 fn align_keeps_anchor_and_explicitly_fixed_selection_unchanged() {
     let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
     let owner = NodeContainer::Composition(fixture.composition_id);
     let anchor = fixture.add_node(owner, 65, "Anchor", [100.0, 100.0], [120.0, 80.0]);
     let movable = fixture.add_node(owner, 66, "Movable", [400.0, 500.0], [100.0, 40.0]);
@@ -650,10 +661,11 @@ fn align_keeps_anchor_and_explicitly_fixed_selection_unchanged() {
 #[test]
 fn vertical_distribution_keeps_visual_gaps_and_horizontal_graph_flow() {
     let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
     let owner = NodeContainer::Composition(fixture.composition_id);
     let source = fixture.add_node(owner, 70, "Source", [0.0, 0.0], [100.0, 100.0]);
-    let first = fixture.add_node(owner, 71, "First", [0.0, 0.0], [80.0, 60.0]);
-    let second = fixture.add_node(owner, 72, "Second", [0.0, 0.0], [140.0, 120.0]);
+    let first = fixture.add_node(owner, 71, "First", [130.0, 0.0], [80.0, 60.0]);
+    let second = fixture.add_node(owner, 72, "Second", [240.0, 0.0], [140.0, 120.0]);
     fixture.connect(source, first, 0);
     fixture.connect(first, second, 0);
     let plan = plan_directional_layout(
@@ -674,6 +686,279 @@ fn vertical_distribution_keeps_visual_gaps_and_horizontal_graph_flow() {
     let second_rect = planned_geometry(&fixture, &plan, second);
     assert_eq!(first_rect.position[1], source_rect.bottom() + V_GAP);
     assert_eq!(second_rect.position[1], first_rect.bottom() + V_GAP);
+    assert_eq!(first_rect.position[0], 130.0);
+    assert_eq!(second_rect.position[0], 240.0);
     assert_ltr(&fixture, &plan, source, first);
     assert_ltr(&fixture, &plan, first, second);
+}
+
+#[test]
+fn exact_align_rejects_a_new_fixed_obstacle_overlap() {
+    let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 80, "Anchor", [0.0, 100.0], [100.0, 80.0]);
+    let movable = fixture.add_node(owner, 81, "Movable", [500.0, 500.0], [100.0, 40.0]);
+    let fixed_sink = fixture.add_node(owner, 82, "Fixed sink", [260.0, 100.0], [100.0, 80.0]);
+    let _lane_obstacle =
+        fixture.add_node(owner, 83, "Lane obstacle", [500.0, 100.0], [100.0, 100.0]);
+    fixture.connect(anchor, movable, 0);
+    fixture.connect(movable, fixed_sink, 0);
+
+    let result = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection {
+                selected: &[movable, fixed_sink],
+                fixed: &[fixed_sink],
+            },
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Align,
+        ),
+    );
+
+    assert_eq!(result, Err(DirectionalLayoutError::ConstraintCollision));
+}
+
+#[test]
+fn valid_owner_uses_available_upper_slot_without_moving_siblings() {
+    let mut fixture = Fixture::new();
+    let owner = NodeContainer::Track(fixture.track_id);
+    {
+        let track = fixture.project.get_track_mut(fixture.track_id).unwrap();
+        track.ui_position = [0.0, 0.0];
+        track.ui_size = [800.0, 500.0];
+    }
+    let anchor = fixture.add_node(owner, 90, "Anchor", [0.0, 200.0], [100.0, 80.0]);
+    let movable = fixture.add_node(owner, 91, "Movable", [420.0, 300.0], [100.0, 60.0]);
+    let lower_blocker =
+        fixture.add_node(owner, 92, "Lower blocker", [130.0, 250.0], [100.0, 170.0]);
+    fixture.connect(anchor, movable, 0);
+
+    let blocker_before = fixture.geometry[&lower_blocker].position;
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )
+    .unwrap();
+
+    let movable = planned_geometry(&fixture, &plan, movable);
+    let blocker = fixture.geometry[&lower_blocker];
+    assert_eq!(movable.position[0], 130.0);
+    assert!(movable.bottom() + V_GAP <= blocker.position[1]);
+    assert!(movable.position[1] >= AUTO_LAYOUT_TRACK_TOP);
+    assert!(!plan.node_positions.contains_key(&lower_blocker));
+    assert_eq!(fixture.geometry[&lower_blocker].position, blocker_before);
+}
+
+#[test]
+fn obstacle_moves_the_whole_semantic_rank_as_one_block() {
+    let mut fixture = Fixture::new();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 100, "Anchor", [0.0, 100.0], [100.0, 80.0]);
+    let upper = fixture.add_node(owner, 101, "Upper", [-100.0, 100.0], [100.0, 60.0]);
+    let lower = fixture.add_node(owner, 102, "Lower", [-100.0, 200.0], [100.0, 60.0]);
+    let obstacle = fixture.add_node(owner, 103, "Obstacle", [130.0, 170.0], [100.0, 80.0]);
+    fixture.connect_ports(anchor, "upper", upper, "input", 0);
+    fixture.connect_ports(anchor, "lower", lower, "input", 0);
+
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )
+    .unwrap();
+
+    let upper = planned_geometry(&fixture, &plan, upper);
+    let lower = planned_geometry(&fixture, &plan, lower);
+    let obstacle = fixture.geometry[&obstacle];
+    assert_eq!(lower.position[1], upper.bottom() + V_GAP);
+    assert!(upper.position[1] >= obstacle.bottom() + V_GAP);
+}
+
+#[test]
+fn hundred_node_rank_with_dense_obstacles_remains_interactive() {
+    let mut fixture = Fixture::new();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 200, "Anchor", [0.0, 0.0], [80.0, 30.0]);
+    let mut eligible = Vec::new();
+    for index in 0..100_u128 {
+        let node = fixture.add_node(
+            owner,
+            1_000 + index,
+            &format!("Branch {index}"),
+            [0.0, index as f32 * 31.0],
+            [80.0, 30.0],
+        );
+        fixture.connect_ports(anchor, "branch", node, "input", index as i64);
+        eligible.push(node);
+        fixture.add_node(
+            owner,
+            2_000 + index,
+            &format!("Obstacle {index}"),
+            [110.0, index as f32 * 31.0],
+            [80.0, 30.0],
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(plan.diagnostics.eligible_node_ids.len(), eligible.len());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "100-Node rank packing took {:?}",
+        started.elapsed()
+    );
+    let mut ordered = eligible;
+    ordered.sort_by(|left, right| {
+        planned_geometry(&fixture, &plan, *left).position[1]
+            .total_cmp(&planned_geometry(&fixture, &plan, *right).position[1])
+    });
+    for pair in ordered.windows(2) {
+        let upper = planned_geometry(&fixture, &plan, pair[0]);
+        let lower = planned_geometry(&fixture, &plan, pair[1]);
+        assert!(upper.bottom() + V_GAP <= lower.position[1]);
+    }
+}
+
+#[test]
+fn horizontal_distribution_preserves_each_nodes_vertical_lane() {
+    let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 3_000, "Anchor", [0.0, 80.0], [100.0, 60.0]);
+    let upper = fixture.add_node(owner, 3_001, "Upper", [500.0, 180.0], [80.0, 40.0]);
+    let lower = fixture.add_node(owner, 3_002, "Lower", [520.0, 360.0], [120.0, 60.0]);
+    fixture.connect_ports(anchor, "upper", upper, "input", 0);
+    fixture.connect_ports(anchor, "lower", lower, "input", 0);
+
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Distribute,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(planned_geometry(&fixture, &plan, upper).position[1], 180.0);
+    assert_eq!(planned_geometry(&fixture, &plan, lower).position[1], 360.0);
+    assert_eq!(planned_geometry(&fixture, &plan, upper).position[0], 130.0);
+    assert_eq!(planned_geometry(&fixture, &plan, lower).position[0], 240.0);
+}
+
+#[test]
+fn vertical_alignment_preserves_each_nodes_vertical_lane() {
+    let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 3_010, "Anchor", [100.0, 100.0], [120.0, 80.0]);
+    let movable = fixture.add_node(owner, 3_011, "Movable", [500.0, 320.0], [80.0, 40.0]);
+    fixture.connect(anchor, movable, 0);
+
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Vertical,
+            DirectionalLayoutMode::Align,
+        ),
+    )
+    .unwrap();
+
+    let movable = planned_geometry(&fixture, &plan, movable);
+    assert_eq!(movable.position[1], 320.0);
+    assert_eq!(movable.center()[0], fixture.geometry[&anchor].center()[0]);
+}
+
+#[test]
+fn worsening_one_axis_of_a_legacy_pair_is_rejected() {
+    let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 3_020, "Anchor", [0.0, 80.0], [100.0, 60.0]);
+    let movable = fixture.add_node(owner, 3_021, "Movable", [200.0, 300.0], [100.0, 80.0]);
+    let _legacy_overlap =
+        fixture.add_node(owner, 3_022, "Legacy overlap", [80.0, 300.0], [100.0, 80.0]);
+    fixture.connect(anchor, movable, 0);
+
+    let result = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Distribute,
+        ),
+    );
+
+    assert_eq!(result, Err(DirectionalLayoutError::ConstraintCollision));
+}
+
+#[test]
+fn explicit_layout_repairs_a_legacy_fixed_node_overlap() {
+    let mut fixture = Fixture::new();
+    fixture.move_track_away_from_composition_nodes();
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let anchor = fixture.add_node(owner, 3_030, "Anchor", [0.0, 100.0], [100.0, 80.0]);
+    let movable = fixture.add_node(owner, 3_031, "Movable", [130.0, 300.0], [100.0, 80.0]);
+    let fixed = fixture.add_node(owner, 3_032, "Fixed", [130.0, 300.0], [100.0, 80.0]);
+    fixture.connect(anchor, movable, 0);
+
+    let plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            owner,
+            anchor,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )
+    .unwrap();
+
+    let movable = planned_geometry(&fixture, &plan, movable);
+    let fixed = fixture.geometry[&fixed];
+    assert!(
+        movable.bottom() + V_GAP <= fixed.position[1]
+            || movable.position[1] >= fixed.bottom() + V_GAP
+    );
 }

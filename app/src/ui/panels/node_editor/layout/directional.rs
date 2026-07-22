@@ -16,10 +16,10 @@ const POSITION_EPSILON: f32 = 0.001;
 
 #[path = "directional_graph.rs"]
 mod graph;
+#[path = "directional_packing.rs"]
+mod packing;
 
 use graph::{actual_node_edges, semantic_edge_cmp, ActualNodeEdge, BranchGraph, SemanticNodeOrder};
-
-use super::{immediate_child_rects, AutoLayoutPlan};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) enum BranchDirection {
@@ -138,6 +138,7 @@ pub(in crate::ui::panels::node_editor) enum DirectionalLayoutError {
     AnchorGeometryMissing(Uuid),
     AnchorGeometryInvalid(Uuid),
     InvalidGap,
+    ConstraintCollision,
 }
 
 impl fmt::Display for DirectionalLayoutError {
@@ -158,6 +159,8 @@ impl fmt::Display for DirectionalLayoutError {
                 write!(formatter, "anchor Node {id} has invalid geometry")
             }
             Self::InvalidGap => formatter.write_str("layout gaps must be finite and non-negative"),
+            Self::ConstraintCollision => formatter
+                .write_str("directional layout constraints have no collision-free exact placement"),
         }
     }
 }
@@ -272,14 +275,9 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
     );
     let component_depth = branch_graph.component_depths(request.anchor_node_id, request.direction);
     let mut planned = match request.mode {
-        DirectionalLayoutMode::Layout => graph_layout_positions(
-            project,
-            request,
-            &branch_graph,
-            &component_depth,
-            &eligible,
-            &eligible_set,
-        ),
+        DirectionalLayoutMode::Layout => {
+            graph_layout_positions(project, request, &branch_graph, &component_depth, &eligible)
+        }
         DirectionalLayoutMode::Align => request
             .node_geometry
             .iter()
@@ -297,7 +295,18 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
     ) {
         align_positions(request, anchor_geometry, &eligible, &mut planned);
     }
-    enforce_left_to_right_flow(request, &branch_graph, &eligible_set, &mut planned);
+    if request.mode == DirectionalLayoutMode::Layout {
+        enforce_left_to_right_flow(request, &branch_graph, &eligible_set, &mut planned);
+    }
+    packing::pack_layout_level_blocks(
+        project,
+        request,
+        &branch_graph,
+        &component_depth,
+        &eligible,
+        &eligible_set,
+        &mut planned,
+    )?;
 
     let mut positions = BTreeMap::new();
     for node_id in &eligible {
@@ -445,7 +454,6 @@ fn graph_layout_positions(
     graph: &BranchGraph,
     depth: &HashMap<usize, usize>,
     eligible: &[Uuid],
-    eligible_set: &HashSet<Uuid>,
 ) -> BTreeMap<Uuid, [f32; 2]> {
     let anchor = request.node_geometry[&request.anchor_node_id];
     let mut nodes_by_level = BTreeMap::<i32, Vec<Uuid>>::new();
@@ -484,25 +492,6 @@ fn graph_layout_positions(
         }
     }
 
-    let mut fixed_obstacles = direct_owner_node_ids(project, request.direct_owner)
-        .into_iter()
-        .filter(|node_id| !eligible_set.contains(node_id))
-        .filter_map(|node_id| {
-            request
-                .node_geometry
-                .get(&node_id)
-                .copied()
-                .filter(|geometry| geometry.is_valid())
-        })
-        .collect::<Vec<_>>();
-    fixed_obstacles.extend(
-        immediate_child_rects(project, &AutoLayoutPlan::default(), request.direct_owner)
-            .into_iter()
-            .map(|rect| NodeLayoutGeometry {
-                position: [rect.min.x, rect.min.y],
-                size: [rect.width(), rect.height()],
-            }),
-    );
     let mut planned_geometry = BTreeMap::<Uuid, NodeLayoutGeometry>::new();
     let mut result = BTreeMap::new();
     let mut ordered_eligible = eligible.to_vec();
@@ -522,15 +511,17 @@ fn graph_layout_positions(
     for node_id in ordered_eligible {
         let level = graph.level_for(node_id, depth, request.direction);
         let geometry = request.node_geometry[&node_id];
-        let mut position = [x_by_level[&level], anchor.position[1]];
+        // A single Node at this rank keeps its authored orthogonal lane when
+        // possible. Multi-Node ranks share the anchor lane and are packed in
+        // semantic order, so existing reversed Y values cannot invert ordered
+        // Merge inputs.
+        let preferred_y = if nodes_by_level[&level].len() == 1 {
+            geometry.position[1]
+        } else {
+            anchor.position[1]
+        };
+        let mut position = [x_by_level[&level], preferred_y];
         position[0] = constrained_x(request, graph, &planned_geometry, node_id, position[0]);
-        position[1] = first_clear_y(
-            geometry.with_position(position),
-            &fixed_obstacles,
-            planned_geometry.values().copied(),
-            request.horizontal_gap,
-            request.vertical_gap,
-        );
         let placed = geometry.with_position(position);
         planned_geometry.insert(node_id, placed);
         result.insert(node_id, position);
@@ -696,66 +687,6 @@ fn effective_position_geometry(
 ) -> Option<NodeLayoutGeometry> {
     let geometry = request.node_geometry.get(&node_id).copied()?;
     Some(geometry.with_position(planned.get(&node_id).copied().unwrap_or(geometry.position)))
-}
-
-fn first_clear_y(
-    mut candidate: NodeLayoutGeometry,
-    fixed: &[NodeLayoutGeometry],
-    placed: impl Iterator<Item = NodeLayoutGeometry>,
-    horizontal_gap: f32,
-    vertical_gap: f32,
-) -> f32 {
-    let mut obstacles = fixed.to_vec();
-    obstacles.extend(placed);
-    loop {
-        let next_y = obstacles
-            .iter()
-            .filter(|obstacle| {
-                intervals_overlap_with_gap(
-                    candidate.position[0],
-                    candidate.right(),
-                    obstacle.position[0],
-                    obstacle.right(),
-                    horizontal_gap,
-                ) && intervals_overlap_with_gap(
-                    candidate.position[1],
-                    candidate.bottom(),
-                    obstacle.position[1],
-                    obstacle.bottom(),
-                    vertical_gap,
-                )
-            })
-            .map(|obstacle| obstacle.bottom() + vertical_gap)
-            .max_by(f32::total_cmp);
-        let Some(next_y) = next_y else {
-            return candidate.position[1];
-        };
-        candidate.position[1] = next_y;
-    }
-}
-
-fn intervals_overlap_with_gap(
-    left_start: f32,
-    left_end: f32,
-    right_start: f32,
-    right_end: f32,
-    gap: f32,
-) -> bool {
-    left_start < right_end + gap && left_end + gap > right_start
-}
-
-fn direct_owner_node_ids(project: &Project, owner: NodeContainer) -> Vec<Uuid> {
-    match owner {
-        NodeContainer::Composition(id) => project
-            .get_composition(id)
-            .map_or_else(Vec::new, |composition| composition.node_ids.clone()),
-        NodeContainer::Track(id) => project
-            .get_track(id)
-            .map_or_else(Vec::new, |track| track.node_ids.clone()),
-        NodeContainer::Clip(id) => project
-            .get_clip(id)
-            .map_or_else(Vec::new, |clip| clip.node_ids.clone()),
-    }
 }
 
 fn directional_level_cmp(left: i32, right: i32, direction: BranchDirection) -> Ordering {

@@ -68,9 +68,11 @@ fn assert_top_to_bottom(fixture: &Fixture, plan: &DirectionalLayoutPlan, expecte
 fn image_merge_sources_follow_front_to_back_visual_rows() {
     let mut fixture = Fixture::new();
     let owner = NodeContainer::Composition(fixture.composition_id);
-    let back = fixture.add_node(owner, 101, "Back", [0.0, 100.0], [100.0, 80.0]);
+    // Authored Y is deliberately the reverse of the Merge row order. The
+    // physical variadic order remains authoritative after block packing.
+    let back = fixture.add_node(owner, 101, "Back", [0.0, 0.0], [100.0, 80.0]);
     let middle = fixture.add_node(owner, 102, "Middle", [0.0, 100.0], [100.0, 80.0]);
-    let front = fixture.add_node(owner, 103, "Front", [0.0, 100.0], [100.0, 80.0]);
+    let front = fixture.add_node(owner, 103, "Front", [0.0, 200.0], [100.0, 80.0]);
     let merge = fixture.add_node(owner, 104, "Image Merge", [400.0, 100.0], [180.0, 100.0]);
     fixture.connect(back, merge, 0);
     fixture.connect(middle, merge, 1);

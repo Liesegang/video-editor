@@ -55,8 +55,6 @@ impl DirectionalLayoutGestureDirection {
 pub(crate) struct FrozenNodeGeometry {
     /// Exact outer rectangle reported by Snarl at pointer press.
     pub(crate) rect: egui::Rect,
-    /// Difference between Snarl's outer top-left and persisted node position.
-    pub(crate) render_offset: egui::Vec2,
     pub(crate) measured: bool,
 }
 

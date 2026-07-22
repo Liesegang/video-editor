@@ -789,7 +789,18 @@ fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
 #[test]
 fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = Fixture::new()?;
+    let mut fixture = Fixture::new()?;
+    let track_id = fixture
+        .project
+        .get_composition(fixture.composition_id)
+        .and_then(|composition| composition.track_ids.first().copied())
+        .ok_or("modifier fixture Track is missing")?;
+    let track = fixture
+        .project
+        .get_track_mut(track_id)
+        .ok_or("modifier fixture Track is missing")?;
+    track.ui_position = [900.0, 100.0];
+    track.ui_size = [300.0, 300.0];
     let mut state = NodeEditorState::default();
     let mut history = HistoryManager::new();
     let modifiers = egui::Modifiers {

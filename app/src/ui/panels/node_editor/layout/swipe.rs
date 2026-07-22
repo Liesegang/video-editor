@@ -19,6 +19,7 @@ use crate::state::node_editor_layout::{
     DirectionalLayoutGestureMode, DirectionalLayoutGestureOutcome, FrozenNodeGeometry,
     NodeEditorDirectionalLayoutExecution, NodeEditorDirectionalLayoutGesture,
 };
+use crate::ui::panels::node_editor::canvas::node_editor_details_visible;
 #[cfg(test)]
 use crate::ui::panels::node_editor::container_hierarchy_needs_reflow;
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
@@ -247,26 +248,18 @@ fn begin_gesture(
             continue;
         };
         let position = node.ui_position;
-        let (rect, render_offset, measured) = rendered_node_rects.get(&node_id).map_or_else(
+        let (rect, measured) = rendered_node_rects.get(&node_id).map_or_else(
             || {
                 let size = super::estimated_node_size(project, node_id);
                 (
                     egui::Rect::from_min_size(egui::pos2(position[0], position[1]), size),
-                    egui::Vec2::ZERO,
                     false,
                 )
             },
-            |rect| (*rect, rect.min - egui::pos2(position[0], position[1]), true),
+            |rect| (*rect, true),
         );
         baseline_positions.insert(node_id, position);
-        frozen_geometry.insert(
-            node_id,
-            FrozenNodeGeometry {
-                rect,
-                render_offset,
-                measured,
-            },
-        );
+        frozen_geometry.insert(node_id, FrozenNodeGeometry { rect, measured });
     }
     if !frozen_geometry.contains_key(&intent.anchor) {
         return Err(format!(
@@ -418,19 +411,17 @@ fn plan_gesture(
         .axis
         .ok_or_else(|| "directional layout did not cross its activation threshold".to_string())?;
     let direction = gesture_direction(axis, gesture.current - gesture.start)?;
-    let geometry = gesture
-        .frozen_geometry
-        .iter()
-        .map(|(node_id, geometry)| {
-            (
-                *node_id,
-                NodeLayoutGeometry {
-                    position: [geometry.rect.min.x, geometry.rect.min.y],
-                    size: [geometry.rect.width(), geometry.rect.height()],
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut geometry = BTreeMap::new();
+    for node_id in gesture.frozen_geometry.keys() {
+        let bounds = frozen_layout_rect(project, gesture, *node_id)?;
+        geometry.insert(
+            *node_id,
+            NodeLayoutGeometry {
+                position: [bounds.min.x, bounds.min.y],
+                size: [bounds.width(), bounds.height()],
+            },
+        );
+    }
     // Selecting only the anchor is equivalent to an unconstrained branch.
     // Additional selected Nodes constrain movement after reachability.
     let selected = gesture
@@ -469,13 +460,16 @@ fn plan_gesture(
         .map_err(|error| format!("cannot plan directional layout: {error}"))?;
     let mut positions = BTreeMap::new();
     for (node_id, rect_position) in &plan.node_positions {
-        let geometry = gesture
-            .frozen_geometry
+        let baseline = gesture
+            .baseline_positions
             .get(node_id)
-            .ok_or_else(|| format!("Node {node_id} lost its frozen geometry"))?;
+            .ok_or_else(|| format!("Node {node_id} lost its baseline position"))?;
+        let bounds = geometry
+            .get(node_id)
+            .ok_or_else(|| format!("Node {node_id} lost its layout geometry"))?;
         let position = [
-            rect_position[0] - geometry.render_offset.x,
-            rect_position[1] - geometry.render_offset.y,
+            baseline[0] + rect_position[0] - bounds.position[0],
+            baseline[1] + rect_position[1] - bounds.position[1],
         ];
         if !position.into_iter().all(f32::is_finite) {
             return Err(format!("Node {node_id} planned a non-finite position"));
@@ -606,10 +600,6 @@ fn planned_branch_rect(
     positions
         .iter()
         .try_fold(None, |bounds, (node_id, position)| {
-            let geometry = gesture
-                .frozen_geometry
-                .get(node_id)
-                .ok_or_else(|| format!("planned Node {node_id} lost its frozen geometry"))?;
             let baseline = gesture
                 .baseline_positions
                 .get(node_id)
@@ -618,12 +608,7 @@ fn planned_branch_rect(
                 return Ok(bounds);
             }
             let delta = egui::vec2(position[0] - baseline[0], position[1] - baseline[1]);
-            let rendered = geometry.rect.translate(delta);
-            let estimated = egui::Rect::from_min_size(
-                egui::pos2(position[0], position[1]),
-                super::estimated_node_size(project, *node_id),
-            );
-            let rect = rendered.union(estimated);
+            let rect = frozen_layout_rect(project, gesture, *node_id)?.translate(delta);
             if !rect.is_finite() || rect.width() <= 0.0 || rect.height() <= 0.0 {
                 return Err(format!("planned Node {node_id} has invalid final geometry"));
             }
@@ -631,6 +616,32 @@ fn planned_branch_rect(
                 bounds.map_or(rect, |bounds: egui::Rect| bounds.union(rect)),
             ))
         })
+}
+
+fn frozen_layout_rect(
+    project: &Project,
+    gesture: &NodeEditorDirectionalLayoutGesture,
+    node_id: Uuid,
+) -> Result<egui::Rect, String> {
+    let baseline = gesture
+        .baseline_positions
+        .get(&node_id)
+        .ok_or_else(|| format!("Node {node_id} lost its baseline position"))?;
+    let estimated = egui::Rect::from_min_size(
+        egui::pos2(baseline[0], baseline[1]),
+        super::estimated_node_size(project, node_id),
+    );
+    let frozen = gesture
+        .frozen_geometry
+        .get(&node_id)
+        .ok_or_else(|| format!("Node {node_id} lost its frozen geometry"))?;
+    Ok(
+        if frozen.measured && node_editor_details_visible(gesture.canvas_transform.scaling) {
+            frozen.rect.union(estimated)
+        } else {
+            estimated
+        },
+    )
 }
 
 fn validate_commit_project(

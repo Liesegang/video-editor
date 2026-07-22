@@ -1,6 +1,146 @@
 use super::*;
+use crate::test_support::generator_node;
 use crate::ui::panels::node_editor::ensure_structural_merge_layout;
+use library::editor::project_service::GeneratorNodeRequest;
 use library::model::Clip;
+
+#[test]
+fn dense_text_vertical_distribute_rejects_before_overlapping_sibling_clip(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = NestedFixture::new()?;
+    let owner = NodeContainer::Clip(fixture.clip_id);
+    let clip_rect = fixture
+        .project
+        .get_clip(fixture.clip_id)
+        .map(|clip| container_rect(clip.ui_position, clip.ui_size))
+        .ok_or("dense Text fixture Clip is missing")?;
+    let content = nested_content_rect(clip_rect, AUTO_LAYOUT_CLIP_TOP);
+    let mut sibling = Clip::new("Sibling below dense Text", 0.0, 1.0);
+    sibling.ui_position = [clip_rect.left(), clip_rect.bottom() + AUTO_LAYOUT_ROW_GAP];
+    sibling.ui_size = [clip_rect.width(), 220.0];
+    let sibling_id = sibling.id;
+    let sibling_rect = container_rect(sibling.ui_position, sibling.ui_size);
+    fixture.project.add_clip(sibling);
+    fixture
+        .project
+        .attach_clip_to_track(fixture.track_id, sibling_id)?;
+    grow_container_hierarchy_to_rect_all_edges(
+        &mut fixture.project,
+        NodeContainer::Track(fixture.track_id),
+        sibling_rect,
+    );
+    assert!(!container_hierarchy_needs_reflow(
+        &fixture.project,
+        fixture.composition_id
+    ));
+
+    let mut previous = fixture.source;
+    for index in 0..4_u128 {
+        let mut text = generator_node(
+            &format!("Dense Text {index}"),
+            GeneratorNodeRequest::Text {
+                text: format!("Dense Text {index}"),
+                font: "Arial".to_string(),
+            },
+        );
+        text.id = Uuid::from_u128(0x7_400 + index);
+        text.ui_position = [content.left(), content.top()];
+        let text_id = text.id;
+        fixture.project.add_node(text);
+        fixture.project.attach_node_to_container(owner, text_id)?;
+        connect(&mut fixture.project, previous, text_id, index as i64);
+        previous = text_id;
+    }
+
+    let before = fixture.project.clone();
+    let before_bytes = serde_json::to_vec(&before)?;
+    let mut state = NodeEditorState::default();
+    let mut history = HistoryManager::new();
+    history.push_project_state(fixture.project.clone());
+    let history_before = (history.undo_depth(), history.redo_depth());
+    let modifiers = egui::Modifiers {
+        alt: true,
+        ..egui::Modifiers::NONE
+    };
+    handle_directional_layout_outputs(
+        &fixture.project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Start,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    );
+    let update = handle_directional_layout_outputs(
+        &fixture.project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Update,
+            fixture.source,
+            egui::pos2(402.0, 500.0),
+            Some(LayoutSwipeAxis::Vertical),
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    );
+    assert!(update.commit.is_none());
+    let active = state
+        .directional_layout_swipe
+        .as_ref()
+        .ok_or("dense Text update unexpectedly ended the gesture")?;
+    assert!(!active.preview_positions.is_empty());
+    assert_eq!(fixture.project, before);
+    assert_eq!((history.undo_depth(), history.redo_depth()), history_before);
+
+    let prepared = handle_directional_layout_outputs(
+        &fixture.project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Commit,
+            fixture.source,
+            egui::pos2(402.0, 500.0),
+            Some(LayoutSwipeAxis::Vertical),
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    )
+    .commit
+    .ok_or("dense Text commit was not prepared")?;
+    assert_eq!(prepared.gesture.preview_positions, prepared.positions);
+    let mut project = fixture.project;
+    let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, prepared);
+    assert!(!result.changed);
+    assert_eq!(project, before);
+    assert_eq!(serde_json::to_vec(&project)?, before_bytes);
+    assert_eq!((history.undo_depth(), history.redo_depth()), history_before);
+    let rejected = state
+        .last_directional_layout_swipe
+        .as_ref()
+        .ok_or("dense Text commit rejection diagnostics are missing")?;
+    assert_eq!(rejected.outcome, DirectionalLayoutGestureOutcome::Rejected);
+    assert!(rejected.moved_node_ids.is_empty());
+    assert!(
+        rejected
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("container hierarchy violation")),
+        "unexpected dense Text rejection: {:?}",
+        rejected.reason
+    );
+    Ok(())
+}
 
 #[test]
 fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
