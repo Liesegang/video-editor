@@ -20,7 +20,10 @@ use crate::state::node_editor_layout::{
     NodeEditorDirectionalLayoutExecution, NodeEditorDirectionalLayoutGesture,
 };
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
-use crate::ui::panels::node_editor::{GraphItem, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP};
+use crate::ui::panels::node_editor::{
+    container_hierarchy_needs_reflow, ensure_reparent_hierarchy_contains, GraphItem,
+    AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP,
+};
 
 use super::{
     BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest, LayoutAxis,
@@ -485,37 +488,28 @@ pub(in crate::ui::panels::node_editor) fn apply_directional_layout_commit(
     commit: DirectionalLayoutCommit,
 ) -> DirectionalLayoutCommitResult {
     let gesture = commit.gesture;
-    let rejection = validate_commit_project(project, &gesture, &commit.positions).err();
-    if let Some(reason) = rejection {
-        record_execution(
-            project,
-            state,
-            history,
-            gesture,
-            DirectionalLayoutGestureOutcome::Rejected,
-            Some(reason),
-            Vec::new(),
-        );
-        return DirectionalLayoutCommitResult {
-            changed: false,
-            request_repaint: true,
-        };
-    }
-
-    let mut moved_node_ids = Vec::new();
-    for (node_id, position) in &commit.positions {
-        let Some(node) = project.get_node_mut(*node_id) else {
-            // Every target was validated under this same write lock.
-            continue;
-        };
-        if positions_differ(node.ui_position, *position) {
-            node.ui_position = *position;
-            moved_node_ids.push(*node_id);
+    let candidate = build_commit_candidate(project, history, &gesture, &commit.positions);
+    let (candidate, moved_node_ids) = match candidate {
+        Ok(candidate) => candidate,
+        Err(reason) => {
+            record_execution(
+                project,
+                state,
+                history,
+                gesture,
+                DirectionalLayoutGestureOutcome::Rejected,
+                Some(reason),
+                Vec::new(),
+            );
+            return DirectionalLayoutCommitResult {
+                changed: false,
+                request_repaint: true,
+            };
         }
-    }
-    moved_node_ids.sort_unstable();
-    let changed = !moved_node_ids.is_empty();
+    };
+    let changed = &candidate != project;
     if changed {
+        *project = candidate;
         history.push_project_state(project.clone());
     }
     record_execution(
@@ -533,8 +527,78 @@ pub(in crate::ui::panels::node_editor) fn apply_directional_layout_commit(
     }
 }
 
+fn build_commit_candidate(
+    project: &Project,
+    history: &HistoryManager,
+    gesture: &NodeEditorDirectionalLayoutGesture,
+    positions: &BTreeMap<Uuid, [f32; 2]>,
+) -> Result<(Project, Vec<Uuid>), String> {
+    validate_commit_project(project, history, gesture, positions)?;
+    let baseline_needs_reflow = container_hierarchy_needs_reflow(project, gesture.composition_id);
+    let branch_rect = planned_branch_rect(project, gesture, positions)?;
+
+    let mut candidate = project.clone();
+    let mut moved_node_ids = Vec::new();
+    for (node_id, position) in positions {
+        let node = candidate
+            .get_node_mut(*node_id)
+            .ok_or_else(|| format!("planned Node {node_id} was deleted"))?;
+        if positions_differ(node.ui_position, *position) {
+            node.ui_position = *position;
+            moved_node_ids.push(*node_id);
+        }
+    }
+    moved_node_ids.sort_unstable();
+
+    if let Some(rect) = branch_rect {
+        ensure_reparent_hierarchy_contains(&mut candidate, gesture.direct_owner, rect);
+    }
+    if !baseline_needs_reflow
+        && container_hierarchy_needs_reflow(&candidate, gesture.composition_id)
+    {
+        return Err("directional layout would overlap or escape a container hierarchy".to_string());
+    }
+    Ok((candidate, moved_node_ids))
+}
+
+fn planned_branch_rect(
+    project: &Project,
+    gesture: &NodeEditorDirectionalLayoutGesture,
+    positions: &BTreeMap<Uuid, [f32; 2]>,
+) -> Result<Option<egui::Rect>, String> {
+    positions
+        .iter()
+        .try_fold(None, |bounds, (node_id, position)| {
+            let geometry = gesture
+                .frozen_geometry
+                .get(node_id)
+                .ok_or_else(|| format!("planned Node {node_id} lost its frozen geometry"))?;
+            let baseline = gesture
+                .baseline_positions
+                .get(node_id)
+                .ok_or_else(|| format!("planned Node {node_id} lost its baseline position"))?;
+            if !positions_differ(*baseline, *position) {
+                return Ok(bounds);
+            }
+            let delta = egui::vec2(position[0] - baseline[0], position[1] - baseline[1]);
+            let rendered = geometry.rect.translate(delta);
+            let estimated = egui::Rect::from_min_size(
+                egui::pos2(position[0], position[1]),
+                super::estimated_node_size(project, *node_id),
+            );
+            let rect = rendered.union(estimated);
+            if !rect.is_finite() || rect.width() <= 0.0 || rect.height() <= 0.0 {
+                return Err(format!("planned Node {node_id} has invalid final geometry"));
+            }
+            Ok(Some(
+                bounds.map_or(rect, |bounds: egui::Rect| bounds.union(rect)),
+            ))
+        })
+}
+
 fn validate_commit_project(
     project: &Project,
+    history: &HistoryManager,
     gesture: &NodeEditorDirectionalLayoutGesture,
     positions: &BTreeMap<Uuid, [f32; 2]>,
 ) -> Result<(), String> {
@@ -546,6 +610,11 @@ fn validate_commit_project(
     }
     if project.find_node_container(gesture.anchor_node_id) != Some(gesture.direct_owner) {
         return Err("anchor Node left its frozen direct owner".to_string());
+    }
+    if history.undo_depth() != gesture.history_undo_depth
+        || history.redo_depth() != gesture.history_redo_depth
+    {
+        return Err("Project history changed during directional layout".to_string());
     }
     for (node_id, position) in positions {
         let Some(node) = project.get_node(*node_id) else {
