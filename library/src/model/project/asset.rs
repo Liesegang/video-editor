@@ -1,5 +1,6 @@
 use crate::model::frame::color::Color;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -23,6 +24,15 @@ pub struct Asset {
     pub color: Color,
     #[serde(default)]
     pub stream_index: Option<usize>,
+    /// SHA-256 captured from the imported bytes, rather than copied from a
+    /// reference that happens to name this Asset.
+    ///
+    /// The field is persisted so pure Project validation can compare the
+    /// imported identity without opening the filesystem. It is an import-time
+    /// snapshot, not proof that an external path still exists or still has the
+    /// same bytes. Resource opening must verify those conditions again.
+    #[serde(default)]
+    imported_content_sha256: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -53,7 +63,24 @@ impl Asset {
                 a: 255,
             }, // Default gray
             stream_index: None,
+            imported_content_sha256: None,
         }
+    }
+
+    /// Record the digest of the exact bytes accepted by an importer.
+    ///
+    /// Reading those bytes is deliberately the importer's responsibility;
+    /// Project validation remains deterministic and free of filesystem I/O.
+    /// A runtime resource loader must recompute and compare the digest when it
+    /// opens an external Asset.
+    pub fn verify_imported_content(&mut self, bytes: &[u8]) -> String {
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        self.imported_content_sha256 = Some(digest.clone());
+        digest
+    }
+
+    pub fn imported_content_sha256(&self) -> Option<&str> {
+        self.imported_content_sha256.as_deref()
     }
 
     /// Maps source-local seconds to a source frame using the Asset FPS when

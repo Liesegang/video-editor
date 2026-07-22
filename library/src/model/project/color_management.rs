@@ -1,27 +1,31 @@
 //! Persisted color-pipeline intent owned by the authoritative [`Project`](super::Project).
 //!
-//! This module deliberately does not create processors. It records enough
-//! stable identity for a color backend to reproduce a Project, and separates
-//! requested data from the safe effective fallback used when persisted data
-//! is incomplete or unavailable.
+//! This module records identities only; it neither opens files nor creates
+//! color processors. A persisted request is therefore either model-validated
+//! or explicitly unavailable. Backend config availability and external file
+//! bytes must still be verified when resources are opened. There is
+//! intentionally no implicit fallback that could reinterpret authored
+//! color-space names under a different config.
 
-use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::asset::Asset;
+use super::asset::{Asset, AssetKind};
 
 pub const DEFAULT_BUNDLED_COLOR_CONFIG_ID: &str = "ruvie://color-config/builtin-linear-srgb-v1";
 pub const DEFAULT_WORKING_COLOR_SPACE: &str = "linear-srgb";
 pub const DEFAULT_PREVIEW_DISPLAY: &str = "srgb";
-pub const DEFAULT_PREVIEW_VIEW: &str = "standard";
+/// The built-in backend performs a direct working-space to display-space
+/// transform. Named display views are an OCIO contract and are not silently
+/// accepted by the built-in backend.
+pub const DEFAULT_PREVIEW_VIEW: Option<&str> = None;
 pub const DEFAULT_OUTPUT_COLOR_SPACE: &str = "srgb";
 
 /// Stable identity of the color configuration used to interpret space names.
-///
-/// OpenColorIO registry aliases such as `ocio://default` are intentionally not
-/// representable as valid effective configuration. Built-in OCIO configs must
-/// use their exact registry URI and record the processor version. External
-/// configs are Project assets pinned by their content checksum.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ColorConfigIdentity {
@@ -29,7 +33,9 @@ pub enum ColorConfigIdentity {
     Bundled { id: String },
     /// An exact entry from OpenColorIO's built-in config registry.
     OcioBuiltin { uri: String, ocio_version: String },
-    /// An external `.ocio` config stored as a Project asset.
+    /// An external `.ocio` config stored as a Project asset. `sha256` is the
+    /// expected identity and must match the Asset's independently recorded
+    /// imported-content digest before this request is model-validated.
     ProjectAsset {
         asset_id: Uuid,
         sha256: String,
@@ -49,30 +55,37 @@ impl Default for ColorConfigIdentity {
 pub struct PreviewColorConfig {
     #[serde(default = "default_preview_display")]
     display: String,
-    #[serde(default = "default_preview_view")]
-    view: String,
+    #[serde(default)]
+    view: Option<String>,
 }
 
 impl PreviewColorConfig {
-    pub fn new(display: impl Into<String>, view: impl Into<String>) -> Self {
+    pub fn new(display: impl Into<String>, view: Option<String>) -> Self {
         Self {
             display: display.into(),
-            view: view.into(),
+            view,
         }
+    }
+
+    pub fn direct(display: impl Into<String>) -> Self {
+        Self::new(display, None)
     }
 
     pub fn display(&self) -> &str {
         &self.display
     }
 
-    pub fn view(&self) -> &str {
-        &self.view
+    pub fn view(&self) -> Option<&str> {
+        self.view.as_deref()
     }
 }
 
 impl Default for PreviewColorConfig {
     fn default() -> Self {
-        Self::new(DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_VIEW)
+        Self::new(
+            DEFAULT_PREVIEW_DISPLAY,
+            DEFAULT_PREVIEW_VIEW.map(str::to_string),
+        )
     }
 }
 
@@ -157,17 +170,47 @@ impl ColorManagementConfig {
             ColorManagementField::PreviewDisplay,
             &mut diagnostics,
         );
-        validate_named_field(
-            &self.preview.view,
-            ColorManagementField::PreviewView,
-            &mut diagnostics,
-        );
+        validate_preview_contract(self, &mut diagnostics);
         validate_named_field(
             &self.export.output_space,
             ColorManagementField::OutputSpace,
             &mut diagnostics,
         );
         diagnostics
+    }
+
+    fn stable_cache_identity(&self) -> ColorConfigCacheIdentity {
+        let mut hasher = Sha256::new();
+        hash_part(&mut hasher, "ruvie-color-config-cache-v1");
+        match &self.config {
+            ColorConfigIdentity::Bundled { id } => {
+                hash_part(&mut hasher, "bundled");
+                hash_part(&mut hasher, id);
+            }
+            ColorConfigIdentity::OcioBuiltin { uri, ocio_version } => {
+                hash_part(&mut hasher, "ocio-builtin");
+                hash_part(&mut hasher, uri);
+                hash_part(&mut hasher, ocio_version);
+            }
+            ColorConfigIdentity::ProjectAsset {
+                asset_id,
+                sha256,
+                ocio_version,
+            } => {
+                hash_part(&mut hasher, "project-asset");
+                hash_part(&mut hasher, &asset_id.to_string());
+                hash_part(&mut hasher, &sha256.to_ascii_lowercase());
+                hash_part(&mut hasher, ocio_version);
+            }
+        }
+        hash_part(&mut hasher, &self.working_space);
+        hash_part(&mut hasher, &self.preview.display);
+        hash_part(
+            &mut hasher,
+            self.preview.view.as_deref().unwrap_or("<direct>"),
+        );
+        hash_part(&mut hasher, &self.export.output_space);
+        ColorConfigCacheIdentity(format!("sha256:{:x}", hasher.finalize()))
     }
 }
 
@@ -182,52 +225,259 @@ impl Default for ColorManagementConfig {
     }
 }
 
-/// A validated runtime-facing color configuration plus diagnostics from the
-/// persisted request. Invalid requests resolve as a whole to the deterministic
-/// bundled fallback so space names are never interpreted under the wrong
-/// config.
+/// Exact persisted value of the `color_management` Project field.
+///
+/// Malformed JSON remains serializable as-is so opening and saving a Project
+/// does not erase data that a future repair UI could recover.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedColorManagementConfig {
-    effective: ColorManagementConfig,
-    diagnostics: Vec<ColorManagementIssue>,
+pub enum RequestedColorManagementConfig {
+    Config(ColorManagementConfig),
+    Malformed {
+        raw: Value,
+        structure_issues: Vec<ColorManagementStructureIssue>,
+    },
+}
+
+impl RequestedColorManagementConfig {
+    pub fn as_config(&self) -> Option<&ColorManagementConfig> {
+        match self {
+            Self::Config(config) => Some(config),
+            Self::Malformed { .. } => None,
+        }
+    }
+
+    pub fn malformed_raw(&self) -> Option<&Value> {
+        match self {
+            Self::Config(_) => None,
+            Self::Malformed { raw, .. } => Some(raw),
+        }
+    }
+
+    pub(super) fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+        match self {
+            Self::Config(config) => config.diagnostics(assets),
+            Self::Malformed {
+                structure_issues, ..
+            } => structure_issues
+                .iter()
+                .cloned()
+                .map(|issue| ColorManagementIssue::MalformedStructure { issue })
+                .collect(),
+        }
+    }
+}
+
+impl Default for RequestedColorManagementConfig {
+    fn default() -> Self {
+        Self::Config(ColorManagementConfig::default())
+    }
+}
+
+impl Serialize for RequestedColorManagementConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Config(config) => config.serialize(serializer),
+            Self::Malformed { raw, .. } => raw.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestedColorManagementConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        match serde_json::from_value::<ColorManagementConfig>(raw.clone()) {
+            Ok(config) => Ok(Self::Config(config)),
+            Err(error) => {
+                let mut structure_issues = classify_structure(&raw);
+                if structure_issues.is_empty() {
+                    structure_issues.push(ColorManagementStructureIssue::InvalidValue {
+                        path: "color_management".to_string(),
+                        detail: error.to_string(),
+                    });
+                }
+                Ok(Self::Malformed {
+                    raw,
+                    structure_issues,
+                })
+            }
+        }
+    }
+}
+
+/// Stable identity for locating processor/LUT cache entries. It exists only
+/// for a model-validated intent, but is not proof that a backend has the config
+/// or that an external Asset path is still readable.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ColorConfigCacheIdentity(String);
+
+impl ColorConfigCacheIdentity {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ColorConfigCacheIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Model validation never substitutes another color configuration.
+///
+/// `Ready` means that persisted identities are structurally and semantically
+/// consistent. A backend must still verify an exact OCIO registry config, and
+/// a resource loader must re-read and hash an external `.ocio` file before
+/// creating a processor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelValidatedColorManagementConfig {
+    config: ColorManagementConfig,
+    cache_identity: ColorConfigCacheIdentity,
+}
+
+impl ModelValidatedColorManagementConfig {
+    pub fn config(&self) -> &ColorManagementConfig {
+        &self.config
+    }
+
+    pub fn cache_identity(&self) -> &ColorConfigCacheIdentity {
+        &self.cache_identity
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedColorManagementConfig {
+    Ready(ModelValidatedColorManagementConfig),
+    Unavailable {
+        requested: RequestedColorManagementConfig,
+        diagnostics: Vec<ColorManagementIssue>,
+    },
 }
 
 impl ResolvedColorManagementConfig {
-    pub fn effective(&self) -> &ColorManagementConfig {
-        &self.effective
+    pub fn model_validated_intent(&self) -> Option<&ModelValidatedColorManagementConfig> {
+        match self {
+            Self::Ready(intent) => Some(intent),
+            Self::Unavailable { .. } => None,
+        }
     }
 
     pub fn diagnostics(&self) -> &[ColorManagementIssue] {
-        &self.diagnostics
+        match self {
+            Self::Ready(_) => &[],
+            Self::Unavailable { diagnostics, .. } => diagnostics,
+        }
     }
 
-    pub fn used_safe_fallback(&self) -> bool {
-        !self.diagnostics.is_empty()
+    pub fn unavailable_request(&self) -> Option<&RequestedColorManagementConfig> {
+        match self {
+            Self::Ready(_) => None,
+            Self::Unavailable { requested, .. } => Some(requested),
+        }
     }
 }
 
+/// Structural failures found while decoding `color_management`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "problem", rename_all = "snake_case")]
+pub enum ColorManagementStructureIssue {
+    Null {
+        path: String,
+    },
+    WrongType {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    MissingField {
+        path: String,
+    },
+    UnknownConfigKind {
+        kind: String,
+    },
+    InvalidValue {
+        path: String,
+        detail: String,
+    },
+}
+
 /// Structured non-fatal diagnostics for persisted color configuration.
-///
-/// These issues are intentionally separate from Project graph errors: a user
-/// must still be able to open and repair a Project whose external color config
-/// has moved or whose metadata was hand-edited.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "code", content = "context", rename_all = "snake_case")]
 pub enum ColorManagementIssue {
-    BlankIdentifier { field: ColorManagementField },
-    MovingConfigIdentifier { identifier: String },
-    InvalidBundledConfigId { identifier: String },
-    InvalidOcioBuiltinUri { uri: String },
-    UnpinnedOcioBuiltinUri { uri: String },
-    InvalidOcioVersion { version: String },
-    ConfigAssetNotFound { asset_id: Uuid },
-    InvalidConfigChecksum { asset_id: Uuid, sha256: String },
+    MalformedStructure {
+        issue: ColorManagementStructureIssue,
+    },
+    BlankIdentifier {
+        field: ColorManagementField,
+    },
+    MissingRequiredPreviewView,
+    UnsupportedBundledPreviewView {
+        view: String,
+    },
+    MovingConfigIdentifier {
+        identifier: String,
+    },
+    InvalidBundledConfigId {
+        identifier: String,
+    },
+    InvalidOcioBuiltinUri {
+        uri: String,
+    },
+    UnpinnedOcioBuiltinUri {
+        uri: String,
+    },
+    InvalidOcioVersion {
+        version: String,
+    },
+    ConfigAssetNotFound {
+        asset_id: Uuid,
+    },
+    ConfigAssetWrongKind {
+        asset_id: Uuid,
+    },
+    ConfigAssetNotOcio {
+        asset_id: Uuid,
+        path: String,
+    },
+    InvalidConfigChecksum {
+        asset_id: Uuid,
+        sha256: String,
+    },
+    ConfigAssetChecksumUnverified {
+        asset_id: Uuid,
+    },
+    InvalidImportedContentChecksum {
+        asset_id: Uuid,
+        sha256: String,
+    },
+    ConfigAssetChecksumMismatch {
+        asset_id: Uuid,
+        expected: String,
+        imported: String,
+    },
 }
 
 impl std::fmt::Display for ColorManagementIssue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MalformedStructure { issue } => {
+                write!(formatter, "malformed color configuration: {issue:?}")
+            }
             Self::BlankIdentifier { field } => write!(formatter, "{field} must not be blank"),
+            Self::MissingRequiredPreviewView => {
+                formatter.write_str("an OpenColorIO Preview requires an explicit display view")
+            }
+            Self::UnsupportedBundledPreviewView { view } => write!(
+                formatter,
+                "the built-in color config does not support named Preview view '{view}'"
+            ),
             Self::MovingConfigIdentifier { identifier } => write!(
                 formatter,
                 "color config identifier '{identifier}' is a moving alias"
@@ -236,12 +486,10 @@ impl std::fmt::Display for ColorManagementIssue {
                 formatter,
                 "bundled color config id '{identifier}' is not a versioned RuViE config URI"
             ),
-            Self::InvalidOcioBuiltinUri { uri } => {
-                write!(
-                    formatter,
-                    "OpenColorIO built-in config URI '{uri}' is invalid"
-                )
-            }
+            Self::InvalidOcioBuiltinUri { uri } => write!(
+                formatter,
+                "OpenColorIO built-in config URI '{uri}' is invalid"
+            ),
             Self::UnpinnedOcioBuiltinUri { uri } => write!(
                 formatter,
                 "OpenColorIO built-in config URI '{uri}' is not an exact versioned identity"
@@ -252,9 +500,33 @@ impl std::fmt::Display for ColorManagementIssue {
             Self::ConfigAssetNotFound { asset_id } => {
                 write!(formatter, "color config asset {asset_id} does not exist")
             }
+            Self::ConfigAssetWrongKind { asset_id } => write!(
+                formatter,
+                "color config asset {asset_id} must use the non-media Asset kind"
+            ),
+            Self::ConfigAssetNotOcio { asset_id, path } => write!(
+                formatter,
+                "color config asset {asset_id} path '{path}' is not an .ocio file"
+            ),
             Self::InvalidConfigChecksum { asset_id, sha256 } => write!(
                 formatter,
-                "color config asset {asset_id} has invalid SHA-256 checksum '{sha256}'"
+                "color config asset {asset_id} has invalid expected SHA-256 '{sha256}'"
+            ),
+            Self::ConfigAssetChecksumUnverified { asset_id } => write!(
+                formatter,
+                "color config asset {asset_id} has no imported-content checksum"
+            ),
+            Self::InvalidImportedContentChecksum { asset_id, sha256 } => write!(
+                formatter,
+                "color config asset {asset_id} has invalid imported-content SHA-256 '{sha256}'"
+            ),
+            Self::ConfigAssetChecksumMismatch {
+                asset_id,
+                expected,
+                imported,
+            } => write!(
+                formatter,
+                "color config asset {asset_id} expected SHA-256 '{expected}' but imported '{imported}'"
             ),
         }
     }
@@ -287,18 +559,44 @@ impl std::fmt::Display for ColorManagementField {
 }
 
 pub(super) fn resolve_color_management(
-    requested: &ColorManagementConfig,
+    requested: &RequestedColorManagementConfig,
     assets: &[Asset],
 ) -> ResolvedColorManagementConfig {
     let diagnostics = requested.diagnostics(assets);
-    let effective = if diagnostics.is_empty() {
-        requested.clone()
-    } else {
-        ColorManagementConfig::default()
-    };
-    ResolvedColorManagementConfig {
-        effective,
-        diagnostics,
+    match (requested, diagnostics.is_empty()) {
+        (RequestedColorManagementConfig::Config(config), true) => {
+            ResolvedColorManagementConfig::Ready(ModelValidatedColorManagementConfig {
+                cache_identity: config.stable_cache_identity(),
+                config: config.clone(),
+            })
+        }
+        _ => ResolvedColorManagementConfig::Unavailable {
+            requested: requested.clone(),
+            diagnostics,
+        },
+    }
+}
+
+fn validate_preview_contract(
+    config: &ColorManagementConfig,
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    match (&config.config, config.preview.view.as_deref()) {
+        (ColorConfigIdentity::Bundled { .. }, Some(view)) if !view.trim().is_empty() => {
+            diagnostics.push(ColorManagementIssue::UnsupportedBundledPreviewView {
+                view: view.to_string(),
+            });
+        }
+        (ColorConfigIdentity::Bundled { .. }, Some(_)) => {
+            diagnostics.push(ColorManagementIssue::BlankIdentifier {
+                field: ColorManagementField::PreviewView,
+            });
+        }
+        (ColorConfigIdentity::Bundled { .. }, None) => {}
+        (_, None) => diagnostics.push(ColorManagementIssue::MissingRequiredPreviewView),
+        (_, Some(view)) => {
+            validate_named_field(view, ColorManagementField::PreviewView, diagnostics)
+        }
     }
 }
 
@@ -338,7 +636,10 @@ fn validate_config_identity(
             sha256,
             ocio_version,
         } => {
-            if !assets.iter().any(|asset| asset.id == *asset_id) {
+            let asset = assets.iter().find(|asset| asset.id == *asset_id);
+            if let Some(asset) = asset {
+                validate_config_asset(asset, sha256, diagnostics);
+            } else {
                 diagnostics.push(ColorManagementIssue::ConfigAssetNotFound {
                     asset_id: *asset_id,
                 });
@@ -351,6 +652,44 @@ fn validate_config_identity(
             }
             validate_ocio_version(ocio_version, diagnostics);
         }
+    }
+}
+
+fn validate_config_asset(
+    asset: &Asset,
+    expected_sha256: &str,
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    if asset.kind != AssetKind::Other {
+        diagnostics.push(ColorManagementIssue::ConfigAssetWrongKind { asset_id: asset.id });
+    }
+    if !Path::new(&asset.path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ocio"))
+    {
+        diagnostics.push(ColorManagementIssue::ConfigAssetNotOcio {
+            asset_id: asset.id,
+            path: asset.path.clone(),
+        });
+    }
+    match asset.imported_content_sha256() {
+        None => diagnostics
+            .push(ColorManagementIssue::ConfigAssetChecksumUnverified { asset_id: asset.id }),
+        Some(imported) if !is_sha256(imported) => {
+            diagnostics.push(ColorManagementIssue::InvalidImportedContentChecksum {
+                asset_id: asset.id,
+                sha256: imported.to_string(),
+            });
+        }
+        Some(imported) if !imported.eq_ignore_ascii_case(expected_sha256) => {
+            diagnostics.push(ColorManagementIssue::ConfigAssetChecksumMismatch {
+                asset_id: asset.id,
+                expected: expected_sha256.to_string(),
+                imported: imported.to_string(),
+            });
+        }
+        Some(_) => {}
     }
 }
 
@@ -376,11 +715,203 @@ fn validate_ocio_version(version: &str, diagnostics: &mut Vec<ColorManagementIss
     }
 }
 
+fn classify_structure(raw: &Value) -> Vec<ColorManagementStructureIssue> {
+    let mut issues = Vec::new();
+    let Some(object) = expect_object(raw, "color_management", &mut issues) else {
+        return issues;
+    };
+
+    if let Some(config) = object.get("config") {
+        classify_config_identity(config, &mut issues);
+    }
+    classify_optional_string(
+        object.get("working_space"),
+        "color_management.working_space",
+        &mut issues,
+    );
+    classify_nested_object(
+        object.get("preview"),
+        "color_management.preview",
+        &["display"],
+        &["view"],
+        &mut issues,
+    );
+    classify_nested_object(
+        object.get("export"),
+        "color_management.export",
+        &["output_space"],
+        &[],
+        &mut issues,
+    );
+    issues
+}
+
+fn classify_config_identity(value: &Value, issues: &mut Vec<ColorManagementStructureIssue>) {
+    let path = "color_management.config";
+    let Some(object) = expect_object(value, path, issues) else {
+        return;
+    };
+    let Some(kind_value) = object.get("kind") else {
+        issues.push(ColorManagementStructureIssue::MissingField {
+            path: format!("{path}.kind"),
+        });
+        return;
+    };
+    let Some(kind) = expect_string(kind_value, &format!("{path}.kind"), issues) else {
+        return;
+    };
+    match kind {
+        "bundled" => classify_required_strings(object, path, &["id"], issues),
+        "ocio_builtin" => {
+            classify_required_strings(object, path, &["uri", "ocio_version"], issues);
+        }
+        "project_asset" => {
+            classify_required_strings(
+                object,
+                path,
+                &["asset_id", "sha256", "ocio_version"],
+                issues,
+            );
+            if let Some(Value::String(asset_id)) = object.get("asset_id")
+                && Uuid::parse_str(asset_id).is_err()
+            {
+                issues.push(ColorManagementStructureIssue::InvalidValue {
+                    path: format!("{path}.asset_id"),
+                    detail: "expected UUID".to_string(),
+                });
+            }
+        }
+        unknown => issues.push(ColorManagementStructureIssue::UnknownConfigKind {
+            kind: unknown.to_string(),
+        }),
+    }
+}
+
+fn classify_nested_object(
+    value: Option<&Value>,
+    path: &str,
+    string_fields: &[&str],
+    nullable_string_fields: &[&str],
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    let Some(object) = expect_object(value, path, issues) else {
+        return;
+    };
+    for field in string_fields {
+        classify_optional_string(object.get(*field), &format!("{path}.{field}"), issues);
+    }
+    for field in nullable_string_fields {
+        if let Some(value) = object.get(*field)
+            && !value.is_null()
+        {
+            let _ = expect_string(value, &format!("{path}.{field}"), issues);
+        }
+    }
+}
+
+fn classify_required_strings(
+    object: &serde_json::Map<String, Value>,
+    path: &str,
+    fields: &[&str],
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
+    for field in fields {
+        let field_path = format!("{path}.{field}");
+        match object.get(*field) {
+            Some(value) => {
+                let _ = expect_string(value, &field_path, issues);
+            }
+            None => issues.push(ColorManagementStructureIssue::MissingField { path: field_path }),
+        }
+    }
+}
+
+fn classify_optional_string(
+    value: Option<&Value>,
+    path: &str,
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
+    if let Some(value) = value {
+        let _ = expect_string(value, path, issues);
+    }
+}
+
+fn expect_object<'a>(
+    value: &'a Value,
+    path: &str,
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    match value {
+        Value::Object(object) => Some(object),
+        Value::Null => {
+            issues.push(ColorManagementStructureIssue::Null {
+                path: path.to_string(),
+            });
+            None
+        }
+        other => {
+            issues.push(ColorManagementStructureIssue::WrongType {
+                path: path.to_string(),
+                expected: "object".to_string(),
+                actual: json_type(other).to_string(),
+            });
+            None
+        }
+    }
+}
+
+fn expect_string<'a>(
+    value: &'a Value,
+    path: &str,
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) -> Option<&'a str> {
+    match value {
+        Value::String(value) => Some(value),
+        Value::Null => {
+            issues.push(ColorManagementStructureIssue::Null {
+                path: path.to_string(),
+            });
+            None
+        }
+        other => {
+            issues.push(ColorManagementStructureIssue::WrongType {
+                path: path.to_string(),
+                expected: "string".to_string(),
+                actual: json_type(other).to_string(),
+            });
+            None
+        }
+    }
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 fn is_moving_identifier(identifier: &str) -> bool {
-    let normalized = identifier.trim().to_ascii_lowercase();
-    normalized
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|part| matches!(part, "default" | "latest"))
+    matches!(
+        identifier
+            .trim()
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .as_str(),
+        "default"
+            | "latest"
+            | "ocio://default"
+            | "ocio://latest"
+            | "ruvie://color-config/default"
+            | "ruvie://color-config/latest"
+    )
 }
 
 fn contains_ocio_registry_version(uri: &str) -> bool {
@@ -413,16 +944,17 @@ fn is_sha256(checksum: &str) -> bool {
             .all(|character| character.is_ascii_hexdigit())
 }
 
+fn hash_part(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
 fn default_working_color_space() -> String {
     DEFAULT_WORKING_COLOR_SPACE.to_string()
 }
 
 fn default_preview_display() -> String {
     DEFAULT_PREVIEW_DISPLAY.to_string()
-}
-
-fn default_preview_view() -> String {
-    DEFAULT_PREVIEW_VIEW.to_string()
 }
 
 fn default_output_color_space() -> String {

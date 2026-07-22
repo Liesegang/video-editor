@@ -21,7 +21,8 @@ pub use node::{
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;
 pub use project::{
-    ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
-    Composition, ExportColorConfig, NodeContainer, NodeGraphBundle, PreviewColorConfig, Project,
-    ResolvedColorManagementConfig, ResourceGraph,
+    ColorConfigCacheIdentity, ColorConfigIdentity, ColorManagementConfig, ColorManagementField,
+    ColorManagementIssue, ColorManagementStructureIssue, Composition, ExportColorConfig,
+    ModelValidatedColorManagementConfig, NodeContainer, NodeGraphBundle, PreviewColorConfig,
+    Project, RequestedColorManagementConfig, ResolvedColorManagementConfig, ResourceGraph,
 };

@@ -23,10 +23,11 @@ mod transaction;
 use transaction::{first_new_project_validation_error, port_owner_for_container};
 
 pub use color_management::{
-    ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
-    DEFAULT_BUNDLED_COLOR_CONFIG_ID, DEFAULT_OUTPUT_COLOR_SPACE, DEFAULT_PREVIEW_DISPLAY,
-    DEFAULT_PREVIEW_VIEW, DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, PreviewColorConfig,
-    ResolvedColorManagementConfig,
+    ColorConfigCacheIdentity, ColorConfigIdentity, ColorManagementConfig, ColorManagementField,
+    ColorManagementIssue, ColorManagementStructureIssue, DEFAULT_BUNDLED_COLOR_CONFIG_ID,
+    DEFAULT_OUTPUT_COLOR_SPACE, DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_VIEW,
+    DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, ModelValidatedColorManagementConfig,
+    PreviewColorConfig, RequestedColorManagementConfig, ResolvedColorManagementConfig,
 };
 pub use connection::{
     ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
@@ -63,7 +64,7 @@ pub struct Project {
     #[serde(default)]
     pub assets: Vec<Asset>,
     #[serde(default)]
-    color_management: ColorManagementConfig,
+    color_management: RequestedColorManagementConfig,
     #[serde(default)]
     pub export: ExportConfig,
     #[serde(default)]
@@ -355,7 +356,7 @@ impl Project {
             nodes: HashMap::new(),
             resources: HashMap::new(),
             assets: Vec::new(),
-            color_management: ColorManagementConfig::default(),
+            color_management: RequestedColorManagementConfig::default(),
             export: ExportConfig::default(),
             connections: Vec::new(),
         }
@@ -373,19 +374,26 @@ impl Project {
     ///
     /// Runtime consumers should use [`Project::resolved_color_management`] so
     /// an unavailable external config cannot silently reinterpret space names.
-    pub fn requested_color_management(&self) -> &ColorManagementConfig {
+    pub fn requested_color_management(&self) -> &RequestedColorManagementConfig {
         &self.color_management
     }
 
+    /// Parsed color intent, or `None` when the raw persisted value is
+    /// structurally malformed and retained for repair.
+    pub fn requested_color_management_config(&self) -> Option<&ColorManagementConfig> {
+        self.color_management.as_config()
+    }
+
     /// Replace the Project color intent only when all identifiers are pinned
-    /// and its external config asset, if any, is available.
+    /// and its external config asset has a matching import-time identity.
+    /// Backend and current filesystem availability remain runtime checks.
     pub fn set_color_management(
         &mut self,
         color_management: ColorManagementConfig,
     ) -> Result<(), Vec<ColorManagementIssue>> {
         let diagnostics = color_management.diagnostics(&self.assets);
         if diagnostics.is_empty() {
-            self.color_management = color_management;
+            self.color_management = RequestedColorManagementConfig::Config(color_management);
             Ok(())
         } else {
             Err(diagnostics)
@@ -401,9 +409,10 @@ impl Project {
         self.color_management.diagnostics(&self.assets)
     }
 
-    /// Runtime-safe effective color settings. Any invalid persisted request
-    /// fails closed to the bundled linear-sRGB configuration and remains
-    /// observable through diagnostics.
+    /// Model-validate color settings without substituting a different config.
+    /// Callers must handle [`ResolvedColorManagementConfig::Unavailable`]
+    /// explicitly. A Ready result still requires backend/resource verification;
+    /// no linear-sRGB fallback is returned from this API.
     pub fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
         color_management::resolve_color_management(&self.color_management, &self.assets)
     }
