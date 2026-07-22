@@ -142,10 +142,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 .map_or(response.clone(), |reason| {
                     response.on_hover_text(reason.tooltip())
                 });
-                let unclipped_header_rect = *self.to_global * response.rect;
+                let header_content_rect = response.rect;
+                let visual_header_rect =
+                    Editor::node_header_frame(visual).outer_rect(response.rect);
+                let unclipped_content_rect = *self.to_global * header_content_rect;
+                let unclipped_header_rect = *self.to_global * visual_header_rect;
                 let header_rect = clipped_qa_rect(unclipped_header_rect, *self.canvas_clip);
                 if let Ok(mut capture) = self.surface_capture.lock() {
-                    capture.record_node_header(project_node_id, response.rect);
+                    capture.record_node_header(project_node_id, visual_header_rect);
                 }
                 let coordinate_double_clicked = ui.input(|input| {
                     input
@@ -167,6 +171,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             "node_id": project_node_id,
                             "selected": selected,
                             "highlight_style": highlight_metadata,
+                            "content_rect": qa_rect_metadata(unclipped_content_rect),
                         }),
                     );
                 }
@@ -180,6 +185,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         "selected": selected,
                         "highlight_style": highlight_metadata,
                         "hovered": response.hovered(),
+                        "content_rect": qa_rect_metadata(unclipped_content_rect),
                         "unclipped_rect": qa_rect_metadata(unclipped_header_rect),
                         "visible_in_canvas": header_rect.is_positive(),
                     })),

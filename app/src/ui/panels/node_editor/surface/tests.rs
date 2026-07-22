@@ -15,6 +15,16 @@ fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
     }
 }
 
+fn key_a(pressed: bool) -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::A,
+        physical_key: Some(egui::Key::A),
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
 fn run_pointer_frame(
     context: &egui::Context,
     projection: &SurfaceProjection<'_>,
@@ -67,6 +77,59 @@ fn selection_intent_maps_opaque_groups_without_registry_probe_order() {
             primary: Some(SelectionTarget::Clip(clip)),
         })
     );
+}
+
+#[test]
+fn production_surface_arms_layout_swipe_from_visual_header_padding() {
+    let mut project = Project::new("visual header padding");
+    let node = Node::new_merge("Padded header");
+    let node_id = node.id;
+    project.add_node(node);
+    let node_rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(220.0, 120.0));
+    let visual_header = egui::Rect::from_min_size(node_rect.min, egui::vec2(220.0, 38.0));
+    let content_header = visual_header.shrink2(egui::vec2(9.0, 7.0));
+    let padding_point = egui::pos2(content_header.center().x, visual_header.top() + 1.0);
+    let mut capture = SurfaceCapture::default();
+    capture.record_selectable(SelectionTarget::Node(node_id));
+    capture.record_node_header(node_id, visual_header);
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let projection = SurfaceProjection::from_project(
+        &project,
+        &[],
+        &HashMap::from([(node_id, node_rect)]),
+        &HashMap::new(),
+        &capture,
+        &[],
+        &[],
+        None,
+        None,
+        viewport,
+        egui::emath::TSTransform::IDENTITY,
+    );
+    assert!(visual_header.contains(padding_point));
+    assert!(!content_header.contains(padding_point));
+
+    let context = egui::Context::default();
+    let mut state = SurfaceState::default();
+    let outputs = run_pointer_frame(
+        &context,
+        &projection,
+        &mut state,
+        node_editor_ui::InteractionOptions::ALL,
+        vec![
+            key_a(true),
+            egui::Event::PointerMoved(padding_point),
+            pointer_button(padding_point, true),
+        ],
+    );
+
+    assert!(outputs.iter().any(|output| matches!(
+        output,
+        node_editor_ui::EditorOutput::LayoutSwipe(intent)
+            if intent.phase == node_editor_ui::LayoutSwipePhase::Start
+                && intent.anchor == node_id
+    )));
+    assert!(state.is_layout_swipe_active());
 }
 
 #[test]

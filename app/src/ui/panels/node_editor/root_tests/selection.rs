@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn real_node_header_capture_includes_the_visual_frame_padding() {
+    let (project, ids) = adversarial_hierarchy_fixture();
+    render_test_graph(&project, ids.composition);
+    let component_id = format!("node_editor.node_header:{}", ids.solid);
+    let metadata = test_metadata(&component_id).unwrap();
+    let rect = |key: &str| {
+        let value = &metadata[key];
+        egui::Rect::from_min_max(
+            egui::pos2(
+                value["min_x"].as_f64().unwrap() as f32,
+                value["min_y"].as_f64().unwrap() as f32,
+            ),
+            egui::pos2(
+                value["max_x"].as_f64().unwrap() as f32,
+                value["max_y"].as_f64().unwrap() as f32,
+            ),
+        )
+    };
+    let visual = test_rect(&component_id).unwrap();
+    let content = rect("content_rect");
+    let padding_point = egui::pos2(content.center().x, visual.top() + 1.0);
+
+    assert!(visual.contains(padding_point));
+    assert!(!content.contains(padding_point));
+    assert!(visual.width() > content.width());
+    assert!(visual.height() > content.height());
+}
+
+#[test]
 fn production_container_metadata_exposes_selected_visual_for_all_group_kinds() {
     let (project, composition_id, track_id, clip_id, _, _) = fixture();
     let (_, containers) = build_snarl(&project, composition_id);
