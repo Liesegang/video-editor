@@ -261,8 +261,7 @@ where
     let navigation_owns_pointer = input.space_down || input.middle_down;
     let a_held_through_release =
         input.a_down || (input.released && input.pointer_released_before_a);
-    let layout_conflict = pointer_blocked
-        || wants_keyboard
+    let layout_conflict = wants_keyboard
         || navigation_owns_pointer
         || options.layout_swipe == LayoutSwipeHitArea::Disabled
         || !a_held_through_release;

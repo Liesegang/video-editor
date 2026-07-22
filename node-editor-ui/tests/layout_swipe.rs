@@ -899,3 +899,61 @@ fn raw_a_press_on_header_wins_over_a_wire_crossing_the_same_point() {
     );
     assert!(without_a.iter().all(|output| swipe(output).is_none()));
 }
+
+#[test]
+fn active_swipe_keeps_pointer_capture_when_crossing_a_body_control() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let transform = egui::emath::TSTransform::IDENTITY;
+    let (start, started) = arm(&context, &graph, &mut state, transform, Modifiers::NONE);
+    assert_eq!(only_swipe(&started).phase, LayoutSwipePhase::Start);
+    let activated = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![Event::PointerMoved(start + vec2(28.0, 0.0))],
+            Modifiers::NONE,
+        ),
+    );
+    assert_eq!(only_swipe(&activated).phase, LayoutSwipePhase::Update);
+    assert!(state.is_layout_swipe_active());
+
+    let body_control = graph.nodes[0].rect.center_bottom() - vec2(0.0, 18.0);
+    let crossed = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput {
+            events: vec![Event::PointerMoved(body_control)],
+            modifiers: Modifiers::NONE,
+            focused: true,
+            pointer_blocked: true,
+            keyboard_focus: false,
+        },
+    );
+    assert_eq!(only_swipe(&crossed).phase, LayoutSwipePhase::Update);
+    assert!(state.is_layout_swipe_active());
+
+    let committed = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput {
+            events: vec![pointer(body_control, false, Modifiers::NONE)],
+            modifiers: Modifiers::NONE,
+            focused: true,
+            pointer_blocked: true,
+            keyboard_focus: false,
+        },
+    );
+    assert_eq!(only_swipe(&committed).phase, LayoutSwipePhase::Commit);
+    assert!(!state.is_layout_swipe_active());
+}
