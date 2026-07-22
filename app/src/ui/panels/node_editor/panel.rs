@@ -13,6 +13,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
+use super::layout::{
+    apply_directional_layout_commit, apply_directional_layout_preview,
+    handle_directional_layout_outputs, DirectionalLayoutFrameOutcome,
+};
+use crate::utils::lock::{mutex_lock_or_recover, write_or_recover};
+
 use super::{
     apply_auto_layout, apply_edit, apply_layout_edit, apply_queued_node_edits, build_snarl,
     capture_container_resize_before_canvas, captured_snarl_drag_node, captured_snarl_drag_target,
@@ -69,6 +75,8 @@ pub fn node_editor_panel(
     let context_menu_state = &mut editor_context.node_editor_context_menu;
     let node_editor_state = &mut editor_context.node_editor_state;
     let Some(comp_id) = comp_id else {
+        node_editor_state.directional_layout_swipe = None;
+        node_editor_state.directional_layout_release_guard = false;
         discard_layout_request_without_composition(node_editor_state);
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
         ui.centered_and_justified(|ui| ui.label("No Composition Selected"));
@@ -213,6 +221,7 @@ pub fn node_editor_panel(
     let mut selection_changed = false;
     let mut context_menu_exclusion_rects = Vec::new();
     let mut wire_context_request = None;
+    let mut directional_layout_frame: DirectionalLayoutFrameOutcome;
     let mut snarl_selected_node_ids: Vec<Uuid>;
     let mut to_global = egui::emath::TSTransform::default();
     let mut canvas_clip = canvas_rect;
@@ -225,7 +234,8 @@ pub fn node_editor_panel(
             ui.label("Project is unavailable");
             return;
         };
-        let (built_snarl, containers) = build_snarl(&project, comp_id);
+        let (mut built_snarl, containers) = build_snarl(&project, comp_id);
+        apply_directional_layout_preview(&mut built_snarl, node_editor_state);
         snarl = built_snarl;
 
         let resize_was_active = node_editor_state.container_resize.is_some();
@@ -262,7 +272,8 @@ pub fn node_editor_panel(
             suppress_wire_connect: node_editor_state.wire_gesture.is_some()
                 || node_editor_state.normal_connect_gesture.is_some()
                 || node_editor_state.normal_connect_cancel_pending_release
-                || node_editor_state.merge_layer_reorder.is_some(),
+                || node_editor_state.merge_layer_reorder.is_some()
+                || node_editor_state.directional_layout_swipe.is_some(),
             locked_canvas_transform: node_editor_state
                 .container_resize
                 .as_ref()
@@ -459,43 +470,6 @@ pub fn node_editor_panel(
             });
             *context_menu_state = None;
         }
-        let wire_owned_layout_before = wire_pointer_owns_layout(node_editor_state);
-        edits.extend(wire_interactions(
-            ui,
-            node_editor_state,
-            WireInteractionFrame {
-                project: &project,
-                edges: &rendered_edges,
-                rendered_ports: &rendered_ports,
-                canvas_clip,
-                graph_item_rects: &context_menu_exclusion_rects,
-                to_global,
-            },
-        ));
-        let wire_owned_layout =
-            wire_owned_layout_before || wire_pointer_owns_layout(node_editor_state);
-        if let Some(edit) = show_wire_context_menu(
-            ui,
-            node_editor_state,
-            &project,
-            plugin_manager.as_ref(),
-            comp_id,
-            to_global,
-        ) {
-            edits.push(edit);
-        }
-
-        let resize_owned_layout_before = node_editor_state.container_resize.is_some();
-        let resize_edits = container_resize_interactions(
-            ui,
-            &project,
-            &containers,
-            to_global,
-            canvas_clip,
-            node_editor_state,
-        );
-        let resize_owned_layout =
-            resize_owned_layout_before || node_editor_state.container_resize.is_some();
         let (primary_pressed, primary_down, primary_released, pointer_position, modifiers) = ui
             .input(|input| {
                 (
@@ -515,11 +489,91 @@ pub fn node_editor_panel(
                             .any(|rect| wire_port_drop_rect(*rect).contains(position))
                     })
             });
-        let pointer_is_specialized = pointer_on_port
-            || wire_owned_layout
-            || resize_owned_layout
+        let surface_options = if node_editor_details_visible(to_global.scaling) {
+            node_editor_ui::InteractionOptions::SELECTION
+        } else {
+            node_editor_ui::InteractionOptions::OVERVIEW_SELECTION
+        };
+        let resize_owned_layout_before = node_editor_state.container_resize.is_some();
+        let legacy_pointer_already_owned = wire_pointer_owns_layout(node_editor_state)
+            || resize_owned_layout_before
+            || pointer_on_port
             || node_editor_state.wire_knife.is_some()
             || node_editor_state.merge_layer_reorder.is_some();
+        let layout_swipe_preflight = {
+            let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
+            let port_rects = mutex_lock_or_recover(rendered_ports.as_ref());
+            let capture = mutex_lock_or_recover(surface_capture.as_ref());
+            let projection = SurfaceProjection::from_project(
+                &project,
+                &containers,
+                &node_rects,
+                &port_rects,
+                &capture,
+                &rendered_edges,
+                editor_context.selection.targets(),
+                editor_context.selection.primary(),
+                node_editor_state.selected_connection_id,
+                canvas_clip,
+                to_global,
+            );
+            node_editor_ui::Editor::layout_swipe_wants_pointer(
+                ui,
+                &projection.frame(),
+                &node_editor_state.surface_interaction,
+                surface_options,
+                legacy_pointer_already_owned,
+            )
+        };
+        let wire_owned_layout_before = wire_pointer_owns_layout(node_editor_state);
+        if !layout_swipe_preflight && !resize_owned_layout_before {
+            edits.extend(wire_interactions(
+                ui,
+                node_editor_state,
+                WireInteractionFrame {
+                    project: &project,
+                    edges: &rendered_edges,
+                    rendered_ports: &rendered_ports,
+                    canvas_clip,
+                    graph_item_rects: &context_menu_exclusion_rects,
+                    to_global,
+                },
+            ));
+        }
+        let wire_owned_layout =
+            wire_owned_layout_before || wire_pointer_owns_layout(node_editor_state);
+        if let Some(edit) = show_wire_context_menu(
+            ui,
+            node_editor_state,
+            &project,
+            plugin_manager.as_ref(),
+            comp_id,
+            to_global,
+        ) {
+            edits.push(edit);
+        }
+
+        let resize_edits = container_resize_interactions(
+            ui,
+            &project,
+            &containers,
+            to_global,
+            canvas_clip,
+            node_editor_state,
+        );
+        let resize_owned_layout =
+            resize_owned_layout_before || node_editor_state.container_resize.is_some();
+        let directional_layout_was_active = node_editor_state.directional_layout_swipe.is_some()
+            || node_editor_state.directional_layout_release_guard
+            || node_editor_state
+                .surface_interaction
+                .is_layout_swipe_active();
+        let pointer_is_specialized = !directional_layout_was_active
+            && (pointer_on_port
+                || wire_owned_layout
+                || resize_owned_layout
+                || node_editor_state.wire_knife.is_some()
+                || node_editor_state.merge_layer_reorder.is_some());
 
         if primary_pressed {
             if let Some(owner) = resize_started_owner.filter(|owner| {
@@ -535,11 +589,10 @@ pub fn node_editor_panel(
         }
 
         let surface_was_active = node_editor_state.surface_interaction.is_active();
-        let surface_outputs = if let (Ok(node_rects), Ok(port_rects), Ok(capture)) = (
-            rendered_node_rects.lock(),
-            rendered_ports.lock(),
-            surface_capture.lock(),
-        ) {
+        let surface_outputs = {
+            let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
+            let port_rects = mutex_lock_or_recover(rendered_ports.as_ref());
+            let capture = mutex_lock_or_recover(surface_capture.as_ref());
             let projection = SurfaceProjection::from_project(
                 &project,
                 &containers,
@@ -553,20 +606,13 @@ pub fn node_editor_panel(
                 canvas_clip,
                 to_global,
             );
-            let options = if node_editor_details_visible(to_global.scaling) {
-                node_editor_ui::InteractionOptions::SELECTION
-            } else {
-                node_editor_ui::InteractionOptions::OVERVIEW_SELECTION
-            };
             node_editor_ui::Editor::interact(
                 ui,
                 &projection.frame(),
                 &mut node_editor_state.surface_interaction,
-                options,
+                surface_options,
                 pointer_is_specialized,
             )
-        } else {
-            Vec::new()
         };
         if let Some(change) = super::selection_change(&surface_outputs) {
             selection_changed |= replace_selection_if_changed(
@@ -578,10 +624,27 @@ pub fn node_editor_panel(
         if super::deselects_wire(&surface_outputs) {
             node_editor_state.selected_connection_id = None;
         }
+        let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
+        directional_layout_frame = handle_directional_layout_outputs(
+            &project,
+            comp_id,
+            editor_context.selection.targets(),
+            &node_rects,
+            &surface_outputs,
+            node_editor_state,
+            history_manager,
+        );
+        drop(node_rects);
+        if node_editor_state.directional_layout_release_guard && primary_released {
+            node_editor_state.directional_layout_release_guard = false;
+        }
         let surface_owned_layout =
             surface_was_active || node_editor_state.surface_interaction.is_active();
 
-        let layout_pointer_owned = wire_owned_layout || resize_owned_layout || surface_owned_layout;
+        let layout_pointer_owned = wire_owned_layout
+            || resize_owned_layout
+            || surface_owned_layout
+            || directional_layout_frame.owns_pointer;
         if primary_down && !layout_pointer_owned {
             if let Some(target) = captured_drag_target {
                 if node_editor_state.active_drag_selection != Some(target) {
@@ -658,8 +721,11 @@ pub fn node_editor_panel(
             node_editor_state.moved_node_ids.clear();
             node_editor_state.active_drag_selection = None;
         }
-        if node_editor_state.merge_layer_reorder.is_some() {
+        if node_editor_state.merge_layer_reorder.is_some() || directional_layout_frame.owns_pointer
+        {
             collected.clear();
+            edits.clear();
+            drop_intents.clear();
         }
         layout_edits = collected;
     }
@@ -678,7 +744,19 @@ pub fn node_editor_panel(
     }
 
     let mut layout_changed = false;
-    if let Ok(mut project) = project_lock.write() {
+    let mut directional_layout_changed = false;
+    {
+        let mut project = write_or_recover(project_lock.as_ref());
+        if let Some(commit) = directional_layout_frame.commit.take() {
+            let result = apply_directional_layout_commit(
+                &mut project,
+                node_editor_state,
+                history_manager,
+                commit,
+            );
+            directional_layout_changed = result.changed;
+            directional_layout_frame.request_repaint |= result.request_repaint;
+        }
         if apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state) {
             // Render completion is asynchronous. Wake the UI immediately so
             // a paused Preview observes this authoritative graph mutation
@@ -724,6 +802,9 @@ pub fn node_editor_panel(
                 }
             }
         }
+    }
+    if directional_layout_frame.request_repaint || directional_layout_changed {
+        ui.ctx().request_repaint();
     }
     if node_editor_state
         .merge_layer_reorder

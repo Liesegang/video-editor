@@ -184,6 +184,9 @@ impl EditorContext {
         self.node_editor_state.panel_rect = None;
         self.node_editor_state.pending_layout_command = None;
         self.node_editor_state.last_layout_execution = None;
+        self.node_editor_state.directional_layout_swipe = None;
+        self.node_editor_state.directional_layout_release_guard = false;
+        self.node_editor_state.last_directional_layout_swipe = None;
         self.node_editor_state.pending_navigation = None;
         self.node_editor_state.layout_changed_during_drag = false;
         self.node_editor_state.node_reparent = None;

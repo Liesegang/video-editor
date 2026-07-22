@@ -693,6 +693,20 @@ pub struct NodeEditorState {
     /// Last consumed request is exposed only through the QA state snapshot.
     #[serde(skip)]
     pub last_layout_execution: Option<NodeEditorLayoutExecution>,
+    /// Frozen, read-only Project projection for a hold-A directional layout.
+    #[serde(skip)]
+    pub(crate) directional_layout_swipe:
+        Option<super::node_editor_layout::NodeEditorDirectionalLayoutGesture>,
+    /// Continue suppressing Snarl's competing drag until the physical release
+    /// after A/Escape cancellation has passed through one UI frame.
+    #[serde(skip)]
+    pub(crate) directional_layout_release_guard: bool,
+    #[serde(skip)]
+    pub(crate) directional_layout_swipe_serial: u64,
+    /// Last terminal gesture result, retained only for QA diagnostics.
+    #[serde(skip)]
+    pub(crate) last_directional_layout_swipe:
+        Option<super::node_editor_layout::NodeEditorDirectionalLayoutExecution>,
     #[serde(skip)]
     pub pending_navigation: Option<Uuid>,
     #[serde(skip)]

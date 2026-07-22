@@ -97,6 +97,66 @@ pub fn snapshot(
 
     let project = serde_json::to_value(project)
         .map_err(|error| format!("failed to serialize authoritative Project: {error}"))?;
+    let directional_layout_swipe = editor_context
+        .node_editor_state
+        .directional_layout_swipe
+        .as_ref()
+        .map(|gesture| {
+            let measured_geometry_count = gesture
+                .frozen_geometry
+                .values()
+                .filter(|geometry| geometry.measured)
+                .count();
+            json!({
+                "gesture_id": gesture.gesture_id,
+                "composition_id": gesture.composition_id,
+                "direct_owner": node_container_key(gesture.direct_owner),
+                "anchor_node_id": gesture.anchor_node_id,
+                "mode": gesture.mode.as_str(),
+                "axis": gesture.axis.map(|axis| format!("{axis:?}").to_lowercase()),
+                "direction": gesture.direction.map(|direction| direction.as_str()),
+                "start": {"x": gesture.start.x, "y": gesture.start.y},
+                "current": {"x": gesture.current.x, "y": gesture.current.y},
+                "frozen_selected_node_ids": gesture.frozen_selected_node_ids,
+                "frozen_geometry_count": gesture.frozen_geometry.len(),
+                "measured_geometry_count": measured_geometry_count,
+                "estimated_geometry_count": gesture.frozen_geometry.len() - measured_geometry_count,
+                "preview_positions": gesture.preview_positions,
+                "project_revision": gesture.project_revision,
+                "history_undo_depth": gesture.history_undo_depth,
+                "history_redo_depth": gesture.history_redo_depth,
+                "diagnostics": {
+                    "reachable_node_ids": gesture.diagnostics.reachable_node_ids,
+                    "eligible_node_ids": gesture.diagnostics.eligible_node_ids,
+                    "moved_node_ids": gesture.diagnostics.moved_node_ids,
+                    "blocked_node_ids": gesture.diagnostics.blocked_node_ids,
+                },
+            })
+        });
+    let last_directional_layout_swipe = editor_context
+        .node_editor_state
+        .last_directional_layout_swipe
+        .as_ref()
+        .map(|execution| {
+            json!({
+                "gesture_id": execution.gesture_id,
+                "outcome": execution.outcome.as_str(),
+                "reason": execution.reason,
+                "composition_id": execution.composition_id,
+                "direct_owner": node_container_key(execution.direct_owner),
+                "anchor_node_id": execution.anchor_node_id,
+                "mode": execution.mode.as_str(),
+                "axis": execution.axis.map(|axis| format!("{axis:?}").to_lowercase()),
+                "direction": execution.direction.map(|direction| direction.as_str()),
+                "moved_node_ids": execution.moved_node_ids,
+                "project_revision_before": execution.project_revision_before,
+                "project_revision_after": execution.project_revision_after,
+                "history_undo_before": execution.history_undo_before,
+                "history_undo_after": execution.history_undo_after,
+                "history_redo_before": execution.history_redo_before,
+                "history_redo_after": execution.history_redo_after,
+            })
+        });
     Ok(json!({
         "frame": frame,
         "project": project,
@@ -203,6 +263,11 @@ pub fn snapshot(
                         "scope": execution.scope,
                         "changed": execution.changed,
                     })),
+                "directional_layout_swipe": directional_layout_swipe,
+                "directional_layout_release_guard": editor_context
+                    .node_editor_state
+                    .directional_layout_release_guard,
+                "last_directional_layout_swipe": last_directional_layout_swipe,
                 "pending_navigation": editor_context.node_editor_state.pending_navigation,
                 "selected_connection_id": editor_context.node_editor_state.selected_connection_id,
                 "reparent_gesture": editor_context.node_editor_state.node_reparent.as_ref().map(|gesture| {

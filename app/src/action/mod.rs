@@ -14,6 +14,8 @@ pub fn node_layout_command_blocked(state: &NodeEditorState) -> bool {
         || !state.moved_node_ids.is_empty()
         || state.node_reparent.is_some()
         || state.container_resize.is_some()
+        || state.directional_layout_swipe.is_some()
+        || state.directional_layout_release_guard
         || state.surface_interaction.is_active()
         || state.active_drag_selection.is_some()
         || state.wire_gesture.is_some()
