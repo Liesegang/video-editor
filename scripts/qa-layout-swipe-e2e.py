@@ -185,7 +185,7 @@ def begin_swipe(
     shift=False,
     alt=False,
     anchor=TEXT,
-    observed=BASE.TEXT_TRANSFORM,
+    observed=BASE.BLUR_EFFECT,
     require_visible_preview=True,
 ):
     # Overview uses the whole Node while detailed mode uses its full painted
@@ -636,15 +636,37 @@ def run_suite(client):
     commit_swipe(client, plain)
     undo_commit(client, plain)
 
-    align = begin_swipe(client, 145.0, 3.0, shift=True)
+    align = begin_swipe(
+        client,
+        145.0,
+        3.0,
+        shift=True,
+        anchor=BASE.SOLID,
+        observed=BASE.MERGE,
+    )
     commit_swipe(client, align)
     undo_commit(client, align)
 
-    distribute = begin_swipe(client, 3.0, 75.0, alt=True)
+    distribute = begin_swipe(
+        client,
+        3.0,
+        75.0,
+        alt=True,
+        anchor=BASE.SOLID,
+        observed=BASE.MERGE,
+    )
     commit_swipe(client, distribute)
     undo_commit(client, distribute)
 
-    combined = begin_swipe(client, 135.0, 2.0, shift=True, alt=True)
+    combined = begin_swipe(
+        client,
+        135.0,
+        2.0,
+        shift=True,
+        alt=True,
+        anchor=BASE.SOLID,
+        observed=BASE.MERGE,
+    )
     commit_swipe(client, combined)
     undo_commit(client, combined)
 
