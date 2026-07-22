@@ -278,8 +278,6 @@ pub(in crate::ui::panels::node_editor) fn layout_needs_reflow(
             node_ids.extend(clip.node_ids.iter().copied());
         }
     }
-    node_ids.sort_unstable();
-    node_ids.dedup();
     let node_rects = node_ids
         .into_iter()
         .filter_map(|node_id| estimated_node_rect(project, node_id).map(|rect| (node_id, rect)))
