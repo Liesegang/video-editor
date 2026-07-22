@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+mod color_metadata;
+
+pub use color_metadata::{
+    AssetSourceColorMetadata, SourceColorDescription, SourceColorPrimaries, SourceColorProfile,
+    SourceColorRange, SourceMatrixCoefficients, SourceTransferCharacteristic,
+};
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Asset {
     pub id: Uuid,
@@ -33,6 +40,10 @@ pub struct Asset {
     /// same bytes. Resource opening must verify those conditions again.
     #[serde(default)]
     imported_content_sha256: Option<String>,
+    /// Detected encoded-source color tags and the user's independent override.
+    /// Pixel conversion is deliberately not performed by this metadata field.
+    #[serde(default, skip_serializing_if = "AssetSourceColorMetadata::is_empty")]
+    pub source_color: AssetSourceColorMetadata,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -64,6 +75,7 @@ impl Asset {
             }, // Default gray
             stream_index: None,
             imported_content_sha256: None,
+            source_color: AssetSourceColorMetadata::default(),
         }
     }
 
@@ -103,5 +115,44 @@ impl Asset {
     pub fn contains_source_frame(&self, frame_number: u64) -> bool {
         self.frame_count
             .is_none_or(|frame_count| frame_number < frame_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Asset, AssetKind, SourceColorPrimaries};
+
+    #[test]
+    fn pre_color_metadata_asset_json_still_loads() {
+        let json = r#"{
+            "id":"eecdb250-8720-4931-a17b-87402b5d099e",
+            "name":"legacy.png",
+            "path":"legacy.png",
+            "kind":"Image",
+            "duration":null,
+            "width":16,
+            "height":9,
+            "fps":null,
+            "color":{"r":100,"g":100,"b":100,"a":255}
+        }"#;
+
+        let asset: Asset = serde_json::from_str(json).expect("legacy Asset must deserialize");
+        assert_eq!(asset.kind, AssetKind::Image);
+        assert!(asset.source_color.detected.is_empty());
+        assert!(asset.source_color.user_override.is_none());
+    }
+
+    #[test]
+    fn source_color_round_trips_without_merging_override_and_detection() {
+        let mut asset = Asset::new("wide", "wide.mov", AssetKind::Video);
+        asset.source_color.detected.primaries = Some(SourceColorPrimaries::Bt709);
+        asset.source_color.user_override = Some(super::SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::Bt2020),
+            ..super::SourceColorDescription::default()
+        });
+
+        let json = serde_json::to_string(&asset).unwrap();
+        let restored: Asset = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, asset);
     }
 }

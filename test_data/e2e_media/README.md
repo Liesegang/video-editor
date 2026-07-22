@@ -23,6 +23,11 @@ and 1.8 seconds. The generator verifies those exact PTS with `ffprobe`; the
 Rust tests assert frame selection by those timestamps instead of by an average
 FPS-derived ordinal.
 
+`color_rec709_limited.mp4`, `color_rec2020_pq.mp4`, and
+`color_rec2020_hlg.mp4` carry explicit H.273 source tags. The matching
+`color_untagged.mp4` deliberately omits them; tests must keep those fields
+unknown rather than guessing a color space from dimensions or codec.
+
 Verify the checked-in bytes from the fixture directory:
 
 ```sh

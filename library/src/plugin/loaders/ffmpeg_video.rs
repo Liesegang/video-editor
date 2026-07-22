@@ -1,6 +1,7 @@
 use super::super::{
     LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse, Plugin,
 };
+use super::ffmpeg_color_metadata;
 use crate::cache::CacheManager;
 use crate::editor::color_service::{ColorSpaceManager, OcioProcessor};
 use crate::error::LibraryError;
@@ -37,6 +38,7 @@ struct BufferedFrame {
     frame: ffmpeg::util::frame::Video,
     pts: i64,
     fallback_end_pts: i64,
+    source_color: crate::model::asset::SourceColorDescription,
 }
 
 #[derive(Debug)]
@@ -106,6 +108,7 @@ pub struct VideoReader {
     ocio_processor: Option<OcioProcessor>,
     current_color_space: Option<(String, String)>,
     last_decode_stats: DecodeStats,
+    stream_source_color: crate::model::asset::SourceColorDescription,
 }
 
 impl VideoReader {
@@ -143,6 +146,7 @@ impl VideoReader {
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
         let decoder = context_decoder.decoder().video()?;
+        let stream_source_color = ffmpeg_color_metadata::from_decoder(&decoder);
 
         let stream = input_context
             .stream(video_stream_index)
@@ -188,6 +192,7 @@ impl VideoReader {
             ocio_processor: None,
             current_color_space: None,
             last_decode_stats: DecodeStats::default(),
+            stream_source_color,
         })
     }
 
@@ -242,6 +247,20 @@ impl VideoReader {
 
     pub fn last_decode_stats(&self) -> DecodeStats {
         self.last_decode_stats
+    }
+
+    /// Effective detected metadata for the selected decoded frame. Frame tags
+    /// override only the fields they actually carry; absent fields fall back
+    /// to the selected stream's codec metadata.
+    pub fn current_source_color(&self) -> crate::model::asset::SourceColorDescription {
+        self.current_frame.as_ref().map_or_else(
+            || self.stream_source_color.clone(),
+            |buffered| {
+                buffered
+                    .source_color
+                    .with_detected_fallback(&self.stream_source_color)
+            },
+        )
     }
 
     /// Convenience API for callers that have an authoritative CFR ordinal.
@@ -535,26 +554,33 @@ fn collect_asset_metadata(
                 container_duration
             };
 
-            let (fps, width, height, frame_count) = if kind == crate::model::asset::AssetKind::Video
-            {
-                let average = stream.avg_frame_rate();
-                let fps = (average.numerator() > 0 && average.denominator() > 0)
-                    .then(|| f64::from(average.numerator()) / f64::from(average.denominator()));
-                let dimensions = ffmpeg::codec::context::Context::from_parameters(parameters)
-                    .ok()
-                    .and_then(|context| context.decoder().video().ok())
-                    .map(|decoder| (decoder.width(), decoder.height()));
-                (
-                    fps,
-                    dimensions.map(|value| value.0),
-                    dimensions.map(|value| value.1),
-                    u64::try_from(stream.frames())
+            let (fps, width, height, frame_count, source_color) =
+                if kind == crate::model::asset::AssetKind::Video {
+                    let average = stream.avg_frame_rate();
+                    let fps = (average.numerator() > 0 && average.denominator() > 0)
+                        .then(|| f64::from(average.numerator()) / f64::from(average.denominator()));
+                    let video = ffmpeg::codec::context::Context::from_parameters(parameters)
                         .ok()
-                        .filter(|frames| *frames > 0),
-                )
-            } else {
-                (None, None, None, None)
-            };
+                        .and_then(|context| context.decoder().video().ok());
+                    let dimensions = video
+                        .as_ref()
+                        .map(|decoder| (decoder.width(), decoder.height()));
+                    let source_color = video
+                        .as_ref()
+                        .map(ffmpeg_color_metadata::from_decoder)
+                        .unwrap_or_default();
+                    (
+                        fps,
+                        dimensions.map(|value| value.0),
+                        dimensions.map(|value| value.1),
+                        u64::try_from(stream.frames())
+                            .ok()
+                            .filter(|frames| *frames > 0),
+                        source_color,
+                    )
+                } else {
+                    (None, None, None, None, Default::default())
+                };
 
             Some(crate::plugin::AssetMetadata {
                 kind,
@@ -565,6 +591,7 @@ fn collect_asset_metadata(
                 stream_index: Some(stream.index()),
                 frame_count,
                 time_base: Some((time_base.numerator(), time_base.denominator())),
+                source_color,
             })
         })
         .collect()
@@ -591,6 +618,7 @@ fn receive_until_target(
                     stats,
                 );
                 let decoded = BufferedFrame {
+                    source_color: ffmpeg_color_metadata::from_frame(&frame),
                     frame,
                     pts,
                     fallback_end_pts: pts.saturating_add(duration),

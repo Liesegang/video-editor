@@ -45,6 +45,25 @@ ffmpeg_run -f lavfi \
 ffmpeg_run -i "$fixture_dir/h264_24.mp4" -map 0:v:0 -an -c copy \
     "$fixture_dir/h264_24.mov"
 
+# Explicit source color tags. `setparams` attaches the tags to input frames so
+# libx264 writes both the bitstream VUI and container metadata. The HDR samples
+# use 10-bit storage; these fixtures validate probing, not color conversion.
+ffmpeg_run -f lavfi -i "testsrc2=size=16x16:rate=1:duration=1" \
+    -vf "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=limited" \
+    -an -c:v libx264 -threads 1 -pix_fmt yuv420p \
+    "$fixture_dir/color_rec709_limited.mp4"
+ffmpeg_run -f lavfi -i "testsrc2=size=16x16:rate=1:duration=1" \
+    -vf "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=limited" \
+    -an -c:v libx264 -threads 1 -pix_fmt yuv420p10le \
+    "$fixture_dir/color_rec2020_pq.mp4"
+ffmpeg_run -f lavfi -i "testsrc2=size=16x16:rate=1:duration=1" \
+    -vf "setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc:range=limited" \
+    -an -c:v libx264 -threads 1 -pix_fmt yuv420p10le \
+    "$fixture_dir/color_rec2020_hlg.mp4"
+ffmpeg_run -f lavfi -i "testsrc2=size=16x16:rate=1:duration=1" \
+    -an -c:v libx264 -threads 1 -pix_fmt yuv420p \
+    "$fixture_dir/color_untagged.mp4"
+
 # VP9 retains an odd-sized 9x7 frame, exercising stride and dimension logic.
 ffmpeg_run -f lavfi -i "testsrc=size=9x7:rate=15:duration=2" \
     -an -c:v libvpx-vp9 -lossless 1 -threads 1 -row-mt 0 -g 10 \
@@ -126,6 +145,7 @@ ffmpeg_run \
     shasum -a 256 \
         rgba.png rgb.jpg rgba.webp h264_24.mp4 h264_24.mov \
         vp9_odd.webm ffv1_alpha.mkv multistream.mkv tone.mp3 multi_audio.mkv \
-        av_duration_mismatch.mp4 vfr_pts.mkv \
+        av_duration_mismatch.mp4 vfr_pts.mkv color_rec709_limited.mp4 \
+        color_rec2020_pq.mp4 color_rec2020_hlg.mp4 color_untagged.mp4 \
         > SHA256SUMS
 )

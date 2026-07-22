@@ -3,7 +3,10 @@ use super::super::{
 };
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
+use crate::model::asset::{SourceColorDescription, SourceColorProfile};
 use crate::model::frame::Image;
+use image::ImageDecoder;
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
@@ -11,6 +14,60 @@ use std::io::BufReader;
 fn guessed_reader(path: &str) -> Result<image::ImageReader<BufReader<File>>, Box<dyn Error>> {
     let reader = image::ImageReader::open(path)?;
     Ok(reader.with_guessed_format()?)
+}
+
+fn probe_image(
+    path: &str,
+) -> Result<(u32, u32, SourceColorDescription), Box<dyn std::error::Error>> {
+    let reader = guessed_reader(path)?;
+    let bit_depth_is_source_precision = matches!(
+        reader.format(),
+        Some(
+            image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::WebP
+                | image::ImageFormat::Tiff
+        )
+    );
+    let mut decoder = reader.into_decoder()?;
+    let (width, height) = decoder.dimensions();
+    let color_type = decoder.color_type();
+    let channel_count = u16::from(color_type.channel_count());
+    let bit_depth = (bit_depth_is_source_precision && channel_count > 0)
+        .then(|| color_type.bits_per_pixel() / channel_count)
+        .and_then(|bits| u8::try_from(bits).ok());
+    let profile = decoder.icc_profile()?.map(|bytes| {
+        let profile_id = icc_profile_id(&bytes);
+        SourceColorProfile::Icc {
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            byte_length: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            profile_id,
+        }
+    });
+
+    Ok((
+        width,
+        height,
+        SourceColorDescription {
+            bit_depth,
+            profile,
+            ..SourceColorDescription::default()
+        },
+    ))
+}
+
+fn icc_profile_id(profile: &[u8]) -> Option<String> {
+    const ICC_SIGNATURE: std::ops::Range<usize> = 36..40;
+    const ICC_PROFILE_ID: std::ops::Range<usize> = 84..100;
+    if profile.len() < 128 || profile.get(ICC_SIGNATURE)? != b"acsp" {
+        return None;
+    }
+    let id = profile.get(ICC_PROFILE_ID)?;
+    id.iter().any(|byte| *byte != 0).then(|| {
+        id.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    })
 }
 
 /// Load an image from disk and return as RGBA.
@@ -93,10 +150,7 @@ impl LoadPlugin for NativeImageLoader {
             return Err(LoadPluginError::Unsupported);
         }
 
-        let (w, h) = guessed_reader(path)
-            .map_err(LibraryError::from)?
-            .into_dimensions()
-            .map_err(|e| LibraryError::from(Box::new(e) as Box<dyn std::error::Error>))?;
+        let (w, h, source_color) = probe_image(path).map_err(LibraryError::from)?;
 
         Ok(vec![crate::plugin::AssetMetadata {
             kind: crate::model::asset::AssetKind::Image,
@@ -107,6 +161,7 @@ impl LoadPlugin for NativeImageLoader {
             stream_index: None,
             frame_count: None,
             time_base: None,
+            source_color,
         }])
     }
 
@@ -136,6 +191,8 @@ mod tests {
     use super::{NativeImageLoader, load_image};
     use crate::cache::CacheManager;
     use crate::plugin::{LoadPlugin, LoadPluginError, LoadRequest};
+    use image::ImageEncoder;
+    use sha2::Digest;
     use uuid::Uuid;
 
     #[test]
@@ -221,6 +278,48 @@ mod tests {
             assert_eq!(loaded.image.height, 1);
             std::fs::remove_file(path)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn image_probe_preserves_reliable_bit_depth_and_icc_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path =
+            std::env::temp_dir().join(format!("video-editor-icc-16bit-{}.png", Uuid::new_v4()));
+        let mut icc = vec![0_u8; 128];
+        icc[0..4].copy_from_slice(&128_u32.to_be_bytes());
+        icc[36..40].copy_from_slice(b"acsp");
+        let expected_profile_id = [
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba,
+            0xdc, 0xfe,
+        ];
+        icc[84..100].copy_from_slice(&expected_profile_id);
+        let expected_sha = format!("{:x}", sha2::Sha256::digest(&icc));
+
+        let file = std::fs::File::create(&path)?;
+        let writer = std::io::BufWriter::new(file);
+        let mut encoder = image::codecs::png::PngEncoder::new(writer);
+        encoder.set_icc_profile(icc)?;
+        encoder.write_image(
+            &[0xff, 0xff, 0x80, 0x00, 0x00, 0x00],
+            1,
+            1,
+            image::ExtendedColorType::Rgb16,
+        )?;
+
+        let streams = NativeImageLoader::new().open(path.to_str().unwrap())?;
+        let source = &streams[0].source_color;
+        assert_eq!(source.bit_depth, Some(16));
+        assert_eq!(
+            source.profile,
+            Some(crate::model::asset::SourceColorProfile::Icc {
+                sha256: expected_sha,
+                byte_length: 128,
+                profile_id: Some("0123456789abcdef1032547698badcfe".to_string()),
+            })
+        );
+
+        std::fs::remove_file(path)?;
         Ok(())
     }
 }

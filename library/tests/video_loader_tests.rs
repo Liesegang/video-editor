@@ -1,11 +1,17 @@
 use anyhow::{Context, Result, anyhow, bail};
 use library::LibraryError;
 use library::cache::CacheManager;
+use library::editor::project_service::ProjectManager;
+use library::model::asset::{
+    SourceColorDescription, SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
+    SourceTransferCharacteristic,
+};
+use library::model::{AssetKind, Project};
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
 use library::plugin::{LoadPlugin, LoadPluginError, LoadRequest, Plugin, PluginManager};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 fn get_test_file_path(filename: &str) -> PathBuf {
@@ -45,6 +51,83 @@ fn require_error<T, E>(result: std::result::Result<T, E>, message: &str) -> Resu
         Ok(_) => bail!("{message}"),
         Err(error) => Ok(error),
     }
+}
+
+fn video_source_metadata(filename: &str) -> Result<SourceColorDescription> {
+    let path = get_media_fixture_path(filename);
+    let streams = FfmpegVideoLoader::new().open(
+        path.to_str()
+            .context("color fixture path must contain valid UTF-8")?,
+    )?;
+    streams
+        .into_iter()
+        .find(|stream| stream.kind == AssetKind::Video)
+        .map(|stream| stream.source_color)
+        .context("color fixture must expose a video stream")
+}
+
+#[test]
+fn ffmpeg_probes_rec709_rec2020_pq_hlg_and_untagged_sources() -> Result<()> {
+    let rec709 = video_source_metadata("color_rec709_limited.mp4")?;
+    assert_eq!(rec709.primaries, Some(SourceColorPrimaries::Bt709));
+    assert_eq!(rec709.transfer, Some(SourceTransferCharacteristic::Bt709));
+    assert_eq!(rec709.matrix, Some(SourceMatrixCoefficients::Bt709));
+    assert_eq!(rec709.range, Some(SourceColorRange::Limited));
+    assert_eq!(rec709.bit_depth, Some(8));
+
+    for (fixture, transfer) in [
+        ("color_rec2020_pq.mp4", SourceTransferCharacteristic::Pq),
+        ("color_rec2020_hlg.mp4", SourceTransferCharacteristic::Hlg),
+    ] {
+        let source = video_source_metadata(fixture)?;
+        assert_eq!(source.primaries, Some(SourceColorPrimaries::Bt2020));
+        assert_eq!(source.transfer, Some(transfer));
+        assert_eq!(
+            source.matrix,
+            Some(SourceMatrixCoefficients::Bt2020NonConstantLuminance)
+        );
+        assert_eq!(source.range, Some(SourceColorRange::Limited));
+        assert_eq!(source.bit_depth, Some(10));
+    }
+
+    let untagged = video_source_metadata("color_untagged.mp4")?;
+    assert_eq!(
+        untagged,
+        SourceColorDescription {
+            bit_depth: Some(8),
+            ..SourceColorDescription::default()
+        },
+        "codec/pixel format must not be used to guess missing color tags"
+    );
+    Ok(())
+}
+
+#[test]
+fn decoded_frame_tags_are_retained_and_asset_import_persists_detection() -> Result<()> {
+    let path = get_media_fixture_path("color_rec2020_hlg.mp4");
+    let path = path
+        .to_str()
+        .context("color fixture path must contain valid UTF-8")?;
+    let expected = video_source_metadata("color_rec2020_hlg.mp4")?;
+
+    let mut reader = VideoReader::new(path)?;
+    reader.decode_at_time(0.0)?;
+    assert_eq!(reader.current_source_color(), expected);
+
+    let shared = Arc::new(RwLock::new(Project::new("source color import")));
+    let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+    let imported = manager.import_file(path)?;
+    let project = shared
+        .read()
+        .map_err(|error| anyhow!("project lock poisoned: {error}"))?;
+    let asset = project
+        .assets
+        .iter()
+        .find(|asset| imported.contains(&asset.id) && asset.kind == AssetKind::Video)
+        .context("imported video Asset must exist")?;
+    assert_eq!(asset.source_color.detected, expected);
+    assert!(asset.source_color.user_override.is_none());
+    Ok(())
 }
 
 #[test]

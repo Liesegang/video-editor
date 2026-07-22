@@ -1,12 +1,15 @@
 pub mod ffmpeg_video;
 pub mod native_image;
 
+mod ffmpeg_color_metadata;
+
 pub use self::ffmpeg_video::FfmpegVideoLoader;
 pub use self::native_image::NativeImageLoader;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::AssetKind;
+use crate::model::asset::SourceColorDescription;
 use crate::model::frame::Image;
 use crate::plugin::{Plugin, PluginCategory};
 use std::collections::HashMap;
@@ -66,6 +69,9 @@ pub struct AssetMetadata {
     pub stream_index: Option<usize>,
     pub frame_count: Option<u64>,
     pub time_base: Option<(i32, i32)>,
+    /// Color tags detected from this source stream. Empty fields remain
+    /// unknown and must not be replaced with guessed defaults by the loader.
+    pub source_color: SourceColorDescription,
 }
 
 pub trait LoadPlugin: Plugin {

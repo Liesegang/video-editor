@@ -77,6 +77,7 @@ impl ProjectManager {
                 asset.width = stream.width;
                 asset.height = stream.height;
                 asset.stream_index = stream.stream_index;
+                asset.source_color.detected = stream.source_color;
                 if asset.kind == crate::model::asset::AssetKind::Video {
                     asset.frame_count = stream.frame_count;
                 }
@@ -88,7 +89,7 @@ impl ProjectManager {
         // 2. Fallback if no streams returned (or empty list)
         if assets_to_add.is_empty() {
             // 1. Get Metadata (Single call)
-            let (mut kind, duration, fps, width, height, frame_count) =
+            let (mut kind, duration, fps, width, height, frame_count, source_color) =
                 if let Some(meta) = self.plugin_manager.get_metadata(path)? {
                     (
                         meta.kind,
@@ -97,6 +98,7 @@ impl ProjectManager {
                         meta.width,
                         meta.height,
                         meta.frame_count,
+                        meta.source_color,
                     )
                 } else {
                     (
@@ -106,6 +108,7 @@ impl ProjectManager {
                         None,
                         None,
                         None,
+                        crate::model::asset::SourceColorDescription::default(),
                     )
                 };
 
@@ -134,6 +137,7 @@ impl ProjectManager {
             asset.fps = fps;
             asset.width = width;
             asset.height = height;
+            asset.source_color.detected = source_color;
             if asset.kind == crate::model::asset::AssetKind::Video {
                 asset.frame_count = frame_count;
             }

@@ -240,6 +240,9 @@ pub(in crate::plugin::runtime_native) fn metadata_from_wire(
         stream_index,
         frame_count,
         time_base,
+        // Loader ABI v1 predates source color metadata. Runtime plugins leave
+        // it explicitly unknown until a future ABI can transport these tags.
+        source_color: crate::model::asset::SourceColorDescription::default(),
     })
 }
 
