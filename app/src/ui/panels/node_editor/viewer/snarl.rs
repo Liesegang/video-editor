@@ -488,8 +488,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn has_body(&mut self, item: &GraphItem) -> bool {
-        let _ = item;
-        false
+        matches!(
+            item,
+            GraphItem::Node(node_id)
+                if self.project.get_node(*node_id).is_some_and(|node| matches!(
+                    node.content(),
+                    NodeContent::Color(library::model::ColorContent::Compose)
+                ))
+        )
     }
 
     fn show_body(
@@ -654,7 +660,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     });
                 }
                 NodeContent::Value(value) => self.show_value_body(ui, *value),
-                NodeContent::Color(operation) => self.show_color_body(ui, *operation),
+                NodeContent::Color(operation) => {
+                    self.show_color_body(ui, project_node_id, *operation)
+                }
                 NodeContent::Data(_) => self.show_data_body(ui, project_node_id),
                 NodeContent::List(operation) => self.show_list_body(ui, *operation),
                 NodeContent::Path(operation) => self.show_path_body(ui, *operation),

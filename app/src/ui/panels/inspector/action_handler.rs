@@ -221,7 +221,7 @@ mod tests {
     use super::*;
     use library::cache::CacheManager;
     use library::model::property::PropertyValue;
-    use library::model::{Clip, Node, Project};
+    use library::model::{Clip, DataContent, Node, Project};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
     use std::error::Error;
@@ -301,6 +301,97 @@ mod tests {
         let restored = node_property(&project.read().unwrap(), node_id, "sigma_x").unwrap();
         assert_eq!(restored.evaluator, "constant");
         assert_eq!(restored.value(), Some(&number(20.0)));
+    }
+
+    #[test]
+    fn canonical_color_picker_update_preserves_keyframe_mode_and_one_undo_step() -> TestResult {
+        let plugins = Arc::new(PluginManager::default());
+        let node = Node::new_data("Color", DataContent::Color);
+        let node_id = node.id;
+        let initial_value = node
+            .properties()
+            .get("value")
+            .and_then(Property::value)
+            .cloned()
+            .ok_or_else(|| io::Error::other("Color Node has no initialized value"))?;
+        let mut initial = Project::new("canonical color picker history");
+        initial.add_node(node);
+        let project = Arc::new(RwLock::new(initial));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::clone(&plugins),
+            Arc::new(CacheManager::new()),
+        )?;
+        let mut history = HistoryManager::new();
+        history.push_project_state(
+            project
+                .read()
+                .map_err(|_| io::Error::other("Project read lock poisoned"))?
+                .clone(),
+        );
+
+        let property_snapshot = |name: &str| {
+            project
+                .read()
+                .ok()
+                .and_then(|project| node_property(&project, node_id, name))
+        };
+        {
+            let mut context = ActionContext::new(
+                &mut service,
+                &mut history,
+                PropertyOwner::Node(node_id),
+                1.25,
+            );
+            assert!(context.handle_actions(
+                vec![PropertyAction::SetMode(
+                    "value".to_string(),
+                    PropertyAuthoringMode::Keyframe,
+                    initial_value,
+                )],
+                property_snapshot,
+            ));
+        }
+        let before_picker = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?
+            .clone();
+        let before_depth = history.undo_depth();
+        let edited = PropertyValue::ColorValue(library::model::property::ColorValue::new(
+            library::model::property::ColorSpaceRef::linear_srgb(),
+            [0.25, 0.5, 0.75, 0.625],
+        )?);
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.25,
+        );
+        assert!(context.handle_actions(
+            vec![
+                PropertyAction::Update("value".to_string(), edited.clone()),
+                PropertyAction::Commit,
+            ],
+            property_snapshot,
+        ));
+        assert_eq!(history.undo_depth(), before_depth + 1);
+        let current = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?
+            .clone();
+        let property = node_property(&current, node_id, "value")
+            .ok_or_else(|| io::Error::other("Color property disappeared"))?;
+        assert_eq!(property.evaluator, "keyframe");
+        assert_eq!(
+            property
+                .keyframes()
+                .into_iter()
+                .find(|keyframe| keyframe.time == OrderedFloat(1.25))
+                .map(|keyframe| keyframe.value),
+            Some(edited)
+        );
+        assert_eq!(history.undo(&current), Some(before_picker));
+        Ok(())
     }
 
     #[test]

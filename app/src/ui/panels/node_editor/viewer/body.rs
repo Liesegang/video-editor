@@ -2,6 +2,7 @@ use super::{property_value_summary, ProjectNodeViewer};
 use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::time_source_state;
+use crate::ui::widgets::color_value_picker::color_value_picker;
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control, toggled_keyframe_property, PropertyModeAction,
@@ -713,13 +714,21 @@ impl ProjectNodeViewer<'_> {
                         )
                     }
                     PropertyValue::ColorValue(color) => {
-                        let response = property_value_summary::render_color(ui, color);
+                        let picker = color_value_picker(
+                            ui,
+                            egui::Id::new(("node_editor_color_picker", node_id, property_key)),
+                            color,
+                        );
+                        let changed = picker.value.is_some();
+                        if let Some(edited) = picker.value {
+                            *color = edited;
+                        }
                         (
-                            false,
-                            false,
-                            false,
-                            "color_value_readonly",
-                            response,
+                            changed,
+                            true,
+                            picker.finished,
+                            "canonical_color_picker",
+                            picker.response,
                             Vec::new(),
                         )
                     }

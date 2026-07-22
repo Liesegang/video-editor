@@ -274,6 +274,22 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 .is_some_and(|node| node.update_property_or_keyframe(&key, time, value, None)),
             PortOwner::Composition(_) | PortOwner::Track(_) => false,
         },
+        NodeEdit::SetNodeProperties {
+            node_id,
+            time,
+            values,
+        } => project.get_node_mut(node_id).is_some_and(|node| {
+            let mut candidate = node.clone();
+            if !values
+                .into_iter()
+                .all(|(key, value)| candidate.update_property_or_keyframe(&key, time, value, None))
+                || candidate == *node
+            {
+                return false;
+            }
+            *node = candidate;
+            true
+        }),
     }
 }
 

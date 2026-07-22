@@ -7,7 +7,7 @@ use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::property_authoring::{render_property_authoring, PropertyAction};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
-mod structured;
+pub(super) mod structured;
 mod vector;
 
 pub struct PropertyRenderContext<'a> {

@@ -134,6 +134,116 @@ def replace_drag_value(client, component_id, text, node_id, expected_component, 
     )
 
 
+def exercise_color_picker(client, node_id, expected_before):
+    prefix = "inspector.property_component.node:{}:value".format(node_id)
+    picker_id = prefix + ":picker"
+    saturation_value_id = prefix + ":picker_saturation_value"
+    popup_id = prefix + ":picker_popup"
+    client.ensure_in_scroll_area(picker_id)
+    before = client.state()
+    picker_metadata = component_metadata(client, picker_id)
+    expected_metadata = {
+        "storage": "canonical_color_value",
+        "numeric": "f64",
+        "alpha": "straight",
+        "authored_space": "srgb",
+        "display_space": "srgb",
+        "transform_authority": "ruvie-color-management",
+        "supported": True,
+        "display_clipped": True,
+        "no_op_preserves_authored_value": True,
+    }
+    mismatches = {
+        key: (picker_metadata.get(key), value)
+        for key, value in expected_metadata.items()
+        if picker_metadata.get(key) != value
+    }
+    if mismatches:
+        raise QaFailure("canonical Color picker metadata mismatch: {!r}".format(mismatches))
+
+    client.click_component(picker_id)
+    _, popup = client.wait_component_settled(popup_id)
+    _, saturation_value = client.wait_component_settled(saturation_value_id)
+    popup_metadata = popup.get("metadata") or {}
+    dimensions = popup_metadata.get("dimensions") or {}
+    if not (
+        popup_metadata.get("large_picker") is True
+        and float(dimensions.get("saturation_value_width", 0.0)) >= 340.0
+        and float(dimensions.get("saturation_value_height", 0.0)) >= 250.0
+    ):
+        raise QaFailure("canonical Color picker popup is not large: {!r}".format(popup_metadata))
+    opened = client.state()
+    if property_value(opened, node_id) != expected_before:
+        raise QaFailure("opening the Color picker rewrote the authoritative f64 value")
+    BASE.assert_history_delta(before, opened, 0, "Color picker open no-op")
+
+    snapshot, saturation_value = client.component(saturation_value_id)
+    rect = saturation_value["rect_points"]
+    start = client.point(rect, 0.28, 0.72)
+    end = client.point(rect, 0.82, 0.18)
+    client.inject(
+        "drag",
+        {
+            "from": start,
+            "to": end,
+            "coordinate_space": "points",
+            "steps": 16,
+            "button": "primary",
+        },
+        {
+            "component_id": saturation_value_id,
+            "component_frame": snapshot["frame"],
+            "component_rect_points": rect,
+            "coordinate_reason": "real large-picker saturation/value gesture",
+        },
+    )
+    changed = client.wait_project(
+        "canonical Color picker Project update",
+        lambda project: project
+        if BASE.property_value(project["nodes"][node_id], "value") != expected_before
+        else None,
+    )
+    picked = property_value(changed, node_id)
+    if not (
+        picked.get("$type") == "color_value"
+        and picked.get("space") == "srgb"
+        and all(0.0 <= channel <= 1.0 for channel in picked.get("rgba", ())[:3])
+        and picked.get("rgba", [None] * 4)[3] == expected_before["rgba"][3]
+    ):
+        raise QaFailure("display picker emitted an invalid canonical color: {!r}".format(picked))
+
+    client.click_component("inspector.owner.node:" + node_id)
+    committed = client.wait_until(
+        "canonical Color picker history commit",
+        lambda: state
+        if (state := client.state())["history"]["undo_depth"]
+        == before["history"]["undo_depth"] + 1
+        else None,
+    )
+    BASE.assert_history_delta(before, committed, 1, "Color picker gesture")
+    return {
+        "before_open": expected_before,
+        "picked": picked,
+        "history": {
+            "before_undo_depth": before["history"]["undo_depth"],
+            "opened_undo_depth": opened["history"]["undo_depth"],
+            "committed_undo_depth": committed["history"]["undo_depth"],
+            "open_delta": opened["history"]["undo_depth"]
+            - before["history"]["undo_depth"],
+            "gesture_delta": committed["history"]["undo_depth"]
+            - before["history"]["undo_depth"],
+        },
+        "button_metadata": picker_metadata,
+        "popup_metadata": popup_metadata,
+        "geometry": {
+            "popup": popup["rect_points"],
+            "saturation_value": saturation_value["rect_points"],
+            "drag_from": start,
+            "drag_to": end,
+        },
+    }
+
+
 def author_color(client, node_id):
     select_exact_node(client, node_id)
     prefix = "inspector.property_component.node:{}:value".format(node_id)
@@ -166,10 +276,14 @@ def author_color(client, node_id):
     }
     if value != expected:
         raise QaFailure("canonical Color Project value mismatch: {!r}".format(value))
+    picker = exercise_color_picker(client, node_id, expected)
+    state = client.state()
+    value = property_value(state, node_id)
     probe = metadata_output_probe(client, state, node_id)
     return {
         "project_value": value,
-        "runtime": assert_selected_runtime(probe, node_id, expected),
+        "runtime": assert_selected_runtime(probe, node_id, value),
+        "picker": picker,
         "control_metadata": {"r": red_metadata, "g": green_metadata},
     }
 

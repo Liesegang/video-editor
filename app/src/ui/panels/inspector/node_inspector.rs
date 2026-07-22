@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
 use egui::Ui;
-use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType};
-use library::model::{GeneratorContent, Node, NodeContent};
+use library::model::property::{
+    ColorSpaceRef, ColorValue, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
+};
+use library::model::{ColorContent, GeneratorContent, Node, NodeContent};
 use library::plugin::{PluginManager, TRANSFORM_CATEGORY};
 use library::{EditorService, PropertyOwner};
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -13,7 +16,9 @@ use super::action_handler::ActionContext;
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::path_effect;
 use super::properties::{render_property_rows, PropertyRenderContext};
+use super::property_authoring::PropertyAction;
 use super::property_inference::inferred_property_definitions;
+use crate::ui::widgets::color_value_picker::color_value_picker;
 
 #[allow(
     clippy::too_many_arguments,
@@ -132,6 +137,7 @@ pub(super) fn render_node_properties(
             current_time,
             fps,
             resolution,
+            matches!(node.content(), NodeContent::Color(ColorContent::Compose)),
             needs_refresh,
         );
     }
@@ -143,6 +149,7 @@ pub(super) fn canonical_native_property_definitions(
     match node.content() {
         NodeContent::Value(value) => Some(value.property_definitions().to_vec()),
         NodeContent::Data(data) => Some(data.property_definitions().to_vec()),
+        NodeContent::Color(operation) => Some(operation.property_definitions().to_vec()),
         NodeContent::List(operation) => Some(operation.property_definitions().to_vec()),
         NodeContent::SoundAnalysis(analysis) => Some(analysis.property_definitions().to_vec()),
         _ => None,
@@ -192,6 +199,7 @@ fn render_property_map(
     current_time: f64,
     fps: f64,
     resolution: (u64, u64),
+    show_compose_picker: bool,
     needs_refresh: &mut bool,
 ) {
     struct Chunk {
@@ -203,6 +211,16 @@ fn render_property_map(
     let evaluated =
         evaluate_property_map(project_service, properties, current_time, fps, resolution);
     render_evaluation_issues(ui, &qa_scope, evaluated.issues());
+
+    if show_compose_picker {
+        if let Some(actions) = render_compose_picker(ui, owner, &qa_scope, &evaluated) {
+            let mut context =
+                ActionContext::new(project_service, history_manager, owner, current_time);
+            if context.handle_actions(actions, |name| properties.get(name).cloned()) {
+                *needs_refresh = true;
+            }
+        }
+    }
 
     let mut chunks = Vec::new();
     let mut grid_definitions = Vec::new();
@@ -270,6 +288,60 @@ fn render_property_map(
             *needs_refresh = true;
         }
     }
+}
+
+fn render_compose_picker(
+    ui: &mut Ui,
+    owner: PropertyOwner,
+    qa_scope: &str,
+    evaluated: &super::evaluation::EvaluatedPropertyMap,
+) -> Option<Vec<PropertyAction>> {
+    let value = |key: &str| evaluated.value(key);
+    let space = value(library::model::COLOR_SPACE_PORT)?.get_as::<String>()?;
+    let component = |key: &str| value(key)?.get_as::<f64>();
+    let color = ColorValue::new(
+        ColorSpaceRef::new(space).ok()?,
+        [
+            component(library::model::COLOR_RED_PORT)?,
+            component(library::model::COLOR_GREEN_PORT)?,
+            component(library::model::COLOR_BLUE_PORT)?,
+            component(library::model::COLOR_ALPHA_PORT)?,
+        ],
+    )
+    .ok()?;
+    ui.label(egui::RichText::new("Color").strong());
+    let prefix = format!("inspector.aggregate.{qa_scope}:compose_color");
+    let mut picker = color_value_picker(
+        ui,
+        egui::Id::new(("inspector_compose_color_picker", owner)),
+        &color,
+    );
+    super::properties::structured::register_color_picker(&prefix, &color, &picker);
+
+    let mut actions = Vec::new();
+    if let Some(color) = picker.value.take() {
+        actions.push(PropertyAction::Update(
+            library::model::COLOR_SPACE_PORT.to_string(),
+            PropertyValue::String(color.color_space().to_string()),
+        ));
+        actions.extend(
+            [
+                library::model::COLOR_RED_PORT,
+                library::model::COLOR_GREEN_PORT,
+                library::model::COLOR_BLUE_PORT,
+                library::model::COLOR_ALPHA_PORT,
+            ]
+            .into_iter()
+            .zip(color.rgba())
+            .map(|(key, value)| {
+                PropertyAction::Update(key.to_string(), PropertyValue::Number(OrderedFloat(value)))
+            }),
+        );
+    }
+    if picker.finished {
+        actions.push(PropertyAction::Commit);
+    }
+    Some(actions)
 }
 
 fn qa_owner_scope(owner: PropertyOwner) -> String {

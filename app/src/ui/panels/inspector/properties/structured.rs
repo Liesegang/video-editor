@@ -2,6 +2,8 @@ use egui::{Color32, Id, Ui};
 use library::model::path::{FillRule, PathValue};
 use library::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
 
+use crate::ui::widgets::color_value_picker::{color_value_picker, ColorPickerEdit};
+
 #[derive(Clone)]
 struct ColorDraft {
     source: ColorValue,
@@ -59,9 +61,9 @@ pub(super) fn canonical_path_for_inspector(
     }
 }
 
-/// Edits the authoritative float components directly. A display color picker
-/// is intentionally absent: it would clip HDR/negative RGB and erase the
-/// color-space tag before the user explicitly requested a conversion.
+/// Edits the authoritative float components directly and offers an explicit
+/// display-view picker when the shared color-management service supports the
+/// authored space. The picker never replaces these lossless controls.
 pub(super) fn color_value(
     ui: &mut Ui,
     id: Id,
@@ -76,6 +78,14 @@ pub(super) fn color_value(
     let mut finished = false;
     let mut candidate = None;
     let group = ui.vertical(|ui| {
+        let picker = color_value_picker(ui, id.with("display_picker"), value);
+        register_color_picker(qa_component_prefix, value, &picker);
+        if let Some(picked) = picker.value {
+            draft = ColorDraft::from_value(&picked);
+            candidate = Some(PropertyValue::ColorValue(picked));
+            changed = true;
+        }
+        finished |= picker.finished;
         ui.horizontal(|ui| {
             ui.small("space");
             let response = ui.add_sized(
@@ -147,8 +157,90 @@ fn register_color_component(
             "numeric": "f64",
             "alpha": "straight",
             "legacy_srgba8_picker": false,
+            "display_picker_available": true,
         })),
     );
+}
+
+pub(in crate::ui::panels::inspector) fn register_color_picker(
+    qa_component_prefix: &str,
+    value: &ColorValue,
+    picker: &ColorPickerEdit,
+) {
+    let picker_id = format!("{qa_component_prefix}:picker");
+    crate::qa::register_component_with_metadata(
+        picker_id.clone(),
+        "canonical_color_display_picker",
+        picker.response.rect,
+        picker.response.enabled(),
+        Some(color_picker_metadata(value, picker)),
+    );
+    let Some(geometry) = picker.geometry else {
+        return;
+    };
+    let dimensions = serde_json::json!({
+        "popup_width": geometry.popup.width(),
+        "popup_height": geometry.popup.height(),
+        "saturation_value_width": geometry.saturation_value.width(),
+        "saturation_value_height": geometry.saturation_value.height(),
+    });
+    for (suffix, component_type, rect, control) in [
+        (
+            "picker_popup",
+            "canonical_color_picker_popup",
+            geometry.popup,
+            "popup",
+        ),
+        (
+            "picker_saturation_value",
+            "canonical_color_picker_saturation_value",
+            geometry.saturation_value,
+            "saturation_value",
+        ),
+        (
+            "picker_hue",
+            "canonical_color_picker_hue",
+            geometry.hue,
+            "hue",
+        ),
+        (
+            "picker_alpha",
+            "canonical_color_picker_alpha",
+            geometry.alpha,
+            "alpha",
+        ),
+    ] {
+        crate::qa::register_component_with_metadata(
+            format!("{qa_component_prefix}:{suffix}"),
+            component_type,
+            rect,
+            true,
+            Some(serde_json::json!({
+                "control": control,
+                "authored_space": value.color_space().as_str(),
+                "display_space": "srgb",
+                "transform_authority": "ruvie-color-management",
+                "large_picker": true,
+                "dimensions": dimensions,
+                "trigger": picker_id,
+            })),
+        );
+    }
+}
+
+fn color_picker_metadata(value: &ColorValue, picker: &ColorPickerEdit) -> serde_json::Value {
+    serde_json::json!({
+        "storage": "canonical_color_value",
+        "numeric": "f64",
+        "alpha": "straight",
+        "authored_space": value.color_space().as_str(),
+        "display_space": "srgb",
+        "transform_authority": "ruvie-color-management",
+        "supported": picker.supported,
+        "display_clipped": picker.display_clipped,
+        "no_op_preserves_authored_value": true,
+        "error": picker.error,
+    })
 }
 
 #[derive(Clone)]
@@ -343,6 +435,46 @@ mod tests {
             canonical_color_for_inspector(Some(&PropertyValue::Color(legacy.clone())), &default)
                 .ok_or("legacy color was not adapted")?;
         assert_eq!(adapted.try_to_straight_srgba8(), Ok(legacy));
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_picker_metadata_keeps_stable_transform_and_storage_contract(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let context = egui::Context::default();
+        let color = ColorValue::new(ColorSpaceRef::linear_srgb(), [0.25, 0.5, 0.75, 1.0])?;
+        let mut metadata = None;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let picker =
+                        color_value_picker(ui, egui::Id::new("canonical-picker-metadata"), &color);
+                    metadata = Some(color_picker_metadata(&color, &picker));
+                });
+            },
+        ));
+        assert_eq!(
+            metadata,
+            Some(serde_json::json!({
+                "storage": "canonical_color_value",
+                "numeric": "f64",
+                "alpha": "straight",
+                "authored_space": "linear-srgb",
+                "display_space": "srgb",
+                "transform_authority": "ruvie-color-management",
+                "supported": true,
+                "display_clipped": false,
+                "no_op_preserves_authored_value": true,
+                "error": null,
+            }))
+        );
         Ok(())
     }
 

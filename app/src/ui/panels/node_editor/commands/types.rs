@@ -99,6 +99,14 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
         time: f64,
         value: PropertyValue,
     },
+    /// One continuous UI gesture updating several authored properties. The
+    /// candidate Node is validated in isolation before replacing Project
+    /// state, so a grouped picker never exposes a partially updated color.
+    SetNodeProperties {
+        node_id: Uuid,
+        time: f64,
+        values: Vec<(String, PropertyValue)>,
+    },
 }
 
 #[derive(Debug)]
