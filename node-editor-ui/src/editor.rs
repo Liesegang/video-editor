@@ -185,6 +185,24 @@ impl Editor {
     {
         interaction::interact(ui, frame, state, options, pointer_blocked)
     }
+
+    /// Whether hold-A directional layout owns this frame's primary press.
+    ///
+    /// Hosts with a temporary legacy wire adapter should use this read-only
+    /// preflight before allowing that adapter to claim a crossing wire.
+    pub fn layout_swipe_wants_pointer<NodeId, PortId, WireId, GroupId, Key>(
+        ui: &egui::Ui,
+        frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+        state: &InteractionState<NodeId, PortId, WireId, GroupId>,
+        options: InteractionOptions,
+        pointer_blocked: bool,
+    ) -> bool
+    where
+        NodeId: Eq,
+        GroupId: Eq,
+    {
+        interaction::layout_swipe_wants_pointer(ui, frame, state, options, pointer_blocked)
+    }
 }
 
 fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(

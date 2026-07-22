@@ -770,3 +770,52 @@ fn ordinary_header_move_still_works_without_a() {
             if items == &[ItemId::Node(1)] && *delta == vec2(20.0, 4.0)
     )));
 }
+
+#[test]
+fn raw_a_press_on_header_wins_over_a_wire_crossing_the_same_point() {
+    let context = egui::Context::default();
+    let mut graph = FakeGraph::new();
+    let start = graph.nodes[0].header_rect.center();
+    graph.wires[0].curve = CubicBezier::new(
+        pos2(60.0, start.y),
+        pos2(100.0, start.y),
+        pos2(220.0, start.y),
+        pos2(260.0, start.y),
+    );
+    let mut state = State::default();
+    let outputs = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        egui::emath::TSTransform::IDENTITY,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![
+                key(egui::Key::A, true, Modifiers::NONE),
+                Event::PointerMoved(start),
+                pointer(start, true, Modifiers::NONE),
+            ],
+            Modifiers::NONE,
+        ),
+    );
+    assert_eq!(only_swipe(&outputs).phase, LayoutSwipePhase::Start);
+    assert!(state.is_layout_swipe_active());
+
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let without_a = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        egui::emath::TSTransform::IDENTITY,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![
+                Event::PointerMoved(start),
+                pointer(start, true, Modifiers::NONE),
+            ],
+            Modifiers::NONE,
+        ),
+    );
+    assert!(without_a.iter().all(|output| swipe(output).is_none()));
+}

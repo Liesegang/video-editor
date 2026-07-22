@@ -9,6 +9,9 @@ use crate::{
     LayoutSwipePhase, PortDirection, WireDescriptor,
 };
 
+mod layout_swipe_preflight;
+pub(crate) use layout_swipe_preflight::layout_swipe_wants_pointer;
+
 const MARQUEE_DRAG_THRESHOLD: f32 = 4.0;
 const PORT_HIT_RADIUS: f32 = 9.0;
 const WIRE_HIT_RADIUS: f32 = 8.0;
