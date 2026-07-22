@@ -97,6 +97,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(39, 83, 95),
             accent: Color32::from_rgb(91, 197, 218),
         },
+        Some(NodeContent::Color(_)) => NodePalette {
+            body: Color32::from_rgb(48, 36, 28),
+            header: Color32::from_rgb(105, 67, 37),
+            accent: Color32::from_rgb(238, 159, 88),
+        },
         Some(NodeContent::Data(_)) => NodePalette {
             body: Color32::from_rgb(41, 31, 48),
             header: Color32::from_rgb(84, 48, 105),
@@ -179,6 +184,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             ValueContent::Multiply => NodeEditorIcon::new(icons::X, "Multiply value operation"),
             ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
         },
+        Some(NodeContent::Color(_)) => {
+            NodeEditorIcon::new(icons::PALETTE, "Lossless Color operation")
+        }
         Some(NodeContent::Data(DataContent::Color)) => {
             NodeEditorIcon::new(icons::PALETTE, "Canonical color value")
         }

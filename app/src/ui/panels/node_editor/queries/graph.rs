@@ -147,6 +147,11 @@ pub(in crate::ui::panels::node_editor) fn node_property_definition(
             .iter()
             .find(|definition| definition.name() == property_name)
             .cloned(),
+        NodeContent::Color(operation) => operation
+            .property_definitions()
+            .iter()
+            .find(|definition| definition.name() == property_name)
+            .cloned(),
         NodeContent::SoundAnalysis(analysis) => analysis
             .property_definitions()
             .iter()

@@ -252,6 +252,73 @@ fn canonical_path_union_is_auto_discovered_with_stable_menu_contract() {
 }
 
 #[test]
+fn color_operations_are_searchable_and_initialize_exact_inspector_contracts() {
+    let plugins = PluginManager::default();
+    let items = node_create_menu_items(&plugins);
+    for operation in library::model::ColorContent::ALL {
+        let request = NodeCreateRequest::Native(operation.catalog_id().to_string());
+        let item = items
+            .iter()
+            .find(|item| item.value == request)
+            .expect("every lossless Color operation is exposed by the shared Add catalog");
+        assert_eq!(item.label, operation.label());
+        assert_eq!(item.category.as_deref(), Some("Color"));
+        assert_eq!(
+            item.qa_id.as_deref(),
+            Some(
+                format!(
+                    "node_editor.menu.create.color:{}",
+                    operation.catalog_id().trim_start_matches("native.color.")
+                )
+                .as_str()
+            )
+        );
+        let metadata = item
+            .qa_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .expect("Color menu item carries stable QA metadata");
+        assert_eq!(
+            metadata
+                .get("catalog_id")
+                .and_then(serde_json::Value::as_str),
+            Some(operation.catalog_id())
+        );
+        assert_eq!(
+            metadata
+                .get("runtime_status")
+                .and_then(serde_json::Value::as_str),
+            Some("implemented")
+        );
+        let node = create_operation_node_for_request(&item.value, &plugins)
+            .expect("Color request creates a detached Node");
+        assert_eq!(node.content(), &NodeContent::Color(operation));
+        for definition in operation.property_definitions() {
+            let inspector_definition =
+                node_property_definition(Some(&plugins), &node, definition.name())
+                    .expect("every Color property has an Inspector definition");
+            assert_eq!(inspector_definition.name(), definition.name());
+            assert_eq!(inspector_definition.label(), definition.label());
+            assert_eq!(inspector_definition.ui_type(), definition.ui_type());
+            assert_eq!(
+                inspector_definition.default_value(),
+                definition.default_value()
+            );
+            assert!(node.properties().get(definition.name()).is_some());
+        }
+    }
+
+    let matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
+        &items,
+        "hdr interpolate color",
+    );
+    assert!(matches.iter().any(|index| {
+        items[*index].value
+            == NodeCreateRequest::Native(library::model::ColorContent::Mix.catalog_id().to_string())
+    }));
+}
+
+#[test]
 fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan() {
     let (mut project, composition_id, _, clip_id, _, _) = fixture();
     let mut modulo = Node::new_fmod("Fmod");

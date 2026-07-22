@@ -304,6 +304,7 @@ pub(super) fn node_display_type(node: &Node) -> String {
             operation.category, operation.operation
         ),
         NodeContent::Value(value) => value.label().to_string(),
+        NodeContent::Color(operation) => operation.label().to_string(),
         NodeContent::Data(data) => data.label().to_string(),
         NodeContent::List(operation) => operation.label().to_string(),
         NodeContent::Path(operation) => operation.label().to_string(),

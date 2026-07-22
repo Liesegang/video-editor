@@ -836,6 +836,7 @@ pub(super) fn source_kind(node: &Node) -> &'static str {
             _ => "Plug-in",
         },
         NodeContent::Value(value) => value.label(),
+        NodeContent::Color(operation) => operation.label(),
         NodeContent::Data(data) => data.label(),
         NodeContent::List(operation) => operation.label(),
         NodeContent::Path(operation) => operation.label(),

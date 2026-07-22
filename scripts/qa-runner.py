@@ -143,6 +143,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("merge-reorder", "qa-merge-reorder-e2e.py"),
             SuiteSpec("list-nodes", "qa-list-nodes-e2e.py"),
             SuiteSpec("path-color-nodes", "qa-path-color-nodes-e2e.py"),
+            SuiteSpec("color-operations", "qa-color-operations-e2e.py"),
             SuiteSpec(
                 "container-output-hit", "qa-container-output-hit-e2e.py"
             ),

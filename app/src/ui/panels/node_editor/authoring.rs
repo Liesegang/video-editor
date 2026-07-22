@@ -162,6 +162,7 @@ fn create_native_action(
             canvas_size.1,
         ),
         NativeNodeFactory::Value(_)
+        | NativeNodeFactory::Color(_)
         | NativeNodeFactory::Data(_)
         | NativeNodeFactory::List(_)
         | NativeNodeFactory::Path(_)
