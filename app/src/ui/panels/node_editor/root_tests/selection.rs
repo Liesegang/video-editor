@@ -68,6 +68,18 @@ fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
     let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
     assert!(project.remove_node(solid_id).unwrap().is_some());
     assert!(project.remove_node(merge_id).unwrap().is_some());
+    // `fixture` also owns generated structural Merge Nodes. They are not part
+    // of this gesture assertion, so keep their frames out of the two subject
+    // headers. Otherwise egui-snarl's independent z-order is free to put one
+    // of those legitimate Nodes over the coordinate used below, making the
+    // test click a different visible Node instead of exercising header input.
+    let mut structural_node_ids = project.nodes.keys().copied().collect::<Vec<_>>();
+    structural_node_ids.sort_unstable();
+    for (index, node_id) in structural_node_ids.into_iter().enumerate() {
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = [1_500.0, 120.0 + index as f32 * 320.0];
+        }
+    }
     if let Some(clip) = project.get_clip_mut(clip_id) {
         clip.ui_size = [1_300.0, 760.0];
     }
