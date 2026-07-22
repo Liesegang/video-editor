@@ -413,6 +413,13 @@ def commit_swipe(client, gesture):
         raise QaFailure("committed layout reported no moved Nodes")
     if gesture["observed"] not in last["moved_node_ids"]:
         raise QaFailure("committed layout omitted the observed branch Node")
+    observed = gesture["observed"]
+    observed_before = gesture["before"]["project"]["nodes"][observed]["ui_position"]
+    observed_after = after["project"]["nodes"][observed]["ui_position"]
+    if observed_after != gesture["observed_preview_position"]:
+        raise QaFailure("layout Commit did not persist the observed preview position")
+    if observed_after == observed_before:
+        raise QaFailure("layout Commit left the observed branch Node unchanged")
     BASE.assert_history_delta(
         gesture["before"], after, 1, "hold-A {} commit".format(gesture["mode"])
     )
