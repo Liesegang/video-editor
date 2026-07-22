@@ -445,3 +445,48 @@ fn dynamically_typed_get_item_connection_fails_safely_when_runtime_value_mismatc
         "Any permits a static connection but the concrete consumer must reject a runtime type mismatch"
     );
 }
+
+#[test]
+fn dynamically_typed_get_item_can_feed_a_list_consumer_when_the_item_is_a_list() {
+    let mut fixture = ListFixture::new();
+    let inner_id = fixture.add(Node::new_list("Inner", ListContent::Make));
+    let outer_id = fixture.add(Node::new_list("Outer", ListContent::Make));
+    let get_id = fixture.add(Node::new_list("Get nested", ListContent::GetItem));
+    let length_id = fixture.add(Node::new_list("Nested length", ListContent::Length));
+
+    fixture
+        .project
+        .connect_ports(
+            fixture.clip_output(TIME_PORT),
+            ListFixture::node_input(inner_id, LIST_ITEMS_INPUT_PORT),
+        )
+        .unwrap();
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(inner_id), LIST_OUTPUT_PORT),
+            ListFixture::node_input(outer_id, LIST_ITEMS_INPUT_PORT),
+        )
+        .unwrap();
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(outer_id), LIST_OUTPUT_PORT),
+            ListFixture::node_input(get_id, LIST_INPUT_PORT),
+        )
+        .unwrap();
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(get_id), LIST_ITEM_OUTPUT_PORT),
+            ListFixture::node_input(length_id, LIST_INPUT_PORT),
+        )
+        .unwrap();
+
+    assert!(fixture.project.validate_connections().is_empty());
+    assert_eq!(
+        fixture.evaluate(length_id, LIST_LENGTH_OUTPUT_PORT, 0.5),
+        EvalOutput::Produced(PropertyValue::Integer(1)),
+        "Any-to-List is a checked dynamic cast: an actual nested list must remain consumable"
+    );
+}

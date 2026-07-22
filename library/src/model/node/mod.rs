@@ -481,6 +481,7 @@ impl Node {
                 matches!(
                     port.data_type,
                     PortDataType::Audio
+                        | PortDataType::List
                         | PortDataType::Image
                         | PortDataType::Shape
                         | PortDataType::Numeric

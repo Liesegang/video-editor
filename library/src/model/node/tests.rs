@@ -132,6 +132,7 @@ fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
     for data_type in [
         PortDataType::Image,
         PortDataType::Shape,
+        PortDataType::List,
         PortDataType::Numeric,
         PortDataType::Number,
         PortDataType::Vec2,
