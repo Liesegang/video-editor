@@ -27,7 +27,7 @@ pub const DEFAULT_OUTPUT_COLOR_SPACE: &str = "srgb";
 
 /// Stable identity of the color configuration used to interpret space names.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorConfigIdentity {
     /// A versioned config shipped as part of RuViE itself.
     Bundled { id: String },
@@ -52,6 +52,7 @@ impl Default for ColorConfigIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewColorConfig {
     #[serde(default = "default_preview_display")]
     display: String,
@@ -90,6 +91,7 @@ impl Default for PreviewColorConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExportColorConfig {
     #[serde(default = "default_output_color_space")]
     output_space: String,
@@ -115,6 +117,7 @@ impl Default for ExportColorConfig {
 
 /// Project-wide color-management intent shared by every editing view.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColorManagementConfig {
     #[serde(default)]
     config: ColorConfigIdentity,
@@ -315,6 +318,9 @@ pub enum ColorManagementStructureIssue {
     },
     UnknownConfigKind {
         kind: String,
+    },
+    UnknownField {
+        path: String,
     },
     InvalidValue {
         path: String,

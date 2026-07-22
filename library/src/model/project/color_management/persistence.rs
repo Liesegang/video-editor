@@ -51,6 +51,12 @@ fn classify_structure(raw: &Value) -> Vec<ColorManagementStructureIssue> {
     let Some(object) = expect_object(raw, "color_management", &mut issues) else {
         return issues;
     };
+    classify_unknown_fields(
+        object,
+        "color_management",
+        &["config", "working_space", "preview", "export"],
+        &mut issues,
+    );
 
     if let Some(config) = object.get("config") {
         classify_config_identity(config, &mut issues);
@@ -92,11 +98,21 @@ fn classify_config_identity(value: &Value, issues: &mut Vec<ColorManagementStruc
         return;
     };
     match kind {
-        "bundled" => classify_required_strings(object, path, &["id"], issues),
+        "bundled" => {
+            classify_unknown_fields(object, path, &["kind", "id"], issues);
+            classify_required_strings(object, path, &["id"], issues);
+        }
         "ocio_builtin" => {
+            classify_unknown_fields(object, path, &["kind", "uri", "ocio_version"], issues);
             classify_required_strings(object, path, &["uri", "ocio_version"], issues);
         }
         "project_asset" => {
+            classify_unknown_fields(
+                object,
+                path,
+                &["kind", "asset_id", "sha256", "ocio_version"],
+                issues,
+            );
             classify_required_strings(
                 object,
                 path,
@@ -131,6 +147,15 @@ fn classify_nested_object(
     let Some(object) = expect_object(value, path, issues) else {
         return;
     };
+    for field in object.keys() {
+        if !string_fields.contains(&field.as_str())
+            && !nullable_string_fields.contains(&field.as_str())
+        {
+            issues.push(ColorManagementStructureIssue::UnknownField {
+                path: format!("{path}.{field}"),
+            });
+        }
+    }
     for field in string_fields {
         classify_optional_string(object.get(*field), &format!("{path}.{field}"), issues);
     }
@@ -139,6 +164,21 @@ fn classify_nested_object(
             && !value.is_null()
         {
             let _ = expect_string(value, &format!("{path}.{field}"), issues);
+        }
+    }
+}
+
+fn classify_unknown_fields(
+    object: &serde_json::Map<String, Value>,
+    path: &str,
+    allowed_fields: &[&str],
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
+    for field in object.keys() {
+        if !allowed_fields.contains(&field.as_str()) {
+            issues.push(ColorManagementStructureIssue::UnknownField {
+                path: format!("{path}.{field}"),
+            });
         }
     }
 }

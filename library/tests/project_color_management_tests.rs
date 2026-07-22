@@ -84,6 +84,24 @@ fn project_without_color_management_loads_with_current_pre_v1_default() -> Resul
 }
 
 #[test]
+fn existing_asset_without_imported_checksum_remains_compatible() -> Result<()> {
+    let mut project = Project::new("pre-checksum asset");
+    project
+        .assets
+        .push(Asset::new("existing image", "image.png", AssetKind::Image));
+    let mut value = serde_json::to_value(&project)?;
+    value["assets"][0]
+        .as_object_mut()
+        .context("Asset serialization is an object")?
+        .remove("imported_content_sha256");
+
+    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    assert_eq!(loaded.assets[0].imported_content_sha256(), None);
+    assert_eq!(Project::load(&loaded.save()?)?, loaded);
+    Ok(())
+}
+
+#[test]
 fn partial_color_management_object_uses_field_defaults_without_a_migration() -> Result<()> {
     let project = Project::new("partial pre-v1 color config");
     let mut value = serde_json::to_value(&project)?;
@@ -266,6 +284,47 @@ fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -
                 path: "color_management.working_space".to_string(),
                 expected: "string".to_string(),
                 actual: "number".to_string(),
+            },
+        ),
+        (
+            json!({ "working_spaec": "ACEScg" }),
+            ColorManagementStructureIssue::UnknownField {
+                path: "color_management.working_spaec".to_string(),
+            },
+        ),
+        (
+            json!({
+                "config": {
+                    "kind": "bundled",
+                    "id": DEFAULT_BUNDLED_COLOR_CONFIG_ID,
+                    "moving_alias": "ocio://default"
+                }
+            }),
+            ColorManagementStructureIssue::UnknownField {
+                path: "color_management.config.moving_alias".to_string(),
+            },
+        ),
+        (
+            json!({
+                "preview": {
+                    "display": "srgb",
+                    "view": null,
+                    "veiw": "standard"
+                }
+            }),
+            ColorManagementStructureIssue::UnknownField {
+                path: "color_management.preview.veiw".to_string(),
+            },
+        ),
+        (
+            json!({
+                "export": {
+                    "output_space": "srgb",
+                    "output_colour_space": "ACEScg"
+                }
+            }),
+            ColorManagementStructureIssue::UnknownField {
+                path: "color_management.export.output_colour_space".to_string(),
             },
         ),
     ];
