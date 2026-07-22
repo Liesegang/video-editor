@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::rendering::renderer::{RenderOutput, TextureInfo};
+use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::{GpuContext, image_to_skia, surface_to_image};
 use skia_safe::{ImageFilter, Paint};
 
@@ -25,26 +25,11 @@ where
         paint.set_image_filter(filter);
         canvas.draw_image(image, (0, 0), Some(&paint));
 
-        // If we have a context, try to return a texture
-        let ctx_opt = surface.recording_context();
-        if let Some(mut ctx) = ctx_opt {
-            if let Some(mut dctx) = ctx.as_direct_context() {
-                dctx.flush_and_submit();
-            }
-
-            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                &mut surface,
-                skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) && let Some(gl_info) = texture.gl_texture_info()
-            {
-                return Ok(RenderOutput::Texture(TextureInfo {
-                    texture_id: gl_info.id,
-                    width,
-                    height,
-                }));
-            }
-        }
-        // Fallback to Image
+        // A backend texture borrowed from this local Surface becomes invalid
+        // as soon as the function returns and drops the Surface. Keep this
+        // boundary owned until RenderOutput gains an owner-bearing GPU frame.
+        // Returning a copied Image is slower, but cannot expose a dangling GL
+        // texture ID to the next effect or Preview.
         let image = surface_to_image(&mut surface, width, height)?;
         Ok(RenderOutput::Image(image))
     };
