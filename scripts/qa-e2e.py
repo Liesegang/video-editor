@@ -1939,8 +1939,34 @@ def ensure_node_editor_ports_interactive(client, component_ids, max_zooms=6):
     for _ in range(max_zooms):
         components = {item["id"]: item for item in snapshot["components"]}
         canvas = components["node_editor.canvas"]
-        if (canvas.get("metadata") or {}).get("port_interaction_enabled"):
-            return reveal_node_editor_components(client, component_ids)
+        canvas_interactive = (canvas.get("metadata") or {}).get(
+            "port_interaction_enabled"
+        )
+        targets_interactive = all(
+            (target.get("metadata") or {}).get("normal_interaction_enabled")
+            for target in targets
+        )
+        if canvas_interactive and targets_interactive:
+            # Revealing a widely separated endpoint pair may zoom the canvas
+            # back below the interaction threshold. Never return that
+            # non-interactive frame: a subsequent coordinate drag would be
+            # claimed by the Node body and move it instead of creating a wire.
+            final_snapshot, final_targets = reveal_node_editor_components(
+                client, component_ids
+            )
+            final_components = {
+                item["id"]: item for item in final_snapshot["components"]
+            }
+            final_canvas = final_components["node_editor.canvas"]
+            if (final_canvas.get("metadata") or {}).get(
+                "port_interaction_enabled"
+            ) and all(
+                (target.get("metadata") or {}).get("normal_interaction_enabled")
+                for target in final_targets
+            ):
+                return final_snapshot, final_targets
+            snapshot, targets = final_snapshot, final_targets
+            continue
         canvas_rect = canvas["rect_points"]
         focus = {
             "x": sum(target["rect_points"]["center_x"] for target in targets)

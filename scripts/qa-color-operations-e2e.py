@@ -106,6 +106,83 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
     )[0]
 
 
+def arrange_color_nodes(client, node_ids):
+    """Compact isolated authored Nodes through the real selection/layout UI."""
+    before = client.state()
+    positions_before = {
+        node_id: before["project"]["nodes"][node_id]["ui_position"]
+        for node_id in node_ids
+    }
+    execution_before = before["editor"]["node_editor"]["layout_execution_serial"]
+
+    for index, node_id in enumerate(node_ids):
+        component_id = "node_editor.node_header:" + node_id
+        snapshot, component = BASE.reveal_node_editor_component(client, component_id)
+        point = client.point(component["rect_points"])
+        client.inject(
+            "click",
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "coordinate_space": "points",
+                "button": "primary",
+                "modifiers": {"shift": index > 0},
+            },
+            {
+                "component_id": component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": component["rect_points"],
+                "coordinate_reason": "select Color Nodes for compact layout",
+            },
+        )
+
+    expected_selection = set(node_ids)
+
+    def selected_all_nodes():
+        state = client.state()
+        selected = {
+            target["id"]
+            for target in state["editor"]["selection"]["targets"]
+            if target["kind"] == "node"
+        }
+        return state if selected == expected_selection else None
+
+    client.wait_until(
+        "Color Node multi-selection",
+        selected_all_nodes,
+    )
+
+    client.key("l", True, command=True)
+    client.key("l", False, command=True)
+
+    def selection_layout_completed():
+        state = client.state()
+        node_editor = state["editor"]["node_editor"]
+        execution = node_editor.get("last_layout_execution")
+        positions_changed = any(
+            state["project"]["nodes"][node_id]["ui_position"]
+            != positions_before[node_id]
+            for node_id in node_ids
+        )
+        if (
+            node_editor["layout_execution_serial"] > execution_before
+            and execution is not None
+            and execution["command"] == "NodeEditorCleanLayoutSelection"
+            and execution["scope"] == "selection"
+            and execution["changed"] is True
+            and positions_changed
+        ):
+            return state
+        return None
+
+    arranged = client.wait_until(
+        "Color Node selection layout",
+        selection_layout_completed,
+    )
+    BASE.assert_history_delta(before, arranged, 1, "Color Node selection layout")
+    return arranged
+
+
 def select_and_assert_inspector(client, node_id, property_names):
     header_id = "node_editor.node_header:" + node_id
     BASE.reveal_node_editor_component(client, header_id)
@@ -158,6 +235,10 @@ def run_suite(client):
     second_compose_id, second_compose_menu = create_color_node(client, *OPERATIONS[0])
     split_id, split_menu = create_color_node(client, *OPERATIONS[1])
     mix_id, mix_menu = create_color_node(client, *OPERATIONS[2])
+
+    arrange_color_nodes(
+        client, (compose_id, second_compose_id, split_id, mix_id)
+    )
 
     connections = [
         connect(client, compose_id, "color", split_id, "color"),

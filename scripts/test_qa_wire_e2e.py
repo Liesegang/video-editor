@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = pathlib.Path(__file__).with_name("qa-e2e.py")
@@ -27,6 +28,43 @@ def rect(min_x, min_y, max_x, max_y):
 
 
 class NodeWireQaTests(unittest.TestCase):
+    def test_port_reveal_never_returns_a_noninteractive_zoom_frame(self):
+        target_id = "node_editor.port.node:source.output:color"
+
+        def snapshot(interactive):
+            target = {
+                "id": target_id,
+                "metadata": {"normal_interaction_enabled": interactive},
+            }
+            return (
+                {
+                    "components": [
+                        {
+                            "id": "node_editor.canvas",
+                            "metadata": {
+                                "port_interaction_enabled": interactive,
+                            },
+                        },
+                        target,
+                    ]
+                },
+                [target],
+            )
+
+        with mock.patch.object(
+            QA,
+            "reveal_node_editor_components",
+            side_effect=[snapshot(True), snapshot(False)],
+        ) as reveal:
+            with self.assertRaisesRegex(
+                QA.QaFailure, "did not enable normal port interactions"
+            ):
+                QA.ensure_node_editor_ports_interactive(
+                    object(), [target_id], max_zooms=1
+                )
+
+        self.assertEqual(reveal.call_count, 2)
+
     def test_wire_hit_click_uses_fresh_bezier_point_instead_of_bbox_center(self):
         component = {
             "id": "node_editor.edge.derived:track:clip",
