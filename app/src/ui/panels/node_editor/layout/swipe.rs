@@ -19,15 +19,16 @@ use crate::state::node_editor_layout::{
     DirectionalLayoutGestureMode, DirectionalLayoutGestureOutcome, FrozenNodeGeometry,
     NodeEditorDirectionalLayoutExecution, NodeEditorDirectionalLayoutGesture,
 };
+#[cfg(test)]
+use crate::ui::panels::node_editor::container_hierarchy_needs_reflow;
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
 use crate::ui::panels::node_editor::{
-    container_hierarchy_needs_reflow, ensure_reparent_hierarchy_contains, GraphItem,
-    AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP,
+    ensure_reparent_hierarchy_contains, GraphItem, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP,
 };
 
 use super::{
-    BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest, LayoutAxis,
-    NodeLayoutGeometry,
+    container_hierarchy_regresses, BranchDirection, DirectionalLayoutMode,
+    DirectionalLayoutRequest, LayoutAxis, NodeLayoutGeometry,
 };
 
 const POSITION_EPSILON: f32 = 0.001;
@@ -534,7 +535,6 @@ fn build_commit_candidate(
     positions: &BTreeMap<Uuid, [f32; 2]>,
 ) -> Result<(Project, Vec<Uuid>), String> {
     validate_commit_project(project, history, gesture, positions)?;
-    let baseline_needs_reflow = container_hierarchy_needs_reflow(project, gesture.composition_id);
     let branch_rect = planned_branch_rect(project, gesture, positions)?;
 
     let mut candidate = project.clone();
@@ -553,10 +553,11 @@ fn build_commit_candidate(
     if let Some(rect) = branch_rect {
         ensure_reparent_hierarchy_contains(&mut candidate, gesture.direct_owner, rect);
     }
-    if !baseline_needs_reflow
-        && container_hierarchy_needs_reflow(&candidate, gesture.composition_id)
-    {
-        return Err("directional layout would overlap or escape a container hierarchy".to_string());
+    if container_hierarchy_regresses(project, &candidate, gesture.composition_id) {
+        return Err(
+            "directional layout would introduce or worsen a container hierarchy violation"
+                .to_string(),
+        );
     }
     Ok((candidate, moved_node_ids))
 }
