@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::contract::{BackendBuild, BackendCapabilities, CpuSamplePrecision, ProcessorCacheKey};
+use crate::{
+    contract::{BackendBuild, BackendCapabilities, CpuSamplePrecision},
+    request::{ColorTransformRequest, ProcessorCacheKey, TransformSpec},
+};
 
 pub const SRGB_SPACE_ID: &str = "srgb";
 pub const LINEAR_SRGB_SPACE_ID: &str = "linear-srgb";
@@ -10,82 +13,6 @@ pub struct ColorSpaceInfo {
     pub id: String,
     pub label: String,
     pub scene_linear: bool,
-}
-
-/// Why a transform is being requested. Source and target identities remain
-/// explicit even for Preview and output transforms, so no role silently
-/// changes the mathematical contract.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum TransformRole {
-    Explicit,
-    SourceToWorking,
-    WorkingToDisplay { view: Option<String> },
-    WorkingToOutput,
-}
-
-impl TransformRole {
-    fn cache_fragment(&self) -> String {
-        match self {
-            Self::Explicit => "explicit".to_string(),
-            Self::SourceToWorking => "source-to-working".to_string(),
-            Self::WorkingToDisplay { view: None } => "working-to-display".to_string(),
-            Self::WorkingToDisplay { view: Some(view) } => {
-                format!("working-to-display:{view}")
-            }
-            Self::WorkingToOutput => "working-to-output".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ColorTransformRequest {
-    pub source_space: String,
-    pub target_space: String,
-    pub role: TransformRole,
-}
-
-impl ColorTransformRequest {
-    pub fn explicit(source_space: impl Into<String>, target_space: impl Into<String>) -> Self {
-        Self {
-            source_space: source_space.into(),
-            target_space: target_space.into(),
-            role: TransformRole::Explicit,
-        }
-    }
-
-    pub fn source_to_working(
-        source_space: impl Into<String>,
-        working_space: impl Into<String>,
-    ) -> Self {
-        Self {
-            source_space: source_space.into(),
-            target_space: working_space.into(),
-            role: TransformRole::SourceToWorking,
-        }
-    }
-
-    pub fn working_to_display(
-        working_space: impl Into<String>,
-        display_space: impl Into<String>,
-        view: Option<String>,
-    ) -> Self {
-        Self {
-            source_space: working_space.into(),
-            target_space: display_space.into(),
-            role: TransformRole::WorkingToDisplay { view },
-        }
-    }
-
-    pub fn working_to_output(
-        working_space: impl Into<String>,
-        output_space: impl Into<String>,
-    ) -> Self {
-        Self {
-            source_space: working_space.into(),
-            target_space: output_space.into(),
-            role: TransformRole::WorkingToOutput,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,13 +38,26 @@ pub struct GpuColorTransform {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ColorManagementError {
-    StubBackend { backend_id: String },
+    StubBackend {
+        backend_id: String,
+    },
     EmptyColorSpace,
-    NonFiniteComponent { component: &'static str },
+    NonFiniteComponent {
+        component: &'static str,
+    },
     AlphaOutOfRange,
-    UnsupportedTransform { source: String, target: String },
-    UnsupportedDisplayView { backend_id: String, view: String },
-    GpuTransformUnavailable { backend_id: String },
+    UnsupportedTransform {
+        source: String,
+        target: String,
+    },
+    UnsupportedDisplayView {
+        backend_id: String,
+        display: String,
+        view: String,
+    },
+    GpuTransformUnavailable {
+        backend_id: String,
+    },
 }
 
 impl fmt::Display for ColorManagementError {
@@ -139,10 +79,14 @@ impl fmt::Display for ColorManagementError {
                     "unsupported color transform '{source}' -> '{target}'"
                 )
             }
-            Self::UnsupportedDisplayView { backend_id, view } => {
+            Self::UnsupportedDisplayView {
+                backend_id,
+                display,
+                view,
+            } => {
                 write!(
                     formatter,
-                    "color backend '{backend_id}' does not support display view '{view}'"
+                    "color backend '{backend_id}' does not support display/view '{display}/{view}'"
                 )
             }
             Self::GpuTransformUnavailable { backend_id } => {
@@ -240,32 +184,33 @@ impl BuiltinColorTransform {
         request: &ColorTransformRequest,
     ) -> Result<TransformKind, ColorManagementError> {
         ensure_real_backend(self)?;
-        if request.source_space.trim().is_empty() || request.target_space.trim().is_empty() {
+        let (source, destination) = match request.spec() {
+            TransformSpec::ColorSpace {
+                source,
+                destination,
+            } => (source, destination),
+            TransformSpec::DisplayView { display, view, .. } => {
+                return Err(ColorManagementError::UnsupportedDisplayView {
+                    backend_id: self.backend_id().to_string(),
+                    display: display.clone(),
+                    view: view.clone(),
+                });
+            }
+        };
+        if source.trim().is_empty() || destination.trim().is_empty() {
             return Err(ColorManagementError::EmptyColorSpace);
         }
-        if let TransformRole::WorkingToDisplay { view: Some(view) } = &request.role {
-            return Err(ColorManagementError::UnsupportedDisplayView {
-                backend_id: self.backend_id().to_string(),
-                view: view.clone(),
-            });
-        }
-        let source_supported = matches!(
-            request.source_space.as_str(),
-            SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID
-        );
-        let target_supported = matches!(
-            request.target_space.as_str(),
-            SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID
-        );
-        if source_supported && target_supported && request.source_space == request.target_space {
+        let source_supported = matches!(source.as_str(), SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID);
+        let target_supported = matches!(destination.as_str(), SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID);
+        if source_supported && target_supported && source == destination {
             return Ok(TransformKind::Identity);
         }
-        match (request.source_space.as_str(), request.target_space.as_str()) {
+        match (source.as_str(), destination.as_str()) {
             (SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID) => Ok(TransformKind::SrgbToLinear),
             (LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID) => Ok(TransformKind::LinearToSrgb),
             _ => Err(ColorManagementError::UnsupportedTransform {
-                source: request.source_space.clone(),
-                target: request.target_space.clone(),
+                source: source.clone(),
+                target: destination.clone(),
             }),
         }
     }
@@ -317,9 +262,9 @@ impl ColorTransformBackend for BuiltinColorTransform {
         Ok(ProcessorCacheKey {
             backend_id: self.backend_id().to_string(),
             config_fingerprint: self.config_fingerprint(),
-            source_space: request.source_space.clone(),
-            target_space: request.target_space.clone(),
-            role: request.role.cache_fragment(),
+            purpose: request.purpose(),
+            spec: request.spec().clone(),
+            context: request.context().clone(),
         })
     }
 
@@ -453,7 +398,7 @@ mod tests {
         BuiltinColorTransform, ColorManagementError, ColorTransformBackend, ColorTransformRequest,
         GpuShaderLanguage, LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
     };
-    use crate::{BackendBuild, CpuSamplePrecision, TransformRole};
+    use crate::{BackendBuild, CpuSamplePrecision, TransformPurpose};
 
     fn assert_near(actual: f64, expected: f64) {
         assert!(
@@ -530,12 +475,12 @@ mod tests {
     }
 
     #[test]
-    fn supported_role_participates_in_processor_cache_identity() {
+    fn supported_purpose_participates_in_processor_cache_identity() {
         let backend = BuiltinColorTransform;
         let explicit = ColorTransformRequest::explicit(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         let display =
-            ColorTransformRequest::working_to_display(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID, None);
-        assert_eq!(explicit.role, TransformRole::Explicit);
+            ColorTransformRequest::working_to_display(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        assert_eq!(explicit.purpose(), TransformPurpose::Explicit);
         assert_ne!(
             backend.processor_cache_key(&explicit).unwrap(),
             backend.processor_cache_key(&display).unwrap()
@@ -545,25 +490,31 @@ mod tests {
     #[test]
     fn builtin_rejects_named_display_views_instead_of_ignoring_them() {
         let backend = BuiltinColorTransform;
-        let request = ColorTransformRequest::working_to_display(
+        let request = ColorTransformRequest::working_to_display_view(
             LINEAR_SRGB_SPACE_ID,
-            SRGB_SPACE_ID,
-            Some("qa-view".to_string()),
+            "qa-display",
+            "qa-view",
         );
 
         assert!(matches!(
             backend.processor_cache_key(&request),
             Err(ColorManagementError::UnsupportedDisplayView {
                 ref backend_id,
+                ref display,
                 ref view,
-            }) if backend_id == "builtin.extended-srgb" && view == "qa-view"
+            }) if backend_id == "builtin.extended-srgb"
+                && display == "qa-display"
+                && view == "qa-view"
         ));
         assert!(matches!(
             backend.create_cpu_processor(&request),
             Err(ColorManagementError::UnsupportedDisplayView {
                 ref backend_id,
+                ref display,
                 ref view,
-            }) if backend_id == "builtin.extended-srgb" && view == "qa-view"
+            }) if backend_id == "builtin.extended-srgb"
+                && display == "qa-display"
+                && view == "qa-view"
         ));
     }
 

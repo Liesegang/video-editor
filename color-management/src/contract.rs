@@ -34,16 +34,6 @@ pub enum CpuSamplePrecision {
     Float64,
 }
 
-/// Stable identity for reusing a CPU processor.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ProcessorCacheKey {
-    pub backend_id: String,
-    pub config_fingerprint: String,
-    pub source_space: String,
-    pub target_space: String,
-    pub role: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AlphaRepresentation {
     Straight,

@@ -1,14 +1,18 @@
 use std::fmt;
 
-use crate::{
-    AlphaRepresentation, BackendBuild, ColorManagementError, ComponentStorage, CpuColorProcessor,
-};
+use crate::{AlphaRepresentation, BackendBuild, ColorManagementError, CpuColorProcessor};
 
 /// Per-image CPU safety budget. 8K RGBA32F fits; larger working images must
 /// use tiled/GPU storage instead of risking a process-aborting allocation.
 const MAX_SCENE_LINEAR_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 
-/// Stable identity required at every composite/cache boundary.
+/// Stable color identity required at every composite/cache boundary.
+///
+/// Component storage deliberately does not participate in this identity. An
+/// RGBA16F GPU surface and an RGBA32F CPU surface can represent the same
+/// working-color contract and may cross a storage-conversion boundary without
+/// becoming color-incompatible. The owning image/resource type records its
+/// actual storage instead.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorkingColorIdentity {
     pub project_config_identity: String,
@@ -17,11 +21,10 @@ pub struct WorkingColorIdentity {
     pub backend_config_fingerprint: String,
     pub working_space: String,
     pub alpha: AlphaRepresentation,
-    pub storage: ComponentStorage,
 }
 
 impl WorkingColorIdentity {
-    pub fn scene_linear_f32(
+    pub fn scene_linear(
         project_config_identity: impl Into<String>,
         backend_id: impl Into<String>,
         backend_build: BackendBuild,
@@ -35,8 +38,25 @@ impl WorkingColorIdentity {
             backend_config_fingerprint: backend_config_fingerprint.into(),
             working_space: working_space.into(),
             alpha: AlphaRepresentation::Premultiplied,
-            storage: ComponentStorage::Float32,
         }
+    }
+
+    /// Compatibility name for the current CPU f32 owner. Storage is not part
+    /// of the returned color identity; new code should use [`Self::scene_linear`].
+    pub fn scene_linear_f32(
+        project_config_identity: impl Into<String>,
+        backend_id: impl Into<String>,
+        backend_build: BackendBuild,
+        backend_config_fingerprint: impl Into<String>,
+        working_space: impl Into<String>,
+    ) -> Self {
+        Self::scene_linear(
+            project_config_identity,
+            backend_id,
+            backend_build,
+            backend_config_fingerprint,
+            working_space,
+        )
     }
 }
 
@@ -156,7 +176,7 @@ impl fmt::Display for SceneLinearImageError {
                 component,
             } => write!(
                 formatter,
-                "scene-linear pixel {pixel_index} has non-finite {component}"
+                "image pixel {pixel_index} has non-finite {component}"
             ),
             Self::AlphaOutOfRange { pixel_index, alpha } => write!(
                 formatter,
@@ -313,52 +333,77 @@ impl SceneLinearImage {
         validate_and_canonicalize(&mut self.pixels)
     }
 
+    /// Apply a working-to-display/output transform without quantizing.
+    ///
+    /// The returned RGB remains extended-range f32 (negative and greater than
+    /// one values are preserved), while alpha is copied exactly and never
+    /// submitted to the color backend. Fully transparent pixels remain
+    /// canonical transparent black. Backend output is validated even when the
+    /// processor overrides its bulk method.
+    pub fn to_straight_rgba_f32(
+        &self,
+        working_to_output: &dyn CpuColorProcessor,
+    ) -> Result<Vec<[f32; 4]>, SceneLinearImageError> {
+        let mut straight = allocate_rgb_pixels(self.width, self.height)?;
+        for pixel in &self.pixels {
+            let alpha = pixel[3];
+            let straight_rgb = if alpha == 0.0 {
+                [0.0; 3]
+            } else {
+                [pixel[0] / alpha, pixel[1] / alpha, pixel[2] / alpha]
+            };
+            straight.push(straight_rgb);
+        }
+        validate_rgb_pixels(&straight)?;
+        working_to_output.transform_rgb_f32_in_place(&mut straight)?;
+        validate_rgb_pixels(&straight)?;
+
+        let mut rgba = allocate_pixels(self.width, self.height)?;
+        for (transformed, pixel) in straight.into_iter().zip(&self.pixels) {
+            if pixel[3] == 0.0 {
+                rgba.push([0.0; 4]);
+            } else {
+                rgba.push([transformed[0], transformed[1], transformed[2], pixel[3]]);
+            }
+        }
+        Ok(rgba)
+    }
+
     /// Apply a working-to-display/output transform and quantize at the terminal
-    /// RGBA8 boundary. RGB is clipped only here; alpha is never transformed.
+    /// RGBA8 boundary. RGB is clipped only by the packing step.
     pub fn to_straight_rgba8(
         &self,
         working_to_output: &dyn CpuColorProcessor,
     ) -> Result<Vec<u8>, SceneLinearImageError> {
-        let component_count =
-            self.pixels
-                .len()
-                .checked_mul(4)
-                .ok_or(SceneLinearImageError::DimensionOverflow {
-                    width: self.width,
-                    height: self.height,
-                })?;
-        let mut straight = allocate_rgb_pixels(self.width, self.height)?;
-        for pixel in &self.pixels {
-            let alpha = f64::from(pixel[3]);
-            let straight_rgb = if alpha == 0.0 {
-                [0.0; 3]
-            } else {
-                [
-                    f64::from(pixel[0]) / alpha,
-                    f64::from(pixel[1]) / alpha,
-                    f64::from(pixel[2]) / alpha,
-                ]
-            };
-            straight.push(straight_rgb.map(|component| component as f32));
-        }
-        working_to_output.transform_rgb_f32_in_place(&mut straight)?;
-        let mut rgba = Vec::new();
-        rgba.try_reserve_exact(component_count).map_err(|_| {
-            SceneLinearImageError::AllocationFailed {
-                bytes: component_count,
-            }
-        })?;
-        for (transformed, pixel) in straight.iter().zip(&self.pixels) {
-            let alpha = f64::from(pixel[3]);
-            rgba.extend([
-                quantize_unorm8(f64::from(transformed[0])),
-                quantize_unorm8(f64::from(transformed[1])),
-                quantize_unorm8(f64::from(transformed[2])),
-                quantize_unorm8(alpha),
-            ]);
-        }
-        Ok(rgba)
+        let straight = self.to_straight_rgba_f32(working_to_output)?;
+        pack_straight_rgba8(self.width, self.height, &straight)
     }
+}
+
+fn pack_straight_rgba8(
+    width: u32,
+    height: u32,
+    straight: &[[f32; 4]],
+) -> Result<Vec<u8>, SceneLinearImageError> {
+    let component_count = straight
+        .len()
+        .checked_mul(4)
+        .ok_or(SceneLinearImageError::DimensionOverflow { width, height })?;
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(component_count).map_err(|_| {
+        SceneLinearImageError::AllocationFailed {
+            bytes: component_count,
+        }
+    })?;
+    for pixel in straight {
+        rgba.extend([
+            quantize_unorm8(f64::from(pixel[0])),
+            quantize_unorm8(f64::from(pixel[1])),
+            quantize_unorm8(f64::from(pixel[2])),
+            quantize_unorm8(f64::from(pixel[3])),
+        ]);
+    }
+    Ok(rgba)
 }
 
 fn checked_pixel_count(width: u32, height: u32) -> Result<usize, SceneLinearImageError> {
@@ -417,6 +462,20 @@ fn validate_and_canonicalize(pixels: &mut [[f32; 4]]) -> Result<(), SceneLinearI
         }
         if pixel[3] == 0.0 {
             *pixel = [0.0; 4];
+        }
+    }
+    Ok(())
+}
+
+fn validate_rgb_pixels(pixels: &[[f32; 3]]) -> Result<(), SceneLinearImageError> {
+    for (pixel_index, pixel) in pixels.iter().enumerate() {
+        for (component, value) in ["r", "g", "b"].into_iter().zip(pixel) {
+            if !value.is_finite() {
+                return Err(SceneLinearImageError::NonFiniteComponent {
+                    pixel_index,
+                    component,
+                });
+            }
         }
     }
     Ok(())
@@ -496,6 +555,10 @@ mod tests {
 
         let identity = processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         assert_eq!(
+            image.to_straight_rgba_f32(identity.as_ref()).unwrap(),
+            [[-0.25, 2.0, 0.5, 1.0]]
+        );
+        assert_eq!(
             image.to_straight_rgba8(identity.as_ref()).unwrap(),
             [0, 255, 128, 255]
         );
@@ -524,7 +587,7 @@ mod tests {
             SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[0.25, 0.25, 0.25, 1.0]])
                 .unwrap();
         let identity = |space: &str| {
-            WorkingColorIdentity::scene_linear_f32(
+            WorkingColorIdentity::scene_linear(
                 "project-config",
                 "backend",
                 BackendBuild::Real,
@@ -561,6 +624,22 @@ mod tests {
         }
     }
 
+    struct InvalidBulkProcessor;
+
+    impl CpuColorProcessor for InvalidBulkProcessor {
+        fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
+            Ok(rgb)
+        }
+
+        fn transform_rgb_f32_in_place(
+            &self,
+            pixels: &mut [[f32; 3]],
+        ) -> Result<(), ColorManagementError> {
+            pixels[0][1] = f32::NAN;
+            Ok(())
+        }
+    }
+
     #[test]
     fn processor_api_never_receives_alpha() {
         let image = SceneLinearImage::solid_from_straight_rgba8(
@@ -571,5 +650,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(image.pixels()[0][3], 128.0 / 255.0);
+    }
+
+    #[test]
+    fn float_terminal_unpremultiplies_without_clipping_and_preserves_alpha() {
+        let image = SceneLinearImage::from_premultiplied_rgba_f32(
+            2,
+            1,
+            vec![[-0.125, 0.5, 0.25, 0.25], [0.0; 4]],
+        )
+        .unwrap();
+
+        assert_eq!(
+            image.to_straight_rgba_f32(&IdentityProcessor).unwrap(),
+            [[-0.5, 2.0, 1.0, 0.25], [0.0; 4]]
+        );
+    }
+
+    #[test]
+    fn float_terminal_rejects_invalid_bulk_backend_output() {
+        let image =
+            SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[0.25, 0.25, 0.25, 1.0]])
+                .unwrap();
+
+        assert!(matches!(
+            image.to_straight_rgba_f32(&InvalidBulkProcessor),
+            Err(SceneLinearImageError::NonFiniteComponent {
+                pixel_index: 0,
+                component: "g"
+            })
+        ));
+    }
+
+    #[test]
+    fn working_color_identity_is_independent_of_image_storage() {
+        let color_identity = WorkingColorIdentity::scene_linear(
+            "project-config",
+            "backend",
+            BackendBuild::Real,
+            "fingerprint",
+            LINEAR_SRGB_SPACE_ID,
+        );
+
+        assert_eq!(
+            color_identity,
+            WorkingColorIdentity::scene_linear_f32(
+                "project-config",
+                "backend",
+                BackendBuild::Real,
+                "fingerprint",
+                LINEAR_SRGB_SPACE_ID,
+            )
+        );
     }
 }

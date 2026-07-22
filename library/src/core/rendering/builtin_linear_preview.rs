@@ -182,7 +182,6 @@ impl VerifiedBuiltinPipeline {
         let preview_request = ColorTransformRequest::working_to_display(
             config.working_space(),
             config.preview().display(),
-            config.preview().view().map(str::to_string),
         );
         let working = WorkingColorIdentity::scene_linear_f32(
             intent.cache_identity().as_str(),

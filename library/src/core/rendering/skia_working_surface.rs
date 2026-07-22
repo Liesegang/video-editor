@@ -160,7 +160,7 @@ mod tests {
     }
 
     fn identity() -> WorkingColorIdentity {
-        WorkingColorIdentity::scene_linear_f32(
+        WorkingColorIdentity::scene_linear(
             "test-config",
             "builtin.extended-srgb",
             BackendBuild::Real,

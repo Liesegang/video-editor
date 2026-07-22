@@ -7,3 +7,6 @@ license = "MIT"
 
 [lints]
 workspace = true
+
+[dependencies]
+sha2 = "0.10"

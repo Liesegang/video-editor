@@ -13,18 +13,21 @@
 
 mod contract;
 mod image;
+mod request;
 mod transform;
 
 pub use contract::{
     AlphaRepresentation, AuthoringScalarPrecision, BackendBuild, BackendCapabilities,
-    ColorPipelineContract, ComponentStorage, CpuSamplePrecision, ProcessorCacheKey,
-    TARGET_COLOR_PIPELINE,
+    ColorPipelineContract, ComponentStorage, CpuSamplePrecision, TARGET_COLOR_PIPELINE,
 };
 pub use image::{
     ManagedSceneLinearImage, SceneLinearImage, SceneLinearImageError, WorkingColorIdentity,
 };
+pub use request::{
+    ColorContext, ColorTransformRequest, ProcessorCacheKey, TransformPurpose, TransformSpec,
+};
 pub use transform::{
     BuiltinColorTransform, ColorManagementError, ColorSpaceInfo, ColorTransformBackend,
-    ColorTransformRequest, CpuColorProcessor, GpuColorTransform, GpuLut3d, GpuShaderLanguage,
-    LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID, TransformRole,
+    CpuColorProcessor, GpuColorTransform, GpuLut3d, GpuShaderLanguage, LINEAR_SRGB_SPACE_ID,
+    SRGB_SPACE_ID,
 };
