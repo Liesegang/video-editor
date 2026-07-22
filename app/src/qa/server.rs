@@ -3,20 +3,20 @@ use super::input::{
     ActionPhase, ActionTracker, DragRequest, InputAction, InputCommand, KeyRequest, PinchRequest,
     PointerRequest, ScrollRequest, TextRequest,
 };
+use super::probe;
 use super::registry;
-use super::state::StateQuery;
+use super::ui_query::{self, UiQuery};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(2);
-const STATE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct QaServer {
     address: SocketAddr,
@@ -29,7 +29,7 @@ impl QaServer {
     pub fn start(
         port: u16,
         input_sender: SyncSender<InputCommand>,
-        state_sender: SyncSender<StateQuery>,
+        query_sender: SyncSender<UiQuery>,
         tracker: Arc<ActionTracker>,
         repaint_context: egui::Context,
     ) -> io::Result<Self> {
@@ -56,7 +56,7 @@ impl QaServer {
                     listener,
                     thread_shutdown,
                     input_sender,
-                    state_sender,
+                    query_sender,
                     tracker,
                     repaint_context,
                     thread_captures,
@@ -99,7 +99,7 @@ fn serve(
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
     input_sender: SyncSender<InputCommand>,
-    state_sender: SyncSender<StateQuery>,
+    query_sender: SyncSender<UiQuery>,
     tracker: Arc<ActionTracker>,
     repaint_context: egui::Context,
     captures: Arc<CaptureStore>,
@@ -129,7 +129,7 @@ fn serve(
                     Ok(request) => route(
                         request,
                         &input_sender,
-                        &state_sender,
+                        &query_sender,
                         &tracker,
                         &repaint_context,
                         &captures,
@@ -279,7 +279,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-struct HttpResponse {
+pub(super) struct HttpResponse {
     status: u16,
     body: HttpBody,
 }
@@ -290,7 +290,7 @@ enum HttpBody {
 }
 
 impl HttpResponse {
-    fn json(status: u16, body: Value) -> Self {
+    pub(super) fn json(status: u16, body: Value) -> Self {
         Self {
             status,
             body: HttpBody::Json(body),
@@ -308,7 +308,7 @@ impl HttpResponse {
 fn route(
     request: HttpRequest,
     input_sender: &SyncSender<InputCommand>,
-    state_sender: &SyncSender<StateQuery>,
+    query_sender: &SyncSender<UiQuery>,
     tracker: &ActionTracker,
     repaint_context: &egui::Context,
     captures: &CaptureStore,
@@ -361,34 +361,11 @@ fn route(
     }
 
     if request.method == "GET" && path == "/v1/state" {
-        let (response_sender, response_receiver) = mpsc::sync_channel(1);
-        match state_sender.try_send(StateQuery {
-            response: response_sender,
-        }) {
-            Ok(()) => {
-                repaint_context.request_repaint();
-                return match response_receiver.recv_timeout(STATE_TIMEOUT) {
-                    Ok(Ok(snapshot)) => HttpResponse::json(200, snapshot),
-                    Ok(Err(message)) => HttpResponse::json(500, json!({"error": message})),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        HttpResponse::json(503, json!({"error": "UI state query timed out"}))
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => HttpResponse::json(
-                        503,
-                        json!({"error": "UI state responder is unavailable"}),
-                    ),
-                };
-            }
-            Err(TrySendError::Full(_)) => {
-                return HttpResponse::json(429, json!({"error": "state query queue is full"}));
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                return HttpResponse::json(
-                    503,
-                    json!({"error": "UI state responder is unavailable"}),
-                );
-            }
-        }
+        return ui_query::snapshot_response(query_sender, repaint_context);
+    }
+
+    if request.method == "POST" && path == "/v1/probes/metadata-output" {
+        return probe::endpoint_response(&request.body, query_sender, repaint_context);
     }
 
     if request.method == "GET" {
@@ -622,6 +599,9 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     stream.write_all(&body)?;
     stream.flush()
 }
+
+#[cfg(test)]
+mod query_tests;
 
 #[cfg(test)]
 mod tests {
@@ -952,34 +932,5 @@ mod tests {
                 .action,
             InputAction::Key(KeyRequest { pressed: true, .. })
         ));
-    }
-
-    #[test]
-    fn state_endpoint_is_answered_on_demand_by_the_ui_side() {
-        let (sender, _receiver) = mpsc::sync_channel(1);
-        let (state_sender, state_receiver) = mpsc::sync_channel(1);
-        let server = QaServer::start(
-            0,
-            sender,
-            state_sender,
-            Arc::new(ActionTracker::default()),
-            egui::Context::default(),
-        )
-        .unwrap();
-        let address = server.address();
-        let requester = std::thread::spawn(move || {
-            request(address, "GET /v1/state HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        });
-        let query = state_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-        query
-            .response
-            .send(Ok(
-                json!({"frame": 42, "project": {"name": "authoritative"}}),
-            ))
-            .unwrap();
-        let response = requester.join().unwrap();
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.contains("\"frame\":42"));
-        assert!(response.contains("\"name\":\"authoritative\""));
     }
 }

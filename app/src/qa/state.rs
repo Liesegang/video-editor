@@ -1,16 +1,11 @@
 use crate::action::HistoryManager;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
-use crate::state::context_types::{NodeEditorEditableWire, SelectionTarget};
+use crate::state::context_types::NodeEditorEditableWire;
 use egui_dock::DockState;
-use library::core::framing::FrameEvaluator;
-use library::model::project::connection::DATA_VALUE_OUTPUT_PORT;
-use library::model::project::{EvalOutput, NodeContainer, PortAddress, PortOwner, Project};
-use library::model::NodeContent;
-use library::plugin::PluginManager;
+use library::model::project::{NodeContainer, Project};
 use library::PropertyOwner;
 use serde_json::{json, Value};
-use std::sync::mpsc::SyncSender;
 
 fn node_container_key(container: NodeContainer) -> String {
     match container {
@@ -27,22 +22,12 @@ fn property_owner_json(owner: PropertyOwner) -> Value {
     }
 }
 
-/// A one-shot request from the loopback HTTP thread to the UI thread.
-///
-/// The response is deliberately produced on demand from the authoritative
-/// Project and EditorContext.  The QA bridge never keeps a synchronized model
-/// or a cached copy of editor state.
-pub struct StateQuery {
-    pub response: SyncSender<Result<Value, String>>,
-}
-
 pub fn snapshot(
     frame: u64,
     project: &Project,
     editor_context: &EditorContext,
     dock_state: &DockState<Tab>,
     history_manager: &HistoryManager,
-    plugin_manager: &PluginManager,
 ) -> Result<Value, String> {
     let preview_render = editor_context.preview_render_scheduler.diagnostics();
     let mut expanded_tracks = editor_context
@@ -110,21 +95,11 @@ pub fn snapshot(
             })
         });
 
-    let selected_metadata_output = selected_data_runtime_snapshot(
-        project,
-        editor_context.selection.primary(),
-        editor_context.active_composition_id,
-        f64::from(editor_context.timeline.current_time),
-        plugin_manager,
-    );
     let project = serde_json::to_value(project)
         .map_err(|error| format!("failed to serialize authoritative Project: {error}"))?;
     Ok(json!({
         "frame": frame,
         "project": project,
-        "runtime": {
-            "selected_metadata_output": selected_metadata_output,
-        },
         "editor": {
             "navigation": {
                 "active_composition_id": editor_context.active_composition_id,
@@ -378,70 +353,6 @@ pub fn snapshot(
     }))
 }
 
-fn selected_data_runtime_snapshot(
-    project: &Project,
-    selection: Option<SelectionTarget>,
-    active_composition_id: Option<uuid::Uuid>,
-    global_time: f64,
-    plugin_manager: &PluginManager,
-) -> Value {
-    let Some(node_id) = selection.and_then(SelectionTarget::node_id) else {
-        return Value::Null;
-    };
-    let Some(node) = project.get_node(node_id) else {
-        return Value::Null;
-    };
-    if !matches!(node.content(), NodeContent::Data(_)) {
-        return Value::Null;
-    }
-    let Some(composition_id) = project
-        .find_containing_composition(node_id)
-        .or(active_composition_id)
-    else {
-        return json!({
-            "node_id": node_id,
-            "port": DATA_VALUE_OUTPUT_PORT,
-            "time": global_time,
-            "status": "error",
-            "error": "Data Node has no containing or active composition",
-        });
-    };
-    let Some(composition) = project.get_composition(composition_id) else {
-        return json!({
-            "node_id": node_id,
-            "port": DATA_VALUE_OUTPUT_PORT,
-            "time": global_time,
-            "status": "error",
-            "error": "Data Node composition is absent",
-        });
-    };
-    let evaluator = FrameEvaluator::new(
-        project,
-        composition,
-        plugin_manager.get_property_evaluators(),
-        plugin_manager,
-    );
-    let source = PortAddress::new(PortOwner::Node(node_id), DATA_VALUE_OUTPUT_PORT);
-    let output = match evaluator.evaluate_metadata_output(&source, global_time) {
-        Ok(EvalOutput::Produced(value)) => json!({
-            "status": "produced",
-            "value": Value::from(&value),
-        }),
-        Ok(EvalOutput::NoOutput) => json!({"status": "no_output"}),
-        Err(error) => json!({
-            "status": "error",
-            "error": error.to_string(),
-        }),
-    };
-    json!({
-        "node_id": node_id,
-        "port": DATA_VALUE_OUTPUT_PORT,
-        "global_time": global_time,
-        "evaluation_source": "authoritative_project",
-        "result": output,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,7 +362,6 @@ mod tests {
     use library::model::project::Composition;
     use library::model::property::{ColorSpaceRef, ColorValue, Property, PropertyValue};
     use library::model::{DataContent, Node};
-    use library::plugin::PluginManager;
 
     #[test]
     fn snapshot_reads_project_and_transient_editor_state() {
@@ -476,7 +386,7 @@ mod tests {
         data_node
             .set_property(
                 DATA_VALUE_PROPERTY.to_string(),
-                Property::constant(PropertyValue::ColorValue(color.clone())),
+                Property::constant(PropertyValue::ColorValue(color)),
             )
             .unwrap();
         let data_node_id = data_node.id;
@@ -501,7 +411,6 @@ mod tests {
             &context,
             &create_initial_dock_state(),
             &history,
-            &PluginManager::default(),
         )
         .unwrap();
         assert_eq!(value["frame"], 9);
@@ -532,13 +441,6 @@ mod tests {
             track_id.to_string()
         );
         assert_eq!(value["history"]["undo_depth"], 1);
-        assert_eq!(
-            value["runtime"]["selected_metadata_output"]["evaluation_source"],
-            "authoritative_project"
-        );
-        assert_eq!(
-            value["runtime"]["selected_metadata_output"]["result"]["value"],
-            Value::from(&PropertyValue::ColorValue(color))
-        );
+        assert!(value.get("runtime").is_none());
     }
 }

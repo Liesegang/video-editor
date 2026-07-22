@@ -20,9 +20,11 @@
 mod capture;
 mod fixture;
 mod input;
+mod probe;
 mod registry;
 mod server;
 mod state;
+mod ui_query;
 
 pub use fixture::{install_from_env as install_fixture_from_env, FixtureInfo};
 pub use registry::{begin_frame, end_frame, register_component, register_component_with_metadata};
@@ -44,7 +46,7 @@ pub const QA_PORT_FILE_ENV: &str = "RUVIE_QA_PORT_FILE";
 
 pub struct QaRuntime {
     sequencer: InputSequencer,
-    state_receiver: mpsc::Receiver<state::StateQuery>,
+    query_receiver: mpsc::Receiver<ui_query::UiQuery>,
     captures: Arc<capture::CaptureStore>,
     server: QaServer,
 }
@@ -65,12 +67,12 @@ impl QaRuntime {
         })?;
 
         let (sender, receiver) = mpsc::sync_channel(INPUT_QUEUE_CAPACITY);
-        let (state_sender, state_receiver) = mpsc::sync_channel(16);
+        let (query_sender, query_receiver) = mpsc::sync_channel(16);
         let tracker = Arc::new(ActionTracker::default());
         let server = QaServer::start(
             port,
             sender,
-            state_sender,
+            query_sender,
             Arc::clone(&tracker),
             context.clone(),
         )
@@ -97,7 +99,7 @@ impl QaRuntime {
         );
         Ok(Some(Self {
             sequencer,
-            state_receiver,
+            query_receiver,
             captures,
             server,
         }))
@@ -122,7 +124,7 @@ impl QaRuntime {
         self.captures.issue_for_frame(context, current_frame);
     }
 
-    pub fn answer_state_queries(
+    pub fn answer_ui_queries(
         &mut self,
         project: &std::sync::Arc<std::sync::RwLock<library::model::project::Project>>,
         editor_context: &crate::state::context::EditorContext,
@@ -130,22 +132,33 @@ impl QaRuntime {
         history_manager: &crate::action::HistoryManager,
         plugin_manager: &library::plugin::PluginManager,
     ) {
-        while let Ok(query) = self.state_receiver.try_recv() {
-            let response = project
-                .read()
-                .map_err(|error| format!("Project lock is poisoned: {error}"))
-                .and_then(|project| {
-                    state::snapshot(
-                        registry::snapshot().frame,
-                        &project,
-                        editor_context,
-                        dock_state,
-                        history_manager,
-                        plugin_manager,
-                    )
-                });
+        while let Ok(query) = self.query_receiver.try_recv() {
+            let response = if std::time::Instant::now() > query.deadline {
+                Err("QA UI query expired before processing".to_string())
+            } else {
+                project
+                    .read()
+                    .map_err(|error| format!("Project lock is poisoned: {error}"))
+                    .and_then(|project| match &query.kind {
+                        ui_query::UiQueryKind::Snapshot => state::snapshot(
+                            registry::snapshot().frame,
+                            &project,
+                            editor_context,
+                            dock_state,
+                            history_manager,
+                        ),
+                        ui_query::UiQueryKind::MetadataOutput(request) => {
+                            probe::evaluate_metadata_output(
+                                &project,
+                                editor_context.active_composition_id,
+                                request,
+                                plugin_manager,
+                            )
+                        }
+                    })
+            };
             if query.response.try_send(response).is_err() {
-                log::debug!("QA state query receiver was dropped before the UI replied");
+                log::debug!("QA UI query receiver was dropped before the UI replied");
             }
         }
     }

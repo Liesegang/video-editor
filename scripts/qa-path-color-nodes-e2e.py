@@ -82,10 +82,23 @@ def property_value(state, node_id):
     return BASE.property_value(state["project"]["nodes"][node_id], "value")
 
 
-def assert_selected_runtime(state, node_id, expected):
-    probe = state.get("runtime", {}).get("selected_metadata_output")
+def metadata_output_probe(client, state, node_id):
+    if "runtime" in state:
+        raise QaFailure("ordinary /v1/state must not evaluate runtime outputs")
+    return client.request(
+        "/v1/probes/metadata-output",
+        {
+            "node_id": node_id,
+            "port": "value",
+            "global_time": state["editor"]["timeline"]["current_time"],
+        },
+        method="POST",
+    )
+
+
+def assert_selected_runtime(probe, node_id, expected):
     if not isinstance(probe, dict):
-        raise QaFailure("selected Data runtime probe is absent")
+        raise QaFailure("Data runtime probe is absent")
     result = probe.get("result") or {}
     expected_header = {
         "node_id": node_id,
@@ -153,22 +166,10 @@ def author_color(client, node_id):
     }
     if value != expected:
         raise QaFailure("canonical Color Project value mismatch: {!r}".format(value))
-    settled = client.wait_until(
-        "canonical Color runtime evaluation",
-        lambda: current
-        if (
-            (current := client.state())
-            .get("runtime", {})
-            .get("selected_metadata_output", {})
-            .get("result", {})
-            .get("value")
-            == expected
-        )
-        else None,
-    )
+    probe = metadata_output_probe(client, state, node_id)
     return {
         "project_value": value,
-        "runtime": assert_selected_runtime(settled, node_id, expected),
+        "runtime": assert_selected_runtime(probe, node_id, expected),
         "control_metadata": {"r": red_metadata, "g": green_metadata},
     }
 
@@ -279,22 +280,10 @@ def author_path(client, node_id):
         applied_or_rejected,
     )
     value = property_value(state, node_id)
-    settled = client.wait_until(
-        "canonical Path runtime evaluation",
-        lambda: current
-        if (
-            (current := client.state())
-            .get("runtime", {})
-            .get("selected_metadata_output", {})
-            .get("result", {})
-            .get("value")
-            == expected
-        )
-        else None,
-    )
+    probe = metadata_output_probe(client, state, node_id)
     return {
         "project_value": value,
-        "runtime": assert_selected_runtime(settled, node_id, expected),
+        "runtime": assert_selected_runtime(probe, node_id, expected),
         "control_metadata": {
             "toggle": toggle_metadata,
             "json": path_metadata,
