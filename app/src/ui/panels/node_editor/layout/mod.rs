@@ -42,8 +42,9 @@ pub(in crate::ui::panels::node_editor) use reflow::{
 pub(in crate::ui::panels::node_editor) use structural_merge::ensure_structural_merge_layout;
 pub(in crate::ui::panels::node_editor) use swipe::{
     apply_directional_layout_commit, apply_directional_layout_preview,
-    finish_directional_layout_release_guard, handle_directional_layout_outputs,
-    recover_directional_layout_release_guard, DirectionalLayoutFrameOutcome,
+    finish_directional_layout_release_guard, finish_edits_before_directional_layout_start,
+    handle_directional_layout_outputs, recover_directional_layout_release_guard,
+    DirectionalLayoutFrameOutcome,
 };
 pub(in crate::ui::panels::node_editor) use types::{
     AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit,

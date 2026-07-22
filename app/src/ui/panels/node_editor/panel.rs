@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use super::layout::{
     apply_directional_layout_commit, apply_directional_layout_preview,
-    finish_directional_layout_release_guard, handle_directional_layout_outputs,
-    recover_directional_layout_release_guard, DirectionalLayoutFrameOutcome,
+    finish_directional_layout_release_guard, finish_edits_before_directional_layout_start,
+    handle_directional_layout_outputs, recover_directional_layout_release_guard,
+    DirectionalLayoutFrameOutcome,
 };
 use crate::utils::lock::{mutex_lock_or_recover, write_or_recover};
 
@@ -35,9 +36,9 @@ use super::{
     rendered_edge_at_position, select_logical_item, selected_container_owners,
     selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
     wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
-    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, ReparentReleaseOutcome,
-    SurfaceCapture, SurfaceProjection, TimeContextNode, WireInteractionFrame,
-    WireSecondaryClickHit,
+    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, QueuedNodeEdit,
+    ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
+    WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -230,6 +231,7 @@ pub fn node_editor_panel(
     let mut context_menu_exclusion_rects = Vec::new();
     let mut wire_context_request = None;
     let mut directional_layout_frame: DirectionalLayoutFrameOutcome;
+    let mut directional_layout_outputs = Vec::new();
     let mut snarl_selected_node_ids: Vec<Uuid>;
     let mut to_global = egui::emath::TSTransform::default();
     let mut canvas_clip = canvas_rect;
@@ -632,25 +634,21 @@ pub fn node_editor_panel(
         if super::deselects_wire(&surface_outputs) {
             node_editor_state.selected_connection_id = None;
         }
-        let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
-        directional_layout_frame = handle_directional_layout_outputs(
-            &project,
-            comp_id,
-            editor_context.selection.targets(),
-            &node_rects,
-            &surface_outputs,
-            node_editor_state,
-            history_manager,
+        directional_layout_outputs.extend(
+            surface_outputs
+                .iter()
+                .filter(|output| matches!(output, node_editor_ui::EditorOutput::LayoutSwipe(_)))
+                .cloned(),
         );
-        drop(node_rects);
-        finish_directional_layout_release_guard(node_editor_state, primary_released);
+        let directional_pointer_owned =
+            directional_layout_was_active || !directional_layout_outputs.is_empty();
         let surface_owned_layout =
             surface_was_active || node_editor_state.surface_interaction.is_active();
 
         let layout_pointer_owned = wire_owned_layout
             || resize_owned_layout
             || surface_owned_layout
-            || directional_layout_frame.owns_pointer;
+            || directional_pointer_owned;
         if primary_down && !layout_pointer_owned {
             if let Some(target) = captured_drag_target {
                 if node_editor_state.active_drag_selection != Some(target) {
@@ -727,8 +725,11 @@ pub fn node_editor_panel(
             node_editor_state.moved_node_ids.clear();
             node_editor_state.active_drag_selection = None;
         }
-        if node_editor_state.merge_layer_reorder.is_some() || directional_layout_frame.owns_pointer
-        {
+        if directional_pointer_owned {
+            collected.clear();
+            edits.retain(QueuedNodeEdit::finishes_continuous_edit);
+            drop_intents.clear();
+        } else if node_editor_state.merge_layer_reorder.is_some() {
             collected.clear();
             edits.clear();
             drop_intents.clear();
@@ -753,6 +754,27 @@ pub fn node_editor_panel(
     let mut directional_layout_changed = false;
     {
         let mut project = write_or_recover(project_lock.as_ref());
+        let pre_start_edits = finish_edits_before_directional_layout_start(
+            &mut project,
+            &mut edits,
+            &directional_layout_outputs,
+            node_editor_state,
+            history_manager,
+        );
+        if pre_start_edits.changed {
+            ui.ctx().request_repaint();
+        }
+        let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
+        directional_layout_frame = handle_directional_layout_outputs(
+            &project,
+            comp_id,
+            editor_context.selection.targets(),
+            &node_rects,
+            &directional_layout_outputs,
+            node_editor_state,
+            history_manager,
+        );
+        drop(node_rects);
         if let Some(commit) = directional_layout_frame.commit.take() {
             let result = apply_directional_layout_commit(
                 &mut project,
@@ -763,7 +785,9 @@ pub fn node_editor_panel(
             directional_layout_changed = result.changed;
             directional_layout_frame.request_repaint |= result.request_repaint;
         }
-        if apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state) {
+        if !pre_start_edits.consumed
+            && apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state)
+        {
             // Render completion is asynchronous. Wake the UI immediately so
             // a paused Preview observes this authoritative graph mutation
             // without waiting for unrelated pointer input.
@@ -809,6 +833,7 @@ pub fn node_editor_panel(
             }
         }
     }
+    finish_directional_layout_release_guard(node_editor_state, primary_released);
     if directional_layout_frame.request_repaint || directional_layout_changed {
         ui.ctx().request_repaint();
     }

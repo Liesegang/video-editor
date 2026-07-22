@@ -5,10 +5,12 @@ use library::model::project::{
 };
 use library::model::Node;
 
+use crate::state::context_types::NodeEditorPendingEdit;
 use crate::ui::panels::node_editor::{
-    apply_auto_layout, compute_auto_layout, container_rect, estimated_node_rect,
-    estimated_node_size, nested_content_rect, AutoLayoutScope, AUTO_LAYOUT_CLIP_TOP,
-    AUTO_LAYOUT_COMPOSITION_BOTTOM, AUTO_LAYOUT_COMPOSITION_RIGHT,
+    apply_auto_layout, apply_queued_node_edits, compute_auto_layout, container_rect,
+    estimated_node_rect, estimated_node_size, nested_content_rect, AutoLayoutScope, NodeEdit,
+    QueuedNodeEdit, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
+    AUTO_LAYOUT_COMPOSITION_RIGHT,
 };
 
 struct Fixture {
@@ -96,7 +98,7 @@ fn prepare_horizontal_commit(
     anchor: Uuid,
     rects: &HashMap<Uuid, egui::Rect>,
     state: &mut NodeEditorState,
-    history: &HistoryManager,
+    history: &mut HistoryManager,
 ) -> Result<DirectionalLayoutCommit, Box<dyn std::error::Error>> {
     handle_directional_layout_outputs(
         project,
@@ -287,6 +289,45 @@ fn output(intent: LayoutSwipeIntent<Uuid>) -> SurfaceOutput {
 #[path = "swipe_containment_tests.rs"]
 mod containment;
 
+fn apply_pending_rename(
+    project: &mut Project,
+    node_id: Uuid,
+    name: &str,
+    state: &mut NodeEditorState,
+    history: &mut HistoryManager,
+) {
+    assert!(apply_queued_node_edits(
+        project,
+        vec![QueuedNodeEdit::Continuous {
+            pending: NodeEditorPendingEdit {
+                owner: PortOwner::Node(node_id),
+                key: "name".to_string(),
+            },
+            edit: Some(NodeEdit::Rename {
+                node_id,
+                name: name.to_string(),
+            }),
+            finished: false,
+        }],
+        history,
+        state,
+    ));
+}
+
+fn finished_rename(node_id: Uuid, name: &str) -> QueuedNodeEdit {
+    QueuedNodeEdit::Continuous {
+        pending: NodeEditorPendingEdit {
+            owner: PortOwner::Node(node_id),
+            key: "name".to_string(),
+        },
+        edit: Some(NodeEdit::Rename {
+            node_id,
+            name: name.to_string(),
+        }),
+        finished: true,
+    }
+}
+
 #[test]
 fn start_and_update_only_change_sparse_display_projection() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -312,7 +353,7 @@ fn start_and_update_only_change_sparse_display_projection() -> Result<(), Box<dy
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     assert!(started.owns_pointer);
     assert!(started.commit.is_none());
@@ -342,7 +383,7 @@ fn start_and_update_only_change_sparse_display_projection() -> Result<(), Box<dy
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     assert!(updated.owns_pointer);
     assert!(updated.request_repaint);
@@ -389,7 +430,7 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
         &fixture.rects,
         &[start],
         &mut state,
-        &history,
+        &mut history,
     );
     let commit_frame = handle_directional_layout_outputs(
         &project,
@@ -404,7 +445,7 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     assert_eq!(project, before, "Commit intent must still be read-only");
     assert_eq!(history.undo_depth(), undo_before);
@@ -438,6 +479,164 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
         .undo(&project)
         .ok_or("directional layout commit was not undoable")?;
     assert_eq!(restored, before);
+    Ok(())
+}
+
+#[test]
+fn start_closes_pending_property_history_before_layout_commit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let initial = fixture.project.clone();
+    let mut project = fixture.project;
+    let mut state = NodeEditorState::default();
+    let mut history = HistoryManager::new();
+    history.push_project_state(initial.clone());
+    apply_pending_rename(
+        &mut project,
+        fixture.source,
+        "Intermediate",
+        &mut state,
+        &mut history,
+    );
+    assert_eq!(history.undo_depth(), 1);
+    assert!(state.pending_continuous_edit.is_some());
+
+    let outputs = vec![
+        output(intent(
+            LayoutSwipePhase::Start,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            egui::Modifiers::NONE,
+        )),
+        output(intent(
+            LayoutSwipePhase::Commit,
+            fixture.source,
+            egui::pos2(620.0, 300.0),
+            Some(LayoutSwipeAxis::Horizontal),
+            egui::Modifiers::NONE,
+        )),
+    ];
+    let mut final_edits = vec![finished_rename(fixture.source, "Final")];
+    let pre_start = finish_edits_before_directional_layout_start(
+        &mut project,
+        &mut final_edits,
+        &outputs,
+        &mut state,
+        &mut history,
+    );
+    assert!(pre_start.consumed);
+    assert!(pre_start.changed);
+    assert!(final_edits.is_empty());
+    assert_eq!(history.undo_depth(), 2);
+    assert!(state.pending_continuous_edit.is_none());
+    assert_eq!(project.get_node(fixture.source).unwrap().name, "Final");
+    let final_property_state = project.clone();
+
+    let frame = handle_directional_layout_outputs(
+        &project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &outputs,
+        &mut state,
+        &mut history,
+    );
+    let prepared = frame
+        .commit
+        .as_ref()
+        .ok_or("layout commit was not prepared")?;
+    assert_eq!(
+        prepared.gesture.project_revision,
+        project_revision(&final_property_state)?,
+        "Start must freeze the final property value, not its prior drag value",
+    );
+    assert_eq!(prepared.gesture.history_undo_depth, 2);
+    let commit = frame.commit.ok_or("layout commit was not prepared")?;
+    assert!(
+        apply_directional_layout_commit(&mut project, &mut state, &mut history, commit,).changed
+    );
+    assert_eq!(history.undo_depth(), 3);
+
+    let after_layout_undo = history.undo(&project).ok_or("layout undo missing")?;
+    assert_eq!(after_layout_undo, final_property_state);
+    let after_property_undo = history
+        .undo(&after_layout_undo)
+        .ok_or("property undo missing")?;
+    assert_eq!(after_property_undo, initial);
+    Ok(())
+}
+
+#[test]
+fn cancelled_layout_keeps_the_closed_property_history_entry(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let initial = fixture.project.clone();
+    let mut project = fixture.project;
+    let mut state = NodeEditorState::default();
+    let mut history = HistoryManager::new();
+    history.push_project_state(initial.clone());
+    apply_pending_rename(
+        &mut project,
+        fixture.source,
+        "Intermediate",
+        &mut state,
+        &mut history,
+    );
+    let outputs = vec![
+        output(intent(
+            LayoutSwipePhase::Start,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            egui::Modifiers::NONE,
+        )),
+        output(intent(
+            LayoutSwipePhase::Cancel,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            egui::Modifiers::NONE,
+        )),
+    ];
+    let mut final_edits = vec![finished_rename(fixture.source, "Final")];
+    let pre_start = finish_edits_before_directional_layout_start(
+        &mut project,
+        &mut final_edits,
+        &outputs,
+        &mut state,
+        &mut history,
+    );
+    assert!(pre_start.consumed);
+    assert!(pre_start.changed);
+    let final_property_state = project.clone();
+    let frame = handle_directional_layout_outputs(
+        &project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &outputs,
+        &mut state,
+        &mut history,
+    );
+
+    assert!(frame.commit.is_none());
+    assert_eq!(project, final_property_state);
+    assert_eq!(history.undo_depth(), 2);
+    assert!(state.pending_continuous_edit.is_none());
+    let cancelled = state
+        .last_directional_layout_swipe
+        .as_ref()
+        .ok_or("cancelled layout omitted diagnostics")?;
+    assert_eq!(
+        cancelled.project_revision_before,
+        project_revision(&final_property_state)?,
+    );
+    assert_eq!(cancelled.history_undo_before, 2);
+    assert_eq!(
+        history.undo(&project).ok_or("property undo missing")?,
+        initial
+    );
     Ok(())
 }
 
@@ -480,7 +679,7 @@ fn releasing_a_before_pointer_cancels_without_project_or_history_change(
             &fixture.rects,
             &[output(swipe)],
             &mut state,
-            &history,
+            &mut history,
         );
     }
     assert!(state.directional_layout_swipe.is_none());
@@ -510,7 +709,7 @@ fn releasing_a_before_pointer_cancels_without_project_or_history_change(
         &fixture.rects,
         &[],
         &mut state,
-        &history,
+        &mut history,
     );
     assert!(guarded.owns_pointer);
     assert!(!recover_directional_layout_release_guard(
@@ -560,7 +759,7 @@ fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
             &fixture.rects,
             &[output(swipe)],
             &mut state,
-            &history,
+            &mut history,
         );
     }
     assert!(state.directional_layout_release_guard);
@@ -577,7 +776,7 @@ fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
         &fixture.rects,
         &[],
         &mut state,
-        &history,
+        &mut history,
     );
     assert!(!normal_input.owns_pointer);
     assert_eq!(fixture.project, before);
@@ -590,7 +789,7 @@ fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let mut state = NodeEditorState::default();
-    let history = HistoryManager::new();
+    let mut history = HistoryManager::new();
     let modifiers = egui::Modifiers {
         alt: true,
         shift: true,
@@ -609,7 +808,7 @@ fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
             modifiers,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     handle_directional_layout_outputs(
         &fixture.project,
@@ -624,7 +823,7 @@ fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
             modifiers,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     let active = state
         .directional_layout_swipe
@@ -664,7 +863,7 @@ fn concurrent_project_change_rejects_whole_commit_without_partial_layout(
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     let frame = handle_directional_layout_outputs(
         &project,
@@ -679,7 +878,7 @@ fn concurrent_project_change_rejects_whole_commit_without_partial_layout(
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     let commit = frame.commit.ok_or("commit plan was not prepared")?;
     let middle_before = project

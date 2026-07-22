@@ -23,7 +23,8 @@ use crate::state::node_editor_layout::{
 use crate::ui::panels::node_editor::container_hierarchy_needs_reflow;
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
 use crate::ui::panels::node_editor::{
-    grow_container_hierarchy_to_rect_all_edges, GraphItem, AUTO_LAYOUT_COLUMN_GAP,
+    apply_queued_node_edits, commands::flush_pending_continuous_edit_with_project,
+    grow_container_hierarchy_to_rect_all_edges, GraphItem, QueuedNodeEdit, AUTO_LAYOUT_COLUMN_GAP,
     AUTO_LAYOUT_ROW_GAP,
 };
 
@@ -49,6 +50,39 @@ pub(in crate::ui::panels::node_editor) struct DirectionalLayoutCommit {
 pub(in crate::ui::panels::node_editor) struct DirectionalLayoutCommitResult {
     pub(in crate::ui::panels::node_editor) changed: bool,
     pub(in crate::ui::panels::node_editor) request_repaint: bool,
+}
+
+#[derive(Default)]
+pub(in crate::ui::panels::node_editor) struct DirectionalLayoutPreStartEdits {
+    pub(in crate::ui::panels::node_editor) consumed: bool,
+    pub(in crate::ui::panels::node_editor) changed: bool,
+}
+
+/// Apply focus-loss/final-value edits before Start freezes Project revision
+/// and history depths, reporting whether edits were consumed and changed.
+pub(in crate::ui::panels::node_editor) fn finish_edits_before_directional_layout_start(
+    project: &mut Project,
+    edits: &mut Vec<QueuedNodeEdit>,
+    outputs: &[SurfaceOutput],
+    state: &mut NodeEditorState,
+    history: &mut HistoryManager,
+) -> DirectionalLayoutPreStartEdits {
+    let starts = outputs.iter().any(|output| {
+        matches!(
+            output,
+            EditorOutput::LayoutSwipe(LayoutSwipeIntent {
+                phase: LayoutSwipePhase::Start,
+                ..
+            })
+        )
+    });
+    if !starts {
+        return DirectionalLayoutPreStartEdits::default();
+    }
+    DirectionalLayoutPreStartEdits {
+        consumed: true,
+        changed: apply_queued_node_edits(project, std::mem::take(edits), history, state),
+    }
 }
 
 /// Recover a cancellation guard before normal input arbitration.
@@ -121,7 +155,7 @@ pub(in crate::ui::panels::node_editor) fn handle_directional_layout_outputs(
     rendered_node_rects: &HashMap<Uuid, egui::Rect>,
     outputs: &[SurfaceOutput],
     state: &mut NodeEditorState,
-    history: &HistoryManager,
+    history: &mut HistoryManager,
 ) -> DirectionalLayoutFrameOutcome {
     let mut outcome = DirectionalLayoutFrameOutcome {
         owns_pointer: state.directional_layout_swipe.is_some()
@@ -137,6 +171,7 @@ pub(in crate::ui::panels::node_editor) fn handle_directional_layout_outputs(
         outcome.owns_pointer = true;
         match intent.phase {
             LayoutSwipePhase::Start => {
+                flush_pending_continuous_edit_with_project(project, history, state);
                 if let Err(reason) = begin_gesture(
                     project,
                     composition_id,

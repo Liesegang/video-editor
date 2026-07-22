@@ -18,7 +18,7 @@ fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
         fixture.source,
         &fixture.rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     let composition_bottom = project
         .get_composition(fixture.composition_id)
@@ -130,7 +130,7 @@ fn composition_direct_layout_grows_only_composition_and_preserves_child_track(
         source_id,
         &rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     let composition_right = composition_before.0[0] + composition_before.1[0];
     commit
@@ -182,7 +182,7 @@ fn contained_layout_does_not_resize_any_container() -> Result<(), Box<dyn std::e
         fixture.source,
         &fixture.rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     commit
         .positions
@@ -240,7 +240,7 @@ fn unrelated_legacy_hierarchy_violation_does_not_block_safe_layout(
         fixture.source,
         &fixture.rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     commit
         .positions
@@ -297,7 +297,7 @@ fn new_child_overlap_rejects_whole_commit_on_an_invalidity_free_baseline(
         source,
         &pair.rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     commit
         .positions
@@ -408,7 +408,7 @@ fn unrelated_sibling_violation_cannot_mask_a_new_overlap() -> Result<(), Box<dyn
         source,
         &rendered,
         &mut state,
-        &history,
+        &mut history,
     )?;
     commit.positions.insert(
         sink,
@@ -468,7 +468,7 @@ fn worsening_the_same_legacy_overlap_rejects_atomically() -> Result<(), Box<dyn 
         source,
         &rects,
         &mut state,
-        &history,
+        &mut history,
     )?;
     commit
         .positions
@@ -583,7 +583,7 @@ fn upstream_layout_keeps_structural_merge_anchor_and_preview_positions_exact(
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     );
     let commit = handle_directional_layout_outputs(
         &project,
@@ -598,7 +598,7 @@ fn upstream_layout_keeps_structural_merge_anchor_and_preview_positions_exact(
             egui::Modifiers::NONE,
         ))],
         &mut state,
-        &history,
+        &mut history,
     )
     .commit
     .ok_or("upstream structural-anchor commit was not prepared")?;

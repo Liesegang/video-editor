@@ -110,3 +110,9 @@ pub(in crate::ui::panels::node_editor) enum QueuedNodeEdit {
         finished: bool,
     },
 }
+
+impl QueuedNodeEdit {
+    pub(in crate::ui::panels::node_editor) const fn finishes_continuous_edit(&self) -> bool {
+        matches!(self, Self::Continuous { finished: true, .. })
+    }
+}

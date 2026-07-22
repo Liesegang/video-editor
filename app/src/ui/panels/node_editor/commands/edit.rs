@@ -357,7 +357,7 @@ fn apply_container_output_node(
     }
 }
 
-fn flush_pending_continuous_edit_with_project(
+pub(in crate::ui::panels::node_editor) fn flush_pending_continuous_edit_with_project(
     project: &Project,
     history_manager: &mut HistoryManager,
     node_editor_state: &mut NodeEditorState,
