@@ -146,10 +146,7 @@ mod tests {
     fn adapter_never_retags_an_unsupported_conversion() -> Result<(), Box<dyn std::error::Error>> {
         let aces = ColorValue::new(ColorSpaceRef::new("acescg")?, [0.5, 0.25, 2.0, 1.0])?;
         assert!(transform_color(&aces, &ColorSpaceRef::linear_srgb()).is_err());
-        assert_eq!(
-            transform_color(&aces, &ColorSpaceRef::new("acescg")?)?,
-            aces
-        );
+        assert!(transform_color(&aces, &ColorSpaceRef::new("acescg")?).is_err());
         Ok(())
     }
 }

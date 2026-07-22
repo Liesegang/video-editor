@@ -202,7 +202,15 @@ impl BuiltinColorTransform {
         if request.source_space.trim().is_empty() || request.target_space.trim().is_empty() {
             return Err(ColorManagementError::EmptyColorSpace);
         }
-        if request.source_space == request.target_space {
+        let source_supported = matches!(
+            request.source_space.as_str(),
+            SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID
+        );
+        let target_supported = matches!(
+            request.target_space.as_str(),
+            SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID
+        );
+        if source_supported && target_supported && request.source_space == request.target_space {
             return Ok(TransformKind::Identity);
         }
         match (request.source_space.as_str(), request.target_space.as_str()) {
@@ -432,12 +440,19 @@ mod tests {
     }
 
     #[test]
-    fn unknown_retag_is_rejected_but_same_space_identity_is_lossless() {
+    fn supported_identity_is_lossless_and_unknown_spaces_are_rejected() {
         let backend = BuiltinColorTransform;
         let value = [-3.0, 4.0, 0.25, 0.5];
-        assert_eq!(backend.transform_rgba(value, "acescg", "acescg"), Ok(value));
+        assert_eq!(
+            backend.transform_rgba(value, LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID),
+            Ok(value)
+        );
         assert!(matches!(
             backend.transform_rgba(value, "acescg", LINEAR_SRGB_SPACE_ID),
+            Err(ColorManagementError::UnsupportedTransform { .. })
+        ));
+        assert!(matches!(
+            backend.transform_rgba(value, "acescg", "acescg"),
             Err(ColorManagementError::UnsupportedTransform { .. })
         ));
     }
