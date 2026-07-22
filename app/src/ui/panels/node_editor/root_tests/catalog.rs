@@ -130,6 +130,58 @@ fn native_values_have_explicit_operation_presentation() {
 }
 
 #[test]
+fn compose_color_uses_reachable_compact_picker_with_bounded_rendered_width() {
+    let (mut project, composition_id, _, _, _, _) = fixture();
+    project.get_composition_mut(composition_id).unwrap().ui_size = [1900.0, 1200.0];
+    let mut compose = Node::new_color("Compose Color", ColorContent::Compose);
+    compose.ui_position = [1400.0, 200.0];
+    let compose_id = compose.id;
+    project.add_node(compose);
+    project
+        .attach_node_to_container(NodeContainer::Composition(composition_id), compose_id)
+        .unwrap();
+
+    let (rects, _, transform, _) =
+        render_test_graph_with_context_menu_exclusions(&project, composition_id);
+    let rendered = rects
+        .get(&format!("node_editor.node:{compose_id}"))
+        .copied()
+        .expect("rendered Compose Color Node");
+    let picker_id = format!("node_editor.color_picker.node:{compose_id}:compose");
+    let picker = rects
+        .get(&picker_id)
+        .copied()
+        .expect("reachable Compose Color picker");
+    let picker_metadata = test_metadata(&picker_id).expect("Compose picker QA metadata");
+    let estimated = estimated_node_size(&project, compose_id);
+    let rendered_graph_width = rendered.width() / transform.scaling;
+    let rendered_graph_height = rendered.height() / transform.scaling;
+    let picker_graph_width = picker.width() / transform.scaling;
+
+    assert!(rect_contains_rect(rendered.expand(1.0), picker));
+    assert_eq!(picker_metadata["presentation"], "compact_swatch_status");
+    assert_eq!(picker_metadata["popup_open"], false);
+    assert_eq!(estimated.x, 520.0);
+    assert_eq!(
+        node_body_width(project.get_node(compose_id).unwrap().content()),
+        COMPOSE_COLOR_BODY_WIDTH
+    );
+    assert!(picker_graph_width <= COMPOSE_COLOR_BODY_WIDTH + 1.0);
+    assert!(
+        rendered_graph_width <= estimated.x + 1.0,
+        "rendered Compose width escaped its content-specific estimate: rendered={rendered_graph_width}, estimated={estimated:?}"
+    );
+    assert!(
+        estimated.x - rendered_graph_width <= 8.0,
+        "Compose estimate is no longer compact/authoritative: rendered={rendered_graph_width}, estimated={estimated:?}"
+    );
+    assert!(
+        rendered_graph_height <= estimated.y + 1.0,
+        "rendered Compose height escaped its content-specific estimate: rendered={rendered_graph_height}, estimated={estimated:?}"
+    );
+}
+
+#[test]
 fn container_chrome_uses_bundled_phosphor_icons() {
     let id = Uuid::new_v4();
     assert_eq!(

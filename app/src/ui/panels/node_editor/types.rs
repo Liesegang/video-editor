@@ -16,6 +16,9 @@ pub(super) const EMBEDDED_PORT_LABEL_INSET: f32 = 18.0;
 pub(super) const RESIZE_HIT_WIDTH: f32 = 7.0;
 pub(super) const RESIZE_CORNER_SIZE: f32 = 15.0;
 pub(super) const NODE_BODY_WIDTH: f32 = 200.0;
+/// Compose Color keeps only its aggregate swatch/status in the center lane.
+/// Its individual Space/R/G/B/A values remain in the ordinary input rows.
+pub(super) const COMPOSE_COLOR_BODY_WIDTH: f32 = 104.0;
 /// Physical variadic rows need enough room for their handle, source label,
 /// typed controls, and both reorder buttons without outgrowing layout's
 /// estimate at runtime.

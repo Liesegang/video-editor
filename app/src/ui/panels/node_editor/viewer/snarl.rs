@@ -488,12 +488,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn has_body(&mut self, item: &GraphItem) -> bool {
-        // Editable values already live in the left input rows and the exact
-        // Node Inspector. Adding a second central body duplicates those
-        // controls and makes coil-layout Nodes wider than the layout model,
-        // which can overlap the next column and steal wire drops.
-        let _ = item;
-        false
+        matches!(
+            item,
+            GraphItem::Node(node_id)
+                if self.project.get_node(*node_id).is_some_and(|node| matches!(
+                    node.content(),
+                    NodeContent::Color(library::model::ColorContent::Compose)
+                ))
+        )
     }
 
     fn show_body(
@@ -517,31 +519,43 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let GraphItem::Node(project_node_id) = item else {
             return;
         };
+        let compact_compose = self.project.get_node(project_node_id).is_some_and(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Color(library::model::ColorContent::Compose)
+            )
+        });
+        let body_width = self
+            .project
+            .get_node(project_node_id)
+            .map_or(NODE_BODY_WIDTH, |node| node_body_width(node.content()));
         ui.vertical(|ui| {
-            ui.set_width(NODE_BODY_WIDTH);
+            ui.set_width(body_width);
             let Some(node) = self.project.get_node(project_node_id) else {
                 return;
             };
 
-            let mut name = node.name.clone();
-            ui.horizontal(|ui| {
-                property_label(ui, "Name");
-                let response = ui.add_sized(
-                    [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
-                    egui::TextEdit::singleline(&mut name),
-                );
-                let finished = continuous_response_finished(ui, &response);
-                let edit = response.changed().then_some(NodeEdit::Rename {
-                    node_id: project_node_id,
-                    name,
+            if !compact_compose {
+                let mut name = node.name.clone();
+                ui.horizontal(|ui| {
+                    property_label(ui, "Name");
+                    let response = ui.add_sized(
+                        [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
+                        egui::TextEdit::singleline(&mut name),
+                    );
+                    let finished = continuous_response_finished(ui, &response);
+                    let edit = response.changed().then_some(NodeEdit::Rename {
+                        node_id: project_node_id,
+                        name,
+                    });
+                    self.queue_continuous_edit(
+                        PortOwner::Node(project_node_id),
+                        "$name",
+                        edit,
+                        finished,
+                    );
                 });
-                self.queue_continuous_edit(
-                    PortOwner::Node(project_node_id),
-                    "$name",
-                    edit,
-                    finished,
-                );
-            });
+            }
 
             match node.content() {
                 NodeContent::Generator(GeneratorContent::Text) => {

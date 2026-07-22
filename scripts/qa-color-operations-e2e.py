@@ -19,6 +19,16 @@ if SPEC is None or SPEC.loader is None:
 BASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BASE)
 
+LAYOUT_PATH = os.path.join(SCRIPT_DIR, "qa_node_editor_layout.py")
+LAYOUT_SPEC = importlib.util.spec_from_file_location(
+    "ruvie_qa_node_editor_layout", LAYOUT_PATH
+)
+if LAYOUT_SPEC is None or LAYOUT_SPEC.loader is None:
+    raise RuntimeError("cannot load scripts/qa_node_editor_layout.py")
+LAYOUT_MODULE = importlib.util.module_from_spec(LAYOUT_SPEC)
+LAYOUT_SPEC.loader.exec_module(LAYOUT_MODULE)
+NODE_LAYOUT = LAYOUT_MODULE.NodeEditorLayoutQa(BASE)
+
 QaClient = BASE.QaClient
 QaFailure = BASE.QaFailure
 
@@ -89,7 +99,7 @@ def create_color_node(client, query, operation_key, content):
         client,
         query,
         menu_id,
-        "node_editor.container.composition:{}".format(BASE.COMPOSITION),
+        "node_editor.container.track:{}".format(FIXTURE_TRACK),
     )
     expected = {"type": "Color", "data": content}
     actual = state["project"]["nodes"][node_id].get("content")
@@ -111,7 +121,7 @@ def create_color_node(client, query, operation_key, content):
         raise QaFailure("Color menu metadata mismatch: {!r}".format(mismatches))
     BASE.assert_history_delta(before, state, 1, "{} Node creation".format(query))
     owners = BASE.validate_canonical_ownership(state["project"])
-    expected_owner = "composition:" + BASE.COMPOSITION
+    expected_owner = "track:" + FIXTURE_TRACK
     actual_owner = owners["node_owners"].get(node_id)
     if actual_owner != expected_owner:
         raise QaFailure(
@@ -119,8 +129,8 @@ def create_color_node(client, query, operation_key, content):
                 query, actual_owner, expected_owner
             )
         )
-    composition = BASE.composition_map(state["project"])[BASE.COMPOSITION]
-    if composition["node_ids"].count(node_id) != 1:
+    track = state["project"]["tracks"][FIXTURE_TRACK]
+    if track["node_ids"].count(node_id) != 1:
         raise QaFailure("{} Node is not contained exactly once".format(query))
     return node_id, metadata, before, state, {
         "node_id": node_id,
@@ -130,30 +140,109 @@ def create_color_node(client, query, operation_key, content):
     }
 
 
-def node_port(node_id, direction, port):
-    return "node_editor.port.node:{}.{}:{}".format(node_id, direction, port)
+def exercise_node_compose_picker_noop(client, node_id):
+    """Open and close the compact Node-local picker through real clicks."""
+    picker_id = "node_editor.color_picker.node:{}:compose".format(node_id)
+    try:
+        BASE.reveal_node_editor_component(client, picker_id)
+    except QaFailure as error:
+        state = client.state()
+        snapshot = client.component_snapshot()
+        rendered_nodes = sorted(
+            component["id"]
+            for component in snapshot["components"]
+            if component["id"].startswith("node_editor.node:")
+        )
+        raise QaFailure(
+            "{}; Compose node={!r}; track={!r}; rendered_nodes={!r}".format(
+                error,
+                state["project"]["nodes"].get(node_id),
+                state["project"]["tracks"].get(FIXTURE_TRACK),
+                rendered_nodes,
+            )
+        ) from error
+    snapshot, picker = client.wait_component_settled(picker_id)
+    metadata = picker.get("metadata") or {}
+    expected = {
+        "operation": "native.color.compose",
+        "presentation": "compact_swatch_status",
+        "editable": True,
+        "popup_open": False,
+        "transform_authority": "ruvie-color-management",
+    }
+    mismatches = {
+        key: (metadata.get(key), value)
+        for key, value in expected.items()
+        if metadata.get(key) != value
+    }
+    if mismatches:
+        raise QaFailure("compact Compose picker metadata mismatch: {!r}".format(mismatches))
+    components = {component["id"]: component for component in snapshot["components"]}
+    node = components.get("node_editor.node:" + node_id)
+    if node is None:
+        raise QaFailure("Compose picker frame omitted its owning Node card")
+    picker_center = client.point(picker["rect_points"])
+    if not BASE.point_in_component_rect(picker_center, node["rect_points"]):
+        raise QaFailure("Compose picker is outside its physical Node card")
 
+    before = client.state()
+    client.click_component(picker_id)
 
-def matching_connections(project, from_id, output, to_id, input_port):
-    return [
-        connection
-        for connection in project.get("connections", ())
-        if connection.get("from", {}).get("owner", {}).get("owner_type") == "Node"
-        and connection["from"]["owner"].get("owner_id") == from_id
-        and connection["from"].get("port") == output
-        and connection.get("to", {}).get("owner", {}).get("owner_type") == "Node"
-        and connection["to"]["owner"].get("owner_id") == to_id
-        and connection["to"].get("port") == input_port
-    ]
+    def picker_opened():
+        state = client.state()
+        try:
+            opened_snapshot, opened_picker = client.component(picker_id)
+        except QaFailure:
+            return None
+        if (opened_picker.get("metadata") or {}).get("popup_open") is True:
+            return state, opened_snapshot, opened_picker
+        return None
+
+    opened, opened_snapshot, opened_picker = client.wait_until(
+        "compact Compose picker popup", picker_opened
+    )
+    if opened["project"] != before["project"] or opened["history"] != before["history"]:
+        raise QaFailure("opening the compact Compose picker mutated Project/history")
+
+    client.click_component(picker_id)
+
+    def picker_closed():
+        state = client.state()
+        try:
+            closed_snapshot, closed_picker = client.component(picker_id)
+        except QaFailure:
+            return None
+        if (closed_picker.get("metadata") or {}).get("popup_open") is False:
+            return state, closed_snapshot, closed_picker
+        return None
+
+    closed, closed_snapshot, closed_picker = client.wait_until(
+        "compact Compose picker close", picker_closed
+    )
+    if closed["project"] != before["project"] or closed["history"] != before["history"]:
+        raise QaFailure("closing the compact Compose picker mutated Project/history")
+    return {
+        "picker_id": picker_id,
+        "initial_frame": snapshot["frame"],
+        "opened_frame": opened_snapshot["frame"],
+        "closed_frame": closed_snapshot["frame"],
+        "picker_rect": picker["rect_points"],
+        "node_rect": node["rect_points"],
+        "initial_metadata": metadata,
+        "opened_metadata": opened_picker.get("metadata") or {},
+        "closed_metadata": closed_picker.get("metadata") or {},
+        "project_unchanged": closed["project"] == before["project"],
+        "history_unchanged": closed["history"] == before["history"],
+    }
 
 
 def connect(client, from_id, output, to_id, input_port, reverse=False):
-    source = node_port(from_id, "output", output)
-    target = node_port(to_id, "input", input_port)
+    source = NODE_LAYOUT.node_port(from_id, "output", output)
+    target = NODE_LAYOUT.node_port(to_id, "input", input_port)
     connection_label = "{}:{} -> {}:{}".format(
         from_id, output, to_id, input_port
     )
-    compact_wire_endpoints(client, from_id, to_id)
+    NODE_LAYOUT.compact_wire_endpoints(client, from_id, to_id)
     try:
         port_snapshot, port_components = BASE.ensure_node_editor_ports_interactive(
             client, [source, target], max_zooms=14
@@ -171,7 +260,11 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
         connected = client.wait_project(
             "Color {} coordinate wire".format(connection_label),
             lambda project: project
-            if len(matching_connections(project, from_id, output, to_id, input_port))
+            if len(
+                NODE_LAYOUT.matching_connections(
+                    project, from_id, output, to_id, input_port
+                )
+            )
             == 1
             else None,
         )
@@ -200,142 +293,12 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
         ) from error
     BASE.assert_history_delta(before, connected, 1, "Color coordinate wire")
     return (
-        matching_connections(
+        NODE_LAYOUT.matching_connections(
             connected["project"], from_id, output, to_id, input_port
         )[0],
         before,
         connected,
     )
-
-
-def compact_wire_endpoints(client, from_id, to_id):
-    """Move the target beside its source through real Node-header drags.
-
-    Disconnected Nodes intentionally share one topological rank, so clean
-    layout stacks them vertically. At overview scale that stack cannot expose
-    two ports in one interactive frame. Header drags are still normal egui
-    interactions at overview scale; use bounded physical drags to place the
-    target one compact left-to-right step after the source, then let the wire
-    helper zoom into both rendered ports.
-    """
-    target_header_id = "node_editor.node_header:" + to_id
-    # Node layout's current estimated width is 462 graph units. Keep a small
-    # positive gap so the source output pin cannot overlap the target body.
-    horizontal_step = 520.0
-    # Sub-pixel screen deltas are treated as clicks by egui. At the overview
-    # scale 16 graph units are only a few screen points and do not affect
-    # whether the two full Nodes fit in the interaction viewport.
-    tolerance = 16.0
-
-    for _ in range(12):
-        state = client.state()
-        source_position = state["project"]["nodes"][from_id]["ui_position"]
-        target_position = state["project"]["nodes"][to_id]["ui_position"]
-        target_goal = [source_position[0] + horizontal_step, source_position[1]]
-        graph_delta = [
-            target_goal[0] - target_position[0],
-            target_goal[1] - target_position[1],
-        ]
-        if max(abs(graph_delta[0]), abs(graph_delta[1])) <= tolerance:
-            return state
-
-        snapshot, target_header = BASE.reveal_node_editor_component(
-            client, target_header_id
-        )
-        components = {item["id"]: item for item in snapshot["components"]}
-        canvas = components["node_editor.canvas"]
-        scale = float((canvas.get("metadata") or {}).get("scale", 0.0))
-        if not math.isfinite(scale) or scale <= 0.0:
-            raise QaFailure("Node Editor omitted a usable scale for Color Node drag")
-
-        start = client.point(target_header["rect_points"])
-        canvas_rect = canvas["rect_points"]
-        margin = 16.0
-        desired_screen_delta = [graph_delta[0] * scale, graph_delta[1] * scale]
-        screen_delta = [
-            max(
-                canvas_rect["min_x"] + margin - start["x"],
-                min(canvas_rect["max_x"] - margin - start["x"], desired_screen_delta[0]),
-            ),
-            max(
-                canvas_rect["min_y"] + margin - start["y"],
-                min(canvas_rect["max_y"] - margin - start["y"], desired_screen_delta[1]),
-            ),
-        ]
-        if max(abs(screen_delta[0]), abs(screen_delta[1])) < 1.0:
-            raise QaFailure("Color Node header cannot move toward its wire source")
-        end = {
-            "x": start["x"] + screen_delta[0],
-            "y": start["y"] + screen_delta[1],
-        }
-        position_before = list(target_position)
-        client.inject(
-            "drag",
-            {
-                "from": start,
-                "to": end,
-                "coordinate_space": "points",
-                "steps": 12,
-                "button": "primary",
-            },
-            {
-                "component_id": target_header_id,
-                "component_frame": snapshot["frame"],
-                "component_rect_points": target_header["rect_points"],
-                "coordinate_reason": "physically compact Color wire endpoints",
-                "source_node_id": from_id,
-                "target_node_id": to_id,
-                "target_graph_goal": target_goal,
-            },
-        )
-        client.wait_project(
-            "Color wire target Node header drag",
-            lambda project: project
-            if project["nodes"][to_id]["ui_position"] != position_before
-            else None,
-        )
-
-    raise QaFailure("Color wire endpoints did not compact after physical Node drags")
-
-
-def arrange_color_nodes(client, node_ids):
-    """Compact the graph through the real all-graph layout shortcut."""
-    before = client.state()
-    positions_before = {
-        node_id: before["project"]["nodes"][node_id]["ui_position"]
-        for node_id in node_ids
-    }
-    execution_before = before["editor"]["node_editor"]["layout_execution_serial"]
-
-    client.key("l", True, shift=True)
-    client.key("l", False, shift=True)
-
-    def selection_layout_completed():
-        state = client.state()
-        node_editor = state["editor"]["node_editor"]
-        execution = node_editor.get("last_layout_execution")
-        positions_changed = any(
-            state["project"]["nodes"][node_id]["ui_position"]
-            != positions_before[node_id]
-            for node_id in node_ids
-        )
-        if (
-            node_editor["layout_execution_serial"] > execution_before
-            and execution is not None
-            and execution["command"] == "NodeEditorCleanLayoutAll"
-            and execution["scope"] == "all"
-            and execution["changed"] is True
-            and positions_changed
-        ):
-            return state
-        return None
-
-    arranged = client.wait_until(
-        "Color Node all-graph layout",
-        selection_layout_completed,
-    )
-    BASE.assert_history_delta(before, arranged, 1, "Color Node all-graph layout")
-    return arranged
 
 
 def assert_undo_redo_roundtrip(client, description, before, after):
@@ -369,107 +332,9 @@ def assert_undo_redo_roundtrip(client, description, before, after):
     }
 
 
-def assert_topological_layout(state, edges):
-    """Require the clean layout to leave no authored Color wire going left."""
-    project = state["project"]
-    edge_geometry = []
-    for from_id, output, to_id, input_port in edges:
-        if len(matching_connections(project, from_id, output, to_id, input_port)) != 1:
-            raise QaFailure(
-                "final layout lost {}:{} -> {}:{}".format(
-                    from_id, output, to_id, input_port
-                )
-            )
-        source = project["nodes"][from_id]["ui_position"]
-        target = project["nodes"][to_id]["ui_position"]
-        delta_x = float(target[0]) - float(source[0])
-        edge_geometry.append(
-            {
-                "from": from_id,
-                "output": output,
-                "to": to_id,
-                "input": input_port,
-                "source_position": source,
-                "target_position": target,
-                "delta_x": delta_x,
-                "backward": delta_x <= 0.0,
-            }
-        )
-    backward = [edge for edge in edge_geometry if edge["backward"]]
-    if backward:
-        raise QaFailure(
-            "clean layout left backward/non-forward Color wires: {!r}".format(backward)
-        )
-    return {
-        "execution": state["editor"]["node_editor"].get("last_layout_execution"),
-        "positions": {
-            node_id: project["nodes"][node_id]["ui_position"]
-            for node_id in sorted({item for edge in edges for item in (edge[0], edge[2])})
-        },
-        "edges": edge_geometry,
-        "backward_edge_count": len(backward),
-    }
-
-
-def assert_final_ports_interactive(client, pairs):
-    """Pan/zoom only, then prove post-layout pins are real draggable targets."""
-    before = client.state()
-    observations = []
-    for description, source, target in pairs:
-        snapshot, components = BASE.ensure_node_editor_ports_interactive(
-            client, [source, target], max_zooms=14
-        )
-        by_id = {component["id"]: component for component in components}
-        canvas = next(
-            component
-            for component in snapshot["components"]
-            if component["id"] == "node_editor.canvas"
-        )
-        if (canvas.get("metadata") or {}).get("port_interaction_enabled") is not True:
-            raise QaFailure("{} canvas interaction remained disabled".format(description))
-        recorded_ports = []
-        for component_id in (source, target):
-            component = by_id[component_id]
-            metadata = component.get("metadata") or {}
-            rect = component["rect_points"]
-            if not (
-                component.get("visible") is True
-                and component.get("enabled") is True
-                and rect["width"] > 0.0
-                and rect["height"] > 0.0
-                and metadata.get("normal_interaction_enabled") is True
-            ):
-                raise QaFailure(
-                    "{} port {} is not a visible normal-interaction target".format(
-                        description, component_id
-                    )
-                )
-            recorded_ports.append(
-                {
-                    "id": component_id,
-                    "rect_points": rect,
-                    "normal_interaction_enabled": metadata.get(
-                        "normal_interaction_enabled"
-                    ),
-                }
-            )
-        observations.append(
-            {
-                "description": description,
-                "frame": snapshot["frame"],
-                "scale": (canvas.get("metadata") or {}).get("scale"),
-                "ports": recorded_ports,
-            }
-        )
-    after = client.state()
-    if after["project"] != before["project"] or after["history"] != before["history"]:
-        raise QaFailure("post-layout port reveal mutated Project or edit history")
-    return observations
-
-
 def set_node_property(client, node_id, property_key, value, description):
     """Author a Node property through its rendered egui text-entry control."""
-    input_id = node_port(node_id, "input", property_key)
+    input_id = NODE_LAYOUT.node_port(node_id, "input", property_key)
     component_id = "node_editor.property.node:{}:{}".format(node_id, property_key)
     header_id = "node_editor.node_header:" + node_id
     try:
@@ -604,6 +469,7 @@ def run_suite(client):
             compose_created,
         )
     }
+    compose_picker = exercise_node_compose_picker_noop(client, compose_id)
     created = []
     for operation in (
         OPERATIONS[0],
@@ -666,7 +532,7 @@ def run_suite(client):
     # Physical header placement above exists only to make disconnected setup
     # ports reachable.  Once every authored wire exists, the production clean
     # layout owns all Node positions; no Node header is dragged after this.
-    arranged = arrange_color_nodes(
+    arranged = NODE_LAYOUT.clean_layout_all(
         client,
         (
             compose_id,
@@ -677,23 +543,38 @@ def run_suite(client):
             display_id,
             split_id,
         ),
+        label="Color Node",
     )
-    layout = assert_topological_layout(
+    layout = NODE_LAYOUT.assert_forward_layout(
         arranged,
         [(source, output, target, input_port) for source, output, target, input_port, _ in edge_specs],
     )
-    port_interactions = assert_final_ports_interactive(
+    all_layout_node_ids = tuple(sorted(arranged["project"]["nodes"]))
+    rendered_layout = NODE_LAYOUT.assert_rendered_non_overlap(
+        client, all_layout_node_ids
+    )
+    reconnected, post_layout_wire = NODE_LAYOUT.reconnect_wire_after_layout(
+        client,
+        compose_id,
+        "color",
+        linear_a_id,
+        "color",
+        connections[0],
+        all_layout_node_ids,
+    )
+    connections[0] = reconnected
+    port_interactions = NODE_LAYOUT.assert_ports_interactive(
         client,
         (
             (
                 "post-layout branch wire",
-                node_port(linear_a_id, "output", "color"),
-                node_port(mix_id, "input", "a"),
+                NODE_LAYOUT.node_port(linear_a_id, "output", "color"),
+                NODE_LAYOUT.node_port(mix_id, "input", "a"),
             ),
             (
                 "post-layout final wire",
-                node_port(display_id, "output", "color"),
-                node_port(split_id, "input", "color"),
+                NODE_LAYOUT.node_port(display_id, "output", "color"),
+                NODE_LAYOUT.node_port(split_id, "input", "color"),
             ),
         ),
     )
@@ -743,7 +624,7 @@ def run_suite(client):
         display_id,
     }
     final_owners = BASE.validate_canonical_ownership(final["project"])
-    expected_owner = "composition:" + BASE.COMPOSITION
+    expected_owner = "track:" + FIXTURE_TRACK
     color_owners = {
         node_id: final_owners["node_owners"].get(node_id)
         for node_id in sorted(expected_color_nodes)
@@ -758,7 +639,7 @@ def run_suite(client):
         raise QaFailure("Node positions changed after the final clean-layout command")
     if final["history"]["redo_depth"] != 0:
         raise QaFailure("final Color validation left redo history")
-    verified_mutation_count = len(creation_events) + len(edge_specs) + 2 + 1
+    verified_mutation_count = len(creation_events) + len(edge_specs) + 2 + 1 + 2
     history_delta = (
         final["history"]["undo_depth"] - initial["history"]["undo_depth"]
     )
@@ -777,6 +658,11 @@ def run_suite(client):
         == len(connections),
         "positions_unchanged_after_clean_layout": final_positions
         == layout["positions"],
+        "rendered_node_overlap_count": len(rendered_layout["overlaps"]),
+        "post_layout_wire_reconnected": post_layout_wire[
+            "reconnected_connection_id"
+        ]
+        == connections[0]["id"],
     }
     if not final_validation["all_connection_ids_unique"]:
         raise QaFailure("Color graph contains duplicate authored connection IDs")
@@ -806,7 +692,10 @@ def run_suite(client):
         "connections": connections,
         "creation_history": creation_events,
         "history_roundtrips": history_roundtrips,
+        "compose_node_picker": compose_picker,
         "layout": layout,
+        "rendered_layout": rendered_layout,
+        "post_layout_wire_interaction": post_layout_wire,
         "post_layout_port_interactions": port_interactions,
         "final_validation": final_validation,
         "final_history": {

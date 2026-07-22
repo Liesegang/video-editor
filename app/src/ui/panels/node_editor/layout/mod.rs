@@ -25,7 +25,7 @@ pub(in crate::ui::panels::node_editor) use directional::{
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use node_geometry::estimated_merge_node_width;
 pub(in crate::ui::panels::node_editor) use node_geometry::{
-    estimated_node_size, estimated_node_width,
+    estimated_node_size, estimated_node_width, node_body_width,
 };
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use ranking::canonical_edges;

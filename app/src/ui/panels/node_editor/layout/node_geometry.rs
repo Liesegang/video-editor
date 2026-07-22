@@ -3,12 +3,48 @@ use library::model::{GeneratorContent, Node, NodeContent, Project};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    input_definitions, merge_layer_rows, output_definitions, GraphItem, MERGE_BODY_WIDTH,
-    NODE_BODY_WIDTH, NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
+    input_definitions, merge_layer_rows, output_definitions, GraphItem, COMPOSE_COLOR_BODY_WIDTH,
+    MERGE_BODY_WIDTH, NODE_BODY_WIDTH, NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
 };
 
+/// Conservative non-body allowance for the input controls, output label,
+/// pin sockets, frame margins, and inter-lane spacing used by Snarl's Coil
+/// layout. Compose has a compact aggregate body, but its five authored input
+/// rows still determine the wider input lane.
+const NODE_HORIZONTAL_CHROME_WIDTH: f32 = 70.0;
+const COMPOSE_COLOR_HORIZONTAL_CHROME_WIDTH: f32 = 224.0;
+
 pub(in crate::ui::panels::node_editor) fn estimated_node_width() -> f32 {
-    (NODE_BODY_WIDTH + PORT_LABEL_WIDTH * 2.0 + 70.0).max(NODE_HEADER_WIDTH + 30.0)
+    estimated_node_width_for_body(NODE_BODY_WIDTH, NODE_HORIZONTAL_CHROME_WIDTH)
+}
+
+fn estimated_node_width_for_body(body_width: f32, horizontal_chrome_width: f32) -> f32 {
+    (body_width + PORT_LABEL_WIDTH * 2.0 + horizontal_chrome_width).max(NODE_HEADER_WIDTH + 30.0)
+}
+
+pub(in crate::ui::panels::node_editor) const fn node_body_width(content: &NodeContent) -> f32 {
+    if matches!(
+        content,
+        NodeContent::Color(library::model::ColorContent::Compose)
+    ) {
+        COMPOSE_COLOR_BODY_WIDTH
+    } else {
+        NODE_BODY_WIDTH
+    }
+}
+
+fn estimated_node_width_for_content(content: &NodeContent) -> f32 {
+    if matches!(
+        content,
+        NodeContent::Color(library::model::ColorContent::Compose)
+    ) {
+        estimated_node_width_for_body(
+            COMPOSE_COLOR_BODY_WIDTH,
+            COMPOSE_COLOR_HORIZONTAL_CHROME_WIDTH,
+        )
+    } else {
+        estimated_node_width()
+    }
 }
 
 /// Conservative allowance for Snarl's pin lanes, frame margins, and stroke
@@ -68,7 +104,7 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
         }) {
             estimated_merge_node_width()
         } else {
-            estimated_node_width()
+            content.map_or_else(estimated_node_width, estimated_node_width_for_content)
         },
         base_height + pin_rows.saturating_sub(4) as f32 * PORT_ROW_HEIGHT,
     )

@@ -22,7 +22,7 @@ use library::model::project::{PortAddress, PortDataType, PortDirection};
 #[cfg(test)]
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 #[cfg(test)]
-use library::model::{BlendMode, GeneratorContent, ValueContent};
+use library::model::{BlendMode, ColorContent, GeneratorContent, ValueContent};
 use library::model::{Clip, Node, NodeContainer, NodeContent, NodeGraphBundle, Project};
 #[cfg(test)]
 use library::plugin::{
@@ -90,7 +90,7 @@ use types::{
     AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
     AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
     AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP,
-    CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
+    COMPOSE_COLOR_BODY_WIDTH, CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
     CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, DETACHED_GRAPH_NODE_GAP,
     EMBEDDED_PORT_LABEL_INSET, INLINE_CONTROL_WIDTH, MERGE_BODY_WIDTH, MIN_CONTAINER_SIZE,
     NODE_BODY_WIDTH, NODE_HEADER_WIDTH, NODE_REPARENT_DRAG_THRESHOLD,
@@ -118,7 +118,7 @@ mod commands;
 use commands::{NodeEdit, QueuedNodeEdit};
 mod layout;
 
-use layout::{AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit};
+use layout::{node_body_width, AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit};
 mod viewer;
 
 use viewer::ProjectNodeViewer;

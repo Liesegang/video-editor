@@ -1,8 +1,8 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::evaluate_node_property;
 use crate::ui::panels::node_editor::{
-    bounded_non_selectable_label, clipped_qa_rect, node_property_time, property_label,
-    qa_rect_metadata, NodeEdit, INLINE_CONTROL_WIDTH,
+    bounded_non_selectable_label, clipped_qa_rect, node_property_time, qa_rect_metadata, NodeEdit,
+    COMPOSE_COLOR_BODY_WIDTH,
 };
 use crate::ui::widgets::color_value_picker::color_value_picker;
 use eframe::egui;
@@ -19,19 +19,6 @@ impl ProjectNodeViewer<'_> {
         node_id: Uuid,
         operation: ColorContent,
     ) {
-        ui.horizontal(|ui| {
-            property_label(ui, "Category");
-            bounded_non_selectable_label(ui, "Color", INLINE_CONTROL_WIDTH, egui::Align::LEFT);
-        });
-        ui.horizontal(|ui| {
-            property_label(ui, "Operation");
-            bounded_non_selectable_label(
-                ui,
-                operation.label(),
-                INLINE_CONTROL_WIDTH,
-                egui::Align::LEFT,
-            );
-        });
         if operation == ColorContent::Compose {
             self.show_compose_picker(ui, node_id);
         }
@@ -95,17 +82,7 @@ impl ProjectNodeViewer<'_> {
         });
         let resolved_color = resolved_color.flatten();
         let color = resolved_color.as_ref().unwrap_or(&authored_color);
-        ui.horizontal(|ui| {
-            property_label(
-                ui,
-                if resolved_color.is_some() {
-                    "Result"
-                } else if read_only {
-                    "Fallback"
-                } else {
-                    "Picker"
-                },
-            );
+        ui.vertical_centered(|ui| {
             let mut picker = ui
                 .add_enabled_ui(!read_only, |ui| {
                     color_value_picker(
@@ -117,8 +94,21 @@ impl ProjectNodeViewer<'_> {
                 .inner;
             let unclipped_rect = *self.to_global * picker.response.rect;
             let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
+            let component_id = format!("node_editor.color_picker.node:{node_id}:compose");
+            let popup_open = picker.geometry.is_some();
+            #[cfg(test)]
+            {
+                crate::ui::panels::node_editor::capture_test_rect(&component_id, rect);
+                crate::ui::panels::node_editor::capture_test_metadata(
+                    &component_id,
+                    &serde_json::json!({
+                        "presentation": "compact_swatch_status",
+                        "popup_open": popup_open,
+                    }),
+                );
+            }
             crate::qa::register_component_with_metadata(
-                format!("node_editor.color_picker.node:{node_id}:compose"),
+                component_id,
                 "node_editor_compose_color_picker",
                 rect,
                 picker.response.enabled(),
@@ -130,6 +120,9 @@ impl ProjectNodeViewer<'_> {
                     "display_space": "srgb",
                     "transform_authority": "ruvie-color-management",
                     "grouped_properties": ["space", "r", "g", "b", "a"],
+                    "presentation": "compact_swatch_status",
+                    "body_width_graph_points": COMPOSE_COLOR_BODY_WIDTH,
+                    "popup_open": popup_open,
                     "linked_inputs": linked_inputs.iter().map(|(port, source)| serde_json::json!({
                         "port": port,
                         "source": source,
@@ -154,17 +147,30 @@ impl ProjectNodeViewer<'_> {
                 edit,
                 !read_only && picker.finished,
             );
+            let status = if resolved_color.is_some() {
+                "Linked result"
+            } else if read_only {
+                "Fallback"
+            } else {
+                authored_color.color_space().as_str()
+            };
+            let status_response = bounded_non_selectable_label(
+                ui,
+                status,
+                COMPOSE_COLOR_BODY_WIDTH,
+                egui::Align::Center,
+            );
             if read_only {
-                bounded_non_selectable_label(
-                    ui,
-                    format!("linked result: {}", linked_ports.join(", ")),
-                    INLINE_CONTROL_WIDTH,
-                    egui::Align::LEFT,
-                )
-                .on_hover_text(if resolved_color.is_some() {
-                    "Read-only runtime result from the connected ports; edit their source Nodes."
+                status_response.on_hover_text(if resolved_color.is_some() {
+                    format!(
+                        "Read-only runtime result from connected ports ({}); edit their source Nodes.",
+                        linked_ports.join(", ")
+                    )
                 } else {
-                    "The connected runtime result is unavailable at this time; this swatch is only the authored fallback."
+                    format!(
+                        "Runtime result for connected ports ({}) is unavailable; this swatch is the authored fallback.",
+                        linked_ports.join(", ")
+                    )
                 });
             }
         });
