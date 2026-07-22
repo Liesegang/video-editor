@@ -19,6 +19,8 @@ mod graph;
 
 use graph::{actual_node_edges, semantic_edge_cmp, ActualNodeEdge, BranchGraph};
 
+use super::{immediate_child_rects, AutoLayoutPlan};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) enum BranchDirection {
     Upstream,
@@ -464,7 +466,7 @@ fn graph_layout_positions(
         }
     }
 
-    let fixed_obstacles = direct_owner_node_ids(project, request.direct_owner)
+    let mut fixed_obstacles = direct_owner_node_ids(project, request.direct_owner)
         .into_iter()
         .filter(|node_id| !eligible_set.contains(node_id))
         .filter_map(|node_id| {
@@ -475,6 +477,14 @@ fn graph_layout_positions(
                 .filter(|geometry| geometry.is_valid())
         })
         .collect::<Vec<_>>();
+    fixed_obstacles.extend(
+        immediate_child_rects(project, &AutoLayoutPlan::default(), request.direct_owner)
+            .into_iter()
+            .map(|rect| NodeLayoutGeometry {
+                position: [rect.min.x, rect.min.y],
+                size: [rect.width(), rect.height()],
+            }),
+    );
     let mut planned_geometry = BTreeMap::<Uuid, NodeLayoutGeometry>::new();
     let mut result = BTreeMap::new();
     let mut ordered_eligible = eligible.to_vec();

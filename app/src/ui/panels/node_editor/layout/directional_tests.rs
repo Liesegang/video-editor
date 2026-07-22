@@ -309,6 +309,108 @@ fn container_output_does_not_create_a_hidden_structural_helper_edge() {
 }
 
 #[test]
+fn layout_keeps_direct_nodes_clear_of_immediate_child_containers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new();
+    let composition_owner = NodeContainer::Composition(fixture.composition_id);
+    let track_owner = NodeContainer::Track(fixture.track_id);
+    {
+        let track = fixture
+            .project
+            .get_track_mut(fixture.track_id)
+            .ok_or("fixture Track is missing")?;
+        track.ui_position = [220.0, 40.0];
+        track.ui_size = [400.0, 300.0];
+    }
+    let composition_source = fixture.add_node(
+        composition_owner,
+        32,
+        "Composition source",
+        [80.0, 80.0],
+        [100.0, 80.0],
+    );
+    let composition_sink = fixture.add_node(
+        composition_owner,
+        33,
+        "Composition sink",
+        [80.0, 220.0],
+        [100.0, 80.0],
+    );
+    fixture.connect(composition_source, composition_sink, 0);
+    let composition_plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            composition_owner,
+            composition_source,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )?;
+    let track_rect = immediate_child_rects(
+        &fixture.project,
+        &AutoLayoutPlan::default(),
+        composition_owner,
+    )
+    .into_iter()
+    .next()
+    .ok_or("Composition child Track rectangle is missing")?;
+    let composition_sink_rect = planned_geometry(&fixture, &composition_plan, composition_sink);
+    let composition_sink_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            composition_sink_rect.position[0],
+            composition_sink_rect.position[1],
+        ),
+        egui::vec2(composition_sink_rect.size[0], composition_sink_rect.size[1]),
+    );
+    assert!(!composition_sink_rect.intersects(track_rect));
+    assert!(composition_sink_rect.top() >= track_rect.bottom() + V_GAP);
+
+    let mut clip = Clip::new("Clip obstacle", 0.0, 5.0);
+    clip.ui_position = [420.0, 450.0];
+    clip.ui_size = [360.0, 260.0];
+    let clip_id = clip.id;
+    fixture.project.add_clip(clip);
+    fixture
+        .project
+        .attach_clip_to_track(fixture.track_id, clip_id)?;
+    let track_source = fixture.add_node(
+        track_owner,
+        34,
+        "Track source",
+        [280.0, 500.0],
+        [100.0, 80.0],
+    );
+    let track_sink = fixture.add_node(track_owner, 35, "Track sink", [280.0, 620.0], [100.0, 80.0]);
+    fixture.connect(track_source, track_sink, 0);
+    let track_plan = plan_directional_layout(
+        &fixture.project,
+        &fixture.request(
+            track_owner,
+            track_source,
+            TestSelection::ALL,
+            BranchDirection::Downstream,
+            LayoutAxis::Horizontal,
+            DirectionalLayoutMode::Layout,
+        ),
+    )?;
+    let clip_rect =
+        immediate_child_rects(&fixture.project, &AutoLayoutPlan::default(), track_owner)
+            .into_iter()
+            .next()
+            .ok_or("Track child Clip rectangle is missing")?;
+    let track_sink_rect = planned_geometry(&fixture, &track_plan, track_sink);
+    let track_sink_rect = egui::Rect::from_min_size(
+        egui::pos2(track_sink_rect.position[0], track_sink_rect.position[1]),
+        egui::vec2(track_sink_rect.size[0], track_sink_rect.size[1]),
+    );
+    assert!(!track_sink_rect.intersects(clip_rect));
+    assert!(track_sink_rect.top() >= clip_rect.bottom() + V_GAP);
+    Ok(())
+}
+
+#[test]
 fn cycles_share_an_scc_and_vertical_layout_still_preserves_ltr_flow() {
     let mut fixture = Fixture::new();
     let owner = NodeContainer::Composition(fixture.composition_id);
