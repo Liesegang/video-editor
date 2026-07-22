@@ -143,6 +143,130 @@ fn dense_text_vertical_distribute_rejects_before_overlapping_sibling_clip(
 }
 
 #[test]
+fn exact_vertical_distribute_can_grow_owner_hierarchy_and_undo_once(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = NestedFixture::new()?;
+    let before = fixture.project.clone();
+    let clip_before = container_geometry(&fixture.project, NodeContainer::Clip(fixture.clip_id))
+        .ok_or("nested fixture Clip geometry is missing")?;
+    let track_before = container_geometry(&fixture.project, NodeContainer::Track(fixture.track_id))
+        .ok_or("nested fixture Track geometry is missing")?;
+    let composition_before = container_geometry(
+        &fixture.project,
+        NodeContainer::Composition(fixture.composition_id),
+    )
+    .ok_or("nested fixture Composition geometry is missing")?;
+    let mut project = fixture.project;
+    let mut state = NodeEditorState::default();
+    let mut history = HistoryManager::new();
+    history.push_project_state(project.clone());
+    let history_before = (history.undo_depth(), history.redo_depth());
+    let modifiers = egui::Modifiers {
+        alt: true,
+        ..egui::Modifiers::NONE
+    };
+
+    handle_directional_layout_outputs(
+        &project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Start,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    );
+    let update = handle_directional_layout_outputs(
+        &project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Update,
+            fixture.source,
+            egui::pos2(402.0, 500.0),
+            Some(LayoutSwipeAxis::Vertical),
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    );
+    assert!(update.commit.is_none());
+    let preview = state
+        .directional_layout_swipe
+        .as_ref()
+        .ok_or("exact vertical distribute rejected before preview")?;
+    let sink_preview = preview
+        .preview_positions
+        .get(&fixture.sink)
+        .copied()
+        .ok_or("exact vertical distribute omitted its downstream sink")?;
+    let clip_bottom = clip_before.0[1] + clip_before.1[1];
+    let sink_height = estimated_node_size(&project, fixture.sink).y;
+    assert!(sink_preview[1] + sink_height > clip_bottom);
+    assert_eq!(project, before);
+    assert_eq!((history.undo_depth(), history.redo_depth()), history_before);
+
+    let prepared = handle_directional_layout_outputs(
+        &project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[output(intent(
+            LayoutSwipePhase::Commit,
+            fixture.source,
+            egui::pos2(402.0, 500.0),
+            Some(LayoutSwipeAxis::Vertical),
+            modifiers,
+        ))],
+        &mut state,
+        &mut history,
+    )
+    .commit
+    .ok_or("exact vertical distribute did not prepare its commit")?;
+    assert_eq!(prepared.gesture.preview_positions, prepared.positions);
+    let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, prepared);
+    assert!(
+        result.changed,
+        "safe exact growth rejected: {:?}",
+        state
+            .last_directional_layout_swipe
+            .as_ref()
+            .and_then(|execution| execution.reason.as_deref())
+    );
+    assert_eq!(history.undo_depth(), history_before.0 + 1);
+    assert_eq!(history.redo_depth(), 0);
+    assert!(
+        container_geometry(&project, NodeContainer::Clip(fixture.clip_id))
+            .is_some_and(|geometry| geometry.1[1] > clip_before.1[1])
+    );
+    assert!(
+        container_geometry(&project, NodeContainer::Track(fixture.track_id))
+            .is_some_and(|geometry| geometry.1[1] > track_before.1[1])
+    );
+    assert!(
+        container_geometry(&project, NodeContainer::Composition(fixture.composition_id))
+            .is_some_and(|geometry| geometry.1[1] > composition_before.1[1])
+    );
+    assert!(!container_hierarchy_needs_reflow(
+        &project,
+        fixture.composition_id
+    ));
+    assert_eq!(
+        history
+            .undo(&project)
+            .ok_or("exact vertical distribute commit was not undoable")?,
+        before
+    );
+    Ok(())
+}
+
+#[test]
 fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fixture = NestedFixture::new()?;

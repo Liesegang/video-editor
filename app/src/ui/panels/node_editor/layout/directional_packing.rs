@@ -103,7 +103,12 @@ pub(super) fn pack_layout_level_blocks(
             let top = if can_reflow_vertical {
                 choose_block_top(request, &entries, block_height, owner_bounds, &forbidden)
             } else {
-                exact_constraint_top(&entries, owner_bounds, &forbidden)
+                // Exact Align/Distribute coordinates may legitimately extend
+                // beyond the owner's current authored bounds. The atomic
+                // commit grows the owner hierarchy and then rejects any new
+                // sibling/container violation; rejecting here would prevent
+                // every otherwise-safe growth from ever reaching that guard.
+                exact_constraint_top(&entries, &forbidden)
                     .ok_or(super::DirectionalLayoutError::ConstraintCollision)?
             };
             for entry in entries {
@@ -316,17 +321,10 @@ fn merged_forbidden_intervals(
     merged
 }
 
-fn exact_constraint_top(
-    entries: &[LevelBlockEntry],
-    owner_bounds: Option<[f32; 2]>,
-    forbidden: &[OpenInterval],
-) -> Option<f32> {
+fn exact_constraint_top(entries: &[LevelBlockEntry], forbidden: &[OpenInterval]) -> Option<f32> {
     let entry = entries.first()?;
     let top = entry.preferred_y;
-    let bottom = top + entry.size[1];
-    let inside = owner_bounds
-        .is_none_or(|[owner_top, owner_bottom]| top >= owner_top && bottom <= owner_bottom);
-    (inside && !is_forbidden(forbidden, top)).then_some(top)
+    (!is_forbidden(forbidden, top)).then_some(top)
 }
 
 fn choose_block_top(
