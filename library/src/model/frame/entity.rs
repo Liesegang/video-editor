@@ -43,7 +43,9 @@ pub struct StyleConfig {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum SkSLColorDomain {
-    /// Scene-linear values in the exact working space of the current Project.
+    /// Scene-linear, straight-alpha RGBA values in the exact working space of
+    /// the current Project. The renderer premultiplies RGB by alpha exactly
+    /// once before the values enter Skia's premultiplied working storage.
     ProjectWorkingLinear,
 }
 

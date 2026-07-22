@@ -214,7 +214,7 @@ fn project_surface_converts_authored_background_once_when_contract_changes() {
 }
 
 #[test]
-fn project_working_sksl_retains_declared_linear_values() {
+fn project_working_sksl_premultiplies_once_and_terminals_from_straight_values() {
     let config = "working-sksl";
     let mut renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
     renderer
@@ -223,7 +223,7 @@ fn project_working_sksl_retains_declared_linear_values() {
 
     let output = renderer
         .rasterize_sksl_layer(SkSLRasterRequest {
-            shader_code: "half4 main(float2 p) { return half4(0.5, 0.25, 0.75, 1.0); }",
+            shader_code: "half4 main(float2 p) { return half4(0.5, 0.25, 0.75, 0.5); }",
             resolution: (1.0, 1.0),
             time: 0.0,
             transform: &Affine2D::IDENTITY,
@@ -234,7 +234,41 @@ fn project_working_sksl_retains_declared_linear_values() {
         panic!("declared Project-working SkSL must retain its typed working output");
     };
     assert_eq!(output.identity(), &working_identity(config));
-    assert_pixel_near(output.pixels().pixels()[0], [0.5, 0.25, 0.75, 1.0]);
+    assert_pixel_near(output.pixels().pixels()[0], [0.25, 0.125, 0.375, 0.5]);
+
+    let terminal = BuiltinColorTransform
+        .create_cpu_processor(&ColorTransformRequest::working_to_output(
+            LINEAR_SRGB_SPACE_ID,
+            SRGB_SPACE_ID,
+        ))
+        .unwrap();
+    assert_eq!(
+        output.to_straight_rgba8(terminal.as_ref()).unwrap(),
+        [188, 137, 225, 128]
+    );
+}
+
+#[test]
+fn project_working_sksl_premultiplication_preserves_extended_and_negative_rgb() {
+    let config = "working-sksl-extended";
+    let mut renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+
+    let output = renderer
+        .rasterize_sksl_layer(SkSLRasterRequest {
+            shader_code: "half4 main(float2 p) { return half4(-0.5, 2.0, 0.25, 0.5); }",
+            resolution: (1.0, 1.0),
+            time: 0.0,
+            transform: &Affine2D::IDENTITY,
+            color_domain: SkSLColorDomain::ProjectWorkingLinear,
+        })
+        .unwrap();
+    let RenderOutput::Working(output) = output else {
+        panic!("declared Project-working SkSL must retain its typed working output");
+    };
+    assert_pixel_near(output.pixels().pixels()[0], [-0.25, 1.0, 0.125, 0.5]);
 }
 
 #[test]

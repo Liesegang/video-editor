@@ -106,10 +106,10 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
             content: FrameContent::SkSL {
                 shader,
                 resolution: (res_x as f32, res_y as f32),
-                // The bundled native generator's shader ABI is scene-linear
-                // in the current Project working space. This is explicit on
-                // every evaluated frame so other shader domains can be added
-                // later without relying on the active render target.
+                // The bundled native generator's shader ABI is scene-linear,
+                // straight-alpha RGBA in the current Project working space.
+                // This is explicit on every evaluated frame so the renderer
+                // can adapt it once to Skia's premultiplied storage contract.
                 color_domain: SkSLColorDomain::ProjectWorkingLinear,
                 effects: Vec::new(),
                 transform: Default::default(),

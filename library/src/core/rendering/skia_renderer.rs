@@ -21,13 +21,22 @@ use log::debug;
 
 use skia_safe::{
     AlphaType, Canvas, ColorType, CubicResampler, ISize, ImageInfo, Matrix, Paint, Point,
-    SamplingOptions, Surface,
+    SamplingOptions, Shader, Surface, runtime_effect::ChildPtr,
 };
 
 mod legacy_backplate;
 mod paint;
 
 use paint::{PaintFactory, StrokeRenderConfig};
+
+const SKSL_STRAIGHT_TO_PREMULTIPLIED: &str = r#"
+uniform shader straight_input;
+
+half4 main(float2 position) {
+    half4 straight = straight_input.eval(position);
+    return half4(straight.rgb * straight.a, straight.a);
+}
+"#;
 
 pub struct SkiaRenderer {
     width: u32,
@@ -37,6 +46,7 @@ pub struct SkiaRenderer {
     surface_contract: SkiaSurfaceContract,
     group_surfaces: Vec<GroupSurface>,
     blend_runtime: BlendRuntime,
+    sksl_straight_to_premultiplied: Option<skia_safe::RuntimeEffect>,
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
@@ -149,6 +159,7 @@ impl SkiaRenderer {
             surface_contract,
             group_surfaces: Vec::new(),
             blend_runtime: BlendRuntime::new(),
+            sksl_straight_to_premultiplied: None,
             gpu_context,
             sharing_handle: None,
             sharing_hwnd: None,
@@ -203,6 +214,41 @@ impl SkiaRenderer {
             self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
             &self.surface_contract,
         )
+    }
+
+    fn premultiply_straight_sksl_shader(
+        &mut self,
+        straight_shader: Shader,
+    ) -> Result<Shader, LibraryError> {
+        if self.sksl_straight_to_premultiplied.is_none() {
+            self.sksl_straight_to_premultiplied = Some(
+                skia_safe::RuntimeEffect::make_for_shader(SKSL_STRAIGHT_TO_PREMULTIPLIED, None)
+                    .map_err(|error| {
+                        LibraryError::Render(format!(
+                            "Failed to compile the straight-alpha SkSL storage adapter: {error}"
+                        ))
+                    })?,
+            );
+        }
+        let effect = self
+            .sksl_straight_to_premultiplied
+            .as_ref()
+            .ok_or_else(|| {
+                LibraryError::Render(
+                    "Straight-alpha SkSL storage adapter remained unavailable".to_string(),
+                )
+            })?;
+        effect
+            .make_shader(
+                skia_safe::Data::new_copy(&[]),
+                &[ChildPtr::from(straight_shader)],
+                None,
+            )
+            .ok_or_else(|| {
+                LibraryError::Render(
+                    "Failed to adapt straight-alpha SkSL to premultiplied storage".to_string(),
+                )
+            })
     }
 
     fn replace_surface_contract(
@@ -566,11 +612,16 @@ impl Renderer for SkiaRenderer {
 
             let uniforms = skia_safe::Data::new_copy(&data);
 
-            let shader = effect
-                .make_shader(uniforms, &[], None)
-                .ok_or(LibraryError::Render(
-                    "Failed to create SkSL shader".to_string(),
-                ))?;
+            let straight_shader =
+                effect
+                    .make_shader(uniforms, &[], None)
+                    .ok_or(LibraryError::Render(
+                        "Failed to create SkSL shader".to_string(),
+                    ))?;
+            // ProjectWorkingLinear is a straight-alpha ABI. Skia assumes every
+            // shader result is already premultiplied, so adapt it exactly once
+            // without clipping negative or greater-than-one working RGB.
+            let shader = self.premultiply_straight_sksl_shader(straight_shader)?;
 
             let mut paint = Paint::default();
             paint.set_shader(shader);
