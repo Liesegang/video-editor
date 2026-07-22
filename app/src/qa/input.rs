@@ -27,6 +27,7 @@ pub enum QaPointerButton {
 pub enum QaKey {
     A,
     L,
+    T,
     Z,
     Space,
     Escape,
@@ -39,6 +40,7 @@ impl From<QaKey> for egui::Key {
         match value {
             QaKey::A => Self::A,
             QaKey::L => Self::L,
+            QaKey::T => Self::T,
             QaKey::Z => Self::Z,
             QaKey::Space => Self::Space,
             QaKey::Escape => Self::Escape,

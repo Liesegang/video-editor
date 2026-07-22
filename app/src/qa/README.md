@@ -217,10 +217,14 @@ Run the focused inherited-Time presentation suite with:
 python3 scripts/qa-implicit-time-e2e.py --spawn
 ```
 
-It hovers and selects an implicitly timed Node, verifies the dashed context
-wire and Inspector/Node badges without Project or history changes, then creates
-an explicit Time wire by coordinate drag and removes it through the physical
-wire menu. Undo and disconnect must both restore the inherited presentation.
+It selects an implicitly timed Node through a real screen-coordinate click,
+then holds `T` through the keyboard endpoint and verifies that every inherited
+Time relationship appears as a dashed, non-interactive context wire. Releasing
+`T` must hide the overlay immediately; holding it while the pointer is over a
+different panel must not reveal anything. The suite also verifies the Node
+badge without Project or history changes, then creates an explicit Time wire
+by coordinate drag and removes it through the physical wire menu. Undo and
+disconnect must both restore the hold-to-reveal inherited presentation.
 The suite re-queries component rectangles after every layout-changing tab or
 canvas transition and is also part of the full QA runner. A physical wire
 topology edit can invoke the existing Snarl Clip-layout canonicalization; the

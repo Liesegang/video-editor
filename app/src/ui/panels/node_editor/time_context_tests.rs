@@ -87,14 +87,21 @@ fn render_time_context_test_graph(
 fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
     let (mut project, composition_id, _, clip_id, solid_id, merge_id) = fixture();
     let initial = project.clone();
-    let selected_merge = [TimeContextNode {
-        node_id: merge_id,
-        selected: true,
-        hovered: false,
-    }];
+    let visible_nodes = [
+        TimeContextNode {
+            node_id: solid_id,
+            selected: false,
+            hovered: false,
+        },
+        TimeContextNode {
+            node_id: merge_id,
+            selected: true,
+            hovered: false,
+        },
+    ];
 
     let (implicit_count, physical_before) =
-        render_time_context_test_graph(&project, composition_id, &selected_merge);
+        render_time_context_test_graph(&project, composition_id, &visible_nodes);
     assert_eq!(implicit_count, 1);
     let wire_id = format!("node_editor.time_context_wire.node:{merge_id}");
     assert!(test_rect(&wire_id).is_some_and(|rect| rect.is_positive()));
@@ -104,6 +111,9 @@ fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
     assert_eq!(wire_metadata["editable"], false);
     assert_eq!(wire_metadata["hit_testable"], false);
     assert_eq!(wire_metadata["wire_collection"], "context_only");
+    assert_eq!(wire_metadata["trigger"], "hold_key");
+    assert_eq!(wire_metadata["held"], true);
+    assert_eq!(wire_metadata["key"], "T");
     assert_eq!(wire_metadata["selected"], true);
     let implicit_node_rect =
         test_rect(&format!("node_editor.node:{merge_id}")).expect("implicit Merge node geometry");
@@ -137,7 +147,7 @@ fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
         )
         .unwrap();
     let (explicit_count, physical_explicit) =
-        render_time_context_test_graph(&project, composition_id, &selected_merge);
+        render_time_context_test_graph(&project, composition_id, &visible_nodes);
     assert_eq!(explicit_count, 0, "authored Time hides the context wire");
     assert!(test_rect(&wire_id).is_none());
     assert_eq!(physical_explicit.len(), physical_before.len() + 1);
@@ -150,7 +160,7 @@ fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
 
     assert!(project.disconnect_connection(connection_id));
     let (restored_count, physical_restored) =
-        render_time_context_test_graph(&project, composition_id, &selected_merge);
+        render_time_context_test_graph(&project, composition_id, &visible_nodes);
     assert_eq!(restored_count, 1);
     assert_eq!(physical_restored, physical_before);
     assert_eq!(project, initial);

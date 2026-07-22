@@ -26,19 +26,19 @@ use super::{
     capture_container_resize_before_canvas, captured_snarl_drag_node, captured_snarl_drag_target,
     collect_layout_edits_for_selection, compute_auto_layout, compute_full_composition_layout,
     container_inactive, container_resize_interactions, final_node_positions, finish_node_reparent,
-    flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow, layout_toolbar,
-    native_variadic_merge_target, node_can_splice_connection, node_drop_intents,
-    node_editor_canvas_metadata, node_editor_details_visible,
+    flush_pending_continuous_edit, handle_context_menu, implicit_time_overlay_requested,
+    layout_needs_reflow, layout_toolbar, native_variadic_merge_target, node_can_splice_connection,
+    node_drop_intents, node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_snarl_style_for, paint_container_foreground,
     port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
     push_history_snapshot, record_node_reparent_origins, register_container_chrome,
-    register_implicit_time_context_wires, register_rendered_edges, register_reparent_drop_targets,
-    rendered_edge_at_position, select_logical_item, selected_container_owners,
-    selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
-    wire_port_drop_rect, wire_secondary_click_hit, AutoLayoutScope, GraphItem,
-    NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer, QueuedNodeEdit,
-    ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
-    WireInteractionFrame, WireSecondaryClickHit,
+    register_implicit_time_context_wires, register_implicit_time_overlay, register_rendered_edges,
+    register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
+    selected_container_owners, selection_target_for_owner, show_wire_context_menu,
+    splice_node_for_release, wire_interactions, wire_port_drop_rect, wire_secondary_click_hit,
+    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
+    ProjectNodeViewer, QueuedNodeEdit, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection,
+    TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -369,47 +369,50 @@ pub fn node_editor_panel(
                 to_global,
             });
         rendered_edges = register_rendered_edges(&project, &rendered_ports, canvas_clip, overview);
-        let hovered_node_id = ui
-            .input(|input| input.pointer.hover_pos())
-            .filter(|position| canvas_clip.contains(*position))
-            .and_then(|position| {
-                let graph_position = to_global.inverse() * position;
-                rendered_node_rects.lock().ok().and_then(|node_rects| {
+        if implicit_time_overlay_requested(ui.ctx(), canvas_clip) {
+            let hovered_node_id = ui
+                .input(|input| input.pointer.hover_pos())
+                .filter(|position| canvas_clip.contains(*position))
+                .and_then(|position| {
+                    let graph_position = to_global.inverse() * position;
+                    rendered_node_rects.lock().ok().and_then(|node_rects| {
+                        node_rects
+                            .iter()
+                            .filter(|(_, rect)| rect.contains(graph_position))
+                            .min_by_key(|(node_id, _)| **node_id)
+                            .map(|(node_id, _)| *node_id)
+                    })
+                });
+            let selected_node_ids = selected_nodes
+                .iter()
+                .chain(snarl_selected_node_ids.iter())
+                .copied()
+                .collect::<HashSet<_>>();
+            let mut time_context_nodes = rendered_node_rects
+                .lock()
+                .map(|node_rects| {
                     node_rects
-                        .iter()
-                        .filter(|(_, rect)| rect.contains(graph_position))
-                        .min_by_key(|(node_id, _)| **node_id)
-                        .map(|(node_id, _)| *node_id)
+                        .keys()
+                        .copied()
+                        .map(|node_id| TimeContextNode {
+                            node_id,
+                            selected: selected_node_ids.contains(&node_id),
+                            hovered: hovered_node_id == Some(node_id),
+                        })
+                        .collect::<Vec<_>>()
                 })
-            });
-        let mut time_context_by_node = HashMap::<Uuid, (bool, bool)>::new();
-        for node_id in selected_nodes
-            .iter()
-            .chain(snarl_selected_node_ids.iter())
-            .copied()
-        {
-            time_context_by_node.entry(node_id).or_default().0 = true;
+                .unwrap_or_default();
+            time_context_nodes.sort_by_key(|node| node.node_id);
+            let context_wire_painter = ui.painter().with_clip_rect(canvas_clip);
+            let wire_count = register_implicit_time_context_wires(
+                &project,
+                &rendered_ports,
+                &time_context_nodes,
+                canvas_clip,
+                &context_wire_painter,
+            );
+            register_implicit_time_overlay(canvas_clip, wire_count);
         }
-        if let Some(node_id) = hovered_node_id {
-            time_context_by_node.entry(node_id).or_default().1 = true;
-        }
-        let mut time_context_nodes = time_context_by_node
-            .into_iter()
-            .map(|(node_id, (selected, hovered))| TimeContextNode {
-                node_id,
-                selected,
-                hovered,
-            })
-            .collect::<Vec<_>>();
-        time_context_nodes.sort_by_key(|node| node.node_id);
-        let context_wire_painter = ui.painter().with_clip_rect(canvas_clip);
-        register_implicit_time_context_wires(
-            &project,
-            &rendered_ports,
-            &time_context_nodes,
-            canvas_clip,
-            &context_wire_painter,
-        );
         for container in &containers {
             let selected = selected_containers.contains(&container.owner);
             paint_container_foreground(

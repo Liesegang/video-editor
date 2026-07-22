@@ -265,6 +265,17 @@ pub(in crate::ui::panels::node_editor) fn register_implicit_time_context_wires(
             metadata.insert("selected".to_string(), node.selected.into());
             metadata.insert("hovered".to_string(), node.hovered.into());
             metadata.insert("dashed".to_string(), true.into());
+            metadata.insert("trigger".to_string(), "hold_key".into());
+            metadata.insert("held".to_string(), true.into());
+            metadata.insert(
+                "key".to_string(),
+                crate::ui::panels::node_editor::IMPLICIT_TIME_OVERLAY_KEY_LABEL.into(),
+            );
+            metadata.insert("reveal_gesture".to_string(), "hold".into());
+            metadata.insert(
+                "reveal_key".to_string(),
+                crate::ui::panels::node_editor::IMPLICIT_TIME_OVERLAY_KEY_LABEL.into(),
+            );
             metadata.insert("hit_testable".to_string(), false.into());
             metadata.insert("wire_collection".to_string(), "context_only".into());
             metadata.insert("visible".to_string(), bbox.is_positive().into());

@@ -56,6 +56,7 @@ mod sound_merge_reorder_tests;
 mod surface;
 #[cfg(test)]
 mod test_fixture;
+mod time_context_overlay;
 #[cfg(test)]
 mod time_context_tests;
 
@@ -77,6 +78,10 @@ use container_output::{
     IMAGE_OUTPUT_BINDING_PORT,
 };
 use property_evaluation::{evaluate_node_property, render_node_property_issue};
+use time_context_overlay::{
+    implicit_time_overlay_requested, register_implicit_time_overlay,
+    IMPLICIT_TIME_OVERLAY_KEY_LABEL,
+};
 mod types;
 
 use types::{
