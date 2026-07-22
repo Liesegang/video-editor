@@ -5,7 +5,7 @@ use library::model::project::{
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
 };
 use library::model::{BlendMode, ListContent, NodeContainer, NodeContent, Project};
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
@@ -69,10 +69,18 @@ impl NativeVariadicMergeKind {
         }
     }
 
-    const fn visual_index(self, canonical_index: usize, item_count: usize) -> usize {
+    const fn canonical_index_for_visual(self, visual_index: usize, item_count: usize) -> usize {
         match self {
-            Self::Image => item_count - canonical_index - 1,
-            Self::Sound | Self::List => canonical_index,
+            Self::Image => item_count - visual_index - 1,
+            Self::Sound | Self::List => visual_index,
+        }
+    }
+
+    fn visual_connection_cmp(self, left: (i64, Uuid), right: (i64, Uuid)) -> Ordering {
+        let canonical = left.cmp(&right);
+        match self {
+            Self::Image => canonical.reverse(),
+            Self::Sound | Self::List => canonical,
         }
     }
 
@@ -294,17 +302,20 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
         .iter()
         .filter(|connection| connection.to == target)
         .collect::<Vec<_>>();
-    connections.sort_by_key(|connection| (connection.order, connection.id));
+    connections.sort_by(|left, right| {
+        kind.visual_connection_cmp((left.order, left.id), (right.order, right.id))
+    });
     let layer_count = connections.len();
     let structural = structural_merge_context(project, merge_id);
     let structural_count = structural
         .as_ref()
         .map_or(0, |(_, children)| children.len())
         .min(layer_count);
-    let mut rows = connections
+    connections
         .into_iter()
         .enumerate()
-        .map(|(canonical_index, connection)| {
+        .map(|(visual_index, connection)| {
+            let canonical_index = kind.canonical_index_for_visual(visual_index, layer_count);
             let structural_child = structural.as_ref().and_then(|(container, children)| {
                 let expected_port = match kind {
                     NativeVariadicMergeKind::Image => IMAGE_OUTPUT_PORT,
@@ -332,16 +343,14 @@ pub(in crate::ui::panels::node_editor) fn merge_layer_rows(
                 authored_blend_available: connection_supports_authored_blend(project, connection),
                 kind,
                 canonical_index,
-                visual_index: kind.visual_index(canonical_index, layer_count),
+                visual_index,
                 layer_count,
                 structural_child,
                 reorder_min_index,
                 reorder_max_index,
             }
         })
-        .collect::<Vec<_>>();
-    rows.sort_by_key(|row| row.visual_index);
-    rows
+        .collect()
 }
 
 fn structural_merge_context(
@@ -433,6 +442,18 @@ pub(in crate::ui::panels::node_editor) fn native_variadic_merge_target(
                 && definition.multiplicity == PortMultiplicity::Variadic
         })
         .then_some(merge)
+}
+
+/// Compare two persisted connections in the exact physical top-to-bottom
+/// order used by the native Image/Sound/List variadic rows.
+pub(in crate::ui::panels::node_editor) fn native_variadic_connection_visual_cmp(
+    project: &Project,
+    target: &PortAddress,
+    left: (i64, Uuid),
+    right: (i64, Uuid),
+) -> Option<Ordering> {
+    native_variadic_merge_target(project, target)
+        .map(|merge| merge.kind.visual_connection_cmp(left, right))
 }
 
 pub(in crate::ui::panels::node_editor) fn native_variadic_merge_for_node(

@@ -17,7 +17,7 @@ const POSITION_EPSILON: f32 = 0.001;
 #[path = "directional_graph.rs"]
 mod graph;
 
-use graph::{actual_node_edges, semantic_edge_cmp, ActualNodeEdge, BranchGraph};
+use graph::{actual_node_edges, semantic_edge_cmp, ActualNodeEdge, BranchGraph, SemanticNodeOrder};
 
 use super::{immediate_child_rects, AutoLayoutPlan};
 
@@ -173,6 +173,8 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
     let anchor_geometry = request.node_geometry[&request.anchor_node_id];
     let graph_node_ids = composition_node_ids(project, request.composition_id);
     let edges = actual_node_edges(project, &graph_node_ids);
+    let semantic_order =
+        SemanticNodeOrder::new(project, request.node_geometry, &graph_node_ids, &edges);
     let reachable = reachable_nodes(project, request.anchor_node_id, request.direction, &edges);
     let owner_edges = edges
         .iter()
@@ -236,8 +238,18 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
         }
     }
 
-    sort_nodes_semantically(project, request.node_geometry, &edges, &mut eligible);
-    sort_nodes_semantically(project, request.node_geometry, &edges, &mut blocked);
+    sort_nodes_semantically(
+        project,
+        request.node_geometry,
+        &semantic_order,
+        &mut eligible,
+    );
+    sort_nodes_semantically(
+        project,
+        request.node_geometry,
+        &semantic_order,
+        &mut blocked,
+    );
     let eligible_set = eligible.iter().copied().collect::<HashSet<_>>();
     let context_nodes = reachable
         .iter()
@@ -251,7 +263,13 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
                 .is_some_and(|geometry| geometry.is_valid())
         })
         .collect::<HashSet<_>>();
-    let branch_graph = BranchGraph::new(project, request.node_geometry, &context_nodes, edges);
+    let branch_graph = BranchGraph::new(
+        project,
+        request.node_geometry,
+        &context_nodes,
+        edges,
+        semantic_order,
+    );
     let component_depth = branch_graph.component_depths(request.anchor_node_id, request.direction);
     let mut planned = match request.mode {
         DirectionalLayoutMode::Layout => graph_layout_positions(
@@ -300,7 +318,7 @@ pub(in crate::ui::panels::node_editor) fn plan_directional_layout(
     sort_nodes_semantically(
         project,
         request.node_geometry,
-        &branch_graph.edges,
+        &branch_graph.semantic_order,
         &mut reachable_diagnostic,
     );
     Ok(DirectionalLayoutPlan {
@@ -438,7 +456,7 @@ fn graph_layout_positions(
             .push(node_id);
     }
     for nodes in nodes_by_level.values_mut() {
-        sort_nodes_semantically(project, request.node_geometry, &graph.edges, nodes);
+        sort_nodes_semantically(project, request.node_geometry, &graph.semantic_order, nodes);
     }
     let max_width_by_level = nodes_by_level
         .iter()
@@ -492,7 +510,13 @@ fn graph_layout_positions(
         let left_level = graph.level_for(*left, depth, request.direction);
         let right_level = graph.level_for(*right, depth, request.direction);
         directional_level_cmp(left_level, right_level, request.direction).then_with(|| {
-            semantic_node_cmp(project, request.node_geometry, *left, *right, &graph.edges)
+            semantic_node_cmp(
+                project,
+                request.node_geometry,
+                *left,
+                *right,
+                &graph.semantic_order,
+            )
         })
     });
     for node_id in ordered_eligible {
@@ -526,7 +550,13 @@ fn distribute_positions(
         let left_level = graph.level_for(*left, depth, request.direction);
         let right_level = graph.level_for(*right, depth, request.direction);
         directional_level_cmp(left_level, right_level, request.direction).then_with(|| {
-            semantic_node_cmp(project, request.node_geometry, *left, *right, &graph.edges)
+            semantic_node_cmp(
+                project,
+                request.node_geometry,
+                *left,
+                *right,
+                &graph.semantic_order,
+            )
         })
     });
     let anchor = request.node_geometry[&request.anchor_node_id];
@@ -738,11 +768,17 @@ fn directional_level_cmp(left: i32, right: i32, direction: BranchDirection) -> O
 fn sort_nodes_semantically<T: SemanticNodeIdentity>(
     project: &Project,
     geometry: &BTreeMap<Uuid, NodeLayoutGeometry>,
-    edges: &[ActualNodeEdge],
+    semantic_order: &SemanticNodeOrder,
     nodes: &mut [T],
 ) {
     nodes.sort_by(|left, right| {
-        semantic_node_cmp(project, geometry, left.node_id(), right.node_id(), edges)
+        semantic_node_cmp(
+            project,
+            geometry,
+            left.node_id(),
+            right.node_id(),
+            semantic_order,
+        )
     });
 }
 
@@ -763,41 +799,13 @@ impl SemanticNodeIdentity for DirectionalLayoutBlockedNode {
 }
 
 fn semantic_node_cmp(
-    project: &Project,
-    geometry: &BTreeMap<Uuid, NodeLayoutGeometry>,
+    _project: &Project,
+    _geometry: &BTreeMap<Uuid, NodeLayoutGeometry>,
     left: Uuid,
     right: Uuid,
-    edges: &[ActualNodeEdge],
+    semantic_order: &SemanticNodeOrder,
 ) -> Ordering {
-    let left_order = highest_outgoing_order(left, edges);
-    let right_order = highest_outgoing_order(right, edges);
-    right_order
-        .cmp(&left_order)
-        .then_with(|| {
-            let left_geometry = geometry.get(&left);
-            let right_geometry = geometry.get(&right);
-            left_geometry
-                .map_or(0.0, |item| item.position[1])
-                .total_cmp(&right_geometry.map_or(0.0, |item| item.position[1]))
-        })
-        .then_with(|| {
-            geometry
-                .get(&left)
-                .map_or(0.0, |item| item.position[0])
-                .total_cmp(&geometry.get(&right).map_or(0.0, |item| item.position[0]))
-        })
-        .then_with(|| semantic_node_cmp_without_geometry(project, left, right))
-        // Truly indistinguishable authored Nodes have no remaining semantic
-        // order. UUID is only the final total-order fallback in that case.
-        .then_with(|| left.cmp(&right))
-}
-
-fn highest_outgoing_order(node_id: Uuid, edges: &[ActualNodeEdge]) -> Option<i64> {
-    edges
-        .iter()
-        .filter(|edge| edge.from == node_id)
-        .map(|edge| edge.order)
-        .max()
+    semantic_order.compare(left, right)
 }
 
 fn semantic_node_cmp_without_geometry(project: &Project, left: Uuid, right: Uuid) -> Ordering {

@@ -187,9 +187,10 @@ use components::{
     blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
     connection_supports_authored_blend, estimated_merge_input_anchor_offset,
     merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
-    native_variadic_merge_for_node, native_variadic_merge_target, register_merge_layer_component,
-    wire_order_menu_state, wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot,
-    MergeInputSlotRole, MergeLayerRow, NativeVariadicMergeKind,
+    native_variadic_connection_visual_cmp, native_variadic_merge_for_node,
+    native_variadic_merge_target, register_merge_layer_component, wire_order_menu_state,
+    wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
+    MergeLayerRow, NativeVariadicMergeKind,
 };
 #[cfg(test)]
 use components::{merge_images_target_node_id, merge_vacant_slot, WireOrderMenuState};
