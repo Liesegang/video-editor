@@ -332,7 +332,14 @@ fn every_color_catalog_factory_initializes_typed_defaults_and_roundtrips() {
             node.properties(),
             &PropertyMap::from_definitions(operation.property_definitions())
         );
-        assert!(!node.supports_bypass());
+        assert_eq!(
+            node.supports_bypass(),
+            operation == ColorContent::ConvertSpace
+        );
+        assert_eq!(
+            node.bypass_input_for_output(COLOR_VALUE_PORT),
+            (operation == ColorContent::ConvertSpace).then_some(COLOR_VALUE_PORT)
+        );
         assert!(descriptor.ports().iter().any(|port| {
             port.direction == PortDirection::Output
                 && matches!(
@@ -358,6 +365,14 @@ fn every_color_catalog_factory_initializes_typed_defaults_and_roundtrips() {
             .get(COLOR_MIX_FACTOR_PORT)
             .and_then(Property::value),
         Some(&PropertyValue::Number(OrderedFloat(0.5)))
+    );
+    let convert = Node::new_catalog_node(ColorContent::ConvertSpace.catalog_id()).unwrap();
+    assert_eq!(
+        convert
+            .properties()
+            .get(COLOR_TARGET_SPACE_PORT)
+            .and_then(Property::value),
+        Some(&PropertyValue::String("linear-srgb".to_string()))
     );
 }
 

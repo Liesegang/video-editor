@@ -11,8 +11,8 @@ use crate::model::project::{EvalOutput, EvalResult, PortAddress, PortOwner};
 use crate::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
 use crate::model::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_VALUE_PORT,
-    ColorContent, Node, NodeContent,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
+    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent, Node, NodeContent,
 };
 use crate::plugin::ResolvedNodeInputs;
 
@@ -32,7 +32,14 @@ impl FrameEvaluator<'_> {
         let NodeContent::Color(operation) = node.content() else {
             return Ok(EvalOutput::NoOutput);
         };
-        if !node.enabled || node.bypassed || !supports_output(*operation, output_port) {
+        if !node.enabled || !supports_output(*operation, output_port) {
+            return Ok(EvalOutput::NoOutput);
+        }
+        // The shared metadata dispatcher handles a valid bypass before this
+        // operation-specific evaluator and pulls the canonical Color input
+        // connection. A direct call with a forward-loaded invalid bypass flag
+        // must stay harmless.
+        if node.bypassed {
             return Ok(EvalOutput::NoOutput);
         }
         let scope = match self.scope_for_owner(owner, global_time, path)? {
@@ -48,6 +55,9 @@ impl FrameEvaluator<'_> {
                 self.evaluate_split_color(node, output_port, scope, global_time, path)
             }
             ColorContent::Mix => self.evaluate_mix_color(node, scope, global_time, path),
+            ColorContent::ConvertSpace => {
+                self.evaluate_convert_color_space(node, scope, global_time, path)
+            }
         };
         path.remove(&owner);
         result
@@ -150,6 +160,42 @@ impl FrameEvaluator<'_> {
             .map_or(EvalOutput::NoOutput, EvalOutput::Produced))
     }
 
+    fn evaluate_convert_color_space(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let source = match self.resolve_color(node, COLOR_VALUE_PORT, scope, global_time, path)? {
+            EvalOutput::Produced(color) => color,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let target = match self.resolve_color_property_input(
+            node,
+            COLOR_TARGET_SPACE_PORT,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(PropertyValue::String(target)) => target,
+            EvalOutput::Produced(_) | EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let Ok(target) = ColorSpaceRef::new(target) else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        match crate::color_management::transform_color(&source, &target) {
+            Ok(color) => Ok(EvalOutput::Produced(PropertyValue::ColorValue(color))),
+            Err(error) => {
+                log::debug!(
+                    "Color Space conversion on Node '{}' produced no output: {error}",
+                    node.id
+                );
+                Ok(EvalOutput::NoOutput)
+            }
+        }
+    }
+
     fn resolve_color_number(
         &self,
         node: &Node,
@@ -230,7 +276,9 @@ impl FrameEvaluator<'_> {
 
 fn supports_output(operation: ColorContent, output: &str) -> bool {
     match operation {
-        ColorContent::Compose | ColorContent::Mix => output == COLOR_VALUE_PORT,
+        ColorContent::Compose | ColorContent::Mix | ColorContent::ConvertSpace => {
+            output == COLOR_VALUE_PORT
+        }
         ColorContent::Split => matches!(
             output,
             COLOR_SPACE_PORT

@@ -26,8 +26,8 @@ pub use catalog::{
 };
 pub use color::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_VALUE_PORT,
-    ColorContent,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
+    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent,
 };
 pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
@@ -447,6 +447,9 @@ impl Node {
     pub fn bypass_input_for_output(&self, output: &str) -> Option<&str> {
         match self.content() {
             NodeContent::Value(value) => value.bypass_input_for_output(output),
+            NodeContent::Color(ColorContent::ConvertSpace) if output == COLOR_VALUE_PORT => {
+                Some(COLOR_VALUE_PORT)
+            }
             NodeContent::PluginOperation(operation) => {
                 let output_type = operation
                     .declared_ports
@@ -474,6 +477,12 @@ impl Node {
     pub fn supports_bypass(&self) -> bool {
         if matches!(self.content(), NodeContent::SoundMerge) {
             return true;
+        }
+        if matches!(
+            self.content(),
+            NodeContent::Color(ColorContent::ConvertSpace)
+        ) {
+            return self.bypass_input_for_output(COLOR_VALUE_PORT) == Some(COLOR_VALUE_PORT);
         }
         let ports = match self.content() {
             NodeContent::Value(value) => value.port_definitions(),

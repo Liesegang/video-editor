@@ -11,8 +11,8 @@ use crate::model::project::{
 use crate::model::property::{ColorSpaceRef, ColorValue, Keyframe, Property, PropertyValue};
 use crate::model::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
-    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, COLOR_VALUE_PORT,
-    Clip, ColorContent, Composition, Node,
+    COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
+    COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, Clip, ColorContent, Composition, Node,
 };
 use crate::plugin::PluginManager;
 
@@ -195,6 +195,119 @@ fn explicit_time_input_drives_mix_factor_keyframes() {
             ColorValue::new(ColorSpaceRef::srgb(), [1.0, 1.0, 1.0, 1.0]).unwrap()
         )),
         "the explicit Time wire must sample factor at Clip Duration (2.0), not global 0.25"
+    );
+}
+
+#[test]
+fn explicit_color_space_nodes_roundtrip_extended_rgb_without_changing_alpha() {
+    let mut fixture = ColorFixture::new();
+    let encoded = [-0.25, 0.5, 2.0, 0.375];
+    let source_id = fixture.add(compose_node("srgb", encoded));
+    let linear_id = fixture.add(Node::new_color("To Linear", ColorContent::ConvertSpace));
+    let mut display = Node::new_color("To Display", ColorContent::ConvertSpace);
+    set(
+        &mut display,
+        COLOR_TARGET_SPACE_PORT,
+        PropertyValue::String("srgb".to_string()),
+    );
+    let display_id = fixture.add(display);
+    fixture.connect(source_id, COLOR_VALUE_PORT, linear_id, COLOR_VALUE_PORT);
+    fixture.connect(linear_id, COLOR_VALUE_PORT, display_id, COLOR_VALUE_PORT);
+    assert!(fixture.project.validate_connections().is_empty());
+
+    let EvalOutput::Produced(PropertyValue::ColorValue(linear)) =
+        fixture.evaluate(linear_id, COLOR_VALUE_PORT, 0.5)
+    else {
+        panic!("sRGB to linear-sRGB must produce a canonical ColorValue");
+    };
+    assert_eq!(linear.color_space(), &ColorSpaceRef::linear_srgb());
+    assert!(linear.rgba()[0] < 0.0);
+    assert!(linear.rgba()[2] > 1.0);
+    assert_eq!(linear.rgba()[3], encoded[3]);
+
+    let EvalOutput::Produced(PropertyValue::ColorValue(round_trip)) =
+        fixture.evaluate(display_id, COLOR_VALUE_PORT, 0.5)
+    else {
+        panic!("linear-sRGB to sRGB must produce a canonical ColorValue");
+    };
+    assert_eq!(round_trip.color_space(), &ColorSpaceRef::srgb());
+    for (actual, expected) in round_trip.rgba().into_iter().zip(encoded) {
+        assert!((actual - expected).abs() <= 1.0e-12);
+    }
+}
+
+#[test]
+fn explicit_time_input_selects_keyframed_color_space_target() {
+    let mut fixture = ColorFixture::new();
+    let mut convert = Node::new_color("Timed Convert", ColorContent::ConvertSpace);
+    set(
+        &mut convert,
+        COLOR_VALUE_PORT,
+        PropertyValue::ColorValue(
+            ColorValue::new(ColorSpaceRef::srgb(), [0.5, 0.25, 0.75, 0.5]).unwrap(),
+        ),
+    );
+    convert
+        .set_property(
+            COLOR_TARGET_SPACE_PORT.to_string(),
+            Property::keyframe(vec![
+                Keyframe::new(
+                    0.0,
+                    PropertyValue::String("srgb".to_string()),
+                    Default::default(),
+                ),
+                Keyframe::new(
+                    2.0,
+                    PropertyValue::String("linear-srgb".to_string()),
+                    Default::default(),
+                ),
+            ]),
+        )
+        .unwrap();
+    let convert_id = fixture.add(convert);
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Clip(fixture.clip_id), DURATION_PORT),
+            PortAddress::new(PortOwner::Node(convert_id), TIME_PORT),
+        )
+        .unwrap();
+    let EvalOutput::Produced(PropertyValue::ColorValue(output)) =
+        fixture.evaluate(convert_id, COLOR_VALUE_PORT, 0.25)
+    else {
+        panic!("explicit Time must select the target at Clip Duration");
+    };
+    assert_eq!(output.color_space(), &ColorSpaceRef::linear_srgb());
+    assert!((output.rgba()[0] - 0.214_041_140_482_232_55).abs() <= 1.0e-12);
+}
+
+#[test]
+fn unsupported_color_space_conversion_fails_closed_instead_of_retagging() {
+    let mut fixture = ColorFixture::new();
+    let source_id = fixture.add(compose_node("acescg", [0.5, 0.25, 2.0, 1.0]));
+    let convert_id = fixture.add(Node::new_color("Unsupported", ColorContent::ConvertSpace));
+    fixture.connect(source_id, COLOR_VALUE_PORT, convert_id, COLOR_VALUE_PORT);
+    assert_eq!(
+        fixture.evaluate(convert_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::NoOutput
+    );
+
+    let expected =
+        ColorValue::new(ColorSpaceRef::new("acescg").unwrap(), [0.5, 0.25, 2.0, 1.0]).unwrap();
+    let convert = fixture.project.get_node_mut(convert_id).unwrap();
+    assert!(convert.supports_bypass());
+    convert.bypassed = true;
+    assert_eq!(
+        fixture.evaluate(convert_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::Produced(PropertyValue::ColorValue(expected)),
+        "bypass must return the input Color unchanged without consulting the target space"
+    );
+
+    fixture.project.get_node_mut(convert_id).unwrap().enabled = false;
+    assert_eq!(
+        fixture.evaluate(convert_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::NoOutput,
+        "disabled remains distinct from bypass"
     );
 }
 

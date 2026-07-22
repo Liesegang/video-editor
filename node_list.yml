@@ -175,6 +175,31 @@ Mix Color:
       key: color
       label: Color
       type: Color
+Convert Color Space:
+  category: Color
+  catalog_status: native
+  catalog_id: native.color.convert_space
+  runtime_status: implemented
+  model: Color.ConvertSpace
+  description: Explicit extended-range transfer between encoded sRGB and linear-sRGB; unsupported transforms produce no output
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+    - name: color
+      key: color
+      label: Color
+      type: Color
+    - name: target_space
+      key: target_space
+      label: Target Space
+      type: String
+  outputs:
+    - name: color
+      key: color
+      label: Color
+      type: Color
 Path:
   category: Data
   catalog_status: native

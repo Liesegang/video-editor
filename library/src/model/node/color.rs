@@ -24,6 +24,7 @@ pub const COLOR_VALUE_PORT: &str = "color";
 pub const COLOR_MIX_LEFT_PORT: &str = "a";
 pub const COLOR_MIX_RIGHT_PORT: &str = "b";
 pub const COLOR_MIX_FACTOR_PORT: &str = "factor";
+pub const COLOR_TARGET_SPACE_PORT: &str = "target_space";
 
 fn number_definition(name: &str, label: &str, default: f64) -> PropertyDefinition {
     PropertyDefinition::new(
@@ -130,22 +131,49 @@ static MIX_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 3]> = LazyLock::n
     ]
 });
 
+static CONVERT_SPACE_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 2]> =
+    LazyLock::new(|| {
+        [
+            PropertyDefinition::new(
+                COLOR_VALUE_PORT,
+                PropertyUiType::ColorValue,
+                "Color",
+                default_color(Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                }),
+            ),
+            PropertyDefinition::new(
+                COLOR_TARGET_SPACE_PORT,
+                PropertyUiType::Text,
+                "Target Space",
+                PropertyValue::String(
+                    crate::color_management::working_linear_srgb_space_id().to_string(),
+                ),
+            ),
+        ]
+    });
+
 /// Stable persisted identity for lossless first-party Color operations.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ColorContent {
     Compose,
     Split,
     Mix,
+    ConvertSpace,
 }
 
 impl ColorContent {
-    pub const ALL: [Self; 3] = [Self::Compose, Self::Split, Self::Mix];
+    pub const ALL: [Self; 4] = [Self::Compose, Self::Split, Self::Mix, Self::ConvertSpace];
 
     pub const fn catalog_id(self) -> &'static str {
         match self {
             Self::Compose => "native.color.compose",
             Self::Split => "native.color.split",
             Self::Mix => "native.color.mix",
+            Self::ConvertSpace => "native.color.convert_space",
         }
     }
 
@@ -154,6 +182,7 @@ impl ColorContent {
             Self::Compose => "Compose Color",
             Self::Split => "Split Color",
             Self::Mix => "Mix Color",
+            Self::ConvertSpace => "Convert Color Space",
         }
     }
 
@@ -162,6 +191,7 @@ impl ColorContent {
             Self::Compose => COMPOSE_PROPERTY_DEFINITIONS.as_slice(),
             Self::Split => SPLIT_PROPERTY_DEFINITIONS.as_slice(),
             Self::Mix => MIX_PROPERTY_DEFINITIONS.as_slice(),
+            Self::ConvertSpace => CONVERT_SPACE_PROPERTY_DEFINITIONS.as_slice(),
         }
     }
 
