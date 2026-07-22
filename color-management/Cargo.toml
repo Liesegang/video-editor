@@ -1,0 +1,9 @@
+[package]
+name = "ruvie-color-management"
+version = "0.1.0"
+edition = "2024"
+description = "Project-independent color-management contracts for RuViE."
+license = "MIT"
+
+[lints]
+workspace = true

@@ -13,6 +13,7 @@ default = ["gl"]
 gl = []
 
 [dependencies]
+ruvie-color-management = { version = "0.1.0", path = "../color-management" }
 ruvie-plugin-api = { version = "0.1.0", path = "../plugin-api" }
 ruvie-python-runtime = { version = "0.1.0", path = "../python-runtime" }
 serde = { version = "1.0.228", features = ["derive"] }

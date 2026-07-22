@@ -1,6 +1,10 @@
 // Core internal modules
 pub mod core;
 
+/// Shared color transforms used by graph operations, pickers, and future
+/// Preview/export boundaries.
+pub mod color_management;
+
 // Editor services - public API for GUI
 pub mod editor;
 

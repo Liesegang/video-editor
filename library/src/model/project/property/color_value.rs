@@ -11,6 +11,7 @@ use crate::model::frame::color::Color;
 const COLOR_VALUE_TAG_FIELD: &str = "$type";
 const COLOR_VALUE_TAG: &str = "color_value";
 const SRGB_COLOR_SPACE: &str = "srgb";
+const LINEAR_SRGB_COLOR_SPACE: &str = "linear-srgb";
 const COMPONENT_NAMES: [&str; 4] = ["r", "g", "b", "a"];
 
 /// Stable reference to the color space in which a graph color is encoded.
@@ -34,6 +35,11 @@ impl ColorSpaceRef {
     /// boundary. This is not linear-light sRGB.
     pub fn srgb() -> Self {
         Self(SRGB_COLOR_SPACE.to_string())
+    }
+
+    /// Canonical scene-linear sRGB working space identifier.
+    pub fn linear_srgb() -> Self {
+        Self(LINEAR_SRGB_COLOR_SPACE.to_string())
     }
 
     pub fn as_str(&self) -> &str {
