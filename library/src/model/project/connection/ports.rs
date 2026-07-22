@@ -94,6 +94,7 @@ fn node_ports(
         | NodeContent::Value(_)
         | NodeContent::Data(_)
         | NodeContent::List(_)
+        | NodeContent::Path(_)
         | NodeContent::NativeOperation(_)
         | NodeContent::Merge
         | NodeContent::SoundMerge

@@ -51,6 +51,7 @@ pub(in crate::ui::panels::node_editor) fn estimated_node_size(
             | NodeContent::CompositionInstance(_)
             | NodeContent::Value(_)
             | NodeContent::Data(_)
+            | NodeContent::Path(_)
             | NodeContent::List(_),
         ) => 220.0,
         None => 220.0,

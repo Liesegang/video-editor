@@ -12,6 +12,7 @@ mod body;
 mod data;
 mod list;
 mod native_operation;
+mod path;
 mod property_value_summary;
 mod selection;
 mod snarl;

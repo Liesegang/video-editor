@@ -306,6 +306,7 @@ pub(super) fn node_display_type(node: &Node) -> String {
         NodeContent::Value(value) => value.label().to_string(),
         NodeContent::Data(data) => data.label().to_string(),
         NodeContent::List(operation) => operation.label().to_string(),
+        NodeContent::Path(operation) => operation.label().to_string(),
         NodeContent::NativeOperation(operation) => {
             library::model::native_node_descriptor(&operation.catalog_id).map_or_else(
                 || format!("Native Operation · unknown ({})", operation.catalog_id),

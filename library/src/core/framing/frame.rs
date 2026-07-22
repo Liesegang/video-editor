@@ -13,6 +13,7 @@ mod data_graph;
 mod evaluator;
 mod image_graph;
 mod list_graph;
+mod path_graph;
 mod scope;
 mod shape_graph;
 mod value_graph;
@@ -75,6 +76,8 @@ pub fn get_frame_from_project(
 mod data_graph_tests;
 #[cfg(test)]
 mod list_graph_tests;
+#[cfg(test)]
+mod path_graph_tests;
 #[cfg(test)]
 mod sound_analysis_tests;
 #[cfg(test)]

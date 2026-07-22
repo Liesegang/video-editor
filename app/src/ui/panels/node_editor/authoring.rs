@@ -164,6 +164,7 @@ fn create_native_action(
         NativeNodeFactory::Value(_)
         | NativeNodeFactory::Data(_)
         | NativeNodeFactory::List(_)
+        | NativeNodeFactory::Path(_)
         | NativeNodeFactory::Merge
         | NativeNodeFactory::SoundMerge
         | NativeNodeFactory::SoundAnalysis(_)

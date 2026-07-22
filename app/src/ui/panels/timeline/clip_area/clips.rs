@@ -144,6 +144,7 @@ fn semantic_source_kind(node: &Node) -> &'static str {
         NodeContent::Value(_) => "Value",
         NodeContent::Data(_) => "Data",
         NodeContent::List(_) => "List",
+        NodeContent::Path(_) => "Path",
         NodeContent::SoundAnalysis(_) => "Analysis",
         NodeContent::NativeOperation(_) => "Native Operation",
     }
@@ -188,6 +189,7 @@ fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
         Some(NodeContent::Value(_)) => (90, 180, 200),
         Some(NodeContent::Data(_)) => (170, 130, 205),
         Some(NodeContent::List(_)) => (90, 190, 145),
+        Some(NodeContent::Path(_)) => (170, 130, 205),
         Some(NodeContent::NativeOperation(_)) => (210, 145, 90),
         Some(NodeContent::CompositionInstance(_) | NodeContent::Merge) | None => (150, 150, 150),
         Some(NodeContent::SoundMerge) => (170, 135, 205),

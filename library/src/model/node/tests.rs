@@ -362,6 +362,43 @@ fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
 }
 
 #[test]
+fn every_path_operation_catalog_factory_has_an_executable_typed_route() {
+    use crate::model::project::connection::{PATH_OUTPUT_PORT, PATHS_INPUT_PORT};
+    use crate::model::project::{PortDataType, PortDirection};
+
+    for operation in PathOperationContent::ALL {
+        let descriptor = native_node_descriptor(operation.catalog_id()).unwrap();
+        assert_eq!(descriptor.label(), operation.label());
+        assert_eq!(
+            descriptor.runtime_status(),
+            NativeNodeRuntimeStatus::Implemented
+        );
+        assert_eq!(descriptor.factory(), NativeNodeFactory::Path(operation));
+        let node = Node::new_catalog_node(operation.catalog_id()).unwrap();
+        assert_eq!(node.content(), &NodeContent::Path(operation));
+        assert_eq!(
+            node.properties(),
+            &PropertyMap::from_definitions(operation.property_definitions())
+        );
+        assert!(!node.supports_bypass());
+        let restored: Node = serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        assert_eq!(restored, node);
+    }
+
+    let union = native_node_descriptor(PathOperationContent::Union.catalog_id()).unwrap();
+    assert!(union.ports().iter().any(|port| {
+        port.key == PATHS_INPUT_PORT
+            && port.direction == PortDirection::Input
+            && port.data_type == PortDataType::List
+    }));
+    assert!(union.ports().iter().any(|port| {
+        port.key == PATH_OUTPUT_PORT
+            && port.direction == PortDirection::Output
+            && port.data_type == PortDataType::Path
+    }));
+}
+
+#[test]
 fn canonical_data_ui_types_reject_lossy_legacy_substitutions() {
     use crate::model::frame::color::Color;
     use crate::model::path::{FillRule, PathValue};

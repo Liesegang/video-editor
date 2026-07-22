@@ -70,6 +70,19 @@ pub(crate) fn to_skia_path(value: &PathValue) -> Result<Path, LibraryError> {
     Ok(path)
 }
 
+/// Convert a native Path operation result back into canonical Project data.
+/// Boolean PathOps normalize their result to non-zero winding geometry, so
+/// this boundary never infers a fill rule from renderer-only inverse modes.
+pub(crate) fn from_skia_boolean_path(value: &Path) -> Result<PathValue, LibraryError> {
+    if !value.is_finite() {
+        return Err(LibraryError::Render(
+            "Native Path operation produced non-finite geometry".to_string(),
+        ));
+    }
+    crate::model::path::path_value_from_skia(value, FillRule::NonZero)
+        .map_err(|error| LibraryError::Render(format!("Invalid native Path result: {error}")))
+}
+
 pub(crate) fn resolve_renderer_path(
     canonical: Option<&PathValue>,
     legacy_svg: &str,

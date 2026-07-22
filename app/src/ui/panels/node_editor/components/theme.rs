@@ -3,7 +3,8 @@ use egui_phosphor::regular as icons;
 use egui_snarl::ui::{PinInfo, WireStyle};
 use library::model::project::{PortDataType, PortDirection, PortOwner, PortSide};
 use library::model::{
-    AssetKind, DataContent, GeneratorContent, Node, NodeContent, Project, ValueContent,
+    AssetKind, DataContent, GeneratorContent, Node, NodeContent, PathOperationContent, Project,
+    ValueContent,
 };
 use node_editor_ui::{Editor, GroupChrome, NodePalette};
 use uuid::Uuid;
@@ -106,6 +107,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(38, 88, 70),
             accent: Color32::from_rgb(87, 207, 158),
         },
+        Some(NodeContent::Path(_)) => NodePalette {
+            body: Color32::from_rgb(35, 31, 48),
+            header: Color32::from_rgb(73, 49, 105),
+            accent: Color32::from_rgb(182, 129, 232),
+        },
         Some(NodeContent::NativeOperation(_)) => NodePalette {
             body: Color32::from_rgb(48, 38, 29),
             header: Color32::from_rgb(106, 72, 38),
@@ -181,6 +187,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
         }
         Some(NodeContent::List(_)) => {
             NodeEditorIcon::new(icons::LIST_NUMBERS, "Ordered List operation")
+        }
+        Some(NodeContent::Path(PathOperationContent::Union)) => {
+            NodeEditorIcon::new(icons::UNION, "Boolean Path union")
         }
         Some(NodeContent::NativeOperation(operation)) => {
             let descriptor = library::model::native_node_descriptor(&operation.catalog_id);

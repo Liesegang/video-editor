@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod svg;
 
+pub(crate) use svg::path_value_from_skia;
 pub use svg::{
     SvgPathCodecError, SvgPathEnvelope, decode_svg_path, encode_svg_path,
     parse_legacy_svg_path_data, write_legacy_svg_path_data,

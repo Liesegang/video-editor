@@ -17,6 +17,7 @@ mod catalog;
 mod containers;
 mod data;
 mod list;
+mod path;
 mod sound_analysis;
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
@@ -28,6 +29,7 @@ pub use containers::{
 };
 pub use data::DataContent;
 pub use list::ListContent;
+pub use path::PathOperationContent;
 pub use sound_analysis::SoundAnalysisContent;
 
 /// Stable authored/catalog identity of the native ordered Sound mixer.
@@ -570,6 +572,15 @@ impl Node {
         )
     }
 
+    /// Creates an executable operation over canonical Path graph values.
+    pub fn new_path_operation(name: &str, content: PathOperationContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::Path(content),
+            PropertyMap::from_definitions(content.property_definitions()),
+        )
+    }
+
     /// Creates one of the native descriptor-backed numeric operations.
     pub fn new_value(name: &str, content: ValueContent) -> Self {
         Self::with_properties(
@@ -688,6 +699,10 @@ pub enum NodeContent {
     /// First-party authored Color and Path leaves. Their values live only in
     /// the canonical Project property map and retain their tagged precision.
     Data(DataContent),
+    /// Executable first-party operations over canonical Path graph values.
+    /// These return reusable Project data rather than annotating a transient
+    /// render Shape like a Shape Path Effect.
+    Path(PathOperationContent),
     /// A first-party typed operation whose authoring and port contract are
     /// available, while its runtime may still be explicitly design-needed.
     NativeOperation(NativeOperationContent),

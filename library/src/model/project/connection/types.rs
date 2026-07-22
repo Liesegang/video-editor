@@ -27,6 +27,11 @@ pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
 /// Canonical property/output key shared by authored data leaf Nodes.
 pub const DATA_VALUE_PROPERTY: &str = "value";
 pub const DATA_VALUE_OUTPUT_PORT: &str = "value";
+
+/// Ordered `List<Path>` input consumed by native path-combining operations.
+pub const PATHS_INPUT_PORT: &str = "paths";
+/// Canonical `Path` result produced by native path operations.
+pub const PATH_OUTPUT_PORT: &str = "path";
 /// Ordered heterogeneous value input used by the native Make List Node.
 pub const LIST_ITEMS_INPUT_PORT: &str = "item";
 pub const LIST_INPUT_PORT: &str = "list";

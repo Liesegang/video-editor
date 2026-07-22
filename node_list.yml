@@ -1694,33 +1694,12 @@ Offset Path:
   outputs:
     - name: path
       type: Path
-Fill Path:
-  category: Path
-  catalog_status: design-needed
-  inputs:
-    - name: path
-      type: Path
-    - name: color
-      type: Color
-  outputs:
-    - name: image
-      type: Image
-Stroke Path:
-  category: Path
-  catalog_status: design-needed
-  inputs:
-    - name: path
-      type: Path
-    - name: color
-      type: Color
-    - name: width
-      type: Scalar
-  outputs:
-    - name: image
-      type: Image
 Union Path:
   category: Path
-  catalog_status: design-needed
+  catalog_status: native
+  catalog_id: native.path.union
+  runtime_status: implemented
+  description: Boolean union of canonical filled Path values; this is reusable Path data, not a render-only Shape Path Effect
   inputs:
     - name: paths
       type: List<Path>

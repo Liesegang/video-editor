@@ -838,6 +838,7 @@ pub(super) fn source_kind(node: &Node) -> &'static str {
         NodeContent::Value(value) => value.label(),
         NodeContent::Data(data) => data.label(),
         NodeContent::List(operation) => operation.label(),
+        NodeContent::Path(operation) => operation.label(),
         NodeContent::NativeOperation(operation) => {
             library::model::native_node_descriptor(&operation.catalog_id)
                 .map_or("Native Operation", |descriptor| descriptor.label())

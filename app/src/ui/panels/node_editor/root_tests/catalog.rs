@@ -210,6 +210,48 @@ fn math_add_items_create_every_native_value_and_fmod_accepts_explicit_time() {
 }
 
 #[test]
+fn canonical_path_union_is_auto_discovered_with_stable_menu_contract() {
+    let plugins = PluginManager::default();
+    let items = node_create_menu_items(&plugins);
+    let request = NodeCreateRequest::Native("native.path.union".to_string());
+    let item = items
+        .iter()
+        .find(|item| item.value == request)
+        .expect("canonical Path Union is exposed by native catalog discovery");
+    assert_eq!(item.label, "Union Path");
+    assert_eq!(item.category.as_deref(), Some("Path"));
+    assert_eq!(
+        item.qa_id.as_deref(),
+        Some("node_editor.menu.create.path:union")
+    );
+    assert_eq!(
+        item.qa_metadata.as_ref(),
+        Some(&serde_json::json!({
+            "action": "create",
+            "kind": "native",
+            "catalog_id": "native.path.union",
+            "label": "Union Path",
+            "category": "Path",
+            "runtime_status": "implemented",
+        }))
+    );
+
+    let node = create_operation_node_for_request(&item.value, &plugins)
+        .expect("catalog request creates the executable typed Path Node");
+    assert_eq!(
+        node.content(),
+        &NodeContent::Path(library::model::PathOperationContent::Union)
+    );
+    let node_id = node.id;
+    let mut project = Project::new("Path catalog presentation");
+    project.add_node(node);
+    assert_eq!(
+        node_icon(&project, node_id).glyph,
+        egui_phosphor::regular::UNION
+    );
+}
+
+#[test]
 fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan() {
     let (mut project, composition_id, _, clip_id, _, _) = fixture();
     let mut modulo = Node::new_fmod("Fmod");

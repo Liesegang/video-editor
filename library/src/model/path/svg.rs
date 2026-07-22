@@ -223,7 +223,9 @@ fn write_svg_path_data(path: &PathValue) -> Result<(String, Vec<ConicHint>), Svg
     Ok((path_data.trim_end().to_owned(), conic_hints))
 }
 
-fn path_value_from_skia(
+/// Convert a finite backend path into canonical Project geometry at the
+/// explicit Skia f32 boundary used by native boolean Path operations.
+pub(crate) fn path_value_from_skia(
     path: &skia_safe::Path,
     fill_rule: FillRule,
 ) -> Result<PathValue, SvgPathCodecError> {

@@ -134,7 +134,10 @@ impl Project {
                                 )
                             })
                         }),
-                        NodeContent::Value(_) | NodeContent::Data(_) | NodeContent::List(_) => None,
+                        NodeContent::Value(_)
+                        | NodeContent::Data(_)
+                        | NodeContent::List(_)
+                        | NodeContent::Path(_) => None,
                         NodeContent::SoundMerge => None,
                         NodeContent::SoundAnalysis(_) => None,
                     }
