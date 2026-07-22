@@ -180,12 +180,10 @@ pub(super) fn property_value_to_wire(
                 a: value.a,
             })
         }
-        PropertyValue::Path(_)
-        | PropertyValue::Array(_)
-        | PropertyValue::Map(_)
-        | PropertyValue::OpaqueJson(_) => {
-            Err("path, array, map, and opaque JSON values are not supported by ABI v1")
+        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
+            Err("path, array, and map values are not supported by ABI v1")
         }
+        PropertyValue::OpaqueJson(_) => Err("opaque JSON values are not supported by ABI v1"),
     }
 }
 
