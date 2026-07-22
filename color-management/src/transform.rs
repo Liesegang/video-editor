@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::contract::{BackendBuild, BackendCapabilities, ProcessorCacheKey};
+use crate::contract::{BackendBuild, BackendCapabilities, CpuComputePrecision, ProcessorCacheKey};
 
 pub const SRGB_SPACE_ID: &str = "srgb";
 pub const LINEAR_SRGB_SPACE_ID: &str = "linear-srgb";
@@ -151,9 +151,12 @@ impl fmt::Display for ColorManagementError {
 impl std::error::Error for ColorManagementError {}
 
 pub trait CpuColorProcessor: Send + Sync {
-    /// Transform one straight-alpha floating-point color without clipping RGB.
-    fn transform_straight_rgba_f64(&self, rgba: [f64; 4])
-    -> Result<[f64; 4], ColorManagementError>;
+    /// Transform one straight-alpha authoring color without clipping RGB.
+    ///
+    /// f64 is the lossless Project/API interchange representation. A backend
+    /// may compute internally at the precision reported by
+    /// [`BackendCapabilities::cpu_processor_compute_precision`].
+    fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError>;
 }
 
 /// Replaceable backend boundary for built-in transfers and a future pinned
@@ -191,7 +194,7 @@ impl BuiltinColorTransform {
     ) -> Result<[f64; 4], ColorManagementError> {
         let request = ColorTransformRequest::explicit(source_space, target_space);
         self.create_cpu_processor(&request)?
-            .transform_straight_rgba_f64(rgba)
+            .transform_straight_rgba(rgba)
     }
 
     fn validate_request(
@@ -240,7 +243,7 @@ impl ColorTransformBackend for BuiltinColorTransform {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             enumerate_color_spaces: true,
-            cpu_straight_rgba_f64: true,
+            cpu_processor_compute_precision: Some(CpuComputePrecision::Float64),
             gpu_shader_lut: false,
             extended_range_rgb: true,
         }
@@ -318,10 +321,7 @@ struct BuiltinCpuProcessor {
 }
 
 impl CpuColorProcessor for BuiltinCpuProcessor {
-    fn transform_straight_rgba_f64(
-        &self,
-        rgba: [f64; 4],
-    ) -> Result<[f64; 4], ColorManagementError> {
+    fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError> {
         validate_rgba(rgba)?;
         let [r, g, b, a] = rgba;
         let transform = match self.kind {
@@ -384,7 +384,7 @@ mod tests {
         BuiltinColorTransform, ColorManagementError, ColorTransformBackend, ColorTransformRequest,
         GpuShaderLanguage, LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
     };
-    use crate::{BackendBuild, TransformRole};
+    use crate::{BackendBuild, CpuComputePrecision, TransformRole};
 
     fn assert_near(actual: f64, expected: f64) {
         assert!(
@@ -399,7 +399,10 @@ mod tests {
         assert_eq!(backend.build(), BackendBuild::Real);
         let capabilities = backend.capabilities();
         assert!(capabilities.enumerate_color_spaces);
-        assert!(capabilities.cpu_straight_rgba_f64);
+        assert_eq!(
+            capabilities.cpu_processor_compute_precision,
+            Some(CpuComputePrecision::Float64)
+        );
         assert!(!capabilities.gpu_shader_lut);
         assert!(capabilities.extended_range_rgb);
         assert_eq!(backend.available_color_spaces().unwrap().len(), 2);
@@ -479,11 +482,11 @@ mod tests {
         let request = ColorTransformRequest::explicit(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         let processor = backend.create_cpu_processor(&request).unwrap();
         assert!(matches!(
-            processor.transform_straight_rgba_f64([f64::NAN, 0.0, 0.0, 1.0]),
+            processor.transform_straight_rgba([f64::NAN, 0.0, 0.0, 1.0]),
             Err(ColorManagementError::NonFiniteComponent { component: "r" })
         ));
         assert!(matches!(
-            processor.transform_straight_rgba_f64([0.0, 0.0, 0.0, 2.0]),
+            processor.transform_straight_rgba([0.0, 0.0, 0.0, 2.0]),
             Err(ColorManagementError::AlphaOutOfRange)
         ));
         assert!(matches!(
