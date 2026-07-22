@@ -311,6 +311,7 @@ impl PropertyPlugin for StatefulPropertyPlugin {
 }
 
 struct EvaluatedValueStylePlugin;
+struct ExternalFillReplacementStylePlugin;
 
 const REENTRANT_EFFECT_ID: &str = "reentrant-drop-effect";
 
@@ -470,6 +471,40 @@ impl StylePlugin for EvaluatedValueStylePlugin {
     }
 }
 
+impl Plugin for ExternalFillReplacementStylePlugin {
+    fn id(&self) -> &str {
+        "fill"
+    }
+
+    fn name(&self) -> String {
+        "External Fill Replacement".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Tests".to_string()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl StylePlugin for ExternalFillReplacementStylePlugin {
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::style(self.id(), self.name(), Vec::new())
+    }
+
+    fn evaluate_source(
+        &self,
+        _context: &FrameEvaluationContext,
+        _source_id: uuid::Uuid,
+        _properties: &PropertyMap,
+        _eval_time: f64,
+    ) -> Option<StyleConfig> {
+        None
+    }
+}
+
 #[test]
 fn external_registration_does_not_expand_the_bundled_operation_inventory() {
     let manager = PluginManager::default();
@@ -482,11 +517,14 @@ fn external_registration_does_not_expand_the_bundled_operation_inventory() {
                 descriptor.category().to_string(),
                 descriptor.component_id().to_string(),
                 descriptor.operation().to_string(),
+                descriptor.label().to_string(),
+                descriptor.declared_ports().to_vec(),
             )
         })
         .collect::<Vec<_>>();
 
     manager.register_style_plugin(Arc::new(EvaluatedValueStylePlugin));
+    manager.register_style_plugin(Arc::new(ExternalFillReplacementStylePlugin));
     assert!(
         manager
             .operation_descriptor(
@@ -503,6 +541,13 @@ fn external_registration_does_not_expand_the_bundled_operation_inventory() {
             .is_ok(),
         "external operation factory must remain runtime reachable"
     );
+    assert_eq!(
+        manager
+            .operation_descriptor(STYLE_CATEGORY, "fill", STYLE_APPLY_OPERATION)
+            .expect("same-ID external replacement must remain runtime reachable")
+            .label(),
+        "External Fill Replacement"
+    );
 
     let after = manager
         .bundled_operation_descriptors()
@@ -513,6 +558,8 @@ fn external_registration_does_not_expand_the_bundled_operation_inventory() {
                 descriptor.category().to_string(),
                 descriptor.component_id().to_string(),
                 descriptor.operation().to_string(),
+                descriptor.label().to_string(),
+                descriptor.declared_ports().to_vec(),
             )
         })
         .collect::<Vec<_>>();
@@ -520,7 +567,7 @@ fn external_registration_does_not_expand_the_bundled_operation_inventory() {
     assert!(
         after
             .iter()
-            .all(|(_, component_id, _)| component_id != "evaluated-value-style"),
+            .all(|(_, component_id, _, _, _)| component_id != "evaluated-value-style"),
         "third-party operations belong to the runtime registry, not the static bundled catalog"
     );
 }

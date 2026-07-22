@@ -25,9 +25,10 @@ use crate::plugin::properties::{
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
-    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, PATH_EFFECT_APPLY_OPERATION,
-    PATH_EFFECT_CATEGORY, PathEffectPlugin, SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION,
-    STYLE_CATEGORY, StylePlugin, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
+    IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor, OperationDescriptorError,
+    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PathEffectPlugin,
+    SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
+    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 
 use super::PluginManager;
@@ -54,31 +55,62 @@ impl OperationIdentity {
 /// cannot silently expand the static first-party catalog contract.
 #[derive(Default)]
 pub(super) struct BundledOperationInventory {
-    identities: Vec<OperationIdentity>,
+    entries: Vec<BundledOperationEntry>,
+}
+
+struct BundledOperationEntry {
+    identity: OperationIdentity,
+    descriptor: Result<OperationDescriptor, String>,
 }
 
 impl BundledOperationInventory {
-    fn record(&mut self, category: &str, component_id: &str, operation: &str) {
+    fn record(
+        &mut self,
+        category: &str,
+        component_id: &str,
+        operation: &str,
+        descriptor: Result<OperationDescriptor, OperationDescriptorError>,
+    ) {
         let identity = OperationIdentity::new(category, component_id, operation);
         assert!(
-            !self.identities.contains(&identity),
+            !self.entries.iter().any(|entry| entry.identity == identity),
             "duplicate bundled operation identity {category}/{component_id}/{operation}"
         );
-        self.identities.push(identity);
+        let descriptor = descriptor
+            .map_err(|error| error.to_string())
+            .and_then(|descriptor| {
+                if descriptor.category() == category
+                    && descriptor.component_id() == component_id
+                    && descriptor.operation() == operation
+                {
+                    Ok(descriptor)
+                } else {
+                    Err(format!(
+                        "descriptor returned mismatched identity {}/{}/{}",
+                        descriptor.category(),
+                        descriptor.component_id(),
+                        descriptor.operation()
+                    ))
+                }
+            });
+        self.entries.push(BundledOperationEntry {
+            identity,
+            descriptor,
+        });
     }
 
-    fn descriptors(
-        &self,
-        manager: &PluginManager,
-    ) -> Result<Vec<OperationDescriptor>, LibraryError> {
-        self.identities
+    fn descriptors(&self) -> Result<Vec<OperationDescriptor>, LibraryError> {
+        self.entries
             .iter()
-            .map(|identity| {
-                manager.operation_descriptor(
-                    &identity.category,
-                    &identity.component_id,
-                    &identity.operation,
-                )
+            .map(|entry| {
+                entry.descriptor.clone().map_err(|reason| {
+                    LibraryError::Plugin(format!(
+                        "Bundled operation {}/{}/{} has an invalid descriptor: {reason}",
+                        entry.identity.category,
+                        entry.identity.component_id,
+                        entry.identity.operation
+                    ))
+                })
             })
             .collect()
     }
@@ -149,11 +181,13 @@ impl Default for PluginManager {
             TRANSFORM_CATEGORY,
             SHAPE_TRANSFORM_COMPONENT_ID,
             TRANSFORM_APPLY_OPERATION,
+            crate::plugin::transforms::shape_descriptor(),
         );
         manager.bundled_operations.record(
             TRANSFORM_CATEGORY,
             IMAGE_TRANSFORM_COMPONENT_ID,
             TRANSFORM_APPLY_OPERATION,
+            crate::plugin::transforms::image_descriptor(),
         );
 
         manager
@@ -162,26 +196,42 @@ impl Default for PluginManager {
 
 impl PluginManager {
     fn register_bundled_effect(&mut self, plugin: Arc<dyn EffectPlugin>) {
-        self.bundled_operations
-            .record(EFFECT_CATEGORY, plugin.id(), EFFECT_APPLY_OPERATION);
+        self.bundled_operations.record(
+            EFFECT_CATEGORY,
+            plugin.id(),
+            EFFECT_APPLY_OPERATION,
+            plugin.descriptor(),
+        );
         self.register_effect(plugin);
     }
 
     fn register_bundled_effector(&mut self, plugin: Arc<dyn EffectorPlugin>) {
-        self.bundled_operations
-            .record(EFFECTOR_CATEGORY, plugin.id(), EFFECTOR_APPLY_OPERATION);
+        self.bundled_operations.record(
+            EFFECTOR_CATEGORY,
+            plugin.id(),
+            EFFECTOR_APPLY_OPERATION,
+            plugin.descriptor(),
+        );
         self.register_effector_plugin(plugin);
     }
 
     fn register_bundled_decorator(&mut self, plugin: Arc<dyn DecoratorPlugin>) {
-        self.bundled_operations
-            .record(DECORATOR_CATEGORY, plugin.id(), DECORATOR_APPLY_OPERATION);
+        self.bundled_operations.record(
+            DECORATOR_CATEGORY,
+            plugin.id(),
+            DECORATOR_APPLY_OPERATION,
+            plugin.descriptor(),
+        );
         self.register_decorator_plugin(plugin);
     }
 
     fn register_bundled_style(&mut self, plugin: Arc<dyn StylePlugin>) {
-        self.bundled_operations
-            .record(STYLE_CATEGORY, plugin.id(), STYLE_APPLY_OPERATION);
+        self.bundled_operations.record(
+            STYLE_CATEGORY,
+            plugin.id(),
+            STYLE_APPLY_OPERATION,
+            plugin.descriptor(),
+        );
         self.register_style_plugin(plugin);
     }
 
@@ -190,6 +240,7 @@ impl PluginManager {
             PATH_EFFECT_CATEGORY,
             plugin.id(),
             PATH_EFFECT_APPLY_OPERATION,
+            plugin.descriptor(),
         );
         self.register_path_effect_plugin(plugin);
     }
@@ -199,8 +250,10 @@ impl PluginManager {
     /// Operations registered later through public registration or runtime
     /// discovery remain executable but are intentionally excluded: external
     /// plugins must not be forced into the repository's static node catalog.
-    /// Resolution uses the same path as graph authoring and rendering.
+    /// Descriptors are snapshotted while the default manager is built, so a
+    /// later same-ID external replacement cannot rewrite first-party truth.
+    /// Catalog tests separately verify each snapshot is runtime reachable.
     pub fn bundled_operation_descriptors(&self) -> Result<Vec<OperationDescriptor>, LibraryError> {
-        self.bundled_operations.descriptors(self)
+        self.bundled_operations.descriptors()
     }
 }
