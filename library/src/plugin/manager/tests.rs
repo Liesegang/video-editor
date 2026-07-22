@@ -471,6 +471,61 @@ impl StylePlugin for EvaluatedValueStylePlugin {
 }
 
 #[test]
+fn external_registration_does_not_expand_the_bundled_operation_inventory() {
+    let manager = PluginManager::default();
+    let before = manager
+        .bundled_operation_descriptors()
+        .expect("bundled descriptors must resolve")
+        .into_iter()
+        .map(|descriptor| {
+            (
+                descriptor.category().to_string(),
+                descriptor.component_id().to_string(),
+                descriptor.operation().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    manager.register_style_plugin(Arc::new(EvaluatedValueStylePlugin));
+    assert!(
+        manager
+            .operation_descriptor(
+                STYLE_CATEGORY,
+                "evaluated-value-style",
+                STYLE_APPLY_OPERATION,
+            )
+            .is_ok(),
+        "external operation must remain runtime reachable"
+    );
+    assert!(
+        manager
+            .create_style_operation_node("evaluated-value-style")
+            .is_ok(),
+        "external operation factory must remain runtime reachable"
+    );
+
+    let after = manager
+        .bundled_operation_descriptors()
+        .expect("external registration must not invalidate bundled descriptors")
+        .into_iter()
+        .map(|descriptor| {
+            (
+                descriptor.category().to_string(),
+                descriptor.component_id().to_string(),
+                descriptor.operation().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(after, before);
+    assert!(
+        after
+            .iter()
+            .all(|(_, component_id, _)| component_id != "evaluated-value-style"),
+        "third-party operations belong to the runtime registry, not the static bundled catalog"
+    );
+}
+
+#[test]
 fn operation_validation_materializes_stateful_values_before_plugin_evaluation() {
     let evaluations = Arc::new(AtomicUsize::new(0));
     let manager = PluginManager::default();

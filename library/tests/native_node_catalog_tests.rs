@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use library::model::project::{
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortSide,
 };
-use library::model::{NativeNodeRuntimeStatus, native_node_catalog};
+use library::model::{NativeNodeRuntimeStatus, NodeContent, native_node_catalog};
+use library::plugin::PluginManager;
 
 const NODE_LIST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../node_list.yml"));
 
@@ -79,6 +80,9 @@ struct NodeListEntry {
     catalog_status: Option<String>,
     catalog_id: Option<String>,
     runtime_status: Option<String>,
+    operation_category: Option<String>,
+    component_id: Option<String>,
+    operation: Option<String>,
     inputs: Vec<NodeListPort>,
     outputs: Vec<NodeListPort>,
 }
@@ -153,6 +157,9 @@ fn parse_node_list() -> BTreeMap<String, NodeListEntry> {
                             "catalog_status" => &mut entry.catalog_status,
                             "catalog_id" => &mut entry.catalog_id,
                             "runtime_status" => &mut entry.runtime_status,
+                            "operation_category" => &mut entry.operation_category,
+                            "component_id" => &mut entry.component_id,
+                            "operation" => &mut entry.operation,
                             _ => continue,
                         };
                         assert!(
@@ -337,23 +344,53 @@ fn node_list_and_native_catalog_match_bidirectionally() {
     for entry in entries.values() {
         let status = entry.catalog_status.as_deref().unwrap_or_else(|| {
             panic!(
-                "{} is missing mandatory catalog_status (native or design-needed)",
+                "{} is missing mandatory catalog_status (native, plugin-managed, or design-needed)",
                 entry.label
             )
         });
         assert!(
-            matches!(status, "native" | "design-needed"),
+            matches!(status, "native" | "plugin-managed" | "design-needed"),
             "{} has unsupported catalog_status {status}",
             entry.label
         );
         if status == "design-needed" {
             assert!(
-                entry.catalog_id.is_none() && entry.runtime_status.is_none(),
-                "{} is design-only but claims native catalog metadata",
+                entry.catalog_id.is_none()
+                    && entry.runtime_status.is_none()
+                    && entry.operation_category.is_none()
+                    && entry.component_id.is_none()
+                    && entry.operation.is_none(),
+                "{} is design-only but claims an implemented catalog identity",
                 entry.label
             );
             continue;
         }
+        if status == "plugin-managed" {
+            assert!(
+                entry.catalog_id.is_none() && entry.runtime_status.is_none(),
+                "{} is plugin-managed but claims native catalog metadata",
+                entry.label
+            );
+            for (field, value) in [
+                ("operation_category", &entry.operation_category),
+                ("component_id", &entry.component_id),
+                ("operation", &entry.operation),
+            ] {
+                assert!(
+                    value.as_deref().is_some_and(|value| !value.is_empty()),
+                    "{} is plugin-managed but missing {field}",
+                    entry.label
+                );
+            }
+            continue;
+        }
+        assert!(
+            entry.operation_category.is_none()
+                && entry.component_id.is_none()
+                && entry.operation.is_none(),
+            "{} is native but also claims a plugin operation identity",
+            entry.label
+        );
         let catalog_id = entry
             .catalog_id
             .as_deref()
@@ -419,6 +456,104 @@ fn node_list_and_native_catalog_match_bidirectionally() {
             descriptor.ports(),
             "{catalog_id}: ordered typed port contract drift"
         );
+    }
+}
+
+#[test]
+fn node_list_and_bundled_plugin_operations_match_bidirectionally() {
+    let entries = parse_node_list();
+    let mut yaml_by_identity = BTreeMap::new();
+    for entry in entries
+        .values()
+        .filter(|entry| entry.catalog_status.as_deref() == Some("plugin-managed"))
+    {
+        let identity = (
+            entry
+                .operation_category
+                .as_deref()
+                .expect("plugin-managed operation category"),
+            entry
+                .component_id
+                .as_deref()
+                .expect("plugin-managed component id"),
+            entry
+                .operation
+                .as_deref()
+                .expect("plugin-managed operation"),
+        );
+        assert!(
+            yaml_by_identity.insert(identity, entry).is_none(),
+            "duplicate plugin-managed identity {identity:?} in node_list.yml"
+        );
+    }
+
+    let manager = PluginManager::default();
+    let descriptors = manager
+        .bundled_operation_descriptors()
+        .expect("all bundled operation descriptors must resolve");
+    let mut bundled_by_identity = BTreeMap::new();
+    for descriptor in &descriptors {
+        let identity = (
+            descriptor.category(),
+            descriptor.component_id(),
+            descriptor.operation(),
+        );
+        assert!(
+            bundled_by_identity.insert(identity, descriptor).is_none(),
+            "duplicate bundled operation identity {identity:?}"
+        );
+    }
+
+    assert_eq!(
+        yaml_by_identity.keys().copied().collect::<Vec<_>>(),
+        bundled_by_identity.keys().copied().collect::<Vec<_>>(),
+        "node_list.yml plugin-managed entries and bundled descriptors must contain exactly the same operation identities; external plugins are intentionally outside this gate"
+    );
+
+    for (identity, descriptor) in bundled_by_identity {
+        let entry = yaml_by_identity[&identity];
+        assert_eq!(entry.label, descriptor.label(), "{identity:?}: label drift");
+        assert_eq!(
+            entry.port_definitions(),
+            descriptor.declared_ports(),
+            "{identity:?}: ordered typed port contract drift"
+        );
+
+        let resolved = manager
+            .operation_descriptor(identity.0, identity.1, identity.2)
+            .unwrap_or_else(|error| panic!("{identity:?}: descriptor is unreachable: {error}"));
+        assert_eq!(resolved.label(), descriptor.label());
+        assert_eq!(resolved.declared_ports(), descriptor.declared_ports());
+
+        let node = manager
+            .create_operation_node(identity.0, identity.1, identity.2)
+            .unwrap_or_else(|error| panic!("{identity:?}: factory is unreachable: {error}"));
+        let NodeContent::PluginOperation(content) = node.content() else {
+            panic!("{identity:?}: factory did not create a plugin operation Node");
+        };
+        assert_eq!(content.category, identity.0);
+        assert_eq!(content.component_id, identity.1);
+        assert_eq!(content.operation, identity.2);
+        assert_eq!(content.declared_ports, descriptor.declared_ports());
+        assert_eq!(
+            node.properties().iter().count(),
+            descriptor.properties().len(),
+            "{identity:?}: factory property count drift"
+        );
+        for definition in descriptor.properties() {
+            let property = node.properties().get(definition.name()).unwrap_or_else(|| {
+                panic!(
+                    "{identity:?}: factory omitted property {}",
+                    definition.name()
+                )
+            });
+            assert_eq!(
+                property.get_static_value(),
+                Some(definition.default_value()),
+                "{identity:?}: factory default drift for {}",
+                definition.name()
+            );
+        }
     }
 }
 

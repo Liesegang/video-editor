@@ -1,8 +1,10 @@
 # `catalog_status` is mandatory for every design entry. `native` entries are
 # checked bidirectionally against the compiled catalog; `design-needed` entries
-# may remain unimplemented, and `plugin-managed` entries belong to the dynamic
-# plugin descriptor registry. Native entries also declare a stable `catalog_id`
-# and their current runtime status.
+# may remain unimplemented, and `plugin-managed` entries mirror descriptors
+# bundled with this binary. Runtime-discovered/third-party plugins are valid
+# Project operations but intentionally stay outside this static first-party
+# inventory. Native entries also declare a stable `catalog_id` and runtime
+# status; plugin-managed entries declare their complete operation identity.
 
 Expression:
   category: Scripting
@@ -460,12 +462,19 @@ List Length:
 # --- Compositing ---
 Shape Transform:
   category: Shape Operations / Transform
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: transform
   component_id: transform
   operation: transform.apply.v1
   description: Absolute spatial placement for a complete Shape value; opacity is owned by Style
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: position
       key: property:position
       label: Position
@@ -524,13 +533,6 @@ Shape Transform:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
         suffix: px
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -548,12 +550,19 @@ Shape Transform:
       multiplicity: Single
 Image Transform:
   category: Image Operations / Transform
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: transform
   component_id: image
   operation: transform.apply.v1
   description: Absolute spatial placement for a complete Image subtree; opacity is not a Transform property
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: position
       key: property:position
       label: Position
@@ -612,13 +621,6 @@ Image Transform:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
         suffix: px
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: image
       key: image_in
       label: Image
@@ -1232,18 +1234,204 @@ Noise:
 # --- Filters ---
 Blur:
   category: Filters
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: blur
+  operation: effect.apply.v1
   description: Gaussian blur
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: sigma_x
+      key: property:sigma_x
+      label: Sigma X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: sigma_x
+    - name: sigma_y
+      key: property:sigma_y
+      label: Sigma Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: sigma_y
+    - name: tile_mode
+      key: property:tile_mode
+      label: Tile Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: tile_mode
     - name: image
+      key: image_in
+      label: Image
       type: Image
-    - name: radius_x
-      type: Scalar
-    - name: radius_y
-      type: Scalar
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
     - name: image
+      key: image
+      label: Image
       type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Pixel Sorter:
+  category: Filters
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: pixel_sorter
+  operation: effect.apply.v1
+  description: Sort contiguous pixel runs by a selected channel criterion
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: threshold
+      key: property:threshold
+      label: Threshold
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: threshold
+    - name: direction
+      key: property:direction
+      label: Direction
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: direction
+    - name: sort_criteria
+      key: property:sort_criteria
+      label: Criteria
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: sort_criteria
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Dilate:
+  category: Filters
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: dilate
+  operation: effect.apply.v1
+  description: Expand opaque image regions independently on each axis
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: radius_x
+      key: property:radius_x
+      label: Radius X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: radius_x
+    - name: radius_y
+      key: property:radius_y
+      label: Radius Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: radius_y
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Erode:
+  category: Filters
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: erode
+  operation: effect.apply.v1
+  description: Contract opaque image regions independently on each axis
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: radius_x
+      key: property:radius_x
+      label: Radius X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: radius_x
+    - name: radius_y
+      key: property:radius_y
+      label: Radius Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: radius_y
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Glow:
   category: Filters
   catalog_status: design-needed
@@ -1261,21 +1449,221 @@ Glow:
       type: Image
 Drop Shadow:
   category: Filters
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: drop_shadow
+  operation: effect.apply.v1
   inputs:
-    - name: image
-      type: Image
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: dx
+      key: property:dx
+      label: Distance X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: dx
+    - name: dy
+      key: property:dy
+      label: Distance Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: dy
+    - name: sigma_x
+      key: property:sigma_x
+      label: Blur X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: sigma_x
+    - name: sigma_y
+      key: property:sigma_y
+      label: Blur Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: sigma_y
     - name: color
+      key: property:color
+      label: Color
       type: Color
-    - name: distance
-      type: Scalar
-    - name: angle
-      type: Scalar
-    - name: softness
-      type: Scalar
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+    - name: shadow_only
+      key: property:shadow_only
+      label: Shadow Only
+      type: Boolean
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: shadow_only
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
     - name: image
+      key: image
+      label: Image
       type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Magnifier:
+  category: Filters
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: magnifier
+  operation: effect.apply.v1
+  description: Magnify one rectangular image region
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: x
+      key: property:x
+      label: X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: x
+    - name: y
+      key: property:y
+      label: Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: y
+    - name: width
+      key: property:width
+      label: Width
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: width
+    - name: height
+      key: property:height
+      label: Height
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: height
+    - name: zoom_amount
+      key: property:zoom_amount
+      label: Zoom Amount
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: zoom_amount
+    - name: inset
+      key: property:inset
+      label: Inset
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: inset
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Tile:
+  category: Filters
+  catalog_status: plugin-managed
+  operation_category: effect
+  component_id: tile
+  operation: effect.apply.v1
+  description: Repeat one source rectangle across a destination rectangle
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: x
+      key: property:x
+      label: X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: x
+    - name: y
+      key: property:y
+      label: Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: y
+    - name: width
+      key: property:width
+      label: Width
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: width
+    - name: height
+      key: property:height
+      label: Height
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: height
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 
 # --- Distortion ---
 Displacement Map:
@@ -1339,15 +1727,22 @@ Union Path:
   outputs:
     - name: path
       type: Path
-Dash Path Effect:
+Dash:
   category: Shape Operations / Path Effects
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: path_effect
   component_id: dash
   operation: path_effect.apply.v1
   shape_geometry: Path
   description: Apply one Dash config to Path geometry; Text requires an explicit outline-extraction operation
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: intervals
       key: property:intervals
       label: Intervals
@@ -1376,13 +1771,6 @@ Dash Path Effect:
         suffix: px
         min_hard_limit: false
         max_hard_limit: false
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -1398,15 +1786,22 @@ Dash Path Effect:
       side: Right
       exposure: Graph
       multiplicity: Single
-Corner Path Effect:
+Corner:
   category: Shape Operations / Path Effects
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: path_effect
   component_id: corner
   operation: path_effect.apply.v1
   shape_geometry: Path
   description: Apply one Corner config to Path geometry; Text requires an explicit outline-extraction operation
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: radius
       key: property:radius
       label: Radius
@@ -1424,13 +1819,6 @@ Corner Path Effect:
         suffix: px
         min_hard_limit: true
         max_hard_limit: false
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -1446,15 +1834,22 @@ Corner Path Effect:
       side: Right
       exposure: Graph
       multiplicity: Single
-Discrete Path Effect:
+Discrete:
   category: Shape Operations / Path Effects
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: path_effect
   component_id: discrete
   operation: path_effect.apply.v1
   shape_geometry: Path
   description: Apply one seeded Discrete config to Path geometry; Text requires explicit outline extraction
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: segment_length
       key: property:segment_length
       label: Segment Length
@@ -1505,13 +1900,6 @@ Discrete Path Effect:
         suffix: ""
         min_hard_limit: true
         max_hard_limit: true
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -1527,15 +1915,22 @@ Discrete Path Effect:
       side: Right
       exposure: Graph
       multiplicity: Single
-Trim Path Effect:
+Trim:
   category: Shape Operations / Path Effects
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: path_effect
   component_id: trim
   operation: path_effect.apply.v1
   shape_geometry: Path
   description: Apply one Trim config to Path geometry; Text requires an explicit outline-extraction operation
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: start
       key: property:start
       label: Start
@@ -1570,13 +1965,6 @@ Trim Path Effect:
         suffix: ""
         min_hard_limit: true
         max_hard_limit: true
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -2164,12 +2552,19 @@ Motion Behavior:
 # --- Style ---
 Image Opacity:
   category: Image Operations / Styles
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: style
   component_id: image_opacity
   operation: style.apply.v1
   description: Apply alpha to one complete Image subtree without changing its spatial transform
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: opacity
       key: property:opacity
       label: Opacity
@@ -2187,13 +2582,6 @@ Image Opacity:
         suffix: ""
         min_hard_limit: true
         max_hard_limit: true
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: image
       key: image_in
       label: Image
@@ -2211,12 +2599,19 @@ Image Opacity:
       multiplicity: Single
 Fill:
   category: Shape Operations / Styles
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: style
   component_id: fill
   operation: style.apply.v1
   description: Rasterize one Shape with a fill; owns the Shape branch's base opacity
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: color
       key: property:color
       label: Color
@@ -2262,13 +2657,6 @@ Fill:
         suffix: px
         min_hard_limit: false
         max_hard_limit: false
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -2286,12 +2674,19 @@ Fill:
       multiplicity: Single
 Stroke:
   category: Shape Operations / Styles
-  catalog_status: design-needed
+  catalog_status: plugin-managed
   operation_category: style
   component_id: stroke
   operation: style.apply.v1
   description: Rasterize one Shape with a stroke; owns the Shape branch's base opacity
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: color
       key: property:color
       label: Color
@@ -2423,13 +2818,6 @@ Stroke:
         suffix: px
         min_hard_limit: false
         max_hard_limit: false
-    - name: time
-      key: time
-      label: Time
-      type: Number
-      side: Left
-      exposure: Graph
-      multiplicity: Single
     - name: shape
       key: shape_in
       label: Shape
@@ -2461,89 +2849,352 @@ Shadow Style:
       type: Style
 
 # --- Ensemble ---
-Transform Effector:
+Transform Modulation:
   category: Ensemble
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effector
+  component_id: transform
+  operation: effector.apply.v1
   inputs:
-    - name: translate
-      type: Vector2
-    - name: rotate
-      type: Scalar
-    - name: scale
-      type: Vector2
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: tx
+      key: property:tx
+      label: Translate X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: tx
+    - name: ty
+      key: property:ty
+      label: Translate Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: ty
+    - name: scale_x
+      key: property:scale_x
+      label: Scale X
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: scale_x
+    - name: scale_y
+      key: property:scale_y
+      label: Scale Y
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: scale_y
+    - name: rotation
+      key: property:rotation
+      label: Rotation
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: rotation
     - name: target
-      type: Enum
-      options: [Char, Line, Block]
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: effector
-      type: Effector
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 
-Step Delay Effector:
+Step Delay:
   category: Ensemble
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effector
+  component_id: step_delay
+  operation: effector.apply.v1
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: delay
-      type: Scalar
+      key: property:delay
+      label: Delay per Char
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: delay
     - name: duration
-      type: Scalar
+      key: property:duration
+      label: Duration
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: duration
     - name: from_opacity
-      type: Scalar
+      key: property:from_opacity
+      label: From Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: from_opacity
     - name: to_opacity
-      type: Scalar
+      key: property:to_opacity
+      label: To Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: to_opacity
+    - name: target
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: effector
-      type: Effector
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 
-Randomize Effector:
+Randomize:
   category: Ensemble
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effector
+  component_id: randomize
+  operation: effector.apply.v1
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: seed
-      type: Scalar
+      key: property:seed
+      label: Seed
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: seed
     - name: amount
-      type: Scalar
+      key: property:amount
+      label: Amount
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: amount
     - name: translate_range
-      type: Vector2
+      key: property:translate_range
+      label: Translate Range
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: translate_range
     - name: rotate_range
-      type: Scalar
+      key: property:rotate_range
+      label: Rotate Range
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: rotate_range
     - name: scale_range
-      type: Vector2
+      key: property:scale_range
+      label: Scale Range
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: scale_range
+    - name: target
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: effector
-      type: Effector
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 
-Opacity Effector:
+Opacity Modulation:
   category: Ensemble
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: effector
+  component_id: opacity
+  operation: effector.apply.v1
   inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: opacity
-      type: Scalar
+      key: property:opacity
+      label: Element Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
     - name: mode
-      type: Enum
-      options: [Set, Add, Multiply]
+      key: property:mode
+      label: Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: mode
+    - name: target
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
-    - name: effector
-      type: Effector
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 
-Backplate Decorator:
+Backplate:
   category: Ensemble
-  catalog_status: design-needed
+  catalog_status: plugin-managed
+  operation_category: decorator
+  component_id: backplate
+  operation: decorator.apply.v1
   description: Fit arbitrary background Shape geometry to Char, Line, or Block bounds; use downstream Fill/Stroke Style nodes for appearance
   inputs:
-    - name: target_shape
-      type: Shape
-    - name: background_shape
-      type: Shape
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
     - name: target
-      type: Enum
-      options: [Char, Line, Block]
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
     - name: padding
-      type: Scalar
+      key: property:padding
+      label: Padding
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: padding
     - name: offset
+      key: property:offset
+      label: Offset
       type: Vector2
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: offset
     - name: fit
-      type: Enum
-      options: [Stretch, Contain, Cover]
+      key: property:fit
+      label: Fit
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: fit
+    - name: target_shape
+      key: shape_in
+      label: Target
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: background_shape
+      key: background_shape
+      label: Background
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
   outputs:
     - name: background_shape
+      key: shape
+      label: Background
       type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single

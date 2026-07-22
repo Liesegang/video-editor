@@ -1,5 +1,7 @@
 //! Plugin manager for registering, loading, and accessing plugins.
 
+mod bundled;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -71,94 +73,10 @@ fn materialize_validated_operation_properties(
     Some(materialized)
 }
 
-use crate::plugin::effects::{
-    BlurEffectPlugin, DilateEffectPlugin, DropShadowEffectPlugin, ErodeEffectPlugin,
-    MagnifierEffectPlugin, PixelSorterPlugin, TileEffectPlugin,
-};
-use crate::plugin::entity_converter::{
-    ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
-    SolidEntityConverterPlugin, TextEntityConverterPlugin, VideoEntityConverterPlugin,
-};
-use crate::plugin::exporters::{FfmpegExportPlugin, PngExportPlugin};
-use crate::plugin::loaders::{FfmpegVideoLoader, NativeImageLoader};
-use crate::plugin::properties::{
-    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
-};
-
 /// Main plugin manager.
 pub struct PluginManager {
     inner: RwLock<PluginRegistry>,
-}
-
-impl Default for PluginManager {
-    fn default() -> Self {
-        let manager = Self::new();
-
-        // Standard Effects
-        manager.register_effect(Arc::new(BlurEffectPlugin::new()));
-        manager.register_effect(Arc::new(PixelSorterPlugin::new()));
-        manager.register_effect(Arc::new(DilateEffectPlugin::new()));
-        manager.register_effect(Arc::new(ErodeEffectPlugin::new()));
-        manager.register_effect(Arc::new(DropShadowEffectPlugin::new()));
-        manager.register_effect(Arc::new(MagnifierEffectPlugin::new()));
-        manager.register_effect(Arc::new(TileEffectPlugin::new()));
-
-        // Standard Loaders
-        manager.register_load_plugin(Arc::new(NativeImageLoader::new()));
-        manager.register_load_plugin(Arc::new(FfmpegVideoLoader::new()));
-
-        // Standard Exporters
-        manager.register_export_plugin(Arc::new(PngExportPlugin::new()));
-        manager.register_export_plugin(Arc::new(FfmpegExportPlugin::new()));
-
-        // Standard Property Plugins
-        manager.register_property_plugin(Arc::new(ConstantPropertyPlugin::new()));
-        manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
-        manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
-
-        // Standard Entity Converters
-        manager.register_entity_converter_plugin(Arc::new(VideoEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(ImageEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(TextEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(ShapeEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(SolidEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(SkSLEntityConverterPlugin::new()));
-
-        // Standard Effectors
-        manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::TransformEffectorPlugin));
-        manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::StepDelayEffectorPlugin));
-        manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::RandomizeEffectorPlugin));
-        manager.register_effector_plugin(Arc::new(crate::plugin::effectors::OpacityEffectorPlugin));
-
-        // Standard Decorators
-        manager.register_decorator_plugin(Arc::new(
-            crate::plugin::decorators::BackplateDecoratorPlugin,
-        ));
-
-        // Standard Styles
-        manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
-        manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
-        manager.register_style_plugin(Arc::new(crate::plugin::styles::ImageOpacityStylePlugin));
-
-        // Standard Shape Path Effects
-        manager.register_path_effect_plugin(Arc::new(
-            crate::plugin::path_effects::DashPathEffectPlugin,
-        ));
-        manager.register_path_effect_plugin(Arc::new(
-            crate::plugin::path_effects::CornerPathEffectPlugin,
-        ));
-        manager.register_path_effect_plugin(Arc::new(
-            crate::plugin::path_effects::DiscretePathEffectPlugin,
-        ));
-        manager.register_path_effect_plugin(Arc::new(
-            crate::plugin::path_effects::TrimPathEffectPlugin,
-        ));
-
-        manager
-    }
+    bundled_operations: bundled::BundledOperationInventory,
 }
 
 impl PluginManager {
@@ -177,6 +95,7 @@ impl PluginManager {
                 dynamic_libraries: Vec::new(),
                 runtime_plugins: RuntimePluginRegistry::new(),
             }),
+            bundled_operations: bundled::BundledOperationInventory::default(),
         }
     }
 
