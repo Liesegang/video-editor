@@ -662,6 +662,7 @@ fn select_false_never_emits_select_for_nodes_groups_wires_or_blank_canvas() {
         delete: false,
         reparent: false,
         resize_groups: false,
+        layout_swipe: node_editor_ui::LayoutSwipeHitArea::Disabled,
     };
     for point in [
         graph.nodes[0].rect.center(),

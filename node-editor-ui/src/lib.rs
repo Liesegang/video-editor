@@ -10,7 +10,9 @@
 mod chrome;
 mod editor;
 mod graph;
+mod input;
 mod interaction;
+mod layout_swipe;
 mod selection;
 mod wire;
 
@@ -23,5 +25,6 @@ pub use graph::{
     PortDirection, PortInstanceId, PortOwner, TypeKey, WireDescriptor,
 };
 pub use interaction::{EditorOutput, InteractionOptions, InteractionState};
+pub use layout_swipe::{LayoutSwipeAxis, LayoutSwipeHitArea, LayoutSwipeIntent, LayoutSwipePhase};
 pub use selection::{after_click, after_marquee, topmost_hit};
 pub use wire::{CubicBezier, HitRegion};

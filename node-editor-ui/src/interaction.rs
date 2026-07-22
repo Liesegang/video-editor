@@ -2,7 +2,12 @@
 
 use egui::{Pos2, Rect, Vec2};
 
-use crate::{after_click, after_marquee, GraphFrame, ItemId, PortDirection, WireDescriptor};
+use crate::input::interaction_input;
+use crate::layout_swipe::{hit_anchor as hit_layout_swipe_anchor, LayoutSwipeState};
+use crate::{
+    after_click, after_marquee, GraphFrame, ItemId, LayoutSwipeHitArea, LayoutSwipeIntent,
+    LayoutSwipePhase, PortDirection, WireDescriptor,
+};
 
 const MARQUEE_DRAG_THRESHOLD: f32 = 4.0;
 const PORT_HIT_RADIUS: f32 = 9.0;
@@ -24,6 +29,8 @@ pub enum EditorOutput<NodeId, PortId, WireId, GroupId> {
         items: Vec<ItemId<NodeId, GroupId, WireId>>,
         delta: Vec2,
     },
+    /// A non-mutating directional-layout gesture for the host to interpret.
+    LayoutSwipe(LayoutSwipeIntent<NodeId>),
     Connect {
         from: PortId,
         to: PortId,
@@ -62,6 +69,8 @@ pub struct InteractionOptions {
     pub delete: bool,
     pub reparent: bool,
     pub resize_groups: bool,
+    /// Hold-A directional layout gesture target policy.
+    pub layout_swipe: LayoutSwipeHitArea,
 }
 
 impl InteractionOptions {
@@ -75,6 +84,7 @@ impl InteractionOptions {
         delete: true,
         reparent: true,
         resize_groups: true,
+        layout_swipe: LayoutSwipeHitArea::Header,
     };
 
     /// Production migration slice: logical click/marquee selection and wire
@@ -90,6 +100,7 @@ impl InteractionOptions {
         delete: false,
         reparent: false,
         resize_groups: false,
+        layout_swipe: LayoutSwipeHitArea::Header,
     };
 
     /// Overview interaction keeps large semantic targets and blank-canvas
@@ -104,6 +115,7 @@ impl InteractionOptions {
         delete: false,
         reparent: false,
         resize_groups: false,
+        layout_swipe: LayoutSwipeHitArea::Node,
     };
 }
 
@@ -145,6 +157,7 @@ enum Gesture<NodeId, PortId, GroupId> {
         current: Pos2,
         transform: egui::emath::TSTransform,
     },
+    LayoutSwipe(LayoutSwipeState<NodeId>),
 }
 
 impl<NodeId, PortId, GroupId> Gesture<NodeId, PortId, GroupId> {
@@ -154,6 +167,7 @@ impl<NodeId, PortId, GroupId> Gesture<NodeId, PortId, GroupId> {
             | Self::Move { transform, .. }
             | Self::Connect { transform, .. }
             | Self::Resize { transform, .. } => *transform,
+            Self::LayoutSwipe(gesture) => gesture.transform(),
         }
     }
 }
@@ -192,6 +206,12 @@ impl<NodeId, PortId, WireId, GroupId> InteractionState<NodeId, PortId, WireId, G
         self.gesture.is_some()
     }
 
+    /// Whether the host must suppress competing move, reparent, pan, and zoom
+    /// behavior while a directional-layout gesture owns the pointer.
+    pub const fn is_layout_swipe_active(&self) -> bool {
+        matches!(self.gesture, Some(Gesture::LayoutSwipe(_)))
+    }
+
     pub fn cancel(&mut self) {
         self.gesture = None;
     }
@@ -216,23 +236,49 @@ where
     {
         state.cancel();
     }
+    let input = interaction_input(ui);
+    let wants_keyboard = ui.ctx().wants_keyboard_input();
+    if !input.focused {
+        let output = cancel_layout_swipe(state, input.pointer).map(EditorOutput::LayoutSwipe);
+        state.cancel();
+        return output.into_iter().collect();
+    }
+    if input.escape && state.is_layout_swipe_active() {
+        return cancel_layout_swipe(state, input.pointer)
+            .map(EditorOutput::LayoutSwipe)
+            .into_iter()
+            .collect();
+    }
+
     let mut outputs = keyboard_outputs(ui, frame, state, options);
-    let (pressed, down, released, pointer, modifiers) = ui.input(|input| {
-        (
-            input.pointer.primary_pressed(),
-            input.pointer.primary_down(),
-            input.pointer.primary_released(),
-            input.pointer.interact_pos(),
-            input.modifiers,
-        )
-    });
+    if input.escape {
+        return outputs;
+    }
+
+    let navigation_owns_pointer = input.space_down || input.middle_down;
+    let a_held_through_release =
+        input.a_down || (input.released && input.pointer_released_before_a);
+    let layout_conflict = pointer_blocked
+        || wants_keyboard
+        || navigation_owns_pointer
+        || options.layout_swipe == LayoutSwipeHitArea::Disabled
+        || !a_held_through_release;
+    if state.is_layout_swipe_active() && layout_conflict {
+        if let Some(cancel) = cancel_layout_swipe(state, input.pointer) {
+            outputs.push(EditorOutput::LayoutSwipe(cancel));
+        }
+        return outputs;
+    }
 
     if state.gesture.is_none()
-        && pressed
+        && input.pressed
         && !pointer_blocked
-        && pointer.is_some_and(|position| frame.viewport.contains(position))
+        && !navigation_owns_pointer
+        && input
+            .press_position
+            .is_some_and(|position| frame.viewport.contains(position))
     {
-        let Some(screen_position) = pointer else {
+        let Some(screen_position) = input.press_position else {
             return outputs;
         };
         let graph_position = frame.graph_position(screen_position);
@@ -243,24 +289,62 @@ where
             options,
             graph_position,
             screen_position,
-            modifiers,
+            input.press_modifiers,
+            input.a_down_at_press && !wants_keyboard,
             &mut outputs,
         );
     }
 
-    if let Some(position) = pointer {
-        update_gesture(frame, state, options, position, down, &mut outputs);
+    if state.is_layout_swipe_active() && !a_held_through_release {
+        if let Some(cancel) = cancel_layout_swipe(state, input.pointer) {
+            outputs.push(EditorOutput::LayoutSwipe(cancel));
+        }
+        return outputs;
+    }
+
+    if let Some(position) = input.pointer {
+        update_gesture(
+            frame,
+            state,
+            options,
+            position,
+            input.down,
+            input.released,
+            &mut outputs,
+        );
     }
 
     paint_transient(ui, frame, state);
 
-    if released {
-        finish_gesture(frame, state, options, pointer, &mut outputs);
-    } else if !down && !pressed {
-        state.cancel();
+    if input.released {
+        finish_gesture(frame, state, options, input.pointer, &mut outputs);
+    } else if !input.down && !input.pressed {
+        if let Some(cancel) = cancel_layout_swipe(state, input.pointer) {
+            outputs.push(EditorOutput::LayoutSwipe(cancel));
+        } else {
+            state.cancel();
+        }
     }
 
     outputs
+}
+
+fn cancel_layout_swipe<NodeId, PortId, WireId, GroupId>(
+    state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
+    current: Option<Pos2>,
+) -> Option<LayoutSwipeIntent<NodeId>>
+where
+    NodeId: Clone,
+{
+    match state.gesture.take() {
+        Some(Gesture::LayoutSwipe(gesture)) => {
+            Some(gesture.finish(LayoutSwipePhase::Cancel, current))
+        }
+        gesture => {
+            state.gesture = gesture;
+            None
+        }
+    }
 }
 
 fn keyboard_outputs<NodeId, PortId, WireId, GroupId, Key>(
@@ -338,6 +422,7 @@ fn begin_gesture<NodeId, PortId, WireId, GroupId, Key>(
     graph_position: Pos2,
     screen_position: Pos2,
     modifiers: egui::Modifiers,
+    layout_swipe_requested: bool,
     outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
 ) where
     NodeId: Clone + Eq,
@@ -376,6 +461,21 @@ fn begin_gesture<NodeId, PortId, WireId, GroupId, Key>(
                     outputs,
                 );
             }
+            return;
+        }
+    }
+
+    if layout_swipe_requested {
+        if let Some(anchor) = hit_layout_swipe_anchor(frame, graph_position, options.layout_swipe) {
+            let gesture = LayoutSwipeState::new(
+                anchor.id.clone(),
+                screen_position,
+                modifiers,
+                frame.transform,
+            );
+            outputs.push(EditorOutput::LayoutSwipe(gesture.start_intent()));
+            state.gesture = Some(Gesture::LayoutSwipe(gesture));
+            capture_pointer(ui);
             return;
         }
     }
@@ -456,6 +556,7 @@ fn update_gesture<NodeId, PortId, WireId, GroupId, Key>(
     options: InteractionOptions,
     screen_position: Pos2,
     pointer_down: bool,
+    pointer_released: bool,
     outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
 ) where
     NodeId: Clone,
@@ -511,6 +612,13 @@ fn update_gesture<NodeId, PortId, WireId, GroupId, Key>(
                     group: group.clone(),
                     rect: Rect::from_min_size(initial_rect.min, size),
                 });
+            }
+        }
+        Gesture::LayoutSwipe(gesture) => {
+            if pointer_down || pointer_released {
+                if let Some(update) = gesture.update(screen_position) {
+                    outputs.push(EditorOutput::LayoutSwipe(update));
+                }
             }
         }
     }
@@ -596,6 +704,14 @@ fn finish_gesture<NodeId, PortId, WireId, GroupId, Key>(
                 outputs.push(EditorOutput::Reparent { nodes, parent });
             }
         }
+        Gesture::LayoutSwipe(gesture) => {
+            let phase = if gesture.is_activated() {
+                LayoutSwipePhase::Commit
+            } else {
+                LayoutSwipePhase::Cancel
+            };
+            outputs.push(EditorOutput::LayoutSwipe(gesture.finish(phase, pointer)));
+        }
         Gesture::Marquee { .. }
         | Gesture::Connect { .. }
         | Gesture::Move { .. }
@@ -677,7 +793,10 @@ fn paint_transient<NodeId, PortId, WireId, GroupId, Key>(
                 );
             }
         }
-        Some(Gesture::Move { .. }) | Some(Gesture::Resize { .. }) | None => {}
+        Some(Gesture::Move { .. })
+        | Some(Gesture::Resize { .. })
+        | Some(Gesture::LayoutSwipe(_))
+        | None => {}
     }
 }
 
