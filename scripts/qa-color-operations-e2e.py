@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Real-coordinate E2E for lossless Compose/Split/Mix Color Nodes."""
+"""Real-coordinate E2E for lossless, explicitly transformed Color Nodes."""
 
 import argparse
 import importlib.util
 import json
+import math
 import os
 import signal
 import subprocess
@@ -25,6 +26,7 @@ OPERATIONS = (
     ("compose color", "compose", "Compose"),
     ("split color", "split", "Split"),
     ("mix color", "mix", "Mix"),
+    ("convert color space", "convert_space", "ConvertSpace"),
 )
 
 
@@ -88,7 +90,14 @@ def matching_connections(project, from_id, output, to_id, input_port):
 def connect(client, from_id, output, to_id, input_port, reverse=False):
     source = node_port(from_id, "output", output)
     target = node_port(to_id, "input", input_port)
-    BASE.ensure_node_editor_ports_interactive(client, [source, target])
+    try:
+        BASE.ensure_node_editor_ports_interactive(
+            client, [source, target], max_zooms=14
+        )
+    except QaFailure as error:
+        raise QaFailure(
+            "Cannot enable Color wire {} -> {}: {}".format(output, input_port, error)
+        ) from error
     before = client.state()
     if reverse:
         client.drag_components(target, source, steps=16)
@@ -107,7 +116,7 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
 
 
 def arrange_color_nodes(client, node_ids):
-    """Compact isolated authored Nodes through the real selection/layout UI."""
+    """Compact the graph through the real all-graph layout shortcut."""
     before = client.state()
     positions_before = {
         node_id: before["project"]["nodes"][node_id]["ui_position"]
@@ -115,45 +124,8 @@ def arrange_color_nodes(client, node_ids):
     }
     execution_before = before["editor"]["node_editor"]["layout_execution_serial"]
 
-    for index, node_id in enumerate(node_ids):
-        component_id = "node_editor.node_header:" + node_id
-        snapshot, component = BASE.reveal_node_editor_component(client, component_id)
-        point = client.point(component["rect_points"])
-        client.inject(
-            "click",
-            {
-                "x": point["x"],
-                "y": point["y"],
-                "coordinate_space": "points",
-                "button": "primary",
-                "modifiers": {"shift": index > 0},
-            },
-            {
-                "component_id": component_id,
-                "component_frame": snapshot["frame"],
-                "component_rect_points": component["rect_points"],
-                "coordinate_reason": "select Color Nodes for compact layout",
-            },
-        )
-
-    expected_selection = set(node_ids)
-
-    def selected_all_nodes():
-        state = client.state()
-        selected = {
-            target["id"]
-            for target in state["editor"]["selection"]["targets"]
-            if target["kind"] == "node"
-        }
-        return state if selected == expected_selection else None
-
-    client.wait_until(
-        "Color Node multi-selection",
-        selected_all_nodes,
-    )
-
-    client.key("l", True, command=True)
-    client.key("l", False, command=True)
+    client.key("l", True, shift=True)
+    client.key("l", False, shift=True)
 
     def selection_layout_completed():
         state = client.state()
@@ -167,8 +139,8 @@ def arrange_color_nodes(client, node_ids):
         if (
             node_editor["layout_execution_serial"] > execution_before
             and execution is not None
-            and execution["command"] == "NodeEditorCleanLayoutSelection"
-            and execution["scope"] == "selection"
+            and execution["command"] == "NodeEditorCleanLayoutAll"
+            and execution["scope"] == "all"
             and execution["changed"] is True
             and positions_changed
         ):
@@ -176,11 +148,39 @@ def arrange_color_nodes(client, node_ids):
         return None
 
     arranged = client.wait_until(
-        "Color Node selection layout",
+        "Color Node all-graph layout",
         selection_layout_completed,
     )
-    BASE.assert_history_delta(before, arranged, 1, "Color Node selection layout")
+    BASE.assert_history_delta(before, arranged, 1, "Color Node all-graph layout")
     return arranged
+
+
+def set_node_property(client, node_id, property_key, value, description):
+    """Author a Node property through its rendered egui text-entry control."""
+    input_id = node_port(node_id, "input", property_key)
+    component_id = "node_editor.property.node:{}:{}".format(node_id, property_key)
+    header_id = "node_editor.node_header:" + node_id
+    try:
+        BASE.ensure_node_editor_ports_interactive(client, [input_id], max_zooms=14)
+    except QaFailure as error:
+        raise QaFailure(
+            "Cannot reveal Color property {} on {}: {}".format(
+                property_key, node_id, error
+            )
+        ) from error
+    BASE.reveal_node_editor_component(client, component_id)
+    before = client.state()
+    client.replace_component_text(component_id, str(value))
+    BASE.reveal_node_editor_component(client, header_id)
+    client.click_component(header_id)
+    state = client.wait_project(
+        description,
+        lambda project: project
+        if BASE.property_value(project["nodes"][node_id], property_key) == value
+        else None,
+    )
+    BASE.assert_history_delta(before, state, 1, description)
+    return state
 
 
 def select_and_assert_inspector(client, node_id, property_names):
@@ -226,6 +226,50 @@ def assert_probe_value(probe, expected):
         )
 
 
+def signed_transfer(value, transfer):
+    magnitude = transfer(abs(value))
+    return -magnitude if value < 0.0 else magnitude
+
+
+def srgb_to_linear(value):
+    return signed_transfer(
+        value,
+        lambda magnitude: magnitude / 12.92
+        if magnitude <= 0.04045
+        else ((magnitude + 0.055) / 1.055) ** 2.4,
+    )
+
+
+def linear_to_srgb(value):
+    return signed_transfer(
+        value,
+        lambda magnitude: magnitude * 12.92
+        if magnitude <= 0.0031308
+        else 1.055 * magnitude ** (1.0 / 2.4) - 0.055,
+    )
+
+
+def assert_color_probe_near(probe, space, rgba, tolerance=1.0e-12):
+    result = probe.get("result") or {}
+    value = result.get("value") or {}
+    if result.get("status") != "produced":
+        raise QaFailure("Color runtime did not produce: {!r}".format(result))
+    if value.get("$type") != "color_value" or value.get("space") != space:
+        raise QaFailure(
+            "Color runtime tag {!r}, expected color_value @ {}".format(value, space)
+        )
+    actual = value.get("rgba")
+    if not isinstance(actual, list) or len(actual) != 4:
+        raise QaFailure("Color runtime RGBA is malformed: {!r}".format(actual))
+    for index, (observed, expected) in enumerate(zip(actual, rgba)):
+        if not math.isclose(observed, expected, rel_tol=0.0, abs_tol=tolerance):
+            raise QaFailure(
+                "Color component {} was {!r}, expected {!r}".format(
+                    index, observed, expected
+                )
+            )
+
+
 def run_suite(client):
     health = client.wait_health()
     BASE.wait_fresh_fixture(client)
@@ -235,34 +279,70 @@ def run_suite(client):
     second_compose_id, second_compose_menu = create_color_node(client, *OPERATIONS[0])
     split_id, split_menu = create_color_node(client, *OPERATIONS[1])
     mix_id, mix_menu = create_color_node(client, *OPERATIONS[2])
+    linear_a_id, linear_a_menu = create_color_node(client, *OPERATIONS[3])
+    linear_b_id, linear_b_menu = create_color_node(client, *OPERATIONS[3])
+    display_id, display_menu = create_color_node(client, *OPERATIONS[3])
 
     arrange_color_nodes(
-        client, (compose_id, second_compose_id, split_id, mix_id)
+        client,
+        (
+            compose_id,
+            second_compose_id,
+            linear_a_id,
+            linear_b_id,
+            mix_id,
+            display_id,
+            split_id,
+        ),
+    )
+
+    set_node_property(client, compose_id, "r", 0.5, "encoded source R authoring")
+    set_node_property(
+        client, display_id, "target_space", "srgb", "display transform target"
     )
 
     connections = [
-        connect(client, compose_id, "color", split_id, "color"),
-        connect(client, compose_id, "color", mix_id, "a", reverse=True),
-        connect(client, second_compose_id, "color", mix_id, "b"),
+        connect(client, compose_id, "color", linear_a_id, "color"),
+        connect(client, second_compose_id, "color", linear_b_id, "color"),
+        connect(client, linear_a_id, "color", mix_id, "a", reverse=True),
+        connect(client, linear_b_id, "color", mix_id, "b"),
+        connect(client, mix_id, "color", display_id, "color"),
+        connect(client, display_id, "color", split_id, "color"),
     ]
     inspector = {
         "compose": select_and_assert_inspector(
             client, compose_id, ("space", "r", "g", "b", "a")
         ),
         "mix": select_and_assert_inspector(client, mix_id, ("factor",)),
+        "convert": select_and_assert_inspector(
+            client, display_id, ("color", "target_space")
+        ),
     }
 
-    white = {
+    encoded_source = {
         "$type": "color_value",
         "space": "srgb",
-        "rgba": [1.0, 1.0, 1.0, 1.0],
+        "rgba": [0.5, 1.0, 1.0, 1.0],
     }
     compose_probe = metadata_probe(client, compose_id, "color")
+    linear_probe = metadata_probe(client, linear_a_id, "color")
+    linear_mix_probe = metadata_probe(client, mix_id, "color")
+    display_probe = metadata_probe(client, display_id, "color")
     split_probe = metadata_probe(client, split_id, "space")
-    mix_probe = metadata_probe(client, mix_id, "color")
-    assert_probe_value(compose_probe, white)
+    assert_probe_value(compose_probe, encoded_source)
+    source_linear_r = srgb_to_linear(0.5)
+    mixed_linear_r = (source_linear_r + 1.0) * 0.5
+    display_r = linear_to_srgb(mixed_linear_r)
+    assert_color_probe_near(
+        linear_probe, "linear-srgb", [source_linear_r, 1.0, 1.0, 1.0]
+    )
+    assert_color_probe_near(
+        linear_mix_probe, "linear-srgb", [mixed_linear_r, 1.0, 1.0, 1.0]
+    )
+    assert_color_probe_near(display_probe, "srgb", [display_r, 1.0, 1.0, 1.0])
     assert_probe_value(split_probe, "srgb")
-    assert_probe_value(mix_probe, white)
+    if math.isclose(display_r, 0.75, rel_tol=0.0, abs_tol=1.0e-6):
+        raise QaFailure("Mix occurred in encoded sRGB instead of linear-sRGB")
 
     return {
         "ok": True,
@@ -273,19 +353,32 @@ def run_suite(client):
             "second_compose": second_compose_id,
             "split": split_id,
             "mix": mix_id,
+            "linear_a": linear_a_id,
+            "linear_b": linear_b_id,
+            "display": display_id,
         },
         "menu_metadata": {
             "compose": compose_menu,
             "second_compose": second_compose_menu,
             "split": split_menu,
             "mix": mix_menu,
+            "linear_a": linear_a_menu,
+            "linear_b": linear_b_menu,
+            "display": display_menu,
         },
         "connections": connections,
         "inspector": inspector,
         "runtime": {
             "compose": compose_probe,
             "split_space": split_probe,
-            "mix": mix_probe,
+            "linear": linear_probe,
+            "linear_mix": linear_mix_probe,
+            "display": display_probe,
+            "oracle": {
+                "source_linear_r": source_linear_r,
+                "mixed_linear_r": mixed_linear_r,
+                "display_r": display_r,
+            },
         },
         "actions": client.evidence,
     }
