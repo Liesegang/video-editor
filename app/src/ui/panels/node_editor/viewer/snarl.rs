@@ -488,14 +488,12 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn has_body(&mut self, item: &GraphItem) -> bool {
-        matches!(
-            item,
-            GraphItem::Node(node_id)
-                if self.project.get_node(*node_id).is_some_and(|node| matches!(
-                    node.content(),
-                    NodeContent::Color(library::model::ColorContent::Compose)
-                ))
-        )
+        // Editable values already live in the left input rows and the exact
+        // Node Inspector. Adding a second central body duplicates those
+        // controls and makes coil-layout Nodes wider than the layout model,
+        // which can overlap the next column and steal wire drops.
+        let _ = item;
+        false
     }
 
     fn show_body(

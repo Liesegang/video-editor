@@ -161,13 +161,11 @@ impl ProjectNodeViewer<'_> {
                     INLINE_CONTROL_WIDTH,
                     egui::Align::LEFT,
                 )
-                .on_hover_text(
-                    if resolved_color.is_some() {
-                        "Read-only runtime result from the connected ports; edit their source Nodes."
-                    } else {
-                        "The connected runtime result is unavailable at this time; this swatch is only the authored fallback."
-                    },
-                );
+                .on_hover_text(if resolved_color.is_some() {
+                    "Read-only runtime result from the connected ports; edit their source Nodes."
+                } else {
+                    "The connected runtime result is unavailable at this time; this swatch is only the authored fallback."
+                });
             }
         });
     }

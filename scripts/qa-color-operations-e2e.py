@@ -150,9 +150,12 @@ def matching_connections(project, from_id, output, to_id, input_port):
 def connect(client, from_id, output, to_id, input_port, reverse=False):
     source = node_port(from_id, "output", output)
     target = node_port(to_id, "input", input_port)
+    connection_label = "{}:{} -> {}:{}".format(
+        from_id, output, to_id, input_port
+    )
     compact_wire_endpoints(client, from_id, to_id)
     try:
-        BASE.ensure_node_editor_ports_interactive(
+        port_snapshot, port_components = BASE.ensure_node_editor_ports_interactive(
             client, [source, target], max_zooms=14
         )
     except QaFailure as error:
@@ -164,12 +167,37 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
         client.drag_components(target, source, steps=16)
     else:
         client.drag_components(source, target, steps=16)
-    connected = client.wait_project(
-        "Color {} -> {} coordinate wire".format(output, input_port),
-        lambda project: project
-        if len(matching_connections(project, from_id, output, to_id, input_port)) == 1
-        else None,
-    )
+    try:
+        connected = client.wait_project(
+            "Color {} coordinate wire".format(connection_label),
+            lambda project: project
+            if len(matching_connections(project, from_id, output, to_id, input_port))
+            == 1
+            else None,
+        )
+    except QaFailure as error:
+        failed = client.state()
+        component_geometry = {
+            component["id"]: {
+                "rect_points": component.get("rect_points"),
+                "metadata": component.get("metadata"),
+            }
+            for component in port_components
+        }
+        raise QaFailure(
+            "{}; authored connections after drag: {!r}; port frame: {!r}; "
+            "port geometry: {!r}; Node positions: {!r}; last action: {!r}".format(
+                error,
+                failed["project"].get("connections", ()),
+                port_snapshot.get("frame"),
+                component_geometry,
+                {
+                    from_id: failed["project"]["nodes"][from_id]["ui_position"],
+                    to_id: failed["project"]["nodes"][to_id]["ui_position"],
+                },
+                client.evidence[-1] if client.evidence else None,
+            )
+        ) from error
     BASE.assert_history_delta(before, connected, 1, "Color coordinate wire")
     return (
         matching_connections(
