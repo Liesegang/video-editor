@@ -8,6 +8,11 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ImageSurface {
+    /// Authoritative Project Asset that owns source metadata and identity.
+    /// Legacy/file-path generators may leave this absent, in which case a
+    /// managed renderer must not guess the source color space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<Uuid>,
     #[serde(rename = "file_path")]
     pub file_path: String,
     #[serde(default)]

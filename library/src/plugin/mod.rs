@@ -51,8 +51,8 @@ pub use effectors::EffectorPlugin;
 pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
 pub use exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
 pub use loaders::{
-    AssetMetadata, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRepository, LoadRequest,
-    LoadResponse,
+    AssetMetadata, DecodedColorSpace, DecodedComponentStorage, DecodedPixelDescription, LoadPlugin,
+    LoadPluginError, LoadPluginResult, LoadRepository, LoadRequest, LoadResponse,
 };
 pub use path_effects::PathEffectPlugin;
 pub use styles::StylePlugin;

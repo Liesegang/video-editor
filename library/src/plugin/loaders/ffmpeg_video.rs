@@ -921,11 +921,11 @@ impl FfmpegVideoLoader {
                 .lock()
                 .map_err(|_| LibraryError::Plugin("FFmpeg reader lock poisoned".to_string()))?;
             let target_pts = reader.target_pts_for_time(source_time)?;
-
+            let decoded = ffmpeg_color_metadata::decoded_rgba8(&reader.decoder, output_color_space);
             if let Some(image) = cache.get_video_frame(&cache_key, target_pts) {
                 drop(reader);
                 if FileIdentity::read(path)? == reader_key.identity {
-                    return Ok(LoadResponse { image });
+                    return Ok(LoadResponse { image, decoded });
                 }
                 continue;
             }
@@ -934,15 +934,15 @@ impl FfmpegVideoLoader {
                 (Some(src), Some(dst)) => reader.set_color_space(src, dst),
                 _ => reader.clear_color_space(),
             }
-            let decoded = reader.decode_at_time(source_time);
+            let image = reader.decode_at_time(source_time);
             drop(reader);
 
             if FileIdentity::read(path)? != reader_key.identity {
                 continue;
             }
-            let image = decoded?;
+            let image = image?;
             cache.put_video_frame(&cache_key, target_pts, &image);
-            return Ok(LoadResponse { image });
+            return Ok(LoadResponse { image, decoded });
         }
         Err(LibraryError::Plugin(format!(
             "Media file changed repeatedly while decoding {path:?}"

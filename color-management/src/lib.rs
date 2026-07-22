@@ -12,12 +12,16 @@
 //! free to select another scene-linear working space.
 
 mod contract;
+mod image;
 mod transform;
 
 pub use contract::{
     AlphaRepresentation, AuthoringScalarPrecision, BackendBuild, BackendCapabilities,
     ColorPipelineContract, ComponentStorage, CpuSamplePrecision, ProcessorCacheKey,
     TARGET_COLOR_PIPELINE,
+};
+pub use image::{
+    ManagedSceneLinearImage, SceneLinearImage, SceneLinearImageError, WorkingColorIdentity,
 };
 pub use transform::{
     BuiltinColorTransform, ColorManagementError, ColorSpaceInfo, ColorTransformBackend,

@@ -17,7 +17,8 @@ use super::parse_semver_triplet;
 use crate::error::LibraryError;
 use crate::plugin::loaders::ffmpeg_video::FileIdentity;
 use crate::plugin::{
-    AssetMetadata, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse, Plugin,
+    AssetMetadata, DecodedPixelDescription, LoadPlugin, LoadPluginError, LoadPluginResult,
+    LoadRequest, LoadResponse, Plugin,
 };
 pub(in crate::plugin::runtime_native) struct RuntimeLoaderPlugin {
     pub(in crate::plugin::runtime_native) component: RuntimeComponent,
@@ -105,7 +106,10 @@ impl LoadPlugin for RuntimeLoaderPlugin {
             }
         };
         if let Some(image) = cached {
-            return Ok(LoadResponse { image });
+            return Ok(LoadResponse {
+                image,
+                decoded: DecodedPixelDescription::abi_v1_srgb_rgba8(),
+            });
         }
 
         let (wire, _borrowed) = loader_request_to_wire(request)
@@ -150,7 +154,10 @@ impl LoadPlugin for RuntimeLoaderPlugin {
                 cache.put_video_frame(&cache_key, source_time_bits(*source_time), &image);
             }
         }
-        Ok(LoadResponse { image })
+        Ok(LoadResponse {
+            image,
+            decoded: DecodedPixelDescription::abi_v1_srgb_rgba8(),
+        })
     }
 }
 

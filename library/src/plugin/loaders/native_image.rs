@@ -1,10 +1,12 @@
 use super::super::{
-    LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse, Plugin,
+    DecodedColorSpace, DecodedPixelDescription, LoadPlugin, LoadPluginError, LoadPluginResult,
+    LoadRequest, LoadResponse, Plugin,
 };
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::{SourceColorDescription, SourceColorProfile};
 use crate::model::frame::Image;
+use crate::plugin::loaders::ffmpeg_video::FileIdentity;
 use image::ImageDecoder;
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -215,16 +217,37 @@ impl LoadPlugin for NativeImageLoader {
             if !Self::claims_path(path) {
                 return Err(LoadPluginError::Unsupported);
             }
-            let image = if let Some(img) = cache.get_image(path) {
-                img
-            } else {
-                let img = load_image(path)
+            for _attempt in 0..3 {
+                let identity = FileIdentity::read(path).map_err(LoadPluginError::Failed)?;
+                let cache_key = format!(
+                    "native-image\0{}\0identity={}",
+                    identity.canonical_path().display(),
+                    identity.cache_token()
+                );
+                let image = if let Some(image) = cache.get_image(&cache_key) {
+                    image
+                } else {
+                    load_image(path)
+                        .map_err(LibraryError::from)
+                        .map_err(LoadPluginError::Failed)?
+                };
+                let (_, _, source_color) = probe_image(path)
                     .map_err(LibraryError::from)
                     .map_err(LoadPluginError::Failed)?;
-                cache.put_image(path, &img);
-                img
-            };
-            Ok(LoadResponse { image })
+                if FileIdentity::read(path).map_err(LoadPluginError::Failed)? != identity {
+                    continue;
+                }
+                cache.put_image(&cache_key, &image);
+                return Ok(LoadResponse {
+                    image,
+                    decoded: DecodedPixelDescription::straight_rgba8(
+                        DecodedColorSpace::SourceEncoded(source_color),
+                    ),
+                });
+            }
+            Err(LoadPluginError::Failed(LibraryError::Plugin(format!(
+                "Image file changed repeatedly while decoding {path:?}"
+            ))))
         } else {
             Err(LoadPluginError::Unsupported)
         }
@@ -290,6 +313,42 @@ mod tests {
         assert_eq!(loaded.image.data, [10, 20, 30, 255]);
         std::fs::remove_file(path)?;
         Ok(())
+    }
+
+    #[test]
+    fn replacing_an_image_at_the_same_path_invalidates_the_decode_cache() {
+        let path = std::env::temp_dir().join(format!(
+            "video-editor-replaced-image-{}.png",
+            Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let loader = NativeImageLoader::new();
+        let cache = CacheManager::new();
+        image::save_buffer(&path, &[10, 20, 30, 255], 1, 1, image::ColorType::Rgba8).unwrap();
+        let first = loader
+            .load(
+                &LoadRequest::Image {
+                    path: path_text.clone(),
+                },
+                &cache,
+            )
+            .unwrap();
+        assert_eq!(first.image.data, [10, 20, 30, 255]);
+
+        image::save_buffer(
+            &path,
+            &[40, 50, 60, 255, 70, 80, 90, 255],
+            2,
+            1,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+        let second = loader
+            .load(&LoadRequest::Image { path: path_text }, &cache)
+            .unwrap();
+        assert_eq!((second.image.width, second.image.height), (2, 1));
+        assert_eq!(second.image.data, [40, 50, 60, 255, 70, 80, 90, 255]);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

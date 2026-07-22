@@ -9,6 +9,7 @@ use crate::model::asset::{
     SourceColorDescription, SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
     SourceTransferCharacteristic,
 };
+use crate::plugin::{DecodedColorSpace, DecodedPixelDescription};
 use ffmpeg_next as ffmpeg;
 
 pub(super) fn from_decoder(decoder: &ffmpeg::decoder::Video) -> SourceColorDescription {
@@ -20,6 +21,23 @@ pub(super) fn from_decoder(decoder: &ffmpeg::decoder::Video) -> SourceColorDescr
         bit_depth: decoder_raw_bit_depth(decoder).or_else(|| pixel_bit_depth(decoder.format())),
         profile: None,
     }
+}
+
+pub(super) fn decoded_rgba8(
+    decoder: &ffmpeg::decoder::Video,
+    output_color_space: Option<&str>,
+) -> DecodedPixelDescription {
+    let color_space = if let Some(output) = output_color_space {
+        DecodedColorSpace::Named(output.to_string())
+    } else {
+        let mut source = from_decoder(decoder);
+        // swscale has already expanded YUV matrix/range into full-range RGB.
+        source.matrix = None;
+        source.range = None;
+        source.bit_depth = None;
+        DecodedColorSpace::SourceEncoded(source)
+    };
+    DecodedPixelDescription::straight_rgba8(color_space)
 }
 
 fn decoder_raw_bit_depth(decoder: &ffmpeg::decoder::Video) -> Option<u8> {

@@ -56,4 +56,5 @@ cpal = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 rtrb = "0.3"
 anyhow = "1.0.103"
+bytemuck = "1.25.1"
 unicode-segmentation = "1.12"

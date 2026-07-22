@@ -115,6 +115,7 @@ pub enum ColorManagementError {
     EmptyColorSpace,
     NonFiniteComponent { component: &'static str },
     AlphaOutOfRange,
+    ProcessorChangedAlpha { before_bits: u32, after_bits: u32 },
     UnsupportedTransform { source: String, target: String },
     UnsupportedDisplayView { backend_id: String, view: String },
     GpuTransformUnavailable { backend_id: String },
@@ -133,6 +134,15 @@ impl fmt::Display for ColorManagementError {
             Self::AlphaOutOfRange => {
                 formatter.write_str("straight alpha must be between 0 and 1 inclusive")
             }
+            Self::ProcessorChangedAlpha {
+                before_bits,
+                after_bits,
+            } => write!(
+                formatter,
+                "color processor changed alpha from {} to {}; color transforms must affect RGB only",
+                f32::from_bits(*before_bits),
+                f32::from_bits(*after_bits)
+            ),
             Self::UnsupportedTransform { source, target } => {
                 write!(
                     formatter,
@@ -165,6 +175,36 @@ pub trait CpuColorProcessor: Send + Sync {
     /// [`BackendCapabilities::cpu_processor_sample_precision`]; that capability
     /// does not claim the backend's internal arithmetic precision.
     fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError>;
+
+    /// Transform a packed straight-alpha f32 image in place.
+    ///
+    /// Backends with a packed image API (including OpenColorIO) should
+    /// override this method. The default keeps small/custom processors source
+    /// compatible while avoiding a second image-transform abstraction.
+    fn transform_straight_rgba_f32_in_place(
+        &self,
+        pixels: &mut [[f32; 4]],
+    ) -> Result<(), ColorManagementError> {
+        for pixel in pixels {
+            let alpha = pixel[3];
+            let transformed = self.transform_straight_rgba([
+                f64::from(pixel[0]),
+                f64::from(pixel[1]),
+                f64::from(pixel[2]),
+                f64::from(alpha),
+            ])?;
+            let transformed = transformed.map(|component| component as f32);
+            validate_rgba_f32(transformed)?;
+            if transformed[3] != alpha {
+                return Err(ColorManagementError::ProcessorChangedAlpha {
+                    before_bits: alpha.to_bits(),
+                    after_bits: transformed[3].to_bits(),
+                });
+            }
+            *pixel = transformed;
+        }
+        Ok(())
+    }
 }
 
 /// Replaceable backend boundary for built-in transfers and a future pinned
@@ -345,9 +385,40 @@ impl CpuColorProcessor for BuiltinCpuProcessor {
         };
         Ok([transform(r), transform(g), transform(b), a])
     }
+
+    fn transform_straight_rgba_f32_in_place(
+        &self,
+        pixels: &mut [[f32; 4]],
+    ) -> Result<(), ColorManagementError> {
+        for pixel in pixels {
+            validate_rgba_f32(*pixel)?;
+            let transform = match self.kind {
+                TransformKind::Identity => continue,
+                TransformKind::SrgbToLinear => extended_srgb_to_linear,
+                TransformKind::LinearToSrgb => extended_linear_to_srgb,
+            };
+            pixel[0] = transform(f64::from(pixel[0])) as f32;
+            pixel[1] = transform(f64::from(pixel[1])) as f32;
+            pixel[2] = transform(f64::from(pixel[2])) as f32;
+            validate_rgba_f32(*pixel)?;
+        }
+        Ok(())
+    }
 }
 
 fn validate_rgba(rgba: [f64; 4]) -> Result<(), ColorManagementError> {
+    for (component, value) in ["r", "g", "b", "a"].into_iter().zip(rgba) {
+        if !value.is_finite() {
+            return Err(ColorManagementError::NonFiniteComponent { component });
+        }
+    }
+    if !(0.0..=1.0).contains(&rgba[3]) {
+        return Err(ColorManagementError::AlphaOutOfRange);
+    }
+    Ok(())
+}
+
+fn validate_rgba_f32(rgba: [f32; 4]) -> Result<(), ColorManagementError> {
     for (component, value) in ["r", "g", "b", "a"].into_iter().zip(rgba) {
         if !value.is_finite() {
             return Err(ColorManagementError::NonFiniteComponent { component });

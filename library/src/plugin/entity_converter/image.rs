@@ -59,6 +59,7 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
             .map(|asset| asset.path.clone())
             .or_else(|| evaluator.require_string(props, "file_path", time, "image"))?;
         let surface = ImageSurface {
+            asset_id: asset.map(|asset| asset.id),
             file_path,
             effects: Vec::new(),
             transform: Default::default(),

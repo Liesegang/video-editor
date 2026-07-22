@@ -92,6 +92,7 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
             .or_else(|| asset.and_then(|asset| asset.stream_index));
 
         let surface = ImageSurface {
+            asset_id: asset.map(|asset| asset.id),
             file_path,
             effects: Vec::new(),
             transform: Default::default(),

@@ -3,7 +3,7 @@ use crate::transform::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 /// Whether a backend contains a real implementation or a build-time stub.
 ///
 /// Hosts must reject [`BackendBuild::Stub`] before accepting Project work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BackendBuild {
     Real,
     Stub,
@@ -44,13 +44,13 @@ pub struct ProcessorCacheKey {
     pub role: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AlphaRepresentation {
     Straight,
     Premultiplied,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ComponentStorage {
     Float16,
     Float32,

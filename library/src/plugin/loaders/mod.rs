@@ -12,6 +12,7 @@ use crate::model::asset::AssetKind;
 use crate::model::asset::SourceColorDescription;
 use crate::model::frame::Image;
 use crate::plugin::{Plugin, PluginCategory};
+use ruvie_color_management::AlphaRepresentation;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -44,6 +45,57 @@ impl LoadRequest {
 #[derive(Debug)]
 pub struct LoadResponse {
     pub image: Image,
+    /// Semantics of the pixels after loader/decoder processing. Source-file
+    /// CICP/ICC metadata alone is not a substitute: a decoder may already have
+    /// expanded YUV matrix/range or applied a color transform.
+    pub decoded: DecodedPixelDescription,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DecodedColorSpace {
+    /// Versioned Loader ABI v1 contract and other proven straight sRGB output.
+    Srgb,
+    /// Samples retain the indicated source encoding after matrix/range
+    /// expansion. Project overrides may replace this interpretation.
+    SourceEncoded(SourceColorDescription),
+    /// A loader explicitly transformed samples into this config-owned space.
+    Named(String),
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodedComponentStorage {
+    Unorm8,
+    Float16,
+    Float32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodedPixelDescription {
+    pub color_space: DecodedColorSpace,
+    /// True means any encoded YUV/non-RGB matrix has already been expanded to
+    /// RGB and must not be applied again by color management.
+    pub rgb_matrix_applied: bool,
+    /// True means limited/video range has already been expanded to full range.
+    pub full_range: bool,
+    pub alpha: AlphaRepresentation,
+    pub storage: DecodedComponentStorage,
+}
+
+impl DecodedPixelDescription {
+    pub fn straight_rgba8(color_space: DecodedColorSpace) -> Self {
+        Self {
+            color_space,
+            rgb_matrix_applied: true,
+            full_range: true,
+            alpha: AlphaRepresentation::Straight,
+            storage: DecodedComponentStorage::Unorm8,
+        }
+    }
+
+    pub fn abi_v1_srgb_rgba8() -> Self {
+        Self::straight_rgba8(DecodedColorSpace::Srgb)
+    }
 }
 
 /// A loader can either decline a request without error or report a real load
@@ -71,8 +123,9 @@ pub struct AssetMetadata {
     pub time_base: Option<(i32, i32)>,
     /// Color tags detected from this source stream/codec, or from authoritative
     /// still-image metadata. Empty fields remain unknown and must not be
-    /// replaced with guessed defaults by the loader. Per-frame tags are not
-    /// transported by Loader ABI v1 or [`LoadResponse`].
+    /// replaced with guessed defaults by the loader. Loader ABI v1 cannot
+    /// expose arbitrary source tags, but [`LoadResponse::decoded`] always
+    /// describes the pixels that actually cross the loader boundary.
     pub source_color: SourceColorDescription,
 }
 
