@@ -65,6 +65,45 @@ def ensure_overview_scale(client):
     return client.wait_until("Node Editor overview clamp", clamped)
 
 
+def ensure_detail_scale(client, focus_component_id):
+    """Zoom around a real Node so overview coordinates remain recoverable."""
+    snapshot, focus = BASE.reveal_node_editor_component(client, focus_component_id)
+    components = {item["id"]: item for item in snapshot["components"]}
+    canvas = components.get("node_editor.canvas")
+    if canvas is None:
+        raise QaFailure("Node Editor detail zoom omitted its canvas")
+    metadata = canvas.get("metadata") or {}
+    if metadata.get("detail_enabled") is not True:
+        point = client.point(focus["rect_points"])
+        client.inject(
+            "scroll",
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "delta_x": 0.0,
+                "delta_y": 10_000.0,
+                "coordinate_space": "points",
+                "modifiers": {"command": True},
+            },
+            {
+                "component_id": focus_component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": focus["rect_points"],
+                "canvas_rect_points": canvas["rect_points"],
+                "coordinate_reason": "real command-wheel detail zoom centered on target Node",
+            },
+        )
+
+    def detailed():
+        current, current_canvas = client.component("node_editor.canvas")
+        current_metadata = current_canvas.get("metadata") or {}
+        if current_metadata.get("detail_enabled") is not True:
+            return None
+        return current
+
+    return client.wait_until("Node Editor detailed zoom", detailed)
+
+
 def node_rects(snapshot):
     return {
         component["id"].split(":", 1)[1]: component["rect_points"]
@@ -99,21 +138,94 @@ def pointer_payload(point, shift=False, alt=False, button=None):
     return payload
 
 
-def begin_swipe(client, dx, dy, shift=False, alt=False):
-    header_id = "node_editor.node_header:" + TEXT
-    # The generic overview interaction uses the whole Node as its hit area,
-    # while this exact point remains derived from the stable header component.
-    # Keep one known downstream target in the same viewport so Update must
+def rect_contains_point(rect, point):
+    return (
+        float(rect["min_x"]) <= point["x"] <= float(rect["max_x"])
+        and float(rect["min_y"]) <= point["y"] <= float(rect["max_y"])
+    )
+
+
+def header_padding_point(header):
+    visual = header["rect_points"]
+    content = (header.get("metadata") or {}).get("content_rect")
+    if not isinstance(content, dict):
+        raise QaFailure("Node header omitted content_rect metadata")
+    candidates = [
+        {
+            "x": (float(visual["min_x"]) + float(visual["max_x"])) * 0.5,
+            "y": (float(visual["min_y"]) + float(content["min_y"])) * 0.5,
+        },
+        {
+            "x": (float(visual["min_x"]) + float(visual["max_x"])) * 0.5,
+            "y": (float(content["max_y"]) + float(visual["max_y"])) * 0.5,
+        },
+        {
+            "x": (float(visual["min_x"]) + float(content["min_x"])) * 0.5,
+            "y": (float(content["min_y"]) + float(content["max_y"])) * 0.5,
+        },
+        {
+            "x": (float(content["max_x"]) + float(visual["max_x"])) * 0.5,
+            "y": (float(content["min_y"]) + float(content["max_y"])) * 0.5,
+        },
+    ]
+    for point in candidates:
+        if rect_contains_point(visual, point) and not rect_contains_point(content, point):
+            return point, content
+    raise QaFailure(
+        "visual Node header exposes no clickable padding outside content: {!r}".format(
+            {"visual": visual, "content": content}
+        )
+    )
+
+
+def begin_swipe(
+    client,
+    dx,
+    dy,
+    shift=False,
+    alt=False,
+    anchor=TEXT,
+    observed=BASE.TEXT_TRANSFORM,
+    require_visible_preview=True,
+):
+    # Overview uses the whole Node while detailed mode uses its full painted
+    # header. Keep one known branch target in the same viewport so Update must
     # produce an observable before/after rectangle for the same stable ID.
-    downstream_id = "node_editor.node:" + BASE.TEXT_TRANSFORM
-    BASE.reveal_node_editor_components(client, [header_id, downstream_id])
-    client.wait_component_settled(header_id)
+    observed_id = "node_editor.node:" + observed
+    anchor_id = None
+    for _ in range(2):
+        _, canvas = client.component("node_editor.canvas")
+        detailed = (canvas.get("metadata") or {}).get("detail_enabled") is True
+        candidate = (
+            "node_editor.node_header:" if detailed else "node_editor.node:"
+        ) + anchor
+        revealed, _ = BASE.reveal_node_editor_components(
+            client, [candidate, observed_id]
+        )
+        revealed_components = {
+            item["id"]: item for item in revealed["components"]
+        }
+        revealed_canvas = revealed_components.get("node_editor.canvas")
+        if revealed_canvas is None:
+            continue
+        remains_detailed = (
+            (revealed_canvas.get("metadata") or {}).get("detail_enabled") is True
+        )
+        expected = (
+            "node_editor.node_header:" if remains_detailed else "node_editor.node:"
+        ) + anchor
+        if candidate == expected:
+            anchor_id = candidate
+            break
+    if anchor_id is None:
+        raise QaFailure("Node layout hit area changed level-of-detail while revealing")
+    client.wait_component_settled(anchor_id)
     client.key("a", True, shift=shift, alt=alt)
 
-    # Resolve fresh coordinates after the key frame. This is the exact header
-    # hit used by the physical pointer press, never a guessed graph position.
-    snapshot, header = client.component(header_id)
-    start = client.point(header["rect_points"], 0.55, 0.5)
+    # Resolve fresh coordinates after the key frame. This is an actual visible
+    # Node hit, never a guessed graph position.
+    snapshot, anchor_component = client.component(anchor_id)
+    start = client.point(anchor_component["rect_points"], 0.5, 0.5)
     _, canvas = client.component("node_editor.canvas")
     end = {"x": start["x"] + dx, "y": start["y"] + dy}
     canvas_rect = canvas["rect_points"]
@@ -126,17 +238,17 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
 
     before = client.state()
     before_rects = node_rects(snapshot)
-    if BASE.TEXT_TRANSFORM not in before_rects:
+    if observed not in before_rects:
         client.key("a", False, shift=shift, alt=alt)
-        raise QaFailure("known downstream Node is not visible before layout swipe")
+        raise QaFailure("known branch Node is not visible before layout swipe")
     client.inject(
         "press",
         pointer_payload(start, shift=shift, alt=alt, button="primary"),
         {
-            "component_id": header_id,
+            "component_id": anchor_id,
             "component_frame": snapshot["frame"],
-            "component_rect_points": header["rect_points"],
-            "coordinate_reason": "hold-A press on real Node header",
+            "component_rect_points": anchor_component["rect_points"],
+            "coordinate_reason": "hold-A press on real Node layout hit area",
         },
     )
 
@@ -145,11 +257,13 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
         active = state["editor"]["node_editor"]["directional_layout_swipe"]
         if active is None:
             return None
-        if active["anchor_node_id"] != TEXT:
+        if active["anchor_node_id"] != anchor:
             raise QaFailure("layout swipe captured the wrong anchor: {!r}".format(active))
         return state
 
-    start_state = client.wait_until("directional layout Start", started)
+    start_state = client.wait_until(
+        "directional layout Start {} ({}, {})".format(anchor, dx, dy), started
+    )
     if start_state["project"] != before["project"]:
         raise QaFailure("layout swipe Start mutated authoritative Project")
     if start_state["history"] != before["history"]:
@@ -159,10 +273,10 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
         "move",
         pointer_payload(end, shift=shift, alt=alt),
         {
-            "component_id": header_id,
+            "component_id": anchor_id,
             "component_frame": snapshot["frame"],
-            "component_rect_points": header["rect_points"],
-            "coordinate_reason": "hold-A directional movement from real Node header",
+            "component_rect_points": anchor_component["rect_points"],
+            "coordinate_reason": "hold-A directional movement from real Node hit area",
         },
     )
 
@@ -172,6 +286,9 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
         (False, True): "distribute",
         (True, True): "align_and_distribute",
     }[(shift, alt)]
+    expected_axis = "horizontal" if abs(dx) >= abs(dy) else "vertical"
+    signed_distance = dx if expected_axis == "horizontal" else dy
+    expected_direction = "downstream" if signed_distance > 0.0 else "upstream"
 
     preview_diagnostic = {}
 
@@ -185,6 +302,12 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
             raise QaFailure(
                 "modifier mode mismatch: expected {}, got {!r}".format(
                     expected_mode, active
+                )
+            )
+        if active["axis"] != expected_axis or active["direction"] != expected_direction:
+            raise QaFailure(
+                "direction mismatch: expected {}/{}, got {!r}".format(
+                    expected_axis, expected_direction, active
                 )
             )
         snapshot_after = client.component_snapshot()
@@ -203,11 +326,13 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
             and node_id in after_rects
             and rect_moved(before_rects[node_id], after_rects[node_id])
         ]
-        if BASE.TEXT_TRANSFORM not in after_rects:
+        if observed not in active["preview_positions"]:
             return None
-        if BASE.TEXT_TRANSFORM not in visibly_moved:
-            return None
-        if not visibly_moved:
+        if observed not in active["diagnostics"]["moved_node_ids"]:
+            raise QaFailure("observed branch Node was not planned as moved")
+        if require_visible_preview and (
+            observed not in after_rects or observed not in visibly_moved
+        ):
             return None
         return state, snapshot_after, visibly_moved
 
@@ -236,6 +361,11 @@ def begin_swipe(client, dx, dy, shift=False, alt=False):
         "alt": alt,
         "gesture_id": active["gesture_id"],
         "mode": expected_mode,
+        "axis": expected_axis,
+        "direction": expected_direction,
+        "anchor": anchor,
+        "observed": observed,
+        "observed_preview_position": active["preview_positions"][observed],
         "preview_snapshot": preview_snapshot,
         "visibly_moved": visibly_moved,
     }
@@ -267,6 +397,11 @@ def commit_swipe(client, gesture):
             raise QaFailure("layout swipe did not commit: {!r}".format(last))
         if last["mode"] != gesture["mode"]:
             raise QaFailure("committed modifier mode changed: {!r}".format(last))
+        if (
+            last["axis"] != gesture["axis"]
+            or last["direction"] != gesture["direction"]
+        ):
+            raise QaFailure("committed direction changed: {!r}".format(last))
         if node_editor["directional_layout_swipe"] is not None:
             return None
         return state
@@ -276,12 +411,15 @@ def commit_swipe(client, gesture):
     last = after["editor"]["node_editor"]["last_directional_layout_swipe"]
     if not last["moved_node_ids"]:
         raise QaFailure("committed layout reported no moved Nodes")
+    if gesture["observed"] not in last["moved_node_ids"]:
+        raise QaFailure("committed layout omitted the observed branch Node")
     BASE.assert_history_delta(
         gesture["before"], after, 1, "hold-A {} commit".format(gesture["mode"])
     )
-    if after["project"]["nodes"][TEXT]["ui_position"] != gesture["before"][
+    anchor = gesture["anchor"]
+    if after["project"]["nodes"][anchor]["ui_position"] != gesture["before"][
         "project"
-    ]["nodes"][TEXT]["ui_position"]:
+    ]["nodes"][anchor]["ui_position"]:
         raise QaFailure("fixed anchor moved during directional layout")
     return after
 
@@ -349,6 +487,107 @@ def cancel_swipe(client, gesture):
     return client.wait_until("cancel release guard cleared", guard_released)
 
 
+def verify_detail_header_padding_swipe(client):
+    """Prove the painted header frame, not only its content, starts layout."""
+    anchor = BASE.TEXT_TRANSFORM
+    header_id = "node_editor.node_header:" + anchor
+    ensure_detail_scale(client, header_id)
+    BASE.reveal_node_editor_component(client, header_id)
+    client.wait_component_settled(header_id)
+    client.key("a", True)
+
+    snapshot, header = client.component(header_id)
+    components = {item["id"]: item for item in snapshot["components"]}
+    canvas = components.get("node_editor.canvas")
+    if canvas is None:
+        client.key("a", False)
+        raise QaFailure("detailed Node Editor frame omitted its canvas")
+    if (canvas.get("metadata") or {}).get("detail_enabled") is not True:
+        client.key("a", False)
+        raise QaFailure("header-padding QA did not remain at detailed zoom")
+    start, content_rect = header_padding_point(header)
+    canvas_rect = canvas["rect_points"]
+    if start["x"] + 64.0 <= float(canvas_rect["max_x"]) - 4.0:
+        dx = 64.0
+    elif start["x"] - 64.0 >= float(canvas_rect["min_x"]) + 4.0:
+        dx = -64.0
+    else:
+        client.key("a", False)
+        raise QaFailure("detailed Node header has no room for a real layout drag")
+    end = {"x": start["x"] + dx, "y": start["y"] + 2.0}
+    expected_direction = "downstream" if dx > 0.0 else "upstream"
+    before = client.state()
+
+    client.inject(
+        "press",
+        pointer_payload(start, button="primary"),
+        {
+            "component_id": header_id,
+            "component_frame": snapshot["frame"],
+            "component_rect_points": header["rect_points"],
+            "header_content_rect_points": content_rect,
+            "coordinate_reason": "hold-A press on painted Node header padding outside content",
+        },
+    )
+
+    def started():
+        state = client.state()
+        active = state["editor"]["node_editor"]["directional_layout_swipe"]
+        if active is None:
+            return None
+        if active["anchor_node_id"] != anchor:
+            raise QaFailure("header padding captured the wrong anchor: {!r}".format(active))
+        return state
+
+    started_state = client.wait_until("detailed header-padding Start", started)
+    if started_state["project"] != before["project"]:
+        raise QaFailure("detailed header-padding Start mutated Project")
+    if started_state["history"] != before["history"]:
+        raise QaFailure("detailed header-padding Start changed history")
+
+    client.inject(
+        "move",
+        pointer_payload(end),
+        {
+            "component_id": header_id,
+            "component_frame": snapshot["frame"],
+            "component_rect_points": header["rect_points"],
+            "header_content_rect_points": content_rect,
+            "coordinate_reason": "real layout motion from painted Node header padding",
+        },
+    )
+
+    def previewed():
+        state = client.state()
+        active = state["editor"]["node_editor"]["directional_layout_swipe"]
+        if active is None or not active["preview_positions"]:
+            return None
+        if active["axis"] != "horizontal" or active["direction"] != expected_direction:
+            raise QaFailure("detailed header-padding direction mismatch: {!r}".format(active))
+        if state["project"] != before["project"] or state["history"] != before["history"]:
+            raise QaFailure("detailed header-padding preview changed authoritative state")
+        return state
+
+    preview_state = client.wait_until("detailed header-padding preview", previewed)
+    active = preview_state["editor"]["node_editor"]["directional_layout_swipe"]
+    gesture = {
+        "before": before,
+        "end": end,
+        "shift": False,
+        "alt": False,
+        "gesture_id": active["gesture_id"],
+    }
+    final_state = cancel_swipe(client, gesture)
+    return {
+        "gesture_id": active["gesture_id"],
+        "direction": expected_direction,
+        "point": start,
+        "visual_rect": header["rect_points"],
+        "content_rect": content_rect,
+        "final_state": final_state,
+    }
+
+
 def run_suite(client):
     health = client.wait_health()
     client.wait_until(
@@ -359,7 +598,33 @@ def run_suite(client):
     )
     BASE.activate_dock_tab(client, NODE_TAB, "Node Editor", "layout swipe QA")
     ensure_overview_scale(client)
+    ensure_detail_scale(
+        client, "node_editor.node_header:" + BASE.TEXT_TRANSFORM
+    )
 
+    upstream_left = begin_swipe(
+        client,
+        -150.0,
+        -2.0,
+        anchor=BASE.TEXT_TRANSFORM,
+        observed=TEXT,
+        require_visible_preview=False,
+    )
+    commit_swipe(client, upstream_left)
+    undo_commit(client, upstream_left)
+
+    upstream_up = begin_swipe(
+        client,
+        -2.0,
+        -90.0,
+        anchor=BASE.TEXT_TRANSFORM,
+        observed=TEXT,
+        require_visible_preview=False,
+    )
+    commit_swipe(client, upstream_up)
+    undo_commit(client, upstream_up)
+
+    ensure_overview_scale(client)
     plain = begin_swipe(client, 150.0, 4.0)
     commit_swipe(client, plain)
     undo_commit(client, plain)
@@ -377,7 +642,10 @@ def run_suite(client):
     undo_commit(client, combined)
 
     cancelled = begin_swipe(client, 150.0, 2.0)
-    final_state = cancel_swipe(client, cancelled)
+    cancel_swipe(client, cancelled)
+
+    padding = verify_detail_header_padding_swipe(client)
+    final_state = padding.pop("final_state")
 
     return {
         "ok": True,
@@ -389,6 +657,13 @@ def run_suite(client):
             "distribute",
             "align_and_distribute",
         ],
+        "verified_directions": [
+            {"axis": "horizontal", "direction": "downstream"},
+            {"axis": "vertical", "direction": "downstream"},
+            {"axis": "horizontal", "direction": "upstream"},
+            {"axis": "vertical", "direction": "upstream"},
+        ],
+        "detailed_header_padding": padding,
         "cancelled_gesture_id": cancelled["gesture_id"],
         "final_history": final_state["history"],
         "actions": client.evidence,
