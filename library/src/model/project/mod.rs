@@ -11,6 +11,7 @@ use crate::model::project::property::PropertyMap;
 
 pub mod asset;
 pub mod clip_helpers;
+mod color_management;
 pub mod connection;
 mod error;
 mod output_binding;
@@ -21,6 +22,12 @@ mod transaction;
 
 use transaction::{first_new_project_validation_error, port_owner_for_container};
 
+pub use color_management::{
+    ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
+    DEFAULT_BUNDLED_COLOR_CONFIG_ID, DEFAULT_OUTPUT_COLOR_SPACE, DEFAULT_PREVIEW_DISPLAY,
+    DEFAULT_PREVIEW_VIEW, DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, PreviewColorConfig,
+    ResolvedColorManagementConfig,
+};
 pub use connection::{
     ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
     AUDIO_OUTPUT_PORT, BACKGROUND_SHAPE_INPUT_PORT, BAND_HIGH_HZ_PROPERTY, BAND_LOW_HZ_PROPERTY,
@@ -55,6 +62,8 @@ pub struct Project {
     pub resources: HashMap<Uuid, ResourceGraph>,
     #[serde(default)]
     pub assets: Vec<Asset>,
+    #[serde(default)]
+    color_management: ColorManagementConfig,
     #[serde(default)]
     pub export: ExportConfig,
     #[serde(default)]
@@ -346,6 +355,7 @@ impl Project {
             nodes: HashMap::new(),
             resources: HashMap::new(),
             assets: Vec::new(),
+            color_management: ColorManagementConfig::default(),
             export: ExportConfig::default(),
             connections: Vec::new(),
         }
@@ -357,6 +367,45 @@ impl Project {
 
     pub fn save(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
+    }
+
+    /// Persisted color intent exactly as requested by the Project.
+    ///
+    /// Runtime consumers should use [`Project::resolved_color_management`] so
+    /// an unavailable external config cannot silently reinterpret space names.
+    pub fn requested_color_management(&self) -> &ColorManagementConfig {
+        &self.color_management
+    }
+
+    /// Replace the Project color intent only when all identifiers are pinned
+    /// and its external config asset, if any, is available.
+    pub fn set_color_management(
+        &mut self,
+        color_management: ColorManagementConfig,
+    ) -> Result<(), Vec<ColorManagementIssue>> {
+        let diagnostics = color_management.diagnostics(&self.assets);
+        if diagnostics.is_empty() {
+            self.color_management = color_management;
+            Ok(())
+        } else {
+            Err(diagnostics)
+        }
+    }
+
+    /// Non-fatal diagnostics for persisted color intent.
+    ///
+    /// These are not included in [`Project::validation_issues`], because a
+    /// missing external config must not prevent a user from opening and
+    /// repairing the Project.
+    pub fn color_management_diagnostics(&self) -> Vec<ColorManagementIssue> {
+        self.color_management.diagnostics(&self.assets)
+    }
+
+    /// Runtime-safe effective color settings. Any invalid persisted request
+    /// fails closed to the bundled linear-sRGB configuration and remains
+    /// observable through diagnostics.
+    pub fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
+        color_management::resolve_color_management(&self.color_management, &self.assets)
     }
 
     pub fn add_composition(&mut self, composition: Composition) -> Result<(), ProjectGraphError> {

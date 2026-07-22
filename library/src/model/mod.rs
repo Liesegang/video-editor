@@ -20,4 +20,8 @@ pub use node::{
 };
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;
-pub use project::{Composition, NodeContainer, NodeGraphBundle, Project, ResourceGraph};
+pub use project::{
+    ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
+    Composition, ExportColorConfig, NodeContainer, NodeGraphBundle, PreviewColorConfig, Project,
+    ResolvedColorManagementConfig, ResourceGraph,
+};
