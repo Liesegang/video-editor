@@ -16,6 +16,24 @@ fn installed_transform_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, F
     (project, plugin_manager, info)
 }
 
+#[test]
+fn named_color_operations_fixture_is_minimal_and_isolated() {
+    let project = Arc::new(RwLock::new(Project::new("empty")));
+    let plugin_manager = Arc::new(PluginManager::default());
+    let info = install_named(&project, COLOR_OPERATIONS_E2E_FIXTURE, &plugin_manager).unwrap();
+    let read = project.read().unwrap();
+
+    assert_eq!(read.name, color_operations::PROJECT_NAME);
+    assert_eq!(info.composition_id, E2E_COMPOSITION_ID);
+    assert_eq!(info.expanded_tracks, vec![color_operations::TRACK_ID]);
+    assert_eq!(read.compositions.len(), 1);
+    assert_eq!(read.tracks.len(), 1);
+    assert!(read.clips.is_empty());
+    assert_eq!(read.nodes.len(), 4);
+    assert!(read.validate_connections().is_empty());
+    assert!(read.validate_containment().is_empty());
+}
+
 fn assert_connection(
     project: &Project,
     from_owner: PortOwner,

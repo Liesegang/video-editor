@@ -18,6 +18,7 @@ mod audio;
 
 use audio::audio_node;
 
+mod color_operations;
 mod composition_drop;
 mod nodes;
 mod transform_preview;
@@ -38,6 +39,7 @@ pub const NODE_INSPECTOR_E2E_FIXTURE: &str = "node_inspector_e2e";
 pub const TRANSFORM_PREVIEW_E2E_FIXTURE: &str = "transform_preview_e2e";
 pub const AUDIO_WAVEFORM_E2E_FIXTURE: &str = "audio_waveform_e2e";
 pub const COMPOSITION_DROP_E2E_FIXTURE: &str = "composition_drop_e2e";
+pub const COLOR_OPERATIONS_E2E_FIXTURE: &str = "color_operations_e2e";
 
 pub const E2E_COMPOSITION_ID: Uuid = Uuid::from_u128(0x100);
 pub const E2E_TRACK_A_ID: Uuid = Uuid::from_u128(0x201);
@@ -106,6 +108,7 @@ fn install_named(
             | TRANSFORM_PREVIEW_E2E_FIXTURE
             | AUDIO_WAVEFORM_E2E_FIXTURE
             | COMPOSITION_DROP_E2E_FIXTURE
+            | COLOR_OPERATIONS_E2E_FIXTURE
     ) {
         return Err(format!("unknown {QA_FIXTURE_ENV} value {name:?}"));
     }
@@ -127,6 +130,9 @@ fn install_named(
     }
     if name == COMPOSITION_DROP_E2E_FIXTURE {
         return composition_drop::install(&mut project);
+    }
+    if name == COLOR_OPERATIONS_E2E_FIXTURE {
+        return color_operations::install(&mut project);
     }
 
     project.name = "RuViE QA E2E".to_string();
