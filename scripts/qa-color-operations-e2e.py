@@ -90,6 +90,7 @@ def matching_connections(project, from_id, output, to_id, input_port):
 def connect(client, from_id, output, to_id, input_port, reverse=False):
     source = node_port(from_id, "output", output)
     target = node_port(to_id, "input", input_port)
+    compact_wire_endpoints(client, from_id, to_id)
     try:
         BASE.ensure_node_editor_ports_interactive(
             client, [source, target], max_zooms=14
@@ -113,6 +114,67 @@ def connect(client, from_id, output, to_id, input_port, reverse=False):
     return matching_connections(
         connected["project"], from_id, output, to_id, input_port
     )[0]
+
+
+def compact_wire_endpoints(client, from_id, to_id):
+    """Use the real selection-layout command so both drag endpoints fit.
+
+    A large disconnected graph may only fit at the Node overview scale, where
+    normal port hit testing is deliberately disabled. Laying out the two
+    endpoints before their physical wire exists keeps them close enough for a
+    real coordinate drag without bypassing the UI command/history path.
+    """
+    execution_before = client.state()["editor"]["node_editor"][
+        "layout_execution_serial"
+    ]
+    for index, node_id in enumerate((from_id, to_id)):
+        component_id = "node_editor.node_header:" + node_id
+        snapshot, component = BASE.reveal_node_editor_component(client, component_id)
+        point = client.point(component["rect_points"])
+        client.inject(
+            "click",
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "coordinate_space": "points",
+                "button": "primary",
+                "modifiers": {"shift": index > 0},
+            },
+            {
+                "component_id": component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": component["rect_points"],
+                "coordinate_reason": "select physical Color wire endpoints",
+            },
+        )
+
+    expected = {from_id, to_id}
+    def selected_wire_endpoints():
+        state = client.state()
+        selected = {
+            target["id"]
+            for target in state["editor"]["selection"]["targets"]
+            if target["kind"] == "node"
+        }
+        return state if selected == expected else None
+
+    client.wait_until("Color wire endpoint selection", selected_wire_endpoints)
+    client.key("l", True, command=True)
+    client.key("l", False, command=True)
+
+    client.wait_until(
+        "Color wire endpoint layout",
+        lambda: state
+        if (state := client.state())["editor"]["node_editor"][
+            "layout_execution_serial"
+        ]
+        > execution_before
+        and (state["editor"]["node_editor"].get("last_layout_execution") or {}).get(
+            "scope"
+        )
+        == "selection"
+        else None,
+    )
 
 
 def arrange_color_nodes(client, node_ids):
