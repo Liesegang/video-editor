@@ -11,7 +11,12 @@ use library::model::project::{
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortSide,
 };
 use library::model::{NativeNodeRuntimeStatus, NodeContent, native_node_catalog};
-use library::plugin::PluginManager;
+use library::plugin::{OperationDescriptor, PluginManager};
+
+#[path = "native_node_catalog/property_contract.rs"]
+mod property_contract;
+
+use property_contract::{NodeListPropertyMetadata, PropertyContract};
 
 const NODE_LIST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../node_list.yml"));
 
@@ -25,6 +30,8 @@ struct NodeListPort {
     exposure: Option<String>,
     multiplicity: Option<String>,
     variadic: bool,
+    property: Option<String>,
+    property_metadata: Option<NodeListPropertyMetadata>,
 }
 
 impl NodeListPort {
@@ -98,6 +105,63 @@ impl NodeListEntry {
                     .map(|port| port.definition(PortDirection::Output, &self.label)),
             )
             .collect()
+    }
+
+    fn property_contracts(&self) -> Result<Vec<PropertyContract>, String> {
+        let mut contracts = Vec::new();
+        for port in &self.inputs {
+            let key = port.key.as_deref().unwrap_or_else(|| {
+                port.name
+                    .as_deref()
+                    .expect("catalog input must have a name")
+            });
+            let is_property_port = key.starts_with("property:");
+            let Some(property_key) = port.property.as_deref() else {
+                if is_property_port {
+                    return Err(format!(
+                        "{}.{}: property input is missing its property key",
+                        self.label, key
+                    ));
+                }
+                if port.property_metadata.is_some() {
+                    return Err(format!(
+                        "{}.{}: non-property input cannot declare property_metadata",
+                        self.label, key
+                    ));
+                }
+                continue;
+            };
+            if key != format!("property:{property_key}") {
+                return Err(format!(
+                    "{}.{}: property {:?} does not match its port key",
+                    self.label, key, property_key
+                ));
+            }
+            let label = port
+                .label
+                .as_deref()
+                .ok_or_else(|| format!("{}.{}: property port is missing label", self.label, key))?;
+            let metadata = port.property_metadata.as_ref().ok_or_else(|| {
+                format!(
+                    "{}.{}: property port is missing complete property_metadata",
+                    self.label, key
+                )
+            })?;
+            contracts.push(metadata.contract(
+                property_key,
+                label,
+                &format!("{}.{}", self.label, key),
+            )?);
+        }
+        for port in &self.outputs {
+            if port.property.is_some() || port.property_metadata.is_some() {
+                return Err(format!(
+                    "{}: output ports cannot declare operation properties",
+                    self.label
+                ));
+            }
+        }
+        Ok(contracts)
     }
 }
 
@@ -203,7 +267,29 @@ fn parse_node_list() -> BTreeMap<String, NodeListEntry> {
         if indentation == 6
             && let Some(port) = pending.as_mut()
         {
-            apply_port_field(&mut port.definition, trimmed, line_number);
+            if let Some(value) = trimmed.strip_prefix("property_metadata:") {
+                assert!(
+                    port.definition.property_metadata.is_none(),
+                    "node_list.yml:{line_number}: duplicate property_metadata"
+                );
+                let mut metadata = NodeListPropertyMetadata::default();
+                let value = value.trim();
+                if !value.is_empty() && !value.starts_with('&') {
+                    apply_inline_property_metadata(&mut metadata, value, line_number);
+                }
+                port.definition.property_metadata = Some(metadata);
+            } else {
+                apply_port_field(&mut port.definition, trimmed, line_number);
+            }
+            continue;
+        }
+
+        if indentation == 8
+            && let Some(metadata) = pending
+                .as_mut()
+                .and_then(|port| port.definition.property_metadata.as_mut())
+        {
+            apply_property_metadata_field(metadata, trimmed, line_number);
         }
     }
 
@@ -267,6 +353,7 @@ fn apply_port_field(port: &mut NodeListPort, value: &str, line_number: usize) {
         "side" => &mut port.side,
         "exposure" => &mut port.exposure,
         "multiplicity" => &mut port.multiplicity,
+        "property" => &mut port.property,
         "variadic" => {
             port.variadic = match value {
                 "true" => true,
@@ -280,6 +367,93 @@ fn apply_port_field(port: &mut NodeListPort, value: &str, line_number: usize) {
     assert!(
         target.replace(value.to_string()).is_none(),
         "node_list.yml:{line_number}: duplicate port field {key}"
+    );
+}
+
+fn apply_inline_property_metadata(
+    metadata: &mut NodeListPropertyMetadata,
+    value: &str,
+    line_number: usize,
+) {
+    let body = value
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .unwrap_or_else(|| {
+            panic!("node_list.yml:{line_number}: property_metadata must be an inline YAML map")
+        });
+    for field in split_top_level_fields(body, line_number) {
+        apply_property_metadata_field(metadata, field.trim(), line_number);
+    }
+}
+
+fn split_top_level_fields(value: &str, line_number: usize) -> Vec<&str> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    let mut nesting = 0_u32;
+    let mut quote = None;
+    for (index, character) in value.char_indices() {
+        if let Some(open_quote) = quote {
+            if character == open_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '[' | '{' => nesting += 1,
+            ']' | '}' => {
+                nesting = nesting.checked_sub(1).unwrap_or_else(|| {
+                    panic!("node_list.yml:{line_number}: unbalanced inline property_metadata")
+                });
+            }
+            ',' if nesting == 0 => {
+                fields.push(
+                    value
+                        .get(start..index)
+                        .expect("char_indices always yields UTF-8 boundaries"),
+                );
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        nesting == 0 && quote.is_none(),
+        "node_list.yml:{line_number}: unbalanced inline property_metadata"
+    );
+    fields.push(
+        value
+            .get(start..)
+            .expect("field start always follows a UTF-8 boundary"),
+    );
+    fields
+}
+
+fn apply_property_metadata_field(
+    metadata: &mut NodeListPropertyMetadata,
+    value: &str,
+    line_number: usize,
+) {
+    let Some((key, value)) = yaml_field(value) else {
+        panic!("node_list.yml:{line_number}: invalid property_metadata field {value:?}");
+    };
+    let target = match key {
+        "<<" => return,
+        "label" => &mut metadata.label,
+        "ui_type" => &mut metadata.ui_type,
+        "default" => &mut metadata.default,
+        "min" => &mut metadata.min,
+        "max" => &mut metadata.max,
+        "step" => &mut metadata.step,
+        "suffix" => &mut metadata.suffix,
+        "min_hard_limit" => &mut metadata.min_hard_limit,
+        "max_hard_limit" => &mut metadata.max_hard_limit,
+        "options" => &mut metadata.options,
+        other => panic!("node_list.yml:{line_number}: unsupported property_metadata field {other}"),
+    };
+    assert!(
+        target.replace(value.to_string()).is_none(),
+        "node_list.yml:{line_number}: duplicate property_metadata field {key}"
     );
 }
 
@@ -333,6 +507,28 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         other => panic!("{node_label}.{port_name}: unsupported catalog type {other}"),
     };
     (data_type, value == "List<Image>")
+}
+
+fn compare_plugin_property_contracts(
+    entry: &NodeListEntry,
+    descriptor: &OperationDescriptor,
+) -> Result<(), String> {
+    let yaml = entry.property_contracts()?;
+    let compiled = descriptor
+        .properties()
+        .iter()
+        .map(PropertyContract::from_definition)
+        .collect::<Vec<_>>();
+    if yaml == compiled {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}/{}/{}: ordered property definition drift\nnode_list.yml: {yaml:#?}\ndescriptor: {compiled:#?}",
+            descriptor.category(),
+            descriptor.component_id(),
+            descriptor.operation()
+        ))
+    }
 }
 
 #[test]
@@ -518,6 +714,8 @@ fn node_list_and_bundled_plugin_operations_match_bidirectionally() {
             descriptor.declared_ports(),
             "{identity:?}: ordered typed port contract drift"
         );
+        compare_plugin_property_contracts(entry, descriptor)
+            .unwrap_or_else(|error| panic!("{error}"));
 
         let resolved = manager
             .operation_descriptor(identity.0, identity.1, identity.2)
@@ -555,6 +753,58 @@ fn node_list_and_bundled_plugin_operations_match_bidirectionally() {
             );
         }
     }
+}
+
+#[test]
+fn plugin_property_contract_gate_rejects_missing_default_and_range_drift() {
+    let entries = parse_node_list();
+    let mut entry = entries
+        .get("Image Opacity")
+        .expect("Image Opacity catalog entry")
+        .clone();
+    let manager = PluginManager::default();
+    let descriptors = manager
+        .bundled_operation_descriptors()
+        .expect("bundled descriptors");
+    let descriptor = descriptors
+        .iter()
+        .find(|descriptor| descriptor.label() == "Image Opacity")
+        .expect("Image Opacity descriptor");
+
+    let property_index = entry
+        .inputs
+        .iter()
+        .position(|port| port.property.as_deref() == Some("opacity"))
+        .expect("Image Opacity opacity metadata");
+    entry.inputs[property_index]
+        .property_metadata
+        .as_mut()
+        .expect("Image Opacity opacity metadata")
+        .default = Some("0.5".to_string());
+    assert!(
+        compare_plugin_property_contracts(&entry, descriptor)
+            .expect_err("a wrong YAML default must fail the catalog gate")
+            .contains("property definition drift")
+    );
+
+    let metadata = entry.inputs[property_index]
+        .property_metadata
+        .as_mut()
+        .expect("Image Opacity opacity metadata");
+    metadata.default = Some("1.0".to_string());
+    metadata.max = Some("2.0".to_string());
+    assert!(
+        compare_plugin_property_contracts(&entry, descriptor)
+            .expect_err("a wrong YAML range must fail the catalog gate")
+            .contains("property definition drift")
+    );
+
+    entry.inputs[property_index].property_metadata = None;
+    assert!(
+        compare_plugin_property_contracts(&entry, descriptor)
+            .expect_err("missing YAML metadata must fail the catalog gate")
+            .contains("missing complete property_metadata")
+    );
 }
 
 #[test]

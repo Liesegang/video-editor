@@ -589,7 +589,12 @@ Shape Transform:
       property_metadata:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
+        min: -1000000.0
+        max: 1000000.0
+        step: 0.1
         suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: rotation
       key: property:rotation
       label: Rotation
@@ -635,7 +640,12 @@ Shape Transform:
       property_metadata:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
+        min: -1000000.0
+        max: 1000000.0
+        step: 0.1
         suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: shape
       key: shape_in
       label: Shape
@@ -677,7 +687,12 @@ Image Transform:
       property_metadata:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
+        min: -1000000.0
+        max: 1000000.0
+        step: 0.1
         suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: rotation
       key: property:rotation
       label: Rotation
@@ -723,7 +738,12 @@ Image Transform:
       property_metadata:
         ui_type: Vec2
         default: { x: 0.0, y: 0.0 }
+        min: -1000000.0
+        max: 1000000.0
+        step: 0.1
         suffix: px
+        min_hard_limit: false
+        max_hard_limit: false
     - name: image
       key: image_in
       label: Image
@@ -1362,6 +1382,7 @@ Blur:
       exposure: Graph
       multiplicity: Single
       property: sigma_x
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: false }
     - name: sigma_y
       key: property:sigma_y
       label: Sigma Y
@@ -1370,6 +1391,7 @@ Blur:
       exposure: Graph
       multiplicity: Single
       property: sigma_y
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: false }
     - name: tile_mode
       key: property:tile_mode
       label: Tile Mode
@@ -1378,6 +1400,7 @@ Blur:
       exposure: Graph
       multiplicity: Single
       property: tile_mode
+      property_metadata: { ui_type: Dropdown, default: clamp, options: [clamp, repeat, mirror, decal] }
     - name: image
       key: image_in
       label: Image
@@ -1416,6 +1439,7 @@ Pixel Sorter:
       exposure: Graph
       multiplicity: Single
       property: threshold
+      property_metadata: { ui_type: Float, default: 0.5, min: 0.0, max: 1.0, step: 0.01, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: direction
       key: property:direction
       label: Direction
@@ -1424,6 +1448,7 @@ Pixel Sorter:
       exposure: Graph
       multiplicity: Single
       property: direction
+      property_metadata: { ui_type: Dropdown, default: horizontal, options: [horizontal, vertical] }
     - name: sort_criteria
       key: property:sort_criteria
       label: Criteria
@@ -1432,6 +1457,7 @@ Pixel Sorter:
       exposure: Graph
       multiplicity: Single
       property: sort_criteria
+      property_metadata: { ui_type: Dropdown, default: brightness, options: [brightness, red, green, blue] }
     - name: image
       key: image_in
       label: Image
@@ -1470,6 +1496,7 @@ Dilate:
       exposure: Graph
       multiplicity: Single
       property: radius_x
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: radius_y
       key: property:radius_y
       label: Radius Y
@@ -1478,6 +1505,7 @@ Dilate:
       exposure: Graph
       multiplicity: Single
       property: radius_y
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: image
       key: image_in
       label: Image
@@ -1516,6 +1544,7 @@ Erode:
       exposure: Graph
       multiplicity: Single
       property: radius_x
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: radius_y
       key: property:radius_y
       label: Radius Y
@@ -1524,6 +1553,7 @@ Erode:
       exposure: Graph
       multiplicity: Single
       property: radius_y
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: image
       key: image_in
       label: Image
@@ -1576,6 +1606,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: dx
+      property_metadata: { ui_type: Float, default: 5.0, min: -500.0, max: 500.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: dy
       key: property:dy
       label: Distance Y
@@ -1584,6 +1615,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: dy
+      property_metadata: { ui_type: Float, default: 5.0, min: -500.0, max: 500.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: sigma_x
       key: property:sigma_x
       label: Blur X
@@ -1592,6 +1624,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: sigma_x
+      property_metadata: { ui_type: Float, default: 3.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: false }
     - name: sigma_y
       key: property:sigma_y
       label: Blur Y
@@ -1600,6 +1633,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: sigma_y
+      property_metadata: { ui_type: Float, default: 3.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: color
       key: property:color
       label: Color
@@ -1608,6 +1642,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: color
+      property_metadata: { ui_type: Color, default: { r: 0, g: 0, b: 0, a: 255 } }
     - name: shadow_only
       key: property:shadow_only
       label: Shadow Only
@@ -1616,6 +1651,7 @@ Drop Shadow:
       exposure: Graph
       multiplicity: Single
       property: shadow_only
+      property_metadata: { ui_type: Bool, default: false }
     - name: image
       key: image_in
       label: Image
@@ -1654,6 +1690,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: x
+      property_metadata: { ui_type: Float, default: 100.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: y
       key: property:y
       label: Y
@@ -1662,6 +1699,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: y
+      property_metadata: { ui_type: Float, default: 100.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: width
       key: property:width
       label: Width
@@ -1670,6 +1708,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: width
+      property_metadata: { ui_type: Float, default: 100.0, min: 0.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: height
       key: property:height
       label: Height
@@ -1678,6 +1717,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: height
+      property_metadata: { ui_type: Float, default: 100.0, min: 0.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: zoom_amount
       key: property:zoom_amount
       label: Zoom Amount
@@ -1686,6 +1726,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: zoom_amount
+      property_metadata: { ui_type: Float, default: 2.0, min: 1.0, max: 100.0, step: 0.1, suffix: x, min_hard_limit: false, max_hard_limit: false }
     - name: inset
       key: property:inset
       label: Inset
@@ -1694,6 +1735,7 @@ Magnifier:
       exposure: Graph
       multiplicity: Single
       property: inset
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: image
       key: image_in
       label: Image
@@ -1732,6 +1774,7 @@ Tile:
       exposure: Graph
       multiplicity: Single
       property: x
+      property_metadata: { ui_type: Float, default: 0.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: y
       key: property:y
       label: Y
@@ -1740,6 +1783,7 @@ Tile:
       exposure: Graph
       multiplicity: Single
       property: y
+      property_metadata: { ui_type: Float, default: 0.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: width
       key: property:width
       label: Width
@@ -1748,6 +1792,7 @@ Tile:
       exposure: Graph
       multiplicity: Single
       property: width
+      property_metadata: { ui_type: Float, default: 100.0, min: 0.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: height
       key: property:height
       label: Height
@@ -1756,6 +1801,7 @@ Tile:
       exposure: Graph
       multiplicity: Single
       property: height
+      property_metadata: { ui_type: Float, default: 100.0, min: 0.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: image
       key: image_in
       label: Image
@@ -2707,8 +2753,8 @@ Fill:
       multiplicity: Single
       property: color
       property_metadata:
-        ui_type: Color
-        default: { r: 255, g: 255, b: 255, a: 255 }
+        ui_type: ColorValue
+        default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
     - name: opacity
       key: property:opacity
       label: Opacity
@@ -2782,8 +2828,8 @@ Stroke:
       multiplicity: Single
       property: color
       property_metadata:
-        ui_type: Color
-        default: { r: 255, g: 255, b: 255, a: 255 }
+        ui_type: ColorValue
+        default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
     - name: width
       key: property:width
       label: Width
@@ -2957,6 +3003,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: tx
+      property_metadata: { ui_type: Float, default: 0.0, min: -1000.0, max: 1000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: ty
       key: property:ty
       label: Translate Y
@@ -2965,6 +3012,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: ty
+      property_metadata: { ui_type: Float, default: 0.0, min: -1000.0, max: 1000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: scale_x
       key: property:scale_x
       label: Scale X
@@ -2973,6 +3021,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: scale_x
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 10.0, step: 0.1, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: scale_y
       key: property:scale_y
       label: Scale Y
@@ -2981,6 +3030,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: scale_y
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 10.0, step: 0.1, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: rotation
       key: property:rotation
       label: Rotation
@@ -2989,6 +3039,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: rotation
+      property_metadata: { ui_type: Float, default: 0.0, min: -360.0, max: 360.0, step: 1.0, suffix: "°", min_hard_limit: false, max_hard_limit: false }
     - name: target
       key: property:target
       label: Target
@@ -2997,6 +3048,7 @@ Transform Modulation:
       exposure: Graph
       multiplicity: Single
       property: target
+      property_metadata: { ui_type: Dropdown, default: Block, options: [Block, Line, Char] }
     - name: shape
       key: shape_in
       label: Shape
@@ -3035,6 +3087,7 @@ Step Delay:
       exposure: Graph
       multiplicity: Single
       property: delay
+      property_metadata: { ui_type: Float, default: 0.05, min: 0.0, max: 5.0, step: 0.05, suffix: s, min_hard_limit: false, max_hard_limit: false }
     - name: duration
       key: property:duration
       label: Duration
@@ -3043,6 +3096,7 @@ Step Delay:
       exposure: Graph
       multiplicity: Single
       property: duration
+      property_metadata: { ui_type: Float, default: 0.2, min: 0.0, max: 5.0, step: 0.05, suffix: s, min_hard_limit: false, max_hard_limit: false }
     - name: from_opacity
       key: property:from_opacity
       label: From Opacity
@@ -3051,6 +3105,7 @@ Step Delay:
       exposure: Graph
       multiplicity: Single
       property: from_opacity
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 1.0, suffix: "%", min_hard_limit: true, max_hard_limit: true }
     - name: to_opacity
       key: property:to_opacity
       label: To Opacity
@@ -3059,6 +3114,7 @@ Step Delay:
       exposure: Graph
       multiplicity: Single
       property: to_opacity
+      property_metadata: { ui_type: Float, default: 100.0, min: 0.0, max: 100.0, step: 1.0, suffix: "%", min_hard_limit: true, max_hard_limit: true }
     - name: target
       key: property:target
       label: Target
@@ -3067,6 +3123,7 @@ Step Delay:
       exposure: Graph
       multiplicity: Single
       property: target
+      property_metadata: { ui_type: Dropdown, default: Block, options: [Block, Line, Char] }
     - name: shape
       key: shape_in
       label: Shape
@@ -3105,6 +3162,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: seed
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 1.0, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: amount
       key: property:amount
       label: Amount
@@ -3113,6 +3171,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: amount
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 1.0, step: 0.01, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: translate_range
       key: property:translate_range
       label: Translate Range
@@ -3121,6 +3180,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: translate_range
+      property_metadata: { ui_type: Float, default: 50.0, min: 0.0, max: 500.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: rotate_range
       key: property:rotate_range
       label: Rotate Range
@@ -3129,6 +3189,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: rotate_range
+      property_metadata: { ui_type: Float, default: 15.0, min: 0.0, max: 360.0, step: 1.0, suffix: deg, min_hard_limit: false, max_hard_limit: false }
     - name: scale_range
       key: property:scale_range
       label: Scale Range
@@ -3137,6 +3198,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: scale_range
+      property_metadata: { ui_type: Float, default: 0.5, min: 0.0, max: 5.0, step: 0.1, suffix: "", min_hard_limit: false, max_hard_limit: false }
     - name: target
       key: property:target
       label: Target
@@ -3145,6 +3207,7 @@ Randomize:
       exposure: Graph
       multiplicity: Single
       property: target
+      property_metadata: { ui_type: Dropdown, default: Block, options: [Block, Line, Char] }
     - name: shape
       key: shape_in
       label: Shape
@@ -3183,6 +3246,7 @@ Opacity Modulation:
       exposure: Graph
       multiplicity: Single
       property: opacity
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 1.0, suffix: "%", min_hard_limit: true, max_hard_limit: true }
     - name: mode
       key: property:mode
       label: Mode
@@ -3191,6 +3255,7 @@ Opacity Modulation:
       exposure: Graph
       multiplicity: Single
       property: mode
+      property_metadata: { ui_type: Dropdown, default: Set, options: [Set, Add, Multiply] }
     - name: target
       key: property:target
       label: Target
@@ -3199,6 +3264,7 @@ Opacity Modulation:
       exposure: Graph
       multiplicity: Single
       property: target
+      property_metadata: { ui_type: Dropdown, default: Block, options: [Block, Line, Char] }
     - name: shape
       key: shape_in
       label: Shape
@@ -3238,6 +3304,7 @@ Backplate:
       exposure: Graph
       multiplicity: Single
       property: target
+      property_metadata: { ui_type: Dropdown, default: Block, options: [Char, Line, Block] }
     - name: padding
       key: property:padding
       label: Padding
@@ -3246,6 +3313,7 @@ Backplate:
       exposure: Graph
       multiplicity: Single
       property: padding
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: offset
       key: property:offset
       label: Offset
@@ -3254,6 +3322,7 @@ Backplate:
       exposure: Graph
       multiplicity: Single
       property: offset
+      property_metadata: { ui_type: Vec2, default: { x: 0.0, y: 0.0 }, min: -1000000.0, max: 1000000.0, step: 0.1, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: fit
       key: property:fit
       label: Fit
@@ -3262,6 +3331,7 @@ Backplate:
       exposure: Graph
       multiplicity: Single
       property: fit
+      property_metadata: { ui_type: Dropdown, default: Stretch, options: [Stretch, Contain, Cover] }
     - name: target_shape
       key: shape_in
       label: Target
