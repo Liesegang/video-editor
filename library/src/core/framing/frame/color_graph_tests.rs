@@ -227,6 +227,20 @@ fn invalid_space_alpha_mixed_spaces_factor_disabled_and_bypass_are_no_output() {
         "connected alpha outside [0, 1] must not be clamped"
     );
 
+    let invalid_factor_id = fixture.add(Node::new_color("Invalid factor", ColorContent::Mix));
+    fixture
+        .project
+        .connect_ports(
+            PortAddress::new(PortOwner::Clip(fixture.clip_id), DURATION_PORT),
+            PortAddress::new(PortOwner::Node(invalid_factor_id), COLOR_MIX_FACTOR_PORT),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.evaluate(invalid_factor_id, COLOR_VALUE_PORT, 0.5),
+        EvalOutput::NoOutput,
+        "connected mix factors outside [0, 1] must not be clamped"
+    );
+
     let left_id = fixture.add(compose_node("srgb", [0.0, 0.0, 0.0, 1.0]));
     let right_id = fixture.add(compose_node("acescg", [1.0, 1.0, 1.0, 1.0]));
     let mut mix = Node::new_color("Mix", ColorContent::Mix);
