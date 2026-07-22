@@ -22,6 +22,7 @@ QaClient = BASE.QaClient
 QaFailure = BASE.QaFailure
 NODE_TAB = "dock.tab:node_editor"
 TEXT = BASE.TEXT
+SWIPE_FAILURES = (QaFailure, AssertionError, KeyError, StopIteration, TypeError)
 
 
 def ensure_overview_scale(client):
@@ -178,6 +179,42 @@ def header_padding_point(header):
     )
 
 
+def directional_swipe_state(client):
+    state = client.state()
+    node_editor = state["editor"]["node_editor"]
+    return {
+        "frame": state.get("frame"),
+        "active": node_editor.get("directional_layout_swipe"),
+        "last": node_editor.get("last_directional_layout_swipe"),
+        "release_guard": node_editor.get("directional_layout_release_guard"),
+    }
+
+
+def cleanup_failed_swipe(client, runtime, shift, alt):
+    """Release every physical input owned by a partially started gesture."""
+    cleanup_errors = []
+    if runtime.get("a_held"):
+        try:
+            client.key("a", False, shift=shift, alt=alt)
+        except SWIPE_FAILURES as error:
+            cleanup_errors.append("A release: {}".format(error))
+    if runtime.get("pointer_held"):
+        point = runtime.get("release_point")
+        if point is not None:
+            try:
+                client.inject(
+                    "release",
+                    pointer_payload(point, button="primary"),
+                    {
+                        "component_id": "node_editor.canvas",
+                        "coordinate_reason": "cleanup after failed real-coordinate layout swipe",
+                    },
+                )
+            except SWIPE_FAILURES as error:
+                cleanup_errors.append("primary release: {}".format(error))
+    return cleanup_errors
+
+
 def begin_swipe(
     client,
     dx,
@@ -188,10 +225,60 @@ def begin_swipe(
     observed=BASE.BLUR_EFFECT,
     require_visible_preview=True,
 ):
+    runtime = {
+        "stage": "prepare",
+        "anchor": anchor,
+        "observed": observed,
+        "modifiers": modifiers(shift=shift, alt=alt),
+        "delta": {"x": dx, "y": dy},
+        "a_held": False,
+        "pointer_held": False,
+    }
+    try:
+        return _begin_swipe(
+            client,
+            dx,
+            dy,
+            shift=shift,
+            alt=alt,
+            anchor=anchor,
+            observed=observed,
+            require_visible_preview=require_visible_preview,
+            runtime=runtime,
+        )
+    except SWIPE_FAILURES as error:
+        try:
+            runtime["directional_state"] = directional_swipe_state(client)
+        except SWIPE_FAILURES as state_error:
+            runtime["directional_state_error"] = str(state_error)
+        cleanup_errors = cleanup_failed_swipe(client, runtime, shift, alt)
+        if cleanup_errors:
+            runtime["cleanup_errors"] = cleanup_errors
+        raise QaFailure(
+            "layout swipe failed: {}; context={}".format(
+                error, json.dumps(runtime, sort_keys=True)
+            )
+        ) from error
+
+
+def _begin_swipe(
+    client,
+    dx,
+    dy,
+    shift=False,
+    alt=False,
+    anchor=TEXT,
+    observed=BASE.BLUR_EFFECT,
+    require_visible_preview=True,
+    runtime=None,
+):
+    if runtime is None:
+        runtime = {}
     # Overview uses the whole Node while detailed mode uses its full painted
     # header. Keep one known branch target in the same viewport so Update must
     # produce an observable before/after rectangle for the same stable ID.
     observed_id = "node_editor.node:" + observed
+    runtime["stage"] = "reveal"
     anchor_id = None
     for _ in range(2):
         _, canvas = client.component("node_editor.canvas")
@@ -219,7 +306,10 @@ def begin_swipe(
             break
     if anchor_id is None:
         raise QaFailure("Node layout hit area changed level-of-detail while revealing")
+    runtime["anchor_component_id"] = anchor_id
     client.wait_component_settled(anchor_id)
+    runtime["stage"] = "hold_a"
+    runtime["a_held"] = True
     client.key("a", True, shift=shift, alt=alt)
 
     # Resolve fresh coordinates after the key frame. This is an actual visible
@@ -228,19 +318,25 @@ def begin_swipe(
     start = client.point(anchor_component["rect_points"], 0.5, 0.5)
     _, canvas = client.component("node_editor.canvas")
     end = {"x": start["x"] + dx, "y": start["y"] + dy}
+    runtime["start"] = start
+    runtime["end"] = end
+    runtime["release_point"] = end
     canvas_rect = canvas["rect_points"]
     if not (
         canvas_rect["min_x"] + 4.0 <= end["x"] <= canvas_rect["max_x"] - 4.0
         and canvas_rect["min_y"] + 4.0 <= end["y"] <= canvas_rect["max_y"] - 4.0
     ):
-        client.key("a", False, shift=shift, alt=alt)
         raise QaFailure("requested layout swipe endpoint leaves the real Node canvas")
 
     before = client.state()
+    before_last = before["editor"]["node_editor"]["last_directional_layout_swipe"]
+    before_last_gesture_id = None if before_last is None else before_last.get("gesture_id")
+    runtime["last_gesture_id_before_press"] = before_last_gesture_id
     before_rects = node_rects(snapshot)
     if observed not in before_rects:
-        client.key("a", False, shift=shift, alt=alt)
         raise QaFailure("known branch Node is not visible before layout swipe")
+    runtime["stage"] = "press"
+    runtime["pointer_held"] = True
     client.inject(
         "press",
         pointer_payload(start, shift=shift, alt=alt, button="primary"),
@@ -254,13 +350,22 @@ def begin_swipe(
 
     def started():
         state = client.state()
-        active = state["editor"]["node_editor"]["directional_layout_swipe"]
+        node_editor = state["editor"]["node_editor"]
+        active = node_editor["directional_layout_swipe"]
         if active is None:
+            last = node_editor["last_directional_layout_swipe"]
+            if last is not None and last.get("gesture_id") != before_last_gesture_id:
+                raise QaFailure(
+                    "layout swipe Start rejected gesture: outcome={!r}, reason={!r}, last={!r}".format(
+                        last.get("outcome"), last.get("reason"), last
+                    )
+                )
             return None
         if active["anchor_node_id"] != anchor:
             raise QaFailure("layout swipe captured the wrong anchor: {!r}".format(active))
         return state
 
+    runtime["stage"] = "wait_start"
     start_state = client.wait_until(
         "directional layout Start {} ({}, {})".format(anchor, dx, dy), started
     )
@@ -268,7 +373,13 @@ def begin_swipe(
         raise QaFailure("layout swipe Start mutated authoritative Project")
     if start_state["history"] != before["history"]:
         raise QaFailure("layout swipe Start changed history depths")
+    started_active = start_state["editor"]["node_editor"][
+        "directional_layout_swipe"
+    ]
+    started_gesture_id = started_active["gesture_id"]
+    runtime["gesture_id"] = started_gesture_id
 
+    runtime["stage"] = "move"
     client.inject(
         "move",
         pointer_payload(end, shift=shift, alt=alt),
@@ -294,9 +405,26 @@ def begin_swipe(
 
     def previewed():
         state = client.state()
-        active = state["editor"]["node_editor"]["directional_layout_swipe"]
+        node_editor = state["editor"]["node_editor"]
+        active = node_editor["directional_layout_swipe"]
         preview_diagnostic["active"] = active
-        if active is None or not active["preview_positions"]:
+        preview_diagnostic["last"] = node_editor["last_directional_layout_swipe"]
+        if active is None:
+            last = node_editor["last_directional_layout_swipe"]
+            if last is not None and last.get("gesture_id") == started_gesture_id:
+                raise QaFailure(
+                    "layout swipe Update ended gesture {}: outcome={!r}, reason={!r}".format(
+                        started_gesture_id, last.get("outcome"), last.get("reason")
+                    )
+                )
+            return None
+        if active.get("gesture_id") != started_gesture_id:
+            raise QaFailure(
+                "layout swipe Update replaced gesture {} with {!r}".format(
+                    started_gesture_id, active
+                )
+            )
+        if not active["preview_positions"]:
             return None
         if active["mode"] != expected_mode:
             raise QaFailure(
@@ -337,15 +465,13 @@ def begin_swipe(
         return state, snapshot_after, visibly_moved
 
     try:
+        runtime["stage"] = "wait_preview"
         preview_state, preview_snapshot, visibly_moved = client.wait_until(
             "sparse Snarl preview movement", previewed
         )
-    except QaFailure as error:
-        raise QaFailure(
-            "{}; diagnostic={}".format(
-                error, json.dumps(preview_diagnostic, sort_keys=True)
-            )
-        ) from error
+    except SWIPE_FAILURES:
+        runtime["preview_diagnostic"] = preview_diagnostic
+        raise
     if preview_state["project"] != before["project"]:
         raise QaFailure("layout swipe Update mutated authoritative Project")
     if preview_state["history"] != before["history"]:
@@ -353,6 +479,7 @@ def begin_swipe(
     active = preview_state["editor"]["node_editor"]["directional_layout_swipe"]
     if active["measured_geometry_count"] < 1:
         raise QaFailure("gesture did not freeze any measured Node geometry")
+    runtime["stage"] = "preview_ready"
     return {
         "before": before,
         "start": start,
@@ -595,7 +722,7 @@ def verify_detail_header_padding_swipe(client):
     }
 
 
-def run_suite(client):
+def run_suite(client, first_gesture_only=False):
     health = client.wait_health()
     client.wait_until(
         "layout swipe fixture",
@@ -619,6 +746,20 @@ def run_suite(client):
     )
     commit_swipe(client, upstream_left)
     undo_commit(client, upstream_left)
+
+    if first_gesture_only:
+        final_state = client.state()
+        return {
+            "ok": True,
+            "suite": "node-layout-swipe-first-gesture",
+            "health": health,
+            "verified_modes": ["layout"],
+            "verified_directions": [
+                {"axis": "horizontal", "direction": "upstream"}
+            ],
+            "final_history": final_state["history"],
+            "actions": client.evidence,
+        }
 
     upstream_up = begin_swipe(
         client,
@@ -705,6 +846,11 @@ def parse_args():
     parser.add_argument("--spawn", action="store_true")
     parser.add_argument("--timeout", type=float, default=40.0)
     parser.add_argument(
+        "--first-gesture-only",
+        action="store_true",
+        help="run only the first real-coordinate layout gesture and its Undo",
+    )
+    parser.add_argument(
         "--evidence", default="target/qa-layout-swipe-e2e-evidence.json"
     )
     return parser.parse_args()
@@ -733,7 +879,10 @@ def main():
                 env=environment,
                 start_new_session=True,
             )
-        result = run_suite(QaClient(base_url, args.timeout))
+        result = run_suite(
+            QaClient(base_url, args.timeout),
+            first_gesture_only=args.first_gesture_only,
+        )
         result["run_id"] = os.environ.get("RUVIE_QA_RUN_ID")
         result["git_commit"] = BASE.repository_git_commit()
         result["action_count"] = len(result["actions"])
