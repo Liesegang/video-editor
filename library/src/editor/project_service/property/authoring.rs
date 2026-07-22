@@ -24,6 +24,20 @@ impl ProjectManager {
         )
     }
 
+    pub fn update_properties_or_keyframes(
+        &self,
+        owner: PropertyOwner,
+        time: f64,
+        values: &[(String, PropertyValue)],
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_properties_or_keyframes(
+            &self.project,
+            owner,
+            time,
+            values,
+        )
+    }
+
     /// Replaces one authored Property evaluator/value atomically in the
     /// authoritative Project. Inspector mode changes use this instead of
     /// mutating a detached UI copy.

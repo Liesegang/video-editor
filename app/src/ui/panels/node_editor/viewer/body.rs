@@ -510,7 +510,12 @@ impl ProjectNodeViewer<'_> {
             }
         }
 
-        let property_time = node_property_time(self.project, node_id, self.current_time);
+        let property_time = node_property_time(
+            self.project,
+            self.plugin_manager,
+            node_id,
+            self.current_time,
+        );
         let authored_property = self
             .project
             .get_node(node_id)
@@ -954,7 +959,12 @@ impl ProjectNodeViewer<'_> {
         label: &str,
         fallback: &str,
     ) {
-        let property_time = node_property_time(self.project, node_id, self.current_time);
+        let property_time = node_property_time(
+            self.project,
+            self.plugin_manager,
+            node_id,
+            self.current_time,
+        );
         let evaluated = node.properties().get(key).map(|property| {
             evaluate_node_property(
                 self.project,

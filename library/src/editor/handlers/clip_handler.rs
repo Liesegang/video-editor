@@ -281,6 +281,80 @@ impl ClipHandler {
         }
     }
 
+    /// Atomically update several authored properties on one owner.
+    ///
+    /// The complete owner is staged before the authoritative Project is
+    /// changed. A rejected channel therefore cannot leave a grouped control
+    /// (for example Compose Color) partially updated.
+    pub fn update_properties_or_keyframes(
+        project: &Arc<RwLock<Project>>,
+        owner: PropertyOwner,
+        time: f64,
+        values: &[(String, PropertyValue)],
+    ) -> Result<(), LibraryError> {
+        use std::collections::HashSet;
+
+        if values.is_empty() {
+            return Err(LibraryError::Project(
+                "Property update batch cannot be empty".to_string(),
+            ));
+        }
+        let mut keys = HashSet::with_capacity(values.len());
+        if let Some((duplicate, _)) = values
+            .iter()
+            .find(|(property_key, _)| !keys.insert(property_key.as_str()))
+        {
+            return Err(LibraryError::Project(format!(
+                "Property update batch contains duplicate key '{duplicate}'"
+            )));
+        }
+
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        match owner {
+            PropertyOwner::Clip(clip_id) => {
+                let clip = project
+                    .get_clip_mut(clip_id)
+                    .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?;
+                let mut candidate = clip.clone();
+                for (property_key, value) in values {
+                    if !candidate.update_property_or_keyframe(
+                        property_key,
+                        time,
+                        value.clone(),
+                        None,
+                    ) {
+                        return Err(LibraryError::Project(format!(
+                            "Property {property_key} could not be updated on {owner:?}"
+                        )));
+                    }
+                }
+                *clip = candidate;
+            }
+            PropertyOwner::Node(node_id) => {
+                let node = project
+                    .get_node_mut(node_id)
+                    .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?;
+                let mut candidate = node.clone();
+                for (property_key, value) in values {
+                    if !candidate.update_property_or_keyframe(
+                        property_key,
+                        time,
+                        value.clone(),
+                        None,
+                    ) {
+                        return Err(LibraryError::Project(format!(
+                            "Property {property_key} could not be updated on {owner:?}"
+                        )));
+                    }
+                }
+                *node = candidate;
+            }
+        }
+        Ok(())
+    }
+
     fn validate_recursion(project: &Project, child_id: Uuid, parent_id: Uuid) -> bool {
         if child_id == parent_id {
             return false;
@@ -443,7 +517,9 @@ mod tests {
     use super::*;
     use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::frame::color::Color;
-    use crate::model::{Composition, Track};
+    use crate::model::{
+        COLOR_ALPHA_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, ColorContent, Composition, Track,
+    };
 
     fn project_with_composition(name: &str) -> (Project, Uuid, Uuid) {
         let mut project = Project::new(name);
@@ -630,5 +706,62 @@ mod tests {
         assert_eq!(clip.start_time.into_inner(), 2.5);
         assert_eq!(clip.duration.into_inner(), 2.5);
         assert_eq!(clip.trim_in.into_inner(), 1.75);
+    }
+
+    #[test]
+    fn grouped_node_property_updates_commit_all_channels_or_none() {
+        let mut project = Project::new("atomic grouped properties");
+        let node = Node::new_color("Compose", ColorContent::Compose);
+        let node_id = node.id;
+        project.add_node(node);
+        let project = Arc::new(RwLock::new(project));
+
+        ClipHandler::update_properties_or_keyframes(
+            &project,
+            PropertyOwner::Node(node_id),
+            2.0,
+            &[
+                (
+                    COLOR_SPACE_PORT.to_string(),
+                    PropertyValue::String("linear-srgb".to_string()),
+                ),
+                (
+                    COLOR_RED_PORT.to_string(),
+                    PropertyValue::Number(OrderedFloat(0.25)),
+                ),
+                (
+                    COLOR_ALPHA_PORT.to_string(),
+                    PropertyValue::Number(OrderedFloat(0.625)),
+                ),
+            ],
+        )
+        .unwrap();
+        let committed = project.read().unwrap().clone();
+        let node = committed.get_node(node_id).unwrap();
+        assert_eq!(
+            node.properties()
+                .get(COLOR_SPACE_PORT)
+                .and_then(Property::value),
+            Some(&PropertyValue::String("linear-srgb".to_string()))
+        );
+
+        let error = ClipHandler::update_properties_or_keyframes(
+            &project,
+            PropertyOwner::Node(node_id),
+            2.0,
+            &[
+                (
+                    COLOR_RED_PORT.to_string(),
+                    PropertyValue::Number(OrderedFloat(0.9)),
+                ),
+                (
+                    COLOR_ALPHA_PORT.to_string(),
+                    PropertyValue::Number(OrderedFloat(2.0)),
+                ),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(COLOR_ALPHA_PORT));
+        assert_eq!(*project.read().unwrap(), committed);
     }
 }

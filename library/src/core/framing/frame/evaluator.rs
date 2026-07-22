@@ -57,6 +57,15 @@ impl<'a> FrameEvaluator<'a> {
         self.resolve_metadata_value(source, global_time, &mut HashSet::new())
     }
 
+    /// Resolves the effective local Time for an owner through the exact same
+    /// container inheritance and explicit metadata wires used at render time.
+    /// UI authoring uses this boundary so keyframes are never written in a
+    /// merely structural Clip-local approximation when Time is remapped.
+    pub fn evaluate_owner_time(&self, owner: PortOwner, global_time: f64) -> EvalResult<f64> {
+        self.evaluate_owner_scope_with_scratch(owner, global_time, &mut HashSet::new())
+            .map(|scope| scope.map(|scope| scope.time))
+    }
+
     pub(super) fn single_connection_to<'b>(
         &'b self,
         target: &PortAddress,

@@ -79,6 +79,7 @@ pub(super) fn color_value(
     let mut candidate = None;
     let group = ui.vertical(|ui| {
         let picker = color_value_picker(ui, id.with("display_picker"), value);
+        let display_picker_available = picker.supported;
         register_color_picker(qa_component_prefix, value, &picker);
         if let Some(picked) = picker.value {
             draft = ColorDraft::from_value(&picked);
@@ -97,6 +98,7 @@ pub(super) fn color_value(
                 "color_space",
                 &response,
                 serde_json::json!(draft.color_space),
+                display_picker_available,
             );
             changed |= response.changed();
             finished |= response.lost_focus();
@@ -111,6 +113,7 @@ pub(super) fn color_value(
                     label,
                     &response,
                     serde_json::json!(*component),
+                    display_picker_available,
                 );
                 changed |= response.changed();
                 finished |= response.drag_stopped() || response.lost_focus();
@@ -144,6 +147,7 @@ fn register_color_component(
     component: &str,
     response: &egui::Response,
     value: serde_json::Value,
+    display_picker_available: bool,
 ) {
     crate::qa::register_component_with_metadata(
         component_id,
@@ -157,7 +161,7 @@ fn register_color_component(
             "numeric": "f64",
             "alpha": "straight",
             "legacy_srgba8_picker": false,
-            "display_picker_available": true,
+            "display_picker_available": display_picker_available,
         })),
     );
 }

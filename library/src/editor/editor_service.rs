@@ -604,6 +604,17 @@ impl EditorService {
             .update_property_or_keyframe(owner, property_key, time, value, easing)
     }
 
+    /// Applies a grouped property gesture as one model transaction.
+    pub fn update_properties_or_keyframes(
+        &self,
+        owner: PropertyOwner,
+        time: f64,
+        values: &[(String, PropertyValue)],
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .update_properties_or_keyframes(owner, time, values)
+    }
+
     pub fn replace_property(
         &self,
         owner: PropertyOwner,

@@ -220,15 +220,30 @@ fn inspector_panel_content(
             if let Some(time_source) = time_source.as_ref() {
                 render_node_time_source(ui, node.id, time_source);
             }
-            let evaluation_time = containing_clip
-                .as_ref()
-                .map_or(global_time, |clip| clip.local_time(global_time));
+            let evaluation_time = project
+                .read()
+                .ok()
+                .map(|project| {
+                    let plugin_manager = project_service.get_plugin_manager();
+                    crate::utils::property::node_local_time(
+                        &project,
+                        Some(plugin_manager.as_ref()),
+                        node.id,
+                        global_time,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    containing_clip
+                        .as_ref()
+                        .map_or(global_time, |clip| clip.local_time(global_time))
+                });
             render_node(
                 ui,
                 &node,
                 composition_id,
                 track_id,
                 evaluation_time,
+                global_time,
                 fps,
                 resolution,
                 project_service,

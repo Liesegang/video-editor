@@ -127,13 +127,11 @@ pub(in crate::ui::panels::node_editor) fn parent_container_owner(
 /// owned directly by a Track or Composition stay in global composition time.
 pub(in crate::ui::panels::node_editor) fn node_property_time(
     project: &Project,
+    plugin_manager: Option<&PluginManager>,
     node_id: Uuid,
     global_time: f64,
 ) -> f64 {
-    project
-        .find_parent_clip(node_id)
-        .and_then(|clip_id| project.get_clip(clip_id))
-        .map_or(global_time, |clip| clip.local_time(global_time))
+    crate::utils::property::node_local_time(project, plugin_manager, node_id, global_time)
 }
 
 pub(in crate::ui::panels::node_editor) fn node_property_definition(

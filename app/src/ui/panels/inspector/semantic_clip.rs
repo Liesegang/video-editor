@@ -285,6 +285,10 @@ impl<'a> SemanticPropertyActions<'a> {
             let commit_policy = action_commit_policy(&action);
             let result = match action {
                 PropertyAction::Update(name, value) => self.update(&name, value),
+                PropertyAction::UpdateGroup(_) => Err(library::LibraryError::Validation(
+                    "Grouped direct-Node property updates are not valid in the semantic Clip facade"
+                        .to_string(),
+                )),
                 PropertyAction::Commit => {
                     self.commit_history();
                     continue;
@@ -499,6 +503,7 @@ fn action_commit_policy(action: &PropertyAction) -> PropertyActionCommit {
         | PropertyAction::SetAttribute(..)
         | PropertyAction::SetMode(..) => PropertyActionCommit::Immediate,
         PropertyAction::Update(..)
+        | PropertyAction::UpdateGroup(..)
         | PropertyAction::Commit
         | PropertyAction::SetExpressionSource(..) => PropertyActionCommit::Deferred,
     }

@@ -247,6 +247,13 @@ pub(crate) fn color_value_picker(ui: &mut Ui, id: Id, value: &ColorValue) -> Col
             alpha,
         })
     });
+    if let Some(error) = conversion_error.as_deref() {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            egui::RichText::new("Color transform unavailable").small(),
+        )
+        .on_hover_text(error);
+    }
     ColorPickerEdit {
         response,
         value,

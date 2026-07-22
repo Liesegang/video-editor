@@ -93,7 +93,7 @@ fn clip_owned_node_properties_use_local_time_for_evaluation_and_keyframe_edits()
     let inspector_and_renderer_time = project.get_clip(clip_id).unwrap().local_time(global_time);
     assert_eq!(inspector_and_renderer_time, 4.25);
     assert_eq!(
-        node_property_time(&project, solid_id, global_time),
+        node_property_time(&project, None, solid_id, global_time),
         inspector_and_renderer_time
     );
     assert_eq!(
@@ -103,7 +103,7 @@ fn clip_owned_node_properties_use_local_time_for_evaluation_and_keyframe_edits()
             .properties()
             .get("opacity")
             .unwrap()
-            .evaluate_at(node_property_time(&project, solid_id, global_time))
+            .evaluate_at(node_property_time(&project, None, solid_id, global_time))
             .unwrap(),
         PropertyValue::Number(OrderedFloat(42.5))
     );
@@ -145,11 +145,11 @@ fn clip_owned_node_properties_use_local_time_for_evaluation_and_keyframe_edits()
         .attach_node_to_container(NodeContainer::Composition(composition_id), root_id)
         .unwrap();
     assert_eq!(
-        node_property_time(&project, root_id, global_time),
+        node_property_time(&project, None, root_id, global_time),
         global_time,
         "Composition-owned Node time stays in the global domain"
     );
-    let root_property_time = node_property_time(&project, root_id, global_time);
+    let root_property_time = node_property_time(&project, None, root_id, global_time);
     assert!(apply_edit(
         &mut project,
         NodeEdit::SetProperty {
@@ -182,7 +182,7 @@ fn numeric_drag_text_typing_and_color_popup_each_commit_one_undoable_gesture() {
         clip.time_stretch = OrderedFloat(1.5);
     }
     let numeric_initial = numeric_project.clone();
-    let numeric_time = node_property_time(&numeric_project, solid_id, 6.0);
+    let numeric_time = node_property_time(&numeric_project, None, solid_id, 6.0);
     assert_eq!(numeric_time, 4.25);
     let mut numeric_history = HistoryManager::new();
     numeric_history.push_project_state(numeric_initial.clone());

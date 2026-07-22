@@ -41,8 +41,29 @@ impl ProjectNodeViewer<'_> {
         let Some(node) = self.project.get_node(node_id) else {
             return;
         };
-        let time = node_property_time(self.project, node_id, self.current_time);
-        let Some(color) = compose_color(|key| {
+        let linked_inputs = crate::utils::property::linked_node_inputs(
+            self.project,
+            node_id,
+            &[
+                library::model::COLOR_SPACE_PORT,
+                library::model::COLOR_RED_PORT,
+                library::model::COLOR_GREEN_PORT,
+                library::model::COLOR_BLUE_PORT,
+                library::model::COLOR_ALPHA_PORT,
+            ],
+        );
+        let read_only = !linked_inputs.is_empty();
+        let linked_ports = linked_inputs
+            .iter()
+            .map(|(port, _)| port.clone())
+            .collect::<Vec<_>>();
+        let time = node_property_time(
+            self.project,
+            self.plugin_manager,
+            node_id,
+            self.current_time,
+        );
+        let Some(authored_color) = compose_color(|key| {
             node.properties().get(key).and_then(|property| {
                 evaluate_node_property(self.project, self.plugin_manager, node_id, property, time)
                     .value()
@@ -52,13 +73,48 @@ impl ProjectNodeViewer<'_> {
             ui.colored_label(ui.visuals().error_fg_color, "Color channels are incomplete");
             return;
         };
+        let resolved_color = read_only.then(|| {
+            self.plugin_manager.and_then(|plugin_manager| {
+                match crate::utils::property::evaluate_node_metadata_output(
+                    self.project,
+                    plugin_manager,
+                    node_id,
+                    library::model::COLOR_VALUE_PORT,
+                    self.current_time,
+                ) {
+                    Ok(library::model::project::EvalOutput::Produced(
+                        PropertyValue::ColorValue(color),
+                    )) => Some(color),
+                    Ok(_) => None,
+                    Err(error) => {
+                        log::warn!("Cannot resolve linked Compose color {node_id}: {error}");
+                        None
+                    }
+                }
+            })
+        });
+        let resolved_color = resolved_color.flatten();
+        let color = resolved_color.as_ref().unwrap_or(&authored_color);
         ui.horizontal(|ui| {
-            property_label(ui, "Picker");
-            let mut picker = color_value_picker(
+            property_label(
                 ui,
-                egui::Id::new(("node_editor_compose_color_picker", node_id)),
-                &color,
+                if resolved_color.is_some() {
+                    "Result"
+                } else if read_only {
+                    "Fallback"
+                } else {
+                    "Picker"
+                },
             );
+            let mut picker = ui
+                .add_enabled_ui(!read_only, |ui| {
+                    color_value_picker(
+                        ui,
+                        egui::Id::new(("node_editor_compose_color_picker", node_id)),
+                        color,
+                    )
+                })
+                .inner;
             let unclipped_rect = *self.to_global * picker.response.rect;
             let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
             crate::qa::register_component_with_metadata(
@@ -69,16 +125,24 @@ impl ProjectNodeViewer<'_> {
                 Some(serde_json::json!({
                     "node_id": node_id,
                     "operation": "native.color.compose",
-                    "authored_space": color.color_space().as_str(),
+                    "authored_space": authored_color.color_space().as_str(),
+                    "displayed_space": color.color_space().as_str(),
                     "display_space": "srgb",
                     "transform_authority": "ruvie-color-management",
                     "grouped_properties": ["space", "r", "g", "b", "a"],
+                    "linked_inputs": linked_inputs.iter().map(|(port, source)| serde_json::json!({
+                        "port": port,
+                        "source": source,
+                    })).collect::<Vec<_>>(),
+                    "editable": !read_only,
+                    "displayed_value": if resolved_color.is_some() { "resolved_runtime_output" } else if read_only { "authored_fallback_unavailable_runtime" } else { "evaluated_properties" },
+                    "resolved_value": resolved_color.as_ref().map(|color| serde_json::Value::from(&PropertyValue::ColorValue(color.clone()))),
                     "unclipped_rect": qa_rect_metadata(unclipped_rect),
                 })),
             );
-            let edit = picker
-                .value
-                .take()
+            let edit = (!read_only)
+                .then(|| picker.value.take())
+                .flatten()
                 .map(|color| NodeEdit::SetNodeProperties {
                     node_id,
                     time,
@@ -88,8 +152,23 @@ impl ProjectNodeViewer<'_> {
                 PortOwner::Node(node_id),
                 "$compose_color_picker",
                 edit,
-                picker.finished,
+                !read_only && picker.finished,
             );
+            if read_only {
+                bounded_non_selectable_label(
+                    ui,
+                    format!("linked result: {}", linked_ports.join(", ")),
+                    INLINE_CONTROL_WIDTH,
+                    egui::Align::LEFT,
+                )
+                .on_hover_text(
+                    if resolved_color.is_some() {
+                        "Read-only runtime result from the connected ports; edit their source Nodes."
+                    } else {
+                        "The connected runtime result is unavailable at this time; this swatch is only the authored fallback."
+                    },
+                );
+            }
         });
     }
 }

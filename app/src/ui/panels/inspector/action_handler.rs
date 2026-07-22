@@ -58,6 +58,20 @@ impl<'a> ActionContext<'a> {
         }
     }
 
+    pub fn handle_update_group(&mut self, values: &[(String, PropertyValue)]) -> bool {
+        match self.project_service.update_properties_or_keyframes(
+            self.owner,
+            self.current_time,
+            values,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to update grouped properties: {error}");
+                false
+            }
+        }
+    }
+
     /// Handle a Commit action - saves the current project state to history.
     pub fn handle_commit(&mut self) {
         match self.project_service.get_project().read() {
@@ -195,6 +209,9 @@ impl<'a> ActionContext<'a> {
                 PropertyAction::Update(name, val) => {
                     needs_refresh |= self.handle_update(&name, val, &get_property);
                 }
+                PropertyAction::UpdateGroup(values) => {
+                    needs_refresh |= self.handle_update_group(&values);
+                }
                 PropertyAction::Commit => {
                     self.handle_commit();
                 }
@@ -221,7 +238,10 @@ mod tests {
     use super::*;
     use library::cache::CacheManager;
     use library::model::property::PropertyValue;
-    use library::model::{Clip, DataContent, Node, Project};
+    use library::model::{
+        Clip, ColorContent, DataContent, Node, Project, COLOR_ALPHA_PORT, COLOR_RED_PORT,
+        COLOR_SPACE_PORT,
+    };
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
     use std::error::Error;
@@ -391,6 +411,90 @@ mod tests {
             Some(edited)
         );
         assert_eq!(history.undo(&current), Some(before_picker));
+        Ok(())
+    }
+
+    #[test]
+    fn compose_picker_group_is_atomic_and_commits_one_undo_unit() -> TestResult {
+        let node = Node::new_color("Compose", ColorContent::Compose);
+        let node_id = node.id;
+        let mut initial = Project::new("compose inspector transaction");
+        initial.add_node(node);
+        let project = Arc::new(RwLock::new(initial));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )?;
+        let mut history = HistoryManager::new();
+        history.push_project_state(
+            project
+                .read()
+                .map_err(|_| io::Error::other("Project read lock poisoned"))?
+                .clone(),
+        );
+        let before = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?
+            .clone();
+        let before_depth = history.undo_depth();
+        let property_snapshot = |name: &str| {
+            project
+                .read()
+                .ok()
+                .and_then(|project| node_property(&project, node_id, name))
+        };
+
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.25,
+        );
+        assert!(context.handle_actions(
+            vec![
+                PropertyAction::UpdateGroup(vec![
+                    (
+                        COLOR_SPACE_PORT.to_string(),
+                        PropertyValue::String("linear-srgb".to_string()),
+                    ),
+                    (COLOR_RED_PORT.to_string(), number(0.25)),
+                    (COLOR_ALPHA_PORT.to_string(), number(0.625)),
+                ]),
+                PropertyAction::Commit,
+            ],
+            property_snapshot,
+        ));
+        assert_eq!(history.undo_depth(), before_depth + 1);
+        let committed = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?
+            .clone();
+        assert_eq!(history.undo(&committed), Some(before));
+
+        let before_rejected = project
+            .read()
+            .map_err(|_| io::Error::other("Project read lock poisoned"))?
+            .clone();
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.25,
+        );
+        assert!(!context.handle_actions(
+            vec![PropertyAction::UpdateGroup(vec![
+                (COLOR_RED_PORT.to_string(), number(0.9)),
+                (COLOR_ALPHA_PORT.to_string(), number(2.0)),
+            ])],
+            property_snapshot,
+        ));
+        assert_eq!(
+            *project
+                .read()
+                .map_err(|_| io::Error::other("Project read lock poisoned"))?,
+            before_rejected
+        );
         Ok(())
     }
 

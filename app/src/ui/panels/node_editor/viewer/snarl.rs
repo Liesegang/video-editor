@@ -578,8 +578,12 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     );
                 }
                 NodeContent::Generator(GeneratorContent::Solid) => {
-                    let property_time =
-                        node_property_time(self.project, project_node_id, self.current_time);
+                    let property_time = node_property_time(
+                        self.project,
+                        self.plugin_manager,
+                        project_node_id,
+                        self.current_time,
+                    );
                     let evaluated = node.properties().get("color").map(|property| {
                         evaluate_node_property(
                             self.project,

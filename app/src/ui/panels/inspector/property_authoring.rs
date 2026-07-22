@@ -8,6 +8,9 @@ use crate::ui::widgets::property_mode::{property_mode_control, PropertyModeActio
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyAction {
     Update(String, PropertyValue),
+    /// Several fields authored by one logical control and committed by the
+    /// model only after every value has validated.
+    UpdateGroup(Vec<(String, PropertyValue)>),
     Commit,
     ToggleKeyframe(String, PropertyValue),
     SetAttribute(String, String, PropertyValue),
