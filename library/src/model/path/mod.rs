@@ -260,15 +260,20 @@ pub(crate) fn is_tagged_path_value_json(value: &serde_json::Value) -> bool {
         return false;
     };
     // Reserve only the complete wire envelope. Partial or extended objects
-    // using the same `$type` string remain ordinary authored Maps. Once the
-    // exact envelope is present, malformed path data is rejected by serde.
+    // using the same `$type` string remain ordinary authored Maps. A valid
+    // exact envelope becomes Path; malformed data remains an inspectable Map.
     object.len() == 3
         && object.contains_key("fill_rule")
         && object.contains_key("contours")
-        && object
-            .get(PATH_VALUE_TAG_FIELD)
-            .and_then(serde_json::Value::as_str)
-            == Some(PATH_VALUE_TAG)
+        && has_path_value_tag_json(value)
+}
+
+pub(crate) fn has_path_value_tag_json(value: &serde_json::Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get(PATH_VALUE_TAG_FIELD))
+        .and_then(serde_json::Value::as_str)
+        == Some(PATH_VALUE_TAG)
 }
 
 /// Exact location and value of malformed canonical path data.

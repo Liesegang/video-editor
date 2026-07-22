@@ -239,24 +239,29 @@ fn partial_and_extended_path_envelopes_remain_maps_at_both_json_boundaries() {
     for value in ordinary_maps {
         let deserialized = serde_json::from_value::<PropertyValue>(value.clone()).unwrap();
         assert!(matches!(deserialized, PropertyValue::Map(_)));
+        assert_eq!(serde_json::Value::from(&deserialized), value);
         assert!(matches!(PropertyValue::from(value), PropertyValue::Map(_)));
     }
 }
 
 #[test]
-fn exact_malformed_path_envelope_errors_in_serde_and_falls_back_in_infallible_conversion() {
+fn exact_malformed_path_envelope_remains_a_map_at_both_json_boundaries()
+-> Result<(), serde_json::Error> {
     let malformed = serde_json::json!({
         "$type": "path_value",
         "fill_rule": "not_a_fill_rule",
         "contours": [],
     });
 
-    let error = serde_json::from_value::<PropertyValue>(malformed.clone()).unwrap_err();
-    assert!(error.to_string().contains("not_a_fill_rule"));
+    assert!(matches!(
+        serde_json::from_value::<PropertyValue>(malformed.clone())?,
+        PropertyValue::Map(_)
+    ));
     assert!(matches!(
         PropertyValue::from(malformed),
         PropertyValue::Map(_)
     ));
+    Ok(())
 }
 
 #[test]

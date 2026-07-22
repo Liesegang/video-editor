@@ -119,15 +119,23 @@ impl<'de> Deserialize<'de> for PropertyValue {
         D: Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
-        if super::color_value::is_tagged_color_value_json(&value) {
-            return serde_json::from_value(value)
-                .map(Self::ColorValue)
-                .map_err(D::Error::custom);
+        if super::color_value::has_color_value_tag_json(&value) {
+            if super::color_value::is_tagged_color_value_json(&value)
+                && let Ok(color) = serde_json::from_value(value.clone())
+            {
+                return Ok(Self::ColorValue(color));
+            }
+            // Keep partial, extended, or malformed tagged data in its original
+            // JSON shape. Infallible conversion avoids untagged Vec parsing.
+            return Ok(Self::from(value));
         }
-        if crate::model::path::is_tagged_path_value_json(&value) {
-            return serde_json::from_value(value)
-                .map(Self::Path)
-                .map_err(D::Error::custom);
+        if crate::model::path::has_path_value_tag_json(&value) {
+            if crate::model::path::is_tagged_path_value_json(&value)
+                && let Ok(path) = serde_json::from_value(value.clone())
+            {
+                return Ok(Self::Path(path));
+            }
+            return Ok(Self::from(value));
         }
         serde_json::from_value::<UntaggedPropertyValue>(value)
             .map(Self::from)

@@ -266,15 +266,20 @@ pub(super) fn is_tagged_color_value_json(value: &serde_json::Value) -> bool {
     };
     // Reserve only the complete wire envelope. A user's ordinary Map may use
     // the same `$type` string with a partial or extended shape; those values
-    // remain Maps. Once the exact envelope is present, malformed color data is
-    // rejected rather than silently falling through the untagged Map variant.
+    // remain Maps. A valid exact envelope becomes ColorValue; a malformed one
+    // is retained as an authored Map so it can survive loading and be repaired.
     object.len() == 3
         && object.contains_key("space")
         && object.contains_key("rgba")
-        && object
-            .get(COLOR_VALUE_TAG_FIELD)
-            .and_then(serde_json::Value::as_str)
-            == Some(COLOR_VALUE_TAG)
+        && has_color_value_tag_json(value)
+}
+
+pub(super) fn has_color_value_tag_json(value: &serde_json::Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get(COLOR_VALUE_TAG_FIELD))
+        .and_then(serde_json::Value::as_str)
+        == Some(COLOR_VALUE_TAG)
 }
 
 #[cfg(test)]

@@ -73,10 +73,9 @@ fn tagged_property_value_round_trips_without_map_ambiguity()
         "rgba": [0.0, 0.0, 0.0, 1.0],
         "note": "ordinary map"
     });
-    assert!(matches!(
-        serde_json::from_value::<PropertyValue>(extra)?,
-        PropertyValue::Map(_)
-    ));
+    let extra_value = serde_json::from_value::<PropertyValue>(extra.clone())?;
+    assert!(matches!(extra_value, PropertyValue::Map(_)));
+    assert_eq!(serde_json::Value::from(&extra_value), extra);
 
     for malformed in [
         serde_json::json!({
@@ -95,7 +94,9 @@ fn tagged_property_value_round_trips_without_map_ambiguity()
             "rgba": [0.0, 0.0, 1.0]
         }),
     ] {
-        assert!(serde_json::from_value::<PropertyValue>(malformed).is_err());
+        let property = serde_json::from_value::<PropertyValue>(malformed.clone())?;
+        assert!(matches!(property, PropertyValue::Map(_)));
+        assert_eq!(serde_json::Value::from(&property), malformed);
     }
 
     let legacy_json = serde_json::json!({"r": 1, "g": 2, "b": 3, "a": 4});

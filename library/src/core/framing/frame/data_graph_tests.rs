@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::FrameEvaluator;
@@ -141,6 +142,71 @@ fn path_leaf_preserves_fill_closure_and_arbitrary_conic_weight() {
         fixture.evaluate(node_id, DATA_VALUE_OUTPUT_PORT, 0.5),
         EvalOutput::Produced(PropertyValue::Path(path))
     );
+}
+
+#[test]
+fn malformed_canonical_data_survives_project_roundtrip_and_produces_no_output() -> Result<()> {
+    let path = serde_json::to_value(complete_path())?;
+    let mut unknown_segment = path.clone();
+    unknown_segment["contours"][0]["segments"][0]["kind"] = serde_json::json!("unknown_segment");
+    let mut invalid_weight = path;
+    invalid_weight["contours"][0]["segments"][0]["weight"] = serde_json::json!("not-a-number");
+    let cases = [
+        (
+            DataContent::Color,
+            serde_json::json!({
+                "$type": "color_value",
+                "space": "srgb",
+                "rgba": [0.0, 0.0, 0.0, 1.5],
+            }),
+        ),
+        (
+            DataContent::Color,
+            serde_json::json!({
+                "$type": "color_value",
+                "space": "",
+                "rgba": [0.0, 0.0, 0.0, 1.0],
+            }),
+        ),
+        (DataContent::Path, unknown_segment),
+        (DataContent::Path, invalid_weight),
+    ];
+
+    for (content, malformed) in cases {
+        let mut fixture = DataFixture::new();
+        let node_id = fixture.add(Node::new_data("Malformed Data", content));
+        let mut encoded = serde_json::to_value(&fixture.project)?;
+        encoded["nodes"][node_id.to_string()]["properties"][DATA_VALUE_PROPERTY]["properties"]["value"] =
+            malformed.clone();
+
+        let loaded = Project::load(&serde_json::to_string(&encoded)?)?;
+        let authored = loaded
+            .get_node(node_id)
+            .context("malformed Data Node must survive Project load")?
+            .properties()
+            .get(DATA_VALUE_PROPERTY)
+            .and_then(Property::value)
+            .context("malformed Data value must survive Project load")?;
+        assert!(matches!(authored, PropertyValue::Map(_)));
+        assert_eq!(serde_json::Value::from(authored), malformed);
+
+        let reloaded = Project::load(&loaded.save()?)?;
+        let restored = reloaded
+            .get_node(node_id)
+            .context("malformed Data Node must survive Project reload")?
+            .properties()
+            .get(DATA_VALUE_PROPERTY)
+            .and_then(Property::value)
+            .context("malformed Data value must survive Project reload")?;
+        assert_eq!(serde_json::Value::from(restored), malformed);
+
+        fixture.project = reloaded;
+        assert_eq!(
+            fixture.evaluate(node_id, DATA_VALUE_OUTPUT_PORT, 0.5),
+            EvalOutput::NoOutput
+        );
+    }
+    Ok(())
 }
 
 #[test]
