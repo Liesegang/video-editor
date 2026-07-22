@@ -61,6 +61,10 @@ pub enum FrameContent {
     },
     Shape {
         path: String,
+        /// Exact native path geometry. `path` remains the legacy SVG
+        /// presentation/fallback string, but rendering prefers this value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        canonical_path: Option<crate::model::path::PathValue>,
         styles: Vec<StyleConfig>,
         path_effects: Vec<PathEffect>,
         #[serde(default)]
@@ -135,6 +139,7 @@ impl Hash for FrameContent {
             }
             FrameContent::Shape {
                 path,
+                canonical_path,
                 styles,
                 path_effects,
                 effects,
@@ -142,6 +147,7 @@ impl Hash for FrameContent {
                 transform,
             } => {
                 path.hash(state);
+                canonical_path.hash(state);
                 styles.hash(state);
                 path_effects.hash(state);
                 effects.hash(state);
@@ -211,6 +217,7 @@ impl PartialEq for FrameContent {
             (
                 FrameContent::Shape {
                     path: p1,
+                    canonical_path: cp1,
                     styles: st1,
                     path_effects: pe1,
                     effects: e1,
@@ -219,13 +226,22 @@ impl PartialEq for FrameContent {
                 },
                 FrameContent::Shape {
                     path: p2,
+                    canonical_path: cp2,
                     styles: st2,
                     path_effects: pe2,
                     effects: e2,
                     ensemble: en2,
                     transform: tr2,
                 },
-            ) => p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && en1 == en2 && tr1 == tr2,
+            ) => {
+                p1 == p2
+                    && cp1 == cp2
+                    && st1 == st2
+                    && pe1 == pe2
+                    && e1 == e2
+                    && en1 == en2
+                    && tr1 == tr2
+            }
             (
                 FrameContent::SkSL {
                     shader: s1,

@@ -2,7 +2,6 @@ use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimePathPart, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
-    measure_shape_visual_bounds,
 };
 
 #[derive(Default)]
@@ -44,13 +43,14 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         _clip_width: u64,
         _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::path::{FillRule, PathValue};
         use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 
         vec![PropertyDefinition::new(
             "path",
-            PropertyUiType::MultilineText,
+            PropertyUiType::Path,
             "Path Data",
-            PropertyValue::String("".to_string()),
+            PropertyValue::Path(PathValue::empty(FillRule::NonZero)),
         )]
     }
 
@@ -72,11 +72,27 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         time: f64,
     ) -> Option<RuntimeShape> {
         let props = node.properties();
-        let path = evaluator.require_string(props, "path", time, "shape")?;
-        let parsed = skia_safe::utils::parse_path::from_svg(&path)?;
+        let path_value = evaluator.require_path_value(props, "path", time, "shape")?;
+        let parsed = crate::core::rendering::path_geometry::to_skia_path(&path_value)
+            .inspect_err(|error| {
+                log::error!(
+                    "Shape Node {} cannot cross the Skia path boundary: {error}",
+                    node.id
+                );
+            })
+            .ok()?;
         if parsed.is_empty() {
             return None;
         }
+        let path = crate::model::path::encode_svg_path(&path_value)
+            .inspect_err(|error| {
+                log::error!(
+                    "Shape Node {} cannot create its SVG fallback: {error}",
+                    node.id
+                );
+            })
+            .ok()?
+            .into_path_data();
         let bounds = parsed.compute_tight_bounds();
         let runtime_bounds =
             RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
@@ -85,12 +101,14 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             source_id: node.id,
             geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
                 path: path.clone(),
+                canonical_path: Some(path_value.clone()),
                 bounds: runtime_bounds,
                 // Authored path effects live only on explicit Shape -> Shape
                 // Path Effect operations. This Vec is render-only state.
                 path_effects: Vec::new(),
                 parts: vec![RuntimePathPart {
                     path,
+                    canonical_path: Some(path_value),
                     bounds: runtime_bounds,
                     stable_id,
                     block_group_id: stable_id,
@@ -121,7 +139,12 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         // Calculate evaluation time based on Node timeframe
         let eval_time = time;
 
-        let path_str = evaluator.require_string(props, "path", eval_time, "shape")?;
-        measure_shape_visual_bounds(&path_str, &[], &[])
+        let path_value = evaluator.require_path_value(props, "path", eval_time, "shape")?;
+        let path = crate::core::rendering::path_geometry::to_skia_path(&path_value).ok()?;
+        if path.is_empty() {
+            return None;
+        }
+        let bounds = path.compute_tight_bounds();
+        Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
     }
 }

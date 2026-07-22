@@ -169,6 +169,15 @@ impl From<f64> for PropertyValue {
 }
 
 impl PropertyValue {
+    /// Mirrors the actual Expression bridge's accepted fallback types. UI
+    /// call sites without a PropertyDefinition use this instead of guessing.
+    pub const fn supports_expression(&self) -> bool {
+        !matches!(
+            self,
+            Self::ColorValue(_) | Self::Path(_) | Self::Array(_) | Self::Map(_)
+        )
+    }
+
     pub fn is_compatible_with(&self, ui_type: &PropertyUiType) -> bool {
         match self {
             PropertyValue::Number(_) => matches!(ui_type, PropertyUiType::Float { .. }),

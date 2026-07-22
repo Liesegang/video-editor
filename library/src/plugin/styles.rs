@@ -92,6 +92,30 @@ impl StylePlugin for ImageOpacityStylePlugin {
 }
 
 pub struct FillStylePlugin;
+
+fn renderer_color(
+    context: &FrameEvaluationContext,
+    properties: &PropertyMap,
+    eval_time: f64,
+    operation: &str,
+) -> Option<Color> {
+    context
+        .require_color_value(properties, "color", eval_time, operation)?
+        .try_to_renderer_srgba8()
+        .inspect_err(|error| {
+            log::error!("{operation} cannot cross the legacy renderer color boundary: {error}");
+        })
+        .ok()
+}
+
+fn apply_opacity(mut color: Color, opacity: f64) -> Color {
+    // DrawStyle is the legacy u8 renderer boundary. Opacity is an explicit
+    // Style operation at that boundary, not a conversion of Project color
+    // data, so its result is intentionally quantized exactly once here.
+    color.a = (f64::from(color.a) * opacity).round().clamp(0.0, 255.0) as u8;
+    color
+}
+
 impl Plugin for FillStylePlugin {
     fn id(&self) -> &'static str {
         "fill"
@@ -114,9 +138,11 @@ impl StylePlugin for FillStylePlugin {
             vec![
                 PropertyDefinition::new(
                     "color",
-                    PropertyUiType::Color,
+                    PropertyUiType::ColorValue,
                     "Color",
-                    PropertyValue::Color(Color::white()),
+                    PropertyValue::ColorValue(
+                        crate::model::property::ColorValue::from_straight_srgba8(&Color::white()),
+                    ),
                 ),
                 PropertyDefinition::new(
                     "opacity",
@@ -155,13 +181,12 @@ impl StylePlugin for FillStylePlugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<StyleConfig> {
-        let color = context.evaluate_color(properties, "color", eval_time, Color::white());
+        let color = renderer_color(context, properties, eval_time, "Fill")?;
         let opacity = context.evaluate_number(properties, "opacity", eval_time, 1.0);
         let offset = context.evaluate_number(properties, "offset", eval_time, 0.0) as f32;
 
         // Apply opacity to color
-        let mut final_color = color;
-        final_color.a = (final_color.a as f32 * opacity as f32) as u8;
+        let final_color = apply_opacity(color, opacity);
 
         Some(StyleConfig {
             id: source_id,
@@ -196,9 +221,11 @@ impl StylePlugin for StrokeStylePlugin {
             vec![
                 PropertyDefinition::new(
                     "color",
-                    PropertyUiType::Color,
+                    PropertyUiType::ColorValue,
                     "Color",
-                    PropertyValue::Color(Color::white()),
+                    PropertyValue::ColorValue(
+                        crate::model::property::ColorValue::from_straight_srgba8(&Color::white()),
+                    ),
                 ),
                 PropertyDefinition::new(
                     "width",
@@ -306,7 +333,7 @@ impl StylePlugin for StrokeStylePlugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<StyleConfig> {
-        let color = context.evaluate_color(properties, "color", eval_time, Color::white());
+        let color = renderer_color(context, properties, eval_time, "Stroke")?;
         let width = context.evaluate_number(properties, "width", eval_time, 1.0) as f32;
         let opacity = context.evaluate_number(properties, "opacity", eval_time, 1.0);
         let offset = context.evaluate_number(properties, "offset", eval_time, 0.0) as f32;
@@ -341,8 +368,7 @@ impl StylePlugin for StrokeStylePlugin {
         };
 
         // Apply opacity to color
-        let mut final_color = color;
-        final_color.a = (final_color.a as f32 * opacity as f32) as u8;
+        let final_color = apply_opacity(color, opacity);
 
         Some(StyleConfig {
             id: source_id,

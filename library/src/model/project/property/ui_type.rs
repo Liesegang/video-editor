@@ -64,6 +64,12 @@ impl PropertyUiType {
     const DEFAULT_VECTOR_MAX: f64 = 1_000_000.0;
     const DEFAULT_VECTOR_STEP: f64 = 0.1;
 
+    /// Whether the registered Python Expression evaluator can produce this
+    /// property's authoritative value type today.
+    pub const fn supports_expression(&self) -> bool {
+        !matches!(self, Self::ColorValue | Self::Path)
+    }
+
     pub fn vec2(suffix: impl Into<String>) -> Self {
         Self::vec2_with_range(
             Self::DEFAULT_VECTOR_MIN,

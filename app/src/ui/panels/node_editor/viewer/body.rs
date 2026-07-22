@@ -543,8 +543,21 @@ impl ProjectNodeViewer<'_> {
         let row = ui.horizontal(|ui| {
             bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
             let mode_qa_id = format!("node_editor.property_mode.node:{node_id}:{property_key}");
-            let mode_action =
-                property_mode_control(ui, &mode_qa_id, authored_property.as_ref(), property_time);
+            let allow_expression = property_definition.map_or_else(
+                || {
+                    mode_value
+                        .as_ref()
+                        .is_none_or(PropertyValue::supports_expression)
+                },
+                |definition| definition.ui_type().supports_expression(),
+            );
+            let mode_action = property_mode_control(
+                ui,
+                &mode_qa_id,
+                authored_property.as_ref(),
+                property_time,
+                allow_expression,
+            );
             let replacement = match (mode_action, authored_property.as_ref(), mode_value.clone()) {
                 (Some(PropertyModeAction::SetMode(mode)), current, Some(value)) => {
                     property_for_mode(current, mode, value, property_time).ok()

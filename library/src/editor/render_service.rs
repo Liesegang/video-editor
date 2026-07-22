@@ -114,10 +114,8 @@ impl<T: Renderer> RenderService<T> {
         )
     }
 
-    /// Rasterize the complete upstream Image subtree in its own canvas before
-    /// applying this operation's affine transform. Applying the transform to
-    /// the child context would change graph order for Transform(Effect(...))
-    /// and transform descendants independently instead of as one image.
+    /// Rasterize the upstream Image subtree before its affine transform,
+    /// preserving graph order and treating descendants as one image.
     fn render_image_transform_group(
         &mut self,
         group: &FrameGroup,
@@ -261,6 +259,7 @@ impl<T: Renderer> RenderService<T> {
             }
             FrameContent::Shape {
                 path,
+                canonical_path,
                 styles,
                 path_effects,
                 effects,
@@ -271,6 +270,7 @@ impl<T: Renderer> RenderService<T> {
                 let shape_layer = measure_debug(format!("Rasterize shape layer {}", path), || {
                     self.renderer.rasterize_shape_layer(ShapeRasterRequest {
                         path_data: path,
+                        canonical_path: canonical_path.as_ref(),
                         styles,
                         path_effects,
                         ensemble: ensemble.as_ref(),

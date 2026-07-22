@@ -31,6 +31,10 @@ impl Node {
                     .get("color")
                     .and_then(|property| property.get_static_value())
                     .and_then(|value| match value {
+                        PropertyValue::ColorValue(color) => color
+                            .try_to_renderer_srgba8()
+                            .ok()
+                            .map(|color| (color.r, color.g, color.b)),
                         PropertyValue::Color(color) => Some((color.r, color.g, color.b)),
                         _ => None,
                     })

@@ -217,6 +217,12 @@ fn interpolate_property_values(
                 interpolate_color_rgb(start_color, end_color, t)
             }
         }
+        (PropertyValue::ColorValue(start), PropertyValue::ColorValue(end)) => {
+            start.interpolate_same_space(end, t).map_or_else(
+                || PropertyValue::ColorValue(start.clone()),
+                PropertyValue::ColorValue,
+            )
+        }
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
                 .zip(e.iter())
@@ -332,4 +338,56 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
         ((g_prime + m) * 255.0).round() as u8,
         ((b_prime + m) * 255.0).round() as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::property::{ColorSpaceRef, ColorValue, Keyframe};
+
+    #[test]
+    fn canonical_color_keyframes_interpolate_only_within_one_space()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let start = ColorValue::new(ColorSpaceRef::srgb(), [0.0, 0.0, 0.0, 0.0])?;
+        let end = ColorValue::new(ColorSpaceRef::srgb(), [1.0, 0.5, 2.0, 1.0])?;
+        let property = Property::keyframe(vec![
+            Keyframe::new(
+                0.0,
+                PropertyValue::ColorValue(start),
+                EasingFunction::Linear,
+            ),
+            Keyframe::new(2.0, PropertyValue::ColorValue(end), EasingFunction::Linear),
+        ]);
+        let PropertyValue::ColorValue(middle) = evaluate_keyframes(&property, 1.0) else {
+            return Err("canonical color keyframe changed type".into());
+        };
+        assert_eq!(middle.rgba(), [0.5, 0.25, 1.0, 0.5]);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_color_overshoot_keeps_hdr_rgb_and_clamps_straight_alpha()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let start = ColorValue::new(ColorSpaceRef::srgb(), [0.0, 0.0, 0.0, 0.0])?;
+        let end = ColorValue::new(ColorSpaceRef::srgb(), [1.0, 0.5, 0.25, 1.0])?;
+        let property = Property::keyframe(vec![
+            Keyframe::new(
+                0.0,
+                PropertyValue::ColorValue(start.clone()),
+                EasingFunction::EaseOutBack { c1: 1.70158 },
+            ),
+            Keyframe::new(2.0, PropertyValue::ColorValue(end), EasingFunction::Linear),
+        ]);
+        let PropertyValue::ColorValue(overshoot) = evaluate_keyframes(&property, 1.5) else {
+            return Err("canonical color keyframe changed type".into());
+        };
+        let rgba = overshoot.rgba();
+        assert!(rgba[0] > 1.0, "overshooting RGB was clipped or reset");
+        assert_eq!(rgba[3], 1.0, "overshooting alpha left its legal range");
+        assert_ne!(
+            overshoot, start,
+            "overshoot discontinuously fell back to start"
+        );
+        Ok(())
+    }
 }

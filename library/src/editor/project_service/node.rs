@@ -121,16 +121,22 @@ impl ProjectManager {
                 GeneratorContent::Text
             }
             GeneratorNodeRequest::Shape { path } => {
+                let path =
+                    crate::model::path::parse_legacy_svg_path_data(path).map_err(|error| {
+                        LibraryError::Validation(format!("Invalid Shape SVG path: {error}"))
+                    })?;
                 properties.set(
                     "path".to_string(),
-                    Property::constant(PropertyValue::String(path.clone())),
+                    Property::constant(PropertyValue::Path(path)),
                 );
                 GeneratorContent::Shape
             }
             GeneratorNodeRequest::Solid { color } => {
                 properties.set(
                     "color".to_string(),
-                    Property::constant(PropertyValue::Color(color.clone())),
+                    Property::constant(PropertyValue::ColorValue(
+                        crate::model::property::ColorValue::from_straight_srgba8(color),
+                    )),
                 );
                 GeneratorContent::Solid
             }

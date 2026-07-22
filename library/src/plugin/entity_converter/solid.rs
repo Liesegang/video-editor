@@ -42,11 +42,14 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         _clip_width: u64,
         _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
+        let white = crate::model::property::ColorValue::from_straight_srgba8(
+            &crate::model::frame::color::Color::white(),
+        );
         vec![crate::model::property::PropertyDefinition::new(
             "color",
-            crate::model::property::PropertyUiType::Color,
+            crate::model::property::PropertyUiType::ColorValue,
             "Color",
-            crate::model::property::PropertyValue::Color(crate::model::frame::color::Color::white()),
+            crate::model::property::PropertyValue::ColorValue(white),
         )]
     }
 
@@ -60,7 +63,17 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
             return None;
         };
         let eval_time = time;
-        let color = evaluator.require_color(node.properties(), "color", eval_time, "solid")?;
+        let color_value =
+            evaluator.require_color_value(node.properties(), "color", eval_time, "solid")?;
+        let color = color_value
+            .try_to_renderer_srgba8()
+            .inspect_err(|error| {
+                log::error!(
+                    "Solid Node {} cannot cross the legacy renderer color boundary: {error}",
+                    node.id
+                );
+            })
+            .ok()?;
         let (width, height) = evaluator.evaluation_resolution();
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
 
@@ -71,6 +84,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
             content_bounds: Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
             content: FrameContent::Shape {
                 path,
+                canonical_path: None,
                 styles: vec![StyleConfig {
                     id: node.id,
                     style: DrawStyle::Fill { color, offset: 0.0 },

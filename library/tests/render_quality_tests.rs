@@ -318,6 +318,7 @@ fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) ->
     } else {
         FrameContent::Shape {
             path: "M 1 2 L 43 5 L 38 29 L 4 26 Z".to_string(),
+            canonical_path: None,
             styles: styles.to_vec(),
             path_effects: Vec::new(),
             effects: Vec::new(),
@@ -439,6 +440,7 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() -> Result<()> {
         renderer
             .rasterize_shape_layer(ShapeRasterRequest {
                 path_data: "M 12 12 L 92 12 L 92 62 L 12 62 Z",
+                canonical_path: None,
                 styles: &shape_styles,
                 path_effects: &[],
                 ensemble: None,
@@ -578,6 +580,7 @@ fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() -> Result<()> {
         renderer
             .rasterize_shape_layer(ShapeRasterRequest {
                 path_data: path,
+                canonical_path: None,
                 styles: &styles,
                 path_effects: &[],
                 ensemble: None,

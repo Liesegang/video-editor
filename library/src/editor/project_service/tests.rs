@@ -302,7 +302,8 @@ fn media_factory_rejects_invalid_converter_property_metadata() {
 }
 
 #[test]
-fn generator_factories_materialize_every_converter_default_and_content_value() {
+fn generator_factories_materialize_every_converter_default_and_content_value()
+-> Result<(), Box<dyn std::error::Error>> {
     let shared = Arc::new(RwLock::new(Project::new("generator factories")));
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
     let canvas = (1920, 1080);
@@ -344,7 +345,8 @@ fn generator_factories_materialize_every_converter_default_and_content_value() {
         "shape",
         (canvas.0, canvas.1, 120, 80),
     );
-    assert_property_value(&shape_node, "path", PropertyValue::String(path.to_string()));
+    let path_value = crate::model::path::parse_legacy_svg_path_data(path)?;
+    assert_property_value(&shape_node, "path", PropertyValue::Path(path_value.clone()));
 
     let shader = "half4 main(float2 p) { return half4(1); }";
     let Ok(sksl_node) = manager.create_sksl_node(shader, canvas.0, canvas.1) else {
@@ -385,7 +387,8 @@ fn generator_factories_materialize_every_converter_default_and_content_value() {
         "solid",
         (canvas.0, canvas.1, canvas.0, canvas.1),
     );
-    assert_property_value(&solid_node, "color", PropertyValue::Color(color.clone()));
+    let color_value = crate::model::property::ColorValue::from_straight_srgba8(&color);
+    assert_property_value(&solid_node, "color", PropertyValue::ColorValue(color_value));
 
     for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
         for detached_property in ["position", "scale", "rotation", "anchor", "opacity"] {
@@ -425,9 +428,8 @@ fn generator_factories_materialize_every_converter_default_and_content_value() {
     };
     let loaded_expectations = [
         (text_id, "text", PropertyValue::String(text.to_string())),
-        (shape_id, "path", PropertyValue::String(path.to_string())),
+        (shape_id, "path", PropertyValue::Path(path_value)),
         (sksl_id, "shader", PropertyValue::String(shader.to_string())),
-        (solid_id, "color", PropertyValue::Color(color)),
     ];
     for (node_id, property_key, expected) in loaded_expectations {
         let Some(node) = loaded.get_node(node_id) else {
@@ -435,6 +437,17 @@ fn generator_factories_materialize_every_converter_default_and_content_value() {
         };
         assert_property_value(node, property_key, expected);
     }
+    let loaded_solid_color = loaded
+        .get_node(solid_id)
+        .and_then(|node| node.properties().get("color"))
+        .and_then(Property::value)
+        .and_then(|value| match value {
+            PropertyValue::ColorValue(value) => value.try_to_renderer_srgba8().ok(),
+            PropertyValue::Color(value) => Some(value.clone()),
+            _ => None,
+        });
+    assert_eq!(loaded_solid_color, Some(color));
+    Ok(())
 }
 
 #[test]
@@ -489,17 +502,11 @@ fn converter_backed_generator_properties_have_typed_catalog_inputs() {
                 .get(&port.key)
                 .and_then(Property::value)
                 .expect("catalog property input must reference a materialized property");
-            let expected_type = match (node.content(), port.key.as_str(), value) {
-                (
-                    NodeContent::Generator(GeneratorContent::Shape),
-                    "path",
-                    PropertyValue::String(_),
-                ) => PortDataType::Path,
-                (_, _, PropertyValue::String(_)) => PortDataType::String,
-                (_, _, PropertyValue::Number(_)) => PortDataType::Number,
-                (_, _, PropertyValue::Color(_) | PropertyValue::ColorValue(_)) => {
-                    PortDataType::Color
-                }
+            let expected_type = match value {
+                PropertyValue::Path(_) => PortDataType::Path,
+                PropertyValue::String(_) => PortDataType::String,
+                PropertyValue::Number(_) => PortDataType::Number,
+                PropertyValue::Color(_) | PropertyValue::ColorValue(_) => PortDataType::Color,
                 _ => panic!(
                     "{} property {} has no asserted graph type for {value:?}",
                     descriptor.catalog_id(),

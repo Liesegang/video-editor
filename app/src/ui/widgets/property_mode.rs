@@ -114,6 +114,7 @@ pub(crate) fn property_mode_control(
     qa_id: &str,
     property: Option<&Property>,
     current_time: f64,
+    allow_expression: bool,
 ) -> Option<PropertyModeAction> {
     let presentation = mode_presentation(property, current_time);
     let button = ui
@@ -164,7 +165,10 @@ pub(crate) fn property_mode_control(
             PropertyAuthoringMode::Constant,
             PropertyAuthoringMode::Keyframe,
             PropertyAuthoringMode::Expression,
-        ] {
+        ]
+        .into_iter()
+        .filter(|mode| *mode != PropertyAuthoringMode::Expression || allow_expression)
+        {
             let (icon, semantic) = match mode {
                 PropertyAuthoringMode::Constant => (regular::TIMER, "timer_constant"),
                 PropertyAuthoringMode::Keyframe => (regular::DIAMOND, "diamond_outline_keyframe"),
@@ -243,6 +247,11 @@ pub(crate) fn property_for_mode(
     current_value: PropertyValue,
     current_time: f64,
 ) -> Result<Property, String> {
+    if mode == PropertyAuthoringMode::Expression && !current_value.supports_expression() {
+        return Err(
+            "Expression evaluation is not available for canonical Color or Path values".to_string(),
+        );
+    }
     let authored_value = match current {
         Some(property) if property.evaluator == "expression" => property
             .value()
@@ -351,6 +360,31 @@ mod tests {
             .ok_or("could not remove middle keyframe")?;
         assert_eq!(without_middle.evaluator, "keyframe");
         assert!(!without_middle.has_keyframe_at(2.0, KEYFRAME_TOLERANCE));
+        Ok(())
+    }
+
+    #[test]
+    fn expression_mode_rejects_structured_values_until_the_runtime_supports_them(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let color = library::model::property::ColorValue::new(
+            library::model::property::ColorSpaceRef::srgb(),
+            [0.5, 0.25, 1.0, 1.0],
+        )?;
+        assert!(property_for_mode(
+            None,
+            PropertyAuthoringMode::Expression,
+            PropertyValue::ColorValue(color),
+            0.0,
+        )
+        .is_err());
+        let path = library::model::path::PathValue::empty(library::model::path::FillRule::NonZero);
+        assert!(property_for_mode(
+            None,
+            PropertyAuthoringMode::Expression,
+            PropertyValue::Path(path),
+            0.0,
+        )
+        .is_err());
         Ok(())
     }
 }

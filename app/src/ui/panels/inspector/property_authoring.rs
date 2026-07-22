@@ -39,7 +39,8 @@ pub fn render_property_authoring(
 
         ui.label(definition.label());
         let qa_id = format!("inspector.property_mode.{qa_scope}:{}", definition.name());
-        match property_mode_control(ui, &qa_id, property, current_time) {
+        let allow_expression = definition.ui_type().supports_expression();
+        match property_mode_control(ui, &qa_id, property, current_time, allow_expression) {
             Some(PropertyModeAction::SetMode(mode)) => {
                 actions.push(PropertyAction::SetMode(
                     definition.name().to_string(),
@@ -245,6 +246,77 @@ mod tests {
                 PropertyValue::Number(value),
             ) if name == "amount" && *value == OrderedFloat(2.0)
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn structured_property_menu_does_not_offer_unsupported_expression() -> TestResult {
+        reset_property_mode_test_rects();
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0));
+        let color = library::model::property::ColorValue::new(
+            library::model::property::ColorSpaceRef::srgb(),
+            [0.5, 0.25, 1.0, 1.0],
+        )?;
+        let authored_value = PropertyValue::ColorValue(color.clone());
+        let property = Property::constant(authored_value.clone());
+        let definition = PropertyDefinition::new(
+            "color",
+            PropertyUiType::ColorValue,
+            "Color",
+            PropertyValue::ColorValue(color),
+        );
+        let mut frame = 0;
+        let mut render = |events: Vec<egui::Event>| {
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let _ = render_property_authoring(
+                            ui,
+                            &definition,
+                            Some(&property),
+                            &authored_value,
+                            0.0,
+                            "node:structured",
+                            false,
+                        );
+                    });
+                },
+            );
+            frame += 1;
+            drop(output);
+        };
+
+        render(Vec::new());
+        render(Vec::new());
+        let mode_rect = property_mode_test_rect("mode")
+            .ok_or_else(|| io::Error::other("Property mode icon button was not rendered"))?;
+        let mode_pos = mode_rect.center();
+        render(vec![
+            egui::Event::PointerMoved(mode_pos),
+            egui::Event::PointerButton {
+                pos: mode_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerButton {
+            pos: mode_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        render(Vec::new());
+        assert!(property_mode_test_rect("option.Constant").is_some());
+        assert!(property_mode_test_rect("option.Keyframe").is_some());
+        assert!(property_mode_test_rect("option.Expression").is_none());
         Ok(())
     }
 }

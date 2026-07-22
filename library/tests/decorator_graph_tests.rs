@@ -220,12 +220,14 @@ fn runtime_path_shape(path: &str, part_ids: &[u64]) -> Result<RuntimeShape> {
         source_id,
         geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
             path: path.to_string(),
+            canonical_path: None,
             bounds,
             path_effects: Vec::new(),
             parts: ids
                 .into_iter()
                 .map(|stable_id| RuntimePathPart {
                     path: path.to_string(),
+                    canonical_path: None,
                     bounds,
                     stable_id,
                     block_group_id: 10,
@@ -273,6 +275,7 @@ fn rasterize_geometry(path: &str) -> Result<Image> {
     )?;
     match renderer.rasterize_shape_layer(ShapeRasterRequest {
         path_data: path,
+        canonical_path: None,
         styles: std::slice::from_ref(&style),
         path_effects: &[],
         ensemble: None,
@@ -708,6 +711,7 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
     )?;
     let RenderOutput::Image(image) = renderer.rasterize_shape_layer(ShapeRasterRequest {
         path_data: &path,
+        canonical_path: None,
         styles: &styles,
         path_effects: &path_effects,
         ensemble: Some(&ensemble),

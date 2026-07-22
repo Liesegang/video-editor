@@ -63,6 +63,7 @@ pub enum ColorValueError {
     NonFiniteComponent { component: &'static str },
     AlphaOutOfRange,
     NotStraightSrgba8ColorSpace,
+    OutsideStraightSrgba8Range { component: &'static str },
     NotExactlyRepresentableAsStraightSrgba8 { component: &'static str },
 }
 
@@ -79,6 +80,10 @@ impl fmt::Display for ColorValueError {
             Self::NotStraightSrgba8ColorSpace => {
                 formatter.write_str("color space is not the legacy straight sRGBA8 space")
             }
+            Self::OutsideStraightSrgba8Range { component } => write!(
+                formatter,
+                "color component {component} is outside the legacy straight sRGBA8 range"
+            ),
             Self::NotExactlyRepresentableAsStraightSrgba8 { component } => write!(
                 formatter,
                 "color component {component} is not exactly representable as straight sRGBA8"
@@ -129,6 +134,24 @@ impl ColorValue {
         self.rgba.map(OrderedFloat::into_inner)
     }
 
+    /// Interpolate two authored colors without leaving their declared color
+    /// space. Color-space conversion is deliberately not guessed here: a
+    /// mixed-space keyframe pair has no well-defined interpolation until the
+    /// color-management service supplies an explicit transform.
+    pub fn interpolate_same_space(&self, other: &Self, amount: f64) -> Option<Self> {
+        if self.color_space != other.color_space || !amount.is_finite() {
+            return None;
+        }
+        let start = self.rgba();
+        let end = other.rgba();
+        let mut rgba =
+            std::array::from_fn(|index| start[index] + (end[index] - start[index]) * amount);
+        // Easing functions may overshoot. RGB remains an HDR-capable float,
+        // while straight alpha's model invariant stays bounded and continuous.
+        rgba[3] = rgba[3].clamp(0.0, 1.0);
+        Self::new(self.color_space.clone(), rgba).ok()
+    }
+
     /// Losslessly embeds a legacy, encoded straight sRGBA8 value. RGB is not
     /// multiplied by alpha and no color-space transform is performed.
     pub fn from_straight_srgba8(color: &Color) -> Self {
@@ -158,6 +181,34 @@ impl ColorValue {
             a: exact_srgba8_component(a, "a")?,
         })
     }
+
+    /// Cross the current u8 renderer boundary with an explicit round-to-nearest
+    /// conversion. The authoritative graph value remains unchanged. Values
+    /// that require a color-space transform or HDR/range clipping are rejected
+    /// rather than silently clamped or replaced.
+    pub fn try_to_renderer_srgba8(&self) -> Result<Color, ColorValueError> {
+        if self.color_space.as_str() != SRGB_COLOR_SPACE {
+            return Err(ColorValueError::NotStraightSrgba8ColorSpace);
+        }
+        let [r, g, b, a] = self.rgba;
+        Ok(Color {
+            r: renderer_srgba8_component(r, "r")?,
+            g: renderer_srgba8_component(g, "g")?,
+            b: renderer_srgba8_component(b, "b")?,
+            a: renderer_srgba8_component(a, "a")?,
+        })
+    }
+}
+
+fn renderer_srgba8_component(
+    value: OrderedFloat<f64>,
+    component: &'static str,
+) -> Result<u8, ColorValueError> {
+    let value = value.into_inner();
+    if !(0.0..=1.0).contains(&value) {
+        return Err(ColorValueError::OutsideStraightSrgba8Range { component });
+    }
+    Ok((value * 255.0).round() as u8)
 }
 
 fn exact_srgba8_component(
@@ -224,4 +275,51 @@ pub(super) fn is_tagged_color_value_json(value: &serde_json::Value) -> bool {
             .get(COLOR_VALUE_TAG_FIELD)
             .and_then(serde_json::Value::as_str)
             == Some(COLOR_VALUE_TAG)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renderer_boundary_rounds_ordinary_srgb_but_rejects_color_management_loss()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ordinary = ColorValue::new(ColorSpaceRef::srgb(), [0.5, 0.25, 1.0, 0.5])?;
+        assert_eq!(
+            ordinary.try_to_renderer_srgba8(),
+            Ok(Color {
+                r: 128,
+                g: 64,
+                b: 255,
+                a: 128,
+            })
+        );
+
+        let hdr = ColorValue::new(ColorSpaceRef::srgb(), [-0.1, 2.0, 0.0, 1.0])?;
+        assert!(matches!(
+            hdr.try_to_renderer_srgba8(),
+            Err(ColorValueError::OutsideStraightSrgba8Range { .. })
+        ));
+        let other_space = ColorValue::new(
+            ColorSpaceRef::new("scene_linear_ap1")?,
+            [0.5, 0.25, 1.0, 0.5],
+        )?;
+        assert_eq!(
+            other_space.try_to_renderer_srgba8(),
+            Err(ColorValueError::NotStraightSrgba8ColorSpace)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn same_space_interpolation_keeps_float_graph_values() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let start = ColorValue::new(ColorSpaceRef::srgb(), [-1.0, 0.0, 1.0, 0.0])?;
+        let end = ColorValue::new(ColorSpaceRef::srgb(), [3.0, 2.0, 1.0, 1.0])?;
+        let middle = start
+            .interpolate_same_space(&end, 0.25)
+            .ok_or("same-space interpolation failed")?;
+        assert_eq!(middle.rgba(), [0.0, 0.5, 1.0, 0.25]);
+        Ok(())
+    }
 }

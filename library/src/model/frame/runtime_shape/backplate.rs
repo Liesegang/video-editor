@@ -99,6 +99,7 @@ impl RuntimeShape {
             let bounds = RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
             parts.push(RuntimePathPart {
                 path: fitted.to_svg(),
+                canonical_path: None,
                 bounds,
                 stable_id: region.stable_id,
                 block_group_id: region.block_group_id,
@@ -125,6 +126,7 @@ impl RuntimeShape {
             source_id: operation_id,
             geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
                 path,
+                canonical_path: None,
                 bounds,
                 path_effects: template_path_effects,
                 parts,

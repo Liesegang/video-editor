@@ -129,6 +129,9 @@ pub struct TextRasterRequest<'a> {
 #[derive(Clone, Copy)]
 pub struct ShapeRasterRequest<'a> {
     pub path_data: &'a str,
+    /// Exact native geometry when available. The SVG string remains only a
+    /// legacy/fallback boundary and must not replace weighted conics.
+    pub canonical_path: Option<&'a crate::model::path::PathValue>,
     pub styles: &'a [StyleConfig],
     pub path_effects: &'a [PathEffect],
     pub ensemble: Option<&'a crate::core::ensemble::EnsembleData>,

@@ -695,15 +695,9 @@ impl FrameEvaluator<'_> {
         {
             return Ok(EvalOutput::NoOutput);
         }
-        converter
+        Ok(converter
             .convert_entity(&context, node, scope.time)
-            .map(EvalOutput::Produced)
-            .ok_or_else(|| {
-                LibraryError::Validation(format!(
-                    "Entity converter {kind} failed to produce Node {}",
-                    node.id
-                ))
-            })
+            .map_or(EvalOutput::NoOutput, EvalOutput::Produced))
     }
 
     fn collect_composition_instance(

@@ -846,6 +846,7 @@ impl Renderer for SkiaRenderer {
         let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
         let ShapeRasterRequest {
             path_data,
+            canonical_path,
             styles,
             path_effects,
             ensemble,
@@ -856,14 +857,7 @@ impl Renderer for SkiaRenderer {
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            let path = skia_safe::Path::from_svg(path_data).ok_or_else(|| {
-                LibraryError::Render(format!("Invalid or empty SVG path data: {path_data:?}"))
-            })?;
-            if path.is_empty() {
-                return Err(LibraryError::Render(format!(
-                    "Invalid or empty SVG path data: {path_data:?}"
-                )));
-            }
+            let path = super::path_geometry::resolve_renderer_path(canonical_path, path_data)?;
             let matrix = build_transform_matrix(&transform);
             canvas.save();
             canvas.concat(&matrix);

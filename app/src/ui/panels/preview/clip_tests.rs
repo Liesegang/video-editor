@@ -252,6 +252,7 @@ mod tests {
                 content_bounds: Some(FrameBounds::new(0.0, 0.0, 10.0, 10.0)),
                 content: FrameContent::Shape {
                     path: "M0 0 H10 V10 H0 Z".to_string(),
+                    canonical_path: None,
                     styles: Vec::new(),
                     path_effects: Vec::new(),
                     effects: Vec::new(),
@@ -440,6 +441,7 @@ mod tests {
         object.spatial_transform_node_id = Some(spatial_id);
         object.content = FrameContent::Shape {
             path: "M 0 0 H 100 V 100 Z".to_string(),
+            canonical_path: None,
             styles: Vec::new(),
             path_effects: Vec::new(),
             effects: Vec::new(),
@@ -545,6 +547,7 @@ mod tests {
         });
         rendered_object.content = FrameContent::Shape {
             path: "M0 0 H20 V10 H0 Z".to_string(),
+            canonical_path: None,
             styles: Vec::new(),
             path_effects: Vec::new(),
             effects: Vec::new(),

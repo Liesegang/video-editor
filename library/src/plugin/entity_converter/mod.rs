@@ -210,6 +210,59 @@ impl<'a> FrameEvaluationContext<'a> {
         None
     }
 
+    /// Resolve a canonical graph color without inventing a legacy fallback.
+    /// Conversion to a renderer-specific pixel representation belongs to the
+    /// consumer that crosses that explicit boundary.
+    pub fn require_color_value(
+        &self,
+        props: &PropertyMap,
+        key: &str,
+        time: f64,
+        context: &str,
+    ) -> Option<crate::model::property::ColorValue> {
+        if let Some(value) = self.evaluate_key(props, key, time) {
+            return match value {
+                PropertyValue::ColorValue(color) => Some(color),
+                // Explicit, lossless read adapter for persisted pre-v1 nodes.
+                // New descriptors and authoring paths never emit this type.
+                PropertyValue::Color(color) => Some(
+                    crate::model::property::ColorValue::from_straight_srgba8(&color),
+                ),
+                _ => {
+                    log::warn!("Missing or invalid canonical color property '{key}' for {context}");
+                    None
+                }
+            };
+        }
+        log::warn!("Missing or invalid canonical color property '{key}' for {context}");
+        None
+    }
+
+    /// Resolve canonical path geometry. Existing pre-v1 Shape Nodes may still
+    /// contain an SVG string; that legacy representation is accepted only at
+    /// this explicit read boundary and immediately decoded to `PathValue`.
+    pub fn require_path_value(
+        &self,
+        props: &PropertyMap,
+        key: &str,
+        time: f64,
+        context: &str,
+    ) -> Option<crate::model::path::PathValue> {
+        let value = self.evaluate_key(props, key, time)?;
+        match value {
+            PropertyValue::Path(path) => Some(path),
+            PropertyValue::String(svg) => crate::model::path::parse_legacy_svg_path_data(&svg)
+                .inspect_err(|error| {
+                    log::warn!("Invalid legacy SVG property '{key}' for {context}: {error}");
+                })
+                .ok(),
+            _ => {
+                log::warn!("Missing or invalid canonical path property '{key}' for {context}");
+                None
+            }
+        }
+    }
+
     pub fn optional_string(&self, props: &PropertyMap, key: &str, time: f64) -> Option<String> {
         self.evaluate_key(props, key, time)
             .and_then(|value| value.get_as::<String>())
@@ -258,13 +311,24 @@ impl<'a> FrameEvaluationContext<'a> {
     ) -> Option<HashMap<String, PropertyValue>> {
         let mut evaluated = HashMap::with_capacity(definitions.len());
         for definition in definitions {
-            let Some(value) = self.evaluate_key(properties, definition.name(), time) else {
+            let Some(mut value) = self.evaluate_key(properties, definition.name(), time) else {
                 log::warn!(
                     "{operation_label} property {} is missing or produced NoOutput",
                     definition.name()
                 );
                 return None;
             };
+            if matches!(
+                definition.ui_type(),
+                crate::model::property::PropertyUiType::ColorValue
+            ) && let PropertyValue::Color(color) = &value
+            {
+                // Persisted pre-v1 Style values are adapted losslessly at the
+                // read boundary. Authoritative Project state is not mutated.
+                value = PropertyValue::ColorValue(
+                    crate::model::property::ColorValue::from_straight_srgba8(color),
+                );
+            }
             if let Err(error) = definition.validate_value(&value) {
                 log::warn!(
                     "{operation_label} property {} evaluated to an invalid value: {}",

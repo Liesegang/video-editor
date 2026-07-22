@@ -15,6 +15,7 @@ use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::frame::transform::Transform;
+use crate::model::path::PathValue;
 
 mod backplate;
 
@@ -92,6 +93,17 @@ pub fn measure_shape_visual_bounds(
         return None;
     }
     let bounds = path.compute_tight_bounds();
+    let outset = shape_visual_outset(styles, path_effects);
+
+    Some((
+        bounds.left - outset,
+        bounds.top - outset,
+        bounds.width() + outset * 2.0,
+        bounds.height() + outset * 2.0,
+    ))
+}
+
+fn shape_visual_outset(styles: &[StyleConfig], path_effects: &[PathEffect]) -> f32 {
     let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
         let candidate = match &config.style {
             DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
@@ -115,14 +127,7 @@ pub fn measure_shape_visual_bounds(
             outset
         }
     });
-    let outset = style_outset + effect_outset;
-
-    Some((
-        bounds.left - outset,
-        bounds.top - outset,
-        bounds.width() + outset * 2.0,
-        bounds.height() + outset * 2.0,
-    ))
+    style_outset + effect_outset
 }
 
 /// One Unicode grapheme element. It may contain multiple Unicode scalars, and
@@ -175,6 +180,10 @@ pub struct RuntimeTextShape {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimePathShape {
     pub path: String,
+    /// Exact canonical geometry for native PathValue sources. Legacy SVG and
+    /// render-generated geometry leave this absent. The renderer always
+    /// prefers this value so general conic weights never pass through SVG.
+    pub canonical_path: Option<PathValue>,
     pub bounds: RuntimeBounds,
     pub path_effects: Vec<PathEffect>,
     /// Stable semantic groups retained until Style rasterizes this Shape.
@@ -184,6 +193,9 @@ pub struct RuntimePathShape {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimePathPart {
     pub path: String,
+    /// Canonical geometry for parts that are exact, unmodified projections of
+    /// an authored PathValue. Geometry-generating operations leave this None.
+    pub canonical_path: Option<PathValue>,
     pub bounds: RuntimeBounds,
     pub stable_id: u64,
     pub block_group_id: u64,
@@ -585,6 +597,7 @@ impl RuntimeShape {
                 let mut shape = self.clone();
                 shape.geometry = RuntimeShapeGeometry::Path(RuntimePathShape {
                     path: part.path.clone(),
+                    canonical_path: part.canonical_path.clone(),
                     bounds: part.bounds,
                     path_effects: path_effects.clone(),
                     parts: vec![part.clone()],
@@ -632,12 +645,11 @@ impl RuntimeShape {
                 })
             }
             RuntimeShapeGeometry::Path(path) => {
-                let mut bounds = measure_shape_visual_bounds(
-                    &path.path,
-                    std::slice::from_ref(&style),
-                    &path.path_effects,
-                )
-                .map(|(x, y, width, height)| RuntimeBounds::new(x, y, x + width, y + height));
+                // `path.bounds` was measured from exact canonical Skia
+                // geometry when available. Re-parsing the SVG fallback here
+                // would silently turn weighted conics into ordinary quads.
+                let outset = shape_visual_outset(std::slice::from_ref(&style), &path.path_effects);
+                let mut bounds = Some(path.bounds.expand(outset));
                 if let Some(ensemble) = &ensemble
                     && let Some(decorator_bounds) =
                         measure_path_decorator_bounds(path, &ensemble.decorator_configs)?
@@ -664,6 +676,7 @@ impl RuntimeShape {
             },
             RuntimeShapeGeometry::Path(path) => FrameContent::Shape {
                 path: path.path,
+                canonical_path: path.canonical_path,
                 styles: vec![style],
                 path_effects: path.path_effects,
                 effects: self.effects,
@@ -690,4 +703,111 @@ fn style_with_opacity(style: &StyleConfig, opacity: f32) -> StyleConfig {
     };
     color.a = (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8;
     style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::rendering::path_geometry::to_skia_path;
+    use crate::model::frame::color::Color;
+    use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
+
+    #[test]
+    fn canonical_conic_bounds_do_not_use_the_quadratic_svg_fallback() -> Result<(), LibraryError> {
+        let value = PathValue::new(
+            FillRule::NonZero,
+            vec![PathContour::new(
+                PathPoint::new(0.0, 0.0),
+                vec![PathSegment::conic(
+                    PathPoint::new(50.0, 100.0),
+                    PathPoint::new(100.0, 0.0),
+                    0.2,
+                )],
+                false,
+            )],
+        )
+        .map_err(|error| LibraryError::Render(error.to_string()))?;
+        let direct = to_skia_path(&value)?;
+        let direct_bounds = direct.compute_tight_bounds();
+        let fallback = crate::model::path::encode_svg_path(&value)
+            .map_err(|error| LibraryError::Render(error.to_string()))?
+            .into_path_data();
+        let fallback_path = skia_safe::Path::from_svg(&fallback)
+            .ok_or_else(|| LibraryError::Render("invalid test SVG fallback".to_string()))?;
+        let fallback_bounds = fallback_path.compute_tight_bounds();
+        assert!(
+            (direct_bounds.bottom - fallback_bounds.bottom).abs() > 1.0,
+            "weighted conic and quadratic fallback unexpectedly share bounds"
+        );
+
+        let runtime_bounds = RuntimeBounds::new(
+            direct_bounds.left,
+            direct_bounds.top,
+            direct_bounds.right,
+            direct_bounds.bottom,
+        );
+        let source_id = Uuid::new_v4();
+        let shape = RuntimeShape {
+            source_id,
+            geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
+                path: fallback.clone(),
+                canonical_path: Some(value.clone()),
+                bounds: runtime_bounds,
+                path_effects: Vec::new(),
+                parts: vec![RuntimePathPart {
+                    path: fallback,
+                    canonical_path: Some(value.clone()),
+                    bounds: runtime_bounds,
+                    stable_id: 7,
+                    block_group_id: 7,
+                    line_group_id: 7,
+                    line_index: 0,
+                    opacity: 0.4,
+                }],
+            }),
+            spatial_transform_node_id: None,
+            spatial_transform: Default::default(),
+            modulation_transform: Default::default(),
+            transform: Default::default(),
+            effects: Vec::new(),
+            effector_configs: Vec::new(),
+            decorator_configs: Vec::new(),
+        };
+        let style = StyleConfig {
+            id: Uuid::new_v4(),
+            style: DrawStyle::Fill {
+                color: Color::white(),
+                offset: 0.0,
+            },
+        };
+        let objects = shape.into_styled_objects(style, 0.0)?;
+        let object = objects
+            .first()
+            .ok_or_else(|| LibraryError::Render("styled conic produced no object".to_string()))?;
+        let bounds = object
+            .content_bounds
+            .ok_or_else(|| LibraryError::Render("styled conic has no bounds".to_string()))?;
+        let (_, _, _, rendered_height) = bounds.as_tuple();
+        assert!((rendered_height - (direct_bounds.height() + 2.0)).abs() <= f32::EPSILON);
+        let FrameContent::Shape {
+            canonical_path: Some(rendered),
+            ..
+        } = &object.content
+        else {
+            return Err(LibraryError::Render(
+                "styled conic dropped canonical geometry".to_string(),
+            ));
+        };
+        assert_eq!(rendered, &value);
+        let FrameContent::Shape { styles, .. } = &object.content else {
+            return Err(LibraryError::Render(
+                "styled conic changed content type".to_string(),
+            ));
+        };
+        assert!(matches!(
+            styles.first().map(|style| &style.style),
+            Some(DrawStyle::Fill { color, .. }) if color.a == 102
+        ));
+        Ok(())
+    }
 }
