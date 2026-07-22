@@ -4,9 +4,10 @@ use crate::model::BlendMode;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
-use crate::model::frame::entity::StyleConfig;
+use crate::model::frame::entity::{SkSLColorDomain, StyleConfig};
 use crate::rendering::renderer::{
-    Affine2D, ShapeRasterRequest, TextRasterRequest, TextureInfo, WorkingSurfaceContract,
+    Affine2D, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo,
+    WorkingSurfaceContract,
 };
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
@@ -210,6 +211,62 @@ fn project_surface_converts_authored_background_once_when_contract_changes() {
         working.pixels().pixels()[0],
         [0.215_86, 0.215_86, 0.215_86, 1.0],
     );
+}
+
+#[test]
+fn project_working_sksl_retains_declared_linear_values() {
+    let config = "working-sksl";
+    let mut renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+
+    let output = renderer
+        .rasterize_sksl_layer(SkSLRasterRequest {
+            shader_code: "half4 main(float2 p) { return half4(0.5, 0.25, 0.75, 1.0); }",
+            resolution: (1.0, 1.0),
+            time: 0.0,
+            transform: &Affine2D::IDENTITY,
+            color_domain: SkSLColorDomain::ProjectWorkingLinear,
+        })
+        .unwrap();
+    let RenderOutput::Working(output) = output else {
+        panic!("declared Project-working SkSL must retain its typed working output");
+    };
+    assert_eq!(output.identity(), &working_identity(config));
+    assert_pixel_near(output.pixels().pixels()[0], [0.5, 0.25, 0.75, 1.0]);
+}
+
+#[test]
+fn sksl_domain_mismatch_and_compilation_error_fail_closed() {
+    let request = SkSLRasterRequest {
+        shader_code: "half4 main(float2 p) { return half4(1); }",
+        resolution: (1.0, 1.0),
+        time: 0.0,
+        transform: &Affine2D::IDENTITY,
+        color_domain: SkSLColorDomain::ProjectWorkingLinear,
+    };
+    let mut unmanaged = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    assert!(
+        unmanaged
+            .rasterize_sksl_layer(request)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot render into an unmanaged sRGBA8 surface")
+    );
+
+    let mut managed = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    managed
+        .use_project_linear_surface(working_contract("invalid-sksl"))
+        .unwrap();
+    let error = managed
+        .rasterize_sksl_layer(SkSLRasterRequest {
+            shader_code: "this is not valid SkSL",
+            ..request
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SkSL compilation failed"));
 }
 
 #[test]

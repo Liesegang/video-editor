@@ -11,6 +11,7 @@ mod tests {
     use library::model::frame::color::Color;
     use library::model::frame::entity::{
         FrameBounds, FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject,
+        SkSLColorDomain,
     };
     use library::model::frame::frame::FrameInfo;
     use library::model::frame::transform::{Position, Transform};
@@ -32,6 +33,7 @@ mod tests {
             content: FrameContent::SkSL {
                 shader: "half4 main(float2 p) { return half4(1); }".to_string(),
                 resolution: (30.0, 40.0),
+                color_domain: SkSLColorDomain::ProjectWorkingLinear,
                 effects: Vec::new(),
                 transform: Transform {
                     position: Position { x: 5.0, y: 7.0 },

@@ -15,7 +15,7 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::{DrawStyle, PathEffect};
-use library::model::frame::entity::{FrameContent, FrameItem, StyleConfig};
+use library::model::frame::entity::{FrameContent, FrameItem, SkSLColorDomain, StyleConfig};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner,
@@ -25,7 +25,9 @@ use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
 use library::plugin::{ExportSettings, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager};
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, TextRasterRequest};
-use library::{ExportService, ProjectModel, ProjectService, RenderService, SkiaRenderer};
+use library::{
+    ExportService, ProjectModel, ProjectService, RenderDestination, RenderService, SkiaRenderer,
+};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -185,9 +187,9 @@ fn preview(project: &Project, frame_number: u64, plugins: &Arc<PluginManager>) -
     )?;
     let mut service =
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
-    match service.render_from_frame_info(&frame)? {
+    match service.render_project_frame(project, &frame, RenderDestination::Preview)? {
         RenderOutput::Image(image) => Ok(image),
-        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
+        RenderOutput::Working(_) => bail!("Project renderer returned unterminated working pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
@@ -598,6 +600,7 @@ half4 main(float2 fragCoord) {
     let FrameContent::SkSL {
         shader: converted,
         resolution,
+        color_domain,
         transform,
         ..
     } = first_content(&frame.items).context("SkSL frame content must exist")?
@@ -606,6 +609,7 @@ half4 main(float2 fragCoord) {
     };
     assert_eq!(converted, shader);
     assert_eq!(*resolution, (96.0, 54.0));
+    assert_eq!(*color_domain, SkSLColorDomain::ProjectWorkingLinear);
     assert_eq!((transform.position.x, transform.position.y), (0.0, 0.0));
     let image_transform =
         find_group(&frame.items, transform_id).context("SkSL Image Transform group must exist")?;

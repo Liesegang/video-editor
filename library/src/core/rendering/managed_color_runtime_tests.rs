@@ -589,6 +589,20 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
         // malicious in the active config. Production background ingress must
         // use the Project-bound exact authoring authority instead.
         authored_frame.color_profile = "sRGB".to_string();
+        service
+            .renderer
+            .resize_render_target(
+                authored_frame
+                    .width
+                    .try_into()
+                    .expect("fixture width fits u32"),
+                authored_frame
+                    .height
+                    .try_into()
+                    .expect("fixture height fits u32"),
+                authored_frame.background_color.clone(),
+            )
+            .expect("synchronize the production render target");
         let output = service
             .render_project_frame(&project, &authored_frame, RenderDestination::Preview)
             .expect("named view must chain into the exact sRGB surface binding");

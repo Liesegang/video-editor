@@ -8,7 +8,7 @@ use crate::core::rendering::media_color_ingress::{
     MediaAssetKind, require_unmanaged_abi_srgb, source_asset,
 };
 use crate::core::rendering::renderer::{
-    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest,
+    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
@@ -443,17 +443,19 @@ impl<T: Renderer> RenderService<T> {
             FrameContent::SkSL {
                 shader,
                 resolution,
+                color_domain,
                 effects,
                 transform,
             } => {
                 let render_transform = context.transform(transform);
                 let sksl_layer = measure_debug("Rasterize SkSL", || {
-                    self.renderer.rasterize_sksl_layer(
-                        shader,
-                        *resolution,
-                        current_time as f32,
-                        &render_transform,
-                    )
+                    self.renderer.rasterize_sksl_layer(SkSLRasterRequest {
+                        shader_code: shader,
+                        resolution: *resolution,
+                        time: current_time as f32,
+                        transform: &render_transform,
+                        color_domain: *color_domain,
+                    })
                 })?;
                 let final_image = self.apply_effects(sksl_layer, effects, current_time)?;
                 measure_debug("Composite SkSL", || {

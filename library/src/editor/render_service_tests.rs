@@ -104,10 +104,7 @@ impl Renderer for TexturePathRenderer {
 
     fn rasterize_sksl_layer(
         &mut self,
-        _shader_code: &str,
-        _resolution: (f32, f32),
-        _time: f32,
-        _transform: &Affine2D,
+        _request: crate::rendering::renderer::SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         Err(LibraryError::Render("unexpected SkSL".into()))
     }

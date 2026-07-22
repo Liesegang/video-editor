@@ -3,11 +3,12 @@ use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
+use crate::model::frame::entity::SkSLColorDomain;
 use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
-    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
-    WorkingSurfaceContract,
+    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
+    TextureInfo, WorkingSurfaceContract,
 };
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
@@ -518,16 +519,21 @@ impl Renderer for SkiaRenderer {
 
     fn rasterize_sksl_layer(
         &mut self,
-        shader_code: &str,
-        resolution: (f32, f32),
-        time: f32,
-        transform: &Affine2D,
+        request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        if self.surface_contract.working().is_some() {
-            return Err(LibraryError::Render(
-                "SkSL generator has no declared Project working-color contract".to_string(),
-            ));
+        match request.color_domain {
+            SkSLColorDomain::ProjectWorkingLinear if self.surface_contract.working().is_none() => {
+                return Err(LibraryError::Render(
+                    "Project-working-linear SkSL cannot render into an unmanaged sRGBA8 surface"
+                        .to_string(),
+                ));
+            }
+            SkSLColorDomain::ProjectWorkingLinear => {}
         }
+        let shader_code = request.shader_code;
+        let resolution = request.resolution;
+        let time = request.time;
+        let transform = request.transform;
         let (target_width, target_height) = self.current_target_dimensions();
         let mut layer = self.create_layer_surface()?;
         {
@@ -535,48 +541,45 @@ impl Renderer for SkiaRenderer {
             canvas.clear(skia_safe::Color::TRANSPARENT);
 
             let preprocessed_code = shader_utils::preprocess_shader(shader_code);
-            let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
+            let effect = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None)
+                .map_err(|error| {
+                    log::error!(
+                        "SkSL Compilation Error: {}\nCode:\n{}",
+                        error,
+                        preprocessed_code
+                    );
+                    LibraryError::Render(format!("SkSL compilation failed: {error}"))
+                })?;
+            let uniform_size = effect.uniform_size();
+            let mut data: Vec<u8> = vec![0; uniform_size];
 
-            if let Err(error) = result {
-                log::error!(
-                    "SkSL Compilation Error: {}\nCode:\n{}",
-                    error,
-                    preprocessed_code
-                );
-                canvas.clear(skia_safe::Color::RED);
-            } else if let Ok(effect) = result {
-                let uniform_size = effect.uniform_size();
-                let mut data: Vec<u8> = vec![0; uniform_size];
+            let shader_context = ShaderContext {
+                resolution,
+                time,
+                time_delta: 1.0 / 60.0,
+                frame: (time * 60.0).floor(),
+                mouse: (0.0, 0.0, 0.0, 0.0),
+                date: (2024.0, 1.0, 1.0, 0.0),
+            };
 
-                let shader_context = ShaderContext {
-                    resolution,
-                    time,
-                    time_delta: 1.0 / 60.0,
-                    frame: (time * 60.0).floor(),
-                    mouse: (0.0, 0.0, 0.0, 0.0),
-                    date: (2024.0, 1.0, 1.0, 0.0),
-                };
+            shader_utils::bind_standard_uniforms(&effect, &mut data, &shader_context);
 
-                shader_utils::bind_standard_uniforms(&effect, &mut data, &shader_context);
+            let uniforms = skia_safe::Data::new_copy(&data);
 
-                let uniforms = skia_safe::Data::new_copy(&data);
+            let shader = effect
+                .make_shader(uniforms, &[], None)
+                .ok_or(LibraryError::Render(
+                    "Failed to create SkSL shader".to_string(),
+                ))?;
 
-                let shader =
-                    effect
-                        .make_shader(uniforms, &[], None)
-                        .ok_or(LibraryError::Render(
-                            "Failed to create SkSL shader".to_string(),
-                        ))?;
-
-                let mut paint = Paint::default();
-                paint.set_shader(shader);
-                let matrix = build_transform_matrix(transform);
-                canvas.save();
-                canvas.concat(&matrix);
-                let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
-                canvas.draw_rect(rect, &paint);
-                canvas.restore();
-            }
+            let mut paint = Paint::default();
+            paint.set_shader(shader);
+            let matrix = build_transform_matrix(transform);
+            canvas.save();
+            canvas.concat(&matrix);
+            let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
+            canvas.draw_rect(rect, &paint);
+            canvas.restore();
         }
 
         self.snapshot_surface(&mut layer, target_width, target_height)

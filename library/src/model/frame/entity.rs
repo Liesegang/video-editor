@@ -35,6 +35,18 @@ pub struct StyleConfig {
     pub style: DrawStyle,
 }
 
+/// Declares the numeric color domain produced by an SkSL generator.
+///
+/// Runtime shaders do not carry an ICC/OCIO profile themselves. Keeping this
+/// declaration on the evaluated frame prevents a renderer from silently
+/// interpreting shader values in whichever surface happens to be active.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SkSLColorDomain {
+    /// Scene-linear values in the exact working space of the current Project.
+    ProjectWorkingLinear,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 pub enum FrameContent {
@@ -82,6 +94,7 @@ pub enum FrameContent {
     SkSL {
         shader: String,
         resolution: (f32, f32),
+        color_domain: SkSLColorDomain,
         #[serde(default)]
         effects: Vec<ImageEffect>,
         #[serde(flatten)]
@@ -162,12 +175,14 @@ impl Hash for FrameContent {
             FrameContent::SkSL {
                 shader,
                 resolution,
+                color_domain,
                 effects,
                 transform,
             } => {
                 shader.hash(state);
                 OrderedFloat(resolution.0).hash(state);
                 OrderedFloat(resolution.1).hash(state);
+                color_domain.hash(state);
                 effects.hash(state);
                 transform.hash(state);
             }
@@ -251,12 +266,14 @@ impl PartialEq for FrameContent {
                 FrameContent::SkSL {
                     shader: s1,
                     resolution: r1,
+                    color_domain: d1,
                     effects: e1,
                     transform: tr1,
                 },
                 FrameContent::SkSL {
                     shader: s2,
                     resolution: r2,
+                    color_domain: d2,
                     effects: e2,
                     transform: tr2,
                 },
@@ -264,6 +281,7 @@ impl PartialEq for FrameContent {
                 s1 == s2
                     && OrderedFloat(r1.0) == OrderedFloat(r2.0)
                     && OrderedFloat(r1.1) == OrderedFloat(r2.1)
+                    && d1 == d2
                     && e1 == e2
                     && tr1 == tr2
             }

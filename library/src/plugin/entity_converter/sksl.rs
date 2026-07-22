@@ -1,5 +1,5 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
-use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject};
+use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, SkSLColorDomain};
 
 #[derive(Default)]
 pub struct SkSLEntityConverterPlugin;
@@ -106,6 +106,11 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
             content: FrameContent::SkSL {
                 shader,
                 resolution: (res_x as f32, res_y as f32),
+                // The bundled native generator's shader ABI is scene-linear
+                // in the current Project working space. This is explicit on
+                // every evaluated frame so other shader domains can be added
+                // later without relying on the active render target.
+                color_domain: SkSLColorDomain::ProjectWorkingLinear,
                 effects: Vec::new(),
                 transform: Default::default(),
             },

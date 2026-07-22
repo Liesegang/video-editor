@@ -4,6 +4,7 @@ use crate::model::frame::color::Color;
 
 use crate::model::BlendMode;
 use crate::model::frame::draw_type::PathEffect;
+use crate::model::frame::entity::SkSLColorDomain;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
 use ruvie_color_management::{
@@ -234,6 +235,15 @@ pub struct ShapeRasterRequest<'a> {
     pub transform: Affine2D,
 }
 
+#[derive(Clone, Copy)]
+pub struct SkSLRasterRequest<'a> {
+    pub shader_code: &'a str,
+    pub resolution: (f32, f32),
+    pub time: f32,
+    pub transform: &'a Affine2D,
+    pub color_domain: SkSLColorDomain,
+}
+
 pub trait Renderer {
     /// Select the Project-free encoded-sRGBA8 compatibility contract.
     /// Implementations which have only one legacy surface may keep the
@@ -308,10 +318,7 @@ pub trait Renderer {
 
     fn rasterize_sksl_layer(
         &mut self,
-        shader_code: &str,
-        resolution: (f32, f32),
-        time: f32,
-        transform: &Affine2D,
+        request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError>;
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;
