@@ -111,8 +111,9 @@ impl OperationNodeParts {
 
 impl OperationDescriptor {
     /// Builds a descriptor from one authoritative list of property
-    /// definitions. Every property becomes a typed graph input, followed by
-    /// operation-specific input and output ports.
+    /// definitions. A common Time input is placed first, followed by typed
+    /// property inputs, payload inputs, and outputs. This keeps shared graph
+    /// controls stable without coupling validation to positional counts.
     pub fn new(
         category: impl Into<String>,
         component_id: impl Into<String>,
@@ -121,7 +122,7 @@ impl OperationDescriptor {
         properties: Vec<PropertyDefinition>,
         operation_ports: impl IntoIterator<Item = PortDefinition>,
     ) -> Result<Self, OperationDescriptorError> {
-        let mut declared_ports = properties
+        let property_ports = properties
             .iter()
             .map(|definition| {
                 PortDefinition::input(
@@ -131,6 +132,15 @@ impl OperationDescriptor {
                 )
             })
             .collect::<Vec<_>>();
+        let mut operation_ports = operation_ports.into_iter().collect::<Vec<_>>();
+        let time_input = operation_ports
+            .iter()
+            .position(|port| port.direction == PortDirection::Input && port.key == TIME_PORT)
+            .map(|index| operation_ports.remove(index));
+        let mut declared_ports =
+            Vec::with_capacity(property_ports.len() + operation_ports.len() + 1);
+        declared_ports.extend(time_input);
+        declared_ports.extend(property_ports);
         declared_ports.extend(operation_ports);
         let descriptor = Self {
             category: category.into(),
@@ -470,8 +480,15 @@ impl OperationDescriptor {
                 });
             }
         }
-        let property_count = self.properties.len();
-        for port in self.declared_ports.iter().skip(property_count) {
+        let property_port_keys = self
+            .properties
+            .iter()
+            .map(|definition| property_port_key(definition.name()))
+            .collect::<HashSet<_>>();
+        for port in &self.declared_ports {
+            if property_port_keys.contains(&port.key) {
+                continue;
+            }
             if !valid_operation_port_key(&port.key) {
                 return Err(OperationDescriptorError::InvalidOperationPortKey {
                     key: port.key.clone(),

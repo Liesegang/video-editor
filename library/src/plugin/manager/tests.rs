@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::StyleConfig;
-use crate::model::project::{Composition, EvalOutput, Project};
+use crate::model::project::{Composition, EvalOutput, PortDirection, Project, TIME_PORT};
 use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::{
     FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, PropertyEvaluator,
@@ -177,6 +177,42 @@ fn every_bundled_property_definition_is_valid_and_operations_are_materialized() 
     }
 
     for (category, component_id, expected_property_count) in operation_contracts {
+        let descriptor = match manager.operation_descriptor(
+            category,
+            &component_id,
+            match category {
+                "effect" => EFFECT_APPLY_OPERATION,
+                "effector" => EFFECTOR_APPLY_OPERATION,
+                "decorator" => DECORATOR_APPLY_OPERATION,
+                "style" => STYLE_APPLY_OPERATION,
+                PATH_EFFECT_CATEGORY => PATH_EFFECT_APPLY_OPERATION,
+                TRANSFORM_CATEGORY => TRANSFORM_APPLY_OPERATION,
+                unknown => {
+                    failures.push(format!(
+                        "operation contract uses unknown category {unknown} for {component_id}"
+                    ));
+                    continue;
+                }
+            },
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                failures.push(format!(
+                    "{category} {component_id} descriptor is unreachable: {error}"
+                ));
+                continue;
+            }
+        };
+        let first_input = descriptor
+            .declared_ports()
+            .iter()
+            .find(|port| port.direction == PortDirection::Input);
+        if first_input.map(|port| port.key.as_str()) != Some(TIME_PORT) {
+            failures.push(format!(
+                "{category} {component_id} must place Time before every property and payload input"
+            ));
+        }
+
         let result = match category {
             "effect" => manager.create_effect_operation_node(&component_id),
             "effector" => manager.create_effector_operation_node(&component_id),
@@ -203,6 +239,16 @@ fn every_bundled_property_definition_is_valid_and_operations_are_materialized() 
                     failures.push(format!(
                             "{category} {component_id} initialized {actual_property_count} of {expected_property_count} properties"
                         ));
+                }
+                match node.content() {
+                    crate::model::NodeContent::PluginOperation(operation)
+                        if operation.declared_ports == descriptor.declared_ports() => {}
+                    crate::model::NodeContent::PluginOperation(_) => failures.push(format!(
+                        "{category} {component_id} factory changed the descriptor port order"
+                    )),
+                    _ => failures.push(format!(
+                        "{category} {component_id} factory did not create a plugin operation"
+                    )),
                 }
             }
             Err(error) => failures.push(format!(
