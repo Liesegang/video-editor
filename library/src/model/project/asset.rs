@@ -6,8 +6,9 @@ use uuid::Uuid;
 mod color_metadata;
 
 pub use color_metadata::{
-    AssetSourceColorMetadata, SourceColorDescription, SourceColorPrimaries, SourceColorProfile,
-    SourceColorRange, SourceMatrixCoefficients, SourceTransferCharacteristic,
+    AssetSourceColorMetadata, AssetSourceColorSpaceBinding, AssetSourceColorSpaceBindingError,
+    SourceColorDescription, SourceColorPrimaries, SourceColorProfile, SourceColorRange,
+    SourceMatrixCoefficients, SourceTransferCharacteristic,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

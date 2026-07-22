@@ -384,14 +384,16 @@ impl Project {
         self.color_management.as_config()
     }
 
-    /// Replace the Project color intent only when all identifiers are pinned
+    /// Replace the Project color intent only when its identifiers are pinned
     /// and its external config asset has a matching import-time identity.
+    /// Asset source-space assignments owned by another config remain persisted
+    /// and diagnosed per Asset; they do not block changing the Project config.
     /// Backend and current filesystem availability remain runtime checks.
     pub fn set_color_management(
         &mut self,
         color_management: ColorManagementConfig,
     ) -> Result<(), Vec<ColorManagementIssue>> {
-        let diagnostics = color_management.diagnostics(&self.assets);
+        let diagnostics = color_management.blocking_diagnostics(&self.assets);
         if diagnostics.is_empty() {
             self.color_management = RequestedColorManagementConfig::Config(color_management);
             Ok(())
@@ -400,7 +402,8 @@ impl Project {
         }
     }
 
-    /// Non-fatal diagnostics for persisted color intent.
+    /// Non-fatal diagnostics for persisted Project intent and Asset-local
+    /// source-space assignments.
     ///
     /// These are not included in [`Project::validation_issues`], because a
     /// missing external config must not prevent a user from opening and

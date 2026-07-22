@@ -143,6 +143,193 @@ fn exact_ocio_registry_config_and_non_srgb_spaces_are_model_validated() -> Resul
 }
 
 #[test]
+fn asset_source_space_is_bound_to_the_owning_ocio_config() -> Result<()> {
+    let identity = ColorConfigIdentity::OcioBuiltin {
+        uri: EXACT_OCIO_CONFIG.to_string(),
+        ocio_version: "2.5.2".to_string(),
+    };
+    let config = aces_config(identity);
+    let mut project = Project::new("config-bound asset source");
+    let mut asset = Asset::new("log plate", "plate.exr", AssetKind::Image);
+    asset
+        .source_color
+        .assign_space(config.source_space_binding("ACES2065-1")?);
+    project.assets.push(asset);
+    project
+        .set_color_management(config)
+        .map_err(|issues| anyhow::anyhow!("unexpected color issues: {issues:?}"))?;
+
+    let loaded = Project::load(&project.save()?)?;
+    assert!(loaded.color_management_diagnostics().is_empty());
+    let resolved = loaded.resolved_color_management();
+    let assigned = resolved
+        .model_validated_intent()
+        .context("matching Project color config is ready")?
+        .assigned_source_space(&loaded.assets[0])?
+        .context("explicit source assignment is available")?;
+    assert_eq!(assigned.config(), requested(&loaded)?.config());
+    assert_eq!(assigned.color_space(), "ACES2065-1");
+    Ok(())
+}
+
+#[test]
+fn mismatched_asset_source_config_is_diagnostic_but_project_remains_loadable() -> Result<()> {
+    let assigned = ColorConfigIdentity::OcioBuiltin {
+        uri: "ocio://studio-config-v3.0.0_aces-v1.3_ocio-v2.4".to_string(),
+        ocio_version: "2.4.2".to_string(),
+    };
+    let project_identity = ColorConfigIdentity::OcioBuiltin {
+        uri: EXACT_OCIO_CONFIG.to_string(),
+        ocio_version: "2.5.2".to_string(),
+    };
+    let mut project = Project::new("repairable source config mismatch");
+    let mut asset = Asset::new("old-config plate", "plate.exr", AssetKind::Image);
+    let asset_id = asset.id;
+    let assigned_config = aces_config(assigned.clone());
+    asset
+        .source_color
+        .assign_space(assigned_config.source_space_binding("ACEScg")?);
+    project.assets.push(asset);
+
+    let mut value = serde_json::to_value(&project)?;
+    value["color_management"] = serde_json::to_value(aces_config(project_identity.clone()))?;
+    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    assert!(loaded.color_management_diagnostics().contains(
+        &ColorManagementIssue::AssetSourceColorConfigMismatch {
+            asset_id,
+            assigned: Box::new(assigned),
+            project: Box::new(project_identity),
+        }
+    ));
+    assert!(loaded.validation_issues().is_empty());
+    let resolved = loaded.resolved_color_management();
+    assert!(matches!(resolved, ResolvedColorManagementConfig::Ready(_)));
+    assert!(
+        resolved
+            .model_validated_intent()
+            .context("Project config remains usable")?
+            .assigned_source_space(&loaded.assets[0])
+            .is_err()
+    );
+    assert_eq!(Project::load(&loaded.save()?)?, loaded);
+    Ok(())
+}
+
+#[test]
+fn blank_asset_source_space_is_repairable_and_project_config_stays_ready() -> Result<()> {
+    let identity = ColorConfigIdentity::OcioBuiltin {
+        uri: EXACT_OCIO_CONFIG.to_string(),
+        ocio_version: "2.5.2".to_string(),
+    };
+    assert!(
+        aces_config(identity.clone())
+            .source_space_binding("  ")
+            .is_err()
+    );
+    let mut project = Project::new("repairable blank source space");
+    let asset = Asset::new("untitled source", "plate.exr", AssetKind::Image);
+    let asset_id = asset.id;
+    project.assets.push(asset);
+    let mut value = serde_json::to_value(&project)?;
+    value["color_management"] = serde_json::to_value(aces_config(identity))?;
+    value["assets"][0]["source_color"] = json!({
+        "assigned_space": {
+            "config": {
+                "kind": "ocio_builtin",
+                "uri": EXACT_OCIO_CONFIG,
+                "ocio_version": "2.5.2"
+            },
+            "color_space": "  "
+        }
+    });
+
+    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    assert!(
+        loaded
+            .color_management_diagnostics()
+            .contains(&ColorManagementIssue::AssetSourceColorSpaceBlank { asset_id })
+    );
+    assert!(loaded.assets[0].source_color.assigned_space().is_some());
+    assert!(matches!(
+        loaded.resolved_color_management(),
+        ResolvedColorManagementConfig::Ready(_)
+    ));
+    Ok(())
+}
+
+#[test]
+fn malformed_asset_source_binding_roundtrips_without_blocking_project_open() -> Result<()> {
+    let mut project = Project::new("repairable future source binding");
+    project
+        .assets
+        .push(Asset::new("future plate", "plate.exr", AssetKind::Image));
+    let asset_id = project.assets[0].id;
+    let raw = json!({
+        "config": { "kind": "future_config", "identity": "show-v9" },
+        "color_space": "Future Log"
+    });
+    let mut value = serde_json::to_value(&project)?;
+    value["assets"][0]["source_color"] = json!({ "assigned_space": raw });
+
+    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    assert!(
+        loaded
+            .color_management_diagnostics()
+            .iter()
+            .any(|issue| matches!(
+                issue,
+                ColorManagementIssue::AssetSourceColorBindingMalformed { asset_id: id, .. }
+                    if *id == asset_id
+            ))
+    );
+    assert!(matches!(
+        loaded.resolved_color_management(),
+        ResolvedColorManagementConfig::Ready(_)
+    ));
+    assert!(loaded.validation_issues().is_empty());
+    let saved: Value = serde_json::from_str(&loaded.save()?)?;
+    assert_eq!(saved["assets"][0]["source_color"]["assigned_space"], raw);
+    Ok(())
+}
+
+#[test]
+fn changing_project_config_preserves_and_diagnoses_old_asset_assignment() -> Result<()> {
+    let old_identity = ColorConfigIdentity::OcioBuiltin {
+        uri: "ocio://studio-config-v3.0.0_aces-v1.3_ocio-v2.4".to_string(),
+        ocio_version: "2.4.2".to_string(),
+    };
+    let new_identity = ColorConfigIdentity::OcioBuiltin {
+        uri: EXACT_OCIO_CONFIG.to_string(),
+        ocio_version: "2.5.2".to_string(),
+    };
+    let mut project = Project::new("source assignment survives config switch");
+    let mut asset = Asset::new("plate", "plate.exr", AssetKind::Image);
+    let asset_id = asset.id;
+    let old_config = aces_config(old_identity.clone());
+    asset
+        .source_color
+        .assign_space(old_config.source_space_binding("ACEScg")?);
+    project.assets.push(asset);
+    project
+        .set_color_management(aces_config(new_identity.clone()))
+        .map_err(|issues| anyhow::anyhow!("asset-local issue blocked config switch: {issues:?}"))?;
+
+    assert!(project.color_management_diagnostics().contains(
+        &ColorManagementIssue::AssetSourceColorConfigMismatch {
+            asset_id,
+            assigned: Box::new(old_identity),
+            project: Box::new(new_identity),
+        }
+    ));
+    assert!(project.assets[0].source_color.assigned_space().is_some());
+    assert!(matches!(
+        project.resolved_color_management(),
+        ResolvedColorManagementConfig::Ready(_)
+    ));
+    Ok(())
+}
+
+#[test]
 fn external_ocio_config_requires_imported_bytes_and_matching_model_identity() -> Result<()> {
     let mut project = Project::new("external config");
     let mut asset = Asset::new("show config", "color/show-v12.ocio", AssetKind::Other);

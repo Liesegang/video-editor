@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::asset::Asset;
+use super::asset::{Asset, AssetSourceColorSpaceBinding, AssetSourceColorSpaceBindingError};
 
 mod persistence;
 mod validation;
@@ -160,8 +160,22 @@ impl ColorManagementConfig {
         &self.export
     }
 
+    /// Creates an Asset source-space assignment owned by this exact config.
+    /// This is the public construction path so callers cannot accidentally
+    /// persist an unqualified OpenColorIO color-space name.
+    pub fn source_space_binding(
+        &self,
+        color_space: impl Into<String>,
+    ) -> Result<AssetSourceColorSpaceBinding, AssetSourceColorSpaceBindingError> {
+        AssetSourceColorSpaceBinding::new(self.config.clone(), color_space)
+    }
+
     pub fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
         validation::diagnostics(self, assets)
+    }
+
+    pub(super) fn blocking_diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+        validation::blocking_diagnostics(self, assets)
     }
 
     fn stable_cache_identity(&self) -> ColorConfigCacheIdentity {
@@ -220,6 +234,19 @@ impl RequestedColorManagementConfig {
                 .collect(),
         }
     }
+
+    pub(super) fn blocking_diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+        match self {
+            Self::Config(config) => config.blocking_diagnostics(assets),
+            Self::Malformed {
+                structure_issues, ..
+            } => structure_issues
+                .iter()
+                .cloned()
+                .map(|issue| ColorManagementIssue::MalformedStructure { issue })
+                .collect(),
+        }
+    }
 }
 
 impl Default for RequestedColorManagementConfig {
@@ -266,6 +293,17 @@ impl ModelValidatedColorManagementConfig {
 
     pub fn cache_identity(&self) -> &ColorConfigCacheIdentity {
         &self.cache_identity
+    }
+
+    /// Returns an Asset's explicit source-space assignment only when it belongs
+    /// to this validated Project config. Callers must fail this Asset's ingress
+    /// on `Err`; the rest of the Project remains usable.
+    pub fn assigned_source_space<'a>(
+        &self,
+        asset: &'a Asset,
+    ) -> Result<Option<&'a super::asset::AssetSourceColorSpaceBinding>, ColorManagementIssue> {
+        validation::validate_asset_source_binding(&self.config, asset)?;
+        Ok(asset.source_color.assigned_space())
     }
 }
 
@@ -383,6 +421,18 @@ pub enum ColorManagementIssue {
         expected: String,
         imported: String,
     },
+    AssetSourceColorSpaceBlank {
+        asset_id: Uuid,
+    },
+    AssetSourceColorConfigMismatch {
+        asset_id: Uuid,
+        assigned: Box<ColorConfigIdentity>,
+        project: Box<ColorConfigIdentity>,
+    },
+    AssetSourceColorBindingMalformed {
+        asset_id: Uuid,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for ColorManagementIssue {
@@ -449,6 +499,22 @@ impl std::fmt::Display for ColorManagementIssue {
                 formatter,
                 "color config asset {asset_id} expected SHA-256 '{expected}' but imported '{imported}'"
             ),
+            Self::AssetSourceColorSpaceBlank { asset_id } => write!(
+                formatter,
+                "asset {asset_id} has a blank assigned source color-space name"
+            ),
+            Self::AssetSourceColorConfigMismatch {
+                asset_id,
+                assigned,
+                project,
+            } => write!(
+                formatter,
+                "asset {asset_id} source color space belongs to config {assigned:?}, but the Project uses {project:?}"
+            ),
+            Self::AssetSourceColorBindingMalformed { asset_id, detail } => write!(
+                formatter,
+                "asset {asset_id} has an unrecognized source color-space binding: {detail}"
+            ),
         }
     }
 }
@@ -483,7 +549,7 @@ pub(super) fn resolve_color_management(
     requested: &RequestedColorManagementConfig,
     assets: &[Asset],
 ) -> ResolvedColorManagementConfig {
-    let diagnostics = requested.diagnostics(assets);
+    let diagnostics = requested.blocking_diagnostics(assets);
     match (requested, diagnostics.is_empty()) {
         (RequestedColorManagementConfig::Config(config), true) => {
             ResolvedColorManagementConfig::Ready(ModelValidatedColorManagementConfig {

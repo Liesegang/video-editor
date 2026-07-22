@@ -17,6 +17,15 @@ pub(super) fn diagnostics(
     config: &ColorManagementConfig,
     assets: &[Asset],
 ) -> Vec<ColorManagementIssue> {
+    let mut diagnostics = blocking_diagnostics(config, assets);
+    diagnostics.extend(asset_source_diagnostics(config, assets));
+    diagnostics
+}
+
+pub(super) fn blocking_diagnostics(
+    config: &ColorManagementConfig,
+    assets: &[Asset],
+) -> Vec<ColorManagementIssue> {
     let mut diagnostics = Vec::new();
     validate_config_identity(&config.config, assets, &mut diagnostics);
     validate_named_field(
@@ -36,6 +45,45 @@ pub(super) fn diagnostics(
         &mut diagnostics,
     );
     diagnostics
+}
+
+fn asset_source_diagnostics(
+    config: &ColorManagementConfig,
+    assets: &[Asset],
+) -> Vec<ColorManagementIssue> {
+    let mut diagnostics = Vec::new();
+    for asset in assets {
+        if let Err(issue) = validate_asset_source_binding(config, asset) {
+            diagnostics.push(issue);
+        }
+    }
+    diagnostics
+}
+
+pub(super) fn validate_asset_source_binding(
+    config: &ColorManagementConfig,
+    asset: &Asset,
+) -> Result<(), ColorManagementIssue> {
+    if let Some((_, detail)) = asset.source_color.malformed_assigned_space() {
+        return Err(ColorManagementIssue::AssetSourceColorBindingMalformed {
+            asset_id: asset.id,
+            detail: detail.to_string(),
+        });
+    }
+    let Some(binding) = asset.source_color.assigned_space() else {
+        return Ok(());
+    };
+    if binding.color_space().trim().is_empty() {
+        return Err(ColorManagementIssue::AssetSourceColorSpaceBlank { asset_id: asset.id });
+    }
+    if binding.config() != &config.config {
+        return Err(ColorManagementIssue::AssetSourceColorConfigMismatch {
+            asset_id: asset.id,
+            assigned: Box::new(binding.config().clone()),
+            project: Box::new(config.config.clone()),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn stable_cache_identity(config: &ColorManagementConfig) -> ColorConfigCacheIdentity {
