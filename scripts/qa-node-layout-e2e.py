@@ -291,6 +291,34 @@ def run_suite(client):
                 "{} accessibility/shortcut metadata is incomplete".format(component_id)
             )
 
+    # The compact icon remains the discovery point for directional layout;
+    # no extra text button is needed in the toolbar.
+    _, smart_control = layout_component(client, SMART_LAYOUT)
+    directional_drag = (smart_control.get("metadata") or {}).get("directional_drag")
+    if not isinstance(directional_drag, dict):
+        raise QaFailure("smart layout icon does not publish directional drag help")
+    expected_directions = {
+        "left": "upstream",
+        "up": "upstream",
+        "right": "downstream",
+        "down": "downstream",
+    }
+    expected_modifiers = {
+        "plain": "layout",
+        "shift": "align",
+        "alt": "distribute",
+        "shift_alt": "align_and_distribute",
+    }
+    if directional_drag.get("trigger") != "hold_a_primary_drag":
+        raise QaFailure("directional layout trigger metadata is incomplete")
+    if directional_drag.get("directions") != expected_directions:
+        raise QaFailure("directional layout direction help is incomplete")
+    if directional_drag.get("modifiers") != expected_modifiers:
+        raise QaFailure("directional layout modifier help is incomplete")
+    help_text = directional_drag.get("help")
+    if not isinstance(help_text, str) or "Hold A" not in help_text:
+        raise QaFailure("directional layout tooltip help is incomplete")
+
     # Keep the Selected action discoverable, but disabled and inert until a
     # Node is selected.
     _, selection_control = layout_component(client, SELECTION_LAYOUT)

@@ -2,6 +2,11 @@ use crate::command::{CommandId, CommandRegistry};
 use eframe::egui;
 use egui_phosphor::regular as icons;
 
+const DIRECTIONAL_LAYOUT_HELP: &str = "Directional branch layout\n\
+Hold A + drag a node header\n\
+Left/Up: upstream  Right/Down: downstream\n\
+Shift: align  Option/Alt: distribute  Shift+Option/Alt: both";
+
 fn shortcut_text(registry: &CommandRegistry, command: CommandId) -> &str {
     registry
         .find(command)
@@ -54,6 +59,8 @@ fn register_layout_control(
     shortcut: &str,
     modifier_actions: Option<serde_json::Value>,
 ) {
+    let directional_drag =
+        (command == CommandId::NodeEditorCleanLayout).then(directional_drag_metadata);
     let metadata = serde_json::json!({
         "command_id": command_name(command),
         "label": command_label(command),
@@ -62,6 +69,7 @@ fn register_layout_control(
         "scope": scope,
         "shortcut": shortcut,
         "modifier_actions": modifier_actions,
+        "directional_drag": directional_drag,
     });
     #[cfg(test)]
     {
@@ -75,6 +83,28 @@ fn register_layout_control(
         response.enabled(),
         Some(metadata),
     );
+}
+
+fn directional_drag_metadata() -> serde_json::Value {
+    serde_json::json!({
+        "label": "Directional branch layout",
+        "help": DIRECTIONAL_LAYOUT_HELP,
+        "trigger": "hold_a_primary_drag",
+        "target": "node_header_or_overview_node",
+        "axis_lock": "dominant_axis_after_threshold",
+        "directions": {
+            "left": "upstream",
+            "up": "upstream",
+            "right": "downstream",
+            "down": "downstream",
+        },
+        "modifiers": {
+            "plain": "layout",
+            "shift": "align",
+            "alt": "distribute",
+            "shift_alt": "align_and_distribute",
+        },
+    })
 }
 
 fn command_for_click(modifiers: egui::Modifiers, has_selection: bool) -> Option<CommandId> {
@@ -181,7 +211,7 @@ pub(in crate::ui::panels::node_editor) fn layout_toolbar(
         shortcut_text(registry, CommandId::NodeEditorCleanLayoutSelection),
     );
     let smart_tooltip = format!(
-        "{} Clean layout\n{} — {}\n{} — All\n{} — {}\n{} — {}",
+        "{} Clean layout\n{} — {}\n{} — All\n{} — {}\n{} — {}\n\n{}",
         icons::TREE_STRUCTURE,
         smart_trigger,
         if has_selection {
@@ -194,6 +224,7 @@ pub(in crate::ui::panels::node_editor) fn layout_toolbar(
         container_label,
         selection_trigger,
         selection_modifier,
+        DIRECTIONAL_LAYOUT_HELP,
     );
 
     ui.horizontal(|ui| {
@@ -284,7 +315,7 @@ pub(in crate::ui::panels::node_editor) fn layout_toolbar(
 
 #[cfg(test)]
 mod tests {
-    use super::{command_for_click, command_icon, layout_toolbar};
+    use super::{command_for_click, command_icon, layout_toolbar, DIRECTIONAL_LAYOUT_HELP};
     use crate::command::{CommandId, CommandRegistry};
     use crate::config::AppConfig;
     use crate::ui::panels::node_editor::{reset_test_rects, test_metadata, test_rect};
@@ -422,6 +453,25 @@ mod tests {
         assert_ne!(
             command_icon(CommandId::NodeEditorCleanLayoutSelection),
             command_icon(CommandId::NodeEditorCleanLayoutAll)
+        );
+
+        let smart =
+            test_metadata("node_editor.layout.smart").expect("smart layout control metadata");
+        let directional_drag = smart["directional_drag"]
+            .as_object()
+            .expect("directional drag discoverability metadata");
+        assert_eq!(
+            directional_drag["help"],
+            serde_json::Value::String(DIRECTIONAL_LAYOUT_HELP.to_string())
+        );
+        assert_eq!(directional_drag["trigger"], "hold_a_primary_drag");
+        assert_eq!(directional_drag["directions"]["left"], "upstream");
+        assert_eq!(directional_drag["directions"]["down"], "downstream");
+        assert_eq!(directional_drag["modifiers"]["shift"], "align");
+        assert_eq!(directional_drag["modifiers"]["alt"], "distribute");
+        assert_eq!(
+            directional_drag["modifiers"]["shift_alt"],
+            "align_and_distribute"
         );
 
         assert_eq!(
