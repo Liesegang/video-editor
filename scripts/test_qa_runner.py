@@ -437,6 +437,7 @@ class QaRunnerTests(unittest.TestCase):
                 "keyframe",
                 "node-editor",
                 "node-layout-command",
+                "node-layout-swipe",
                 "node-reparent",
                 "merge-reorder",
                 "list-nodes",

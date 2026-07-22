@@ -138,6 +138,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("keyframe", "qa-keyframe-e2e.py"),
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-layout-command", "qa-node-layout-e2e.py"),
+            SuiteSpec("node-layout-swipe", "qa-layout-swipe-e2e.py"),
             SuiteSpec("node-reparent", "qa-reparent-e2e.py"),
             SuiteSpec("merge-reorder", "qa-merge-reorder-e2e.py"),
             SuiteSpec("list-nodes", "qa-list-nodes-e2e.py"),
