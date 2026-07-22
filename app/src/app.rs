@@ -411,11 +411,13 @@ impl eframe::App for RuViEApp {
 
         crate::qa::end_frame();
         if let Some(runtime) = self.qa_runtime.as_mut() {
+            let plugin_manager = self.project_service.get_plugin_manager();
             runtime.answer_state_queries(
                 &self.project,
                 &self.editor_context,
                 &self.dock_state,
                 &self.history_manager,
+                plugin_manager.as_ref(),
             );
         }
     }

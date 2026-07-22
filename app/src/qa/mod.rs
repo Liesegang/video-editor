@@ -128,6 +128,7 @@ impl QaRuntime {
         editor_context: &crate::state::context::EditorContext,
         dock_state: &egui_dock::DockState<crate::model::ui_types::Tab>,
         history_manager: &crate::action::HistoryManager,
+        plugin_manager: &library::plugin::PluginManager,
     ) {
         while let Ok(query) = self.state_receiver.try_recv() {
             let response = project
@@ -140,6 +141,7 @@ impl QaRuntime {
                         editor_context,
                         dock_state,
                         history_manager,
+                        plugin_manager,
                     )
                 });
             if query.response.try_send(response).is_err() {
