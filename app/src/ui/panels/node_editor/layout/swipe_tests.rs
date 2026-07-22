@@ -288,6 +288,8 @@ fn output(intent: LayoutSwipeIntent<Uuid>) -> SurfaceOutput {
 
 #[path = "swipe_containment_tests.rs"]
 mod containment;
+#[path = "swipe_geometry_authority_tests.rs"]
+mod geometry_authority;
 
 fn apply_pending_rename(
     project: &mut Project,
