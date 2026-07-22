@@ -40,23 +40,10 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
         _clip_width: u64,
         _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-
-        vec![
-            // Video Properties
-            PropertyDefinition::new(
-                "input_color_space",
-                PropertyUiType::Text,
-                "Input Color Space",
-                PropertyValue::String("".to_string()),
-            ),
-            PropertyDefinition::new(
-                "output_color_space",
-                PropertyUiType::Text,
-                "Output Color Space",
-                PropertyValue::String("".to_string()),
-            ),
-        ]
+        // Source interpretation belongs to the authoritative Asset binding
+        // under the Project's exact color configuration. A media Node must not
+        // manufacture config-less color-space names for the loader boundary.
+        Vec::new()
     }
 
     fn convert_entity(
@@ -65,6 +52,19 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
+        let legacy_color = crate::model::active_legacy_media_color_properties(node);
+        if !legacy_color.is_empty() {
+            log::error!(
+                "Media Node {} cannot render because it retains deprecated config-less color authoring ({}). Assign source color on its Asset in the Clip Inspector, then explicitly clear the legacy Node fields",
+                node.id,
+                legacy_color
+                    .iter()
+                    .map(|property| format!("{}: {}", property.key(), property.authored_state()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return None;
+        }
         let props = node.properties();
         let media = match node.content() {
             crate::model::NodeContent::Media(media) => Some(media),
@@ -78,9 +78,6 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
         let file_path = asset
             .map(|asset| asset.path.clone())
             .or_else(|| evaluator.require_string(props, "file_path", eval_time, "video"))?;
-        let input_color_space = evaluator.optional_string(props, "input_color_space", eval_time);
-        let output_color_space = evaluator.optional_string(props, "output_color_space", eval_time);
-
         if !eval_time.is_finite() || eval_time < 0.0 {
             return None;
         }
@@ -96,8 +93,8 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
             file_path,
             effects: Vec::new(),
             transform: Default::default(),
-            input_color_space,
-            output_color_space,
+            input_color_space: None,
+            output_color_space: None,
         };
 
         Some(FrameObject {

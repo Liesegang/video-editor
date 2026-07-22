@@ -24,4 +24,4 @@ pub use handlers::keyframe_handler::KeyframeBatchUpdate;
 pub use handlers::property_ops::PropertyOwner;
 pub use project_model::ProjectModel;
 pub use project_service::ProjectManager as ProjectService;
-pub use render_service::RenderService;
+pub use render_service::{RenderDestination, RenderService};

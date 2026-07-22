@@ -99,9 +99,8 @@ fn renderer_color(
     eval_time: f64,
     operation: &str,
 ) -> Option<Color> {
-    context
-        .require_color_value(properties, "color", eval_time, operation)?
-        .try_to_renderer_srgba8()
+    let color = context.require_color_value(properties, "color", eval_time, operation)?;
+    crate::color_management::to_renderer_srgba8(&color)
         .inspect_err(|error| {
             log::error!("{operation} cannot cross the legacy renderer color boundary: {error}");
         })

@@ -50,6 +50,19 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
+        let legacy_color = crate::model::active_legacy_media_color_properties(node);
+        if !legacy_color.is_empty() {
+            log::error!(
+                "Media Node {} cannot render because it retains deprecated config-less color authoring ({}). Assign source color on its Asset in the Clip Inspector, then explicitly clear the legacy Node fields",
+                node.id,
+                legacy_color
+                    .iter()
+                    .map(|property| format!("{}: {}", property.key(), property.authored_state()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return None;
+        }
         let props = node.properties();
         let asset = match node.content() {
             NodeContent::Media(media) => evaluator.project.get_asset(media.asset_id),

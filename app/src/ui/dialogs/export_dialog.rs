@@ -1,10 +1,9 @@
 use eframe::egui;
 use log::error;
 use std::collections::HashMap;
-use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, RwLock};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use library::cache::SharedCacheManager;
 use library::editor::render_service::RenderService;
@@ -15,11 +14,13 @@ use library::plugin::{ExportSettings, PluginManager};
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::{EditorService, ExportService, ProjectModel};
 
+use super::export_audio_temp::ExportAudioTempFile;
 use crate::utils::lock::read_or_recover;
 
 enum ExportUpdate {
     Progress(f32),
     Complete,
+    Cancelled,
     Failed(String),
 }
 
@@ -39,6 +40,7 @@ pub struct ExportDialog {
     status_message: String,
     progress_rx: Option<Receiver<ExportUpdate>>,
     pub cancellation_token: Option<Arc<std::sync::atomic::AtomicBool>>,
+    export_worker: Option<JoinHandle<()>>,
 
     // New Fields
     pub active_composition_id: Option<uuid::Uuid>, // Targeted composition
@@ -73,6 +75,7 @@ impl ExportDialog {
             status_message: String::new(),
             progress_rx: None,
             cancellation_token: None,
+            export_worker: None,
             active_composition_id: None,
             export_range: ExportRange::EntireComposition,
             custom_start_frame: 0,
@@ -88,19 +91,19 @@ impl ExportDialog {
     }
 
     fn poll_export_updates(&mut self) {
-        if !self.is_exporting {
+        if !self.is_exporting && self.export_worker.is_none() {
             return;
         }
 
         let mut latest_progress = None;
-        let mut finished = false;
-        let mut failure = None;
+        let mut terminal_update = None;
         if let Some(rx) = &self.progress_rx {
             while let Ok(update) = rx.try_recv() {
                 match update {
                     ExportUpdate::Progress(progress) => latest_progress = Some(progress),
-                    ExportUpdate::Complete => finished = true,
-                    ExportUpdate::Failed(message) => failure = Some(message),
+                    terminal @ (ExportUpdate::Complete
+                    | ExportUpdate::Cancelled
+                    | ExportUpdate::Failed(_)) => terminal_update = Some(terminal),
                 }
             }
         }
@@ -108,17 +111,59 @@ impl ExportDialog {
         if let Some(progress) = latest_progress {
             self.progress = progress;
         }
-        if let Some(message) = failure {
+        if let Some(update) = terminal_update {
+            self.finish_export_job(update);
+        } else if self
+            .export_worker
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+        {
+            let worker_panicked = self
+                .export_worker
+                .take()
+                .is_some_and(|handle| handle.join().is_err());
             self.is_exporting = false;
-            self.status_message = message;
-            self.progress_rx = None;
-            self.cancellation_token = None;
-        } else if finished {
-            self.is_exporting = false;
-            self.status_message = "Export complete!".to_string();
+            self.status_message = if worker_panicked {
+                "Export failed because the worker panicked.".to_string()
+            } else {
+                "Export failed because the worker ended without a terminal status.".to_string()
+            };
             self.progress_rx = None;
             self.cancellation_token = None;
         }
+    }
+
+    fn finish_export_job(&mut self, update: ExportUpdate) {
+        let worker_panicked = self
+            .export_worker
+            .take()
+            .is_some_and(|handle| handle.join().is_err());
+        self.is_exporting = false;
+        self.status_message = if worker_panicked {
+            "Export failed because the worker panicked.".to_string()
+        } else {
+            match update {
+                ExportUpdate::Complete => "Export complete!".to_string(),
+                ExportUpdate::Cancelled => "Cancelled.".to_string(),
+                ExportUpdate::Failed(message) => message,
+                ExportUpdate::Progress(_) => {
+                    "Export failed because an invalid terminal status was received.".to_string()
+                }
+            }
+        };
+        self.progress_rx = None;
+        self.cancellation_token = None;
+    }
+
+    fn request_cancel(&mut self) {
+        if let Some(token) = &self.cancellation_token {
+            token.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.status_message = "Cancelling; finalizing active output...".to_string();
+        }
+    }
+
+    fn can_start_export(&self) -> bool {
+        !self.is_exporting && self.export_worker.is_none()
     }
 
     pub fn show(
@@ -142,12 +187,7 @@ impl ExportDialog {
                 let mut should_close = false;
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     if self.is_exporting {
-                        if let Some(token) = &self.cancellation_token {
-                            token.store(true, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        self.is_exporting = false;
-                        self.status_message = "Cancelled.".to_string();
-                        self.progress_rx = None;
+                        self.request_cancel();
                     } else {
                         should_close = true;
                     }
@@ -178,13 +218,15 @@ impl ExportDialog {
         ui.label(&self.status_message);
         ui.spinner();
 
-        if ui.button("Cancel").clicked() {
-            if let Some(token) = &self.cancellation_token {
-                token.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.is_exporting = false;
-            self.status_message = "Cancelled.".to_string();
-            self.progress_rx = None;
+        let cancelling = self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed));
+        if ui
+            .add_enabled(!cancelling, egui::Button::new("Cancel"))
+            .clicked()
+        {
+            self.request_cancel();
         }
     }
 
@@ -534,6 +576,11 @@ impl ExportDialog {
         project_lock: &Arc<RwLock<Project>>,
         project_service: &EditorService,
     ) {
+        if !self.can_start_export() {
+            self.status_message =
+                "The previous export is still cancelling or finalizing.".to_string();
+            return;
+        }
         let exporter_id = if let Some(id) = &self.selected_exporter_id {
             id.clone()
         } else {
@@ -590,7 +637,7 @@ impl ExportDialog {
         let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.cancellation_token = Some(cancel_token.clone());
 
-        thread::spawn(move || {
+        self.export_worker = Some(thread::spawn(move || {
             // Initialize Renderer inside thread (requires context)
             let composition = &project_snapshot.compositions[comp_index];
             let renderer = match SkiaRenderer::new(
@@ -637,11 +684,22 @@ impl ExportDialog {
             };
 
             // Build ExportSettings
-            let mut settings = ExportSettings::for_dimensions(
-                override_width.unwrap_or(composition.width as u32),
-                override_height.unwrap_or(composition.height as u32),
-                override_fps.unwrap_or(composition.fps),
-            );
+            let mut settings = match ExportSettings::from_project(&project_snapshot, composition) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    let message = format!(
+                        "Export cannot establish Project color authority: {error}. No output was written."
+                    );
+                    error!("{message}");
+                    if tx.send(ExportUpdate::Failed(message)).is_err() {
+                        log::debug!("export progress receiver was dropped");
+                    }
+                    return;
+                }
+            };
+            settings.width = override_width.unwrap_or(composition.width as u32);
+            settings.height = override_height.unwrap_or(composition.height as u32);
+            settings.fps = override_fps.unwrap_or(composition.fps);
 
             // Map properties
             let mut json_params = HashMap::new();
@@ -680,26 +738,88 @@ impl ExportDialog {
 
             settings.pixel_format = match property_values_owned.get("pixel_format") {
                 Some(PropertyValue::String(s)) => s.clone(),
-                _ => "rgba".to_string(),
+                _ if exporter_id_owned == "png_export" => "rgba".to_string(),
+                _ => "yuv420p".to_string(),
             };
 
-            // Range Calculation
-            let (start_frame, end_frame_total) = match export_range {
-                ExportRange::EntireComposition => {
-                    (0, (composition.duration * composition.fps).ceil() as u64)
-                }
-                ExportRange::WorkArea => (composition.work_area_in, composition.work_area_out),
-                ExportRange::Custom => (custom_start, custom_end),
+            // Range inputs are authored in composition frames. Convert them
+            // once to output-frame indices so video sampling, duration, audio,
+            // and encoder timestamps all share ExportSettings::fps.
+            let output_range = match export_range {
+                ExportRange::EntireComposition => settings
+                    .frame_count_for_duration(composition.duration)
+                    .map(|end| 0..end),
+                ExportRange::WorkArea => settings.resample_timeline_frame_range(
+                    composition.work_area_in..composition.work_area_out,
+                    composition.fps,
+                ),
+                ExportRange::Custom => settings
+                    .resample_timeline_frame_range(custom_start..custom_end, composition.fps),
             };
-            let duration_frames = end_frame_total.saturating_sub(start_frame).max(1);
+            let output_range = match output_range {
+                Ok(range) => range,
+                Err(error) => {
+                    let message = format!("Export frame-rate/range is invalid: {error}");
+                    error!("{message}");
+                    if tx.send(ExportUpdate::Failed(message)).is_err() {
+                        log::debug!("export progress receiver was dropped");
+                    }
+                    return;
+                }
+            };
+            let output_range =
+                match settings.frame_range_within_duration(output_range, composition.duration) {
+                    Ok(range) => range,
+                    Err(error) => {
+                        let message = format!("Export range is empty or out of bounds: {error}");
+                        error!("{message}");
+                        if tx.send(ExportUpdate::Failed(message)).is_err() {
+                            log::debug!("export progress receiver was dropped");
+                        }
+                        return;
+                    }
+                };
+            let (start_frame, end_frame_total) = (output_range.start, output_range.end);
+            let duration_frames = end_frame_total - start_frame;
+
+            // Resolve and verify the complete selected destination set before
+            // audio rendering, temporary-file creation, save-worker startup,
+            // frame rendering, or any exporter callback.
+            let mut stem_path = std::path::PathBuf::from(&output_path_owned);
+            if stem_path.extension().is_some() {
+                stem_path.set_extension("");
+            }
+            let stem_str = stem_path.to_str().unwrap_or("output");
+            let verified_plan =
+                match ExportService::verify_plan(&project_model, &settings, output_range, stem_str)
+                {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let message =
+                            format!("Export destination is unsafe or cannot be verified: {error}");
+                        error!("{message}");
+                        if tx.send(ExportUpdate::Failed(message)).is_err() {
+                            log::debug!("export progress receiver was dropped");
+                        }
+                        return;
+                    }
+                };
+            let output_container = settings.container.clone();
+
+            // Construct absolute final path for finish_export key
+            let final_output_path = if output_container.is_empty() {
+                output_path_owned.clone()
+            } else {
+                format!("{}.{}", stem_str, output_container)
+            };
 
             // Audio Pre-rendering
-            let mut audio_temp_path: Option<String> = None;
+            let mut audio_temp_file: Option<ExportAudioTempFile> = None;
             if matches!(
                 settings.export_format(),
                 library::plugin::ExportFormat::Video
             ) {
-                let fps = composition.fps;
+                let fps = settings.fps;
                 let start_time = start_frame as f64 / fps;
                 let duration = duration_frames as f64 / fps;
                 let sample_rate = engine_sample_rate; // Use correct rate
@@ -719,76 +839,63 @@ impl ExportDialog {
                 );
 
                 if !audio_data.is_empty() {
-                    // Prepare path helpers
-                    let mut stem_path = std::path::PathBuf::from(&output_path_owned);
-                    if stem_path.extension().is_some() {
-                        stem_path.set_extension("");
-                    }
-                    let stem_str = stem_path.to_str().unwrap_or("output");
-
-                    let audio_path = format!("{}_audio.raw", stem_str);
-                    match std::fs::File::create(&audio_path) {
-                        Ok(mut file) => {
-                            let write_result = audio_data
-                                .iter()
-                                .try_for_each(|sample| file.write_all(&sample.to_le_bytes()));
-                            if let Err(error) = write_result {
-                                error!("Failed to write temporary export audio: {error}");
-                                if let Err(remove_error) = std::fs::remove_file(&audio_path) {
-                                    error!(
-                                        "Failed to remove partial export audio {audio_path}: {remove_error}"
-                                    );
+                    match ExportAudioTempFile::from_samples(&audio_data) {
+                        Ok(temp_file) => {
+                            if let Err(error) = settings.bind_runtime_audio_source(
+                                temp_file.path_string().to_string(),
+                                2,
+                                sample_rate,
+                            ) {
+                                let message = format!(
+                                    "Export failed to bind temporary audio safely: {error}"
+                                );
+                                error!("{message}");
+                                if tx.send(ExportUpdate::Failed(message)).is_err() {
+                                    log::debug!("export progress receiver was dropped");
                                 }
-                            } else {
-                                settings.parameters.insert(
-                                    "audio_source".to_string(),
-                                    serde_json::Value::String(audio_path.clone()),
-                                );
-                                settings.parameters.insert(
-                                    "audio_channels".to_string(),
-                                    serde_json::Value::Number(serde_json::Number::from(2)),
-                                );
-                                settings.parameters.insert(
-                                    "audio_sample_rate".to_string(),
-                                    serde_json::Value::Number(serde_json::Number::from(
-                                        sample_rate,
-                                    )),
-                                );
-                                audio_temp_path = Some(audio_path);
+                                return;
                             }
+                            audio_temp_file = Some(temp_file);
                         }
                         Err(error) => {
-                            error!("Failed to create temporary export audio {audio_path}: {error}");
+                            let message = format!(
+                                "Export failed to create a safe temporary audio file: {error}"
+                            );
+                            error!("{message}");
+                            if tx.send(ExportUpdate::Failed(message)).is_err() {
+                                log::debug!("export progress receiver was dropped");
+                            }
+                            return;
                         }
                     }
                 }
             }
 
-            let output_container = settings.container.clone();
             let settings_arc = Arc::new(settings);
 
-            let mut export_service = ExportService::new(
+            let mut export_service = match ExportService::new(
                 plugin_manager.clone(),
                 exporter_id_owned.clone(),
                 settings_arc,
+                verified_plan,
                 4,
-            );
-
-            // Prepare path helpers
-            let mut stem_path = std::path::PathBuf::from(&output_path_owned);
-            if stem_path.extension().is_some() {
-                stem_path.set_extension("");
-            }
-            let stem_str = stem_path.to_str().unwrap_or("output");
-
-            // Construct absolute final path for finish_export key
-            let final_output_path = if output_container.is_empty() {
-                output_path_owned.clone()
-            } else {
-                format!("{}.{}", stem_str, output_container)
+            ) {
+                Ok(service) => service,
+                Err(error) => {
+                    let message =
+                        format!("Export settings changed after destination verification: {error}");
+                    error!("{message}");
+                    if tx.send(ExportUpdate::Failed(message)).is_err() {
+                        log::debug!("export progress receiver was dropped");
+                    }
+                    return;
+                }
             };
 
-            let chunk_size = 10;
+            // Cancellation is observed between frames. A one-frame chunk
+            // prevents an expensive renderer from running nine extra frames
+            // after the user has requested cancellation.
+            let chunk_size = 1;
             let mut current_frame = start_frame;
             let mut export_error = None;
             let mut receiver_dropped = false;
@@ -803,12 +910,9 @@ impl ExportDialog {
                 let end = (current_frame + chunk_size).min(end_frame_total);
                 let range = current_frame..end;
 
-                if let Err(error) = export_service.render_range(
-                    &mut render_service,
-                    &project_model,
-                    range,
-                    stem_str,
-                ) {
+                if let Err(error) =
+                    export_service.render_range(&mut render_service, &project_model, range)
+                {
                     let message = format!(
                         "Export failed while rendering: {error}. Partial output may remain at {final_output_path}."
                     );
@@ -827,7 +931,12 @@ impl ExportDialog {
                 }
             }
 
-            if let Err(error) = export_service.shutdown() {
+            let shutdown_result = if cancelled {
+                export_service.cancel()
+            } else {
+                export_service.shutdown()
+            };
+            if let Err(error) = shutdown_result {
                 error!("Failed to shut down export workers: {error}");
                 export_error.get_or_insert_with(|| {
                     format!(
@@ -836,64 +945,41 @@ impl ExportDialog {
                 });
             }
 
-            // Cleanup audio temp file
-            if let Some(path) = audio_temp_path {
-                if let Err(error) = std::fs::remove_file(&path) {
-                    error!("Failed to remove temporary export audio {path}: {error}");
-                }
-            }
+            // Keep the path alive until every exporter has closed it. Drop is
+            // the cleanup authority on success, failure, cancellation, and unwind.
+            drop(audio_temp_file);
 
-            // Finalize export
-            if let Err(error) = plugin_manager.finish_export(&exporter_id_owned, &final_output_path)
-            {
-                error!("Failed to finalize export: {error}");
-                export_error
-                    .get_or_insert_with(|| {
-                        format!(
-                            "Export failed to finalize: {error}. Partial output may remain at {final_output_path}."
-                        )
-                    });
-            }
-
-            if cancelled || receiver_dropped {
+            if receiver_dropped {
                 return;
             }
-            let update = export_error.map_or(ExportUpdate::Complete, ExportUpdate::Failed);
+            let update = export_error.map_or_else(
+                || {
+                    if cancelled {
+                        ExportUpdate::Cancelled
+                    } else {
+                        ExportUpdate::Complete
+                    }
+                },
+                ExportUpdate::Failed,
+            );
             if tx.send(update).is_err() {
                 log::debug!("export completion receiver was dropped");
             }
-        });
+        }));
+    }
+}
+
+impl Drop for ExportDialog {
+    fn drop(&mut self) {
+        self.request_cancel();
+        if let Some(handle) = self.export_worker.take() {
+            if handle.join().is_err() {
+                error!("export worker panicked during dialog shutdown");
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{channel, ExportDialog, ExportUpdate};
-    use library::cache::CacheManager;
-    use library::plugin::PluginManager;
-    use std::sync::Arc;
-
-    #[test]
-    fn failed_export_update_stops_progress_and_preserves_the_user_visible_error() {
-        let mut dialog = ExportDialog::new(
-            Arc::new(PluginManager::default()),
-            Arc::new(CacheManager::new()),
-        );
-        let (sender, receiver) = channel();
-        dialog.is_exporting = true;
-        dialog.progress_rx = Some(receiver);
-        dialog.cancellation_token = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
-        sender
-            .send(ExportUpdate::Failed(
-                "Export failed. Partial output may remain at test.mp4.".to_string(),
-            ))
-            .unwrap();
-
-        dialog.poll_export_updates();
-
-        assert!(!dialog.is_exporting);
-        assert!(dialog.progress_rx.is_none());
-        assert!(dialog.cancellation_token.is_none());
-        assert!(dialog.status_message.contains("Partial output may remain"));
-    }
-}
+#[path = "export_dialog_tests.rs"]
+mod tests;

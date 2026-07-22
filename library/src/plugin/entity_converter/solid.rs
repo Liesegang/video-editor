@@ -65,8 +65,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         let eval_time = time;
         let color_value =
             evaluator.require_color_value(node.properties(), "color", eval_time, "solid")?;
-        let color = color_value
-            .try_to_renderer_srgba8()
+        let color = crate::color_management::to_renderer_srgba8(&color_value)
             .inspect_err(|error| {
                 log::error!(
                     "Solid Node {} cannot cross the legacy renderer color boundary: {error}",

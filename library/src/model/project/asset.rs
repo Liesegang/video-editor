@@ -7,8 +7,9 @@ mod color_metadata;
 
 pub use color_metadata::{
     AssetSourceColorMetadata, AssetSourceColorSpaceBinding, AssetSourceColorSpaceBindingError,
-    AssetSourceInterpretation, SourceColorDescription, SourceColorPrimaries, SourceColorProfile,
-    SourceColorRange, SourceMatrixCoefficients, SourceTransferCharacteristic,
+    AssetSourceInterpretation, DecoderSourceColorAuthority, SourceColorAssumption,
+    SourceColorDescription, SourceColorPrimaries, SourceColorProfile, SourceColorRange,
+    SourceMatrixCoefficients, SourceTransferCharacteristic,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

@@ -2,35 +2,38 @@ use crate::cache::SharedCacheManager;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
-use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
+use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
+    WorkingSurfaceContract,
 };
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
-    GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
-    surface_to_image,
+    GpuContext, create_gpu_context, create_image_from_texture, image_to_skia,
 };
+use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
 use crate::rendering::text_layout::{build_text_paragraph, layout_runtime_text_shape};
 use crate::util::timing::ScopedTimer;
-use log::{debug, trace};
-use skia_safe::path_effect::PathEffect as SkPathEffect;
-use skia_safe::trim_path_effect::Mode;
+use log::debug;
 
 use skia_safe::{
-    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
-    Paint, PaintStyle, Point, SamplingOptions, Surface,
+    AlphaType, Canvas, ColorType, CubicResampler, ISize, ImageInfo, Matrix, Paint, Point,
+    SamplingOptions, Surface,
 };
 
 mod legacy_backplate;
+mod paint;
+
+use paint::{PaintFactory, StrokeRenderConfig};
 
 pub struct SkiaRenderer {
     width: u32,
     height: u32,
     background_color: Color,
     surface: Surface,
+    surface_contract: SkiaSurfaceContract,
     group_surfaces: Vec<GroupSurface>,
     blend_runtime: BlendRuntime,
     gpu_context: Option<GpuContext>,
@@ -44,20 +47,15 @@ struct GroupSurface {
     surface: Surface,
 }
 
-struct StrokeRenderConfig<'a> {
-    color: &'a Color,
-    width: f64,
-    offset: f64,
-    cap: &'a CapType,
-    join: &'a JoinType,
-    miter: f64,
-    dash_array: &'a [f64],
-    dash_offset: f64,
-}
-
 impl SkiaRenderer {
     pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::render_to_texture");
+        if self.surface_contract.working().is_some() {
+            return Err(LibraryError::Render(
+                "Project linear surface cannot be exposed as an untyped GPU TextureInfo"
+                    .to_string(),
+            ));
+        }
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
 
@@ -83,97 +81,8 @@ impl SkiaRenderer {
         }
     }
 
-    fn create_stroke_paint(
-        color: &Color,
-        width: f32,
-        cap: &CapType,
-        join: &JoinType,
-        miter: f32,
-    ) -> Paint {
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color(skia_safe::Color::from_argb(
-            color.a, color.r, color.g, color.b,
-        ));
-        paint.set_style(PaintStyle::Stroke);
-        paint.set_stroke_width(width);
-        paint.set_stroke_cap(match cap {
-            CapType::Round => skia_safe::paint::Cap::Round,
-            CapType::Square => skia_safe::paint::Cap::Square,
-            CapType::Butt => skia_safe::paint::Cap::Butt,
-        });
-        paint.set_stroke_join(match join {
-            JoinType::Round => skia_safe::paint::Join::Round,
-            JoinType::Bevel => skia_safe::paint::Join::Bevel,
-            JoinType::Miter => skia_safe::paint::Join::Miter,
-        });
-        paint.set_stroke_miter(miter);
-        paint
-    }
-
-    /// Build the Skia paint used by every text rendering path. Ensemble text
-    /// changes grapheme drawing and per-element transforms; enabling it
-    /// must not silently discard the node's authored Fill/Stroke stack.
-    fn create_text_paint(style: &DrawStyle, opacity: f32, color_override: Option<&Color>) -> Paint {
-        let apply_opacity = |color: &Color| {
-            let color = color_override.unwrap_or(color);
-            Color {
-                r: color.r,
-                g: color.g,
-                b: color.b,
-                a: (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8,
-            }
-        };
-
-        match style {
-            DrawStyle::Fill { color, offset } => {
-                let color = apply_opacity(color);
-                let mut paint = Paint::default();
-                paint.set_color(SkColor::from_argb(color.a, color.r, color.g, color.b));
-                if *offset > 0.0 {
-                    paint.set_style(PaintStyle::StrokeAndFill);
-                    paint.set_stroke_width((*offset * 2.0) as f32);
-                    paint.set_stroke_join(skia_safe::paint::Join::Round);
-                } else {
-                    paint.set_style(PaintStyle::Fill);
-                }
-                paint.set_anti_alias(true);
-                paint
-            }
-            DrawStyle::Stroke {
-                color,
-                width,
-                offset,
-                cap,
-                join,
-                miter,
-                dash_array,
-                dash_offset,
-            } => {
-                let color = apply_opacity(color);
-                let effective_width = (width + offset * 2.0).max(0.0);
-                let mut paint = Self::create_stroke_paint(
-                    &color,
-                    effective_width as f32,
-                    cap,
-                    join,
-                    *miter as f32,
-                );
-                if !dash_array.is_empty() {
-                    let intervals = dash_array
-                        .iter()
-                        .map(|value| *value as f32)
-                        .collect::<Vec<_>>();
-                    if let Some(effect) = SkPathEffect::dash(&intervals, *dash_offset as f32) {
-                        paint.set_path_effect(effect);
-                    }
-                }
-                paint
-            }
-        }
-    }
-
     fn snapshot_surface(
+        &self,
         surface: &mut Surface,
         width: u32,
         height: u32,
@@ -182,8 +91,7 @@ impl SkiaRenderer {
         // ID would leave a dangling RenderOutput as soon as the Surface drops.
         // The root surface remains alive and may still be finalized as a GPU
         // texture for Preview; transient layers cross this boundary as Images.
-        let image = surface_to_image(surface, width, height)?;
-        Ok(RenderOutput::Image(image))
+        skia_working_surface::snapshot_surface(surface, width, height, &self.surface_contract)
     }
 }
 
@@ -219,10 +127,12 @@ impl SkiaRenderer {
             debug!("SkiaRenderer: using CPU raster surfaces");
         }
 
-        let surface = create_surface(
+        let surface_contract = SkiaSurfaceContract::UnmanagedSrgba8;
+        let surface = skia_working_surface::create_surface(
             width,
             height,
             gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+            &surface_contract,
         )
         .map_err(|error| {
             LibraryError::Render(format!(
@@ -235,6 +145,7 @@ impl SkiaRenderer {
             height,
             background_color,
             surface,
+            surface_contract,
             group_surfaces: Vec::new(),
             blend_runtime: BlendRuntime::new(),
             gpu_context,
@@ -253,24 +164,24 @@ impl SkiaRenderer {
         height: u32,
         background_color: Color,
     ) -> Result<(), LibraryError> {
-        let mut surface = create_surface(
+        let mut surface = skia_working_surface::create_surface(
             width,
             height,
             self.gpu_context
                 .as_mut()
                 .map(|context| &mut context.direct_context),
+            &self.surface_contract,
         )
         .map_err(|error| {
             LibraryError::Render(format!(
                 "Cannot resize Skia surface to {width}x{height}: {error}"
             ))
         })?;
-        surface.canvas().clear(SkColor::from_argb(
-            background_color.a,
-            background_color.r,
-            background_color.g,
-            background_color.b,
-        ));
+        skia_working_surface::clear_authored_color(
+            &mut surface,
+            &self.surface_contract,
+            &background_color,
+        )?;
         if let Some(context) = self.gpu_context.as_mut() {
             context.resize(width, height);
         }
@@ -283,22 +194,41 @@ impl SkiaRenderer {
         Ok(())
     }
 
-    fn background_sk_color(&self) -> SkColor {
-        SkColor::from_argb(
-            self.background_color.a,
-            self.background_color.r,
-            self.background_color.g,
-            self.background_color.b,
-        )
-    }
-
     fn create_layer_surface(&mut self) -> Result<Surface, LibraryError> {
         let (width, height) = self.current_target_dimensions();
-        create_surface(
+        skia_working_surface::create_surface(
             width,
             height,
             self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+            &self.surface_contract,
         )
+    }
+
+    fn replace_surface_contract(
+        &mut self,
+        contract: SkiaSurfaceContract,
+    ) -> Result<(), LibraryError> {
+        if self.surface_contract.same_storage_contract(&contract) {
+            self.surface_contract = contract;
+            return Ok(());
+        }
+        let mut surface = skia_working_surface::create_surface(
+            self.width,
+            self.height,
+            self.gpu_context
+                .as_mut()
+                .map(|context| &mut context.direct_context),
+            &contract,
+        )?;
+        skia_working_surface::clear_authored_color(
+            &mut surface,
+            &contract,
+            &self.background_color,
+        )?;
+        self.surface = surface;
+        self.surface_contract = contract;
+        self.group_surfaces.clear();
+        Ok(())
     }
 
     fn current_target_dimensions(&self) -> (u32, u32) {
@@ -315,139 +245,21 @@ impl SkiaRenderer {
         sharing_hwnd: Option<isize>,
         create: impl FnOnce(Option<&mut skia_safe::gpu::DirectContext>) -> Result<Surface, LibraryError>,
     ) -> Result<(), LibraryError> {
-        let surface = create(
+        let mut surface = create(
             gpu_context
                 .as_mut()
                 .map(|context| &mut context.direct_context),
+        )?;
+        skia_working_surface::clear_authored_color(
+            &mut surface,
+            &self.surface_contract,
+            &self.background_color,
         )?;
         self.surface = surface;
         self.gpu_context = gpu_context;
         self.sharing_handle = sharing_handle;
         self.sharing_hwnd = sharing_hwnd;
-        Ok(())
-    }
-
-    fn draw_shape_fill_on_canvas(
-        &self,
-        canvas: &Canvas,
-        path: &skia_safe::Path,
-        color: &Color,
-        path_effects: &[PathEffect],
-        offset: f64,
-    ) -> Result<(), LibraryError> {
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color(skia_safe::Color::from_argb(
-            color.a, color.r, color.g, color.b,
-        ));
-        apply_path_effects(path_effects, &mut paint)?;
-
-        if offset >= 0.0 {
-            // Positive offset: Stroke and Fill to expand
-            if offset > 0.0 {
-                paint.set_style(PaintStyle::StrokeAndFill);
-                paint.set_stroke_width((offset * 2.0) as f32);
-                paint.set_stroke_join(skia_safe::paint::Join::Round);
-            } else {
-                paint.set_style(PaintStyle::Fill);
-            }
-            canvas.draw_path(path, &paint);
-        } else {
-            // Negative offset: Draw Fill, then Erase edges
-            // 1. Draw original Fill
-            paint.set_style(PaintStyle::Fill);
-            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
-            canvas.draw_path(path, &paint);
-
-            // 2. Erase (DstOut) the border stroke
-            let mut erase_paint = Paint::default();
-            erase_paint.set_anti_alias(true);
-            erase_paint.set_style(PaintStyle::Stroke);
-            erase_paint.set_stroke_width((-offset * 2.0) as f32);
-            erase_paint.set_stroke_join(skia_safe::paint::Join::Round);
-            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
-
-            apply_path_effects(path_effects, &mut erase_paint)?;
-
-            canvas.draw_path(path, &erase_paint);
-            canvas.restore();
-        }
-        Ok(())
-    }
-
-    fn draw_shape_stroke_on_canvas(
-        &self,
-        canvas: &Canvas,
-        path: &skia_safe::Path,
-        path_effects: &[PathEffect],
-        config: StrokeRenderConfig<'_>,
-    ) -> Result<(), LibraryError> {
-        let StrokeRenderConfig {
-            color,
-            width,
-            offset,
-            cap,
-            join,
-            miter,
-            dash_array,
-            dash_offset,
-        } = config;
-        if width <= 0.0 {
-            return Ok(());
-        }
-
-        // Prepare base stroke paint
-        let mut stroke_paint =
-            Self::create_stroke_paint(color, width as f32, cap, join, miter as f32);
-
-        // Stroke dash runs after upstream Shape operations.
-        let mut effects_to_apply = path_effects.to_vec();
-        if !dash_array.is_empty() {
-            effects_to_apply.push(PathEffect::Dash {
-                intervals: dash_array.to_vec(),
-                phase: dash_offset,
-            });
-        }
-
-        if offset == 0.0 {
-            // Standard Stroke
-            stroke_paint.set_style(PaintStyle::Stroke);
-            stroke_paint.set_stroke_width(width as f32);
-            apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
-            canvas.draw_path(path, &stroke_paint);
-            return Ok(());
-        }
-
-        // Offset Stroke Logic
-        let outer_r = offset.abs() + width / 2.0;
-        let inner_r = offset.abs() - width / 2.0;
-
-        canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default()); // Isolate blending
-
-        // Setup Clipping
-        if offset > 0.0 {
-            canvas.clip_path(path, skia_safe::ClipOp::Difference, true);
-        } else {
-            canvas.clip_path(path, skia_safe::ClipOp::Intersect, true);
-        }
-
-        // Apply path effects to paint before drawing
-        apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
-
-        // Draw Outer (Base)
-        stroke_paint.set_style(PaintStyle::Stroke);
-        stroke_paint.set_stroke_width((outer_r * 2.0) as f32);
-        canvas.draw_path(path, &stroke_paint);
-
-        // Erase Inner (Hole)
-        if inner_r > 0.0 {
-            let mut erase_paint = stroke_paint.clone();
-            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
-            erase_paint.set_stroke_width((inner_r * 2.0) as f32);
-            canvas.draw_path(path, &erase_paint);
-        }
-
-        canvas.restore();
+        self.group_surfaces.clear();
         Ok(())
     }
 
@@ -521,6 +333,7 @@ impl SkiaRenderer {
                 &runtime_text,
                 &character_transforms,
                 &ensemble_data.decorator_configs,
+                &self.surface_contract,
             )?;
 
             for (character, character_transform) in elements.iter().zip(&character_transforms) {
@@ -536,11 +349,11 @@ impl SkiaRenderer {
                 canvas.translate((-center.x, -center.y));
 
                 for config in styles {
-                    let paint = Self::create_text_paint(
+                    let paint = PaintFactory::new(&self.surface_contract).text_paint(
                         &config.style,
                         character_transform.opacity,
                         character_transform.color_override.as_ref(),
-                    );
+                    )?;
                     // TODO: draw SkParagraph shaping runs with source mapping.
                     // Per-grapheme draw_str cannot preserve cross-element
                     // ligatures or contextual forms in complex scripts.
@@ -556,7 +369,7 @@ impl SkiaRenderer {
 
             canvas.restore();
         }
-        Self::snapshot_surface(&mut layer, target_width, target_height)
+        self.snapshot_surface(&mut layer, target_width, target_height)
     }
 }
 
@@ -574,64 +387,18 @@ fn build_transform_matrix(transform: &Affine2D) -> Matrix {
     )
 }
 
-fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect, LibraryError> {
-    match path_effect {
-        PathEffect::Dash { intervals, phase } => {
-            let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
-            Ok(
-                SkPathEffect::dash(&intervals, *phase as f32).ok_or(LibraryError::Render(
-                    "Failed to create PathEffect".to_string(),
-                ))?,
-            )
-        }
-        PathEffect::Corner { radius } => Ok(SkPathEffect::corner_path(*radius as f32).ok_or(
-            LibraryError::Render("Failed to create PathEffect".to_string()),
-        )?),
-        PathEffect::Discrete {
-            seg_length,
-            deviation,
-            seed,
-        } => Ok(
-            SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32).ok_or(
-                LibraryError::Render("Failed to create PathEffect".to_string()),
-            )?,
-        ),
-        PathEffect::Trim { start, end } => {
-            Ok(
-                SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal).ok_or(
-                    LibraryError::Render("Failed to create PathEffect".to_string()),
-                )?,
-            )
-        }
-    }
-}
-
-fn apply_path_effects(path_effects: &[PathEffect], paint: &mut Paint) -> Result<(), LibraryError> {
-    if !path_effects.is_empty() {
-        let mut composed_effect: Option<skia_safe::PathEffect> = None;
-        for effect in path_effects {
-            trace!("Applying path effect {:?}", effect);
-            match convert_path_effect(effect) {
-                Ok(sk_path_effect) => {
-                    composed_effect = match composed_effect {
-                        // compose(outer, inner) evaluates graph upstream first.
-                        Some(upstream) => Some(SkPathEffect::compose(sk_path_effect, upstream)),
-                        None => Some(sk_path_effect),
-                    };
-                }
-                Err(e) => {
-                    log::warn!("Failed to apply path effect {:?}: {}", effect, e);
-                }
-            }
-        }
-        if let Some(composed) = composed_effect {
-            paint.set_path_effect(composed);
-        }
-    }
-    Ok(())
-}
-
 impl Renderer for SkiaRenderer {
+    fn use_unmanaged_srgba8_surface(&mut self) -> Result<(), LibraryError> {
+        self.replace_surface_contract(SkiaSurfaceContract::UnmanagedSrgba8)
+    }
+
+    fn use_project_linear_surface(
+        &mut self,
+        contract: WorkingSurfaceContract,
+    ) -> Result<(), LibraryError> {
+        self.replace_surface_contract(SkiaSurfaceContract::ProjectLinear(Box::new(contract)))
+    }
+
     fn draw_layer_affine_with_blend(
         &mut self,
         layer: &RenderOutput,
@@ -642,8 +409,30 @@ impl Renderer for SkiaRenderer {
         let _timer = ScopedTimer::debug("SkiaRenderer::draw_layer");
 
         let src_image = match layer {
-            RenderOutput::Image(img) => image_to_skia(img)?,
+            RenderOutput::Image(img) => {
+                if self.surface_contract.working().is_some() {
+                    return Err(LibraryError::Render(
+                        "encoded RGBA8 RenderOutput cannot enter a Project linear surface"
+                            .to_string(),
+                    ));
+                }
+                image_to_skia(img)?
+            }
+            RenderOutput::Working(image) => {
+                let contract = self.surface_contract.working().ok_or_else(|| {
+                    LibraryError::Render(
+                        "Project linear RenderOutput cannot enter the unmanaged sRGBA8 surface"
+                            .to_string(),
+                    )
+                })?;
+                skia_working_surface::managed_working_to_skia_image(image, contract)?
+            }
             RenderOutput::Texture(info) => {
+                if self.surface_contract.working().is_some() {
+                    return Err(LibraryError::Render(
+                        "untyped GPU texture cannot enter a Project linear surface".to_string(),
+                    ));
+                }
                 if let Some(ctx) = self.gpu_context.as_mut() {
                     create_image_from_texture(
                         &mut ctx.direct_context,
@@ -696,19 +485,19 @@ impl Renderer for SkiaRenderer {
     ) -> Result<(), LibraryError> {
         let width = width.max(1);
         let height = height.max(1);
-        let mut surface = create_surface(
+        let mut surface = skia_working_surface::create_surface(
             width,
             height,
             self.gpu_context
                 .as_mut()
                 .map(|context| &mut context.direct_context),
+            &self.surface_contract,
         )?;
-        surface.canvas().clear(SkColor::from_argb(
-            background_color.a,
-            background_color.r,
-            background_color.g,
-            background_color.b,
-        ));
+        skia_working_surface::clear_authored_color(
+            &mut surface,
+            &self.surface_contract,
+            background_color,
+        )?;
         self.group_surfaces.push(GroupSurface {
             width,
             height,
@@ -724,8 +513,7 @@ impl Renderer for SkiaRenderer {
 
         // A texture ID is owned by its Surface. Read the isolated target before
         // dropping it so nested groups cannot leave dangling GPU texture IDs.
-        let image = surface_to_image(&mut group.surface, group.width, group.height)?;
-        Ok(RenderOutput::Image(image))
+        self.snapshot_surface(&mut group.surface, group.width, group.height)
     }
 
     fn rasterize_sksl_layer(
@@ -735,6 +523,11 @@ impl Renderer for SkiaRenderer {
         time: f32,
         transform: &Affine2D,
     ) -> Result<RenderOutput, LibraryError> {
+        if self.surface_contract.working().is_some() {
+            return Err(LibraryError::Render(
+                "SkSL generator has no declared Project working-color contract".to_string(),
+            ));
+        }
         let (target_width, target_height) = self.current_target_dimensions();
         let mut layer = self.create_layer_surface()?;
         {
@@ -786,7 +579,7 @@ impl Renderer for SkiaRenderer {
             }
         }
 
-        Self::snapshot_surface(&mut layer, target_width, target_height)
+        self.snapshot_surface(&mut layer, target_width, target_height)
     }
 
     fn rasterize_text_layer(
@@ -829,14 +622,15 @@ impl Renderer for SkiaRenderer {
 
             for config in styles {
                 let style = &config.style;
-                let paint = Self::create_text_paint(style, 1.0, None);
+                let paint =
+                    PaintFactory::new(&self.surface_contract).text_paint(style, 1.0, None)?;
                 let paragraph = build_text_paragraph(text, font_name, size as f32, Some(&paint));
                 paragraph.paint(canvas, (0.0, 0.0));
             }
 
             canvas.restore();
         }
-        Self::snapshot_surface(&mut layer, target_width, target_height)
+        self.snapshot_surface(&mut layer, target_width, target_height)
     }
 
     fn rasterize_shape_layer(
@@ -864,13 +658,18 @@ impl Renderer for SkiaRenderer {
             if let Some(ensemble) = ensemble
                 && ensemble.enabled
             {
-                legacy_backplate::draw_path_backplates(canvas, &path, &ensemble.decorator_configs)?;
+                legacy_backplate::draw_path_backplates(
+                    canvas,
+                    &path,
+                    &ensemble.decorator_configs,
+                    &self.surface_contract,
+                )?;
             }
             for config in styles {
                 let style = &config.style;
                 match style {
                     DrawStyle::Fill { color, offset } => {
-                        self.draw_shape_fill_on_canvas(
+                        PaintFactory::new(&self.surface_contract).draw_shape_fill(
                             canvas,
                             &path,
                             color,
@@ -888,7 +687,7 @@ impl Renderer for SkiaRenderer {
                         dash_array,
                         dash_offset,
                     } => {
-                        self.draw_shape_stroke_on_canvas(
+                        PaintFactory::new(&self.surface_contract).draw_shape_stroke(
                             canvas,
                             &path,
                             path_effects,
@@ -908,12 +707,16 @@ impl Renderer for SkiaRenderer {
             }
             canvas.restore();
         }
-        Self::snapshot_surface(&mut layer, target_width, target_height)
+        self.snapshot_surface(&mut layer, target_width, target_height)
     }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError> {
         match output {
             RenderOutput::Image(img) => Ok(img.clone()),
+            RenderOutput::Working(image) => Err(LibraryError::Render(format!(
+                "working image {:?} cannot be read as untyped encoded RGBA8; apply the Project terminal processor",
+                image.identity()
+            ))),
             RenderOutput::Texture(info) => {
                 if let Some(ctx) = self.gpu_context.as_mut() {
                     let image = create_image_from_texture(
@@ -969,7 +772,8 @@ impl Renderer for SkiaRenderer {
         }
 
         // If sharing is enabled, attempt to return a Texture.
-        if self.sharing_handle.is_some()
+        if self.surface_contract.working().is_none()
+            && self.sharing_handle.is_some()
             && self.gpu_context.is_some()
             && let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
                 &mut self.surface,
@@ -984,18 +788,24 @@ impl Renderer for SkiaRenderer {
             }));
         }
 
-        // Fallback to Image readback (slow, copy)
-        let image = surface_to_image(&mut self.surface, self.width, self.height)?;
-        Ok(RenderOutput::Image(image))
+        // Fallback to an owned CPU output. Project frames retain working
+        // identity here; only RenderService may apply the terminal processor.
+        skia_working_surface::snapshot_surface(
+            &mut self.surface,
+            self.width,
+            self.height,
+            &self.surface_contract,
+        )
     }
 
     fn clear(&mut self) -> Result<(), LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::clear");
         self.group_surfaces.clear();
-        let color = self.background_sk_color();
-        let canvas: &Canvas = self.surface.canvas();
-        canvas.clear(color);
-        Ok(())
+        skia_working_surface::clear_authored_color(
+            &mut self.surface,
+            &self.surface_contract,
+            &self.background_color,
+        )
     }
 
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
@@ -1023,12 +833,14 @@ impl Renderer for SkiaRenderer {
         })?;
         context.resize(self.width, self.height);
         let (width, height) = (self.width, self.height);
-        self.replace_render_target(Some(context), Some(handle), hwnd, |direct_context| {
-            create_surface(width, height, direct_context).map_err(|error| {
-                LibraryError::Render(format!(
-                    "Cannot create shared Skia surface {width}x{height}: {error}"
-                ))
-            })
+        let surface_contract = self.surface_contract.clone();
+        self.replace_render_target(Some(context), Some(handle), hwnd, move |direct_context| {
+            skia_working_surface::create_surface(width, height, direct_context, &surface_contract)
+                .map_err(|error| {
+                    LibraryError::Render(format!(
+                        "Cannot create shared Skia surface {width}x{height}: {error}"
+                    ))
+                })
         })?;
         log::info!("SkiaRenderer: Recreated GPU context with sharing enabled.");
         Ok(())
@@ -1036,33 +848,5 @@ impl Renderer for SkiaRenderer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{RenderOutput, Renderer, SkiaRenderer};
-    use crate::error::LibraryError;
-    use crate::model::frame::color::Color;
-
-    #[test]
-    fn construction_returns_an_error_for_invalid_dimensions() {
-        let result = SkiaRenderer::new(0, 0, Color::black(), false, None, None);
-        assert!(matches!(result, Err(LibraryError::Render(_))));
-    }
-
-    #[test]
-    fn failed_render_target_replacement_preserves_the_current_surface() {
-        let mut renderer = SkiaRenderer::new(2, 2, Color::black(), false, None, None).unwrap();
-        let result = renderer.replace_render_target(None, Some(99), Some(77), |_| {
-            Err(LibraryError::Render(
-                "injected surface creation failure".to_string(),
-            ))
-        });
-
-        assert!(matches!(result, Err(LibraryError::Render(_))));
-        assert_eq!(renderer.sharing_handle, None);
-        assert_eq!(renderer.sharing_hwnd, None);
-        renderer.clear().unwrap();
-        let RenderOutput::Image(image) = renderer.finalize().unwrap() else {
-            panic!("CPU renderer must retain its image surface");
-        };
-        assert_eq!((image.width, image.height), (2, 2));
-    }
-}
+#[path = "skia_renderer/tests.rs"]
+mod tests;

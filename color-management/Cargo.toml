@@ -8,5 +8,26 @@ license = "MIT"
 [lints]
 workspace = true
 
+[features]
+default = []
+opencolorio = ["dep:ocio-rs"]
+
 [dependencies]
+ocio-rs = { version = "=0.2.1", optional = true, default-features = false }
 sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+tempfile = "3.27"
+
+[[example]]
+name = "assert_real_opencolorio"
+required-features = ["opencolorio"]

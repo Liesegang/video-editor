@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::{EffectColorDomain, EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{Rect, image_filters};
@@ -34,6 +34,10 @@ impl Plugin for MagnifierEffectPlugin {
 }
 
 impl EffectPlugin for MagnifierEffectPlugin {
+    fn color_domain(&self) -> EffectColorDomain {
+        EffectColorDomain::ProjectLinearPreserving
+    }
+
     fn apply(
         &self,
         input: &RenderOutput,
@@ -48,12 +52,12 @@ impl EffectPlugin for MagnifierEffectPlugin {
             .get("y")
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(100.0);
-        let width = params
+        let lens_width = params
             .get("width")
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(100.0);
-        let height = params
-            .get("width")
+        let lens_height = params
+            .get("height")
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(100.0);
         let zoom_amount = params
@@ -65,26 +69,31 @@ impl EffectPlugin for MagnifierEffectPlugin {
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(0.0);
 
-        if width <= 0.0 || height <= 0.0 {
+        if lens_width <= 0.0 || lens_height <= 0.0 {
             return Ok(input.clone());
         }
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
-        apply_skia_filter(input, gpu_context, |_image, width, height| {
-            let lens_bounds = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
-            image_filters::magnifier(
-                lens_bounds,
-                zoom_amount as f32,
-                inset as f32,
-                skia_safe::SamplingOptions::default(),
-                None, // input
-                None, // crop
-            )
-            .ok_or(LibraryError::Render(
-                "Failed to create magnifier filter".to_string(),
-            ))
-        })
+        apply_skia_filter(
+            input,
+            gpu_context,
+            |_image, _canvas_width, _canvas_height| {
+                let lens_bounds =
+                    Rect::from_xywh(x as f32, y as f32, lens_width as f32, lens_height as f32);
+                image_filters::magnifier(
+                    lens_bounds,
+                    zoom_amount as f32,
+                    inset as f32,
+                    skia_safe::SamplingOptions::default(),
+                    None, // input
+                    None, // crop
+                )
+                .ok_or(LibraryError::Render(
+                    "Failed to create magnifier filter".to_string(),
+                ))
+            },
+        )
     }
 
     fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
@@ -171,5 +180,50 @@ impl EffectPlugin for MagnifierEffectPlugin {
                 PropertyValue::Number(OrderedFloat(0.0)),
             ),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MagnifierEffectPlugin;
+    use crate::model::frame::Image;
+    use crate::model::property::PropertyValue;
+    use crate::plugin::EffectPlugin;
+    use crate::rendering::renderer::RenderOutput;
+    use ordered_float::OrderedFloat;
+    use std::collections::HashMap;
+
+    #[test]
+    fn zero_height_bypasses_even_when_width_is_positive() {
+        let input = RenderOutput::Image(Image::new(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        ));
+        let params = HashMap::from([
+            (
+                "width".to_string(),
+                PropertyValue::Number(OrderedFloat(20.0)),
+            ),
+            (
+                "height".to_string(),
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        ]);
+
+        let output = MagnifierEffectPlugin
+            .apply(&input, &params, None)
+            .expect("zero-height magnifier should bypass");
+        let output_data = match &output {
+            RenderOutput::Image(image) => Some(image.data.as_slice()),
+            RenderOutput::Working(_) | RenderOutput::Texture(_) => None,
+        };
+        let input_data = match &input {
+            RenderOutput::Image(image) => Some(image.data.as_slice()),
+            RenderOutput::Working(_) | RenderOutput::Texture(_) => None,
+        };
+        assert_eq!(output_data, input_data);
     }
 }

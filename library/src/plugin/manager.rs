@@ -1,9 +1,11 @@
 //! Plugin manager for registering, loading, and accessing plugins.
 
 mod bundled;
+mod registration;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use libloading::{Library, Symbol};
@@ -12,15 +14,15 @@ use log::debug;
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::AssetKind;
-use crate::model::frame::Image;
 use crate::model::property::PropertyDefinition;
 use crate::model::property::PropertyValue;
 use crate::plugin::EntityConverterPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
+use crate::util::local_file::DirectRegularFile;
 
 use crate::plugin::PluginCategory;
-use crate::plugin::effects::{EffectDefinition, EffectPlugin};
+use crate::plugin::effects::{EffectColorDomain, EffectDefinition, EffectPlugin};
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::{ExportPlugin, ExportSettings};
 use crate::plugin::loaders::{
@@ -33,7 +35,7 @@ use crate::plugin::runtime_native::{
     resolve_bundle, resolve_manifest_identity,
 };
 
-use crate::plugin::traits::{Plugin, PropertyPlugin};
+use crate::plugin::traits::Plugin;
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
@@ -77,6 +79,7 @@ fn materialize_validated_operation_properties(
 pub struct PluginManager {
     inner: RwLock<PluginRegistry>,
     bundled_operations: bundled::BundledOperationInventory,
+    render_revision: AtomicU64,
 }
 
 impl PluginManager {
@@ -96,7 +99,18 @@ impl PluginManager {
                 runtime_plugins: RuntimePluginRegistry::new(),
             }),
             bundled_operations: bundled::BundledOperationInventory::default(),
+            render_revision: AtomicU64::new(1),
         }
+    }
+
+    /// Monotonic invalidation token for every runtime mutation that can alter
+    /// frame evaluation, loading, effects, or color ingress.
+    pub fn render_revision(&self) -> u64 {
+        self.render_revision.load(Ordering::Acquire)
+    }
+
+    fn bump_render_revision(&self) {
+        self.render_revision.fetch_add(1, Ordering::Release);
     }
 
     fn read_registry(&self) -> RwLockReadGuard<'_, PluginRegistry> {
@@ -111,82 +125,6 @@ impl PluginManager {
             log::error!("plugin registry write lock was poisoned; recovering committed state");
             poisoned.into_inner()
         })
-    }
-
-    pub fn register_effect(&self, plugin: Arc<dyn EffectPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.effect_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_load_plugin(&self, plugin: Arc<dyn LoadPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.load_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_export_plugin(&self, plugin: Arc<dyn ExportPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.export_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_entity_converter_plugin(&self, plugin: Arc<dyn EntityConverterPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.entity_converter_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_property_plugin(&self, plugin: Arc<dyn PropertyPlugin>) {
-        let evaluator_id = plugin.id();
-        let evaluator_instance = plugin.get_evaluator_instance();
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner
-                .property_evaluators
-                .register(evaluator_id, evaluator_instance)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_effector_plugin(&self, plugin: Arc<dyn EffectorPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.effector_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_decorator_plugin(&self, plugin: Arc<dyn DecoratorPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.decorator_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_style_plugin(&self, plugin: Arc<dyn StylePlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.style_plugins.register(plugin)
-        };
-        drop(replaced);
-    }
-
-    pub fn register_path_effect_plugin(&self, plugin: Arc<dyn PathEffectPlugin>) {
-        let replaced = {
-            let mut inner = self.write_registry();
-            inner.path_effect_plugins.register(plugin)
-        };
-        drop(replaced);
     }
 
     pub fn get_effector_plugin(&self, id: &str) -> Option<Arc<dyn EffectorPlugin>> {
@@ -838,6 +776,7 @@ impl PluginManager {
                 },
             ) {
                 Ok(registered) => {
+                    self.bump_render_revision();
                     report.loaded_bundles.push(manifest_path);
                     report.registered_components.extend(registered);
                 }
@@ -859,6 +798,7 @@ impl PluginManager {
     pub fn set_loader_priority(&self, order: Vec<String>) {
         let mut inner = self.write_registry();
         inner.load_plugins.set_priority_order(order);
+        self.bump_render_revision();
     }
 
     /// Get the current loader plugin priority order.
@@ -890,11 +830,45 @@ impl PluginManager {
             inner.effect_plugins.get(key).cloned()
         };
         if let Some(plugin) = plugin {
+            let working_identity = match input {
+                RenderOutput::Working(image) => Some(image.identity().clone()),
+                RenderOutput::Image(_) | RenderOutput::Texture(_) => None,
+            };
+            if working_identity.is_some()
+                && plugin.color_domain() != EffectColorDomain::ProjectLinearPreserving
+            {
+                return Err(LibraryError::Plugin(format!(
+                    "Effect '{key}' supports only the unmanaged encoded-sRGBA8 boundary; it cannot process a Project linear RGBAF32 frame"
+                )));
+            }
             debug!("PluginManager: Applying effect '{}'", key);
-            plugin.apply(input, params, gpu_context)
+            let output = plugin.apply(input, params, gpu_context)?;
+            if let Some(expected) = working_identity {
+                match &output {
+                    RenderOutput::Working(image) if image.identity() == &expected => {}
+                    RenderOutput::Working(image) => {
+                        return Err(LibraryError::Plugin(format!(
+                            "Effect '{key}' changed Project working identity from {expected:?} to {:?}",
+                            image.identity()
+                        )));
+                    }
+                    RenderOutput::Image(_) | RenderOutput::Texture(_) => {
+                        return Err(LibraryError::Plugin(format!(
+                            "Effect '{key}' dropped the Project working RGBAF32 contract"
+                        )));
+                    }
+                }
+            }
+            Ok(output)
         } else {
-            log::warn!("Effect '{}' not found", key);
-            Ok(input.clone())
+            if matches!(input, RenderOutput::Working(_)) {
+                Err(LibraryError::Plugin(format!(
+                    "Effect '{key}' is unavailable; refusing to bypass it in a Project linear render"
+                )))
+            } else {
+                log::warn!("Effect '{}' not found", key);
+                Ok(input.clone())
+            }
         }
     }
 
@@ -919,6 +893,17 @@ impl PluginManager {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
+        // This is the automatic Project/Preview boundary. Do not move this
+        // policy into `get_available_streams`: explicit import/relink probing
+        // is a separate editor action. Keep the verified handle alive across
+        // dispatch so FIFOs/devices and final-component symlinks are rejected
+        // before any built-in or third-party loader callback can run.
+        let _locator_guard = DirectRegularFile::open(request.path()).map_err(|error| {
+            LibraryError::Plugin(format!(
+                "Automatic media load rejected locator {:?}: {error}",
+                request.path()
+            ))
+        })?;
         let plugins = {
             let inner = self.read_registry();
             inner.load_plugins.values().cloned().collect::<Vec<_>>()
@@ -1006,16 +991,16 @@ impl PluginManager {
             }))
     }
 
-    pub fn export_image(
+    pub fn export_frame(
         &self,
         exporter_id: &str,
         path: &str,
-        image: &Image,
+        frame: &crate::plugin::ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         let inner = self.read_registry();
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
-            return plugin.export_image(path, image, settings);
+            return plugin.export_frame(path, frame, settings);
         }
         Err(LibraryError::Plugin(format!(
             "Exporter '{}' not found",
@@ -1034,10 +1019,15 @@ impl PluginManager {
             .map(|p| p.properties())
     }
 
-    pub fn finish_export(&self, exporter_id: &str, path: &str) -> Result<(), LibraryError> {
+    pub fn finish_export(
+        &self,
+        exporter_id: &str,
+        path: &str,
+        settings: &ExportSettings,
+    ) -> Result<(), LibraryError> {
         let inner = self.read_registry();
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
-            return plugin.finish_export(path);
+            return plugin.finish_export(path, settings);
         }
         Err(LibraryError::Plugin(format!(
             "Exporter '{}' not found",
@@ -1084,6 +1074,7 @@ impl PluginManager {
             inner.dynamic_libraries.push(library);
             replaced
         };
+        self.bump_render_revision();
         drop(replaced);
         Ok(())
     }
@@ -1119,12 +1110,15 @@ impl PluginManager {
         &self,
         path: P,
     ) -> Result<(), LibraryError> {
+        // The v2 symbol is intentionally different from the former bare-Image
+        // ABI. An old exporter must fail to load instead of receiving typed
+        // ExportFrame bytes under an incompatible Rust trait-object vtable.
         // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
         // load_plugin_generic validates the pointer and retains the library.
         unsafe {
             self.load_plugin_generic::<dyn ExportPlugin>(
                 path.as_ref(),
-                b"create_export_plugin",
+                b"create_export_plugin_v2",
                 |inner, plugin| inner.export_plugins.register(plugin),
             )
         }
@@ -1392,5 +1386,7 @@ pub struct PluginInfo {
     pub impl_type: String,
 }
 
+#[cfg(test)]
+mod automatic_locator_tests;
 #[cfg(test)]
 mod tests;

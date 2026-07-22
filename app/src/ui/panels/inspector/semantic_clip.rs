@@ -25,6 +25,7 @@ use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::property_mode::property_for_mode;
 
+mod source_color;
 mod stack_controls;
 
 #[allow(
@@ -54,6 +55,7 @@ pub(super) fn render(
 
     let root = ui.scope(|ui| {
         render_stack_diagnostics(ui, clip.id, &stack);
+        source_color::render(ui, clip.id, project_service, history_manager, needs_refresh);
         stack_controls::render(
             ui,
             clip.id,

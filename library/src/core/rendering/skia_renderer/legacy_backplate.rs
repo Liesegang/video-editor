@@ -9,12 +9,14 @@ use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::{DecoratorConfig, TransformData};
 use crate::error::LibraryError;
 use crate::model::frame::runtime_shape::{RuntimeTextShape, transformed_text_element_bounds};
+use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
 
 pub(super) fn draw_text_backplates(
     canvas: &Canvas,
     text: &RuntimeTextShape,
     transforms: &[TransformData],
     decorators: &[DecoratorConfig],
+    surface_contract: &SkiaSurfaceContract,
 ) -> Result<(), LibraryError> {
     for decorator in decorators {
         let DecoratorConfig::LegacyBackplate {
@@ -60,7 +62,8 @@ pub(super) fn draw_text_backplates(
                         color,
                         *corner_radius,
                         transform.opacity,
-                    );
+                        surface_contract,
+                    )?;
                     canvas.restore();
                 }
             }
@@ -80,7 +83,8 @@ pub(super) fn draw_text_backplates(
                             color,
                             *corner_radius,
                             opacity,
-                        );
+                            surface_contract,
+                        )?;
                     }
                 }
             }
@@ -99,7 +103,8 @@ pub(super) fn draw_text_backplates(
                         color,
                         *corner_radius,
                         opacity,
-                    );
+                        surface_contract,
+                    )?;
                 }
             }
             BackplateTarget::Parts => {
@@ -116,6 +121,7 @@ pub(super) fn draw_path_backplates(
     canvas: &Canvas,
     path: &Path,
     decorators: &[DecoratorConfig],
+    surface_contract: &SkiaSurfaceContract,
 ) -> Result<(), LibraryError> {
     let bounds = path.compute_tight_bounds();
     for decorator in decorators {
@@ -143,7 +149,8 @@ pub(super) fn draw_path_backplates(
             color,
             *corner_radius,
             1.0,
-        );
+            surface_contract,
+        )?;
     }
     Ok(())
 }
@@ -186,14 +193,10 @@ fn draw_backplate(
     color: &crate::model::frame::color::Color,
     corner_radius: f32,
     opacity: f32,
-) {
+    surface_contract: &SkiaSurfaceContract,
+) -> Result<(), LibraryError> {
     let mut paint = Paint::default();
-    paint.set_color(skia_safe::Color::from_argb(
-        (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8,
-        color.r,
-        color.g,
-        color.b,
-    ));
+    skia_working_surface::set_paint_authored_color(&mut paint, surface_contract, color, opacity)?;
     paint.set_anti_alias(true);
     match shape {
         BackplateShape::Rect => canvas.draw_rect(bounds, &paint),
@@ -207,4 +210,5 @@ fn draw_backplate(
             &paint,
         ),
     };
+    Ok(())
 }

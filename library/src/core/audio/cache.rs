@@ -1,3 +1,6 @@
+use crate::util::local_file::DirectRegularFile;
+#[cfg(windows)]
+use crate::util::local_file::WindowsFileIdentity;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -18,12 +21,19 @@ pub struct AudioFileIdentity {
     change_seconds: i64,
     #[cfg(unix)]
     change_nanos: i64,
+    #[cfg(windows)]
+    windows_identity: WindowsFileIdentity,
 }
 
 impl AudioFileIdentity {
     pub fn read(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let canonical_path = path.as_ref().canonicalize()?;
-        let metadata = std::fs::metadata(&canonical_path)?;
+        let opened = DirectRegularFile::open(path)?;
+        Self::from_opened(&opened)
+    }
+
+    pub(crate) fn from_opened(opened: &DirectRegularFile) -> std::io::Result<Self> {
+        let canonical_path = opened.canonical_path().to_path_buf();
+        let metadata = opened.file().metadata()?;
         let modified_nanos = metadata
             .modified()
             .ok()
@@ -50,6 +60,8 @@ impl AudioFileIdentity {
                 canonical_path,
                 length: metadata.len(),
                 modified_nanos,
+                #[cfg(windows)]
+                windows_identity: opened.windows_identity()?,
             })
         }
     }
@@ -167,5 +179,78 @@ impl AudioChunk {
         self.samples
             .get(relative_frame.checked_mul(channels)?.checked_add(channel)?)
             .copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_format() -> Result<AudioDecodeFormat, std::io::Error> {
+        AudioDecodeFormat::new(48_000, 2)
+            .ok_or_else(|| std::io::Error::other("valid audio format was rejected"))
+    }
+
+    #[test]
+    fn regular_local_file_becomes_an_audio_source_but_url_does_not()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let regular = directory.path().join("fixture.wav");
+        std::fs::write(&regular, b"regular audio identity fixture")?;
+
+        assert!(AudioSourceKey::read(&regular, None, test_format()?).is_ok());
+        let error = AudioSourceKey::read(
+            "https://example.invalid/document-controlled.wav",
+            None,
+            test_format()?,
+        )
+        .err()
+        .ok_or_else(|| std::io::Error::other("URL became an automatic audio source"))?;
+        assert!(error.to_string().contains("URL and URI-scheme"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_never_becomes_an_audio_source_key() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir()?;
+        let regular = directory.path().join("fixture.wav");
+        let link = directory.path().join("linked.wav");
+        std::fs::write(&regular, b"regular audio identity fixture")?;
+        symlink(&regular, &link)?;
+
+        let error = AudioSourceKey::read(&link, None, test_format()?)
+            .err()
+            .ok_or_else(|| std::io::Error::other("symlink became an automatic audio source"))?;
+        assert!(error.to_string().contains("symbolic links"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_never_becomes_a_waveform_or_playback_source_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = tempfile::tempdir()?;
+        let fifo = directory.path().join("document-controlled.wav");
+        let fifo_path = CString::new(fifo.as_os_str().as_bytes())?;
+        // SAFETY: `fifo_path` is a live NUL-terminated path and `mkfifo` does
+        // not retain the pointer after returning.
+        let status = unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) };
+        if status != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let format = test_format()?;
+
+        let error = AudioSourceKey::read(&fifo, None, format)
+            .err()
+            .ok_or_else(|| std::io::Error::other("FIFO became an automatic audio source"))?;
+
+        assert!(error.to_string().contains("FIFOs"));
+        Ok(())
     }
 }

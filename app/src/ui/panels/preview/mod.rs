@@ -2,9 +2,9 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use std::sync::{Arc, RwLock};
 
-use library::model::project::Project;
 use library::EditorService;
 use library::RenderServer;
+use library::model::project::Project;
 
 use crate::command::{CommandId, CommandRegistry};
 #[cfg(test)]
@@ -372,12 +372,18 @@ pub fn preview_panel(
                     if let Some(frame_info) = evaluated_frame {
                         requested_frame_info = Some(frame_info.clone());
                         let presentation = PreviewPresentationKey::from_frame(comp.id, &frame_info);
+                        let render_authority = library::RenderFrameAuthority::capture(
+                            proj_read,
+                            &frame_info,
+                            plugin_manager.render_revision(),
+                        );
                         editor_context.preview_render_scheduler.update_desired(
                             proj_read,
                             presentation,
                             frame_info,
                             editor_context.timeline.is_playing,
                             editor_context.timeline.transport_seek_revision,
+                            render_authority,
                         );
                     }
                 }
@@ -435,6 +441,18 @@ pub fn preview_panel(
                             editor_context.preview_texture_width = image.width;
                             editor_context.preview_texture_height = image.height;
                         }
+                        library::rendering::renderer::RenderOutput::Working(image) => {
+                            log::error!(
+                                "Preview received unterminated Project working pixels {:?}",
+                                image.identity()
+                            );
+                            editor_context.preview_texture_id = None;
+                            editor_context.preview_texture = None;
+                            editor_context.preview_texture_width = 0;
+                            editor_context.preview_texture_height = 0;
+                            editor_context.preview_nontransparent_pixels = None;
+                            editor_context.preview_pixel_hash = None;
+                        }
                         library::rendering::renderer::RenderOutput::Texture(info) => {
                             editor_context.preview_texture_id = Some(info.texture_id);
                             editor_context.preview_texture = None;
@@ -456,7 +474,7 @@ pub fn preview_panel(
 
         if let Some(submission) = editor_context.preview_render_scheduler.take_submission() {
             let request_id = submission.request_id;
-            if !render_server.send_request(request_id, submission.frame) {
+            if !render_server.send_request(request_id, submission.project, submission.frame) {
                 editor_context
                     .preview_render_scheduler
                     .submission_failed(request_id);

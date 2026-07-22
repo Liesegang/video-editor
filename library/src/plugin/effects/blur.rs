@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::{EffectColorDomain, EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{TileMode, image_filters};
@@ -34,6 +34,10 @@ impl Plugin for BlurEffectPlugin {
 }
 
 impl EffectPlugin for BlurEffectPlugin {
+    fn color_domain(&self) -> EffectColorDomain {
+        EffectColorDomain::ProjectLinearPreserving
+    }
+
     fn apply(
         &self,
         input: &RenderOutput,

@@ -70,6 +70,7 @@ fn render(project: &Project) -> Result<library::model::frame::Image> {
     let mut service = RenderService::new(renderer, plugins, Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => anyhow::bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => anyhow::bail!("CPU renderer returned a Texture"),
     }
 }

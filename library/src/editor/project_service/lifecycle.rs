@@ -41,6 +41,10 @@ impl ProjectManager {
     }
 
     pub fn load_project(&self, json_str: &str) -> Result<Project, LibraryError> {
+        // Project adoption is deliberately free of document-controlled media
+        // I/O. Missing source authority remains inspectable and fail-closed;
+        // the user can explicitly re-probe a linked local regular file from
+        // the Timeline/Preview Inspector.
         let new_project = Project::load(json_str)?;
         Self::validate_project_for_adoption(&new_project)?;
         let mut project_write = self.project.write().map_err(|e| {
@@ -87,5 +91,89 @@ impl ProjectManager {
             LibraryError::Runtime(format!("Failed to acquire project read lock: {}", e))
         })?;
         Ok(project_read.save()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::CacheManager;
+    use crate::model::asset::{Asset, AssetKind, SourceColorDescription};
+    use crate::plugin::Plugin;
+    use crate::plugin::loaders::{
+        AssetMetadata, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingLoader {
+        opens: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for CountingLoader {
+        fn id(&self) -> &'static str {
+            "load-purity-probe"
+        }
+
+        fn name(&self) -> String {
+            "Load purity probe".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Tests".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl LoadPlugin for CountingLoader {
+        fn open(&self, _path: &str) -> LoadPluginResult<Vec<AssetMetadata>> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Err(LoadPluginError::Unsupported)
+        }
+
+        fn load(
+            &self,
+            _request: &LoadRequest,
+            _cache: &CacheManager,
+        ) -> LoadPluginResult<LoadResponse> {
+            Err(LoadPluginError::Unsupported)
+        }
+    }
+
+    #[test]
+    fn project_load_never_opens_document_controlled_asset_paths() {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let plugins = Arc::new(PluginManager::new());
+        plugins.register_load_plugin(Arc::new(CountingLoader {
+            opens: Arc::clone(&opens),
+        }));
+        let shared = Arc::new(RwLock::new(Project::new("target")));
+        let manager = ProjectManager::new(Arc::clone(&shared), plugins);
+
+        let mut source = Project::new("untrusted document");
+        let mut asset = Asset::new(
+            "unused network source",
+            "http://127.0.0.1:65535/probe.mp4",
+            AssetKind::Video,
+        );
+        asset.source_color.replace_detected(SourceColorDescription {
+            bit_depth: Some(8),
+            ..SourceColorDescription::default()
+        });
+        let asset_id = asset.id;
+        source.assets.push(asset);
+
+        manager.load_project(&source.save().unwrap()).unwrap();
+        assert_eq!(
+            opens.load(Ordering::SeqCst),
+            0,
+            "deserialize/adopt must perform no loader, network, FIFO, device, or media I/O"
+        );
+        let loaded = shared.read().unwrap();
+        let detected = loaded.get_asset(asset_id).unwrap().source_color.detected();
+        assert_eq!(detected.bit_depth, Some(8));
+        assert_eq!(detected.assumption, None);
     }
 }

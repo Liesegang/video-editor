@@ -7,14 +7,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
 
 use library::cache::CacheManager;
-use library::core::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
-use library::core::audio::loader::AudioLoader;
-use library::core::audio::mixer::{mix_samples, render_samples};
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
+use library::model::asset::{
+    SourceColorAssumption, SourceColorDescription, SourceColorPrimaries, SourceColorRange,
+    SourceMatrixCoefficients, SourceTransferCharacteristic,
+};
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
@@ -23,18 +23,17 @@ use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
     Asset, AssetKind, Clip, Composition, Node, NodeContainer, NodeContent, Project, Track,
 };
-use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
 use library::plugin::{
     ExportSettings, LoadPlugin, LoadPluginError, LoadRequest, NativeImageLoader, PluginManager,
 };
 use library::rendering::renderer::RenderOutput;
-use library::{EditorService, ExportService, ProjectModel, RenderService, SkiaRenderer};
+use library::{ExportService, ProjectModel, RenderDestination, RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use support::{
-    channel_energy, generator_node_for_canvas, media_node_for_canvas, positive_zero_crossings,
+    generator_node_for_canvas, media_node_for_canvas, media_project_with_asset,
     transformed_image_graph,
 };
 use text_overlay::text_overlay_graph;
@@ -187,6 +186,17 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
     video_asset.width = Some(12);
     video_asset.height = Some(8);
     video_asset.stream_index = Some(0);
+    video_asset
+        .source_color
+        .replace_detected(SourceColorDescription {
+            assumption: Some(SourceColorAssumption::UntaggedYuvBt709LimitedV1),
+            primaries: Some(SourceColorPrimaries::Bt709),
+            transfer: Some(SourceTransferCharacteristic::Bt709),
+            matrix: Some(SourceMatrixCoefficients::Bt709),
+            range: Some(SourceColorRange::Limited),
+            bit_depth: Some(8),
+            profile: None,
+        });
     let video_asset_id = video_asset.id;
     project.assets.push(video_asset);
     let video = media_node_for_canvas(
@@ -301,7 +311,9 @@ fn preview_frame(
     )?;
     let mut service =
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
-    let RenderOutput::Image(image) = service.render_from_frame_info(&frame)? else {
+    let RenderOutput::Image(image) =
+        service.render_project_frame(project, &frame, RenderDestination::Preview)?
+    else {
         bail!("CPU preview renderer must return an Image");
     };
     Ok(image)
@@ -410,7 +422,7 @@ fn native_image_loader_decodes_png_jpeg_and_webp_with_alpha_contracts() -> Resul
                 },
                 &cache,
             )?
-            .image)
+            .into_rgba8()?)
     };
 
     let png = load("rgba.png")?;
@@ -430,485 +442,6 @@ fn native_image_loader_decodes_png_jpeg_and_webp_with_alpha_contracts() -> Resul
         loader.open("unsupported.svg"),
         Err(LoadPluginError::Unsupported)
     ));
-    Ok(())
-}
-
-#[test]
-fn ffmpeg_loader_decodes_container_codec_dimension_alpha_and_stream_matrix() -> Result<()> {
-    let decode_three = |name: &str,
-                        expected_dimensions: (u32, u32),
-                        expected_fps: f64,
-                        frames: [u64; 3]|
-     -> Result<Vec<Image>> {
-        let mut reader = VideoReader::new(&fixture(name))?;
-        assert_eq!(reader.get_dimensions(), expected_dimensions);
-        assert!((reader.get_fps() - expected_fps).abs() < 0.001);
-        let mut images = Vec::with_capacity(frames.len());
-        for frame in frames {
-            images.push(reader.decode_frame(frame)?);
-        }
-        Ok(images)
-    };
-
-    let mp4 = decode_three("h264_24.mp4", (12, 8), 24.0, [0, 36, 71])?;
-    let mov = decode_three("h264_24.mov", (12, 8), 24.0, [0, 36, 71])?;
-    assert_eq!(
-        mp4.iter().map(rgba_hash).collect::<Vec<_>>(),
-        mov.iter().map(rgba_hash).collect::<Vec<_>>(),
-        "remuxing H.264 between MP4 and MOV must not change decoded pixels"
-    );
-    assert_ne!(rgba_hash(&mp4[0]), rgba_hash(&mp4[1]));
-    assert_ne!(rgba_hash(&mp4[1]), rgba_hash(&mp4[2]));
-
-    let webm = decode_three("vp9_odd.webm", (9, 7), 15.0, [0, 15, 29])?;
-    assert!(
-        webm.windows(2)
-            .all(|pair| rgba_hash(&pair[0]) != rgba_hash(&pair[1]))
-    );
-
-    let ffv1 = decode_three("ffv1_alpha.mkv", (7, 5), 12.0, [0, 6, 11])?;
-    assert!(
-        ffv1.iter()
-            .all(|image| image.data.chunks_exact(4).any(|pixel| pixel[3] < 255))
-    );
-    assert!(
-        ffv1.windows(2)
-            .all(|pair| rgba_hash(&pair[0]) != rgba_hash(&pair[1]))
-    );
-
-    let mut red = VideoReader::new_with_stream(&fixture("multistream.mkv"), Some(0))?;
-    let mut blue = VideoReader::new_with_stream(&fixture("multistream.mkv"), Some(1))?;
-    let red = red.decode_frame(0)?;
-    let blue = blue.decode_frame(0)?;
-    assert_eq!((red.width, red.height), (8, 6));
-    assert_eq!((blue.width, blue.height), (8, 6));
-    assert!(red.data[0] > red.data[2], "stream 0 must be red");
-    assert!(blue.data[2] > blue.data[0], "stream 1 must be blue");
-    assert_ne!(rgba_hash(&red), rgba_hash(&blue));
-    Ok(())
-}
-
-#[test]
-fn vfr_sampling_uses_pts_instead_of_advertised_fps_ordinals() -> Result<()> {
-    let path = fixture("vfr_pts.mkv");
-    let mut sequential = VideoReader::new(&path)?;
-    assert_eq!(sequential.get_stream_time_base(), (1, 1000));
-    assert!((sequential.get_fps() - 10.0).abs() < 0.001);
-    assert_eq!(
-        sequential.get_frame_count(),
-        None,
-        "duration multiplied by advertised FPS must not fabricate an ordinal bound"
-    );
-
-    let first = sequential.decode_at_time(0.0)?;
-    assert_eq!(sequential.last_decode_stats().selected_pts, Some(0));
-    let second = sequential.decode_at_time(0.1)?;
-    assert_eq!(sequential.last_decode_stats().selected_pts, Some(100));
-    assert_ne!(rgba_hash(&first), rgba_hash(&second));
-    let at_half_second = sequential.decode_at_time(0.5)?;
-    assert_eq!(sequential.last_decode_stats().selected_pts, Some(500));
-    let held_at_one_second = sequential.decode_at_time(1.0)?;
-    assert_eq!(sequential.last_decode_stats().selected_pts, Some(500));
-    let tail = sequential.decode_at_time(1.85)?;
-    assert_eq!(sequential.last_decode_stats().selected_pts, Some(1800));
-    assert_eq!(
-        at_half_second.data, held_at_one_second.data,
-        "the 0.5s frame must remain displayed until the next PTS at 1.8s"
-    );
-    assert_ne!(rgba_hash(&held_at_one_second), rgba_hash(&tail));
-
-    let mut random = VideoReader::new(&path)?;
-    let random_at_one_second = random.decode_at_time(1.0)?;
-    assert_eq!(random_at_one_second.data, held_at_one_second.data);
-    let stats = random.last_decode_stats();
-    assert_eq!(stats.target_pts, 1000);
-    assert_eq!(stats.selected_pts, Some(500));
-    assert_eq!(stats.seek_count, 1);
-    assert!(stats.frames_decoded <= 4);
-    Ok(())
-}
-
-#[test]
-fn timestamp_range_errors_report_the_selected_stream_duration() -> Result<()> {
-    let path = fixture("av_duration_mismatch.mp4");
-    let mut reader = VideoReader::new_with_stream(&path, Some(0))?;
-    let error = match reader.decode_at_time(1.0) {
-        Ok(_) => bail!("the selected video stream unexpectedly reached the padded container"),
-        Err(error) => error,
-    };
-    let library::LibraryError::VideoTimestampOutOfRange {
-        stream_index,
-        duration,
-        ..
-    } = error
-    else {
-        bail!("expected a timestamp range error, got {error}");
-    };
-    assert_eq!(stream_index, 0);
-    let duration = duration.context("fixture video stream declares its own duration")?;
-    assert!((duration - 1.0).abs() < f64::EPSILON);
-    assert!(
-        (duration - 2.0).abs() > f64::EPSILON,
-        "the two-second container/audio duration must not leak into the video error"
-    );
-    Ok(())
-}
-
-#[test]
-fn loader_stream_selection_and_audio_only_probe_do_not_share_the_best_video() -> Result<()> {
-    let loader = FfmpegVideoLoader::new();
-    let cache = CacheManager::new();
-    let path = fixture("multistream.mkv");
-    let load_stream = |stream_index| -> Result<Image> {
-        Ok(loader
-            .load(
-                &LoadRequest::VideoFrame {
-                    path: path.clone(),
-                    source_time: 0.0,
-                    stream_index: Some(stream_index),
-                    input_color_space: None,
-                    output_color_space: None,
-                },
-                &cache,
-            )?
-            .image)
-    };
-    let red = load_stream(0)?;
-    let blue = load_stream(1)?;
-    assert!(red.data[0] > red.data[2]);
-    assert!(blue.data[2] > blue.data[0]);
-    assert_ne!(rgba_hash(&red), rgba_hash(&blue));
-    assert_eq!(loader.cached_reader_count(), 2);
-
-    let audio_streams = loader.open(&fixture("tone.mp3"))?;
-    assert_eq!(audio_streams.len(), 1);
-    assert_eq!(audio_streams[0].kind, AssetKind::Audio);
-    assert_eq!(
-        loader.cached_reader_count(),
-        2,
-        "metadata probing must not require or cache a video decoder"
-    );
-    Ok(())
-}
-
-#[test]
-fn dedicated_audio_loader_decodes_the_tiny_mp3_as_interleaved_stereo() -> Result<()> {
-    let path = fixture("tone.mp3");
-    assert!(AudioLoader::has_audio(&path));
-    let format =
-        AudioDecodeFormat::new(48_000, 2).context("48 kHz stereo decode format must be valid")?;
-    let source = AudioSourceKey::read(&path, None, format)?;
-    let chunk = AudioLoader::decode_chunk(&AudioChunkKey {
-        source,
-        chunk_index: 0,
-    })?;
-    let samples = chunk.samples();
-    assert!(samples.len() > 90_000);
-    assert_eq!(samples.len() % 2, 0);
-    assert!(samples.iter().any(|sample| sample.abs() > 0.01));
-    assert!(
-        samples
-            .chunks_exact(2)
-            .take(1_000)
-            .all(|frame| (frame[0] - frame[1]).abs() < f32::EPSILON)
-    );
-    Ok(())
-}
-
-#[test]
-fn explicit_global_audio_stream_ordinals_decode_distinct_signals() -> Result<()> {
-    let path = fixture("multi_audio.mkv");
-    let format =
-        AudioDecodeFormat::new(8_000, 2).context("8 kHz stereo decode format must be valid")?;
-    let decode = |stream_index| -> Result<library::audio::cache::AudioChunk> {
-        let source = AudioSourceKey::read(&path, stream_index, format)?;
-        AudioLoader::decode_chunk(&AudioChunkKey {
-            source,
-            chunk_index: 0,
-        })
-    };
-
-    assert!(
-        AudioLoader::decode_chunk(&AudioChunkKey {
-            source: AudioSourceKey::read(&path, Some(0), format)?,
-            chunk_index: 0,
-        })
-        .is_err()
-    );
-    let default_audio = decode(None)?;
-    let stream_one = decode(Some(1))?;
-    let stream_two = decode(Some(2))?;
-
-    assert_eq!(default_audio.samples(), stream_one.samples());
-    assert!(channel_energy(stream_one.samples(), 0) > 0.001);
-    assert!(channel_energy(stream_one.samples(), 1) < 0.000_001);
-    assert!(channel_energy(stream_two.samples(), 1) > 0.001);
-    assert!(channel_energy(stream_two.samples(), 0) < 0.000_001);
-    let crossings_one = positive_zero_crossings(stream_one.samples(), 0);
-    let crossings_two = positive_zero_crossings(stream_two.samples(), 1);
-    assert!(
-        (420..=460).contains(&crossings_one),
-        "unexpected stream 1 frequency proxy: {crossings_one} crossings"
-    );
-    assert!(
-        (850..=910).contains(&crossings_two),
-        "unexpected stream 2 frequency proxy: {crossings_two} crossings"
-    );
-    Ok(())
-}
-
-#[test]
-fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
-    let mut project = Project::new("bounded cold audio render");
-    let (composition, track) = Composition::new("main", 8, 6, 12.0, 1.25);
-    let composition_id = composition.id;
-    let track_id = track.id;
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-
-    let mut asset = Asset::new(
-        "multi audio video",
-        &fixture("multi_audio.mkv"),
-        AssetKind::Video,
-    );
-    asset.stream_index = Some(0);
-    let asset_id = asset.id;
-    project.assets.push(asset);
-    let mut clip = Clip::new("retimed audio", 0.0, 1.25);
-    clip.time_stretch = OrderedFloat(2.0);
-    let clip_id = clip.id;
-    project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id)?;
-    let node = media_node_for_canvas(
-        "explicit second audio stream",
-        MediaNodeRequest::Video {
-            asset_id,
-            file_path: fixture("multi_audio.mkv"),
-            stream_index: Some(0),
-            audio_stream_index: Some(2),
-        },
-        8,
-        6,
-        8,
-        6,
-    );
-    let node_id = node.id;
-    project.add_node(node);
-    support::attach_audio_output(&mut project, NodeContainer::Clip(clip_id), node_id)
-        .map_err(|error| anyhow!(error))?;
-
-    let cache = CacheManager::with_audio_chunk_capacity(2);
-    let plugin_manager = PluginManager::default();
-    let rendered = render_samples(
-        &project.assets,
-        &project,
-        project
-            .get_composition(composition_id)
-            .context("audio composition must exist")?,
-        &cache,
-        0,
-        10_000,
-        8_000,
-        2,
-        &plugin_manager,
-    );
-
-    assert_eq!(rendered.len(), 20_000);
-    assert!(cache.audio_chunk_cache_len() <= 2);
-    assert!(cache.cached_audio_sample_count() <= 2 * 8_000 * 2);
-    assert!(channel_energy(&rendered[..2_000], 1) > 0.001);
-    assert!(channel_energy(&rendered[18_000..], 1) > 0.001);
-    assert!(channel_energy(&rendered, 0) < 0.000_001);
-    Ok(())
-}
-
-fn media_project_with_asset(asset: Asset) -> Result<(Project, Uuid)> {
-    let mut project = Project::new("embedded audio integration");
-    let (composition, track) = Composition::new("main", 12, 8, 12.0, 2.0);
-    let track_id = track.id;
-    let asset_id = asset.id;
-    let file_path = asset.path.clone();
-    let media_width = u64::from(asset.width.unwrap_or(12));
-    let media_height = u64::from(asset.height.unwrap_or(8));
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    project.assets.push(asset);
-
-    let clip = Clip::new("padded media clip", 0.0, 2.0);
-    let clip_id = clip.id;
-    project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id)?;
-    let node = media_node_for_canvas(
-        "embedded audio video",
-        MediaNodeRequest::Video {
-            asset_id,
-            file_path,
-            stream_index: None,
-            audio_stream_index: None,
-        },
-        12,
-        8,
-        media_width,
-        media_height,
-    );
-    let node_id = node.id;
-    project.add_node(node);
-    project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
-        .map_err(|error| anyhow!(error))?;
-    support::bind_av_output(&mut project, NodeContainer::Clip(clip_id), node_id)
-        .map_err(|error| anyhow!(error))?;
-    Ok((project, asset_id))
-}
-
-fn wait_for_audio(
-    service: &EditorService,
-    cache: &CacheManager,
-    project: &Project,
-    asset_id: Uuid,
-    sample_rate: u32,
-) -> Result<Arc<library::audio::cache::AudioChunk>> {
-    let composition_id = project
-        .compositions
-        .first()
-        .context("audio project must contain a composition")?
-        .id;
-    service.set_active_composition(Some(composition_id), 0.0);
-    service.reset_audio_pump(0.0);
-    let asset = project
-        .get_asset(asset_id)
-        .context("embedded-audio Asset must exist")?;
-    let format = AudioDecodeFormat::new(sample_rate, 2)
-        .context("editor sample rate must form a valid stereo decode format")?;
-    let source = AudioSourceKey::read(&asset.path, None, format)?;
-    let key = AudioChunkKey {
-        source,
-        chunk_index: 0,
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        service.pump_audio();
-        if let Some(audio) = cache.get_audio_chunk(&key) {
-            return Ok(audio);
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out hydrating embedded audio for Asset {asset_id}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn assert_nonzero_mix(
-    service: &EditorService,
-    project: &Project,
-    cache: &CacheManager,
-    sample_rate: u32,
-    asset_id: Uuid,
-) -> Result<()> {
-    let cached = wait_for_audio(service, cache, project, asset_id, sample_rate)?;
-    assert!(cached.samples().iter().any(|sample| sample.abs() > 0.001));
-    let composition = project
-        .compositions
-        .first()
-        .context("audio project must contain a composition")?;
-    let mixed = mix_samples(
-        &project.assets,
-        project,
-        composition,
-        cache,
-        0,
-        (sample_rate / 4) as usize,
-        sample_rate,
-        2,
-        service.get_plugin_manager().as_ref(),
-    );
-    assert!(
-        mixed.iter().any(|sample| sample.abs() > 0.001),
-        "hydrated Video Asset must contribute embedded audio under its own ID"
-    );
-    Ok(())
-}
-
-#[test]
-fn import_and_load_hydrate_embedded_audio_under_the_video_asset_id() -> Result<()> {
-    let path = fixture("av_duration_mismatch.mp4");
-    assert!(AudioLoader::has_audio(&path));
-    assert!(
-        !AudioLoader::has_audio(&fixture("h264_24.mp4")),
-        "a video codec must not be mistaken for an audio track"
-    );
-
-    let plugins = Arc::new(PluginManager::default());
-    let shared = Arc::new(RwLock::new(Project::new("import target")));
-    let cache = Arc::new(CacheManager::new());
-    let service = EditorService::new(
-        Arc::clone(&shared),
-        Arc::clone(&plugins),
-        Arc::clone(&cache),
-    )?;
-    let sample_rate = service.get_audio_engine().get_sample_rate();
-
-    let imported_ids = service.import_file(&path)?;
-    let imported_video = shared
-        .read()
-        .map_err(|error| anyhow!("project lock poisoned: {error}"))?
-        .assets
-        .iter()
-        .find(|asset| imported_ids.contains(&asset.id) && asset.kind == AssetKind::Video)
-        .cloned()
-        .context("import must produce a Video Asset")?;
-    assert_eq!(imported_video.frame_count, Some(12));
-    assert_eq!(imported_video.stream_index, Some(0));
-
-    let (imported_project, imported_video_id) = media_project_with_asset(imported_video)?;
-    service.set_project(imported_project.clone())?;
-    assert_nonzero_mix(
-        &service,
-        &imported_project,
-        &cache,
-        sample_rate,
-        imported_video_id,
-    )?;
-
-    let mut loaded_asset = Asset::new("loaded AV", &path, AssetKind::Video);
-    loaded_asset.duration = Some(2.0);
-    loaded_asset.fps = Some(12.0);
-    loaded_asset.frame_count = Some(12);
-    loaded_asset.width = Some(12);
-    loaded_asset.height = Some(8);
-    loaded_asset.stream_index = Some(0);
-    let (loaded_project, loaded_video_id) = media_project_with_asset(loaded_asset)?;
-    service.load_project(&loaded_project.save()?)?;
-    let loaded_snapshot = shared
-        .read()
-        .map_err(|error| anyhow!("project lock poisoned: {error}"))?
-        .clone();
-    assert_eq!(
-        loaded_snapshot
-            .get_asset(loaded_video_id)
-            .context("loaded Video Asset must exist")?
-            .frame_count,
-        Some(12)
-    );
-    assert_nonzero_mix(
-        &service,
-        &loaded_snapshot,
-        &cache,
-        sample_rate,
-        loaded_video_id,
-    )?;
     Ok(())
 }
 
@@ -992,8 +525,8 @@ fn imported_frame_count_is_persisted_and_bounds_padded_video_before_render() -> 
         Arc::clone(&plugins),
         Arc::new(CacheManager::new()),
     );
-    render_service.render_from_frame_info(&last_valid)?;
-    render_service.render_from_frame_info(&first_invalid)?;
+    render_service.render_project_frame(&project, &last_valid, RenderDestination::Preview)?;
+    render_service.render_project_frame(&project, &first_invalid, RenderDestination::Preview)?;
     Ok(())
 }
 
@@ -1038,6 +571,7 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
     );
 
     let output = TestDirectory::new()?;
+    let settings = ExportSettings::from_project(&project, &project.compositions[0])?;
     let project_model = ProjectModel::new(Arc::new(project), 0)?;
     let renderer = SkiaRenderer::new(12, 8, Color::black(), false, None, None)?;
     let mut render_service = RenderService::new(
@@ -1045,22 +579,23 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
         Arc::clone(&plugins),
         Arc::new(CacheManager::new()),
     );
-    let settings = Arc::new(ExportSettings::for_dimensions(12, 8, 24.0));
-    let mut exporter = ExportService::new(Arc::clone(&plugins), "png_export".into(), settings, 2);
-    let mut exported_paths = Vec::new();
+    let stem = output.0.join("frame_{frame:03}");
+    let stem = stem.to_str().context("export path must be UTF-8")?;
+    let plan = ExportService::verify_plan(&project_model, &settings, 0..72, stem)?;
+    let mut exporter = ExportService::new(
+        Arc::clone(&plugins),
+        "png_export".into(),
+        Arc::new(settings),
+        plan,
+        2,
+    )?;
     let export_result = (|| -> Result<()> {
         for frame_number in frame_numbers {
-            let stem = output.0.join(format!("frame_{frame_number}"));
             exporter.render_range(
                 &mut render_service,
                 &project_model,
                 frame_number..frame_number + 1,
-                stem.to_str().context("export path must be UTF-8")?,
             )?;
-            exported_paths.push(PathBuf::from(format!(
-                "{}_{frame_number:03}.png",
-                stem.to_string_lossy()
-            )));
         }
         Ok(())
     })();
@@ -1070,9 +605,8 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
 
     let loader = NativeImageLoader::new();
     let cache = CacheManager::new();
-    for ((frame_number, preview), exported_path) in
-        frame_numbers.into_iter().zip(previews).zip(exported_paths)
-    {
+    for (frame_number, preview) in frame_numbers.into_iter().zip(previews) {
+        let exported_path = output.0.join(format!("frame_{frame_number:03}.png"));
         let exported = loader
             .load(
                 &LoadRequest::Image {
@@ -1080,7 +614,7 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
                 },
                 &cache,
             )?
-            .image;
+            .into_rgba8()?;
         assert_eq!((exported.width, exported.height), (12, 8));
         assert_eq!(
             rgba_hash(&exported),

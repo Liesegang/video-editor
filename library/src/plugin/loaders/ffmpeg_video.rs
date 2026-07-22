@@ -2,20 +2,23 @@ use super::super::{
     LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse, Plugin,
 };
 use super::ffmpeg_color_metadata;
+use super::ffmpeg_frame_cache::{DecodedFrameCache, DecodedVideoFrame};
+use super::ffmpeg_pixel_decode;
+use super::ffmpeg_runtime::{
+    classify_ffmpeg_probe_failure, has_registered_ffmpeg_media_extension, initialize_ffmpeg,
+    initialize_ffmpeg_for_path,
+};
+use super::source_file_identity::FileIdentity;
 use crate::cache::CacheManager;
-use crate::editor::color_service::{ColorSpaceManager, OcioProcessor};
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use ffmpeg::Rescale;
 use ffmpeg_next as ffmpeg;
 use lru::LruCache;
-use std::collections::HashSet;
-use std::ffi::{CStr, c_void};
-use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::sync::{Arc, Mutex};
+
+mod typed_reader;
 
 const MAX_FORWARD_DECODE_GAP_FRAMES: i64 = 32;
 const DEFAULT_READER_CACHE_SIZE: usize = 8;
@@ -104,8 +107,6 @@ pub struct VideoReader {
     last_target_pts: Option<i64>,
     decoder_eof: bool,
     timestamp_normalizer: TimestampNormalizer,
-    ocio_processor: Option<OcioProcessor>,
-    current_color_space: Option<(String, String)>,
     last_decode_stats: DecodeStats,
 }
 
@@ -185,8 +186,6 @@ impl VideoReader {
             last_target_pts: None,
             decoder_eof: false,
             timestamp_normalizer: TimestampNormalizer::new(nominal_frame_duration),
-            ocio_processor: None,
-            current_color_space: None,
             last_decode_stats: DecodeStats::default(),
         })
     }
@@ -224,22 +223,6 @@ impl VideoReader {
         (self.decoder.width(), self.decoder.height())
     }
 
-    pub fn set_color_space(&mut self, src: &str, dst: &str) {
-        if let Some((current_src, current_dst)) = &self.current_color_space
-            && current_src == src
-            && current_dst == dst
-        {
-            return;
-        }
-        self.ocio_processor = ColorSpaceManager::create_processor(src, dst);
-        self.current_color_space = Some((src.to_string(), dst.to_string()));
-    }
-
-    pub fn clear_color_space(&mut self) {
-        self.ocio_processor = None;
-        self.current_color_space = None;
-    }
-
     pub fn last_decode_stats(&self) -> DecodeStats {
         self.last_decode_stats
     }
@@ -273,6 +256,22 @@ impl VideoReader {
     /// all validity comparisons use the selected stream's time base and PTS;
     /// average FPS is metadata only and never an ordinal bound.
     pub fn decode_at_time(&mut self, source_time: f64) -> Result<Image, LibraryError> {
+        self.decode_at_time_with_description(source_time, None)
+            .and_then(|decoded| {
+                decoded.pixels.into_rgba8().map_err(|pixels| {
+                    LibraryError::Plugin(format!(
+                        "VideoReader's legacy Image API cannot return {}; use the typed loader API for high-precision media",
+                        pixels.storage_name()
+                    ))
+                })
+            })
+    }
+
+    fn decode_at_time_with_description(
+        &mut self,
+        source_time: f64,
+        source_color_authority: Option<&crate::model::asset::DecoderSourceColorAuthority>,
+    ) -> Result<DecodedVideoFrame, LibraryError> {
         let target_pts = self.target_pts_for_time(source_time)?;
         let mut stats = DecodeStats {
             target_pts,
@@ -289,7 +288,7 @@ impl VideoReader {
         }
         self.last_decode_stats = stats;
         match result {
-            Ok(()) => self.render_current_frame(),
+            Ok(()) => self.render_current_frame(source_color_authority),
             Err(error @ LibraryError::VideoTimestampOutOfRange { .. }) => Err(error),
             Err(source) => Err(LibraryError::VideoTimestampDecode {
                 path: self.file_path.clone(),
@@ -346,7 +345,10 @@ impl VideoReader {
         }
     }
 
-    fn render_current_frame(&self) -> Result<Image, LibraryError> {
+    fn render_current_frame(
+        &self,
+        source_color_authority: Option<&crate::model::asset::DecoderSourceColorAuthority>,
+    ) -> Result<DecodedVideoFrame, LibraryError> {
         let frame = &self
             .current_frame
             .as_ref()
@@ -354,35 +356,15 @@ impl VideoReader {
                 LibraryError::FfmpegOther("Decoder produced no current video frame".to_string())
             })?
             .frame;
-        let mut scaler = ffmpeg::software::scaling::context::Context::get(
-            self.decoder.format(),
-            self.decoder.width(),
-            self.decoder.height(),
-            ffmpeg::format::Pixel::RGBA,
-            self.decoder.width(),
-            self.decoder.height(),
-            ffmpeg::software::scaling::flag::Flags::BILINEAR,
-        )?;
-        let mut rgba_frame = ffmpeg::util::frame::Video::empty();
-        scaler.run(frame, &mut rgba_frame)?;
-
-        let width = rgba_frame.width();
-        let height = rgba_frame.height();
-        let row_bytes = (width * 4) as usize;
-        let mut data = Vec::with_capacity(row_bytes * height as usize);
-        let stride = rgba_frame.stride(0);
-        let plane = rgba_frame.data(0);
-        for y in 0..(height as usize) {
-            let start = y * stride;
-            let end = start + row_bytes;
-            data.extend_from_slice(&plane[start..end]);
-        }
-
-        if let Some(processor) = &self.ocio_processor {
-            data = processor.apply_rgba(&data);
-        }
-
-        Ok(Image::new(width, height, data))
+        let color_plan = ffmpeg_color_metadata::DecodeColorPlan::from_frame(
+            frame,
+            &self.decoder,
+            source_color_authority,
+        );
+        Ok(DecodedVideoFrame {
+            pixels: ffmpeg_pixel_decode::decode_frame_pixels(frame, &color_plan)?,
+            decoded: color_plan.decoded_description(),
+        })
     }
 
     fn decode_at_pts(
@@ -688,68 +670,16 @@ fn buffered_target_is_ready(
 // ============================================================================
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct FileIdentity {
-    canonical_path: PathBuf,
-    length: u64,
-    modified_nanos: u128,
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(unix)]
-    change_seconds: i64,
-    #[cfg(unix)]
-    change_nanos: i64,
-}
-
-impl FileIdentity {
-    pub(crate) fn read(path: &str) -> Result<Self, LibraryError> {
-        let canonical_path = Path::new(path).canonicalize()?;
-        let metadata = std::fs::metadata(&canonical_path)?;
-        let modified_nanos = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            Ok(Self {
-                canonical_path,
-                length: metadata.len(),
-                modified_nanos,
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                change_seconds: metadata.ctime(),
-                change_nanos: metadata.ctime_nsec(),
-            })
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(Self {
-                canonical_path,
-                length: metadata.len(),
-                modified_nanos,
-            })
-        }
-    }
-
-    pub(crate) fn cache_token(&self) -> String {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
-    }
-
-    pub(crate) fn canonical_path(&self) -> &Path {
-        &self.canonical_path
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct ReaderKey {
     identity: FileIdentity,
     stream_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct VideoFrameCacheKey {
+    reader: ReaderKey,
+    target_pts: i64,
+    source_color_authority: Option<crate::model::asset::DecoderSourceColorAuthority>,
 }
 
 pub struct FfmpegVideoLoader {
@@ -757,6 +687,9 @@ pub struct FfmpegVideoLoader {
     /// lock protects only lookup/insertion; each reader has its own lock so
     /// unrelated files or streams can decode in parallel.
     readers: Mutex<LruCache<ReaderKey, Arc<Mutex<VideoReader>>>>,
+    /// Pixels and their post-decode color semantics are one cache value. A hit
+    /// can therefore never reconstruct a descriptor from mutable decoder state.
+    frames: Mutex<DecodedFrameCache<VideoFrameCacheKey>>,
 }
 
 impl Default for FfmpegVideoLoader {
@@ -775,6 +708,7 @@ impl FfmpegVideoLoader {
         let capacity = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN);
         Self {
             readers: Mutex::new(LruCache::new(capacity)),
+            frames: Mutex::new(DecodedFrameCache::default()),
         }
     }
 
@@ -855,6 +789,10 @@ impl FfmpegVideoLoader {
     }
 
     fn claim_video_path(&self, path: &str, stream_index: Option<usize>) -> LoadPluginResult<()> {
+        // Automatic decode must establish a direct regular-file identity
+        // before FFmpeg performs any path-based probe. In particular, opening
+        // a document-authored FIFO here could otherwise block indefinitely.
+        let _identity = FileIdentity::read(path).map_err(LoadPluginError::Failed)?;
         if self.has_cached_reader(path, stream_index) {
             return Ok(());
         }
@@ -869,24 +807,6 @@ impl FfmpegVideoLoader {
             }
             Err(_) => Err(LoadPluginError::Unsupported),
         }
-    }
-
-    fn cache_key(
-        reader_key: &ReaderKey,
-        input_color_space: Option<&str>,
-        output_color_space: Option<&str>,
-    ) -> String {
-        format!(
-            "{}\0identity={}\0stream={}\0input={}\0output={}",
-            reader_key.identity.canonical_path.display(),
-            reader_key.identity.cache_token(),
-            reader_key
-                .stream_index
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "best".to_string()),
-            input_color_space.unwrap_or("none"),
-            output_color_space.unwrap_or("none"),
-        )
     }
 
     #[doc(hidden)]
@@ -910,39 +830,49 @@ impl FfmpegVideoLoader {
         path: &str,
         source_time: f64,
         stream_index: Option<usize>,
-        input_color_space: Option<&str>,
-        output_color_space: Option<&str>,
-        cache: &CacheManager,
+        source_color_authority: Option<&crate::model::asset::DecoderSourceColorAuthority>,
+        _cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
         for _attempt in 0..3 {
             let (reader_key, reader) = self.reader(path, stream_index)?;
-            let cache_key = Self::cache_key(&reader_key, input_color_space, output_color_space);
             let mut reader = reader
                 .lock()
                 .map_err(|_| LibraryError::Plugin("FFmpeg reader lock poisoned".to_string()))?;
             let target_pts = reader.target_pts_for_time(source_time)?;
-            let decoded = ffmpeg_color_metadata::decoded_rgba8(&reader.decoder, output_color_space);
-            if let Some(image) = cache.get_video_frame(&cache_key, target_pts) {
+            let frame_key = VideoFrameCacheKey {
+                reader: reader_key.clone(),
+                target_pts,
+                source_color_authority: source_color_authority.cloned(),
+            };
+            let cached = self
+                .frames
+                .lock()
+                .map_err(|_| LibraryError::Plugin("FFmpeg frame cache lock poisoned".to_string()))?
+                .get(&frame_key);
+            if let Some(cached) = cached {
                 drop(reader);
                 if FileIdentity::read(path)? == reader_key.identity {
-                    return Ok(LoadResponse { image, decoded });
+                    return Ok(LoadResponse::new(cached.pixels, cached.decoded));
                 }
                 continue;
             }
 
-            match (input_color_space, output_color_space) {
-                (Some(src), Some(dst)) => reader.set_color_space(src, dst),
-                _ => reader.clear_color_space(),
-            }
-            let image = reader.decode_at_time(source_time);
+            let decoded_frame =
+                reader.decode_at_time_with_description(source_time, source_color_authority);
             drop(reader);
 
             if FileIdentity::read(path)? != reader_key.identity {
                 continue;
             }
-            let image = image?;
-            cache.put_video_frame(&cache_key, target_pts, &image);
-            return Ok(LoadResponse { image, decoded });
+            let decoded_frame = decoded_frame?;
+            self.frames
+                .lock()
+                .map_err(|_| LibraryError::Plugin("FFmpeg frame cache lock poisoned".to_string()))?
+                .put(frame_key, decoded_frame.clone());
+            return Ok(LoadResponse::new(
+                decoded_frame.pixels,
+                decoded_frame.decoded,
+            ));
         }
         Err(LibraryError::Plugin(format!(
             "Media file changed repeatedly while decoding {path:?}"
@@ -966,91 +896,6 @@ impl Plugin for FfmpegVideoLoader {
     fn version(&self) -> (u32, u32, u32) {
         (0, 1, 0)
     }
-}
-
-struct FfmpegRuntime {
-    initialization: Result<(), ffmpeg::Error>,
-    demuxer_extensions: HashSet<String>,
-}
-
-fn collect_registered_ffmpeg_demuxer_extensions() -> HashSet<String> {
-    let mut extensions = HashSet::new();
-    let mut opaque: *mut c_void = std::ptr::null_mut();
-    loop {
-        // SAFETY: `opaque` starts null and is passed back only to
-        // `av_demuxer_iterate`, as required by the FFmpeg iterator API. The
-        // process-wide runtime initializer serializes this registry walk with
-        // FFmpeg's one initialization call.
-        let input_format = unsafe { ffmpeg::ffi::av_demuxer_iterate(&mut opaque) };
-        if input_format.is_null() {
-            break;
-        }
-        // SAFETY: A non-null entry returned by `av_demuxer_iterate` points to
-        // a registered `AVInputFormat` for the lifetime of libavformat.
-        let extension_list = unsafe { (*input_format).extensions };
-        if extension_list.is_null() {
-            continue;
-        }
-        // SAFETY: `AVInputFormat.extensions` is either null or a
-        // null-terminated, comma-separated string owned by libavformat.
-        let extension_list = unsafe { CStr::from_ptr(extension_list) }.to_string_lossy();
-        extensions.extend(
-            extension_list
-                .split(',')
-                .map(str::trim)
-                .filter(|extension| !extension.is_empty())
-                .map(str::to_ascii_lowercase),
-        );
-    }
-    extensions
-}
-
-fn ffmpeg_runtime() -> &'static FfmpegRuntime {
-    static RUNTIME: OnceLock<FfmpegRuntime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        #[cfg(test)]
-        FFMPEG_INITIALIZER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let initialization = ffmpeg::init();
-        let demuxer_extensions = collect_registered_ffmpeg_demuxer_extensions();
-        FfmpegRuntime {
-            initialization,
-            demuxer_extensions,
-        }
-    })
-}
-
-#[cfg(test)]
-static FFMPEG_INITIALIZER_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-fn initialize_ffmpeg() -> Result<(), LibraryError> {
-    ffmpeg_runtime().initialization.map_err(LibraryError::from)
-}
-
-fn registered_ffmpeg_demuxer_extensions() -> &'static HashSet<String> {
-    &ffmpeg_runtime().demuxer_extensions
-}
-
-fn has_registered_ffmpeg_media_extension(path: &str) -> bool {
-    let extension = Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
-    extension.is_some_and(|extension| {
-        registered_ffmpeg_demuxer_extensions().contains(extension.as_str())
-    })
-}
-
-fn classify_ffmpeg_probe_failure(path: &str, error: LibraryError) -> LoadPluginError {
-    if has_registered_ffmpeg_media_extension(path) {
-        LoadPluginError::Failed(error)
-    } else {
-        LoadPluginError::Unsupported
-    }
-}
-
-fn initialize_ffmpeg_for_path(path: &str) -> LoadPluginResult<()> {
-    initialize_ffmpeg().map_err(|error| classify_ffmpeg_probe_failure(path, error))
 }
 
 impl LoadPlugin for FfmpegVideoLoader {
@@ -1090,8 +935,7 @@ impl LoadPlugin for FfmpegVideoLoader {
             path,
             source_time,
             stream_index,
-            input_color_space,
-            output_color_space,
+            source_color_authority,
         } = request
         {
             self.claim_video_path(path, *stream_index)?;
@@ -1099,8 +943,7 @@ impl LoadPlugin for FfmpegVideoLoader {
                 path,
                 *source_time,
                 *stream_index,
-                input_color_space.as_deref(),
-                output_color_space.as_deref(),
+                source_color_authority.as_ref(),
                 cache,
             )?)
         } else {
@@ -1112,71 +955,6 @@ impl LoadPlugin for FfmpegVideoLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn concurrent_open_load_and_initialization_call_ffmpeg_initializer_once()
-    -> Result<(), Box<dyn std::error::Error>> {
-        const WORKER_COUNT: usize = 12;
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../test_data/e2e_media/h264_24.mp4")
-            .to_string_lossy()
-            .into_owned();
-        let loader = Arc::new(FfmpegVideoLoader::new());
-        let barrier = Arc::new(std::sync::Barrier::new(WORKER_COUNT));
-
-        std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
-            let workers = (0..WORKER_COUNT)
-                .map(|worker_index| {
-                    let loader = Arc::clone(&loader);
-                    let barrier = Arc::clone(&barrier);
-                    let path = path.clone();
-                    scope.spawn(move || -> LoadPluginResult<()> {
-                        barrier.wait();
-                        for rotation in 0..3 {
-                            match (worker_index + rotation) % 3 {
-                                0 => initialize_ffmpeg().map_err(LoadPluginError::from)?,
-                                1 => {
-                                    let metadata = loader.open(&path)?;
-                                    assert!(metadata.iter().any(|stream| {
-                                        stream.kind == crate::model::asset::AssetKind::Video
-                                    }));
-                                }
-                                _ => {
-                                    let loaded = loader.load(
-                                        &LoadRequest::VideoFrame {
-                                            path: path.clone(),
-                                            source_time: 0.0,
-                                            stream_index: None,
-                                            input_color_space: None,
-                                            output_color_space: None,
-                                        },
-                                        &CacheManager::new(),
-                                    )?;
-                                    assert!(loaded.image.width > 0);
-                                    assert!(loaded.image.height > 0);
-                                }
-                            }
-                        }
-                        assert!(registered_ffmpeg_demuxer_extensions().contains("mp4"));
-                        Ok(())
-                    })
-                })
-                .collect::<Vec<_>>();
-            for worker in workers {
-                worker
-                    .join()
-                    .map_err(|_| std::io::Error::other("FFmpeg stress worker panicked"))??;
-            }
-            Ok(())
-        })?;
-
-        assert_eq!(
-            FFMPEG_INITIALIZER_CALLS.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "every FFmpeg entry point must share the process-wide initializer"
-        );
-        Ok(())
-    }
 
     #[test]
     fn missing_and_non_monotonic_timestamps_are_repaired_monotonically() {
@@ -1194,135 +972,5 @@ mod tests {
         assert!(may_use_first_frame_at_start(500, 500));
         assert!(!may_use_first_frame_at_start(501, 500));
         assert!(!may_use_first_frame_at_start(900, 500));
-    }
-
-    #[test]
-    fn demuxer_registry_claims_a_format_missing_from_the_replaced_legacy_table()
-    -> Result<(), Box<dyn std::error::Error>> {
-        initialize_ffmpeg()?;
-        assert!(
-            registered_ffmpeg_demuxer_extensions().contains("nut"),
-            "the linked FFmpeg registry must expose its standard NUT demuxer"
-        );
-        let path = std::env::temp_dir().join(format!(
-            "ffmpeg-registry-routing-{}.nut",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&path, b"not a NUT stream")?;
-        let result = FfmpegVideoLoader::new().open(&path.to_string_lossy());
-        std::fs::remove_file(path)?;
-        let Err(LoadPluginError::Failed(LibraryError::Ffmpeg(error))) = result else {
-            return Err(std::io::Error::other(
-                "a registry-known NUT path must preserve its concrete FFmpeg probe error",
-            )
-            .into());
-        };
-        assert!(!error.to_string().is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn initialization_failure_declines_unknown_extensions_but_claims_registered_ones() {
-        let unknown = classify_ffmpeg_probe_failure(
-            "/fixtures/runtime.rgba-fixture",
-            LibraryError::Plugin("synthetic init failure".to_string()),
-        );
-        assert!(matches!(unknown, LoadPluginError::Unsupported));
-
-        assert!(has_registered_ffmpeg_media_extension(
-            "/fixtures/broken.mp4"
-        ));
-        let known = classify_ffmpeg_probe_failure(
-            "/fixtures/broken.mp4",
-            LibraryError::Plugin("synthetic init failure".to_string()),
-        );
-        assert!(matches!(known, LoadPluginError::Failed(_)));
-    }
-
-    #[test]
-    fn valid_ffmpeg_content_with_an_unknown_extension_is_claimed_by_magic_probe()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/e2e_media/h264_24.mp4");
-        let path = std::env::temp_dir().join(format!(
-            "ffmpeg-renamed-video-{}.asset",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::copy(fixture, &path)?;
-        let path_text = path.to_string_lossy().into_owned();
-        let loader = FfmpegVideoLoader::new();
-        let streams = loader.open(&path_text)?;
-        assert!(
-            streams
-                .iter()
-                .any(|stream| { stream.kind == crate::model::asset::AssetKind::Video })
-        );
-        let loaded = loader.load(
-            &LoadRequest::VideoFrame {
-                path: path_text,
-                source_time: 0.0,
-                stream_index: None,
-                input_color_space: None,
-                output_color_space: None,
-            },
-            &CacheManager::new(),
-        )?;
-        assert!(loaded.image.width > 0);
-        assert!(loaded.image.height > 0);
-        std::fs::remove_file(path)?;
-        Ok(())
-    }
-
-    #[test]
-    fn unknown_probe_failure_is_unsupported_but_registered_media_failure_is_concrete()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let stem =
-            std::env::temp_dir().join(format!("ffmpeg-probe-routing-{}", uuid::Uuid::new_v4()));
-        let custom_path = stem.with_extension("rgba-fixture");
-        let media_path = stem.with_extension("mp4");
-        std::fs::write(&custom_path, b"not an ffmpeg container")?;
-        std::fs::write(&media_path, b"not an ffmpeg container")?;
-        let custom_path_text = custom_path.to_string_lossy().into_owned();
-        let media_path_text = media_path.to_string_lossy().into_owned();
-        let loader = FfmpegVideoLoader::new();
-        assert!(matches!(
-            loader.open(&custom_path_text),
-            Err(LoadPluginError::Unsupported)
-        ));
-        assert!(matches!(
-            loader.load(
-                &LoadRequest::VideoFrame {
-                    path: custom_path_text,
-                    source_time: 0.0,
-                    stream_index: None,
-                    input_color_space: None,
-                    output_color_space: None,
-                },
-                &CacheManager::new(),
-            ),
-            Err(LoadPluginError::Unsupported)
-        ));
-        let media_result = loader.open(&media_path_text);
-        let media_load_result = loader.load(
-            &LoadRequest::VideoFrame {
-                path: media_path_text,
-                source_time: 0.0,
-                stream_index: None,
-                input_color_space: None,
-                output_color_space: None,
-            },
-            &CacheManager::new(),
-        );
-        std::fs::remove_file(custom_path)?;
-        std::fs::remove_file(media_path)?;
-        assert!(matches!(
-            media_result,
-            Err(LoadPluginError::Failed(LibraryError::Ffmpeg(_)))
-        ));
-        assert!(matches!(
-            media_load_result,
-            Err(LoadPluginError::Failed(LibraryError::Ffmpeg(_)))
-        ));
-        Ok(())
     }
 }

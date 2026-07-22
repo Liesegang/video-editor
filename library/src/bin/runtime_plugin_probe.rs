@@ -403,16 +403,15 @@ fn verify_runtime_image_loader(manager: &PluginManager) -> anyhow::Result<()> {
         {
             bail!("runtime Loader returned wrong metadata: {stream:?}")
         }
-        let loaded = manager.load_resource(
-            &LoadRequest::Image {
-                path: path_text.clone(),
-            },
-            &CacheManager::new(),
-        )?;
-        if loaded.image.width != 2
-            || loaded.image.height != 1
-            || loaded.image.data != [9, 8, 7, 255, 0, 0, 0, 0]
-        {
+        let loaded = manager
+            .load_resource(
+                &LoadRequest::Image {
+                    path: path_text.clone(),
+                },
+                &CacheManager::new(),
+            )?
+            .into_rgba8()?;
+        if loaded.width != 2 || loaded.height != 1 || loaded.data != [9, 8, 7, 255, 0, 0, 0, 0] {
             bail!("runtime Loader returned wrong/corrupt RGBA8 pixels")
         }
 
@@ -449,8 +448,10 @@ fn verify_runtime_image_loader(manager: &PluginManager) -> anyhow::Result<()> {
 fn verify_runtime_video_loader(manager: &PluginManager) -> anyhow::Result<()> {
     const SOURCE_TIME: f64 = 1.25;
     const STREAM_INDEX: usize = 7;
-    const INPUT_COLOR_SPACE: &str = "fixture-linear";
-    const OUTPUT_COLOR_SPACE: &str = "fixture-display";
+    // Frozen Loader ABI v1 still contains these byte views, but the host no
+    // longer transports config-less names through its typed request model.
+    const INPUT_COLOR_SPACE: &str = "";
+    const OUTPUT_COLOR_SPACE: &str = "";
 
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -475,8 +476,7 @@ fn verify_runtime_video_loader(manager: &PluginManager) -> anyhow::Result<()> {
         path: path_text.clone(),
         source_time,
         stream_index: Some(STREAM_INDEX),
-        input_color_space: Some(INPUT_COLOR_SPACE.to_string()),
-        output_color_space: Some(OUTPUT_COLOR_SPACE.to_string()),
+        source_color_authority: None,
     };
     let result = (|| -> anyhow::Result<()> {
         let streams = manager
@@ -510,10 +510,12 @@ fn verify_runtime_video_loader(manager: &PluginManager) -> anyhow::Result<()> {
             )
         }
 
-        let loaded = manager.load_resource(&request(SOURCE_TIME), &CacheManager::new())?;
-        if loaded.image.width != 2
-            || loaded.image.height != 1
-            || loaded.image.data != [11, 22, 33, 255, 44, 55, 66, 128]
+        let loaded = manager
+            .load_resource(&request(SOURCE_TIME), &CacheManager::new())?
+            .into_rgba8()?;
+        if loaded.width != 2
+            || loaded.height != 1
+            || loaded.data != [11, 22, 33, 255, 44, 55, 66, 128]
         {
             bail!("runtime Loader returned wrong custom video pixels")
         }

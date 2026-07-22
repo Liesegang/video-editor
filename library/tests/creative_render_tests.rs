@@ -187,6 +187,7 @@ fn preview(project: &Project, frame_number: u64, plugins: &Arc<PluginManager>) -
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
@@ -269,21 +270,20 @@ fn assert_preview_matches_export(
     let renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None)?;
     let mut render_service =
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
-    let mut exporter = ExportService::new(
-        Arc::clone(plugins),
-        "png_export".to_string(),
-        Arc::new(ExportSettings::for_dimensions(WIDTH, HEIGHT, FPS)),
-        1,
-    );
+    let settings = ExportSettings::from_project(model.project().as_ref(), model.composition())?;
     let stem = stem
         .to_str()
         .context("temporary export path must be UTF-8")?;
-    let render_result = exporter.render_range(
-        &mut render_service,
-        &model,
-        frame_number..frame_number + 1,
-        stem,
-    );
+    let plan = ExportService::verify_plan(&model, &settings, frame_number..frame_number + 1, stem)?;
+    let mut exporter = ExportService::new(
+        Arc::clone(plugins),
+        "png_export".to_string(),
+        Arc::new(settings),
+        plan,
+        1,
+    )?;
+    let render_result =
+        exporter.render_range(&mut render_service, &model, frame_number..frame_number + 1);
     let shutdown_result = exporter.shutdown();
     render_result.context("PNG export must render the requested frame")?;
     shutdown_result.context("PNG exporter must shut down cleanly")?;
@@ -291,7 +291,7 @@ fn assert_preview_matches_export(
     let path = format!("{stem}_{frame_number:03}.png");
     let exported = NativeImageLoader::new()
         .load(&LoadRequest::Image { path }, &CacheManager::new())?
-        .image;
+        .into_rgba8()?;
     assert_eq!((exported.width, exported.height), (WIDTH, HEIGHT));
     assert_eq!(exported.data, expected.data);
     Ok(())

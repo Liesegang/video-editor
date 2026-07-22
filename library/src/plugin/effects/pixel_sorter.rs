@@ -56,6 +56,12 @@ impl EffectPlugin for PixelSorterPlugin {
             .map_err(|error| LibraryError::Plugin(error.to_string()))?;
 
         let (width, height, input_data) = match input {
+            crate::rendering::renderer::RenderOutput::Working(_) => {
+                return Err(LibraryError::Plugin(
+                    "Pixel Sorter supports only the unmanaged encoded-sRGBA8 effect boundary"
+                        .to_string(),
+                ));
+            }
             crate::rendering::renderer::RenderOutput::Image(image) => {
                 (image.width, image.height, image.data.as_slice())
             }

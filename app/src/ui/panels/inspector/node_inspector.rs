@@ -68,6 +68,8 @@ pub(super) fn render_node(
 
     path_effect::render_contract(ui, node);
 
+    render_legacy_media_color_repair(ui, node, project_service, history_manager, needs_refresh);
+
     render_node_properties(
         ui,
         node,
@@ -123,7 +125,7 @@ pub(super) fn render_node_properties(
     definitions.extend(
         inferred_property_definitions(node.properties(), current_time)
             .into_iter()
-            .filter(|definition| !known_names.contains(definition.name())),
+            .filter(|definition| exact_node_property_is_visible(definition.name(), &known_names)),
     );
 
     if !definitions.is_empty() {
@@ -144,6 +146,70 @@ pub(super) fn render_node_properties(
             matches!(node.content(), NodeContent::Color(ColorContent::Compose)),
             needs_refresh,
         );
+    }
+}
+
+fn exact_node_property_is_visible(name: &str, known_names: &HashSet<String>) -> bool {
+    !known_names.contains(name) && !library::model::is_legacy_media_color_property(name)
+}
+
+fn render_legacy_media_color_repair(
+    ui: &mut Ui,
+    node: &Node,
+    project_service: &EditorService,
+    history_manager: &mut HistoryManager,
+    needs_refresh: &mut bool,
+) {
+    let active = library::model::active_legacy_media_color_properties(node);
+    if active.is_empty() {
+        return;
+    }
+    let details = active
+        .iter()
+        .map(|property| format!("{}: {}", property.key(), property.authored_state()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = format!(
+        "This Media Node is fail-closed because deprecated config-less color fields remain ({details}). Source interpretation now belongs to the Asset. Assign it from the Clip Inspector, then clear these retired fields explicitly."
+    );
+    let response = ui.colored_label(ui.visuals().error_fg_color, &message);
+    crate::qa::register_component_with_metadata(
+        format!("inspector.node_legacy_source_color:{}.diagnostic", node.id),
+        "node_legacy_source_color_diagnostic",
+        response.rect,
+        true,
+        Some(serde_json::json!({
+            "node_id": node.id,
+            "properties": active.iter().map(|property| property.key()).collect::<Vec<_>>(),
+            "message": message,
+            "rendering": "fail_closed",
+        })),
+    );
+    let clear = ui.button("Clear retired Node color fields");
+    crate::qa::register_component_with_metadata(
+        format!("inspector.node_legacy_source_color:{}.clear", node.id),
+        "node_legacy_source_color_clear",
+        clear.rect,
+        true,
+        Some(serde_json::json!({
+            "node_id": node.id,
+            "explicit_repair": true,
+            "asset_assignment_unchanged": true,
+        })),
+    );
+    if clear.clicked() {
+        match project_service.clear_legacy_media_node_color_properties(node.id) {
+            Ok(()) => {
+                match project_service.get_project().read() {
+                    Ok(project) => history_manager.push_project_state(project.clone()),
+                    Err(error) => {
+                        log::error!("Failed to capture legacy color repair history: {error}")
+                    }
+                }
+                *needs_refresh = true;
+            }
+            Err(error) => log::error!("Failed to clear legacy Media color fields: {error}"),
+        }
     }
 }
 
@@ -536,5 +602,16 @@ mod tests {
     fn linked_compose_picker_never_authors_fallback_channels() {
         let color = ColorValue::new(ColorSpaceRef::srgb(), [0.2, 0.3, 0.4, 0.5]).unwrap();
         assert!(compose_picker_actions(Some(color), true, true).is_empty());
+    }
+
+    #[test]
+    fn exact_node_inspector_never_exposes_retired_color_controls() {
+        let known = HashSet::new();
+        assert!(!exact_node_property_is_visible("input_color_space", &known));
+        assert!(!exact_node_property_is_visible(
+            "output_color_space",
+            &known
+        ));
+        assert!(exact_node_property_is_visible("file_path", &known));
     }
 }

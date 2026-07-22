@@ -40,12 +40,15 @@ jobs:
           Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
           Remove-Item $installerPath
 
-      - name: Build Release
+      # The moving vcpkg checkout below does not provide an exact OpenColorIO
+      # runtime contract. Keep app/opencolorio disabled until a pinned runtime
+      # and its DLLs are packaged and tested with the installer.
+      - name: Build Release (built-in color backend; no OpenColorIO runtime)
         run: |
           # Visual Studioの環境変数を設定
           $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Community"
           $vcvarsPath = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvarsPath`" && cargo build -p app --release"
+          cmd /c "`"$vcvarsPath`" && cargo build -p app --release --no-default-features"
 
       - name: Package
         run: |

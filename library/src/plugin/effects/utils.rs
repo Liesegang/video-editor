@@ -35,6 +35,40 @@ where
     };
 
     match input {
+        RenderOutput::Working(working) => {
+            let image = crate::rendering::skia_working_surface::linear_working_to_skia_image(
+                working.pixels(),
+            )?;
+            let width = working.pixels().width();
+            let height = working.pixels().height();
+            let mut surface = crate::rendering::skia_working_surface::create_working_surface(
+                width,
+                height,
+                gpu_context.map(|context| &mut context.direct_context),
+            )?;
+            surface
+                .canvas()
+                .clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+            let mut paint = Paint::default();
+            paint.set_image_filter(filter_factory(&image, width, height)?);
+            surface.canvas().draw_image(&image, (0, 0), Some(&paint));
+            let pixels = crate::rendering::skia_working_surface::surface_to_linear_working(
+                &mut surface,
+                width,
+                height,
+            )?;
+            // SAFETY: This spatial Skia filter path uses a linear RGBAF32
+            // surface, introduces no authored color and applies no color
+            // transform. The PluginManager admits only effects which declare
+            // this exact preserving contract and verifies the returned token.
+            let output = unsafe {
+                ruvie_color_management::ManagedLinearWorkingImage::from_working_pixels_unchecked(
+                    working.identity().clone(),
+                    pixels,
+                )
+            };
+            Ok(RenderOutput::Working(output))
+        }
         RenderOutput::Texture(info) => {
             if let Some(ctx) = gpu_context {
                 let image = crate::rendering::skia_utils::create_image_from_texture(

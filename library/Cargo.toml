@@ -11,6 +11,7 @@ workspace = true
 [features]
 default = ["gl"]
 gl = []
+opencolorio = ["ruvie-color-management/opencolorio"]
 
 [dependencies]
 ruvie-color-management = { version = "0.1.0", path = "../color-management" }
@@ -30,6 +31,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "tiff",
     "webp",
 ] }
+png = "0.18.1"
 skia-safe = { version = "0.91.0", features = ["gpu", "gl", "textlayout"] }
 
 log = "0.4.26"
@@ -43,6 +45,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
+    "Win32_Storage_FileSystem",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_OpenGL"
 ] }
@@ -56,5 +59,10 @@ cpal = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 rtrb = "0.3"
 anyhow = "1.0.103"
-bytemuck = "1.25.1"
+bytemuck = { version = "1.25.1", features = ["extern_crate_alloc"] }
+half = "2.7.1"
+libc = "0.2"
 unicode-segmentation = "1.12"
+
+[dev-dependencies]
+tempfile = "3.27"

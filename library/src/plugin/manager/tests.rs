@@ -9,8 +9,12 @@ use crate::model::frame::entity::StyleConfig;
 use crate::model::project::{Composition, EvalOutput, PortDirection, Project, TIME_PORT};
 use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::{
-    FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, PropertyEvaluator,
-    PropertyPlugin,
+    EffectColorDomain, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError,
+    PropertyEvaluator, PropertyPlugin,
+};
+use ruvie_color_management::{
+    BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
+    LINEAR_SRGB_SPACE_ID, ManagedLinearWorkingImage, SRGB_SPACE_ID, WorkingColorIdentity,
 };
 
 #[test]
@@ -332,6 +336,7 @@ impl Drop for ReentrantDropEffect {
 }
 
 struct ReplacementEffect;
+struct ContractDroppingEffect;
 
 struct MetadataProbeLoader {
     id: &'static str,
@@ -414,6 +419,76 @@ macro_rules! impl_reentrant_test_effect {
 
 impl_reentrant_test_effect!(ReentrantDropEffect);
 impl_reentrant_test_effect!(ReplacementEffect);
+
+impl Plugin for ContractDroppingEffect {
+    fn id(&self) -> &str {
+        "contract-dropping-effect"
+    }
+
+    fn name(&self) -> String {
+        "Contract Dropping Effect".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Tests".to_string()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl EffectPlugin for ContractDroppingEffect {
+    fn apply(
+        &self,
+        _input: &RenderOutput,
+        _params: &HashMap<String, PropertyValue>,
+        _gpu_context: Option<&mut GpuContext>,
+    ) -> Result<RenderOutput, LibraryError> {
+        Ok(RenderOutput::Image(crate::model::frame::Image::new(
+            1,
+            1,
+            vec![0, 0, 0, 0],
+        )))
+    }
+
+    fn properties(&self) -> Vec<PropertyDefinition> {
+        Vec::new()
+    }
+
+    fn color_domain(&self) -> EffectColorDomain {
+        EffectColorDomain::ProjectLinearPreserving
+    }
+}
+
+fn managed_test_output(config: &str) -> RenderOutput {
+    let backend = BuiltinColorTransform;
+    let context = ColorContext::default();
+    let source = backend
+        .verify_source_space(SRGB_SPACE_ID, &context)
+        .unwrap();
+    let working = backend
+        .verify_working_space(LINEAR_SRGB_SPACE_ID, &context)
+        .unwrap();
+    let identity = WorkingColorIdentity::from_verified(config, working).unwrap();
+    let processor = backend
+        .create_cpu_processor(&ColorTransformRequest::source_to_working(
+            SRGB_SPACE_ID,
+            LINEAR_SRGB_SPACE_ID,
+        ))
+        .unwrap();
+    RenderOutput::Working(
+        ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            identity,
+            &source,
+            1,
+            1,
+            [64, 128, 255, 255],
+            processor.as_ref(),
+        )
+        .unwrap(),
+    )
+}
 
 impl Plugin for EvaluatedValueStylePlugin {
     fn id(&self) -> &str {
@@ -696,4 +771,64 @@ fn metadata_probe_preserves_claimed_loader_failure() -> Result<(), Box<dyn std::
     assert!(message.contains("/fixtures/custom.asset"));
     assert!(!message.contains("No compatible load plugin"));
     Ok(())
+}
+
+#[test]
+fn replacing_same_id_plugin_advances_render_revision() {
+    let manager = PluginManager::new();
+    let initial_revision = manager.render_revision();
+
+    manager.register_load_plugin(Arc::new(MetadataProbeLoader {
+        id: "replaceable-loader",
+        failure: None,
+    }));
+    let registered_revision = manager.render_revision();
+    assert!(
+        registered_revision > initial_revision,
+        "registering a render dependency must invalidate Preview authority"
+    );
+
+    manager.register_load_plugin(Arc::new(MetadataProbeLoader {
+        id: "replaceable-loader",
+        failure: Some("replacement implementation"),
+    }));
+    assert!(
+        manager.render_revision() > registered_revision,
+        "replacing a plugin under the same stable ID must also invalidate Preview authority"
+    );
+}
+
+#[test]
+fn project_working_effects_fail_closed_when_missing_or_legacy_only() {
+    let manager = PluginManager::new();
+    let working = managed_test_output("effect-fail-closed");
+    let missing = manager
+        .apply_effect("missing-effect", &working, &HashMap::new(), None)
+        .expect_err("a missing Project effect must not be silently bypassed");
+    assert!(missing.to_string().contains("refusing to bypass"));
+
+    manager.register_effect(Arc::new(ReplacementEffect));
+    let legacy = manager
+        .apply_effect(REENTRANT_EFFECT_ID, &working, &HashMap::new(), None)
+        .expect_err("an unmanaged-only effect must fail before touching Project pixels");
+    assert!(legacy.to_string().contains("unmanaged encoded-sRGBA8"));
+}
+
+#[test]
+fn declared_project_effect_cannot_drop_the_working_contract() {
+    let manager = PluginManager::new();
+    manager.register_effect(Arc::new(ContractDroppingEffect));
+    let error = manager
+        .apply_effect(
+            "contract-dropping-effect",
+            &managed_test_output("effect-contract"),
+            &HashMap::new(),
+            None,
+        )
+        .expect_err("typed Project effect must return the same managed contract");
+    assert!(
+        error
+            .to_string()
+            .contains("dropped the Project working RGBAF32 contract")
+    );
 }

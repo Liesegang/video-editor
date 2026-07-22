@@ -19,8 +19,11 @@ jobs:
           brew install vulkan-headers
           brew install vulkan-validationlayers
 
-      - name: Build Release
-        run: cargo build -p app --release
+      # Homebrew's moving OpenColorIO formula is not an exact, redistributable
+      # runtime contract. Keep app/opencolorio disabled until the pinned native
+      # runtime and dylibs are bundled and tested in this installer.
+      - name: Build Release (built-in color backend; no OpenColorIO runtime)
+        run: cargo build -p app --release --no-default-features
 
       - name: Package
         run: |

@@ -58,9 +58,11 @@ pub enum AuthoringScalarPrecision {
 /// Intended end-to-end rendering contract.
 ///
 /// This is a target contract, not a claim about the current RGBA8 renderer.
-/// Source adapters decode tagged straight pixels, render storage is
-/// scene-linear and premultiplied, and only a display or output boundary
-/// applies a view/encoding transform.
+/// Source adapters decode tagged straight pixels under an explicit source
+/// policy. Render storage is the Project-selected linear working domain with
+/// premultiplied alpha; its exact verified space and context preserve whether
+/// values are scene-derived or display-derived. Only a terminal boundary
+/// applies a view or output encoding transform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColorPipelineContract {
     pub authoring_alpha: AlphaRepresentation,

@@ -31,6 +31,15 @@ pub struct EffectDefinition {
     pub properties: Vec<PropertyDefinition>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectColorDomain {
+    /// The effect consumes the historical encoded straight-sRGBA8 ABI.
+    UnmanagedSrgba8Only,
+    /// The effect preserves premultiplied RGBAF32 samples and their exact
+    /// `WorkingColorIdentity` without applying a display/transfer transform.
+    ProjectLinearPreserving,
+}
+
 pub trait EffectPlugin: Plugin {
     fn apply(
         &self,
@@ -40,6 +49,10 @@ pub trait EffectPlugin: Plugin {
     ) -> Result<RenderOutput, LibraryError>;
 
     fn properties(&self) -> Vec<PropertyDefinition>;
+
+    fn color_domain(&self) -> EffectColorDomain {
+        EffectColorDomain::UnmanagedSrgba8Only
+    }
 
     /// Authoritative graph operation description. Existing native effects
     /// keep their property-definition implementation as the compatibility

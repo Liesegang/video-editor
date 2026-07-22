@@ -8,10 +8,9 @@ use super::{BlendMode, Clip, Node, NodeContent, Track};
 use crate::model::frame::color::Color;
 use crate::model::project::asset::Asset;
 use crate::model::project::property::PropertyMap;
-
 pub mod asset;
 pub mod clip_helpers;
-mod color_management;
+pub(crate) mod color_management;
 pub mod connection;
 mod error;
 mod output_binding;
@@ -19,15 +18,16 @@ mod path_effect_stack;
 pub mod property;
 mod structural_merge;
 mod transaction;
-
 use transaction::{first_new_project_validation_error, port_owner_for_container};
 
 pub use color_management::{
-    ColorConfigCacheIdentity, ColorConfigIdentity, ColorManagementConfig, ColorManagementField,
-    ColorManagementIssue, ColorManagementStructureIssue, DEFAULT_BUNDLED_COLOR_CONFIG_ID,
-    DEFAULT_OUTPUT_COLOR_SPACE, DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_VIEW,
-    DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, ModelValidatedColorManagementConfig,
-    PreviewColorConfig, RequestedColorManagementConfig, ResolvedColorManagementConfig,
+    ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
+    ColorManagementStructureIssue, DEFAULT_BUNDLED_COLOR_CONFIG_ID, DEFAULT_OUTPUT_COLOR_SPACE,
+    DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_SURFACE_ENCODING, DEFAULT_PREVIEW_VIEW,
+    DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, HdrColorField, HdrColorSettings,
+    HdrColorSettingsError, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID, ModelValidatedColorManagementConfig,
+    PqLinearizationPolicy, PreviewColorConfig, PreviewSurfaceEncoding,
+    RequestedColorManagementConfig, ResolvedColorManagementConfig, SrgbSurfaceColorSpaceBinding,
 };
 pub use connection::{
     ANALYSIS_HOP_MS_PROPERTY, ANALYSIS_SAMPLE_RATE_PROPERTY, ANALYSIS_WINDOW_MS_PROPERTY,
@@ -395,7 +395,7 @@ impl Project {
     ) -> Result<(), Vec<ColorManagementIssue>> {
         let diagnostics = color_management.blocking_diagnostics(&self.assets);
         if diagnostics.is_empty() {
-            self.color_management = RequestedColorManagementConfig::Config(color_management);
+            self.color_management = RequestedColorManagementConfig::from_config(color_management);
             Ok(())
         } else {
             Err(diagnostics)

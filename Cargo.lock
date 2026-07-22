@@ -280,6 +280,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "skia-safe",
+ "tempfile",
  "toml",
  "uuid",
 ]
@@ -837,6 +838,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code",
+]
+
+[[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2413,11 +2423,14 @@ dependencies = [
  "cpal",
  "ffmpeg-next",
  "glutin",
+ "half",
  "image",
+ "libc",
  "libloading 0.9.0",
  "log",
  "lru",
  "ordered-float",
+ "png 0.18.1",
  "raw-window-handle",
  "rayon",
  "rtrb",
@@ -2429,6 +2442,7 @@ dependencies = [
  "sha2",
  "skia-safe",
  "symphonia",
+ "tempfile",
  "thiserror 2.0.19",
  "toml",
  "unicode-segmentation",
@@ -3054,6 +3068,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c8bb09a4a2b1d668170cfe0a7d5bc103f8999fb316c98099b6a9939c9f2e79d"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "ocio-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3492534019b59e29dba06014f907dd12824537ed4d293d4108c4bfc669de7fd"
+dependencies = [
+ "ocio-sys",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ocio-sys"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e63251d72d848de5eda39d59cd6490260cf031738ebd518ea37d76b5aae614ec"
+dependencies = [
+ "cc",
+ "cmake",
 ]
 
 [[package]]
@@ -3784,7 +3818,11 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "ruvie-color-management"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "ocio-rs",
  "sha2",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

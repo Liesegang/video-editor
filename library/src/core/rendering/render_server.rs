@@ -1,18 +1,19 @@
 use log::error;
-use lru::LruCache;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
 
+use crate::RenderDestination;
 use crate::cache::SharedCacheManager;
 use crate::editor::RenderService;
 use crate::error::LibraryError;
-use crate::model::frame::Image;
 use crate::model::frame::frame::FrameInfo;
+use crate::model::project::Project;
 use crate::plugin::PluginManager;
 use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::rendering::skia_renderer::SkiaRenderer;
+
+pub use crate::rendering::render_authority::RenderFrameAuthority;
 
 pub struct RenderServer {
     tx: Sender<RenderRequest>,
@@ -21,7 +22,7 @@ pub struct RenderServer {
 }
 
 enum RenderRequest {
-    Render(RenderRequestId, FrameInfo),
+    Render(RenderRequestId, Arc<Project>, FrameInfo),
     SetSharingContext(usize, Option<isize>),
     Shutdown,
 }
@@ -59,8 +60,6 @@ impl RenderServer {
         let (tx_result, rx_result) = channel::<RenderResult>();
 
         let handle = thread::spawn(move || {
-            let cache_capacity = NonZeroUsize::new(50).unwrap_or(NonZeroUsize::MIN);
-            let mut cache: LruCache<FrameInfo, Vec<u8>> = LruCache::new(cache_capacity);
             let mut current_background_color = crate::model::frame::color::Color {
                 r: 0,
                 g: 0,
@@ -92,8 +91,8 @@ impl RenderServer {
 
                 for request in std::iter::once(first_request).chain(rx.try_iter()) {
                     match request {
-                        RenderRequest::Render(request_id, frame_info) => {
-                            pending_render = Some((request_id, frame_info));
+                        RenderRequest::Render(request_id, project, frame_info) => {
+                            pending_render = Some((request_id, project, frame_info));
                         }
                         RenderRequest::SetSharingContext(handle, hwnd) => {
                             if let Some(render_service) = render_service.as_mut()
@@ -107,7 +106,7 @@ impl RenderServer {
                     }
                 }
 
-                let Some((request_id, frame_info)) = pending_render else {
+                let Some((request_id, project, frame_info)) = pending_render else {
                     continue;
                 };
                 let Some(render_service) = render_service.as_mut() else {
@@ -141,25 +140,6 @@ impl RenderServer {
                     )
                 };
 
-                if let Some(cached_image_data) = cache.get(&frame_info) {
-                    if tx_result
-                        .send(RenderResult {
-                            request_id,
-                            frame_hash: 0,
-                            output: Ok(RenderOutput::Image(Image::new(
-                                target_width,
-                                target_height,
-                                cached_image_data.clone(),
-                            ))),
-                            frame_info,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    continue;
-                }
-
                 if current_width != target_width
                     || current_height != target_height
                     || current_background_color != frame_info.background_color
@@ -192,10 +172,11 @@ impl RenderServer {
                     }
                 }
 
-                let output = render_service.render_from_frame_info(&frame_info);
-                if let Ok(RenderOutput::Image(image)) = &output {
-                    cache.put(frame_info.clone(), image.data.clone());
-                }
+                let output = render_service.render_project_frame(
+                    project.as_ref(),
+                    &frame_info,
+                    RenderDestination::Preview,
+                );
                 if let Err(error) = &output {
                     error!("Failed to render frame: {error}");
                 }
@@ -224,8 +205,16 @@ impl RenderServer {
     ///
     /// A failed submission is observable so a caller-side scheduler can clear
     /// its in-flight slot instead of waiting forever for a result.
-    pub fn send_request(&self, request_id: RenderRequestId, frame_info: FrameInfo) -> bool {
-        if let Err(error) = self.tx.send(RenderRequest::Render(request_id, frame_info)) {
+    pub fn send_request(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<Project>,
+        frame_info: FrameInfo,
+    ) -> bool {
+        if let Err(error) = self
+            .tx
+            .send(RenderRequest::Render(request_id, project, frame_info))
+        {
             log::debug!("Render server is unavailable: {error}");
             return false;
         }
@@ -260,6 +249,7 @@ mod tests {
     use crate::cache::CacheManager;
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::FrameInfo;
+    use crate::model::project::Project;
     use crate::plugin::PluginManager;
     use crate::rendering::renderer::RenderOutput;
     use ordered_float::OrderedFloat;
@@ -285,7 +275,12 @@ mod tests {
             Arc::new(PluginManager::default()),
             Arc::new(CacheManager::new()),
         );
-        assert!(server.send_request(RenderRequestId::new(41), empty_frame(0, 0)));
+        let project = Arc::new(Project::new("render server test"));
+        assert!(server.send_request(
+            RenderRequestId::new(41),
+            Arc::clone(&project),
+            empty_frame(0, 0)
+        ));
         let failed = server
             .rx_result
             .recv_timeout(Duration::from_secs(5))
@@ -293,7 +288,7 @@ mod tests {
         assert_eq!(failed.request_id, RenderRequestId::new(41));
         assert!(failed.output.is_err());
 
-        assert!(server.send_request(RenderRequestId::new(42), empty_frame(2, 2)));
+        assert!(server.send_request(RenderRequestId::new(42), project, empty_frame(2, 2)));
         let recovered = server
             .rx_result
             .recv_timeout(Duration::from_secs(5))

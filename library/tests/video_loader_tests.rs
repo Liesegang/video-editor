@@ -3,12 +3,15 @@ use library::LibraryError;
 use library::cache::CacheManager;
 use library::editor::project_service::ProjectManager;
 use library::model::asset::{
-    SourceColorDescription, SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
-    SourceTransferCharacteristic,
+    SourceColorAssumption, SourceColorDescription, SourceColorPrimaries, SourceColorRange,
+    SourceMatrixCoefficients, SourceTransferCharacteristic,
 };
 use library::model::{AssetKind, Project};
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
-use library::plugin::{LoadPlugin, LoadPluginError, LoadRequest, Plugin, PluginManager};
+use library::plugin::{
+    DecodedColorSpace, DecodedPixelBuffer, DecodedRgbConversion, LoadPlugin, LoadPluginError,
+    LoadRequest, LoadResponse, Plugin, PluginManager,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -26,6 +29,38 @@ fn get_media_fixture_path(filename: &str) -> PathBuf {
     let mut path = get_test_file_path("e2e_media");
     path.push(filename);
     path
+}
+
+fn rgba32f_signature(response: &LoadResponse) -> Result<(u32, u32, Vec<[f32; 4]>)> {
+    let DecodedPixelBuffer::StraightRgba32F(pixels) = response.pixels() else {
+        bail!("verified FFmpeg YUV must use straight RGBA32F storage");
+    };
+    Ok((pixels.width(), pixels.height(), pixels.data().to_vec()))
+}
+
+fn untagged_yuv_compatibility_authority()
+-> Option<library::model::asset::DecoderSourceColorAuthority> {
+    Some(
+        library::model::asset::DecoderSourceColorAuthority::CompatibilityAssumption(
+            SourceColorAssumption::UntaggedYuvBt709LimitedV1,
+        ),
+    )
+}
+
+fn decode_untagged_frame(
+    reader: &mut VideoReader,
+    frame_number: u64,
+) -> Result<LoadResponse, LibraryError> {
+    let authority = untagged_yuv_compatibility_authority();
+    reader.decode_frame_typed(frame_number, authority.as_ref())
+}
+
+fn decode_untagged_time(
+    reader: &mut VideoReader,
+    source_time: f64,
+) -> Result<LoadResponse, LibraryError> {
+    let authority = untagged_yuv_compatibility_authority();
+    reader.decode_at_time_typed(source_time, authority.as_ref())
 }
 
 struct TestDirectory(PathBuf);
@@ -94,11 +129,77 @@ fn ffmpeg_probes_rec709_rec2020_pq_hlg_and_untagged_sources() -> Result<()> {
     assert_eq!(
         untagged,
         SourceColorDescription {
+            assumption: Some(SourceColorAssumption::UntaggedYuvBt709LimitedV1),
+            primaries: Some(SourceColorPrimaries::Bt709),
+            transfer: Some(SourceTransferCharacteristic::Bt709),
+            matrix: Some(SourceMatrixCoefficients::Bt709),
+            range: Some(SourceColorRange::Limited),
             bit_depth: Some(8),
-            ..SourceColorDescription::default()
+            profile: None,
         },
-        "codec/pixel format must not be used to guess missing color tags"
+        "untagged 8-bit YUV compatibility must be explicit and versioned"
     );
+    Ok(())
+}
+
+#[test]
+fn ffmpeg_decodes_ten_bit_pq_and_hlg_to_typed_float_without_rgba8_quantization() -> Result<()> {
+    let loader = FfmpegVideoLoader::new();
+    let cache = CacheManager::new();
+    for (fixture_name, expected_transfer) in [
+        ("color_rec2020_pq.mp4", SourceTransferCharacteristic::Pq),
+        ("color_rec2020_hlg.mp4", SourceTransferCharacteristic::Hlg),
+    ] {
+        let request = LoadRequest::VideoFrame {
+            path: get_media_fixture_path(fixture_name)
+                .to_string_lossy()
+                .into_owned(),
+            source_time: 0.0,
+            stream_index: None,
+            source_color_authority: None,
+        };
+        let first = loader.load(&request, &cache)?;
+        assert!(
+            first.as_rgba8().is_none(),
+            "10-bit {fixture_name} must not cross an RGBA8 loader boundary"
+        );
+        let DecodedColorSpace::SourceEncoded(source) = first.decoded().color_space() else {
+            bail!("{fixture_name} must retain its encoded source description");
+        };
+        assert_eq!(source.primaries, Some(SourceColorPrimaries::Bt2020));
+        assert_eq!(source.transfer, Some(expected_transfer));
+        assert_eq!(source.bit_depth, Some(10));
+        assert_eq!(source.matrix, None, "matrix was consumed by swscale");
+        assert_eq!(source.range, None, "range was consumed by swscale");
+        assert!(matches!(
+            first.decoded().rgb_conversion(),
+            DecodedRgbConversion::AppliedYuvToFullRangeRgb(_)
+        ));
+        let DecodedPixelBuffer::StraightRgba32F(first_pixels) = first.pixels() else {
+            bail!("{fixture_name} must use typed RGBA32F storage");
+        };
+        assert_eq!(first_pixels.data().len(), 16 * 16);
+        assert!(
+            first_pixels
+                .data()
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            first_pixels
+                .data()
+                .iter()
+                .all(|pixel| (pixel[3] - 1.0).abs() <= f32::EPSILON)
+        );
+        let first_data = first_pixels.data().to_vec();
+
+        let cached = loader.load(&request, &cache)?;
+        let DecodedPixelBuffer::StraightRgba32F(cached_pixels) = cached.pixels() else {
+            bail!("cached {fixture_name} was downgraded from RGBA32F");
+        };
+        assert_eq!(cached_pixels.data(), first_data.as_slice());
+    }
     Ok(())
 }
 
@@ -172,17 +273,19 @@ fn test_video_reader_decode_frame() -> Result<()> {
         .context("failed to create VideoReader")?;
 
     // Decode frame 0
-    let img0 = reader.decode_frame(0).context("failed to decode frame 0")?;
-    assert_eq!(img0.width, reader.get_dimensions().0);
-    assert_eq!(img0.height, reader.get_dimensions().1);
-    assert!(!img0.data.is_empty());
+    let img0 = rgba32f_signature(
+        &decode_untagged_frame(&mut reader, 0).context("failed to decode frame 0")?,
+    )?;
+    assert_eq!(img0.0, reader.get_dimensions().0);
+    assert_eq!(img0.1, reader.get_dimensions().1);
+    assert!(!img0.2.is_empty());
 
     // Decode frame 30 (1 sec in)
-    let img30 = reader
-        .decode_frame(30)
-        .context("failed to decode frame 30")?;
-    assert_eq!(img30.width, reader.get_dimensions().0);
-    assert!(!img30.data.is_empty());
+    let img30 = rgba32f_signature(
+        &decode_untagged_frame(&mut reader, 30).context("failed to decode frame 30")?,
+    )?;
+    assert_eq!(img30.0, reader.get_dimensions().0);
+    assert!(!img30.2.is_empty());
     Ok(())
 }
 
@@ -201,9 +304,10 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
         "fixture must have a late frame"
     );
 
-    let direct = direct_reader
-        .decode_frame(target)
-        .context("late random-access decode should succeed")?;
+    let direct = rgba32f_signature(
+        &decode_untagged_frame(&mut direct_reader, target)
+            .context("late random-access decode should succeed")?,
+    )?;
     let random_access_stats = direct_reader.last_decode_stats();
     println!("late frame {target}: {random_access_stats:?}");
     let maximum_reasonable_preroll = (fps.ceil() as u64) * 4;
@@ -219,8 +323,7 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
         random_access_stats.video_packets_read
     );
     for random_target in [target - 2_000, target - 400, target - 4_000] {
-        direct_reader
-            .decode_frame(random_target)
+        decode_untagged_frame(&mut direct_reader, random_target)
             .context("random tail frame should decode after a bounded seek")?;
         let stats = direct_reader.last_decode_stats();
         assert_eq!(stats.seek_count, 1);
@@ -235,23 +338,20 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
     }
 
     let mut sequential_reader = VideoReader::new(path).context("failed to create VideoReader")?;
-    sequential_reader
-        .decode_frame(target - 1)
+    decode_untagged_frame(&mut sequential_reader, target - 1)
         .context("neighbor frame should decode")?;
-    let through_reused_state = sequential_reader
-        .decode_frame(target)
-        .context("sequential late frame should decode")?;
+    let through_reused_state = rgba32f_signature(
+        &decode_untagged_frame(&mut sequential_reader, target)
+            .context("sequential late frame should decode")?,
+    )?;
     let sequential_stats = sequential_reader.last_decode_stats();
     assert_eq!(
         sequential_stats.seek_count, 0,
         "adjacent frame should reuse decoder state"
     );
-    assert_eq!(direct.width, through_reused_state.width);
-    assert_eq!(direct.height, through_reused_state.height);
-    assert_eq!(direct.data, through_reused_state.data);
+    assert_eq!(direct, through_reused_state);
     for sequential_target in target + 1..=target + 4 {
-        sequential_reader
-            .decode_frame(sequential_target)
+        decode_untagged_frame(&mut sequential_reader, sequential_target)
             .context("continuous tail access should keep advancing one decoder")?;
         assert_eq!(sequential_reader.last_decode_stats().seek_count, 0);
     }
@@ -283,8 +383,7 @@ fn video_loader_reuses_a_thread_safe_reader() -> Result<()> {
                     path,
                     source_time: (target + offset) as f64 / fps,
                     stream_index: None,
-                    input_color_space: None,
-                    output_color_space: None,
+                    source_color_authority: untagged_yuv_compatibility_authority(),
                 },
                 &cache,
             )
@@ -296,8 +395,8 @@ fn video_loader_reuses_a_thread_safe_reader() -> Result<()> {
             .join()
             .map_err(|_| anyhow!("loader worker panicked"))?
             .context("concurrent frame decode failed")?;
-        assert!(response.image.width > 0);
-        assert!(response.image.height > 0);
+        assert!(response.pixels().width() > 0);
+        assert!(response.pixels().height() > 0);
     }
     assert_eq!(
         loader.cached_reader_count(),
@@ -322,8 +421,7 @@ fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() ->
                     path: path.to_string_lossy().into_owned(),
                     source_time: 0.0,
                     stream_index: Some(0),
-                    input_color_space: None,
-                    output_color_space: None,
+                    source_color_authority: untagged_yuv_compatibility_authority(),
                 },
                 &cache,
             )
@@ -332,17 +430,16 @@ fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() ->
     assert_eq!(loader.reader_capacity(), 2);
     assert_eq!(loader.cached_reader_count(), 2);
 
-    let replaceable = directory.0.join("replaceable.mkv");
-    fs::copy(get_media_fixture_path("multistream.mkv"), &replaceable)?;
+    let replaceable = directory.0.join("replaceable.mp4");
+    fs::copy(get_media_fixture_path("h264_24.mp4"), &replaceable)?;
     let request = || LoadRequest::VideoFrame {
         path: replaceable.to_string_lossy().into_owned(),
         source_time: 0.0,
         stream_index: Some(0),
-        input_color_space: None,
-        output_color_space: None,
+        source_color_authority: untagged_yuv_compatibility_authority(),
     };
-    let original = loader.load(&request(), &cache)?.image;
-    assert_eq!((original.width, original.height), (8, 6));
+    let original = rgba32f_signature(&loader.load(&request(), &cache)?)?;
+    assert_eq!((original.0, original.1), (12, 8));
 
     fs::write(&replaceable, b"not a media file")?;
     let error = require_error(
@@ -351,10 +448,10 @@ fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() ->
     )?;
     assert!(matches!(error, LoadPluginError::Failed(_)));
 
-    fs::copy(get_media_fixture_path("vp9_odd.webm"), &replaceable)?;
-    let replacement = loader.load(&request(), &cache)?.image;
-    assert_eq!((replacement.width, replacement.height), (9, 7));
-    assert_ne!(original.data, replacement.data);
+    fs::copy(get_media_fixture_path("color_untagged.mp4"), &replaceable)?;
+    let replacement = rgba32f_signature(&loader.load(&request(), &cache)?)?;
+    assert_eq!((replacement.0, replacement.1), (16, 16));
+    assert_ne!(original.2, replacement.2);
     assert!(loader.cached_reader_count() <= loader.reader_capacity());
     Ok(())
 }
@@ -376,14 +473,13 @@ fn default_plugin_manager_loads_video_frames() -> Result<()> {
                 path: path.to_string_lossy().into_owned(),
                 source_time: 0.0,
                 stream_index: None,
-                input_color_space: None,
-                output_color_space: None,
+                source_color_authority: untagged_yuv_compatibility_authority(),
             },
             &library::cache::CacheManager::new(),
         )
         .context("default PluginManager should decode a video frame")?;
-    assert!(response.image.width > 0);
-    assert!(response.image.height > 0);
+    assert!(response.pixels().width() > 0);
+    assert!(response.pixels().height() > 0);
     Ok(())
 }
 
@@ -401,14 +497,12 @@ fn first_last_and_out_of_range_frames_have_distinct_results() -> Result<()> {
         .context("fixture stream duration must be present")?;
     let fps = reader.get_fps();
 
-    reader.decode_frame(0).context("first frame must decode")?;
-    reader
-        .decode_frame(frame_count - 1)
-        .context("last valid frame must decode")?;
+    decode_untagged_frame(&mut reader, 0).context("first frame must decode")?;
+    decode_untagged_frame(&mut reader, frame_count - 1).context("last valid frame must decode")?;
 
     for source_time in [duration, duration + 1.0 / fps] {
         let error = require_error(
-            reader.decode_at_time(source_time),
+            decode_untagged_time(&mut reader, source_time),
             "the stream end and later timestamps are outside the half-open range",
         )?;
         assert!(matches!(
@@ -426,7 +520,7 @@ fn first_last_and_out_of_range_frames_have_distinct_results() -> Result<()> {
     }
 
     let error = require_error(
-        reader.decode_frame(frame_count),
+        decode_untagged_frame(&mut reader, frame_count),
         "frame_count is outside the valid half-open range",
     )?;
     assert!(matches!(
@@ -447,8 +541,7 @@ fn first_last_and_out_of_range_frames_have_distinct_results() -> Result<()> {
                     path: path.clone(),
                     source_time,
                     stream_index: Some(0),
-                    input_color_space: None,
-                    output_color_space: None,
+                    source_color_authority: None,
                 },
                 &CacheManager::new(),
             ),
@@ -512,16 +605,16 @@ impl LoadPlugin for ClaimingFailureLoader {
 
 #[test]
 fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() -> Result<()> {
+    let claimed = tempfile::Builder::new().suffix(".mp4").tempfile()?;
     let manager = PluginManager::new();
     manager.register_load_plugin(Arc::new(ClaimingFailureLoader));
     let error = require_error(
         manager.load_resource(
             &LoadRequest::VideoFrame {
-                path: "claimed.mp4".to_string(),
+                path: claimed.path().to_string_lossy().into_owned(),
                 source_time: 42.0,
                 stream_index: Some(0),
-                input_color_space: None,
-                output_color_space: None,
+                source_color_authority: None,
             },
             &CacheManager::new(),
         ),
@@ -563,7 +656,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
     use library::model::frame::entity::{FrameContent, FrameItem};
     use library::model::project::{Composition, NodeContainer};
     use library::model::{Clip, Project};
-    use library::{RenderService, SkiaRenderer};
+    use library::{RenderDestination, RenderService, SkiaRenderer};
     use ordered_float::OrderedFloat;
 
     let path = get_test_file_path("test.mp4")
@@ -590,6 +683,26 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
     asset.width = Some(1280);
     asset.height = Some(720);
     asset.stream_index = Some(0);
+    asset
+        .source_color
+        .replace_complete_override(SourceColorDescription {
+            assumption: None,
+            // This override supplies only the exact YUV decode operation.
+            // Encoded RGB interpretation remains solely the config-bound sRGB
+            // assignment below; no second CICP authority is introduced.
+            primaries: None,
+            transfer: None,
+            matrix: Some(SourceMatrixCoefficients::Bt709),
+            range: Some(SourceColorRange::Limited),
+            bit_depth: Some(8),
+            profile: None,
+        });
+    let source_binding = project
+        .requested_color_management_config()
+        .context("default Project must have a color configuration")?
+        .source_space_binding("sRGB")
+        .map_err(|error| anyhow!(error))?;
+    asset.source_color.assign_space(source_binding);
     let asset_id = asset.id;
     project.assets.push(asset);
 
@@ -659,7 +772,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
         Arc::new(CacheManager::new()),
     );
     render_service
-        .render_from_frame_info(&frame)
+        .render_project_frame(&project, &frame, RenderDestination::Preview)
         .context("UI-equivalent late frame must render through PluginManager")?;
 
     // Extending a Clip beyond the source does not silently clamp or ask the
@@ -681,8 +794,160 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
         "timeline time past the source must become NoOutput"
     );
     render_service
-        .render_from_frame_info(&out_of_range_frame)
+        .render_project_frame(&project, &out_of_range_frame, RenderDestination::Preview)
         .context("NoOutput outside the source range renders harmlessly")?;
+    Ok(())
+}
+
+#[test]
+fn pre_color_project_explicitly_reprobes_untagged_yuv_and_survives_preview() -> Result<()> {
+    use library::core::framing::FrameEvaluator;
+    use library::editor::project_service::MediaNodeRequest;
+    use library::model::Clip;
+    use library::model::frame::color::Color;
+    use library::model::project::{Composition, NodeContainer};
+    use library::rendering::renderer::RenderOutput;
+    use library::{RenderDestination, RenderService, SkiaRenderer};
+
+    let path = get_media_fixture_path("color_untagged.mp4")
+        .to_string_lossy()
+        .into_owned();
+    let plugin_manager = Arc::new(PluginManager::default());
+    let shared = Arc::new(RwLock::new(Project::new("untagged video import")));
+    let manager = ProjectManager::new(Arc::clone(&shared), Arc::clone(&plugin_manager));
+    let imported_ids = manager.import_file(&path)?;
+    let imported_project = shared
+        .read()
+        .map_err(|error| anyhow!("project lock poisoned: {error}"))?
+        .clone();
+    let mut pre_color_json = serde_json::to_value(&imported_project)?;
+    for asset in pre_color_json["assets"]
+        .as_array_mut()
+        .context("Project assets must serialize as an array")?
+    {
+        if asset["kind"] == "Video" {
+            // This is the exact pre-authority shape produced by the previous
+            // importer for an untagged video: storage depth was retained, but
+            // no versioned interpretation/matrix/range authority existed.
+            asset["source_color"] = serde_json::json!({
+                "detected": {"bit_depth": 8}
+            });
+        }
+    }
+    let repaired_shared = Arc::new(RwLock::new(Project::new("load target")));
+    let repaired_manager =
+        ProjectManager::new(Arc::clone(&repaired_shared), Arc::clone(&plugin_manager));
+    repaired_manager.load_project(&serde_json::to_string(&pre_color_json)?)?;
+    let legacy_asset = repaired_shared
+        .read()
+        .map_err(|error| anyhow!("loaded project lock poisoned: {error}"))?
+        .assets
+        .iter()
+        .find(|asset| imported_ids.contains(&asset.id) && asset.kind == AssetKind::Video)
+        .context("pre-color Project must retain its Video Asset")?
+        .clone();
+    assert_eq!(legacy_asset.source_color.detected().bit_depth, Some(8));
+    assert_eq!(legacy_asset.source_color.detected().assumption, None);
+    let refresh = repaired_manager.refresh_asset_source_color_metadata(legacy_asset.id)?;
+    assert!(
+        refresh.changed,
+        "only the explicit Inspector/relink action may read media and repair legacy authority"
+    );
+    let mut project = repaired_shared
+        .read()
+        .map_err(|error| anyhow!("repaired project lock poisoned: {error}"))?
+        .clone();
+    let asset = project
+        .assets
+        .iter()
+        .find(|asset| imported_ids.contains(&asset.id) && asset.kind == AssetKind::Video)
+        .context("import must persist the fixture's video Asset")?
+        .clone();
+    assert!(asset.source_color.user_override().is_none());
+    assert_eq!(
+        asset.source_color.detected().assumption,
+        Some(SourceColorAssumption::UntaggedYuvBt709LimitedV1)
+    );
+    let saved_after_repair: serde_json::Value = serde_json::from_str(&project.save()?)?;
+    let repaired_asset = saved_after_repair["assets"]
+        .as_array()
+        .context("saved Project assets")?
+        .iter()
+        .find(|saved| saved["id"] == asset.id.to_string())
+        .context("fresh-probed Asset must remain in saved Project")?;
+    assert_eq!(
+        repaired_asset["source_color"]["detected"]["assumption"], "untagged_yuv_bt709_limited_v1",
+        "fresh probe must become normal persisted Project state, never a render-time guess"
+    );
+
+    let width = asset.width.context("fixture width")?;
+    let height = asset.height.context("fixture height")?;
+    let canvas_width = u64::from(width);
+    let canvas_height = u64::from(height);
+    let fps = asset.fps.context("fixture FPS")?;
+    let duration = asset.duration.context("fixture duration")?;
+    let (mut composition, track) =
+        Composition::new("main", canvas_width, canvas_height, fps, duration);
+    composition.background_color = Color::black();
+    let track_id = track.id;
+    assert!(project.add_track(track).is_ok());
+    assert!(project.add_composition(composition).is_ok());
+
+    let clip = Clip::new("untagged video", 0.0, duration);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id)?;
+    let source = support::media_node_for_canvas(
+        "untagged video",
+        MediaNodeRequest::Video {
+            asset_id: asset.id,
+            file_path: path,
+            stream_index: asset.stream_index,
+            audio_stream_index: None,
+        },
+        canvas_width,
+        canvas_height,
+        canvas_width,
+        canvas_height,
+    );
+    // Keeping an explicit Image Transform group forces the production
+    // compatibility renderer instead of the full-canvas managed fast path.
+    let (graph, _) = support::transformed_image_graph(
+        plugin_manager.as_ref(),
+        source,
+        [width as f64 / 2.0, height as f64 / 2.0],
+        [width as f64 / 2.0, height as f64 / 2.0],
+    )?;
+    project
+        .insert_node_graph(NodeContainer::Clip(clip_id), graph)
+        .map_err(anyhow::Error::msg)?;
+
+    let frame = FrameEvaluator::new(
+        &project,
+        &project.compositions[0],
+        plugin_manager.get_property_evaluators(),
+        plugin_manager.as_ref(),
+    )
+    .evaluate(0, 1.0, None)?;
+    let renderer = SkiaRenderer::new(width, height, Color::black(), false, None, None)?;
+    let mut render_service = RenderService::new(
+        renderer,
+        Arc::clone(&plugin_manager),
+        Arc::new(CacheManager::new()),
+    );
+    let output = render_service
+        .render_project_frame(&project, &frame, RenderDestination::Preview)
+        .context("explicit BT.709 compatibility assumption must render in normal Preview")?;
+    let RenderOutput::Image(image) = output else {
+        bail!("CPU Preview must return an image")
+    };
+    assert!(
+        image
+            .data
+            .chunks_exact(4)
+            .any(|pixel| pixel[..3].iter().any(|channel| *channel != 0)),
+        "decoded fixture must remain visible after the BT.709-to-sRGB bridge"
+    );
     Ok(())
 }
 mod support;

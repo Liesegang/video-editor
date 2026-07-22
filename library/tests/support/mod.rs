@@ -6,7 +6,7 @@ use library::model::project::{
     ProjectGraphError,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
-use library::model::{Node, NodeContainer, Project};
+use library::model::{Asset, Clip, Composition, Node, NodeContainer, Project};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -97,6 +97,55 @@ pub fn media_node_for_canvas(
         "built-in Media factory must create a complete test Node: {result:?}"
     );
     result.unwrap_or_else(|_| Node::new_merge("invalid Media test fallback"))
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn media_project_with_asset(asset: Asset) -> Result<(Project, uuid::Uuid)> {
+    let mut project = Project::new("embedded audio integration");
+    let (composition, track) = Composition::new("main", 12, 8, 12.0, 2.0);
+    let track_id = track.id;
+    let asset_id = asset.id;
+    let file_path = asset.path.clone();
+    let media_width = u64::from(asset.width.unwrap_or(12));
+    let media_height = u64::from(asset.height.unwrap_or(8));
+    assert!(
+        project.add_track(track).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    assert!(
+        project.add_composition(composition).is_ok(),
+        "container structural Merge insertion must succeed"
+    );
+    project.assets.push(asset);
+
+    let clip = Clip::new("padded media clip", 0.0, 2.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id)?;
+    let node = media_node_for_canvas(
+        "embedded audio video",
+        MediaNodeRequest::Video {
+            asset_id,
+            file_path,
+            stream_index: None,
+            audio_stream_index: None,
+        },
+        12,
+        8,
+        media_width,
+        media_height,
+    );
+    let node_id = node.id;
+    project.add_node(node);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    bind_av_output(&mut project, NodeContainer::Clip(clip_id), node_id)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    Ok((project, asset_id))
 }
 
 #[allow(

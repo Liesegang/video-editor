@@ -35,8 +35,12 @@ jobs:
             libxkbcommon-dev \
             libxkbcommon-x11-dev
 
-      - name: Build Release
-        run: cargo build -p app --release
+      # This package intentionally excludes app/opencolorio. Enabling that
+      # feature is allowed only after the exact native runtime and its shared
+      # libraries are bundled into the installer; quality.yml proves the real
+      # runtime separately and never treats ocio-rs stub mode as support.
+      - name: Build Release (built-in color backend; no OpenColorIO runtime)
+        run: cargo build -p app --release --no-default-features
 
       - name: Package
         run: |

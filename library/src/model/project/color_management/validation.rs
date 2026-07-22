@@ -9,17 +9,21 @@ use sha2::{Digest, Sha256};
 
 use super::super::asset::{
     Asset, AssetKind, AssetSourceColorSpaceBinding, AssetSourceInterpretation,
+    SourceTransferCharacteristic,
 };
 use super::{
     ColorConfigCacheIdentity, ColorConfigIdentity, ColorManagementConfig, ColorManagementField,
-    ColorManagementIssue,
+    ColorManagementIssue, HdrColorField, PreviewSurfaceEncoding,
 };
+use ruvie_color_management::StandardColorSpaceId;
 
 pub(super) fn diagnostics(
     config: &ColorManagementConfig,
     assets: &[Asset],
 ) -> Vec<ColorManagementIssue> {
     let mut diagnostics = blocking_diagnostics(config, assets);
+    validate_hdr(config, assets, &mut diagnostics);
+    validate_preview_surface_encoding(config, &mut diagnostics);
     diagnostics.extend(asset_source_diagnostics(config, assets));
     diagnostics
 }
@@ -40,6 +44,7 @@ pub(super) fn blocking_diagnostics(
         ColorManagementField::PreviewDisplay,
         &mut diagnostics,
     );
+    validate_srgb_surface_binding(config, &mut diagnostics);
     validate_preview_contract(config, &mut diagnostics);
     validate_named_field(
         &config.export.output_space,
@@ -91,36 +96,228 @@ pub(super) fn validate_asset_source_binding<'a>(
 
 pub(super) fn stable_cache_identity(config: &ColorManagementConfig) -> ColorConfigCacheIdentity {
     let mut hasher = Sha256::new();
-    hash_part(&mut hasher, "ruvie-color-config-cache-v1");
-    match &config.config {
-        ColorConfigIdentity::Bundled { id } => {
-            hash_part(&mut hasher, "bundled");
-            hash_part(&mut hasher, id);
-        }
-        ColorConfigIdentity::OcioBuiltin { uri, ocio_version } => {
-            hash_part(&mut hasher, "ocio-builtin");
-            hash_part(&mut hasher, uri);
-            hash_part(&mut hasher, ocio_version);
-        }
-        ColorConfigIdentity::ProjectAsset {
-            asset_id,
-            sha256,
-            ocio_version,
-        } => {
-            hash_part(&mut hasher, "project-asset");
-            hash_part(&mut hasher, &asset_id.to_string());
-            hash_part(&mut hasher, &sha256.to_ascii_lowercase());
-            hash_part(&mut hasher, ocio_version);
-        }
-    }
+    hash_part(&mut hasher, "ruvie-color-config-cache-v3");
+    hash_config_identity(&mut hasher, &config.config);
     hash_part(&mut hasher, &config.working_space);
     hash_part(&mut hasher, &config.preview.display);
     hash_part(
         &mut hasher,
         config.preview.view.as_deref().unwrap_or("<direct>"),
     );
+    hash_part(&mut hasher, config.preview.surface_encoding.as_str());
+    hash_part(
+        &mut hasher,
+        config
+            .preview
+            .view_output_color_space
+            .as_deref()
+            .unwrap_or("<no-view-output-space>"),
+    );
+    if let Some(binding) = &config.srgb_surface_space {
+        hash_part(&mut hasher, "srgb-surface-binding");
+        hash_config_identity(&mut hasher, binding.config());
+        hash_part(&mut hasher, binding.color_space());
+    } else {
+        hash_part(&mut hasher, "<no-srgb-surface-binding>");
+    }
     hash_part(&mut hasher, &config.export.output_space);
+    hash_optional_number(
+        &mut hasher,
+        "reference-white-nits",
+        config.hdr.reference_white_nits(),
+    );
+    hash_part(&mut hasher, "pq-linearization-policy");
+    hash_part(
+        &mut hasher,
+        config
+            .hdr
+            .pq_linearization_policy()
+            .map_or("none", |policy| policy.context_value()),
+    );
     ColorConfigCacheIdentity(format!("sha256:{:x}", hasher.finalize()))
+}
+
+fn hash_config_identity(hasher: &mut Sha256, identity: &ColorConfigIdentity) {
+    match identity {
+        ColorConfigIdentity::Bundled { id } => {
+            hash_part(hasher, "bundled");
+            hash_part(hasher, id);
+        }
+        ColorConfigIdentity::OcioBuiltin { uri, ocio_version } => {
+            hash_part(hasher, "ocio-builtin");
+            hash_part(hasher, uri);
+            hash_part(hasher, ocio_version);
+        }
+        ColorConfigIdentity::ProjectAsset {
+            asset_id,
+            sha256,
+            ocio_version,
+        } => {
+            hash_part(hasher, "project-asset");
+            hash_part(hasher, &asset_id.to_string());
+            hash_part(hasher, &sha256.to_ascii_lowercase());
+            hash_part(hasher, ocio_version);
+        }
+    }
+}
+
+fn validate_srgb_surface_binding(
+    config: &ColorManagementConfig,
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    if let Err(issue) = validated_srgb_surface_binding(config) {
+        diagnostics.push(issue);
+    }
+}
+
+pub(super) fn validated_srgb_surface_binding(
+    config: &ColorManagementConfig,
+) -> Result<&super::SrgbSurfaceColorSpaceBinding, ColorManagementIssue> {
+    let binding = config
+        .srgb_surface_space
+        .as_ref()
+        .ok_or(ColorManagementIssue::MissingSrgbSurfaceColorSpaceBinding)?;
+    if binding.color_space().trim().is_empty() {
+        return Err(ColorManagementIssue::BlankIdentifier {
+            field: ColorManagementField::SrgbSurfaceColorSpace,
+        });
+    }
+    if binding.config() != &config.config {
+        return Err(ColorManagementIssue::SrgbSurfaceColorSpaceBindingMismatch {
+            bound: Box::new(binding.config().clone()),
+            project: Box::new(config.config.clone()),
+        });
+    }
+    Ok(binding)
+}
+
+fn validate_preview_surface_encoding(
+    config: &ColorManagementConfig,
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    if let PreviewSurfaceEncoding::Unknown(_) = &config.preview.surface_encoding {
+        diagnostics.push(ColorManagementIssue::UnsupportedPreviewSurfaceEncoding {
+            encoding: config.preview.surface_encoding.as_str().to_string(),
+        });
+    }
+    if config.preview.surface_encoding.is_srgb()
+        && config.preview.view.is_none()
+        && config
+            .srgb_surface_space
+            .as_ref()
+            .is_some_and(|binding| config.preview.display != binding.color_space())
+    {
+        diagnostics.push(ColorManagementIssue::DirectPreviewSurfaceEncodingMismatch {
+            destination: config.preview.display.clone(),
+            surface_encoding: config.preview.surface_encoding.clone(),
+        });
+    }
+    match (
+        &config.config,
+        config.preview.view.as_deref(),
+        config.preview.view_output_color_space.as_deref(),
+    ) {
+        (ColorConfigIdentity::Bundled { .. }, None, Some(output_space)) => diagnostics.push(
+            ColorManagementIssue::UnexpectedDirectPreviewViewOutputColorSpace {
+                output_space: output_space.to_string(),
+            },
+        ),
+        (
+            ColorConfigIdentity::OcioBuiltin { .. } | ColorConfigIdentity::ProjectAsset { .. },
+            Some(_),
+            None,
+        ) => diagnostics.push(ColorManagementIssue::MissingPreviewViewOutputColorSpace),
+        (
+            ColorConfigIdentity::OcioBuiltin { .. } | ColorConfigIdentity::ProjectAsset { .. },
+            Some(_),
+            Some(output_space),
+        ) if output_space.trim().is_empty() => {
+            diagnostics.push(ColorManagementIssue::BlankIdentifier {
+                field: ColorManagementField::PreviewViewOutputColorSpace,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn validate_hdr(
+    config: &ColorManagementConfig,
+    assets: &[Asset],
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    diagnostics.extend(
+        config
+            .hdr
+            .semantic_issues()
+            .into_iter()
+            .map(|(field, detail)| ColorManagementIssue::InvalidHdrSetting { field, detail }),
+    );
+    for (purpose, space) in [
+        ("Preview display", config.preview.display.as_str()),
+        ("export output", config.export.output_space.as_str()),
+    ] {
+        if StandardColorSpaceId::from_id(space) == Some(StandardColorSpaceId::Rec2100Pq) {
+            require_hdr_field(
+                config.hdr.reference_white_nits(),
+                HdrColorField::ReferenceWhiteNits,
+                purpose,
+                space,
+                diagnostics,
+            );
+            require_hdr_field(
+                config.hdr.pq_linearization_policy(),
+                HdrColorField::PqLinearizationPolicy,
+                purpose,
+                space,
+                diagnostics,
+            );
+        }
+    }
+    for asset in assets.iter().filter(|asset| asset_requires_pq(asset)) {
+        let purpose = format!("Asset {} PQ source", asset.id);
+        require_hdr_field(
+            config.hdr.reference_white_nits(),
+            HdrColorField::ReferenceWhiteNits,
+            &purpose,
+            ruvie_color_management::REC2100_PQ_SPACE_ID,
+            diagnostics,
+        );
+        require_hdr_field(
+            config.hdr.pq_linearization_policy(),
+            HdrColorField::PqLinearizationPolicy,
+            &purpose,
+            ruvie_color_management::REC2100_PQ_SPACE_ID,
+            diagnostics,
+        );
+    }
+}
+
+fn asset_requires_pq(asset: &Asset) -> bool {
+    match asset.source_color.authoritative_interpretation() {
+        AssetSourceInterpretation::Assigned(binding) => {
+            StandardColorSpaceId::from_id(binding.color_space())
+                == Some(StandardColorSpaceId::Rec2100Pq)
+        }
+        AssetSourceInterpretation::Description(description) => {
+            description.transfer == Some(SourceTransferCharacteristic::Pq)
+        }
+        AssetSourceInterpretation::Malformed { .. } => false,
+    }
+}
+
+fn require_hdr_field<T>(
+    value: Option<T>,
+    field: HdrColorField,
+    purpose: &str,
+    space: &str,
+    diagnostics: &mut Vec<ColorManagementIssue>,
+) {
+    if value.is_none() {
+        diagnostics.push(ColorManagementIssue::MissingHdrSetting {
+            field,
+            required_by: format!("{purpose} color space '{space}'"),
+        });
+    }
 }
 
 fn validate_preview_contract(
@@ -309,4 +506,12 @@ fn is_sha256(checksum: &str) -> bool {
 fn hash_part(hasher: &mut Sha256, value: &str) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
+}
+
+fn hash_optional_number(hasher: &mut Sha256, field: &str, value: Option<f64>) {
+    hash_part(hasher, field);
+    match value {
+        Some(value) => hash_part(hasher, &format!("some:{:016x}", value.to_bits())),
+        None => hash_part(hasher, "none"),
+    }
 }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use library::model::Project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::FrameContent;
@@ -25,7 +25,7 @@ fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
     let asset_id = asset.id;
     project.assets.push(asset);
 
-    let mut node = media_node_for_canvas(
+    let node = media_node_for_canvas(
         "Test Layer",
         MediaNodeRequest::Video {
             asset_id,
@@ -38,13 +38,18 @@ fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
         1920,
         1080,
     );
-    node.set_property(
+    let mut persisted = serde_json::to_value(node)?;
+    let properties = persisted
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("serialized media Node must contain a property map")?;
+    properties.insert(
         "file_path".to_string(),
-        Property::constant(PropertyValue::String(
+        serde_json::to_value(Property::constant(PropertyValue::String(
             "stale-path-is-not-used.mp4".to_string(),
-        )),
-    )
-    .map_err(|error| anyhow!("media factory must initialize file_path: {error}"))?;
+        )))?,
+    );
+    let node = serde_json::from_value(persisted)?;
 
     let plugin_manager = Arc::new(library::plugin::PluginManager::new());
     let context = FrameEvaluationContext {
@@ -60,6 +65,12 @@ fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
     let result = VideoEntityConverterPlugin::new()
         .convert_entity(&context, &node, 5.0)
         .context("video converter should produce a frame")?;
+    assert!(
+        VideoEntityConverterPlugin::new()
+            .get_property_definitions(1920, 1080, 1920, 1080)
+            .is_empty(),
+        "video color interpretation must come from Asset + Project, not Node properties"
+    );
     assert!(matches!(
         result.content,
         FrameContent::Video {
@@ -67,7 +78,31 @@ fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
             stream_index: Some(2),
             ref surface,
         } if surface.file_path == "test.mp4"
+            && surface.input_color_space.is_none()
+            && surface.output_color_space.is_none()
     ));
+
+    let mut legacy = serde_json::to_value(&node)?;
+    let legacy_properties = legacy
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("serialized Media Node must contain properties")?;
+    for (key, value) in [
+        ("input_color_space", "Configless Input"),
+        ("output_color_space", "Configless Output"),
+    ] {
+        legacy_properties.insert(
+            key.to_string(),
+            serde_json::to_value(Property::constant(PropertyValue::String(value.to_string())))?,
+        );
+    }
+    let legacy_node = serde_json::from_value(legacy)?;
+    assert!(
+        VideoEntityConverterPlugin::new()
+            .convert_entity(&context, &legacy_node, 5.0)
+            .is_none(),
+        "non-empty config-less legacy color fields must fail closed until explicitly repaired"
+    );
     Ok(())
 }
 mod support;

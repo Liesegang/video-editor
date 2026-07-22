@@ -67,6 +67,7 @@ fn cpu_renderer() -> Result<SkiaRenderer> {
 fn image(output: RenderOutput) -> Result<Image> {
     match output {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }

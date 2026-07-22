@@ -352,15 +352,15 @@ fn prepare_runtime_components(
                         ))
                     })?,
                 )?)),
-                LOADER_CATEGORY => RuntimeAdapter::Loader(Arc::new(RuntimeLoaderPlugin {
-                    component: component.clone(),
-                    api: pending.loader_api.ok_or_else(|| {
+                LOADER_CATEGORY => RuntimeAdapter::Loader(Arc::new(RuntimeLoaderPlugin::new(
+                    component.clone(),
+                    pending.loader_api.ok_or_else(|| {
                         LibraryError::Plugin(format!(
                             "Runtime Loader '{}' has no {LOADER_CPU_RGBA8_EXTENSION_V1} table",
                             descriptor.id
                         ))
                     })?,
-                })),
+                )?)),
                 _ => {
                     return Err(LibraryError::Plugin(format!(
                         "Runtime plugin component '{}/{}' has no ABI-v1 host adapter",

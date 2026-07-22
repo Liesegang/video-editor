@@ -380,6 +380,18 @@ fn exact_node_section(
     node.properties().iter().next()?;
     let metadata = node_metadata(project, owner, node, manager);
     let mut diagnostics = metadata.diagnostic.into_iter().collect::<Vec<_>>();
+    let legacy_color = crate::model::active_legacy_media_color_properties(node);
+    if !legacy_color.is_empty() {
+        diagnostics.push(format!(
+            "Media Node {} is disabled because deprecated config-less color fields remain ({}). Assign source color on the Asset, then explicitly clear the legacy Node fields",
+            node.id,
+            legacy_color
+                .iter()
+                .map(|property| format!("{}: {}", property.key(), property.authored_state()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     let definition_names = metadata
         .definitions
         .iter()
@@ -419,7 +431,10 @@ fn exact_node_section(
     let mut unknown = node
         .properties()
         .iter()
-        .filter(|(key, _)| !definition_names.contains(key.as_str()))
+        .filter(|(key, _)| {
+            !definition_names.contains(key.as_str())
+                && !crate::model::is_legacy_media_color_property(key)
+        })
         .map(|(key, property)| (key.clone(), property.clone()))
         .collect::<Vec<_>>();
     unknown.sort_by(|left, right| left.0.cmp(&right.0));

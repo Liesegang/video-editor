@@ -6,6 +6,10 @@ use crate::model::BlendMode;
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
+use ruvie_color_management::{
+    CpuColorProcessor, ManagedLinearWorkingImage, VerifiedSourceSpace, WorkingColorIdentity,
+};
+use std::sync::Arc;
 
 /// A render-time 2D affine mapping.
 ///
@@ -104,8 +108,100 @@ impl From<&Transform> for Affine2D {
 
 #[derive(Clone, Debug)]
 pub enum RenderOutput {
+    /// Legacy, straight-alpha, encoded sRGBA8 compatibility output.
     Image(Image),
+    /// Project-authoritative, premultiplied RGBAF32 working-domain output.
+    ///
+    /// This variant is never a terminal Preview/export surface. The root
+    /// Project render applies exactly one destination processor before it
+    /// becomes [`Self::Image`].
+    Working(ManagedLinearWorkingImage),
+    /// Legacy untyped GPU texture. Project working frames deliberately do not
+    /// cross this boundary until an owner-bearing typed GPU resource exists.
     Texture(TextureInfo),
+}
+
+/// Verified authoring-to-working contract installed for one Project frame.
+///
+/// Construction is crate-private: only the exact Project color pipeline can
+/// bind the source processor to the Project's verified working identity.
+#[derive(Clone)]
+pub struct WorkingSurfaceContract {
+    identity: WorkingColorIdentity,
+    authoring_srgb: VerifiedSourceSpace,
+    authoring_to_working: Arc<dyn CpuColorProcessor>,
+}
+
+impl std::fmt::Debug for WorkingSurfaceContract {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkingSurfaceContract")
+            .field("identity", &self.identity)
+            .field("authoring_srgb", &self.authoring_srgb)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WorkingSurfaceContract {
+    pub(crate) fn new(
+        identity: WorkingColorIdentity,
+        authoring_srgb: VerifiedSourceSpace,
+        authoring_to_working: Box<dyn CpuColorProcessor>,
+    ) -> Result<Self, LibraryError> {
+        // Use the managed constructor once to prove that the processor has the
+        // exact source/config/context/direction required by this identity.
+        ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            identity.clone(),
+            &authoring_srgb,
+            1,
+            1,
+            [0, 0, 0, 0],
+            authoring_to_working.as_ref(),
+        )
+        .map_err(|error| {
+            LibraryError::Render(format!(
+                "cannot bind Project authoring colors to the working surface: {error}"
+            ))
+        })?;
+        Ok(Self {
+            identity,
+            authoring_srgb,
+            authoring_to_working: Arc::from(authoring_to_working),
+        })
+    }
+
+    pub fn identity(&self) -> &WorkingColorIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn authoring_color_to_working(
+        &self,
+        color: &Color,
+        opacity: f32,
+    ) -> Result<[f32; 4], LibraryError> {
+        let alpha = (f32::from(color.a) / 255.0 * opacity).clamp(0.0, 1.0);
+        let rgb = self
+            .authoring_to_working
+            .transform_rgb([
+                f64::from(color.r) / 255.0,
+                f64::from(color.g) / 255.0,
+                f64::from(color.b) / 255.0,
+            ])
+            .map_err(|error| {
+                LibraryError::Render(format!(
+                    "cannot convert an authored sRGB color into Project working space '{}': {error}",
+                    self.identity.working_space()
+                ))
+            })?;
+        let rgba = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, alpha];
+        if rgba.iter().all(|component| component.is_finite()) {
+            Ok(rgba)
+        } else {
+            Err(LibraryError::Render(
+                "authoring color conversion produced a non-finite working value".to_string(),
+            ))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +235,25 @@ pub struct ShapeRasterRequest<'a> {
 }
 
 pub trait Renderer {
+    /// Select the Project-free encoded-sRGBA8 compatibility contract.
+    /// Implementations which have only one legacy surface may keep the
+    /// default no-op behavior.
+    fn use_unmanaged_srgba8_surface(&mut self) -> Result<(), LibraryError> {
+        Ok(())
+    }
+
+    /// Select a Project-authoritative RGBAF32 scene-linear contract.
+    /// Renderers must fail rather than pretending that an encoded surface is
+    /// working-linear.
+    fn use_project_linear_surface(
+        &mut self,
+        _contract: WorkingSurfaceContract,
+    ) -> Result<(), LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not implement the Project linear-working surface contract".to_string(),
+        ))
+    }
+
     fn draw_layer(
         &mut self,
         layer: &RenderOutput,

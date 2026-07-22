@@ -17,6 +17,7 @@ mod catalog;
 mod color;
 mod containers;
 mod data;
+mod legacy_media_color;
 mod list;
 mod path;
 mod sound_analysis;
@@ -34,6 +35,10 @@ pub use containers::{
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
 pub use data::DataContent;
+pub use legacy_media_color::{
+    LEGACY_MEDIA_COLOR_PROPERTY_KEYS, LegacyMediaColorProperty,
+    active_legacy_media_color_properties, is_legacy_media_color_property,
+};
 pub use list::ListContent;
 pub use path::PathOperationContent;
 pub use sound_analysis::SoundAnalysisContent;
@@ -541,6 +546,23 @@ impl Node {
         }
         self.properties.set(key, property);
         Ok(())
+    }
+
+    /// Explicit repair command for deprecated config-less Media color fields.
+    ///
+    /// Normal authoring cannot remove initialized properties. These two
+    /// pre-v1 fields are different: they were never part of the current Media
+    /// converter contract, so retaining a non-empty value would leave a
+    /// second, ignored source-color authority in the Project.
+    pub(crate) fn clear_legacy_media_color_properties(&mut self) -> bool {
+        if !matches!(self.content(), NodeContent::Media(_)) {
+            return false;
+        }
+        LEGACY_MEDIA_COLOR_PROPERTY_KEYS
+            .into_iter()
+            .filter_map(|key| self.properties.remove(key))
+            .count()
+            > 0
     }
 
     /// Creates a generic native floating-point remainder Node.

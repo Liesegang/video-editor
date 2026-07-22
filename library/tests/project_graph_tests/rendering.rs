@@ -65,6 +65,7 @@ fn preview(project: &Project) -> Result<Image> {
     );
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }

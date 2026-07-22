@@ -35,16 +35,18 @@ pub use core::framing;
 pub use core::rendering;
 
 pub use crate::model::frame::Image;
-pub use crate::plugin::ExportSettings;
+pub use crate::plugin::{ExportColorAuthority, ExportFrame, ExportSettings};
 
 // Re-export the services that the app will need
-pub use core::rendering::render_server::{RenderRequestId, RenderResult, RenderServer};
+pub use core::rendering::render_server::{
+    RenderFrameAuthority, RenderRequestId, RenderResult, RenderServer,
+};
 pub use core::rendering::skia_renderer::SkiaRenderer;
 pub use editor::ExportService;
 pub use editor::ProjectModel;
 pub use editor::ProjectService;
-pub use editor::RenderService;
 pub use editor::{ClipBundle, EditorService, KeyframeBatchUpdate, NodeGraphBundle, PropertyOwner};
+pub use editor::{RenderDestination, RenderService};
 
 /// Explicitly starts the trusted in-process CPython host. GUI applications
 /// call this once during startup before projects or plugins can execute code.

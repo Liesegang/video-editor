@@ -6,10 +6,15 @@ use super::super::color_management::ColorConfigIdentity;
 /// Stream/codec or still-image color metadata retained without guessing an
 /// untagged source.
 ///
-/// These values describe encoded source samples. They do not imply that the
-/// current RGBA8 loader has applied a color transform yet.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// These values describe encoded source samples. They do not imply that a
+/// typed decoded pixel payload has applied a color transform yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceColorDescription {
+    /// Versioned import-time convention used only when the source carried no
+    /// usable tags. Keeping this in Project data makes the choice inspectable
+    /// and lets a complete user override replace it without hidden fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assumption: Option<SourceColorAssumption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primaries: Option<SourceColorPrimaries>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22,6 +27,27 @@ pub struct SourceColorDescription {
     pub bit_depth: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<SourceColorProfile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceColorAssumption {
+    /// Untagged, <=8-bit YUV video is interpreted as limited-range BT.709.
+    /// This is an explicit compatibility convention, not an inferred tag.
+    UntaggedYuvBt709LimitedV1,
+}
+
+/// Project-owned authority supplied to a video decoder.
+///
+/// A complete user correction deliberately replaces frame tags. An import
+/// assumption is only permission to apply that exact compatibility policy if
+/// the *current decoded frame* still satisfies its preconditions. Keeping the
+/// two cases in distinct variants prevents a stale import assumption from
+/// masquerading as an authored matrix/range override after a relink.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DecoderSourceColorAuthority {
+    CompleteUserOverride(SourceColorDescription),
+    CompatibilityAssumption(SourceColorAssumption),
 }
 
 impl SourceColorDescription {
@@ -182,6 +208,20 @@ impl AssetSourceColorMetadata {
         self.user_override.as_ref()
     }
 
+    /// Typed authority supplied to a decoder. User corrections win; a
+    /// persisted import assumption remains conditional on the actual frame.
+    pub fn decoder_color_authority(&self) -> Option<DecoderSourceColorAuthority> {
+        if let Some(complete) = self.user_override.as_ref() {
+            return Some(DecoderSourceColorAuthority::CompleteUserOverride(
+                complete.clone(),
+            ));
+        }
+        self.detected
+            .assumption
+            .clone()
+            .map(DecoderSourceColorAuthority::CompatibilityAssumption)
+    }
+
     /// Atomically edits the effective description as a complete override.
     ///
     /// The first edit starts from detected metadata. Later edits start from
@@ -235,7 +275,7 @@ impl AssetSourceColorMetadata {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceColorPrimaries {
     Bt709,
@@ -253,7 +293,7 @@ pub enum SourceColorPrimaries {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceTransferCharacteristic {
     Bt709,
@@ -276,7 +316,7 @@ pub enum SourceTransferCharacteristic {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceMatrixCoefficients {
     Identity,
@@ -296,7 +336,7 @@ pub enum SourceMatrixCoefficients {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceColorRange {
     Limited,
@@ -307,7 +347,7 @@ pub enum SourceColorRange {
 
 /// Stable identity for an embedded source profile. The source bytes remain in
 /// the media file; persisting them in every Project would duplicate assets.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceColorProfile {
     Icc {
@@ -326,7 +366,8 @@ pub enum SourceColorProfile {
 mod tests {
     use super::{
         AssetSourceColorMetadata, AssetSourceColorSpaceBinding, AssetSourceInterpretation,
-        SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
+        DecoderSourceColorAuthority, SourceColorAssumption, SourceColorDescription,
+        SourceColorPrimaries, SourceTransferCharacteristic,
     };
     use crate::model::project::ColorConfigIdentity;
 
@@ -350,6 +391,37 @@ mod tests {
         assert_eq!(
             metadata.authoritative_interpretation(),
             AssetSourceInterpretation::Description(&authored)
+        );
+    }
+
+    #[test]
+    fn decoder_authority_distinguishes_authored_override_from_import_assumption() {
+        let detected = SourceColorDescription {
+            assumption: Some(SourceColorAssumption::UntaggedYuvBt709LimitedV1),
+            primaries: Some(SourceColorPrimaries::Bt709),
+            transfer: Some(SourceTransferCharacteristic::Bt709),
+            bit_depth: Some(8),
+            ..SourceColorDescription::default()
+        };
+        let mut metadata = AssetSourceColorMetadata::default();
+        metadata.replace_detected(detected);
+        assert_eq!(
+            metadata.decoder_color_authority(),
+            Some(DecoderSourceColorAuthority::CompatibilityAssumption(
+                SourceColorAssumption::UntaggedYuvBt709LimitedV1
+            ))
+        );
+
+        let authored = SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::Bt2020),
+            transfer: Some(SourceTransferCharacteristic::Pq),
+            bit_depth: Some(10),
+            ..SourceColorDescription::default()
+        };
+        metadata.replace_complete_override(authored.clone());
+        assert_eq!(
+            metadata.decoder_color_authority(),
+            Some(DecoderSourceColorAuthority::CompleteUserOverride(authored))
         );
     }
 

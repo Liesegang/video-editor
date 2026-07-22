@@ -186,23 +186,78 @@ fn color_value_drives_solid_through_the_project_graph() -> Result<()> {
 }
 
 #[test]
-fn unsupported_renderer_colors_produce_no_output_without_white_fallback() -> Result<()> {
+fn display_p3_color_reaches_solid_through_an_explicit_terminal_transform() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let factory = manager(plugins.clone());
-    for color in [
-        ColorValue::new(ColorSpaceRef::srgb(), [-0.25, 2.0, 0.5, 1.0])?,
-        ColorValue::new(
-            ColorSpaceRef::new("scene_linear_ap1")?,
-            [0.5, 0.5, 0.5, 1.0],
-        )?,
-    ] {
-        let project = project_with_graph(solid_graph(&factory, color)?)?;
-        let rendered = frame(&project, &plugins)?;
-        assert!(
-            objects(&rendered.items).is_empty(),
-            "unsupported color crossed the u8 renderer boundary"
-        );
-    }
+    let color = ColorValue::new(ColorSpaceRef::new("display-p3")?, [0.8, 0.4, 0.2, 0.5])?;
+    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let rendered = frame(&project, &plugins)?;
+    let object = objects(&rendered.items)
+        .into_iter()
+        .next()
+        .context("Display P3 Color -> Solid produced no FrameObject")?;
+    let FrameContent::Shape { styles, .. } = &object.content else {
+        anyhow::bail!("Solid did not produce Shape-backed image content");
+    };
+    assert_eq!(
+        styles.first().map(|style| &style.style),
+        Some(&DrawStyle::Fill {
+            color: Color {
+                r: 219,
+                g: 94,
+                b: 31,
+                a: 128,
+            },
+            offset: 0.0,
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn extended_srgb_is_clipped_only_at_the_legacy_terminal_boundary() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let factory = manager(plugins.clone());
+    let color = ColorValue::new(ColorSpaceRef::srgb(), [-0.25, 2.0, 0.5, 1.0])?;
+    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let rendered = frame(&project, &plugins)?;
+    let FrameContent::Shape { styles, .. } = &objects(&rendered.items)
+        .into_iter()
+        .next()
+        .context("extended sRGB solid produced no FrameObject")?
+        .content
+    else {
+        anyhow::bail!("Solid did not produce Shape-backed image content");
+    };
+    assert_eq!(
+        styles.first().map(|style| &style.style),
+        Some(&DrawStyle::Fill {
+            color: Color {
+                r: 0,
+                g: 255,
+                b: 128,
+                a: 255,
+            },
+            offset: 0.0,
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn unknown_renderer_color_produces_no_output_without_white_fallback() -> Result<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let factory = manager(plugins.clone());
+    let color = ColorValue::new(
+        ColorSpaceRef::new("scene_linear_ap1")?,
+        [0.5, 0.5, 0.5, 1.0],
+    )?;
+    let project = project_with_graph(solid_graph(&factory, color)?)?;
+    let rendered = frame(&project, &plugins)?;
+    assert!(
+        objects(&rendered.items).is_empty(),
+        "unsupported color crossed the u8 renderer boundary"
+    );
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 pub mod composition_dialog;
 pub mod confirmation;
+mod export_audio_temp;
 pub mod export_dialog;
 pub mod keyframe_dialog;
 pub mod settings_dialog;

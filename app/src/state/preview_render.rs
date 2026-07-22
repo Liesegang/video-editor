@@ -1,7 +1,8 @@
 use library::model::frame::frame::{FrameInfo, Region};
 use library::model::project::Project;
-use library::RenderRequestId;
+use library::{RenderFrameAuthority, RenderRequestId};
 use ordered_float::OrderedFloat;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Render-affecting view state that is not part of the authoritative Project.
@@ -37,6 +38,7 @@ impl PreviewPresentationKey {
 #[derive(Clone, Debug)]
 struct DesiredRender {
     generation: u64,
+    project: Arc<Project>,
     frame: FrameInfo,
 }
 
@@ -44,6 +46,7 @@ struct DesiredRender {
 struct InFlightRender {
     request_id: RenderRequestId,
     generation: u64,
+    project: Arc<Project>,
     frame: FrameInfo,
 }
 
@@ -56,6 +59,7 @@ struct CompletedRender {
 #[derive(Clone, Debug)]
 pub struct PreviewRenderSubmission {
     pub request_id: RenderRequestId,
+    pub project: Arc<Project>,
     pub frame: FrameInfo,
 }
 
@@ -89,8 +93,9 @@ pub struct PreviewRenderDiagnostics {
 pub struct PreviewRenderScheduler {
     generation: u64,
     next_request_serial: u64,
-    last_project: Option<Project>,
+    last_project: Option<Arc<Project>>,
     last_presentation: Option<PreviewPresentationKey>,
+    last_render_authority: Option<RenderFrameAuthority>,
     last_seek_revision: Option<u64>,
     last_playing: Option<bool>,
     last_requested_time: Option<OrderedFloat<f64>>,
@@ -111,6 +116,7 @@ impl Default for PreviewRenderScheduler {
             next_request_serial: 1,
             last_project: None,
             last_presentation: None,
+            last_render_authority: None,
             last_seek_revision: None,
             last_playing: None,
             last_requested_time: None,
@@ -134,15 +140,20 @@ impl PreviewRenderScheduler {
         frame: FrameInfo,
         playing: bool,
         seek_revision: u64,
+        render_authority: RenderFrameAuthority,
     ) {
         let project_changed = self
             .last_project
             .as_ref()
-            .is_some_and(|previous| previous != project);
+            .is_some_and(|previous| previous.as_ref() != project);
         let presentation_changed = self
             .last_presentation
             .as_ref()
             .is_some_and(|previous| previous != &presentation);
+        let render_authority_changed = self
+            .last_render_authority
+            .as_ref()
+            .is_some_and(|previous| previous != &render_authority);
         let seeked = self
             .last_seek_revision
             .is_some_and(|previous| previous != seek_revision);
@@ -159,6 +170,7 @@ impl PreviewRenderScheduler {
 
         if project_changed
             || presentation_changed
+            || render_authority_changed
             || seeked
             || playback_changed
             || time_discontinuity
@@ -166,10 +178,16 @@ impl PreviewRenderScheduler {
             self.advance_generation();
         }
 
-        if self.last_project.is_none() || project_changed {
-            self.last_project = Some(project.clone());
-        }
+        let project_snapshot = match &self.last_project {
+            Some(previous) if !project_changed => Arc::clone(previous),
+            _ => {
+                let snapshot = Arc::new(project.clone());
+                self.last_project = Some(Arc::clone(&snapshot));
+                snapshot
+            }
+        };
         self.last_presentation = Some(presentation);
+        self.last_render_authority = Some(render_authority);
         self.last_seek_revision = Some(seek_revision);
         self.last_playing = Some(playing);
         self.last_requested_time = Some(frame.now_time);
@@ -197,7 +215,11 @@ impl PreviewRenderScheduler {
         if self.desired.is_some() {
             self.coalesced = self.coalesced.wrapping_add(1);
         }
-        self.desired = Some(DesiredRender { generation, frame });
+        self.desired = Some(DesiredRender {
+            generation,
+            project: project_snapshot,
+            frame,
+        });
     }
 
     /// Invalidate any result still executing when the Preview cannot produce a
@@ -209,6 +231,7 @@ impl PreviewRenderScheduler {
         self.available = false;
         self.desired = None;
         self.last_presentation = None;
+        self.last_render_authority = None;
         self.last_playing = None;
         self.last_requested_time = None;
     }
@@ -225,9 +248,14 @@ impl PreviewRenderScheduler {
         self.in_flight = Some(InFlightRender {
             request_id,
             generation: desired.generation,
+            project: Arc::clone(&desired.project),
             frame: desired.frame,
         });
-        Some(PreviewRenderSubmission { request_id, frame })
+        Some(PreviewRenderSubmission {
+            request_id,
+            project: desired.project,
+            frame,
+        })
     }
 
     pub fn submission_failed(&mut self, request_id: RenderRequestId) {
@@ -260,6 +288,7 @@ impl PreviewRenderScheduler {
             if self.available && in_flight.generation == self.generation && self.desired.is_none() {
                 self.desired = Some(DesiredRender {
                     generation: in_flight.generation,
+                    project: Arc::clone(&in_flight.project),
                     frame: in_flight.frame,
                 });
             }
@@ -367,8 +396,36 @@ mod tests {
         playing: bool,
         seek_revision: u64,
     ) {
+        update_with_authority_revision(
+            scheduler,
+            project,
+            composition_id,
+            frame,
+            playing,
+            seek_revision,
+            1,
+        );
+    }
+
+    fn update_with_authority_revision(
+        scheduler: &mut PreviewRenderScheduler,
+        project: &Project,
+        composition_id: Uuid,
+        frame: FrameInfo,
+        playing: bool,
+        seek_revision: u64,
+        plugin_revision: u64,
+    ) {
         let presentation = PreviewPresentationKey::from_frame(composition_id, &frame);
-        scheduler.update_desired(project, presentation, frame, playing, seek_revision);
+        let authority = RenderFrameAuthority::capture(project, &frame, plugin_revision);
+        scheduler.update_desired(
+            project,
+            presentation,
+            frame,
+            playing,
+            seek_revision,
+            authority,
+        );
     }
 
     #[test]
@@ -473,6 +530,7 @@ mod tests {
             0,
         );
         let stale = scheduler.take_submission().expect("initial request");
+        assert_eq!(stale.project.name, "before");
 
         project.name = "live edit before history commit".to_string();
         update(
@@ -487,7 +545,10 @@ mod tests {
             scheduler.complete(stale.request_id, &stale.frame, true),
             PreviewCompletionDecision::Discard
         );
-        assert!(scheduler.take_submission().is_some());
+        let current = scheduler
+            .take_submission()
+            .expect("edited Project snapshot must be submitted");
+        assert_eq!(current.project.name, "live edit before history commit");
     }
 
     #[test]
@@ -605,6 +666,64 @@ mod tests {
         );
         assert!(scheduler.take_submission().is_none());
         assert_eq!(scheduler.diagnostics().submitted, 1);
+    }
+
+    #[test]
+    fn paused_frame_is_resubmitted_when_render_authority_changes() {
+        let project = Project::new("paused authority invalidation");
+        let composition_id = Uuid::new_v4();
+        let paused_frame = frame(4.0);
+        let mut scheduler = PreviewRenderScheduler::default();
+
+        update_with_authority_revision(
+            &mut scheduler,
+            &project,
+            composition_id,
+            paused_frame.clone(),
+            false,
+            0,
+            10,
+        );
+        let first = scheduler.take_submission().expect("initial paused request");
+        assert_eq!(
+            scheduler.complete(first.request_id, &first.frame, true),
+            PreviewCompletionDecision::Publish
+        );
+
+        update_with_authority_revision(
+            &mut scheduler,
+            &project,
+            composition_id,
+            paused_frame.clone(),
+            false,
+            0,
+            10,
+        );
+        assert!(
+            scheduler.take_submission().is_none(),
+            "an unchanged authority must not spin the paused Preview"
+        );
+        let completed_generation = scheduler.diagnostics().generation;
+
+        update_with_authority_revision(
+            &mut scheduler,
+            &project,
+            composition_id,
+            paused_frame,
+            false,
+            0,
+            11,
+        );
+        assert_ne!(
+            scheduler.diagnostics().generation,
+            completed_generation,
+            "external render authority must invalidate the completed generation"
+        );
+        let refreshed = scheduler
+            .take_submission()
+            .expect("the same paused frame must render again under new authority");
+        assert_eq!(refreshed.frame, first.frame);
+        assert_eq!(scheduler.diagnostics().submitted, 2);
     }
 
     #[test]

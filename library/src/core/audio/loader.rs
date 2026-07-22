@@ -1,4 +1,5 @@
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioFileIdentity};
+use crate::util::local_file::DirectRegularFile;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
 use symphonia::core::errors::Error;
@@ -8,7 +9,6 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 
-use std::fs::File;
 use std::path::Path;
 
 pub struct AudioLoader;
@@ -36,13 +36,11 @@ impl AudioLoader {
     /// implementation detail: the global ordinal is resolved first, then the
     /// selected Track ID is used for seeking and packet filtering.
     pub fn decode_chunk(key: &AudioChunkKey) -> Result<AudioChunk, anyhow::Error> {
-        let current_identity = AudioFileIdentity::read(&key.source.identity.canonical_path)?;
-        if current_identity != key.source.identity {
-            anyhow::bail!("audio source changed before decode");
-        }
-
-        let mut opened =
-            Self::open_track(&key.source.identity.canonical_path, key.source.stream_index)?;
+        let mut opened = Self::open_track(
+            &key.source.identity.canonical_path,
+            key.source.stream_index,
+            &key.source.identity,
+        )?;
         let start_frame = key.start_frame();
         let target_rate = key.source.format.sample_rate;
         let target_channels = usize::from(key.source.format.channels);
@@ -144,9 +142,14 @@ impl AudioLoader {
     fn open_track(
         path: &Path,
         stream_index: Option<usize>,
+        expected_identity: &AudioFileIdentity,
     ) -> Result<OpenAudioTrack, anyhow::Error> {
-        let source = File::open(path)?;
-        let media = MediaSourceStream::new(Box::new(source), Default::default());
+        let source = DirectRegularFile::open(path)?;
+        let opened_identity = AudioFileIdentity::from_opened(&source)?;
+        if &opened_identity != expected_identity {
+            anyhow::bail!("audio source changed before decode");
+        }
+        let media = MediaSourceStream::new(Box::new(source.into_file()), Default::default());
         let options = FormatOptions {
             enable_gapless: true,
             ..FormatOptions::default()
@@ -201,8 +204,8 @@ impl AudioLoader {
 
     pub fn get_duration(path: &str, stream_index: Option<usize>) -> Result<f64, anyhow::Error> {
         let path = Path::new(path);
-        let source = File::open(path)?;
-        let media = MediaSourceStream::new(Box::new(source), Default::default());
+        let source = DirectRegularFile::open(path)?;
+        let media = MediaSourceStream::new(Box::new(source.into_file()), Default::default());
         let probe = symphonia::default::get_probe().format(
             &probe_hint(path),
             media,
@@ -230,10 +233,10 @@ impl AudioLoader {
 
     pub fn has_audio(path: &str) -> bool {
         let path = Path::new(path);
-        let Ok(source) = File::open(path) else {
+        let Ok(source) = DirectRegularFile::open(path) else {
             return false;
         };
-        let media = MediaSourceStream::new(Box::new(source), Default::default());
+        let media = MediaSourceStream::new(Box::new(source.into_file()), Default::default());
         symphonia::default::get_probe()
             .format(
                 &probe_hint(path),

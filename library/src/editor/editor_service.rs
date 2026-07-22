@@ -4,7 +4,9 @@ use crate::editor::audio_service::AudioService;
 use crate::editor::handlers::clip_handler::ClipBundle;
 use crate::editor::handlers::keyframe_handler::KeyframeBatchUpdate;
 use crate::editor::handlers::property_ops::PropertyOwner;
-use crate::editor::project_service::{GeneratorNodeRequest, ProjectManager};
+use crate::editor::project_service::{
+    AssetSourceColorInspector, GeneratorNodeRequest, ProjectManager, SourceColorMetadataRefresh,
+};
 use crate::error::LibraryError;
 use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
@@ -144,6 +146,48 @@ impl EditorService {
 
     pub fn remove_asset_fully(&self, asset_id: Uuid) -> Result<(), LibraryError> {
         self.project_manager.remove_asset_fully(asset_id)
+    }
+
+    pub fn asset_source_color_inspectors(
+        &self,
+        owner: crate::model::project::NodeContainer,
+    ) -> Result<Vec<AssetSourceColorInspector>, LibraryError> {
+        self.project_manager.asset_source_color_inspectors(owner)
+    }
+
+    pub fn assign_asset_source_color_space(
+        &self,
+        asset_id: Uuid,
+        color_space: &str,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .assign_asset_source_color_space(asset_id, color_space)
+    }
+
+    pub fn clear_asset_source_color_space(&self, asset_id: Uuid) -> Result<(), LibraryError> {
+        self.project_manager
+            .clear_asset_source_color_space(asset_id)
+    }
+
+    pub fn use_detected_asset_source_color(&self, asset_id: Uuid) -> Result<(), LibraryError> {
+        self.project_manager
+            .use_detected_asset_source_color(asset_id)
+    }
+
+    pub fn refresh_asset_source_color_metadata(
+        &self,
+        asset_id: Uuid,
+    ) -> Result<SourceColorMetadataRefresh, LibraryError> {
+        self.project_manager
+            .refresh_asset_source_color_metadata(asset_id)
+    }
+
+    pub fn clear_legacy_media_node_color_properties(
+        &self,
+        node_id: Uuid,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .clear_legacy_media_node_color_properties(node_id)
     }
 
     // --- Clip Factory Methods ---

@@ -8,6 +8,9 @@ mod property;
 mod semantic;
 mod shape;
 
+pub use asset::{
+    AssetSourceColorInspector, AssetSourceColorInspectorInterpretation, SourceColorMetadataRefresh,
+};
 pub use lifecycle::ProjectManager;
 pub use node::{
     DEFAULT_SHAPE_PATH, DEFAULT_SKSL_SHADER, DEFAULT_TEXT_FONT, GeneratorNodeRequest,

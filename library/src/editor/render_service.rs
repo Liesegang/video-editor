@@ -1,16 +1,24 @@
 use crate::core::cache::SharedCacheManager;
 use crate::core::framing::get_frame_from_project;
+use crate::core::rendering::managed_color_backend::{
+    ManagedRenderDestination, ProjectColorPipeline,
+};
+use crate::core::rendering::managed_color_source::ingest_loaded_media;
+use crate::core::rendering::media_color_ingress::{
+    MediaAssetKind, require_unmanaged_abi_srgb, source_asset,
+};
 use crate::core::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
 use crate::model::frame::entity::{
-    FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject,
+    FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, ImageSurface,
 };
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
-use crate::plugin::{LoadRequest, PluginManager};
+use crate::model::project::Project;
+use crate::plugin::{ExportFrame, LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
 
@@ -18,6 +26,57 @@ pub struct RenderService<T: Renderer> {
     pub renderer: T,
     cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderDestination {
+    Preview,
+    Export,
+}
+
+enum RenderColorAuthority<'a> {
+    Project {
+        project: &'a Project,
+        pipeline: &'a ProjectColorPipeline,
+    },
+    UnmanagedAbi,
+}
+
+struct MediaRenderInput<'a> {
+    request: &'a LoadRequest,
+    surface: &'a ImageSurface,
+    expected_kind: MediaAssetKind,
+}
+
+fn composition_frame_at_time(time: f64, composition_fps: f64) -> Result<u64, LibraryError> {
+    if !time.is_finite() || time < 0.0 {
+        return Err(LibraryError::Render(format!(
+            "render time must be finite and non-negative, not {time}"
+        )));
+    }
+    if !composition_fps.is_finite() || composition_fps <= 0.0 {
+        return Err(LibraryError::Render(format!(
+            "composition fps must be finite and positive, not {composition_fps}"
+        )));
+    }
+    let scaled = time * composition_fps;
+    if !scaled.is_finite() || scaled >= u64::MAX as f64 {
+        return Err(LibraryError::Render(format!(
+            "render frame position is outside the supported u64 range: {scaled}"
+        )));
+    }
+
+    // Frame samples use interval semantics. Correct only arithmetic noise at
+    // mathematically integral boundaries; a genuine half-frame such as 59.5
+    // must still select frame 59 rather than rounding beyond the source end.
+    let nearest = scaled.round();
+    let snap_tolerance = f64::EPSILON * 8.0 * scaled.abs().max(1.0);
+    let interval_position = if (scaled - nearest).abs() <= snap_tolerance {
+        nearest
+    } else {
+        scaled
+    };
+    Ok(interval_position.floor() as u64)
 }
 
 impl<T: Renderer> RenderService<T> {
@@ -33,18 +92,79 @@ impl<T: Renderer> RenderService<T> {
         }
     }
 
-    pub fn render_frame(
+    /// Render specifically for an exporter and retain the Project-derived
+    /// color authority alongside the terminal pixels.
+    pub fn render_export_frame(
         &mut self,
         project_model: &ProjectModel,
         time: f64,
-    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+    ) -> Result<ExportFrame, LibraryError> {
         let frame_info = self.get_frame(project_model, time)?;
-        self.render_from_frame_info(&frame_info)
+        let output = self.render_project_frame(
+            project_model.project().as_ref(),
+            &frame_info,
+            RenderDestination::Export,
+        )?;
+        let image = match output {
+            RenderOutput::Image(image) => image,
+            RenderOutput::Working(_) => {
+                return Err(LibraryError::Render(
+                    "export received an unterminated Project working frame".to_string(),
+                ));
+            }
+            RenderOutput::Texture(_) => {
+                return Err(LibraryError::Render(
+                    "export received a GPU texture without a typed readback boundary".to_string(),
+                ));
+            }
+        };
+        ExportFrame::from_project_render(project_model.project().as_ref(), image)
     }
 
+    /// Render a Project-evaluated frame with its exact color and Asset
+    /// authority. Preview and export must use this entry point.
+    pub fn render_project_frame(
+        &mut self,
+        project: &Project,
+        frame_info: &FrameInfo,
+        destination: RenderDestination,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        let managed_destination = match destination {
+            RenderDestination::Preview => ManagedRenderDestination::Preview,
+            RenderDestination::Export => ManagedRenderDestination::Export,
+        };
+        let pipeline = ProjectColorPipeline::for_project(project, managed_destination)?;
+        self.renderer
+            .use_project_linear_surface(pipeline.working_surface_contract()?)?;
+        let output = self.render_with_authority(
+            frame_info,
+            &RenderColorAuthority::Project {
+                project,
+                pipeline: &pipeline,
+            },
+        )?;
+        let RenderOutput::Working(working) = output else {
+            return Err(LibraryError::Render(
+                "Project renderer did not retain the typed linear RGBAF32 root output".to_string(),
+            ));
+        };
+        pipeline.terminal_image(&working).map(RenderOutput::Image)
+    }
+
+    /// Project-free compatibility boundary for versioned native plugin probes.
+    /// File-backed Preview/export must use [`Self::render_project_frame`].
     pub fn render_from_frame_info(
         &mut self,
         frame_info: &FrameInfo,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        self.renderer.use_unmanaged_srgba8_surface()?;
+        self.render_with_authority(frame_info, &RenderColorAuthority::UnmanagedAbi)
+    }
+
+    fn render_with_authority(
+        &mut self,
+        frame_info: &FrameInfo,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         self.clear()?;
         let object_count = frame_info.object_count();
@@ -57,6 +177,7 @@ impl<T: Renderer> RenderService<T> {
             &frame_info.items,
             &context,
             frame_info.now_time.into_inner(),
+            color_authority,
         )?;
         measure_debug("RenderService::finalize", || self.renderer.finalize())
     }
@@ -66,13 +187,14 @@ impl<T: Renderer> RenderService<T> {
         items: &[FrameItem],
         context: &RenderContext,
         current_time: f64,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
         for item in items {
             match item {
                 FrameItem::Object(object) => {
-                    self.render_object(object, context, current_time)?;
+                    self.render_object(object, context, current_time, color_authority)?;
                 }
-                FrameItem::Group(group) => self.render_group(group, context)?,
+                FrameItem::Group(group) => self.render_group(group, context, color_authority)?,
             }
         }
         Ok(())
@@ -82,17 +204,23 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         group: &FrameGroup,
         parent_context: &RenderContext,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
         if group.kind == FrameGroupKind::Composition {
-            return self.render_composition_group(group, parent_context);
+            return self.render_composition_group(group, parent_context, color_authority);
         }
         if group.kind == FrameGroupKind::ImageTransform {
-            return self.render_image_transform_group(group, parent_context);
+            return self.render_image_transform_group(group, parent_context, color_authority);
         }
 
         let child_context = parent_context.with_transform(&group.transform);
         if !group_requires_isolation(group) {
-            return self.render_items(&group.items, &child_context, group.effect_time.into_inner());
+            return self.render_items(
+                &group.items,
+                &child_context,
+                group.effect_time.into_inner(),
+                color_authority,
+            );
         }
 
         self.renderer.begin_group(
@@ -100,8 +228,12 @@ impl<T: Renderer> RenderService<T> {
             parent_context.target_height,
             &transparent_color(),
         )?;
-        let children_result =
-            self.render_items(&group.items, &child_context, group.effect_time.into_inner());
+        let children_result = self.render_items(
+            &group.items,
+            &child_context,
+            group.effect_time.into_inner(),
+            color_authority,
+        );
         let output_result = self.renderer.end_group();
         children_result?;
         let output = output_result?;
@@ -120,6 +252,7 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         group: &FrameGroup,
         parent_context: &RenderContext,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
         let width = scaled_dimension(group.width as f64, parent_context.render_scale);
         let height = scaled_dimension(group.height as f64, parent_context.render_scale);
@@ -127,8 +260,12 @@ impl<T: Renderer> RenderService<T> {
 
         self.renderer
             .begin_group(width, height, &transparent_color())?;
-        let children_result =
-            self.render_items(&group.items, &child_context, group.effect_time.into_inner());
+        let children_result = self.render_items(
+            &group.items,
+            &child_context,
+            group.effect_time.into_inner(),
+            color_authority,
+        );
         let output_result = self.renderer.end_group();
         children_result?;
         let output = output_result?;
@@ -153,6 +290,7 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         group: &FrameGroup,
         parent_context: &RenderContext,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
         let width = scaled_dimension(group.width as f64, parent_context.render_scale);
         let height = scaled_dimension(group.height as f64, parent_context.render_scale);
@@ -160,8 +298,12 @@ impl<T: Renderer> RenderService<T> {
 
         self.renderer
             .begin_group(width, height, &group.background_color)?;
-        let children_result =
-            self.render_items(&group.items, &child_context, group.effect_time.into_inner());
+        let children_result = self.render_items(
+            &group.items,
+            &child_context,
+            group.effect_time.into_inner(),
+            color_authority,
+        );
         let output_result = self.renderer.end_group();
         children_result?;
         let output = output_result?;
@@ -188,6 +330,7 @@ impl<T: Renderer> RenderService<T> {
         frame_object: &FrameObject,
         context: &RenderContext,
         current_time: f64,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
         let content = &frame_object.content;
 
@@ -197,20 +340,28 @@ impl<T: Renderer> RenderService<T> {
                 source_time,
                 stream_index,
             } => {
+                let source_color_authority = match color_authority {
+                    RenderColorAuthority::Project { project, .. } => {
+                        source_asset(project, surface, MediaAssetKind::Video)?
+                            .and_then(|asset| asset.source_color.decoder_color_authority())
+                    }
+                    RenderColorAuthority::UnmanagedAbi => None,
+                };
                 let request = LoadRequest::VideoFrame {
                     path: surface.file_path.clone(),
                     source_time: *source_time,
                     stream_index: *stream_index,
-                    input_color_space: surface.input_color_space.clone(),
-                    output_color_space: surface.output_color_space.clone(),
+                    source_color_authority,
                 };
                 self.render_media_surface(
-                    &request,
-                    &surface.file_path,
-                    &surface.transform,
-                    &surface.effects,
+                    MediaRenderInput {
+                        request: &request,
+                        surface,
+                        expected_kind: MediaAssetKind::Video,
+                    },
                     context,
                     current_time,
+                    color_authority,
                 )
             }
             FrameContent::Image { surface } => {
@@ -218,12 +369,14 @@ impl<T: Renderer> RenderService<T> {
                     path: surface.file_path.clone(),
                 };
                 self.render_media_surface(
-                    &request,
-                    &surface.file_path,
-                    &surface.transform,
-                    &surface.effects,
+                    MediaRenderInput {
+                        request: &request,
+                        surface,
+                        expected_kind: MediaAssetKind::Image,
+                    },
                     context,
                     current_time,
+                    color_authority,
                 )
             }
             FrameContent::Text {
@@ -330,8 +483,7 @@ impl<T: Renderer> RenderService<T> {
         let composition = &project.compositions[composition_index];
         let composition_fps = composition.fps;
 
-        // Convert time (f64) to frame_number (u64) using composition_fps
-        let frame_number = (time * composition_fps).round() as u64;
+        let frame_number = composition_frame_at_time(time, composition_fps)?;
 
         get_frame_from_project(
             project,
@@ -384,28 +536,41 @@ impl<T: Renderer> RenderService<T> {
     /// Helper to load, apply effects, and draw a media surface (video or image).
     fn render_media_surface(
         &mut self,
-        request: &LoadRequest,
-        file_path: &str,
-        transform: &Transform,
-        effects: &[crate::model::frame::effect::ImageEffect],
+        input: MediaRenderInput<'_>,
         context: &RenderContext,
         current_time: f64,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
-        let image = measure_debug(format!("Load {}", file_path), || {
+        let MediaRenderInput {
+            request,
+            surface,
+            expected_kind,
+        } = input;
+        let response = measure_debug(format!("Load {}", surface.file_path), || {
             self.plugin_manager
                 .load_resource(request, &self.cache_manager)
-                .map(|r| r.image)
         })?;
+        let layer = match color_authority {
+            RenderColorAuthority::Project { project, pipeline } => {
+                let working =
+                    ingest_loaded_media(project, pipeline, surface, expected_kind, response)?;
+                RenderOutput::Working(working)
+            }
+            RenderColorAuthority::UnmanagedAbi => {
+                require_unmanaged_abi_srgb(response.decoded(), response.pixels())?;
+                RenderOutput::Image(response.into_rgba8()?)
+            }
+        };
 
-        let final_image = self.apply_effects(RenderOutput::Image(image), effects, current_time)?;
+        let final_image = self.apply_effects(layer, &surface.effects, current_time)?;
 
-        let render_transform = context.transform(transform);
+        let render_transform = context.transform(&surface.transform);
 
-        measure_debug(format!("Draw {}", file_path), || {
+        measure_debug(format!("Draw {}", surface.file_path), || {
             self.renderer.draw_layer_affine_with_blend(
                 &final_image,
                 &render_transform,
-                transform.opacity,
+                surface.transform.opacity,
                 crate::model::BlendMode::Normal,
             )
         })?;
@@ -481,552 +646,5 @@ fn group_requires_isolation(group: &FrameGroup) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cache::CacheManager;
-    use crate::core::framing::FrameEvaluator;
-    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
-    use crate::model::frame::color::Color;
-    use crate::model::frame::frame::Region;
-    use crate::model::project::{
-        Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
-        PortAddress, PortOwner,
-    };
-    use crate::model::property::{Property, PropertyValue};
-    use crate::model::{BlendMode, Clip, Node, Project, Track};
-    use crate::plugin::{EffectPlugin, Plugin};
-    use crate::rendering::skia_renderer::SkiaRenderer;
-    use ordered_float::OrderedFloat;
-    use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct CountingEffect {
-        calls: Arc<AtomicUsize>,
-    }
-
-    struct TexturePathRenderer {
-        saw_texture_layer: bool,
-    }
-
-    impl Renderer for TexturePathRenderer {
-        fn draw_layer_affine_with_blend(
-            &mut self,
-            layer: &RenderOutput,
-            _transform: &Affine2D,
-            _opacity: f64,
-            _blend_mode: BlendMode,
-        ) -> Result<(), LibraryError> {
-            self.saw_texture_layer |= matches!(layer, RenderOutput::Texture(_));
-            Ok(())
-        }
-
-        fn begin_group(
-            &mut self,
-            _width: u32,
-            _height: u32,
-            _background_color: &Color,
-        ) -> Result<(), LibraryError> {
-            Ok(())
-        }
-
-        fn end_group(&mut self) -> Result<RenderOutput, LibraryError> {
-            Ok(RenderOutput::Image(crate::model::frame::Image::new(
-                1,
-                1,
-                vec![0, 0, 0, 0],
-            )))
-        }
-
-        fn rasterize_text_layer(
-            &mut self,
-            _request: TextRasterRequest<'_>,
-        ) -> Result<RenderOutput, LibraryError> {
-            Err(LibraryError::Render("unexpected text".into()))
-        }
-
-        fn rasterize_shape_layer(
-            &mut self,
-            _request: ShapeRasterRequest<'_>,
-        ) -> Result<RenderOutput, LibraryError> {
-            Ok(RenderOutput::Texture(
-                crate::rendering::renderer::TextureInfo {
-                    texture_id: 7,
-                    width: 1,
-                    height: 1,
-                },
-            ))
-        }
-
-        fn rasterize_sksl_layer(
-            &mut self,
-            _shader_code: &str,
-            _resolution: (f32, f32),
-            _time: f32,
-            _transform: &Affine2D,
-        ) -> Result<RenderOutput, LibraryError> {
-            Err(LibraryError::Render("unexpected SkSL".into()))
-        }
-
-        fn read_surface(
-            &mut self,
-            _output: &RenderOutput,
-        ) -> Result<crate::model::frame::Image, LibraryError> {
-            Err(LibraryError::Render("unexpected readback".into()))
-        }
-
-        fn finalize(&mut self) -> Result<RenderOutput, LibraryError> {
-            Ok(RenderOutput::Texture(
-                crate::rendering::renderer::TextureInfo {
-                    texture_id: 99,
-                    width: 1,
-                    height: 1,
-                },
-            ))
-        }
-
-        fn clear(&mut self) -> Result<(), LibraryError> {
-            Ok(())
-        }
-    }
-
-    impl Plugin for CountingEffect {
-        fn id(&self) -> &'static str {
-            "counting_track_effect"
-        }
-
-        fn name(&self) -> String {
-            "Counting Track Effect".into()
-        }
-
-        fn category(&self) -> String {
-            "Test".into()
-        }
-
-        fn version(&self) -> (u32, u32, u32) {
-            (0, 0, 0)
-        }
-    }
-
-    impl EffectPlugin for CountingEffect {
-        fn apply(
-            &self,
-            input: &RenderOutput,
-            _params: &HashMap<String, PropertyValue>,
-            _gpu_context: Option<&mut crate::rendering::skia_utils::GpuContext>,
-        ) -> Result<RenderOutput, LibraryError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(input.clone())
-        }
-
-        fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
-            Vec::new()
-        }
-    }
-
-    fn add_solid(
-        project: &mut Project,
-        track_id: uuid::Uuid,
-        color: Color,
-    ) -> (uuid::Uuid, uuid::Uuid) {
-        let clip = Clip::new("solid clip", 0.0, 1.0);
-        let clip_id = clip.id;
-        project.add_clip(clip);
-        project.attach_clip_to_track(track_id, clip_id).unwrap();
-        let node = test_generator_node("solid", GeneratorNodeRequest::Solid { color });
-        let node_id = node.id;
-        project.add_node(node);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
-            .unwrap();
-        project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
-            .unwrap();
-        (clip_id, node_id)
-    }
-
-    #[test]
-    fn real_render_path_composites_tracks_in_order_with_opacity_blend_and_effects() {
-        let effect_calls = Arc::new(AtomicUsize::new(0));
-        let plugin_manager = Arc::new(PluginManager::default());
-        plugin_manager.register_effect(Arc::new(CountingEffect {
-            calls: Arc::clone(&effect_calls),
-        }));
-        let mut project = Project::new("track render test");
-        let (mut composition, first_track) = Composition::new("main", 8, 8, 30.0, 1.0);
-        composition.background_color = Color::black();
-        let composition_id = composition.id;
-        let first_track_id = first_track.id;
-        assert!(
-            project.add_track(first_track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(composition).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-
-        let mut second_track = Track::new("second");
-        let second_track_id = second_track.id;
-        second_track.properties.set(
-            "opacity".into(),
-            Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
-        );
-        assert!(
-            project.add_track(second_track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        project
-            .attach_track_to_composition(composition_id, second_track_id)
-            .unwrap();
-        let second_track_edge_id = project
-            .connections
-            .iter()
-            .find(|connection| connection.from.owner == PortOwner::Track(second_track_id))
-            .expect("Track insertion must create a structural Merge edge")
-            .id;
-        project
-            .set_connection_blend_mode(second_track_edge_id, BlendMode::LinearDodge)
-            .unwrap();
-
-        let _ = add_solid(
-            &mut project,
-            first_track_id,
-            Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-        );
-        let (_second_clip_id, _) = add_solid(
-            &mut project,
-            second_track_id,
-            Color {
-                r: 0,
-                g: 255,
-                b: 0,
-                a: 255,
-            },
-        );
-        let effect = plugin_manager
-            .create_effect_operation_node("counting_track_effect")
-            .unwrap();
-        let effect_id = effect.id;
-        project.add_node(effect);
-        project
-            .attach_node_to_container(NodeContainer::Track(second_track_id), effect_id)
-            .unwrap();
-        project
-            .connect_ports(
-                PortAddress::new(
-                    PortOwner::Node(
-                        project
-                            .get_track(second_track_id)
-                            .unwrap()
-                            .structural_merge_node_id,
-                    ),
-                    IMAGE_OUTPUT_PORT,
-                ),
-                PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
-            )
-            .unwrap();
-        project
-            .set_output_node(NodeContainer::Track(second_track_id), Some(effect_id))
-            .unwrap();
-        let frame = FrameEvaluator::new(
-            &project,
-            &project.compositions[0],
-            plugin_manager.get_property_evaluators(),
-            plugin_manager.as_ref(),
-        )
-        .evaluate(
-            0,
-            0.5,
-            Some(Region {
-                x: 2.0,
-                y: 2.0,
-                width: 4.0,
-                height: 4.0,
-            }),
-        )
-        .unwrap();
-
-        let renderer = SkiaRenderer::new(2, 2, Color::black(), false, None, None).unwrap();
-        let mut service = RenderService::new(
-            renderer,
-            Arc::clone(&plugin_manager),
-            Arc::new(CacheManager::new()),
-        );
-        let RenderOutput::Image(image) = service.render_from_frame_info(&frame).unwrap() else {
-            panic!("CPU renderer must return an Image");
-        };
-
-        assert_eq!((image.width, image.height), (2, 2));
-        let pixel = &image.data[0..4];
-        assert!(
-            pixel[0] >= 250,
-            "bottom red Track must render first: {pixel:?}"
-        );
-        assert!(
-            (120..=135).contains(&pixel[1]),
-            "top green Track must be added once at 50% opacity: {pixel:?}"
-        );
-        assert!(pixel[2] <= 2, "unexpected blue contribution: {pixel:?}");
-        assert_eq!(pixel[3], 255);
-        assert_eq!(effect_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn composition_instance_is_a_spatially_neutral_single_image_output() {
-        let mut project = Project::new("composition output test");
-        let (mut parent, parent_track) = Composition::new("parent", 1, 1, 30.0, 1.0);
-        parent.background_color = Color::black();
-        let parent_track_id = parent_track.id;
-        assert!(
-            project.add_track(parent_track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(parent).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-
-        let (mut nested, nested_track) = Composition::new("nested", 1, 1, 30.0, 1.0);
-        nested.background_color = Color {
-            r: 255,
-            g: 0,
-            b: 0,
-            a: 255,
-        };
-        let nested_id = nested.id;
-        let nested_track_id = nested_track.id;
-        assert!(
-            project.add_track(nested_track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(nested).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        let _ = add_solid(
-            &mut project,
-            nested_track_id,
-            Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-        );
-
-        let clip = Clip::new("nested instance clip", 0.0, 1.0);
-        let clip_id = clip.id;
-        project.add_clip(clip);
-        project
-            .attach_clip_to_track(parent_track_id, clip_id)
-            .unwrap();
-        let instance = Node::new_composition_instance(
-            "nested instance",
-            crate::model::CompositionInstanceContent {
-                composition_id: nested_id,
-            },
-        );
-        let instance_id = instance.id;
-        project.add_node(instance);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), instance_id)
-            .unwrap();
-        project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
-            .unwrap();
-
-        let plugin_manager = Arc::new(PluginManager::default());
-        let frame = FrameEvaluator::new(
-            &project,
-            &project.compositions[0],
-            plugin_manager.get_property_evaluators(),
-            plugin_manager.as_ref(),
-        )
-        .evaluate(0, 1.0, None)
-        .unwrap();
-        let renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
-        let mut service =
-            RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
-        let RenderOutput::Image(image) = service.render_from_frame_info(&frame).unwrap() else {
-            panic!("CPU renderer must return an Image");
-        };
-
-        assert_eq!(&image.data[0..4], &[255, 0, 0, 255]);
-    }
-
-    #[test]
-    fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
-        let mut project = Project::new("texture path test");
-        let (composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
-        let track_id = track.id;
-        assert!(
-            project.add_track(track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(composition).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        let _ = add_solid(&mut project, track_id, Color::white());
-
-        let plugin_manager = Arc::new(PluginManager::default());
-        let frame = FrameEvaluator::new(
-            &project,
-            &project.compositions[0],
-            plugin_manager.get_property_evaluators(),
-            plugin_manager.as_ref(),
-        )
-        .evaluate(0, 1.0, None)
-        .unwrap();
-        let renderer = TexturePathRenderer {
-            saw_texture_layer: false,
-        };
-        let mut service =
-            RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
-
-        let output = service.render_from_frame_info(&frame).unwrap();
-        assert!(service.renderer.saw_texture_layer);
-        assert!(matches!(
-            output,
-            RenderOutput::Texture(crate::rendering::renderer::TextureInfo { texture_id: 99, .. })
-        ));
-    }
-
-    #[test]
-    fn merge_connection_order_changes_the_rendered_pixel() {
-        let mut project = Project::new("merge pixel test");
-        let (mut composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
-        composition.background_color = Color::black();
-        let track_id = track.id;
-        assert!(
-            project.add_track(track).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-        assert!(
-            project.add_composition(composition).is_ok(),
-            "container structural Merge insertion must succeed"
-        );
-
-        let clip = Clip::new("merge clip", 0.0, 1.0);
-        let clip_id = clip.id;
-        project.add_clip(clip);
-        project.attach_clip_to_track(track_id, clip_id).unwrap();
-
-        let red = test_generator_node(
-            "red",
-            GeneratorNodeRequest::Solid {
-                color: Color {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-            },
-        );
-        let red_id = red.id;
-        project.add_node(red);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), red_id)
-            .unwrap();
-
-        let mut green = test_generator_node(
-            "green",
-            GeneratorNodeRequest::Solid {
-                color: Color {
-                    r: 0,
-                    g: 255,
-                    b: 0,
-                    a: 255,
-                },
-            },
-        );
-        green.blend_mode = BlendMode::Multiply;
-        let green_id = green.id;
-        project.add_node(green);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), green_id)
-            .unwrap();
-
-        let merge = Node::new_merge("merge");
-        let merge_id = merge.id;
-        project.add_node(merge);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), merge_id)
-            .unwrap();
-        project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
-            .unwrap();
-
-        let target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
-        let red_connection = project
-            .connect_ports(
-                PortAddress::new(PortOwner::Node(red_id), IMAGE_OUTPUT_PORT),
-                target.clone(),
-            )
-            .unwrap();
-        let green_connection = project
-            .connect_ports(
-                PortAddress::new(PortOwner::Node(green_id), IMAGE_OUTPUT_PORT),
-                target,
-            )
-            .unwrap();
-        project
-            .set_connection_blend_mode(green_connection, BlendMode::LinearDodge)
-            .unwrap();
-
-        let plugin_manager = Arc::new(PluginManager::default());
-        let render_pixel = |project: &Project| {
-            let frame = FrameEvaluator::new(
-                project,
-                &project.compositions[0],
-                plugin_manager.get_property_evaluators(),
-                plugin_manager.as_ref(),
-            )
-            .evaluate(0, 1.0, None)
-            .unwrap();
-            let renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
-            let mut service = RenderService::new(
-                renderer,
-                Arc::clone(&plugin_manager),
-                Arc::new(CacheManager::new()),
-            );
-            let RenderOutput::Image(image) = service.render_from_frame_info(&frame).unwrap() else {
-                panic!("CPU renderer must return an Image");
-            };
-            image.data[0..4].to_vec()
-        };
-
-        let additive = render_pixel(&project);
-        assert!(additive[0] >= 250, "red contribution missing: {additive:?}");
-        assert!(
-            additive[1] >= 250,
-            "green Add contribution missing: {additive:?}"
-        );
-        assert!(
-            additive[2] <= 2,
-            "unexpected blue contribution: {additive:?}"
-        );
-
-        project.reorder_connection(green_connection, 0).unwrap();
-        let reordered = render_pixel(&project);
-        assert!(reordered[0] >= 250, "red top image missing: {reordered:?}");
-        assert!(
-            reordered[1] <= 2,
-            "reorder did not change output: {reordered:?}"
-        );
-        assert_eq!(
-            project
-                .connections
-                .iter()
-                .find(|connection| connection.id == red_connection)
-                .unwrap()
-                .order,
-            1
-        );
-    }
-}
+#[path = "render_service_tests.rs"]
+mod tests;

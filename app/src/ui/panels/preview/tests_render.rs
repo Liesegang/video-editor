@@ -102,23 +102,27 @@ mod render_tests {
             region: None,
             items: Vec::new(),
         };
+        let authority = library::RenderFrameAuthority::capture(&project, &frame, 1);
         scheduler.update_desired(
             &project,
             PreviewPresentationKey::from_frame(composition_id, &frame),
             frame,
             true,
             0,
+            authority,
         );
         let request = scheduler.take_submission().expect("render request");
 
         let mut latest = request.frame.clone();
         latest.now_time = OrderedFloat(3.0);
+        let authority = library::RenderFrameAuthority::capture(&project, &latest, 1);
         scheduler.update_desired(
             &project,
             PreviewPresentationKey::from_frame(composition_id, &latest),
             latest,
             true,
             0,
+            authority,
         );
         let stale_error = RenderResult {
             request_id: request.request_id,

@@ -84,6 +84,7 @@ fn preview(project: &Project, plugins: &Arc<PluginManager>) -> Result<Image> {
     let mut service = RenderService::new(renderer, plugins.clone(), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer returned a texture"),
     }
 }
@@ -282,6 +283,7 @@ fn rasterize_geometry(path: &str) -> Result<Image> {
         transform: Affine2D::IDENTITY,
     })? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer returned a texture"),
     }
 }

@@ -2,13 +2,16 @@ use anyhow::{Context, Result};
 use library::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
     ColorManagementStructureIssue, DEFAULT_BUNDLED_COLOR_CONFIG_ID, DEFAULT_OUTPUT_COLOR_SPACE,
-    DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_VIEW, DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig,
-    PreviewColorConfig, Project, RequestedColorManagementConfig, ResolvedColorManagementConfig,
+    DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_SURFACE_ENCODING, DEFAULT_PREVIEW_VIEW,
+    DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, HdrColorField, HdrColorSettings,
+    PreviewColorConfig, PreviewSurfaceEncoding, Project, RequestedColorManagementConfig,
+    ResolvedColorManagementConfig,
 };
 use library::model::{Asset, AssetKind};
 use serde_json::{Value, json};
 
 const EXACT_OCIO_CONFIG: &str = "ocio://studio-config-v4.0.0_aces-v2.0_ocio-v2.5";
+const EXACT_OCIO_VIEW_OUTPUT: &str = "sRGB Encoded Rec.709 (sRGB)";
 const DIFFERENT_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const TEST_OCIO_BYTES: &[u8] = br#"ocio_profile_version: 2
 roles:
@@ -19,12 +22,15 @@ fn aces_config(identity: ColorConfigIdentity) -> ColorManagementConfig {
     ColorManagementConfig::new(
         identity,
         "ACEScg",
-        PreviewColorConfig::new(
+        PreviewColorConfig::named_view(
             "sRGB - Display",
-            Some("ACES 2.0 - SDR 100 nits".to_string()),
+            "ACES 2.0 - SDR 100 nits",
+            EXACT_OCIO_VIEW_OUTPUT,
+            PreviewSurfaceEncoding::Srgb,
         ),
         ExportColorConfig::new("Output - Rec.2020"),
     )
+    .with_srgb_surface_space(EXACT_OCIO_VIEW_OUTPUT)
 }
 
 fn requested(project: &Project) -> Result<&ColorManagementConfig> {
@@ -47,6 +53,18 @@ fn project_default_is_builtin_compatible_and_roundtrips_without_schema_version()
     assert_eq!(requested.preview().display(), DEFAULT_PREVIEW_DISPLAY);
     assert_eq!(requested.preview().view(), DEFAULT_PREVIEW_VIEW);
     assert_eq!(
+        requested.preview().surface_encoding(),
+        &DEFAULT_PREVIEW_SURFACE_ENCODING
+    );
+    assert_eq!(requested.preview().view_output_color_space(), None);
+    assert_eq!(
+        requested
+            .srgb_surface_space()
+            .context("built-in sRGB surface binding")?
+            .color_space(),
+        ruvie_color_management::SRGB_SPACE_ID
+    );
+    assert_eq!(
         requested.export().output_space(),
         DEFAULT_OUTPUT_COLOR_SPACE
     );
@@ -61,6 +79,14 @@ fn project_default_is_builtin_compatible_and_roundtrips_without_schema_version()
     assert!(value.get("color_management").is_some());
     assert!(value.get("schema_version").is_none());
     assert!(value.get("migration").is_none());
+    assert_eq!(
+        value["color_management"]["preview"]["surface_encoding"],
+        PreviewSurfaceEncoding::Srgb.as_str()
+    );
+    assert_eq!(
+        value["color_management"]["srgb_surface_space"]["color_space"],
+        ruvie_color_management::SRGB_SPACE_ID
+    );
     assert_eq!(Project::load(&encoded)?, project);
     Ok(())
 }
@@ -505,6 +531,19 @@ fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -
         ),
         (
             json!({
+                "preview": {
+                    "display": "srgb",
+                    "surface_encoding": 42
+                }
+            }),
+            ColorManagementStructureIssue::WrongType {
+                path: "color_management.preview.surface_encoding".to_string(),
+                expected: "string".to_string(),
+                actual: "number".to_string(),
+            },
+        ),
+        (
+            json!({
                 "export": {
                     "output_space": "srgb",
                     "output_colour_space": "ACEScg"
@@ -569,7 +608,7 @@ fn invalid_semantic_request_is_unavailable_without_a_silent_default() -> Result<
     assert!(matches!(
         resolved.unavailable_request(),
         Some(RequestedColorManagementConfig::Config(config))
-            if config != &ColorManagementConfig::default()
+            if config.as_ref() != &ColorManagementConfig::default()
     ));
     Ok(())
 }
@@ -612,6 +651,127 @@ fn bundled_preview_is_direct_but_ocio_preview_requires_an_explicit_view() {
 }
 
 #[test]
+fn preview_surface_contract_is_lossless_nonblocking_and_part_of_cache_identity() -> Result<()> {
+    let baseline = Project::new("baseline Preview surface");
+    let baseline_identity = baseline
+        .resolved_color_management()
+        .model_validated_intent()
+        .context("default Preview intent")?
+        .cache_identity()
+        .to_string();
+
+    let mut value = serde_json::to_value(Project::new("future Preview surface"))?;
+    value["color_management"]["preview"]["surface_encoding"] =
+        Value::String("future-display-p3".to_string());
+    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    assert_eq!(
+        requested(&loaded)?.preview().surface_encoding(),
+        &PreviewSurfaceEncoding::Unknown("future-display-p3".to_string())
+    );
+    assert!(loaded.color_management_diagnostics().contains(
+        &ColorManagementIssue::UnsupportedPreviewSurfaceEncoding {
+            encoding: "future-display-p3".to_string(),
+        }
+    ));
+    let loaded_resolution = loaded.resolved_color_management();
+    let loaded_intent = loaded_resolution
+        .model_validated_intent()
+        .context("unknown surface remains model-editable")?;
+    assert_ne!(baseline_identity, loaded_intent.cache_identity());
+    let saved: Value = serde_json::from_str(&loaded.save()?)?;
+    assert_eq!(
+        saved["color_management"]["preview"]["surface_encoding"],
+        "future-display-p3"
+    );
+    Ok(())
+}
+
+#[test]
+fn direct_preview_mismatch_is_nonblocking_but_named_ocio_binding_is_exact() -> Result<()> {
+    let mut direct = Project::new("mismatched direct Preview");
+    direct
+        .set_color_management(ColorManagementConfig::new(
+            ColorConfigIdentity::default(),
+            DEFAULT_WORKING_COLOR_SPACE,
+            PreviewColorConfig::direct(ruvie_color_management::DISPLAY_P3_SPACE_ID),
+            ExportColorConfig::default(),
+        ))
+        .map_err(|issues| anyhow::anyhow!("repairable Preview mismatch blocked: {issues:?}"))?;
+    assert!(direct.color_management_diagnostics().contains(
+        &ColorManagementIssue::DirectPreviewSurfaceEncodingMismatch {
+            destination: ruvie_color_management::DISPLAY_P3_SPACE_ID.to_string(),
+            surface_encoding: PreviewSurfaceEncoding::Srgb,
+        }
+    ));
+    assert!(matches!(
+        direct.resolved_color_management(),
+        ResolvedColorManagementConfig::Ready(_)
+    ));
+
+    let identity = ColorConfigIdentity::OcioBuiltin {
+        uri: EXACT_OCIO_CONFIG.to_string(),
+        ocio_version: "2.5.2".to_string(),
+    };
+    let named = aces_config(identity.clone());
+    assert_eq!(
+        named.preview().view_output_color_space(),
+        Some(EXACT_OCIO_VIEW_OUTPUT)
+    );
+    assert!(named.preview().surface_encoding().is_srgb());
+    assert!(named.diagnostics(&[]).is_empty());
+    let mut first_named_project = Project::new("first named Preview output");
+    first_named_project
+        .set_color_management(named)
+        .map_err(|issues| anyhow::anyhow!("valid named Preview rejected: {issues:?}"))?;
+    let first_named_resolution = first_named_project.resolved_color_management();
+    let first_named_cache = first_named_resolution
+        .model_validated_intent()
+        .context("first named Preview intent")?
+        .cache_identity()
+        .to_string();
+
+    let mut second_named_project = Project::new("second named Preview output");
+    second_named_project
+        .set_color_management(
+            ColorManagementConfig::new(
+                identity.clone(),
+                "ACEScg",
+                PreviewColorConfig::named_view(
+                    "sRGB - Display",
+                    "ACES 2.0 - SDR 100 nits",
+                    "A different exact config-local output",
+                    PreviewSurfaceEncoding::Srgb,
+                ),
+                ExportColorConfig::new("Output - Rec.2020"),
+            )
+            .with_srgb_surface_space(EXACT_OCIO_VIEW_OUTPUT),
+        )
+        .map_err(|issues| anyhow::anyhow!("second named Preview rejected: {issues:?}"))?;
+    let second_named_resolution = second_named_project.resolved_color_management();
+    let second_named_cache = second_named_resolution
+        .model_validated_intent()
+        .context("second named Preview intent")?
+        .cache_identity();
+    assert_ne!(first_named_cache, second_named_cache);
+
+    let missing_binding = ColorManagementConfig::new(
+        identity,
+        "ACEScg",
+        PreviewColorConfig::new(
+            "sRGB - Display",
+            Some("ACES 2.0 - SDR 100 nits".to_string()),
+        ),
+        ExportColorConfig::new("Output - Rec.2020"),
+    );
+    assert!(
+        missing_binding
+            .diagnostics(&[])
+            .contains(&ColorManagementIssue::MissingPreviewViewOutputColorSpace)
+    );
+    Ok(())
+}
+
+#[test]
 fn moving_alias_detection_does_not_reject_versioned_names_containing_default_or_latest() {
     let mut project = Project::new("legitimate names");
     let bundled = ColorManagementConfig::new(
@@ -621,7 +781,8 @@ fn moving_alias_detection_does_not_reject_versioned_names_containing_default_or_
         DEFAULT_WORKING_COLOR_SPACE,
         PreviewColorConfig::default(),
         ExportColorConfig::default(),
-    );
+    )
+    .with_srgb_surface_space(ruvie_color_management::SRGB_SPACE_ID);
     assert!(project.set_color_management(bundled).is_ok());
 
     let ocio = aces_config(ColorConfigIdentity::OcioBuiltin {
@@ -700,7 +861,67 @@ fn cache_identity_is_stable_for_equal_model_validated_configs_and_changes_with_i
     let changed_intent = changed_resolution
         .model_validated_intent()
         .context("changed config is model-validated")?;
-    assert_ne!(first_identity, changed_intent.cache_identity().as_str());
+    assert_ne!(first_identity, changed_intent.cache_identity());
+    Ok(())
+}
+
+#[test]
+fn pq_settings_are_nonblocking_diagnostics_and_part_of_cache_identity() -> Result<()> {
+    let mut missing = Project::new("PQ settings missing");
+    missing
+        .set_color_management(ColorManagementConfig::new(
+            ColorConfigIdentity::default(),
+            DEFAULT_WORKING_COLOR_SPACE,
+            PreviewColorConfig::default(),
+            ExportColorConfig::new(ruvie_color_management::REC2100_PQ_SPACE_ID),
+        ))
+        .map_err(|issues| anyhow::anyhow!("PQ draft must remain repairable: {issues:?}"))?;
+    assert!(matches!(
+        missing.resolved_color_management(),
+        ResolvedColorManagementConfig::Ready(_)
+    ));
+    let diagnostics = missing.color_management_diagnostics();
+    assert!(diagnostics.iter().any(|issue| matches!(
+        issue,
+        ColorManagementIssue::MissingHdrSetting {
+            field: HdrColorField::ReferenceWhiteNits,
+            ..
+        }
+    )));
+    assert!(diagnostics.iter().any(|issue| matches!(
+        issue,
+        ColorManagementIssue::MissingHdrSetting {
+            field: HdrColorField::PqLinearizationPolicy,
+            ..
+        }
+    )));
+
+    let missing_identity = missing
+        .resolved_color_management()
+        .model_validated_intent()
+        .context("missing PQ settings remain model-valid")?
+        .cache_identity()
+        .to_string();
+    let mut configured = Project::new("PQ settings configured");
+    configured
+        .set_color_management(
+            ColorManagementConfig::new(
+                ColorConfigIdentity::default(),
+                DEFAULT_WORKING_COLOR_SPACE,
+                PreviewColorConfig::default(),
+                ExportColorConfig::new(ruvie_color_management::REC2100_PQ_SPACE_ID),
+            )
+            .with_hdr_settings(HdrColorSettings::for_pq(203.0)?),
+        )
+        .map_err(|issues| anyhow::anyhow!("valid PQ settings rejected: {issues:?}"))?;
+    assert!(configured.color_management_diagnostics().is_empty());
+    let configured_identity = configured
+        .resolved_color_management()
+        .model_validated_intent()
+        .context("configured PQ intent")?
+        .cache_identity()
+        .to_string();
+    assert_ne!(missing_identity, configured_identity);
     Ok(())
 }
 
@@ -735,7 +956,18 @@ fn external_config_json(asset_id: uuid::Uuid, sha256: &str) -> Value {
         "working_space": "ACEScg",
         "preview": {
             "display": "sRGB - Display",
-            "view": "ACES 2.0 - SDR 100 nits"
+            "view": "ACES 2.0 - SDR 100 nits",
+            "surface_encoding": "srgb",
+            "view_output_color_space": EXACT_OCIO_VIEW_OUTPUT
+        },
+        "srgb_surface_space": {
+            "config": {
+                "kind": "project_asset",
+                "asset_id": asset_id,
+                "sha256": sha256,
+                "ocio_version": "2.5.2"
+            },
+            "color_space": EXACT_OCIO_VIEW_OUTPUT
         },
         "export": { "output_space": "Output - Rec.2020" }
     })

@@ -129,6 +129,7 @@ fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -
     let mut service = RenderService::new(renderer, plugins.clone(), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }

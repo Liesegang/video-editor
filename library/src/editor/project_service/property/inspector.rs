@@ -1,6 +1,6 @@
 use super::super::lifecycle::ProjectManager;
 use super::super::node::DEFAULT_TEXT_FONT;
-use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::property::PropertyDefinition;
 use crate::model::{GeneratorContent, NodeContent};
 use crate::plugin::entity_converter::measure_text_size;
 
@@ -84,7 +84,7 @@ impl ProjectManager {
 
         let converter = self.plugin_manager.get_entity_converter(kind_key);
 
-        let mut definitions = match node.content() {
+        match node.content() {
             NodeContent::Value(value) => value.property_definitions().to_vec(),
             NodeContent::Data(data) => data.property_definitions().to_vec(),
             NodeContent::List(operation) => operation.property_definitions().to_vec(),
@@ -96,31 +96,6 @@ impl ProjectManager {
                     clip_height,
                 )
             }),
-        };
-
-        if kind_key == "video" {
-            let colorspaces =
-                crate::editor::color_service::ColorSpaceManager::get_available_colorspaces();
-            if !colorspaces.is_empty() {
-                definitions.push(PropertyDefinition::new(
-                    "input_color_space",
-                    PropertyUiType::Dropdown {
-                        options: colorspaces.clone(),
-                    },
-                    "Input Color Space",
-                    PropertyValue::String("".to_string()),
-                ));
-                definitions.push(PropertyDefinition::new(
-                    "output_color_space",
-                    PropertyUiType::Dropdown {
-                        options: colorspaces,
-                    },
-                    "Output Color Space",
-                    PropertyValue::String("".to_string()),
-                ));
-            }
         }
-
-        definitions
     }
 }

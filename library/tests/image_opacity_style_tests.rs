@@ -109,6 +109,7 @@ fn render(project: &Project, plugins: &Arc<PluginManager>) -> Result<Image> {
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Working(_) => bail!("unmanaged renderer returned Project pixels"),
         RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }

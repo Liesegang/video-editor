@@ -1,5 +1,6 @@
 use std::mem::size_of;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ruvie_plugin_api::{
     ASSET_KIND_IMAGE_V1, ASSET_KIND_VIDEO_V1, ASSET_METADATA_DIMENSIONS_V1,
@@ -15,15 +16,17 @@ use super::super::property_wire::empty_bytes_view;
 use super::super::rgba8::{copy_owned_frame, reclaim_owned_frame};
 use super::parse_semver_triplet;
 use crate::error::LibraryError;
-use crate::plugin::loaders::ffmpeg_video::FileIdentity;
+use crate::plugin::loaders::FileIdentity;
 use crate::plugin::{
-    AssetMetadata, DecodedPixelDescription, LoadPlugin, LoadPluginError, LoadPluginResult,
-    LoadRequest, LoadResponse, Plugin,
+    AssetMetadata, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRequest, LoadResponse, Plugin,
 };
 pub(in crate::plugin::runtime_native) struct RuntimeLoaderPlugin {
     pub(in crate::plugin::runtime_native) component: RuntimeComponent,
     pub(in crate::plugin::runtime_native) api: RuvieLoaderCpuRgba8ApiV1,
+    cache_namespace: u64,
 }
+
+static NEXT_RUNTIME_LOADER_CACHE_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 impl Plugin for RuntimeLoaderPlugin {
     fn id(&self) -> &str {
@@ -98,7 +101,7 @@ impl LoadPlugin for RuntimeLoaderPlugin {
         request: &LoadRequest,
         cache: &crate::cache::CacheManager,
     ) -> LoadPluginResult<LoadResponse> {
-        let cache_key = runtime_loader_cache_key(self.id(), request);
+        let cache_key = runtime_loader_cache_key(self.cache_namespace, self.id(), request);
         let cached = match request {
             LoadRequest::Image { .. } => cache.get_image(&cache_key),
             LoadRequest::VideoFrame { source_time, .. } => {
@@ -106,10 +109,7 @@ impl LoadPlugin for RuntimeLoaderPlugin {
             }
         };
         if let Some(image) = cached {
-            return Ok(LoadResponse {
-                image,
-                decoded: DecodedPixelDescription::abi_v1_srgb_rgba8(),
-            });
+            return Ok(LoadResponse::abi_v1_srgb_rgba8(image)?);
         }
 
         let (wire, _borrowed) = loader_request_to_wire(request)
@@ -154,14 +154,22 @@ impl LoadPlugin for RuntimeLoaderPlugin {
                 cache.put_video_frame(&cache_key, source_time_bits(*source_time), &image);
             }
         }
-        Ok(LoadResponse {
-            image,
-            decoded: DecodedPixelDescription::abi_v1_srgb_rgba8(),
-        })
+        Ok(LoadResponse::abi_v1_srgb_rgba8(image)?)
     }
 }
 
 impl RuntimeLoaderPlugin {
+    pub(in crate::plugin::runtime_native) fn new(
+        component: RuntimeComponent,
+        api: RuvieLoaderCpuRgba8ApiV1,
+    ) -> Result<Self, LibraryError> {
+        Ok(Self {
+            component,
+            api,
+            cache_namespace: next_runtime_loader_cache_namespace()?,
+        })
+    }
+
     fn failed(&self, path: &str, action: &str, cause: LibraryError) -> LoadPluginError {
         LoadPluginError::Failed(LibraryError::Plugin(format!(
             "Runtime Loader '{}' failed to {action} path {:?}: {cause}",
@@ -169,6 +177,21 @@ impl RuntimeLoaderPlugin {
             path
         )))
     }
+}
+
+pub(in crate::plugin::runtime_native) fn next_runtime_loader_cache_namespace()
+-> Result<u64, LibraryError> {
+    // The namespace is only a process-local uniqueness token; it does not
+    // publish any loader state, so relaxed ordering is sufficient. Refuse to
+    // wrap because reusing a namespace could expose pixels decoded by a stale
+    // plugin instance.
+    NEXT_RUNTIME_LOADER_CACHE_NAMESPACE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| {
+            LibraryError::Plugin("Runtime Loader cache namespace counter is exhausted".to_string())
+        })
 }
 
 pub(in crate::plugin::runtime_native) fn metadata_from_wire(
@@ -256,14 +279,13 @@ pub(in crate::plugin::runtime_native) fn metadata_from_wire(
 fn loader_request_to_wire(
     request: &LoadRequest,
 ) -> Result<(RuvieLoaderRequestV1, Vec<&str>), LibraryError> {
-    let (request_kind, path, source_time, stream_index, input, output) = match request {
-        LoadRequest::Image { path } => (LOAD_REQUEST_IMAGE_V1, path, 0.0, None, None, None),
+    let (request_kind, path, source_time, stream_index) = match request {
+        LoadRequest::Image { path } => (LOAD_REQUEST_IMAGE_V1, path, 0.0, None),
         LoadRequest::VideoFrame {
             path,
             source_time,
             stream_index,
-            input_color_space,
-            output_color_space,
+            ..
         } => {
             if !source_time.is_finite() || *source_time < 0.0 {
                 return Err(LibraryError::Plugin(format!(
@@ -275,8 +297,6 @@ fn loader_request_to_wire(
                 path,
                 *source_time,
                 *stream_index,
-                input_color_space.as_deref(),
-                output_color_space.as_deref(),
             )
         }
     };
@@ -284,7 +304,7 @@ fn loader_request_to_wire(
         .map(u32::try_from)
         .transpose()
         .map_err(|_| LibraryError::Plugin("Runtime Loader stream index exceeds u32".to_string()))?;
-    let borrowed = vec![path.as_str(), input.unwrap_or(""), output.unwrap_or("")];
+    let borrowed = vec![path.as_str()];
     Ok((
         RuvieLoaderRequestV1 {
             struct_size: size_of::<RuvieLoaderRequestV1>(),
@@ -293,22 +313,19 @@ fn loader_request_to_wire(
             source_time,
             has_stream_index: u32::from(stream_index.is_some()),
             stream_index: stream_index.unwrap_or(0),
-            input_color_space: if input.is_some() {
-                RuvieBytesView::from_slice(borrowed[1].as_bytes())
-            } else {
-                empty_bytes_view()
-            },
-            output_color_space: if output.is_some() {
-                RuvieBytesView::from_slice(borrowed[2].as_bytes())
-            } else {
-                empty_bytes_view()
-            },
+            // ABI v1 always defines returned pixels as sRGB and cannot
+            // transport Project-owned source authority. Keep the frozen ABI
+            // fields empty instead of leaking obsolete bare names back into
+            // the Rust request model.
+            input_color_space: empty_bytes_view(),
+            output_color_space: empty_bytes_view(),
         },
         borrowed,
     ))
 }
 
 pub(in crate::plugin::runtime_native) fn runtime_loader_cache_key(
+    cache_namespace: u64,
     loader_id: &str,
     request: &LoadRequest,
 ) -> String {
@@ -322,16 +339,11 @@ pub(in crate::plugin::runtime_native) fn runtime_loader_cache_key(
         .map_or_else(|| "unavailable".to_string(), FileIdentity::cache_token);
     match request {
         LoadRequest::Image { .. } => format!(
-            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:image:{}:{source_identity}",
+            "runtime-loader:{cache_namespace}:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:image:{}:{source_identity}",
             canonical_path.display()
         ),
-        LoadRequest::VideoFrame {
-            stream_index,
-            input_color_space,
-            output_color_space,
-            ..
-        } => format!(
-            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:video:{}:{source_identity}:stream={stream_index:?}:input={input_color_space:?}:output={output_color_space:?}",
+        LoadRequest::VideoFrame { stream_index, .. } => format!(
+            "runtime-loader:{cache_namespace}:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:video:{}:{source_identity}:stream={stream_index:?}",
             canonical_path.display()
         ),
     }

@@ -1,117 +1,28 @@
 use std::fmt;
 
-use crate::{AlphaRepresentation, BackendBuild, ColorManagementError, CpuColorProcessor};
+use crate::processor_boundary::{validate_output_direction, validate_source_direction};
+use crate::{ColorManagementError, CpuColorProcessor, WorkingColorIdentity};
 
 /// Per-image CPU safety budget. 8K RGBA32F fits; larger working images must
 /// use tiled/GPU storage instead of risking a process-aborting allocation.
-const MAX_SCENE_LINEAR_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_LINEAR_WORKING_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 
-/// Stable color identity required at every composite/cache boundary.
-///
-/// Component storage deliberately does not participate in this identity. An
-/// RGBA16F GPU surface and an RGBA32F CPU surface can represent the same
-/// working-color contract and may cross a storage-conversion boundary without
-/// becoming color-incompatible. The owning image/resource type records its
-/// actual storage instead.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct WorkingColorIdentity {
-    pub project_config_identity: String,
-    pub backend_id: String,
-    pub backend_build: BackendBuild,
-    pub backend_config_fingerprint: String,
-    pub working_space: String,
-    pub alpha: AlphaRepresentation,
-}
-
-impl WorkingColorIdentity {
-    pub fn scene_linear(
-        project_config_identity: impl Into<String>,
-        backend_id: impl Into<String>,
-        backend_build: BackendBuild,
-        backend_config_fingerprint: impl Into<String>,
-        working_space: impl Into<String>,
-    ) -> Self {
-        Self {
-            project_config_identity: project_config_identity.into(),
-            backend_id: backend_id.into(),
-            backend_build,
-            backend_config_fingerprint: backend_config_fingerprint.into(),
-            working_space: working_space.into(),
-            alpha: AlphaRepresentation::Premultiplied,
-        }
-    }
-
-    /// Compatibility name for the current CPU f32 owner. Storage is not part
-    /// of the returned color identity; new code should use [`Self::scene_linear`].
-    pub fn scene_linear_f32(
-        project_config_identity: impl Into<String>,
-        backend_id: impl Into<String>,
-        backend_build: BackendBuild,
-        backend_config_fingerprint: impl Into<String>,
-        working_space: impl Into<String>,
-    ) -> Self {
-        Self::scene_linear(
-            project_config_identity,
-            backend_id,
-            backend_build,
-            backend_config_fingerprint,
-            working_space,
-        )
-    }
-}
-
-/// Low-level CPU buffer for the scene-linear working pipeline.
+/// Low-level CPU buffer in the Project-selected linear working domain.
 ///
 /// RGB is premultiplied by alpha and deliberately retains negative and
 /// greater-than-one values. Alpha remains finite in `[0, 1]`. GPU rendering
 /// may store the same contract as RGBA16F. This buffer intentionally has no
-/// color-space identity and must be wrapped in [`ManagedSceneLinearImage`]
+/// color-space identity and must be wrapped in [`crate::ManagedLinearWorkingImage`]
 /// before crossing a render or cache boundary.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SceneLinearImage {
+pub struct LinearWorkingImage {
     width: u32,
     height: u32,
     pixels: Vec<[f32; 4]>,
 }
 
-/// Owner-bearing scene-linear image whose working identity cannot be dropped
-/// accidentally at a composite/cache boundary.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ManagedSceneLinearImage {
-    identity: WorkingColorIdentity,
-    pixels: SceneLinearImage,
-}
-
-impl ManagedSceneLinearImage {
-    pub fn new(identity: WorkingColorIdentity, pixels: SceneLinearImage) -> Self {
-        Self { identity, pixels }
-    }
-
-    pub fn identity(&self) -> &WorkingColorIdentity {
-        &self.identity
-    }
-
-    pub fn pixels(&self) -> &SceneLinearImage {
-        &self.pixels
-    }
-
-    pub fn into_parts(self) -> (WorkingColorIdentity, SceneLinearImage) {
-        (self.identity, self.pixels)
-    }
-
-    pub fn composite_source_over(&mut self, source: &Self) -> Result<(), SceneLinearImageError> {
-        if self.identity != source.identity {
-            return Err(SceneLinearImageError::WorkingIdentityMismatch {
-                background: Box::new(self.identity.clone()),
-                source: Box::new(source.identity.clone()),
-            });
-        }
-        self.pixels.composite_source_over(&source.pixels)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SceneLinearImageError {
+pub enum LinearWorkingImageError {
     DimensionOverflow {
         width: u32,
         height: u32,
@@ -124,6 +35,10 @@ pub enum SceneLinearImageError {
         bytes: usize,
     },
     InvalidBufferLength {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidPixelCount {
         expected: usize,
         actual: usize,
     },
@@ -146,7 +61,7 @@ pub enum SceneLinearImageError {
     Transform(ColorManagementError),
 }
 
-impl fmt::Display for SceneLinearImageError {
+impl fmt::Display for LinearWorkingImageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DimensionOverflow { width, height } => {
@@ -157,18 +72,24 @@ impl fmt::Display for SceneLinearImageError {
             }
             Self::ImageBudgetExceeded { bytes, maximum } => write!(
                 formatter,
-                "scene-linear image requires {bytes} bytes; per-image limit is {maximum} bytes"
+                "linear working image requires {bytes} bytes; per-image limit is {maximum} bytes"
             ),
             Self::AllocationFailed { bytes } => {
                 write!(
                     formatter,
-                    "cannot allocate {bytes} bytes for scene-linear image"
+                    "cannot allocate {bytes} bytes for linear working image"
                 )
             }
             Self::InvalidBufferLength { expected, actual } => {
                 write!(
                     formatter,
                     "image buffer has {actual} components; expected {expected}"
+                )
+            }
+            Self::InvalidPixelCount { expected, actual } => {
+                write!(
+                    formatter,
+                    "image buffer has {actual} pixels; expected {expected}"
                 )
             }
             Self::NonFiniteComponent {
@@ -180,7 +101,7 @@ impl fmt::Display for SceneLinearImageError {
             ),
             Self::AlphaOutOfRange { pixel_index, alpha } => write!(
                 formatter,
-                "scene-linear pixel {pixel_index} has alpha {alpha}; expected 0 through 1"
+                "linear working pixel {pixel_index} has alpha {alpha}; expected 0 through 1"
             ),
             Self::DimensionMismatch { background, source } => write!(
                 formatter,
@@ -196,7 +117,7 @@ impl fmt::Display for SceneLinearImageError {
     }
 }
 
-impl std::error::Error for SceneLinearImageError {
+impl std::error::Error for LinearWorkingImageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Transform(error) => Some(error),
@@ -205,13 +126,13 @@ impl std::error::Error for SceneLinearImageError {
     }
 }
 
-impl From<ColorManagementError> for SceneLinearImageError {
+impl From<ColorManagementError> for LinearWorkingImageError {
     fn from(error: ColorManagementError) -> Self {
         Self::Transform(error)
     }
 }
 
-impl SceneLinearImage {
+impl LinearWorkingImage {
     /// Create a solid image from one straight encoded color without expanding
     /// an intermediate RGBA8 canvas.
     pub fn solid_from_straight_rgba8(
@@ -219,7 +140,17 @@ impl SceneLinearImage {
         height: u32,
         rgba: [u8; 4],
         source_to_working: &dyn CpuColorProcessor,
-    ) -> Result<Self, SceneLinearImageError> {
+    ) -> Result<Self, LinearWorkingImageError> {
+        validate_source_direction(source_to_working)?;
+        Self::solid_from_straight_rgba8_unchecked(width, height, rgba, source_to_working)
+    }
+
+    fn solid_from_straight_rgba8_unchecked(
+        width: u32,
+        height: u32,
+        rgba: [u8; 4],
+        source_to_working: &dyn CpuColorProcessor,
+    ) -> Result<Self, LinearWorkingImageError> {
         let pixel_count = checked_pixel_count(width, height)?;
         let alpha = f32::from(rgba[3]) / 255.0;
         let mut straight = [[
@@ -244,10 +175,10 @@ impl SceneLinearImage {
         width: u32,
         height: u32,
         mut pixels: Vec<[f32; 4]>,
-    ) -> Result<Self, SceneLinearImageError> {
+    ) -> Result<Self, LinearWorkingImageError> {
         let expected_pixels = checked_pixel_count(width, height)?;
         if pixels.len() != expected_pixels {
-            return Err(SceneLinearImageError::InvalidBufferLength {
+            return Err(LinearWorkingImageError::InvalidBufferLength {
                 expected: expected_pixels,
                 actual: pixels.len(),
             });
@@ -267,13 +198,23 @@ impl SceneLinearImage {
         height: u32,
         rgba: &[u8],
         source_to_working: &dyn CpuColorProcessor,
-    ) -> Result<Self, SceneLinearImageError> {
+    ) -> Result<Self, LinearWorkingImageError> {
+        validate_source_direction(source_to_working)?;
+        Self::from_straight_rgba8_unchecked(width, height, rgba, source_to_working)
+    }
+
+    fn from_straight_rgba8_unchecked(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        source_to_working: &dyn CpuColorProcessor,
+    ) -> Result<Self, LinearWorkingImageError> {
         let pixel_count = checked_pixel_count(width, height)?;
         let expected_components = pixel_count
             .checked_mul(4)
-            .ok_or(SceneLinearImageError::DimensionOverflow { width, height })?;
+            .ok_or(LinearWorkingImageError::DimensionOverflow { width, height })?;
         if rgba.len() != expected_components {
-            return Err(SceneLinearImageError::InvalidBufferLength {
+            return Err(LinearWorkingImageError::InvalidBufferLength {
                 expected: expected_components,
                 actual: rgba.len(),
             });
@@ -292,6 +233,54 @@ impl SceneLinearImage {
         for (rgb, encoded) in straight.into_iter().zip(rgba.chunks_exact(4)) {
             let alpha = f32::from(encoded[3]) / 255.0;
             pixels.push([rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]);
+        }
+        Self::from_premultiplied_rgba_f32(width, height, pixels)
+    }
+
+    /// Decode straight RGBA32F samples through an explicit source-to-working
+    /// processor, then premultiply in the working space.
+    ///
+    /// RGB remains extended range. Alpha is never passed to the color backend
+    /// and must be finite in `[0, 1]`; fully transparent output is canonical
+    /// transparent black.
+    pub fn from_straight_rgba_f32(
+        width: u32,
+        height: u32,
+        rgba: &[[f32; 4]],
+        source_to_working: &dyn CpuColorProcessor,
+    ) -> Result<Self, LinearWorkingImageError> {
+        validate_source_direction(source_to_working)?;
+        Self::from_straight_rgba_f32_unchecked(width, height, rgba, source_to_working)
+    }
+
+    fn from_straight_rgba_f32_unchecked(
+        width: u32,
+        height: u32,
+        rgba: &[[f32; 4]],
+        source_to_working: &dyn CpuColorProcessor,
+    ) -> Result<Self, LinearWorkingImageError> {
+        let pixel_count = checked_pixel_count(width, height)?;
+        if rgba.len() != pixel_count {
+            return Err(LinearWorkingImageError::InvalidPixelCount {
+                expected: pixel_count,
+                actual: rgba.len(),
+            });
+        }
+
+        validate_straight_rgba_f32(rgba)?;
+        let mut straight = allocate_rgb_pixels(width, height)?;
+        straight.extend(rgba.iter().map(|pixel| [pixel[0], pixel[1], pixel[2]]));
+        source_to_working.transform_rgb_f32_in_place(&mut straight)?;
+        validate_rgb_pixels(&straight)?;
+
+        let mut pixels = allocate_pixels(width, height)?;
+        for (rgb, source) in straight.into_iter().zip(rgba) {
+            let alpha = source[3];
+            if alpha == 0.0 {
+                pixels.push([0.0; 4]);
+            } else {
+                pixels.push([rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]);
+            }
         }
         Self::from_premultiplied_rgba_f32(width, height, pixels)
     }
@@ -316,9 +305,9 @@ impl SceneLinearImage {
     pub(crate) fn composite_source_over(
         &mut self,
         source: &Self,
-    ) -> Result<(), SceneLinearImageError> {
+    ) -> Result<(), LinearWorkingImageError> {
         if (self.width, self.height) != (source.width, source.height) {
-            return Err(SceneLinearImageError::DimensionMismatch {
+            return Err(LinearWorkingImageError::DimensionMismatch {
                 background: (self.width, self.height),
                 source: (source.width, source.height),
             });
@@ -343,7 +332,15 @@ impl SceneLinearImage {
     pub fn to_straight_rgba_f32(
         &self,
         working_to_output: &dyn CpuColorProcessor,
-    ) -> Result<Vec<[f32; 4]>, SceneLinearImageError> {
+    ) -> Result<Vec<[f32; 4]>, LinearWorkingImageError> {
+        validate_output_direction(working_to_output)?;
+        self.to_straight_rgba_f32_unchecked(working_to_output)
+    }
+
+    fn to_straight_rgba_f32_unchecked(
+        &self,
+        working_to_output: &dyn CpuColorProcessor,
+    ) -> Result<Vec<[f32; 4]>, LinearWorkingImageError> {
         let mut straight = allocate_rgb_pixels(self.width, self.height)?;
         for pixel in &self.pixels {
             let alpha = pixel[3];
@@ -374,24 +371,25 @@ impl SceneLinearImage {
     pub fn to_straight_rgba8(
         &self,
         working_to_output: &dyn CpuColorProcessor,
-    ) -> Result<Vec<u8>, SceneLinearImageError> {
-        let straight = self.to_straight_rgba_f32(working_to_output)?;
+    ) -> Result<Vec<u8>, LinearWorkingImageError> {
+        validate_output_direction(working_to_output)?;
+        let straight = self.to_straight_rgba_f32_unchecked(working_to_output)?;
         pack_straight_rgba8(self.width, self.height, &straight)
     }
 }
 
-fn pack_straight_rgba8(
+pub(crate) fn pack_straight_rgba8(
     width: u32,
     height: u32,
     straight: &[[f32; 4]],
-) -> Result<Vec<u8>, SceneLinearImageError> {
+) -> Result<Vec<u8>, LinearWorkingImageError> {
     let component_count = straight
         .len()
         .checked_mul(4)
-        .ok_or(SceneLinearImageError::DimensionOverflow { width, height })?;
+        .ok_or(LinearWorkingImageError::DimensionOverflow { width, height })?;
     let mut rgba = Vec::new();
     rgba.try_reserve_exact(component_count).map_err(|_| {
-        SceneLinearImageError::AllocationFailed {
+        LinearWorkingImageError::AllocationFailed {
             bytes: component_count,
         }
     })?;
@@ -406,56 +404,56 @@ fn pack_straight_rgba8(
     Ok(rgba)
 }
 
-fn checked_pixel_count(width: u32, height: u32) -> Result<usize, SceneLinearImageError> {
+fn checked_pixel_count(width: u32, height: u32) -> Result<usize, LinearWorkingImageError> {
     let pixels = u64::from(width)
         .checked_mul(u64::from(height))
-        .ok_or(SceneLinearImageError::DimensionOverflow { width, height })?;
+        .ok_or(LinearWorkingImageError::DimensionOverflow { width, height })?;
     let pixels = usize::try_from(pixels)
-        .map_err(|_| SceneLinearImageError::DimensionOverflow { width, height })?;
+        .map_err(|_| LinearWorkingImageError::DimensionOverflow { width, height })?;
     let bytes = pixels
         .checked_mul(std::mem::size_of::<[f32; 4]>())
-        .ok_or(SceneLinearImageError::DimensionOverflow { width, height })?;
-    if bytes > MAX_SCENE_LINEAR_IMAGE_BYTES {
-        return Err(SceneLinearImageError::ImageBudgetExceeded {
+        .ok_or(LinearWorkingImageError::DimensionOverflow { width, height })?;
+    if bytes > MAX_LINEAR_WORKING_IMAGE_BYTES {
+        return Err(LinearWorkingImageError::ImageBudgetExceeded {
             bytes,
-            maximum: MAX_SCENE_LINEAR_IMAGE_BYTES,
+            maximum: MAX_LINEAR_WORKING_IMAGE_BYTES,
         });
     }
     Ok(pixels)
 }
 
-fn allocate_pixels(width: u32, height: u32) -> Result<Vec<[f32; 4]>, SceneLinearImageError> {
+fn allocate_pixels(width: u32, height: u32) -> Result<Vec<[f32; 4]>, LinearWorkingImageError> {
     let pixel_count = checked_pixel_count(width, height)?;
     let bytes = pixel_count * std::mem::size_of::<[f32; 4]>();
     let mut pixels = Vec::new();
     pixels
         .try_reserve_exact(pixel_count)
-        .map_err(|_| SceneLinearImageError::AllocationFailed { bytes })?;
+        .map_err(|_| LinearWorkingImageError::AllocationFailed { bytes })?;
     Ok(pixels)
 }
 
-fn allocate_rgb_pixels(width: u32, height: u32) -> Result<Vec<[f32; 3]>, SceneLinearImageError> {
+fn allocate_rgb_pixels(width: u32, height: u32) -> Result<Vec<[f32; 3]>, LinearWorkingImageError> {
     let pixel_count = checked_pixel_count(width, height)?;
     let bytes = pixel_count * std::mem::size_of::<[f32; 3]>();
     let mut pixels = Vec::new();
     pixels
         .try_reserve_exact(pixel_count)
-        .map_err(|_| SceneLinearImageError::AllocationFailed { bytes })?;
+        .map_err(|_| LinearWorkingImageError::AllocationFailed { bytes })?;
     Ok(pixels)
 }
 
-fn validate_and_canonicalize(pixels: &mut [[f32; 4]]) -> Result<(), SceneLinearImageError> {
+fn validate_and_canonicalize(pixels: &mut [[f32; 4]]) -> Result<(), LinearWorkingImageError> {
     for (pixel_index, pixel) in pixels.iter_mut().enumerate() {
         for (component, value) in ["r", "g", "b", "a"].into_iter().zip(pixel.iter()) {
             if !value.is_finite() {
-                return Err(SceneLinearImageError::NonFiniteComponent {
+                return Err(LinearWorkingImageError::NonFiniteComponent {
                     pixel_index,
                     component,
                 });
             }
         }
         if !(0.0..=1.0).contains(&pixel[3]) {
-            return Err(SceneLinearImageError::AlphaOutOfRange {
+            return Err(LinearWorkingImageError::AlphaOutOfRange {
                 pixel_index,
                 alpha: pixel[3],
             });
@@ -467,15 +465,35 @@ fn validate_and_canonicalize(pixels: &mut [[f32; 4]]) -> Result<(), SceneLinearI
     Ok(())
 }
 
-fn validate_rgb_pixels(pixels: &[[f32; 3]]) -> Result<(), SceneLinearImageError> {
+pub(crate) fn validate_rgb_pixels(pixels: &[[f32; 3]]) -> Result<(), LinearWorkingImageError> {
     for (pixel_index, pixel) in pixels.iter().enumerate() {
         for (component, value) in ["r", "g", "b"].into_iter().zip(pixel) {
             if !value.is_finite() {
-                return Err(SceneLinearImageError::NonFiniteComponent {
+                return Err(LinearWorkingImageError::NonFiniteComponent {
                     pixel_index,
                     component,
                 });
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_straight_rgba_f32(pixels: &[[f32; 4]]) -> Result<(), LinearWorkingImageError> {
+    for (pixel_index, pixel) in pixels.iter().enumerate() {
+        for (component, value) in ["r", "g", "b", "a"].into_iter().zip(pixel) {
+            if !value.is_finite() {
+                return Err(LinearWorkingImageError::NonFiniteComponent {
+                    pixel_index,
+                    component,
+                });
+            }
+        }
+        if !(0.0..=1.0).contains(&pixel[3]) {
+            return Err(LinearWorkingImageError::AlphaOutOfRange {
+                pixel_index,
+                alpha: pixel[3],
+            });
         }
     }
     Ok(())
@@ -486,26 +504,50 @@ fn quantize_unorm8(value: f64) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "pq_image_tests.rs"]
+mod pq_image_tests;
+
+#[cfg(test)]
 mod tests {
-    use super::{
-        ManagedSceneLinearImage, SceneLinearImage, SceneLinearImageError, WorkingColorIdentity,
-    };
+    use super::{LinearWorkingImage, LinearWorkingImageError};
     use crate::{
-        BackendBuild, BuiltinColorTransform, ColorManagementError, ColorTransformBackend,
-        ColorTransformRequest, CpuColorProcessor, LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
+        BuiltinColorTransform, ColorContext, ColorManagementError, ColorTransformBackend,
+        ColorTransformRequest, CompiledTransformIdentity, CpuColorProcessor, LINEAR_BT709_SPACE_ID,
+        LINEAR_SRGB_SPACE_ID, ManagedLinearWorkingImage, SRGB_SPACE_ID, VerifiedSourceSpace,
+        WorkingColorIdentity,
     };
 
-    fn processor(source: &str, target: &str) -> Box<dyn crate::CpuColorProcessor> {
+    fn source_processor(source: &str, target: &str) -> Box<dyn crate::CpuColorProcessor> {
         BuiltinColorTransform
-            .create_cpu_processor(&ColorTransformRequest::explicit(source, target))
+            .create_cpu_processor(&ColorTransformRequest::source_to_working(source, target))
+            .unwrap()
+    }
+
+    fn output_processor(source: &str, target: &str) -> Box<dyn crate::CpuColorProcessor> {
+        BuiltinColorTransform
+            .create_cpu_processor(&ColorTransformRequest::working_to_output(source, target))
+            .unwrap()
+    }
+
+    fn working_identity(project: &str) -> WorkingColorIdentity {
+        let backend = BuiltinColorTransform;
+        let verified = backend
+            .verify_working_space(LINEAR_SRGB_SPACE_ID, &ColorContext::default())
+            .unwrap();
+        WorkingColorIdentity::from_verified(project, verified).unwrap()
+    }
+
+    fn source_space(space: &str) -> VerifiedSourceSpace {
+        BuiltinColorTransform
+            .verify_source_space(space, &ColorContext::default())
             .unwrap()
     }
 
     #[test]
     fn rgba8_round_trip_transforms_rgb_and_preserves_alpha() {
-        let to_working = processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
-        let to_display = processor(LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID);
-        let image = SceneLinearImage::from_straight_rgba8(
+        let to_working = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let to_display = output_processor(LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID);
+        let image = LinearWorkingImage::from_straight_rgba8(
             2,
             1,
             &[128, 64, 32, 128, 90, 80, 70, 0],
@@ -521,24 +563,83 @@ mod tests {
     }
 
     #[test]
+    fn managed_rgba32f_ingress_preserves_extended_rgb_and_canonicalizes_transparency() {
+        let source = source_space(LINEAR_SRGB_SPACE_ID);
+        let processor = source_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let image = ManagedLinearWorkingImage::from_straight_rgba_f32(
+            working_identity("project-config"),
+            &source,
+            2,
+            1,
+            &[[-0.5, 2.0, 0.25, 0.25], [8.0, -4.0, 2.0, 0.0]],
+            processor.as_ref(),
+        )
+        .unwrap();
+
+        assert_eq!(image.pixels().pixels()[0], [-0.125, 0.5, 0.0625, 0.25]);
+        assert_eq!(image.pixels().pixels()[1], [0.0; 4]);
+    }
+
+    #[test]
+    fn rgba32f_ingress_rejects_invalid_length_components_and_alpha() {
+        let processor = source_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        assert!(matches!(
+            LinearWorkingImage::from_straight_rgba_f32(2, 1, &[[0.0; 4]], processor.as_ref()),
+            Err(LinearWorkingImageError::InvalidPixelCount {
+                expected: 2,
+                actual: 1
+            })
+        ));
+        assert!(matches!(
+            LinearWorkingImage::from_straight_rgba_f32(
+                1,
+                1,
+                &[[f32::NAN, 0.0, 0.0, 1.0]],
+                processor.as_ref(),
+            ),
+            Err(LinearWorkingImageError::NonFiniteComponent {
+                pixel_index: 0,
+                component: "r"
+            })
+        ));
+        assert!(matches!(
+            LinearWorkingImage::from_straight_rgba_f32(
+                1,
+                1,
+                &[[0.0, 0.0, 0.0, 1.5]],
+                processor.as_ref(),
+            ),
+            Err(LinearWorkingImageError::AlphaOutOfRange { pixel_index: 0, .. })
+        ));
+    }
+
+    #[test]
     fn solid_constructor_transforms_once_and_canonicalizes_transparent_rgb() {
-        let to_working = processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
-        let image =
-            SceneLinearImage::solid_from_straight_rgba8(2, 1, [90, 80, 70, 0], to_working.as_ref())
-                .unwrap();
+        let to_working = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let image = LinearWorkingImage::solid_from_straight_rgba8(
+            2,
+            1,
+            [90, 80, 70, 0],
+            to_working.as_ref(),
+        )
+        .unwrap();
         assert_eq!(image.pixels(), &[[0.0; 4], [0.0; 4]]);
     }
 
     #[test]
     fn source_over_blends_in_linear_light_instead_of_encoded_srgb() {
-        let to_working = processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
-        let to_display = processor(LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID);
+        let to_working = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let to_display = output_processor(LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID);
         let mut background =
-            SceneLinearImage::from_straight_rgba8(1, 1, &[0, 0, 0, 255], to_working.as_ref())
+            LinearWorkingImage::from_straight_rgba8(1, 1, &[0, 0, 0, 255], to_working.as_ref())
                 .unwrap();
-        let source =
-            SceneLinearImage::from_straight_rgba8(1, 1, &[255, 255, 255, 128], to_working.as_ref())
-                .unwrap();
+        let source = LinearWorkingImage::from_straight_rgba8(
+            1,
+            1,
+            &[255, 255, 255, 128],
+            to_working.as_ref(),
+        )
+        .unwrap();
 
         background.composite_source_over(&source).unwrap();
 
@@ -549,11 +650,11 @@ mod tests {
     #[test]
     fn working_storage_retains_hdr_and_negative_rgb_until_output_boundary() {
         let image =
-            SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[-0.25, 2.0, 0.5, 1.0]])
+            LinearWorkingImage::from_premultiplied_rgba_f32(1, 1, vec![[-0.25, 2.0, 0.5, 1.0]])
                 .unwrap();
         assert_eq!(image.pixels()[0], [-0.25, 2.0, 0.5, 1.0]);
 
-        let identity = processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let identity = output_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         assert_eq!(
             image.to_straight_rgba_f32(identity.as_ref()).unwrap(),
             [[-0.25, 2.0, 0.5, 1.0]]
@@ -567,66 +668,228 @@ mod tests {
     #[test]
     fn invalid_alpha_and_buffer_lengths_fail_closed() {
         assert!(matches!(
-            SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[0.0, 0.0, 0.0, 1.1]]),
-            Err(SceneLinearImageError::AlphaOutOfRange { .. })
+            LinearWorkingImage::from_premultiplied_rgba_f32(1, 1, vec![[0.0, 0.0, 0.0, 1.1]]),
+            Err(LinearWorkingImageError::AlphaOutOfRange { .. })
         ));
         assert!(matches!(
-            SceneLinearImage::from_straight_rgba8(
+            LinearWorkingImage::from_straight_rgba8(
                 1,
                 1,
                 &[0, 0, 0],
-                processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID).as_ref(),
+                source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID).as_ref(),
             ),
-            Err(SceneLinearImageError::InvalidBufferLength { .. })
+            Err(LinearWorkingImageError::InvalidBufferLength { .. })
         ));
     }
 
     #[test]
     fn working_identity_mismatch_cannot_be_composited() {
-        let image =
-            SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[0.25, 0.25, 0.25, 1.0]])
-                .unwrap();
-        let identity = |space: &str| {
-            WorkingColorIdentity::scene_linear(
-                "project-config",
-                "backend",
-                BackendBuild::Real,
-                "fingerprint",
-                space,
-            )
-        };
-        let mut background = ManagedSceneLinearImage::new(identity("linear-srgb"), image.clone());
-        let source = ManagedSceneLinearImage::new(identity("acescg"), image);
+        let processor = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let source_space = source_space(SRGB_SPACE_ID);
+        let mut background = ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            working_identity("project-a"),
+            &source_space,
+            1,
+            1,
+            [128, 128, 128, 255],
+            processor.as_ref(),
+        )
+        .unwrap();
+        let source = ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            working_identity("project-b"),
+            &source_space,
+            1,
+            1,
+            [128, 128, 128, 255],
+            processor.as_ref(),
+        )
+        .unwrap();
         assert!(matches!(
             background.composite_source_over(&source),
-            Err(SceneLinearImageError::WorkingIdentityMismatch { .. })
+            Err(LinearWorkingImageError::WorkingIdentityMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn managed_ingress_rejects_wrong_direction_destination_and_context() {
+        let identity = working_identity("project-config");
+        let backend = BuiltinColorTransform;
+        let source = source_space(SRGB_SPACE_ID);
+        let explicit = backend
+            .create_cpu_processor(&ColorTransformRequest::explicit(
+                SRGB_SPACE_ID,
+                LINEAR_SRGB_SPACE_ID,
+            ))
+            .unwrap();
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                identity.clone(),
+                &source,
+                1,
+                1,
+                &[0, 0, 0, 255],
+                explicit.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+
+        let wrong_destination = source_processor(SRGB_SPACE_ID, LINEAR_BT709_SPACE_ID);
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                identity.clone(),
+                &source,
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wrong_destination.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+
+        let contextual = backend
+            .create_cpu_processor(
+                &ColorTransformRequest::source_to_working(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID)
+                    .with_context(ColorContext::default().with_variable("SHOT", "010")),
+            )
+            .unwrap();
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                identity,
+                &source,
+                1,
+                1,
+                &[0, 0, 0, 255],
+                contextual.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn managed_ingress_rejects_processor_for_a_different_resolved_source() {
+        let identity = working_identity("project-config");
+        let resolved_source = source_space(SRGB_SPACE_ID);
+        let wrong_source_processor = source_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                identity,
+                &resolved_source,
+                1,
+                1,
+                &[128, 64, 32, 255],
+                wrong_source_processor.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn managed_ingress_rejects_source_token_from_a_different_config_or_context() {
+        let identity = working_identity("project-config");
+        let context = ColorContext::default().with_variable("SHOT", "010");
+        let source = BuiltinColorTransform
+            .verify_source_space(SRGB_SPACE_ID, &context)
+            .unwrap();
+        let processor = BuiltinColorTransform
+            .create_cpu_processor(
+                &ColorTransformRequest::source_to_working(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID)
+                    .with_context(context),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                identity,
+                &source,
+                1,
+                1,
+                &[128, 64, 32, 255],
+                processor.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+
+        let valid_source = source_space(SRGB_SPACE_ID);
+        let wrong_config_source = VerifiedSourceSpace::new(
+            valid_source.backend_id().to_string(),
+            valid_source.backend_build(),
+            "mismatched-config".to_string(),
+            valid_source.context().clone(),
+            valid_source.color_space().clone(),
+        );
+        let processor = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        assert!(matches!(
+            ManagedLinearWorkingImage::from_straight_rgba8(
+                working_identity("project-config"),
+                &wrong_config_source,
+                1,
+                1,
+                &[128, 64, 32, 255],
+                processor.as_ref(),
+            ),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn managed_egress_rejects_a_processor_from_the_wrong_working_space() {
+        let to_working = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let image = ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            working_identity("project-config"),
+            &source_space(SRGB_SPACE_ID),
+            1,
+            1,
+            [128, 128, 128, 255],
+            to_working.as_ref(),
+        )
+        .unwrap();
+        let wrong_source = output_processor(LINEAR_BT709_SPACE_ID, SRGB_SPACE_ID);
+
+        assert!(matches!(
+            image.to_straight_rgba8(wrong_source.as_ref()),
+            Err(LinearWorkingImageError::Transform(
+                ColorManagementError::ProcessorContractMismatch { .. }
+            ))
         ));
     }
 
     #[test]
     fn oversized_image_is_rejected_before_allocation() {
         assert!(matches!(
-            SceneLinearImage::solid_from_straight_rgba8(
+            LinearWorkingImage::solid_from_straight_rgba8(
                 100_000,
                 100_000,
                 [0, 0, 0, 0],
-                processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID).as_ref(),
+                source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID).as_ref(),
             ),
-            Err(SceneLinearImageError::ImageBudgetExceeded { .. })
+            Err(LinearWorkingImageError::ImageBudgetExceeded { .. })
         ));
     }
 
-    struct IdentityProcessor;
-
-    impl CpuColorProcessor for IdentityProcessor {
-        fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
-            Ok(rgb)
-        }
+    struct InvalidBulkProcessor {
+        identity: CompiledTransformIdentity,
     }
 
-    struct InvalidBulkProcessor;
+    impl crate::transform::sealed::Processor for InvalidBulkProcessor {}
 
     impl CpuColorProcessor for InvalidBulkProcessor {
+        fn compiled_transform_identity(&self) -> &CompiledTransformIdentity {
+            &self.identity
+        }
+
         fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
             Ok(rgb)
         }
@@ -642,11 +905,12 @@ mod tests {
 
     #[test]
     fn processor_api_never_receives_alpha() {
-        let image = SceneLinearImage::solid_from_straight_rgba8(
+        let processor = source_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let image = LinearWorkingImage::solid_from_straight_rgba8(
             1,
             1,
             [10, 20, 30, 128],
-            &IdentityProcessor,
+            processor.as_ref(),
         )
         .unwrap();
         assert_eq!(image.pixels()[0][3], 128.0 / 255.0);
@@ -654,15 +918,16 @@ mod tests {
 
     #[test]
     fn float_terminal_unpremultiplies_without_clipping_and_preserves_alpha() {
-        let image = SceneLinearImage::from_premultiplied_rgba_f32(
+        let image = LinearWorkingImage::from_premultiplied_rgba_f32(
             2,
             1,
             vec![[-0.125, 0.5, 0.25, 0.25], [0.0; 4]],
         )
         .unwrap();
+        let processor = output_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
 
         assert_eq!(
-            image.to_straight_rgba_f32(&IdentityProcessor).unwrap(),
+            image.to_straight_rgba_f32(processor.as_ref()).unwrap(),
             [[-0.5, 2.0, 1.0, 0.25], [0.0; 4]]
         );
     }
@@ -670,12 +935,16 @@ mod tests {
     #[test]
     fn float_terminal_rejects_invalid_bulk_backend_output() {
         let image =
-            SceneLinearImage::from_premultiplied_rgba_f32(1, 1, vec![[0.25, 0.25, 0.25, 1.0]])
+            LinearWorkingImage::from_premultiplied_rgba_f32(1, 1, vec![[0.25, 0.25, 0.25, 1.0]])
                 .unwrap();
+        let valid = output_processor(LINEAR_SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let invalid = InvalidBulkProcessor {
+            identity: valid.compiled_transform_identity().clone(),
+        };
 
         assert!(matches!(
-            image.to_straight_rgba_f32(&InvalidBulkProcessor),
-            Err(SceneLinearImageError::NonFiniteComponent {
+            image.to_straight_rgba_f32(&invalid),
+            Err(LinearWorkingImageError::NonFiniteComponent {
                 pixel_index: 0,
                 component: "g"
             })
@@ -684,23 +953,17 @@ mod tests {
 
     #[test]
     fn working_color_identity_is_independent_of_image_storage() {
-        let color_identity = WorkingColorIdentity::scene_linear(
-            "project-config",
-            "backend",
-            BackendBuild::Real,
-            "fingerprint",
-            LINEAR_SRGB_SPACE_ID,
-        );
-
-        assert_eq!(
-            color_identity,
-            WorkingColorIdentity::scene_linear_f32(
-                "project-config",
-                "backend",
-                BackendBuild::Real,
-                "fingerprint",
-                LINEAR_SRGB_SPACE_ID,
-            )
-        );
+        let color_identity = working_identity("project-config");
+        let to_working = source_processor(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+        let image_f32 = ManagedLinearWorkingImage::solid_from_straight_rgba8(
+            color_identity.clone(),
+            &source_space(SRGB_SPACE_ID),
+            1,
+            1,
+            [128, 128, 128, 255],
+            to_working.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(image_f32.identity(), &color_identity);
     }
 }

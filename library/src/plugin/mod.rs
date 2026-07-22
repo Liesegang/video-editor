@@ -48,11 +48,18 @@ pub use traits::{Plugin, PropertyPlugin};
 // Re-export from sub-crate modules
 pub use decorators::DecoratorPlugin;
 pub use effectors::EffectorPlugin;
-pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
-pub use exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
+pub use effects::{EffectColorDomain, EffectDefinition, EffectPlugin, EffectRepository};
+pub use exporters::{
+    ExportColorAuthority, ExportFormat, ExportFrame, ExportJobId, ExportPlugin, ExportRepository,
+    ExportSettings,
+};
 pub use loaders::{
-    AssetMetadata, DecodedColorSpace, DecodedComponentStorage, DecodedPixelDescription, LoadPlugin,
-    LoadPluginError, LoadPluginResult, LoadRepository, LoadRequest, LoadResponse,
+    AppliedYuvChromaLocation, AppliedYuvToRgb, AssetMetadata, ConfigOwnedColorSpace,
+    ConfigOwnedColorSpaceError, DecodedColorSpace, DecodedPixelBuffer, DecodedPixelBufferError,
+    DecodedPixelDescription, DecodedRgbConversion, DecodedStraightRgba8, DecodedStraightRgba16F,
+    DecodedStraightRgba32F, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRepository,
+    LoadRequest, LoadResponse, UntaggedSrgbAssumption, UntaggedSrgbAssumptionError,
+    UntaggedSrgbPolicy, YuvChromaLocation, YuvChromaLocationSource, YuvToRgbOperation,
 };
 pub use path_effects::PathEffectPlugin;
 pub use styles::StylePlugin;

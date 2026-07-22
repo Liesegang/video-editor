@@ -28,7 +28,7 @@ impl<'de> Deserialize<'de> for RequestedColorManagementConfig {
     {
         let raw = Value::deserialize(deserializer)?;
         match serde_json::from_value::<ColorManagementConfig>(raw.clone()) {
-            Ok(config) => Ok(Self::Config(config)),
+            Ok(config) => Ok(Self::Config(Box::new(config))),
             Err(error) => {
                 let mut structure_issues = classify_structure(&raw);
                 if structure_issues.is_empty() {
@@ -54,7 +54,14 @@ fn classify_structure(raw: &Value) -> Vec<ColorManagementStructureIssue> {
     classify_unknown_fields(
         object,
         "color_management",
-        &["config", "working_space", "preview", "export"],
+        &[
+            "config",
+            "working_space",
+            "preview",
+            "export",
+            "srgb_surface_space",
+            "hdr",
+        ],
         &mut issues,
     );
 
@@ -69,8 +76,8 @@ fn classify_structure(raw: &Value) -> Vec<ColorManagementStructureIssue> {
     classify_nested_object(
         object.get("preview"),
         "color_management.preview",
-        &["display"],
-        &["view"],
+        &["display", "surface_encoding"],
+        &["view", "view_output_color_space"],
         &mut issues,
     );
     classify_nested_object(
@@ -80,11 +87,77 @@ fn classify_structure(raw: &Value) -> Vec<ColorManagementStructureIssue> {
         &[],
         &mut issues,
     );
+    classify_srgb_surface_binding(object.get("srgb_surface_space"), &mut issues);
+    classify_hdr(object.get("hdr"), &mut issues);
     issues
 }
 
+fn classify_srgb_surface_binding(
+    value: Option<&Value>,
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    let path = "color_management.srgb_surface_space";
+    let Some(object) = expect_object(value, path, issues) else {
+        return;
+    };
+    classify_unknown_fields(object, path, &["config", "color_space"], issues);
+    match object.get("config") {
+        Some(config) => classify_config_identity_at(config, &format!("{path}.config"), issues),
+        None => issues.push(ColorManagementStructureIssue::MissingField {
+            path: format!("{path}.config"),
+        }),
+    }
+    match object.get("color_space") {
+        Some(value) => {
+            let _ = expect_string(value, &format!("{path}.color_space"), issues);
+        }
+        None => issues.push(ColorManagementStructureIssue::MissingField {
+            path: format!("{path}.color_space"),
+        }),
+    }
+}
+
+fn classify_hdr(value: Option<&Value>, issues: &mut Vec<ColorManagementStructureIssue>) {
+    let Some(value) = value else {
+        return;
+    };
+    let path = "color_management.hdr";
+    let Some(object) = expect_object(value, path, issues) else {
+        return;
+    };
+    let fields = ["reference_white_nits", "pq_linearization_policy"];
+    classify_unknown_fields(object, path, &fields, issues);
+    for field in fields {
+        if let Some(value) = object.get(field)
+            && ((field == "reference_white_nits" && !value.is_number())
+                || (field == "pq_linearization_policy" && !value.is_string()))
+        {
+            issues.push(ColorManagementStructureIssue::WrongType {
+                path: format!("{path}.{field}"),
+                expected: if field == "reference_white_nits" {
+                    "number"
+                } else {
+                    "string"
+                }
+                .to_string(),
+                actual: json_type(value).to_string(),
+            });
+        }
+    }
+}
+
 fn classify_config_identity(value: &Value, issues: &mut Vec<ColorManagementStructureIssue>) {
-    let path = "color_management.config";
+    classify_config_identity_at(value, "color_management.config", issues);
+}
+
+fn classify_config_identity_at(
+    value: &Value,
+    path: &str,
+    issues: &mut Vec<ColorManagementStructureIssue>,
+) {
     let Some(object) = expect_object(value, path, issues) else {
         return;
     };

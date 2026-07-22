@@ -7,23 +7,101 @@
 //! intentionally no implicit fallback that could reinterpret authored
 //! color-space names under a different config.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::asset::{Asset, AssetSourceColorSpaceBinding, AssetSourceColorSpaceBindingError};
 
+mod hdr;
 mod persistence;
 mod validation;
 
-pub const DEFAULT_BUNDLED_COLOR_CONFIG_ID: &str = "ruvie://color-config/builtin-linear-srgb-v1";
+pub use hdr::{HdrColorField, HdrColorSettings, HdrColorSettingsError, PqLinearizationPolicy};
+
+/// Exact identity of RuViE's built-in standard scene/display-space catalog.
+///
+/// This is deliberately not the former sRGB-only v1 identity: color-space
+/// names must never acquire wider semantics while retaining an old config
+/// fingerprint.
+pub const DEFAULT_BUNDLED_COLOR_CONFIG_ID: &str = "ruvie://color-config/builtin-standard-spaces-v3";
+/// Exact identity persisted by RuViE before the built-in standard-space
+/// catalog was expanded. It remains available with its original two-space
+/// semantics so an existing pre-v1 Project is not silently reinterpreted.
+pub const LEGACY_BUNDLED_COLOR_CONFIG_V1_ID: &str = "ruvie://color-config/builtin-linear-srgb-v1";
 pub const DEFAULT_WORKING_COLOR_SPACE: &str = "linear-srgb";
 pub const DEFAULT_PREVIEW_DISPLAY: &str = "srgb";
+pub const DEFAULT_PREVIEW_SURFACE_ENCODING: PreviewSurfaceEncoding = PreviewSurfaceEncoding::Srgb;
 /// The built-in backend performs a direct working-space to display-space
 /// transform. Named display views are an OCIO contract and are not silently
 /// accepted by the built-in backend.
 pub const DEFAULT_PREVIEW_VIEW: Option<&str> = None;
 pub const DEFAULT_OUTPUT_COLOR_SPACE: &str = "srgb";
+
+/// Encoding expected by the native Preview surface after its display transform.
+///
+/// Unknown future strings remain intact across load/save so the Project can be
+/// repaired by a newer build instead of being silently reinterpreted as sRGB.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PreviewSurfaceEncoding {
+    Srgb,
+    Unknown(String),
+}
+
+impl PreviewSurfaceEncoding {
+    pub const SRGB_ID: &'static str = "srgb";
+
+    pub fn from_id(id: impl Into<String>) -> Self {
+        let id = id.into();
+        if id == Self::SRGB_ID {
+            Self::Srgb
+        } else {
+            Self::Unknown(id)
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Srgb => Self::SRGB_ID,
+            Self::Unknown(id) => id,
+        }
+    }
+
+    pub const fn is_srgb(&self) -> bool {
+        matches!(self, Self::Srgb)
+    }
+
+    pub const fn direct_destination_space(&self) -> Option<&'static str> {
+        match self {
+            Self::Srgb => Some(ruvie_color_management::SRGB_SPACE_ID),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+impl Default for PreviewSurfaceEncoding {
+    fn default() -> Self {
+        DEFAULT_PREVIEW_SURFACE_ENCODING
+    }
+}
+
+impl Serialize for PreviewSurfaceEncoding {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PreviewSurfaceEncoding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::from_id)
+    }
+}
 
 /// Stable identity of the color configuration used to interpret space names.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +121,37 @@ pub enum ColorConfigIdentity {
     },
 }
 
+/// Exact config-local color space used for RuViE-authored sRGBA8 values and
+/// native sRGB display surfaces.
+///
+/// The duplicated config identity is intentional. It prevents a persisted
+/// color-space name from silently acquiring different semantics if the
+/// Project switches to another OCIO config. The name itself is never inferred
+/// from aliases such as `sRGB`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SrgbSurfaceColorSpaceBinding {
+    config: ColorConfigIdentity,
+    color_space: String,
+}
+
+impl SrgbSurfaceColorSpaceBinding {
+    fn new(config: ColorConfigIdentity, color_space: impl Into<String>) -> Self {
+        Self {
+            config,
+            color_space: color_space.into(),
+        }
+    }
+
+    pub fn config(&self) -> &ColorConfigIdentity {
+        &self.config
+    }
+
+    pub fn color_space(&self) -> &str {
+        &self.color_space
+    }
+}
+
 impl Default for ColorConfigIdentity {
     fn default() -> Self {
         Self::Bundled {
@@ -58,13 +167,45 @@ pub struct PreviewColorConfig {
     display: String,
     #[serde(default)]
     view: Option<String>,
+    #[serde(default)]
+    surface_encoding: PreviewSurfaceEncoding,
+    /// Exact config-local color-space name reported for an OCIO display/view.
+    /// Its meaning is bound to the owning [`ColorConfigIdentity`].
+    #[serde(default)]
+    view_output_color_space: Option<String>,
 }
 
 impl PreviewColorConfig {
     pub fn new(display: impl Into<String>, view: Option<String>) -> Self {
+        Self::new_with_surface_encoding(display, view, PreviewSurfaceEncoding::default())
+    }
+
+    pub fn new_with_surface_encoding(
+        display: impl Into<String>,
+        view: Option<String>,
+        surface_encoding: PreviewSurfaceEncoding,
+    ) -> Self {
         Self {
             display: display.into(),
             view,
+            surface_encoding,
+            view_output_color_space: None,
+        }
+    }
+
+    /// Atomically bind a named OCIO view to its exact config-local output
+    /// color-space name and the native surface encoding receiving its pixels.
+    pub fn named_view(
+        display: impl Into<String>,
+        view: impl Into<String>,
+        view_output_color_space: impl Into<String>,
+        surface_encoding: PreviewSurfaceEncoding,
+    ) -> Self {
+        Self {
+            display: display.into(),
+            view: Some(view.into()),
+            surface_encoding,
+            view_output_color_space: Some(view_output_color_space.into()),
         }
     }
 
@@ -78,6 +219,20 @@ impl PreviewColorConfig {
 
     pub fn view(&self) -> Option<&str> {
         self.view.as_deref()
+    }
+
+    pub fn surface_encoding(&self) -> &PreviewSurfaceEncoding {
+        &self.surface_encoding
+    }
+
+    pub fn view_output_color_space(&self) -> Option<&str> {
+        self.view_output_color_space.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_surface_encoding(mut self, surface_encoding: PreviewSurfaceEncoding) -> Self {
+        self.surface_encoding = surface_encoding;
+        self
     }
 }
 
@@ -116,7 +271,7 @@ impl Default for ExportColorConfig {
 }
 
 /// Project-wide color-management intent shared by every editing view.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorManagementConfig {
     #[serde(default)]
@@ -127,6 +282,50 @@ pub struct ColorManagementConfig {
     preview: PreviewColorConfig,
     #[serde(default)]
     export: ExportColorConfig,
+    /// Exact mapping for legacy/UI-authored straight sRGBA8 values and the
+    /// egui sRGB texture boundary. Custom OCIO configs must bind this
+    /// explicitly; a bare `sRGB` space name is never guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    srgb_surface_space: Option<SrgbSurfaceColorSpaceBinding>,
+    #[serde(default, skip_serializing_if = "HdrColorSettings::is_empty")]
+    hdr: HdrColorSettings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedColorManagementConfig {
+    #[serde(default)]
+    config: ColorConfigIdentity,
+    #[serde(default = "default_working_color_space")]
+    working_space: String,
+    #[serde(default)]
+    preview: PreviewColorConfig,
+    #[serde(default)]
+    export: ExportColorConfig,
+    #[serde(default)]
+    srgb_surface_space: Option<SrgbSurfaceColorSpaceBinding>,
+    #[serde(default)]
+    hdr: HdrColorSettings,
+}
+
+impl<'de> Deserialize<'de> for ColorManagementConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let persisted = PersistedColorManagementConfig::deserialize(deserializer)?;
+        let srgb_surface_space = persisted
+            .srgb_surface_space
+            .or_else(|| default_srgb_surface_binding_for(&persisted.config));
+        Ok(Self {
+            config: persisted.config,
+            working_space: persisted.working_space,
+            preview: persisted.preview,
+            export: persisted.export,
+            srgb_surface_space,
+            hdr: persisted.hdr,
+        })
+    }
 }
 
 impl ColorManagementConfig {
@@ -136,11 +335,14 @@ impl ColorManagementConfig {
         preview: PreviewColorConfig,
         export: ExportColorConfig,
     ) -> Self {
+        let srgb_surface_space = default_srgb_surface_binding_for(&config);
         Self {
             config,
             working_space: working_space.into(),
             preview,
             export,
+            srgb_surface_space,
+            hdr: HdrColorSettings::default(),
         }
     }
 
@@ -158,6 +360,31 @@ impl ColorManagementConfig {
 
     pub fn export(&self) -> &ExportColorConfig {
         &self.export
+    }
+
+    pub fn srgb_surface_space(&self) -> Option<&SrgbSurfaceColorSpaceBinding> {
+        self.srgb_surface_space.as_ref()
+    }
+
+    pub fn hdr(&self) -> &HdrColorSettings {
+        &self.hdr
+    }
+
+    #[must_use]
+    pub fn with_hdr_settings(mut self, hdr: HdrColorSettings) -> Self {
+        self.hdr = hdr;
+        self
+    }
+
+    /// Bind RuViE's authored sRGBA8 values and native sRGB surfaces to an
+    /// exact color space in this Project's current config.
+    #[must_use]
+    pub fn with_srgb_surface_space(mut self, color_space: impl Into<String>) -> Self {
+        self.srgb_surface_space = Some(SrgbSurfaceColorSpaceBinding::new(
+            self.config.clone(),
+            color_space,
+        ));
+        self
     }
 
     /// Creates an Asset source-space assignment owned by this exact config.
@@ -200,7 +427,7 @@ impl Default for ColorManagementConfig {
 /// does not erase data that a future repair UI could recover.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequestedColorManagementConfig {
-    Config(ColorManagementConfig),
+    Config(Box<ColorManagementConfig>),
     Malformed {
         raw: Value,
         structure_issues: Vec<ColorManagementStructureIssue>,
@@ -208,6 +435,10 @@ pub enum RequestedColorManagementConfig {
 }
 
 impl RequestedColorManagementConfig {
+    pub(super) fn from_config(config: ColorManagementConfig) -> Self {
+        Self::Config(Box::new(config))
+    }
+
     pub fn as_config(&self) -> Option<&ColorManagementConfig> {
         match self {
             Self::Config(config) => Some(config),
@@ -251,7 +482,7 @@ impl RequestedColorManagementConfig {
 
 impl Default for RequestedColorManagementConfig {
     fn default() -> Self {
-        Self::Config(ColorManagementConfig::default())
+        Self::Config(Box::default())
     }
 }
 
@@ -260,7 +491,7 @@ impl Default for RequestedColorManagementConfig {
 /// or that an external Asset path is still readable.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
-pub struct ColorConfigCacheIdentity(String);
+pub(super) struct ColorConfigCacheIdentity(String);
 
 impl ColorConfigCacheIdentity {
     pub fn as_str(&self) -> &str {
@@ -291,8 +522,16 @@ impl ModelValidatedColorManagementConfig {
         &self.config
     }
 
-    pub fn cache_identity(&self) -> &ColorConfigCacheIdentity {
-        &self.cache_identity
+    pub fn cache_identity(&self) -> &str {
+        self.cache_identity.as_str()
+    }
+
+    /// Active-config-checked authority for UI-authored sRGBA8 and native sRGB
+    /// surfaces. A bare color-space name cannot be obtained through this API.
+    pub fn srgb_surface_space(
+        &self,
+    ) -> Result<&SrgbSurfaceColorSpaceBinding, ColorManagementIssue> {
+        validation::validated_srgb_surface_binding(&self.config)
     }
 
     /// Returns an Asset's explicit source-space assignment only when it belongs
@@ -308,7 +547,7 @@ impl ModelValidatedColorManagementConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedColorManagementConfig {
-    Ready(ModelValidatedColorManagementConfig),
+    Ready(Box<ModelValidatedColorManagementConfig>),
     Unavailable {
         requested: RequestedColorManagementConfig,
         diagnostics: Vec<ColorManagementIssue>,
@@ -379,6 +618,22 @@ pub enum ColorManagementIssue {
     UnsupportedBundledPreviewView {
         view: String,
     },
+    UnsupportedPreviewSurfaceEncoding {
+        encoding: String,
+    },
+    DirectPreviewSurfaceEncodingMismatch {
+        destination: String,
+        surface_encoding: PreviewSurfaceEncoding,
+    },
+    MissingPreviewViewOutputColorSpace,
+    UnexpectedDirectPreviewViewOutputColorSpace {
+        output_space: String,
+    },
+    MissingSrgbSurfaceColorSpaceBinding,
+    SrgbSurfaceColorSpaceBindingMismatch {
+        bound: Box<ColorConfigIdentity>,
+        project: Box<ColorConfigIdentity>,
+    },
     MovingConfigIdentifier {
         identifier: String,
     },
@@ -432,6 +687,14 @@ pub enum ColorManagementIssue {
         asset_id: Uuid,
         detail: String,
     },
+    InvalidHdrSetting {
+        field: HdrColorField,
+        detail: String,
+    },
+    MissingHdrSetting {
+        field: HdrColorField,
+        required_by: String,
+    },
 }
 
 impl std::fmt::Display for ColorManagementIssue {
@@ -447,6 +710,32 @@ impl std::fmt::Display for ColorManagementIssue {
             Self::UnsupportedBundledPreviewView { view } => write!(
                 formatter,
                 "the built-in color config does not support named Preview view '{view}'"
+            ),
+            Self::UnsupportedPreviewSurfaceEncoding { encoding } => write!(
+                formatter,
+                "Preview surface encoding '{encoding}' is not supported by this build"
+            ),
+            Self::DirectPreviewSurfaceEncodingMismatch {
+                destination,
+                surface_encoding,
+            } => write!(
+                formatter,
+                "direct Preview destination '{destination}' does not match surface encoding '{}'",
+                surface_encoding.as_str()
+            ),
+            Self::MissingPreviewViewOutputColorSpace => formatter.write_str(
+                "an OpenColorIO Preview requires the exact config-local display/view output color space",
+            ),
+            Self::UnexpectedDirectPreviewViewOutputColorSpace { output_space } => write!(
+                formatter,
+                "built-in direct Preview must not bind OCIO view output color space '{output_space}'"
+            ),
+            Self::MissingSrgbSurfaceColorSpaceBinding => formatter.write_str(
+                "the Project color config has no exact sRGB authoring/surface color-space binding",
+            ),
+            Self::SrgbSurfaceColorSpaceBindingMismatch { bound, project } => write!(
+                formatter,
+                "the sRGB authoring/surface color-space binding belongs to config {bound:?}, but the Project uses {project:?}"
             ),
             Self::MovingConfigIdentifier { identifier } => write!(
                 formatter,
@@ -514,6 +803,12 @@ impl std::fmt::Display for ColorManagementIssue {
                 formatter,
                 "asset {asset_id} has an unrecognized source color-space binding: {detail}"
             ),
+            Self::InvalidHdrSetting { field, detail } => {
+                write!(formatter, "invalid {field}: {detail}")
+            }
+            Self::MissingHdrSetting { field, required_by } => {
+                write!(formatter, "{field} is required by {required_by}")
+            }
         }
     }
 }
@@ -528,6 +823,8 @@ pub enum ColorManagementField {
     WorkingSpace,
     PreviewDisplay,
     PreviewView,
+    PreviewViewOutputColorSpace,
+    SrgbSurfaceColorSpace,
     OutputSpace,
 }
 
@@ -539,6 +836,12 @@ impl std::fmt::Display for ColorManagementField {
             Self::WorkingSpace => formatter.write_str("working color space"),
             Self::PreviewDisplay => formatter.write_str("Preview display"),
             Self::PreviewView => formatter.write_str("Preview view"),
+            Self::PreviewViewOutputColorSpace => {
+                formatter.write_str("Preview view output color space")
+            }
+            Self::SrgbSurfaceColorSpace => {
+                formatter.write_str("sRGB authoring/surface color space")
+            }
             Self::OutputSpace => formatter.write_str("output color space"),
         }
     }
@@ -551,10 +854,10 @@ pub(super) fn resolve_color_management(
     let diagnostics = requested.blocking_diagnostics(assets);
     match (requested, diagnostics.is_empty()) {
         (RequestedColorManagementConfig::Config(config), true) => {
-            ResolvedColorManagementConfig::Ready(ModelValidatedColorManagementConfig {
+            ResolvedColorManagementConfig::Ready(Box::new(ModelValidatedColorManagementConfig {
                 cache_identity: config.stable_cache_identity(),
-                config: config.clone(),
-            })
+                config: config.as_ref().clone(),
+            }))
         }
         _ => ResolvedColorManagementConfig::Unavailable {
             requested: requested.clone(),
@@ -573,4 +876,23 @@ fn default_preview_display() -> String {
 
 fn default_output_color_space() -> String {
     DEFAULT_OUTPUT_COLOR_SPACE.to_string()
+}
+
+fn default_srgb_surface_binding_for(
+    config: &ColorConfigIdentity,
+) -> Option<SrgbSurfaceColorSpaceBinding> {
+    matches!(
+        config,
+        ColorConfigIdentity::Bundled { id } if is_supported_bundled_color_config_id(id)
+    )
+    .then(|| {
+        SrgbSurfaceColorSpaceBinding::new(config.clone(), ruvie_color_management::SRGB_SPACE_ID)
+    })
+}
+
+pub(crate) fn is_supported_bundled_color_config_id(id: &str) -> bool {
+    matches!(
+        id,
+        DEFAULT_BUNDLED_COLOR_CONFIG_ID | LEGACY_BUNDLED_COLOR_CONFIG_V1_ID
+    )
 }

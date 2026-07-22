@@ -1,4 +1,5 @@
-//! Canonical [`ColorValue`] adapter for the Project-independent color backend.
+//! Canonical [`ColorValue`](crate::model::property::ColorValue) adapter for the
+//! Project-independent color backend.
 //!
 //! Keep UI and graph code on this boundary. Transfer math belongs to the
 //! `ruvie-color-management` crate so Preview and export can adopt the same
@@ -6,6 +7,7 @@
 
 use std::fmt;
 
+use crate::model::frame::color::Color;
 use crate::model::property::{ColorSpaceRef, ColorValue, ColorValueError};
 use ruvie_color_management::{
     BackendCapabilities, BuiltinColorTransform, ColorManagementError, ColorTransformBackend,
@@ -85,6 +87,25 @@ pub fn from_display_srgb(
     transform_color(&display, authored_space)
 }
 
+/// Convert an authored built-in color to the current encoded-sRGB u8 raster
+/// boundary. Gamut mapping is not implemented yet, so this terminal adapter
+/// uses channel clipping only after the explicit color-space transform.
+/// The authoritative [`ColorValue`] remains floating-point and unchanged.
+pub fn to_renderer_srgba8(source: &ColorValue) -> Result<Color, ColorTransformError> {
+    let display = transform_color(source, &ColorSpaceRef::srgb())?;
+    let [r, g, b, a] = display.rgba();
+    Ok(Color {
+        r: quantize_terminal(r),
+        g: quantize_terminal(g),
+        b: quantize_terminal(b),
+        a: quantize_terminal(a),
+    })
+}
+
+fn quantize_terminal(value: f64) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 pub fn to_working_linear_srgb(source: &ColorValue) -> Result<ColorValue, ColorTransformError> {
     transform_color(source, &ColorSpaceRef::linear_srgb())
 }
@@ -114,8 +135,8 @@ pub const fn working_linear_srgb_space_id() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        from_display_srgb, from_working_linear_srgb, to_display_srgb, to_working_linear_srgb,
-        transform_color,
+        from_display_srgb, from_working_linear_srgb, to_display_srgb, to_renderer_srgba8,
+        to_working_linear_srgb, transform_color,
     };
     use crate::model::property::{ColorSpaceRef, ColorValue};
 
@@ -147,6 +168,22 @@ mod tests {
         let aces = ColorValue::new(ColorSpaceRef::new("acescg")?, [0.5, 0.25, 2.0, 1.0])?;
         assert!(transform_color(&aces, &ColorSpaceRef::linear_srgb()).is_err());
         assert!(transform_color(&aces, &ColorSpaceRef::new("acescg")?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn renderer_terminal_transforms_display_p3_then_clips_only_at_output()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let p3 = ColorValue::new(ColorSpaceRef::new("display-p3")?, [0.8, 0.4, 0.2, 0.5])?;
+        assert_eq!(
+            to_renderer_srgba8(&p3)?,
+            crate::model::frame::color::Color {
+                r: 219,
+                g: 94,
+                b: 31,
+                a: 128,
+            }
+        );
         Ok(())
     }
 }

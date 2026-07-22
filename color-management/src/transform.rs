@@ -1,18 +1,59 @@
 use std::fmt;
 
 use crate::{
+    ColorLinearity, ColorReferenceSpace, ColorSpaceInfo, VerifiedSourceSpace, VerifiedWorkingSpace,
     contract::{BackendBuild, BackendCapabilities, CpuSamplePrecision},
-    request::{ColorTransformRequest, ProcessorCacheKey, TransformSpec},
+    request::{ColorContext, ColorTransformRequest, ProcessorCacheKey, TransformSpec},
+    standard_spaces::{CompiledStandardTransform, StandardColorSpaceId},
 };
 
-pub const SRGB_SPACE_ID: &str = "srgb";
-pub const LINEAR_SRGB_SPACE_ID: &str = "linear-srgb";
+pub use crate::standard_spaces::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ColorSpaceInfo {
-    pub id: String,
-    pub label: String,
-    pub scene_linear: bool,
+/// Stable identity of the immutable program compiled for a CPU processor.
+///
+/// Processor instances may eventually carry mutable dynamic-property state;
+/// this identity deliberately describes only the immutable request and
+/// backend program that can safely participate in caches and validation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CompiledTransformIdentity {
+    backend_build: BackendBuild,
+    cache_key: ProcessorCacheKey,
+    backend_program_cache_id: String,
+}
+
+impl CompiledTransformIdentity {
+    pub(crate) fn new(
+        backend_build: BackendBuild,
+        cache_key: ProcessorCacheKey,
+        backend_program_cache_id: impl Into<String>,
+    ) -> Result<Self, ColorManagementError> {
+        if backend_build == BackendBuild::Stub {
+            return Err(ColorManagementError::StubBackend {
+                backend_id: cache_key.backend_id,
+            });
+        }
+        let backend_program_cache_id = backend_program_cache_id.into();
+        if backend_program_cache_id.trim().is_empty() {
+            return Err(ColorManagementError::EmptyProcessorProgramIdentity);
+        }
+        Ok(Self {
+            backend_build,
+            cache_key,
+            backend_program_cache_id,
+        })
+    }
+
+    pub const fn backend_build(&self) -> BackendBuild {
+        self.backend_build
+    }
+
+    pub const fn cache_key(&self) -> &ProcessorCacheKey {
+        &self.cache_key
+    }
+
+    pub fn backend_program_cache_id(&self) -> &str {
+        &self.backend_program_cache_id
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +83,36 @@ pub enum ColorManagementError {
         backend_id: String,
     },
     EmptyColorSpace,
+    EmptyProjectConfigIdentity,
+    EmptyProcessorProgramIdentity,
+    ColorSpaceUnavailable {
+        space: String,
+    },
+    InvalidWorkingSpace {
+        space: String,
+        reason: &'static str,
+    },
+    InvalidSourceSpace {
+        space: String,
+        reason: &'static str,
+    },
+    MissingContextVariable {
+        variable: &'static str,
+        space: String,
+    },
+    InvalidContextVariable {
+        variable: &'static str,
+        value: String,
+        reason: &'static str,
+    },
+    InvalidTransferDomain {
+        transfer: &'static str,
+        reason: &'static str,
+    },
+    ProcessorContractMismatch {
+        operation: &'static str,
+        detail: String,
+    },
     NonFiniteComponent {
         component: &'static str,
     },
@@ -67,6 +138,58 @@ impl fmt::Display for ColorManagementError {
                 write!(formatter, "color backend '{backend_id}' is a stub build")
             }
             Self::EmptyColorSpace => formatter.write_str("color space must not be empty"),
+            Self::EmptyProjectConfigIdentity => {
+                formatter.write_str("Project color configuration identity must not be empty")
+            }
+            Self::EmptyProcessorProgramIdentity => {
+                formatter.write_str("compiled color processor program identity must not be empty")
+            }
+            Self::ColorSpaceUnavailable { space } => {
+                write!(
+                    formatter,
+                    "color space '{space}' is not available in the backend"
+                )
+            }
+            Self::InvalidWorkingSpace { space, reason } => {
+                write!(
+                    formatter,
+                    "color space '{space}' is not a valid working space: {reason}"
+                )
+            }
+            Self::InvalidSourceSpace { space, reason } => {
+                write!(
+                    formatter,
+                    "color space '{space}' is not a valid image source: {reason}"
+                )
+            }
+            Self::MissingContextVariable { variable, space } => {
+                write!(
+                    formatter,
+                    "color space '{space}' requires context variable '{variable}'"
+                )
+            }
+            Self::InvalidContextVariable {
+                variable,
+                value,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "color context variable '{variable}' has invalid value '{value}': {reason}"
+                )
+            }
+            Self::InvalidTransferDomain { transfer, reason } => {
+                write!(
+                    formatter,
+                    "value is outside the {transfer} transfer domain: {reason}"
+                )
+            }
+            Self::ProcessorContractMismatch { operation, detail } => {
+                write!(
+                    formatter,
+                    "color processor cannot perform {operation}: {detail}"
+                )
+            }
             Self::NonFiniteComponent { component } => {
                 write!(formatter, "color component {component} must be finite")
             }
@@ -101,7 +224,20 @@ impl fmt::Display for ColorManagementError {
 
 impl std::error::Error for ColorManagementError {}
 
-pub trait CpuColorProcessor: Send + Sync {
+/// Private implementation boundary for trusted in-crate color backends.
+///
+/// The public traits remain usable as trait objects, but cannot be implemented
+/// by downstream code that could otherwise self-report `BackendBuild::Real`
+/// and forge processor or verified-space authority.
+pub(crate) mod sealed {
+    pub trait Backend {}
+    pub trait Processor {}
+}
+
+pub trait CpuColorProcessor: sealed::Processor + Send + Sync {
+    /// Immutable request/program identity compiled by the backend.
+    fn compiled_transform_identity(&self) -> &CompiledTransformIdentity;
+
     /// Transform one RGB authoring color without clipping.
     ///
     /// f64 is the canonical Project/API interchange representation. A backend
@@ -135,12 +271,75 @@ pub trait CpuColorProcessor: Send + Sync {
 
 /// Replaceable backend boundary for built-in transfers and a future pinned
 /// OpenColorIO implementation.
-pub trait ColorTransformBackend: Send + Sync {
+pub trait ColorTransformBackend: sealed::Backend + Send + Sync {
     fn backend_id(&self) -> &'static str;
     fn build(&self) -> BackendBuild;
     fn config_fingerprint(&self) -> String;
     fn capabilities(&self) -> BackendCapabilities;
     fn available_color_spaces(&self) -> Result<Vec<ColorSpaceInfo>, ColorManagementError>;
+
+    /// Resolve a source color space in this exact backend configuration and
+    /// context. Data spaces cannot enter the managed color pipeline.
+    fn verify_source_space(
+        &self,
+        space: &str,
+        context: &ColorContext,
+    ) -> Result<VerifiedSourceSpace, ColorManagementError> {
+        let color_space = self.resolve_color_space(space)?;
+        self.validate_color_space_context(&color_space, context)?;
+        if color_space.is_data {
+            return Err(ColorManagementError::InvalidSourceSpace {
+                space: color_space.id,
+                reason: "data spaces cannot enter the managed color pipeline",
+            });
+        }
+        Ok(VerifiedSourceSpace::new(
+            self.backend_id().to_string(),
+            self.build(),
+            self.config_fingerprint(),
+            context.clone(),
+            color_space,
+        ))
+    }
+
+    /// Verify that `space` is scene-referred, linear, and non-data in this
+    /// backend configuration. The returned opaque token also captures the
+    /// context that processors must use at working-image boundaries.
+    fn verify_working_space(
+        &self,
+        space: &str,
+        context: &ColorContext,
+    ) -> Result<VerifiedWorkingSpace, ColorManagementError> {
+        let color_space = self.resolve_color_space(space)?;
+        self.validate_color_space_context(&color_space, context)?;
+        let reason = match (
+            color_space.reference_space,
+            color_space.linearity,
+            color_space.is_data,
+        ) {
+            (_, _, true) => Some("data spaces cannot be used for image compositing"),
+            (ColorReferenceSpace::Display, _, false) => {
+                Some("the space is display-referred, not scene-referred")
+            }
+            (ColorReferenceSpace::Scene, ColorLinearity::Encoded, false) => {
+                Some("the scene-referred space is not linear")
+            }
+            (ColorReferenceSpace::Scene, ColorLinearity::Linear, false) => None,
+        };
+        if let Some(reason) = reason {
+            return Err(ColorManagementError::InvalidWorkingSpace {
+                space: color_space.id,
+                reason,
+            });
+        }
+        Ok(VerifiedWorkingSpace::new(
+            self.backend_id().to_string(),
+            self.build(),
+            self.config_fingerprint(),
+            context.clone(),
+            color_space,
+        ))
+    }
     fn processor_cache_key(
         &self,
         request: &ColorTransformRequest,
@@ -154,10 +353,49 @@ pub trait ColorTransformBackend: Send + Sync {
         request: &ColorTransformRequest,
         language: GpuShaderLanguage,
     ) -> Result<GpuColorTransform, ColorManagementError>;
+
+    /// Resolve the exact config-local output color-space name selected by a
+    /// display/view pair. Backends without named display/view semantics must
+    /// reject instead of inferring a surface encoding from display labels.
+    fn display_view_output_space(
+        &self,
+        display: &str,
+        view: &str,
+        _context: &ColorContext,
+    ) -> Result<String, ColorManagementError> {
+        Err(ColorManagementError::UnsupportedDisplayView {
+            backend_id: self.backend_id().to_string(),
+            display: display.to_string(),
+            view: view.to_string(),
+        })
+    }
+
+    fn validate_color_space_context(
+        &self,
+        _space: &ColorSpaceInfo,
+        _context: &ColorContext,
+    ) -> Result<(), ColorManagementError> {
+        Ok(())
+    }
+
+    fn resolve_color_space(&self, space: &str) -> Result<ColorSpaceInfo, ColorManagementError> {
+        ensure_real_backend_identity(self.backend_id(), self.build())?;
+        if space.trim().is_empty() {
+            return Err(ColorManagementError::EmptyColorSpace);
+        }
+        self.available_color_spaces()?
+            .into_iter()
+            .find(|candidate| candidate.id == space)
+            .ok_or_else(|| ColorManagementError::ColorSpaceUnavailable {
+                space: space.to_string(),
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BuiltinColorTransform;
+
+impl sealed::Backend for BuiltinColorTransform {}
 
 impl BuiltinColorTransform {
     pub fn transform_rgba(
@@ -182,43 +420,24 @@ impl BuiltinColorTransform {
     fn validate_request(
         &self,
         request: &ColorTransformRequest,
-    ) -> Result<TransformKind, ColorManagementError> {
+    ) -> Result<CompiledStandardTransform, ColorManagementError> {
         ensure_real_backend(self)?;
-        let (source, destination) = match request.spec() {
-            TransformSpec::ColorSpace {
-                source,
-                destination,
-            } => (source, destination),
+        match request.spec() {
+            TransformSpec::ColorSpace { .. } => CompiledStandardTransform::compile(request),
             TransformSpec::DisplayView { display, view, .. } => {
-                return Err(ColorManagementError::UnsupportedDisplayView {
+                Err(ColorManagementError::UnsupportedDisplayView {
                     backend_id: self.backend_id().to_string(),
                     display: display.clone(),
                     view: view.clone(),
-                });
+                })
             }
-        };
-        if source.trim().is_empty() || destination.trim().is_empty() {
-            return Err(ColorManagementError::EmptyColorSpace);
-        }
-        let source_supported = matches!(source.as_str(), SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID);
-        let target_supported = matches!(destination.as_str(), SRGB_SPACE_ID | LINEAR_SRGB_SPACE_ID);
-        if source_supported && target_supported && source == destination {
-            return Ok(TransformKind::Identity);
-        }
-        match (source.as_str(), destination.as_str()) {
-            (SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID) => Ok(TransformKind::SrgbToLinear),
-            (LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID) => Ok(TransformKind::LinearToSrgb),
-            _ => Err(ColorManagementError::UnsupportedTransform {
-                source: source.clone(),
-                target: destination.clone(),
-            }),
         }
     }
 }
 
 impl ColorTransformBackend for BuiltinColorTransform {
     fn backend_id(&self) -> &'static str {
-        "builtin.extended-srgb"
+        "builtin.standard-spaces.v3"
     }
 
     fn build(&self) -> BackendBuild {
@@ -226,7 +445,7 @@ impl ColorTransformBackend for BuiltinColorTransform {
     }
 
     fn config_fingerprint(&self) -> String {
-        "builtin-extended-srgb-v1".to_string()
+        "builtin.standard-spaces.config.v3".to_string()
     }
 
     fn capabilities(&self) -> BackendCapabilities {
@@ -240,18 +459,10 @@ impl ColorTransformBackend for BuiltinColorTransform {
 
     fn available_color_spaces(&self) -> Result<Vec<ColorSpaceInfo>, ColorManagementError> {
         ensure_real_backend(self)?;
-        Ok(vec![
-            ColorSpaceInfo {
-                id: SRGB_SPACE_ID.to_string(),
-                label: "sRGB (encoded)".to_string(),
-                scene_linear: false,
-            },
-            ColorSpaceInfo {
-                id: LINEAR_SRGB_SPACE_ID.to_string(),
-                label: "Linear sRGB".to_string(),
-                scene_linear: true,
-            },
-        ])
+        Ok(StandardColorSpaceId::ALL
+            .into_iter()
+            .map(|space| space.metadata().color_space_info())
+            .collect())
     }
 
     fn processor_cache_key(
@@ -272,8 +483,15 @@ impl ColorTransformBackend for BuiltinColorTransform {
         &self,
         request: &ColorTransformRequest,
     ) -> Result<Box<dyn CpuColorProcessor>, ColorManagementError> {
+        let transform = self.validate_request(request)?;
+        let program_id = transform.program_id();
         Ok(Box::new(BuiltinCpuProcessor {
-            kind: self.validate_request(request)?,
+            transform,
+            identity: CompiledTransformIdentity::new(
+                self.build(),
+                self.processor_cache_key(request)?,
+                program_id,
+            )?,
         }))
     }
 
@@ -287,38 +505,54 @@ impl ColorTransformBackend for BuiltinColorTransform {
             backend_id: self.backend_id().to_string(),
         })
     }
+
+    fn validate_color_space_context(
+        &self,
+        space: &ColorSpaceInfo,
+        context: &ColorContext,
+    ) -> Result<(), ColorManagementError> {
+        let standard_space = StandardColorSpaceId::from_id(&space.id).ok_or_else(|| {
+            ColorManagementError::ColorSpaceUnavailable {
+                space: space.id.clone(),
+            }
+        })?;
+        crate::standard_hdr::validate_standard_space_context(standard_space.metadata(), context)
+    }
 }
 
 fn ensure_real_backend(backend: &dyn ColorTransformBackend) -> Result<(), ColorManagementError> {
-    if backend.build() == BackendBuild::Stub {
+    ensure_real_backend_identity(backend.backend_id(), backend.build())
+}
+
+fn ensure_real_backend_identity(
+    backend_id: &str,
+    build: BackendBuild,
+) -> Result<(), ColorManagementError> {
+    if build == BackendBuild::Stub {
         return Err(ColorManagementError::StubBackend {
-            backend_id: backend.backend_id().to_string(),
+            backend_id: backend_id.to_string(),
         });
     }
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TransformKind {
-    Identity,
-    SrgbToLinear,
-    LinearToSrgb,
+struct BuiltinCpuProcessor {
+    transform: CompiledStandardTransform,
+    identity: CompiledTransformIdentity,
 }
 
-struct BuiltinCpuProcessor {
-    kind: TransformKind,
-}
+impl sealed::Processor for BuiltinCpuProcessor {}
 
 impl CpuColorProcessor for BuiltinCpuProcessor {
+    fn compiled_transform_identity(&self) -> &CompiledTransformIdentity {
+        &self.identity
+    }
+
     fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
         validate_rgb(rgb)?;
-        let [r, g, b] = rgb;
-        let transform = match self.kind {
-            TransformKind::Identity => return Ok(rgb),
-            TransformKind::SrgbToLinear => extended_srgb_to_linear,
-            TransformKind::LinearToSrgb => extended_linear_to_srgb,
-        };
-        Ok([transform(r), transform(g), transform(b)])
+        let transformed = self.transform.apply(rgb)?;
+        validate_rgb(transformed)?;
+        Ok(transformed)
     }
 
     fn transform_rgb_f32_in_place(
@@ -327,14 +561,11 @@ impl CpuColorProcessor for BuiltinCpuProcessor {
     ) -> Result<(), ColorManagementError> {
         for pixel in pixels {
             validate_rgb_f32(*pixel)?;
-            let transform = match self.kind {
-                TransformKind::Identity => continue,
-                TransformKind::SrgbToLinear => extended_srgb_to_linear,
-                TransformKind::LinearToSrgb => extended_linear_to_srgb,
-            };
-            pixel[0] = transform(f64::from(pixel[0])) as f32;
-            pixel[1] = transform(f64::from(pixel[1])) as f32;
-            pixel[2] = transform(f64::from(pixel[2])) as f32;
+            let transformed = self
+                .transform
+                .apply(pixel.map(f64::from))?
+                .map(|component| component as f32);
+            *pixel = transformed;
             validate_rgb_f32(*pixel)?;
         }
         Ok(())
@@ -359,46 +590,87 @@ fn validate_rgb_f32(rgb: [f32; 3]) -> Result<(), ColorManagementError> {
     Ok(())
 }
 
-/// IEC 61966-2-1 transfer extended outside `[0, 1]` by odd symmetry.
-///
-/// Odd extension keeps negative scene values finite and makes the transform
-/// reversible. Values above one use the same power segment and are not clipped.
-fn extended_srgb_to_linear(value: f64) -> f64 {
-    signed_transfer(value, |magnitude| {
-        if magnitude <= 0.040_45 {
-            magnitude / 12.92
-        } else {
-            ((magnitude + 0.055) / 1.055).powf(2.4)
-        }
-    })
-}
-
-fn extended_linear_to_srgb(value: f64) -> f64 {
-    signed_transfer(value, |magnitude| {
-        if magnitude <= 0.003_130_8 {
-            magnitude * 12.92
-        } else {
-            1.055 * magnitude.powf(1.0 / 2.4) - 0.055
-        }
-    })
-}
-
-fn signed_transfer(value: f64, transfer: impl FnOnce(f64) -> f64) -> f64 {
-    let transformed = transfer(value.abs());
-    if value.is_sign_negative() {
-        -transformed
-    } else {
-        transformed
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        BuiltinColorTransform, ColorManagementError, ColorTransformBackend, ColorTransformRequest,
-        GpuShaderLanguage, LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
+        BuiltinColorTransform, ColorLinearity, ColorManagementError, ColorReferenceSpace,
+        ColorTransformBackend, ColorTransformRequest, CompiledTransformIdentity, GpuShaderLanguage,
+        LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID,
     };
-    use crate::{BackendBuild, CpuSamplePrecision, TransformPurpose};
+    use crate::{
+        BackendBuild, ColorContext, CpuSamplePrecision, PQ_LINEARIZATION_POLICY_CONTEXT_KEY,
+        REC2100_HLG_SPACE_ID, REC2100_PQ_SPACE_ID, REFERENCE_WHITE_NITS_CONTEXT_KEY,
+        RELATIVE_DISPLAY_LUMINANCE_PQ_POLICY, StandardColorSpaceId, TransformPurpose,
+        TransformSpec,
+    };
+
+    struct DataOnlyBackend;
+
+    impl super::sealed::Backend for DataOnlyBackend {}
+
+    impl ColorTransformBackend for DataOnlyBackend {
+        fn backend_id(&self) -> &'static str {
+            "test.data-only"
+        }
+
+        fn build(&self) -> BackendBuild {
+            BackendBuild::Real
+        }
+
+        fn config_fingerprint(&self) -> String {
+            "test-data-config-v1".to_string()
+        }
+
+        fn capabilities(&self) -> crate::BackendCapabilities {
+            crate::BackendCapabilities {
+                enumerate_color_spaces: true,
+                cpu_processor_sample_precision: None,
+                gpu_shader_lut: false,
+                extended_range_rgb: false,
+            }
+        }
+
+        fn available_color_spaces(
+            &self,
+        ) -> Result<Vec<crate::ColorSpaceInfo>, ColorManagementError> {
+            Ok(vec![crate::ColorSpaceInfo {
+                id: "raw".to_string(),
+                label: "Raw data".to_string(),
+                reference_space: ColorReferenceSpace::Scene,
+                linearity: ColorLinearity::Linear,
+                is_data: true,
+            }])
+        }
+
+        fn processor_cache_key(
+            &self,
+            _request: &ColorTransformRequest,
+        ) -> Result<crate::ProcessorCacheKey, ColorManagementError> {
+            data_backend_has_no_processor()
+        }
+
+        fn create_cpu_processor(
+            &self,
+            _request: &ColorTransformRequest,
+        ) -> Result<Box<dyn crate::CpuColorProcessor>, ColorManagementError> {
+            data_backend_has_no_processor()
+        }
+
+        fn extract_gpu_transform(
+            &self,
+            _request: &ColorTransformRequest,
+            _language: GpuShaderLanguage,
+        ) -> Result<crate::GpuColorTransform, ColorManagementError> {
+            data_backend_has_no_processor()
+        }
+    }
+
+    fn data_backend_has_no_processor<T>() -> Result<T, ColorManagementError> {
+        Err(ColorManagementError::UnsupportedTransform {
+            source: "raw".to_string(),
+            target: "raw".to_string(),
+        })
+    }
 
     fn assert_near(actual: f64, expected: f64) {
         assert!(
@@ -411,6 +683,11 @@ mod tests {
     fn builtin_advertises_only_implemented_capabilities() {
         let backend = BuiltinColorTransform;
         assert_eq!(backend.build(), BackendBuild::Real);
+        assert_eq!(backend.backend_id(), "builtin.standard-spaces.v3");
+        assert_eq!(
+            backend.config_fingerprint(),
+            "builtin.standard-spaces.config.v3"
+        );
         let capabilities = backend.capabilities();
         assert!(capabilities.enumerate_color_spaces);
         assert_eq!(
@@ -419,7 +696,93 @@ mod tests {
         );
         assert!(!capabilities.gpu_shader_lut);
         assert!(capabilities.extended_range_rgb);
-        assert_eq!(backend.available_color_spaces().unwrap().len(), 2);
+        let spaces = backend.available_color_spaces().unwrap();
+        assert_eq!(spaces.len(), StandardColorSpaceId::ALL.len());
+        assert!(spaces.iter().any(|space| {
+            space.id == LINEAR_SRGB_SPACE_ID
+                && space.reference_space == ColorReferenceSpace::Scene
+                && space.linearity == ColorLinearity::Linear
+                && !space.is_data
+                && space.is_valid_working_space()
+        }));
+    }
+
+    #[test]
+    fn only_scene_linear_non_data_space_receives_a_verified_working_token() {
+        let backend = BuiltinColorTransform;
+        let context = ColorContext::default().with_variable("SHOT", "010");
+        let verified = backend
+            .verify_working_space(LINEAR_SRGB_SPACE_ID, &context)
+            .unwrap();
+        assert_eq!(verified.backend_id(), backend.backend_id());
+        assert_eq!(verified.backend_build(), BackendBuild::Real);
+        assert_eq!(verified.context(), &context);
+        assert_eq!(verified.color_space_id(), LINEAR_SRGB_SPACE_ID);
+
+        assert!(matches!(
+            backend.verify_working_space(SRGB_SPACE_ID, &ColorContext::default()),
+            Err(ColorManagementError::InvalidWorkingSpace { .. })
+        ));
+        assert!(matches!(
+            backend.verify_working_space("missing", &ColorContext::default()),
+            Err(ColorManagementError::ColorSpaceUnavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn source_token_captures_exact_backend_config_context_and_space() {
+        let backend = BuiltinColorTransform;
+        let context = ColorContext::default().with_variable("SHOT", "010");
+        let verified = backend
+            .verify_source_space(SRGB_SPACE_ID, &context)
+            .unwrap();
+
+        assert_eq!(verified.backend_id(), backend.backend_id());
+        assert_eq!(verified.backend_build(), BackendBuild::Real);
+        assert_eq!(
+            verified.backend_config_fingerprint(),
+            backend.config_fingerprint()
+        );
+        assert_eq!(verified.context(), &context);
+        assert_eq!(verified.color_space_id(), SRGB_SPACE_ID);
+    }
+
+    #[test]
+    fn hdr_source_tokens_and_processors_fail_closed_without_explicit_context() {
+        let backend = BuiltinColorTransform;
+        assert!(matches!(
+            backend.verify_source_space(REC2100_PQ_SPACE_ID, &ColorContext::default()),
+            Err(ColorManagementError::MissingContextVariable {
+                variable: PQ_LINEARIZATION_POLICY_CONTEXT_KEY,
+                ..
+            })
+        ));
+
+        let missing_reference = ColorContext::default().with_variable(
+            PQ_LINEARIZATION_POLICY_CONTEXT_KEY,
+            RELATIVE_DISPLAY_LUMINANCE_PQ_POLICY,
+        );
+        assert!(matches!(
+            backend.verify_source_space(REC2100_PQ_SPACE_ID, &missing_reference),
+            Err(ColorManagementError::MissingContextVariable {
+                variable: REFERENCE_WHITE_NITS_CONTEXT_KEY,
+                ..
+            })
+        ));
+
+        assert!(
+            backend
+                .verify_source_space(REC2100_HLG_SPACE_ID, &ColorContext::default())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn data_space_cannot_receive_a_managed_source_token() {
+        assert!(matches!(
+            DataOnlyBackend.verify_source_space("raw", &ColorContext::default()),
+            Err(ColorManagementError::InvalidSourceSpace { .. })
+        ));
     }
 
     #[test]
@@ -479,12 +842,48 @@ mod tests {
         let backend = BuiltinColorTransform;
         let explicit = ColorTransformRequest::explicit(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         let display =
-            ColorTransformRequest::working_to_display(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
+            ColorTransformRequest::working_to_display(LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID);
         assert_eq!(explicit.purpose(), TransformPurpose::Explicit);
         assert_ne!(
             backend.processor_cache_key(&explicit).unwrap(),
             backend.processor_cache_key(&display).unwrap()
         );
+    }
+
+    #[test]
+    fn cpu_processor_exposes_the_exact_immutable_request_and_program_identity() {
+        let backend = BuiltinColorTransform;
+        let request = ColorTransformRequest::source_to_working(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID)
+            .with_context(ColorContext::default().with_variable("SHOT", "010"));
+        let processor = backend.create_cpu_processor(&request).unwrap();
+        let compiled = processor.compiled_transform_identity();
+
+        assert_eq!(compiled.backend_build(), BackendBuild::Real);
+        assert_eq!(
+            compiled.cache_key().purpose,
+            TransformPurpose::SourceToWorking
+        );
+        assert_eq!(compiled.cache_key().context, *request.context());
+        assert!(matches!(
+            compiled.cache_key().spec,
+            TransformSpec::ColorSpace {
+                ref source,
+                ref destination,
+            } if source == SRGB_SPACE_ID && destination == LINEAR_SRGB_SPACE_ID
+        ));
+        assert_eq!(
+            compiled.backend_program_cache_id(),
+            "builtin.extended-srgb-to-linear.v1"
+        );
+
+        assert!(matches!(
+            CompiledTransformIdentity::new(
+                BackendBuild::Stub,
+                compiled.cache_key().clone(),
+                "stub-program",
+            ),
+            Err(ColorManagementError::StubBackend { .. })
+        ));
     }
 
     #[test]
@@ -502,7 +901,7 @@ mod tests {
                 ref backend_id,
                 ref display,
                 ref view,
-            }) if backend_id == "builtin.extended-srgb"
+            }) if backend_id == "builtin.standard-spaces.v3"
                 && display == "qa-display"
                 && view == "qa-view"
         ));
@@ -512,7 +911,7 @@ mod tests {
                 ref backend_id,
                 ref display,
                 ref view,
-            }) if backend_id == "builtin.extended-srgb"
+            }) if backend_id == "builtin.standard-spaces.v3"
                 && display == "qa-display"
                 && view == "qa-view"
         ));
