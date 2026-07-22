@@ -311,3 +311,79 @@ fn every_list_catalog_factory_is_complete_typed_and_roundtrips() {
         Some(&PropertyValue::Integer(0))
     );
 }
+
+#[test]
+fn every_data_catalog_factory_is_complete_typed_and_roundtrips_losslessly() {
+    use crate::model::path::{FillRule, PathValue};
+    use crate::model::project::connection::DATA_VALUE_OUTPUT_PORT;
+    use crate::model::project::{PortDataType, PortDirection};
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+
+    for data in DataContent::ALL {
+        let descriptor = native_node_descriptor(data.catalog_id()).unwrap();
+        assert_eq!(descriptor.label(), data.label());
+        assert_eq!(
+            descriptor.runtime_status(),
+            NativeNodeRuntimeStatus::Implemented
+        );
+        assert_eq!(descriptor.factory(), NativeNodeFactory::Data(data));
+        assert_eq!(descriptor.ports().len(), 1);
+        assert!(descriptor.ports().iter().any(|port| {
+            port.key == DATA_VALUE_OUTPUT_PORT
+                && port.direction == PortDirection::Output
+                && port.data_type
+                    == match data {
+                        DataContent::Color => PortDataType::Color,
+                        DataContent::Path => PortDataType::Path,
+                    }
+        }));
+        let node = Node::new_catalog_node(data.catalog_id()).unwrap();
+        assert_eq!(node.content(), &NodeContent::Data(data));
+        assert_eq!(
+            node.properties(),
+            &PropertyMap::from_definitions(data.property_definitions())
+        );
+        assert!(!node.supports_bypass());
+        let restored: Node = serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        assert_eq!(restored, node);
+    }
+
+    let color = DataContent::Color.property_definitions()[0].default_value();
+    assert!(
+        matches!(color, PropertyValue::ColorValue(value) if value.color_space() == &ColorSpaceRef::srgb())
+    );
+    let path = DataContent::Path.property_definitions()[0].default_value();
+    assert_eq!(
+        path,
+        &PropertyValue::Path(PathValue::empty(FillRule::NonZero))
+    );
+    assert!(ColorValue::new(ColorSpaceRef::srgb(), [-1.0, 2.0, 3.0, 0.5]).is_ok());
+}
+
+#[test]
+fn canonical_data_ui_types_reject_lossy_legacy_substitutions() {
+    use crate::model::frame::color::Color;
+    use crate::model::path::{FillRule, PathValue};
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+
+    let tagged = PropertyValue::ColorValue(
+        ColorValue::new(
+            ColorSpaceRef::new("scene_linear").unwrap(),
+            [-0.5, 2.0, 0.0, 0.5],
+        )
+        .unwrap(),
+    );
+    let legacy = PropertyValue::Color(Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    });
+    let path = PropertyValue::Path(PathValue::empty(FillRule::EvenOdd));
+    assert!(tagged.is_compatible_with(&PropertyUiType::ColorValue));
+    assert!(!tagged.is_compatible_with(&PropertyUiType::Color));
+    assert!(legacy.is_compatible_with(&PropertyUiType::Color));
+    assert!(!legacy.is_compatible_with(&PropertyUiType::ColorValue));
+    assert!(path.is_compatible_with(&PropertyUiType::Path));
+    assert!(!path.is_compatible_with(&PropertyUiType::MultilineText));
+}

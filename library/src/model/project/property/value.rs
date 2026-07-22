@@ -181,13 +181,13 @@ impl PropertyValue {
                     | PropertyUiType::Dropdown { .. }
             ),
             PropertyValue::Boolean(_) => matches!(ui_type, PropertyUiType::Bool),
-            PropertyValue::ColorValue(_) | PropertyValue::Color(_) => {
-                matches!(ui_type, PropertyUiType::Color)
-            }
+            PropertyValue::ColorValue(_) => matches!(ui_type, PropertyUiType::ColorValue),
+            PropertyValue::Color(_) => matches!(ui_type, PropertyUiType::Color),
             PropertyValue::Vec2(_) => matches!(ui_type, PropertyUiType::Vec2 { .. }),
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
-            PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => false,
+            PropertyValue::Path(_) => matches!(ui_type, PropertyUiType::Path),
+            PropertyValue::Array(_) | PropertyValue::Map(_) => false,
         }
     }
 }

@@ -92,6 +92,7 @@ fn node_ports(
     match node.content() {
         NodeContent::Generator(_)
         | NodeContent::Value(_)
+        | NodeContent::Data(_)
         | NodeContent::List(_)
         | NodeContent::NativeOperation(_)
         | NodeContent::Merge

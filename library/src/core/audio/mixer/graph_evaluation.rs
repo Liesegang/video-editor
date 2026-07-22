@@ -431,6 +431,7 @@ fn collect_audio_routes<'a>(
                     }
                     NodeContent::Generator(_)
                     | NodeContent::Value(_)
+                    | NodeContent::Data(_)
                     | NodeContent::List(_)
                     | NodeContent::SoundAnalysis(_)
                     | NodeContent::Merge => {}

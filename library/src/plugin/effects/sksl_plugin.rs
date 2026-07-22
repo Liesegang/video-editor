@@ -438,6 +438,21 @@ impl EffectPlugin for SkslEffectPlugin {
                                 a: 255,
                             })
                         }
+                        PropertyUiType::ColorValue => PropertyValue::ColorValue(
+                            crate::model::property::ColorValue::from_straight_srgba8(
+                                &crate::model::frame::color::Color {
+                                    r: 0,
+                                    g: 0,
+                                    b: 0,
+                                    a: 255,
+                                },
+                            ),
+                        ),
+                        PropertyUiType::Path => {
+                            PropertyValue::Path(crate::model::path::PathValue::empty(
+                                crate::model::path::FillRule::NonZero,
+                            ))
+                        }
                         PropertyUiType::Vec2 { .. } => {
                             PropertyValue::Vec2(crate::model::property::Vec2 {
                                 x: OrderedFloat(0.0),

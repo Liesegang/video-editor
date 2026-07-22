@@ -4,6 +4,7 @@
 //! graph evaluator attached to the same authoritative Project and centralizes
 //! only contracts that all typed domains must enforce.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::error::LibraryError;
@@ -12,6 +13,7 @@ use crate::model::project::{
     Composition, EvalOutput, EvalResult, PortAddress, PortDirection, PortMultiplicity, PortOwner,
     Project, ProjectConnection,
 };
+use crate::model::property::PropertyValue;
 use crate::plugin::{
     FrameEvaluationContext, PluginManager, PropertyEvaluatorRegistry, ResolvedNodeInputs,
 };
@@ -41,6 +43,18 @@ impl<'a> FrameEvaluator<'a> {
             property_evaluators,
             plugin_manager,
         }
+    }
+
+    /// Resolves one non-media graph output through the same typed traversal
+    /// used while assembling a frame. This is the public inspection boundary
+    /// for tooling that must prove authored Project values survive runtime
+    /// evaluation without reaching into an individual graph domain.
+    pub fn evaluate_metadata_output(
+        &self,
+        source: &PortAddress,
+        global_time: f64,
+    ) -> EvalResult<PropertyValue> {
+        self.resolve_metadata_value(source, global_time, &mut HashSet::new())
     }
 
     pub(super) fn single_connection_to<'b>(

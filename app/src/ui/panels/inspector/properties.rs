@@ -7,6 +7,7 @@ use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::property_authoring::{render_property_authoring, PropertyAction};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
+mod structured;
 mod vector;
 
 pub struct PropertyRenderContext<'a> {
@@ -293,6 +294,94 @@ where
                     }
                 });
 
+                if context.in_grid {
+                    ui.end_row();
+                }
+            }
+            PropertyUiType::ColorValue => {
+                let value = authored_value
+                    .clone()
+                    .and_then(|value| value.get_as::<library::model::property::ColorValue>())
+                    .or_else(|| {
+                        prop_def
+                            .default_value()
+                            .get_as::<library::model::property::ColorValue>()
+                    });
+                if let Some(value) = value {
+                    let qa_component_prefix = format!(
+                        "inspector.property_component.{}:{}",
+                        context.qa_scope,
+                        prop_def.name()
+                    );
+                    let edit = structured::color_value(
+                        ui,
+                        egui::Id::new((
+                            "canonical_color",
+                            context.qa_scope.as_str(),
+                            prop_def.name(),
+                        )),
+                        &value,
+                        &qa_component_prefix,
+                    );
+                    register_property_control(
+                        context,
+                        prop_def,
+                        "canonical_color",
+                        &edit.response,
+                        serde_json::Value::from(&PropertyValue::ColorValue(value)),
+                    );
+                    if let Some(value) = edit.value {
+                        actions.push(PropertyAction::Update(prop_def.name().to_string(), value));
+                    }
+                    if edit.finished {
+                        actions.push(PropertyAction::Commit);
+                    }
+                } else {
+                    ui.colored_label(ui.visuals().error_fg_color, "Invalid canonical color");
+                }
+                if context.in_grid {
+                    ui.end_row();
+                }
+            }
+            PropertyUiType::Path => {
+                let value = authored_value
+                    .clone()
+                    .and_then(|value| value.get_as::<library::model::path::PathValue>())
+                    .or_else(|| {
+                        prop_def
+                            .default_value()
+                            .get_as::<library::model::path::PathValue>()
+                    });
+                if let Some(value) = value {
+                    let qa_component_prefix = format!(
+                        "inspector.property_component.{}:{}",
+                        context.qa_scope,
+                        prop_def.name()
+                    );
+                    let edit = structured::path_value(
+                        ui,
+                        egui::Id::new((
+                            "canonical_path",
+                            context.qa_scope.as_str(),
+                            prop_def.name(),
+                        )),
+                        &value,
+                        &qa_component_prefix,
+                    );
+                    register_property_control(
+                        context,
+                        prop_def,
+                        "canonical_path_json",
+                        &edit.response,
+                        serde_json::Value::from(&PropertyValue::Path(value)),
+                    );
+                    if let Some(value) = edit.value {
+                        actions.push(PropertyAction::Update(prop_def.name().to_string(), value));
+                        actions.push(PropertyAction::Commit);
+                    }
+                } else {
+                    ui.colored_label(ui.visuals().error_fg_color, "Invalid canonical path");
+                }
                 if context.in_grid {
                     ui.end_row();
                 }
@@ -615,6 +704,8 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
             "max_hard_limit": max_hard_limit,
         }),
         PropertyUiType::Color => serde_json::json!({"kind": "color"}),
+        PropertyUiType::ColorValue => serde_json::json!({"kind": "canonical_color"}),
+        PropertyUiType::Path => serde_json::json!({"kind": "canonical_path"}),
         PropertyUiType::Text => serde_json::json!({"kind": "text"}),
         PropertyUiType::MultilineText => serde_json::json!({"kind": "multiline_text"}),
         PropertyUiType::Bool => serde_json::json!({"kind": "boolean"}),

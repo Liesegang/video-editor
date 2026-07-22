@@ -9,6 +9,7 @@ use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use crate::util::timing::ScopedTimer;
 
 mod container_graph;
+mod data_graph;
 mod evaluator;
 mod image_graph;
 mod list_graph;
@@ -70,6 +71,8 @@ pub fn get_frame_from_project(
     Ok(frame)
 }
 
+#[cfg(test)]
+mod data_graph_tests;
 #[cfg(test)]
 mod list_graph_tests;
 #[cfg(test)]

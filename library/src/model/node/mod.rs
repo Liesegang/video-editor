@@ -1,9 +1,9 @@
 use crate::model::blend::BlendMode;
 use crate::model::numeric::NumericBinaryOperation;
 use crate::model::project::connection::{
-    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
-    NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortDirection, PortExposure,
-    PortMultiplicity, PortSide,
+    DATA_VALUE_PROPERTY, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortDataType, PortDefinition, PortDirection,
+    PortExposure, PortMultiplicity, PortSide,
 };
 use crate::model::project::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 mod catalog;
 mod containers;
+mod data;
 mod list;
 mod sound_analysis;
 pub use catalog::{
@@ -25,6 +26,7 @@ pub use containers::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
+pub use data::DataContent;
 pub use list::ListContent;
 pub use sound_analysis::SoundAnalysisContent;
 
@@ -505,6 +507,20 @@ impl Node {
                 self.name
             ));
         }
+        if matches!(self.content(), NodeContent::Data(_)) {
+            let value = property.value().ok_or_else(|| {
+                format!(
+                    "Data Node '{}' property '{key}' has no authored value",
+                    self.name
+                )
+            })?;
+            if !self.accepts_authored_property_value(&key, value) {
+                return Err(format!(
+                    "Data Node '{}' rejects an incompatible '{key}' value",
+                    self.name,
+                ));
+            }
+        }
         self.properties.set(key, property);
         Ok(())
     }
@@ -544,6 +560,15 @@ impl Node {
         )
     }
 
+    /// Creates a canonical authored data leaf with its complete typed default.
+    pub fn new_data(name: &str, content: DataContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::Data(content),
+            PropertyMap::from_definitions(content.property_definitions()),
+        )
+    }
+
     /// Creates one of the native descriptor-backed numeric operations.
     pub fn new_value(name: &str, content: ValueContent) -> Self {
         Self::with_properties(
@@ -571,6 +596,9 @@ impl Node {
         if self.properties.get(property_key).is_none() {
             return false;
         }
+        if !self.accepts_authored_property_value(property_key, &value) {
+            return false;
+        }
         self.properties
             .update_property_or_keyframe(property_key, time, value, easing);
         true
@@ -584,6 +612,9 @@ impl Node {
         easing: Option<crate::animation::EasingFunction>,
     ) -> Option<crate::model::property::KeyframeId> {
         self.properties.get(property_key)?;
+        if !self.accepts_authored_property_value(property_key, &value) {
+            return None;
+        }
         self.properties
             .upsert_keyframe_with_id(property_key, time, value, easing)
     }
@@ -594,9 +625,21 @@ impl Node {
         keyframe_id: crate::model::property::KeyframeId,
         update: crate::model::property::KeyframeUpdate,
     ) -> bool {
+        if let Some(value) = update.value.as_ref()
+            && !self.accepts_authored_property_value(property_key, value)
+        {
+            return false;
+        }
         self.properties
             .get_mut(property_key)
             .is_some_and(|property| property.update_keyframe_by_id(keyframe_id, update))
+    }
+
+    fn accepts_authored_property_value(&self, key: &str, value: &PropertyValue) -> bool {
+        match self.content() {
+            NodeContent::Data(data) => key == DATA_VALUE_PROPERTY && data.accepts_value(value),
+            _ => true,
+        }
     }
 
     pub(crate) fn remove_keyframe_by_id(
@@ -641,6 +684,9 @@ pub enum NodeContent {
     /// serializable `PropertyValue::Array` payloads; connection order remains
     /// authoritative on `ProjectConnection::order`.
     List(ListContent),
+    /// First-party authored Color and Path leaves. Their values live only in
+    /// the canonical Project property map and retain their tagged precision.
+    Data(DataContent),
     /// A first-party typed operation whose authoring and port contract are
     /// available, while its runtime may still be explicitly design-needed.
     NativeOperation(NativeOperationContent),

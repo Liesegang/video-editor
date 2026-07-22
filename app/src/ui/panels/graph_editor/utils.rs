@@ -39,6 +39,8 @@ fn components_for_ui_type(ui_type: &PropertyUiType) -> &'static [PropertyCompone
         PropertyUiType::Vec4 { .. } => &VEC4_COMPONENTS,
         PropertyUiType::Integer { .. }
         | PropertyUiType::Color
+        | PropertyUiType::ColorValue
+        | PropertyUiType::Path
         | PropertyUiType::Text
         | PropertyUiType::MultilineText
         | PropertyUiType::Bool

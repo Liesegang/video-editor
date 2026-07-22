@@ -57,11 +57,34 @@ Vector3:
       type: Vector3
 Color:
   category: Data
-  catalog_status: design-needed
-  description: RGBA Color
+  catalog_status: native
+  catalog_id: native.data.color
+  runtime_status: implemented
+  model: Data.Color
+  description: Tagged floating-point straight-alpha RGBA color; HDR and negative RGB remain lossless
   outputs:
     - name: value
+      key: value
+      label: Value
       type: Color
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Path:
+  category: Data
+  catalog_status: native
+  catalog_id: native.data.path
+  runtime_status: implemented
+  model: Data.Path
+  description: Canonical multi-contour path with explicit closure, fill rule, and lossless conics
+  outputs:
+    - name: value
+      key: value
+      label: Value
+      type: Path
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 String:
   category: Data
   catalog_status: design-needed

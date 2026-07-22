@@ -24,6 +24,9 @@ pub const FMOD_DIVISOR_INPUT_PORT: &str = "divisor";
 pub const NUMERIC_A_INPUT_PORT: &str = "a";
 pub const NUMERIC_B_INPUT_PORT: &str = "b";
 pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
+/// Canonical property/output key shared by authored data leaf Nodes.
+pub const DATA_VALUE_PROPERTY: &str = "value";
+pub const DATA_VALUE_OUTPUT_PORT: &str = "value";
 /// Ordered heterogeneous value input used by the native Make List Node.
 pub const LIST_ITEMS_INPUT_PORT: &str = "item";
 pub const LIST_INPUT_PORT: &str = "list";

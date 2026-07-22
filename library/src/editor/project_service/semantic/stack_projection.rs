@@ -573,6 +573,13 @@ fn node_metadata(
             diagnostic: None,
             unavailable_reason: None,
         },
+        NodeContent::Data(data) => NodeMetadata {
+            label: data.label().to_string(),
+            group: SemanticPropertyGroup::Other,
+            definitions: data.property_definitions().to_vec(),
+            diagnostic: None,
+            unavailable_reason: None,
+        },
         NodeContent::List(operation) => NodeMetadata {
             label: operation.label().to_string(),
             group: SemanticPropertyGroup::Other,
@@ -832,8 +839,10 @@ fn inferred_definition(key: &str, property: &Property) -> Option<PropertyDefinit
         PropertyValue::Vec2(_) => PropertyUiType::vec2(""),
         PropertyValue::Vec3(_) => PropertyUiType::vec3(""),
         PropertyValue::Vec4(_) => PropertyUiType::vec4(""),
-        PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PropertyUiType::Color,
-        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
+        PropertyValue::ColorValue(_) => PropertyUiType::ColorValue,
+        PropertyValue::Color(_) => PropertyUiType::Color,
+        PropertyValue::Path(_) => PropertyUiType::Path,
+        PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
     };
     Some(PropertyDefinition::new(
         key,

@@ -39,8 +39,10 @@ pub(super) fn inferred_property_definitions(
                 PropertyValue::Vec2(_) => PropertyUiType::vec2(""),
                 PropertyValue::Vec3(_) => PropertyUiType::vec3(""),
                 PropertyValue::Vec4(_) => PropertyUiType::vec4(""),
-                PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PropertyUiType::Color,
-                PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                PropertyValue::ColorValue(_) => PropertyUiType::ColorValue,
+                PropertyValue::Color(_) => PropertyUiType::Color,
+                PropertyValue::Path(_) => PropertyUiType::Path,
+                PropertyValue::Array(_) | PropertyValue::Map(_) => {
                     return None;
                 }
             };

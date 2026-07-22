@@ -527,6 +527,8 @@ pub fn property_ui_type_to_port_data_type(ui_type: &PropertyUiType) -> PortDataT
         PropertyUiType::Float { .. } => PortDataType::Number,
         PropertyUiType::Integer { .. } => PortDataType::Integer,
         PropertyUiType::Color => PortDataType::Color,
+        PropertyUiType::ColorValue => PortDataType::Color,
+        PropertyUiType::Path => PortDataType::Path,
         PropertyUiType::Text
         | PropertyUiType::MultilineText
         | PropertyUiType::Dropdown { .. }

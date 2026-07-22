@@ -2,7 +2,9 @@ use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
 use egui_snarl::ui::{PinInfo, WireStyle};
 use library::model::project::{PortDataType, PortDirection, PortOwner, PortSide};
-use library::model::{AssetKind, GeneratorContent, Node, NodeContent, Project, ValueContent};
+use library::model::{
+    AssetKind, DataContent, GeneratorContent, Node, NodeContent, Project, ValueContent,
+};
 use node_editor_ui::{Editor, GroupChrome, NodePalette};
 use uuid::Uuid;
 
@@ -94,6 +96,11 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(39, 83, 95),
             accent: Color32::from_rgb(91, 197, 218),
         },
+        Some(NodeContent::Data(_)) => NodePalette {
+            body: Color32::from_rgb(41, 31, 48),
+            header: Color32::from_rgb(84, 48, 105),
+            accent: Color32::from_rgb(202, 123, 232),
+        },
         Some(NodeContent::List(_)) => NodePalette {
             body: Color32::from_rgb(27, 43, 38),
             header: Color32::from_rgb(38, 88, 70),
@@ -166,6 +173,12 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
             ValueContent::Multiply => NodeEditorIcon::new(icons::X, "Multiply value operation"),
             ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
         },
+        Some(NodeContent::Data(DataContent::Color)) => {
+            NodeEditorIcon::new(icons::PALETTE, "Canonical color value")
+        }
+        Some(NodeContent::Data(DataContent::Path)) => {
+            NodeEditorIcon::new(icons::WAVE_SINE, "Canonical path value")
+        }
         Some(NodeContent::List(_)) => {
             NodeEditorIcon::new(icons::LIST_NUMBERS, "Ordered List operation")
         }

@@ -10,9 +10,11 @@ use crate::model::frame::color::Color;
 
 mod color_value;
 mod evaluation;
+mod ui_type;
 
 pub use color_value::{ColorSpaceRef, ColorValue, ColorValueError};
 pub use evaluation::PropertySampleError;
+pub use ui_type::PropertyUiType;
 pub use value::{PropertyValue, TryGetProperty, Vec2, Vec3, Vec4};
 
 mod value;
@@ -506,153 +508,6 @@ impl PropertyMap {
     }
 }
 
-// === UI Property Definitions ===
-
-/// Defines how a property should be displayed and edited in the UI
-#[derive(Debug, Clone, PartialEq)]
-pub enum PropertyUiType {
-    Float {
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: String,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    },
-    Integer {
-        min: i64,
-        max: i64,
-        suffix: String,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    },
-    Color,
-    Text,
-    MultilineText,
-    Bool,
-    Vec2 {
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: String,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    },
-    Vec3 {
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: String,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    },
-    Vec4 {
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: String,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    },
-    Dropdown {
-        options: Vec<String>,
-    },
-    Font,
-}
-
-impl PropertyUiType {
-    const DEFAULT_VECTOR_MIN: f64 = -1_000_000.0;
-    const DEFAULT_VECTOR_MAX: f64 = 1_000_000.0;
-    const DEFAULT_VECTOR_STEP: f64 = 0.1;
-
-    pub fn vec2(suffix: impl Into<String>) -> Self {
-        Self::vec2_with_range(
-            Self::DEFAULT_VECTOR_MIN,
-            Self::DEFAULT_VECTOR_MAX,
-            Self::DEFAULT_VECTOR_STEP,
-            suffix,
-            false,
-            false,
-        )
-    }
-
-    pub fn vec2_with_range(
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: impl Into<String>,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    ) -> Self {
-        Self::Vec2 {
-            min,
-            max,
-            step,
-            suffix: suffix.into(),
-            min_hard_limit,
-            max_hard_limit,
-        }
-    }
-
-    pub fn vec3(suffix: impl Into<String>) -> Self {
-        Self::vec3_with_range(
-            Self::DEFAULT_VECTOR_MIN,
-            Self::DEFAULT_VECTOR_MAX,
-            Self::DEFAULT_VECTOR_STEP,
-            suffix,
-            false,
-            false,
-        )
-    }
-
-    pub fn vec3_with_range(
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: impl Into<String>,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    ) -> Self {
-        Self::Vec3 {
-            min,
-            max,
-            step,
-            suffix: suffix.into(),
-            min_hard_limit,
-            max_hard_limit,
-        }
-    }
-
-    pub fn vec4(suffix: impl Into<String>) -> Self {
-        Self::vec4_with_range(
-            Self::DEFAULT_VECTOR_MIN,
-            Self::DEFAULT_VECTOR_MAX,
-            Self::DEFAULT_VECTOR_STEP,
-            suffix,
-            false,
-            false,
-        )
-    }
-
-    pub fn vec4_with_range(
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: impl Into<String>,
-        min_hard_limit: bool,
-        max_hard_limit: bool,
-    ) -> Self {
-        Self::Vec4 {
-            min,
-            max,
-            step,
-            suffix: suffix.into(),
-            min_hard_limit,
-            max_hard_limit,
-        }
-    }
-}
-
 /// Defines a property with its metadata for UI rendering
 #[derive(Debug, Clone)]
 pub struct PropertyDefinition {
@@ -790,6 +645,7 @@ impl PropertyDefinition {
                     ));
                 }
             }
+            PropertyUiType::ColorValue | PropertyUiType::Path => {}
             _ => {}
         }
         self.validate_value(&self.default_value)

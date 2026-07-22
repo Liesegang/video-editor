@@ -648,6 +648,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     });
                 }
                 NodeContent::Value(value) => self.show_value_body(ui, *value),
+                NodeContent::Data(_) => self.show_data_body(ui, project_node_id),
                 NodeContent::List(operation) => self.show_list_body(ui, *operation),
                 NodeContent::NativeOperation(_) => self.show_native_body(ui, project_node_id),
                 NodeContent::Media(_)

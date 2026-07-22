@@ -167,6 +167,11 @@ impl FrameEvaluator<'_> {
             return self.evaluate_list_node_output(node_id, &source.port, global_time, path);
         }
         if let PortOwner::Node(node_id) = source.owner
+            && matches!(source_node.map(Node::content), Some(NodeContent::Data(_)))
+        {
+            return self.evaluate_data_node_output(node_id, &source.port, global_time, path);
+        }
+        if let PortOwner::Node(node_id) = source.owner
             && matches!(
                 source_node.map(Node::content),
                 Some(NodeContent::SoundAnalysis(_))

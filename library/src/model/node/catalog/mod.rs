@@ -52,6 +52,9 @@ pub fn native_node_descriptor_for_node(
         NodeContent::Value(value) => native_node_catalog().iter().find(|descriptor| {
             matches!(descriptor.factory(), NativeNodeFactory::Value(candidate) if candidate == *value)
         }),
+        NodeContent::Data(data) => native_node_catalog().iter().find(|descriptor| {
+            matches!(descriptor.factory(), NativeNodeFactory::Data(candidate) if candidate == *data)
+        }),
         NodeContent::List(operation) => native_node_catalog().iter().find(|descriptor| {
             matches!(descriptor.factory(), NativeNodeFactory::List(candidate) if candidate == *operation)
         }),

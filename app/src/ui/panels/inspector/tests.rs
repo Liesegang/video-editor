@@ -11,7 +11,9 @@ use library::model::project::{
 use library::model::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
-use library::model::{Clip, Composition, ListContent, Node, NodeContent, SoundAnalysisContent};
+use library::model::{
+    Clip, Composition, DataContent, ListContent, Node, NodeContent, SoundAnalysisContent,
+};
 use library::plugin::{
     PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
     SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
@@ -523,6 +525,33 @@ fn get_list_item_uses_canonical_integer_index_metadata() {
         } if suffix.is_empty()
     ));
     assert_eq!(node.properties().iter().count(), 1);
+}
+
+#[test]
+fn data_nodes_use_lossless_canonical_inspector_metadata() {
+    let color = Node::new_data("Color", DataContent::Color);
+    let color_definitions = canonical_native_property_definitions(&color).unwrap();
+    assert_eq!(color_definitions.len(), 1);
+    assert!(matches!(
+        color_definitions[0].ui_type(),
+        PropertyUiType::ColorValue
+    ));
+    assert!(matches!(
+        color_definitions[0].default_value(),
+        PropertyValue::ColorValue(_)
+    ));
+
+    let path = Node::new_data("Path", DataContent::Path);
+    let path_definitions = canonical_native_property_definitions(&path).unwrap();
+    assert_eq!(path_definitions.len(), 1);
+    assert!(matches!(
+        path_definitions[0].ui_type(),
+        PropertyUiType::Path
+    ));
+    assert!(matches!(
+        path_definitions[0].default_value(),
+        PropertyValue::Path(_)
+    ));
 }
 
 #[test]

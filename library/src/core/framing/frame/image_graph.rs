@@ -670,6 +670,7 @@ impl FrameEvaluator<'_> {
             NodeContent::CompositionInstance(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),
+            NodeContent::Data(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::List(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::NativeOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Merge => "merge",

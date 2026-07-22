@@ -86,6 +86,7 @@ impl ProjectManager {
 
         let mut definitions = match node.content() {
             NodeContent::Value(value) => value.property_definitions().to_vec(),
+            NodeContent::Data(data) => data.property_definitions().to_vec(),
             NodeContent::List(operation) => operation.property_definitions().to_vec(),
             _ => converter.map_or_else(Vec::new, |converter| {
                 converter.get_property_definitions(

@@ -142,6 +142,7 @@ pub(super) fn canonical_native_property_definitions(
 ) -> Option<Vec<PropertyDefinition>> {
     match node.content() {
         NodeContent::Value(value) => Some(value.property_definitions().to_vec()),
+        NodeContent::Data(data) => Some(data.property_definitions().to_vec()),
         NodeContent::List(operation) => Some(operation.property_definitions().to_vec()),
         NodeContent::SoundAnalysis(analysis) => Some(analysis.property_definitions().to_vec()),
         _ => None,
@@ -206,7 +207,10 @@ fn render_property_map(
     let mut chunks = Vec::new();
     let mut grid_definitions = Vec::new();
     for definition in definitions {
-        if matches!(definition.ui_type(), PropertyUiType::MultilineText) {
+        if matches!(
+            definition.ui_type(),
+            PropertyUiType::MultilineText | PropertyUiType::Path
+        ) {
             if !grid_definitions.is_empty() {
                 chunks.push(Chunk {
                     in_grid: true,
@@ -300,6 +304,7 @@ pub(super) fn node_display_type(node: &Node) -> String {
             operation.category, operation.operation
         ),
         NodeContent::Value(value) => value.label().to_string(),
+        NodeContent::Data(data) => data.label().to_string(),
         NodeContent::List(operation) => operation.label().to_string(),
         NodeContent::NativeOperation(operation) => {
             library::model::native_node_descriptor(&operation.catalog_id).map_or_else(
