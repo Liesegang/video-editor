@@ -206,9 +206,8 @@ impl SceneLinearImage {
             f32::from(rgba[0]) / 255.0,
             f32::from(rgba[1]) / 255.0,
             f32::from(rgba[2]) / 255.0,
-            alpha,
         ]];
-        source_to_working.transform_straight_rgba_f32_in_place(&mut straight)?;
+        source_to_working.transform_rgb_f32_in_place(&mut straight)?;
         let straight = straight[0];
         let pixel = [
             straight[0] * alpha,
@@ -260,22 +259,19 @@ impl SceneLinearImage {
             });
         }
 
-        let mut pixels = allocate_pixels(width, height)?;
+        let mut straight = allocate_rgb_pixels(width, height)?;
         for encoded in rgba.chunks_exact(4) {
-            let alpha = f64::from(encoded[3]) / 255.0;
-            pixels.push([
+            straight.push([
                 f32::from(encoded[0]) / 255.0,
                 f32::from(encoded[1]) / 255.0,
                 f32::from(encoded[2]) / 255.0,
-                alpha as f32,
             ]);
         }
-        source_to_working.transform_straight_rgba_f32_in_place(&mut pixels)?;
-        for pixel in &mut pixels {
-            let alpha = pixel[3];
-            pixel[0] *= alpha;
-            pixel[1] *= alpha;
-            pixel[2] *= alpha;
+        source_to_working.transform_rgb_f32_in_place(&mut straight)?;
+        let mut pixels = allocate_pixels(width, height)?;
+        for (rgb, encoded) in straight.into_iter().zip(rgba.chunks_exact(4)) {
+            let alpha = f32::from(encoded[3]) / 255.0;
+            pixels.push([rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]);
         }
         Self::from_premultiplied_rgba_f32(width, height, pixels)
     }
@@ -331,7 +327,7 @@ impl SceneLinearImage {
                     width: self.width,
                     height: self.height,
                 })?;
-        let mut straight = allocate_pixels(self.width, self.height)?;
+        let mut straight = allocate_rgb_pixels(self.width, self.height)?;
         for pixel in &self.pixels {
             let alpha = f64::from(pixel[3]);
             let straight_rgb = if alpha == 0.0 {
@@ -343,14 +339,9 @@ impl SceneLinearImage {
                     f64::from(pixel[2]) / alpha,
                 ]
             };
-            straight.push([
-                straight_rgb[0] as f32,
-                straight_rgb[1] as f32,
-                straight_rgb[2] as f32,
-                alpha as f32,
-            ]);
+            straight.push(straight_rgb.map(|component| component as f32));
         }
-        working_to_output.transform_straight_rgba_f32_in_place(&mut straight)?;
+        working_to_output.transform_rgb_f32_in_place(&mut straight)?;
         let mut rgba = Vec::new();
         rgba.try_reserve_exact(component_count).map_err(|_| {
             SceneLinearImageError::AllocationFailed {
@@ -391,6 +382,16 @@ fn checked_pixel_count(width: u32, height: u32) -> Result<usize, SceneLinearImag
 fn allocate_pixels(width: u32, height: u32) -> Result<Vec<[f32; 4]>, SceneLinearImageError> {
     let pixel_count = checked_pixel_count(width, height)?;
     let bytes = pixel_count * std::mem::size_of::<[f32; 4]>();
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(pixel_count)
+        .map_err(|_| SceneLinearImageError::AllocationFailed { bytes })?;
+    Ok(pixels)
+}
+
+fn allocate_rgb_pixels(width: u32, height: u32) -> Result<Vec<[f32; 3]>, SceneLinearImageError> {
+    let pixel_count = checked_pixel_count(width, height)?;
+    let bytes = pixel_count * std::mem::size_of::<[f32; 3]>();
     let mut pixels = Vec::new();
     pixels
         .try_reserve_exact(pixel_count)
@@ -552,30 +553,23 @@ mod tests {
         ));
     }
 
-    struct BadAlphaProcessor;
+    struct IdentityProcessor;
 
-    impl CpuColorProcessor for BadAlphaProcessor {
-        fn transform_straight_rgba(
-            &self,
-            mut rgba: [f64; 4],
-        ) -> Result<[f64; 4], ColorManagementError> {
-            rgba[3] = 0.0;
-            Ok(rgba)
+    impl CpuColorProcessor for IdentityProcessor {
+        fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
+            Ok(rgb)
         }
     }
 
     #[test]
-    fn processor_cannot_change_alpha() {
-        assert!(matches!(
-            SceneLinearImage::solid_from_straight_rgba8(
-                1,
-                1,
-                [10, 20, 30, 255],
-                &BadAlphaProcessor,
-            ),
-            Err(SceneLinearImageError::Transform(
-                ColorManagementError::ProcessorChangedAlpha { .. }
-            ))
-        ));
+    fn processor_api_never_receives_alpha() {
+        let image = SceneLinearImage::solid_from_straight_rgba8(
+            1,
+            1,
+            [10, 20, 30, 128],
+            &IdentityProcessor,
+        )
+        .unwrap();
+        assert_eq!(image.pixels()[0][3], 128.0 / 255.0);
     }
 }

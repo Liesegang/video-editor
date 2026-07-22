@@ -115,7 +115,6 @@ pub enum ColorManagementError {
     EmptyColorSpace,
     NonFiniteComponent { component: &'static str },
     AlphaOutOfRange,
-    ProcessorChangedAlpha { before_bits: u32, after_bits: u32 },
     UnsupportedTransform { source: String, target: String },
     UnsupportedDisplayView { backend_id: String, view: String },
     GpuTransformUnavailable { backend_id: String },
@@ -134,15 +133,6 @@ impl fmt::Display for ColorManagementError {
             Self::AlphaOutOfRange => {
                 formatter.write_str("straight alpha must be between 0 and 1 inclusive")
             }
-            Self::ProcessorChangedAlpha {
-                before_bits,
-                after_bits,
-            } => write!(
-                formatter,
-                "color processor changed alpha from {} to {}; color transforms must affect RGB only",
-                f32::from_bits(*before_bits),
-                f32::from_bits(*after_bits)
-            ),
             Self::UnsupportedTransform { source, target } => {
                 write!(
                     formatter,
@@ -168,39 +158,31 @@ impl fmt::Display for ColorManagementError {
 impl std::error::Error for ColorManagementError {}
 
 pub trait CpuColorProcessor: Send + Sync {
-    /// Transform one straight-alpha authoring color without clipping RGB.
+    /// Transform one RGB authoring color without clipping.
     ///
     /// f64 is the canonical Project/API interchange representation. A backend
     /// may quantize RGB at the sample boundary reported by
     /// [`BackendCapabilities::cpu_processor_sample_precision`]; that capability
     /// does not claim the backend's internal arithmetic precision.
-    fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError>;
+    fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError>;
 
     /// Transform a packed straight-alpha f32 image in place.
     ///
     /// Backends with a packed image API (including OpenColorIO) should
     /// override this method. The default keeps small/custom processors source
     /// compatible while avoiding a second image-transform abstraction.
-    fn transform_straight_rgba_f32_in_place(
+    fn transform_rgb_f32_in_place(
         &self,
-        pixels: &mut [[f32; 4]],
+        pixels: &mut [[f32; 3]],
     ) -> Result<(), ColorManagementError> {
         for pixel in pixels {
-            let alpha = pixel[3];
-            let transformed = self.transform_straight_rgba([
+            let transformed = self.transform_rgb([
                 f64::from(pixel[0]),
                 f64::from(pixel[1]),
                 f64::from(pixel[2]),
-                f64::from(alpha),
             ])?;
             let transformed = transformed.map(|component| component as f32);
-            validate_rgba_f32(transformed)?;
-            if transformed[3] != alpha {
-                return Err(ColorManagementError::ProcessorChangedAlpha {
-                    before_bits: alpha.to_bits(),
-                    after_bits: transformed[3].to_bits(),
-                });
-            }
+            validate_rgb_f32(transformed)?;
             *pixel = transformed;
         }
         Ok(())
@@ -240,9 +222,17 @@ impl BuiltinColorTransform {
         source_space: &str,
         target_space: &str,
     ) -> Result<[f64; 4], ColorManagementError> {
+        validate_rgb([rgba[0], rgba[1], rgba[2]])?;
+        if !rgba[3].is_finite() {
+            return Err(ColorManagementError::NonFiniteComponent { component: "a" });
+        }
+        if !(0.0..=1.0).contains(&rgba[3]) {
+            return Err(ColorManagementError::AlphaOutOfRange);
+        }
         let request = ColorTransformRequest::explicit(source_space, target_space);
         self.create_cpu_processor(&request)?
-            .transform_straight_rgba(rgba)
+            .transform_rgb([rgba[0], rgba[1], rgba[2]])
+            .map(|rgb| [rgb[0], rgb[1], rgb[2], rgba[3]])
     }
 
     fn validate_request(
@@ -375,23 +365,23 @@ struct BuiltinCpuProcessor {
 }
 
 impl CpuColorProcessor for BuiltinCpuProcessor {
-    fn transform_straight_rgba(&self, rgba: [f64; 4]) -> Result<[f64; 4], ColorManagementError> {
-        validate_rgba(rgba)?;
-        let [r, g, b, a] = rgba;
+    fn transform_rgb(&self, rgb: [f64; 3]) -> Result<[f64; 3], ColorManagementError> {
+        validate_rgb(rgb)?;
+        let [r, g, b] = rgb;
         let transform = match self.kind {
-            TransformKind::Identity => return Ok(rgba),
+            TransformKind::Identity => return Ok(rgb),
             TransformKind::SrgbToLinear => extended_srgb_to_linear,
             TransformKind::LinearToSrgb => extended_linear_to_srgb,
         };
-        Ok([transform(r), transform(g), transform(b), a])
+        Ok([transform(r), transform(g), transform(b)])
     }
 
-    fn transform_straight_rgba_f32_in_place(
+    fn transform_rgb_f32_in_place(
         &self,
-        pixels: &mut [[f32; 4]],
+        pixels: &mut [[f32; 3]],
     ) -> Result<(), ColorManagementError> {
         for pixel in pixels {
-            validate_rgba_f32(*pixel)?;
+            validate_rgb_f32(*pixel)?;
             let transform = match self.kind {
                 TransformKind::Identity => continue,
                 TransformKind::SrgbToLinear => extended_srgb_to_linear,
@@ -400,32 +390,26 @@ impl CpuColorProcessor for BuiltinCpuProcessor {
             pixel[0] = transform(f64::from(pixel[0])) as f32;
             pixel[1] = transform(f64::from(pixel[1])) as f32;
             pixel[2] = transform(f64::from(pixel[2])) as f32;
-            validate_rgba_f32(*pixel)?;
+            validate_rgb_f32(*pixel)?;
         }
         Ok(())
     }
 }
 
-fn validate_rgba(rgba: [f64; 4]) -> Result<(), ColorManagementError> {
-    for (component, value) in ["r", "g", "b", "a"].into_iter().zip(rgba) {
+fn validate_rgb(rgb: [f64; 3]) -> Result<(), ColorManagementError> {
+    for (component, value) in ["r", "g", "b"].into_iter().zip(rgb) {
         if !value.is_finite() {
             return Err(ColorManagementError::NonFiniteComponent { component });
         }
-    }
-    if !(0.0..=1.0).contains(&rgba[3]) {
-        return Err(ColorManagementError::AlphaOutOfRange);
     }
     Ok(())
 }
 
-fn validate_rgba_f32(rgba: [f32; 4]) -> Result<(), ColorManagementError> {
-    for (component, value) in ["r", "g", "b", "a"].into_iter().zip(rgba) {
+fn validate_rgb_f32(rgb: [f32; 3]) -> Result<(), ColorManagementError> {
+    for (component, value) in ["r", "g", "b"].into_iter().zip(rgb) {
         if !value.is_finite() {
             return Err(ColorManagementError::NonFiniteComponent { component });
         }
-    }
-    if !(0.0..=1.0).contains(&rgba[3]) {
-        return Err(ColorManagementError::AlphaOutOfRange);
     }
     Ok(())
 }
@@ -589,11 +573,11 @@ mod tests {
         let request = ColorTransformRequest::explicit(SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID);
         let processor = backend.create_cpu_processor(&request).unwrap();
         assert!(matches!(
-            processor.transform_straight_rgba([f64::NAN, 0.0, 0.0, 1.0]),
+            processor.transform_rgb([f64::NAN, 0.0, 0.0]),
             Err(ColorManagementError::NonFiniteComponent { component: "r" })
         ));
         assert!(matches!(
-            processor.transform_straight_rgba([0.0, 0.0, 0.0, 2.0]),
+            backend.transform_rgba([0.0, 0.0, 0.0, 2.0], SRGB_SPACE_ID, LINEAR_SRGB_SPACE_ID),
             Err(ColorManagementError::AlphaOutOfRange)
         ));
         assert!(matches!(
