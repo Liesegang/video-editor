@@ -1,6 +1,11 @@
 mod apply;
 mod auto;
 mod column_packing;
+#[allow(
+    dead_code,
+    reason = "pure planner is consumed by the separately landed gesture adapter"
+)]
+mod directional;
 mod merge_alignment;
 mod node_geometry;
 mod ranking;
@@ -15,6 +20,16 @@ pub(in crate::ui::panels::node_editor) use apply::{
 pub(in crate::ui::panels::node_editor) use auto::composition_graph_node_ids;
 pub(in crate::ui::panels::node_editor) use auto::{
     compute_auto_layout, compute_full_composition_layout, immediate_child_rects,
+};
+#[allow(
+    unused_imports,
+    reason = "pure planner is consumed by the separately landed gesture adapter"
+)]
+pub(in crate::ui::panels::node_editor) use directional::{
+    plan_directional_layout, BranchDirection, DirectionalLayoutBlockedNode,
+    DirectionalLayoutBlockedReason, DirectionalLayoutDiagnostics, DirectionalLayoutError,
+    DirectionalLayoutMode, DirectionalLayoutPlan, DirectionalLayoutRequest, LayoutAxis,
+    NodeLayoutGeometry,
 };
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use node_geometry::estimated_merge_node_width;
