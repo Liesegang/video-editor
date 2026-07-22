@@ -749,7 +749,9 @@ impl ProjectNodeViewer<'_> {
                         let response = property_value_summary::render_path(ui, path);
                         (false, false, false, "path_readonly", response, Vec::new())
                     }
-                    PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                    PropertyValue::Array(_)
+                    | PropertyValue::Map(_)
+                    | PropertyValue::OpaqueJson(_) => {
                         let response = non_selectable_label(
                             ui,
                             egui::RichText::new("complex")

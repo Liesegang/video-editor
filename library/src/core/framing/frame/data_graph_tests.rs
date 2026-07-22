@@ -168,6 +168,22 @@ fn malformed_canonical_data_survives_project_roundtrip_and_produces_no_output() 
                 "rgba": [0.0, 0.0, 0.0, 1.0],
             }),
         ),
+        (
+            DataContent::Color,
+            serde_json::json!({
+                "$type": "color_value",
+                "space": null,
+                "rgba": [0.0, 0.0, 0.0, 1.0],
+            }),
+        ),
+        (
+            DataContent::Color,
+            serde_json::json!({
+                "$type": "color_value",
+                "space": "srgb",
+                "rgba": [0.0, 0.0, 0.0, u64::MAX],
+            }),
+        ),
         (DataContent::Path, unknown_segment),
         (DataContent::Path, invalid_weight),
     ];

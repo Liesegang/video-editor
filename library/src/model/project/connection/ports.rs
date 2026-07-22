@@ -226,7 +226,9 @@ fn property_value_data_type(value: &crate::model::property::PropertyValue) -> Po
         PropertyValue::Vec3(_) => PortDataType::Vec3,
         PropertyValue::Vec4(_) => PortDataType::Vec4,
         PropertyValue::Path(_) => PortDataType::Path,
-        PropertyValue::Array(_) | PropertyValue::Map(_) => PortDataType::Any,
+        PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => {
+            PortDataType::Any
+        }
     }
 }
 

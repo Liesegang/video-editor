@@ -79,6 +79,13 @@ pub enum PropertyValue {
     Path(PathValue),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
+    /// JSON scalar that has no lossless graph-value representation.
+    ///
+    /// This is a preservation-only escape hatch for malformed tagged
+    /// canonical envelopes. Public typed authoring and runtime evaluation do
+    /// not accept it, but Project load/save must not rewrite `null` or an
+    /// unsigned integer outside the `i64` range while keeping repairable data.
+    OpaqueJson(serde_json::Value),
 }
 
 #[derive(Deserialize)]
@@ -166,6 +173,7 @@ impl Hash for PropertyValue {
                     v.hash(state);
                 }
             }
+            PropertyValue::OpaqueJson(value) => value.hash(state),
         }
     }
 }
@@ -182,7 +190,11 @@ impl PropertyValue {
     pub const fn supports_expression(&self) -> bool {
         !matches!(
             self,
-            Self::ColorValue(_) | Self::Path(_) | Self::Array(_) | Self::Map(_)
+            Self::ColorValue(_)
+                | Self::Path(_)
+                | Self::Array(_)
+                | Self::Map(_)
+                | Self::OpaqueJson(_)
         )
     }
 
@@ -204,7 +216,7 @@ impl PropertyValue {
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
             PropertyValue::Path(_) => matches!(ui_type, PropertyUiType::Path),
-            PropertyValue::Array(_) | PropertyValue::Map(_) => false,
+            PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => false,
         }
     }
 }
@@ -236,17 +248,20 @@ impl From<bool> for PropertyValue {
 impl From<serde_json::Value> for PropertyValue {
     fn from(value: serde_json::Value) -> Self {
         match value {
-            serde_json::Value::Null => PropertyValue::String("null".to_string()),
+            serde_json::Value::Null => PropertyValue::OpaqueJson(serde_json::Value::Null),
             serde_json::Value::Bool(b) => PropertyValue::Boolean(b),
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
                     PropertyValue::Integer(i)
                 } else if let Some(u) = n.as_u64() {
-                    PropertyValue::Integer(u as i64)
+                    i64::try_from(u).map_or_else(
+                        |_| PropertyValue::OpaqueJson(serde_json::Value::Number(n)),
+                        PropertyValue::Integer,
+                    )
                 } else if let Some(f) = n.as_f64() {
                     PropertyValue::Number(OrderedFloat(f))
                 } else {
-                    PropertyValue::Number(OrderedFloat(0.0))
+                    PropertyValue::OpaqueJson(serde_json::Value::Number(n))
                 }
             }
             serde_json::Value::String(s) => PropertyValue::String(s),
@@ -382,6 +397,7 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Map(map) => {
                 serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), v.into())).collect())
             }
+            PropertyValue::OpaqueJson(value) => value.clone(),
         }
     }
 }

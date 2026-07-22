@@ -96,7 +96,10 @@ pub(super) fn property_views(
                         "Runtime Effect property {name:?} contains a non-finite value"
                     )));
                 }
-                PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                PropertyValue::Path(_)
+                | PropertyValue::Array(_)
+                | PropertyValue::Map(_)
+                | PropertyValue::OpaqueJson(_) => {
                     return Err(LibraryError::Plugin(format!(
                         "Runtime Effect property {name:?} uses a value unsupported by ABI v1"
                     )));
@@ -177,8 +180,11 @@ pub(super) fn property_value_to_wire(
                 a: value.a,
             })
         }
-        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
-            Err("path, array, and map values are not supported by ABI v1")
+        PropertyValue::Path(_)
+        | PropertyValue::Array(_)
+        | PropertyValue::Map(_)
+        | PropertyValue::OpaqueJson(_) => {
+            Err("path, array, map, and opaque JSON values are not supported by ABI v1")
         }
     }
 }

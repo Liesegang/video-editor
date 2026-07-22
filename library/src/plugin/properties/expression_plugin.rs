@@ -189,12 +189,13 @@ fn expression_value_from_property(
         )),
         PropertyValue::Boolean(value) => Ok(ExpressionValue::Bool(*value)),
         PropertyValue::String(value) => Ok(ExpressionValue::String(value.clone())),
-        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
-            Err(evaluation_error(
-                ExpressionDiagnosticKind::TypeMismatch,
-                "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, legacy Color, Bool, or String",
-            ))
-        }
+        PropertyValue::Path(_)
+        | PropertyValue::Array(_)
+        | PropertyValue::Map(_)
+        | PropertyValue::OpaqueJson(_) => Err(evaluation_error(
+            ExpressionDiagnosticKind::TypeMismatch,
+            "Expression fallback must be Number, Integer, Vec2, Vec3, Vec4, legacy Color, Bool, or String",
+        )),
     }
 }
 

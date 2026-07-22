@@ -42,7 +42,7 @@ pub(super) fn inferred_property_definitions(
                 PropertyValue::ColorValue(_) => PropertyUiType::ColorValue,
                 PropertyValue::Color(_) => PropertyUiType::Color,
                 PropertyValue::Path(_) => PropertyUiType::Path,
-                PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => {
                     return None;
                 }
             };
