@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Source color metadata retained without guessing an untagged source.
+/// Stream/codec or still-image color metadata retained without guessing an
+/// untagged source.
 ///
 /// These values describe encoded source samples. They do not imply that the
 /// current RGBA8 loader has applied a color transform yet.
@@ -24,24 +25,6 @@ impl SourceColorDescription {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
-
-    /// Fill fields omitted by a frame from the containing stream metadata.
-    ///
-    /// This is only for combining two detected sources. User overrides stay
-    /// separate in [`AssetSourceColorMetadata`].
-    pub(crate) fn with_detected_fallback(&self, fallback: &Self) -> Self {
-        Self {
-            primaries: self
-                .primaries
-                .clone()
-                .or_else(|| fallback.primaries.clone()),
-            transfer: self.transfer.clone().or_else(|| fallback.transfer.clone()),
-            matrix: self.matrix.clone().or_else(|| fallback.matrix.clone()),
-            range: self.range.clone().or_else(|| fallback.range.clone()),
-            bit_depth: self.bit_depth.or(fallback.bit_depth),
-            profile: self.profile.clone().or_else(|| fallback.profile.clone()),
-        }
-    }
 }
 
 /// Persisted Asset metadata keeps automatic detection and authored intent
@@ -50,9 +33,9 @@ impl SourceColorDescription {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetSourceColorMetadata {
     #[serde(default, skip_serializing_if = "SourceColorDescription::is_empty")]
-    pub detected: SourceColorDescription,
+    detected: SourceColorDescription,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_override: Option<SourceColorDescription>,
+    user_override: Option<SourceColorDescription>,
 }
 
 impl AssetSourceColorMetadata {
@@ -62,6 +45,43 @@ impl AssetSourceColorMetadata {
 
     pub fn effective(&self) -> &SourceColorDescription {
         self.user_override.as_ref().unwrap_or(&self.detected)
+    }
+
+    pub fn detected(&self) -> &SourceColorDescription {
+        &self.detected
+    }
+
+    pub fn replace_detected(&mut self, detected: SourceColorDescription) {
+        self.detected = detected;
+    }
+
+    pub fn user_override(&self) -> Option<&SourceColorDescription> {
+        self.user_override.as_ref()
+    }
+
+    /// Atomically builds a complete override from the current detection.
+    ///
+    /// Use this when correcting individual detected fields: fields not edited
+    /// by `edit` retain their detected values instead of becoming unknown.
+    pub fn replace_override_from_detected(
+        &mut self,
+        edit: impl FnOnce(&mut SourceColorDescription),
+    ) {
+        let mut complete_override = self.detected.clone();
+        edit(&mut complete_override);
+        self.user_override = Some(complete_override);
+    }
+
+    /// Replaces the override as one complete authored description.
+    ///
+    /// `Some(SourceColorDescription::default())` intentionally declares the
+    /// entire source untagged. It does not inherit omitted detected fields.
+    pub fn replace_complete_override(&mut self, complete: SourceColorDescription) {
+        self.user_override = Some(complete);
+    }
+
+    pub fn clear_override(&mut self) {
+        self.user_override = None;
     }
 }
 
@@ -171,10 +191,9 @@ mod tests {
             transfer: Some(SourceTransferCharacteristic::Pq),
             ..SourceColorDescription::default()
         };
-        let metadata = AssetSourceColorMetadata {
-            detected: detected.clone(),
-            user_override: Some(authored.clone()),
-        };
+        let mut metadata = AssetSourceColorMetadata::default();
+        metadata.replace_detected(detected.clone());
+        metadata.replace_complete_override(authored.clone());
 
         assert_eq!(metadata.detected, detected);
         assert_eq!(metadata.effective(), &authored);
@@ -182,15 +201,34 @@ mod tests {
 
     #[test]
     fn an_explicit_untagged_override_is_not_auto_detection() {
-        let metadata = AssetSourceColorMetadata {
-            detected: SourceColorDescription {
-                primaries: Some(SourceColorPrimaries::Bt709),
-                ..SourceColorDescription::default()
-            },
-            user_override: Some(SourceColorDescription::default()),
-        };
+        let mut metadata = AssetSourceColorMetadata::default();
+        metadata.replace_detected(SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::Bt709),
+            ..SourceColorDescription::default()
+        });
+        metadata.replace_complete_override(SourceColorDescription::default());
 
         assert!(metadata.effective().is_empty());
-        assert!(!metadata.detected.is_empty());
+        assert!(!metadata.detected().is_empty());
+    }
+
+    #[test]
+    fn field_correction_starts_from_complete_detection() {
+        let detected = SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::Bt709),
+            transfer: Some(SourceTransferCharacteristic::Bt709),
+            bit_depth: Some(10),
+            ..SourceColorDescription::default()
+        };
+        let mut metadata = AssetSourceColorMetadata::default();
+        metadata.replace_detected(detected);
+        metadata.replace_override_from_detected(|source| {
+            source.primaries = Some(SourceColorPrimaries::Bt2020);
+        });
+
+        let authored = metadata.user_override().expect("override must exist");
+        assert_eq!(authored.primaries, Some(SourceColorPrimaries::Bt2020));
+        assert_eq!(authored.transfer, Some(SourceTransferCharacteristic::Bt709));
+        assert_eq!(authored.bit_depth, Some(10));
     }
 }

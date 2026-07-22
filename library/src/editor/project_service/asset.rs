@@ -77,7 +77,7 @@ impl ProjectManager {
                 asset.width = stream.width;
                 asset.height = stream.height;
                 asset.stream_index = stream.stream_index;
-                asset.source_color.detected = stream.source_color;
+                asset.source_color.replace_detected(stream.source_color);
                 if asset.kind == crate::model::asset::AssetKind::Video {
                     asset.frame_count = stream.frame_count;
                 }
@@ -137,7 +137,7 @@ impl ProjectManager {
             asset.fps = fps;
             asset.width = width;
             asset.height = height;
-            asset.source_color.detected = source_color;
+            asset.source_color.replace_detected(source_color);
             if asset.kind == crate::model::asset::AssetKind::Video {
                 asset.frame_count = frame_count;
             }

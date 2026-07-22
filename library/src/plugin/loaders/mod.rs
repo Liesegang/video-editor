@@ -69,8 +69,10 @@ pub struct AssetMetadata {
     pub stream_index: Option<usize>,
     pub frame_count: Option<u64>,
     pub time_base: Option<(i32, i32)>,
-    /// Color tags detected from this source stream. Empty fields remain
-    /// unknown and must not be replaced with guessed defaults by the loader.
+    /// Color tags detected from this source stream/codec, or from authoritative
+    /// still-image metadata. Empty fields remain unknown and must not be
+    /// replaced with guessed defaults by the loader. Per-frame tags are not
+    /// transported by Loader ABI v1 or [`LoadResponse`].
     pub source_color: SourceColorDescription,
 }
 

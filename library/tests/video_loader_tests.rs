@@ -103,16 +103,12 @@ fn ffmpeg_probes_rec709_rec2020_pq_hlg_and_untagged_sources() -> Result<()> {
 }
 
 #[test]
-fn decoded_frame_tags_are_retained_and_asset_import_persists_detection() -> Result<()> {
+fn stream_codec_detection_is_persisted_during_asset_import() -> Result<()> {
     let path = get_media_fixture_path("color_rec2020_hlg.mp4");
     let path = path
         .to_str()
         .context("color fixture path must contain valid UTF-8")?;
     let expected = video_source_metadata("color_rec2020_hlg.mp4")?;
-
-    let mut reader = VideoReader::new(path)?;
-    reader.decode_at_time(0.0)?;
-    assert_eq!(reader.current_source_color(), expected);
 
     let shared = Arc::new(RwLock::new(Project::new("source color import")));
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
@@ -125,8 +121,8 @@ fn decoded_frame_tags_are_retained_and_asset_import_persists_detection() -> Resu
         .iter()
         .find(|asset| imported.contains(&asset.id) && asset.kind == AssetKind::Video)
         .context("imported video Asset must exist")?;
-    assert_eq!(asset.source_color.detected, expected);
-    assert!(asset.source_color.user_override.is_none());
+    assert_eq!(asset.source_color.detected(), &expected);
+    assert!(asset.source_color.user_override().is_none());
     Ok(())
 }
 

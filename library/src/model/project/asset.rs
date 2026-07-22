@@ -40,7 +40,8 @@ pub struct Asset {
     /// same bytes. Resource opening must verify those conditions again.
     #[serde(default)]
     imported_content_sha256: Option<String>,
-    /// Detected encoded-source color tags and the user's independent override.
+    /// Detected stream/codec or still-image source color tags and the user's
+    /// independent, complete override.
     /// Pixel conversion is deliberately not performed by this metadata field.
     #[serde(default, skip_serializing_if = "AssetSourceColorMetadata::is_empty")]
     pub source_color: AssetSourceColorMetadata,
@@ -138,17 +139,21 @@ mod tests {
 
         let asset: Asset = serde_json::from_str(json).expect("legacy Asset must deserialize");
         assert_eq!(asset.kind, AssetKind::Image);
-        assert!(asset.source_color.detected.is_empty());
-        assert!(asset.source_color.user_override.is_none());
+        assert!(asset.source_color.detected().is_empty());
+        assert!(asset.source_color.user_override().is_none());
     }
 
     #[test]
     fn source_color_round_trips_without_merging_override_and_detection() {
         let mut asset = Asset::new("wide", "wide.mov", AssetKind::Video);
-        asset.source_color.detected.primaries = Some(SourceColorPrimaries::Bt709);
-        asset.source_color.user_override = Some(super::SourceColorDescription {
-            primaries: Some(SourceColorPrimaries::Bt2020),
-            ..super::SourceColorDescription::default()
+        asset
+            .source_color
+            .replace_detected(super::SourceColorDescription {
+                primaries: Some(SourceColorPrimaries::Bt709),
+                ..super::SourceColorDescription::default()
+            });
+        asset.source_color.replace_override_from_detected(|source| {
+            source.primaries = Some(SourceColorPrimaries::Bt2020);
         });
 
         let json = serde_json::to_string(&asset).unwrap();

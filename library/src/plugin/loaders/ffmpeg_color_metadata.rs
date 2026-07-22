@@ -1,8 +1,11 @@
-//! Translation from FFmpeg/H.273 color tags into the persisted source model.
+//! Translation from FFmpeg/H.273 stream/codec tags into the persisted source
+//! model.
 //!
 //! FFmpeg's safe enums intentionally collapse unrecognized extension codes.
-//! Reading the borrowed codec/frame fields preserves those codes so a newer
-//! or vendor-specific tag survives a Project round trip.
+//! Reading the borrowed codec fields preserves those codes so a newer or
+//! vendor-specific tag survives a Project round trip. Per-frame metadata is
+//! deliberately outside this foundation until the loader response and cache
+//! can transport it without dropping it.
 
 use crate::model::asset::{
     SourceColorDescription, SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
@@ -21,20 +24,6 @@ pub(super) fn from_decoder(decoder: &ffmpeg::decoder::Video) -> SourceColorDescr
         range: range(context.color_range as i32),
         bit_depth: positive_bit_depth(context.bits_per_raw_sample)
             .or_else(|| pixel_bit_depth(decoder.format())),
-        profile: None,
-    }
-}
-
-pub(super) fn from_frame(frame: &ffmpeg::util::frame::Video) -> SourceColorDescription {
-    // SAFETY: FFmpeg owns this AVFrame for the lifetime of `frame`; this
-    // function only copies scalar metadata while the borrow is active.
-    let frame_ref = unsafe { &*frame.as_ptr() };
-    SourceColorDescription {
-        primaries: primaries(frame_ref.color_primaries as i32),
-        transfer: transfer(frame_ref.color_trc as i32),
-        matrix: matrix(frame_ref.colorspace as i32),
-        range: range(frame_ref.color_range as i32),
-        bit_depth: pixel_bit_depth(frame.format()),
         profile: None,
     }
 }

@@ -9,7 +9,7 @@ use image::ImageDecoder;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 
 fn guessed_reader(path: &str) -> Result<image::ImageReader<BufReader<File>>, Box<dyn Error>> {
     let reader = image::ImageReader::open(path)?;
@@ -20,22 +20,22 @@ fn probe_image(
     path: &str,
 ) -> Result<(u32, u32, SourceColorDescription), Box<dyn std::error::Error>> {
     let reader = guessed_reader(path)?;
-    let bit_depth_is_source_precision = matches!(
-        reader.format(),
-        Some(
-            image::ImageFormat::Png
-                | image::ImageFormat::Jpeg
-                | image::ImageFormat::WebP
-                | image::ImageFormat::Tiff
-        )
-    );
+    let format = reader.format();
     let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
-    let color_type = decoder.color_type();
-    let channel_count = u16::from(color_type.channel_count());
-    let bit_depth = (bit_depth_is_source_precision && channel_count > 0)
-        .then(|| color_type.bits_per_pixel() / channel_count)
-        .and_then(|bits| u8::try_from(bits).ok());
+    let bit_depth = match format {
+        // The generic PNG decoder expands 1/2/4-bit samples to 8-bit output,
+        // so only the encoded IHDR is authoritative for source precision.
+        Some(image::ImageFormat::Png) => png_source_bit_depth(path)?,
+        // WebP's VP8 and VP8L sample formats are specified as 8-bit.
+        Some(image::ImageFormat::WebP) => Some(8),
+        // The TIFF backend preserves its encoded color type separately from
+        // the decoder output color type.
+        Some(image::ImageFormat::Tiff) => uniform_channel_bit_depth(decoder.original_color_type()),
+        // In particular, do not infer JPEG source precision from its decoded
+        // output type: the generic API does not expose encoded precision.
+        _ => None,
+    };
     let profile = decoder.icc_profile()?.map(|bytes| {
         let profile_id = icc_profile_id(&bytes);
         SourceColorProfile::Icc {
@@ -54,6 +54,52 @@ fn probe_image(
             ..SourceColorDescription::default()
         },
     ))
+}
+
+fn png_source_bit_depth(path: &str) -> Result<Option<u8>, std::io::Error> {
+    const PNG_HEADER_LENGTH: usize = 29;
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    let mut header = [0_u8; PNG_HEADER_LENGTH];
+    File::open(path)?.read_exact(&mut header)?;
+    if &header[..8] != PNG_SIGNATURE
+        || u32::from_be_bytes([header[8], header[9], header[10], header[11]]) != 13
+        || &header[12..16] != b"IHDR"
+    {
+        return Ok(None);
+    }
+
+    let depth = header[24];
+    let color_type = header[25];
+    let valid = match color_type {
+        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
+        2 | 4 | 6 => matches!(depth, 8 | 16),
+        3 => matches!(depth, 1 | 2 | 4 | 8),
+        _ => false,
+    };
+    Ok(valid.then_some(depth))
+}
+
+fn uniform_channel_bit_depth(color: image::ExtendedColorType) -> Option<u8> {
+    use image::ExtendedColorType as Color;
+    match color {
+        Color::L1 | Color::La1 | Color::Rgb1 | Color::Rgba1 => Some(1),
+        Color::L2 | Color::La2 | Color::Rgb2 | Color::Rgba2 => Some(2),
+        Color::L4 | Color::La4 | Color::Rgb4 | Color::Rgba4 => Some(4),
+        Color::A8
+        | Color::L8
+        | Color::La8
+        | Color::Rgb8
+        | Color::Rgba8
+        | Color::Bgr8
+        | Color::Bgra8
+        | Color::Cmyk8 => Some(8),
+        Color::L16 | Color::La16 | Color::Rgb16 | Color::Rgba16 | Color::Cmyk16 => Some(16),
+        Color::Rgb32F | Color::Rgba32F => Some(32),
+        Color::Unknown(bits) if bits > 0 => Some(bits),
+        // Packed RGB5x1 has padding rather than one uniform bits/channel
+        // value. Future non-exhaustive variants also remain unknown.
+        _ => None,
+    }
 }
 
 fn icc_profile_id(profile: &[u8]) -> Option<String> {
@@ -321,5 +367,50 @@ mod tests {
 
         std::fs::remove_file(path)?;
         Ok(())
+    }
+
+    #[test]
+    fn image_probe_reads_low_bit_png_precision_from_ihdr() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for (depth, bytes) in low_bit_png_fixtures() {
+            let path = std::env::temp_dir()
+                .join(format!("video-editor-{depth}-bit-{}.png", Uuid::new_v4()));
+            std::fs::write(&path, bytes)?;
+
+            let streams = NativeImageLoader::new().open(path.to_str().unwrap())?;
+            assert_eq!(
+                streams[0].source_color.bit_depth,
+                Some(depth),
+                "PNG decoder output expansion must not replace encoded precision"
+            );
+
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    fn low_bit_png_fixtures() -> [(u8, &'static [u8]); 3] {
+        const L1: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0xcb, 0x7b, 0xd2, 0xee, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x08, 0x05, 0x00, 0x00, 0x57, 0x00, 0x56, 0x3f, 0x43, 0x1f, 0x4c, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        const L2: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00,
+            0x00, 0x8c, 0xdb, 0xa8, 0x3e, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x90, 0x96, 0x06, 0x00, 0x00, 0x54, 0x00, 0x37, 0x30, 0x78, 0x6f, 0x7b,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        const L4: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00,
+            0x00, 0x03, 0x9b, 0x5d, 0x9e, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x10, 0x32, 0x09, 0xab, 0x00, 0x00, 0x02, 0x0d, 0x01, 0x15, 0xa9, 0x7e,
+            0xa5, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        [(1, L1), (2, L2), (4, L4)]
     }
 }

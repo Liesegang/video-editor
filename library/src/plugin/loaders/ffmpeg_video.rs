@@ -38,7 +38,6 @@ struct BufferedFrame {
     frame: ffmpeg::util::frame::Video,
     pts: i64,
     fallback_end_pts: i64,
-    source_color: crate::model::asset::SourceColorDescription,
 }
 
 #[derive(Debug)]
@@ -108,7 +107,6 @@ pub struct VideoReader {
     ocio_processor: Option<OcioProcessor>,
     current_color_space: Option<(String, String)>,
     last_decode_stats: DecodeStats,
-    stream_source_color: crate::model::asset::SourceColorDescription,
 }
 
 impl VideoReader {
@@ -146,8 +144,6 @@ impl VideoReader {
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
         let decoder = context_decoder.decoder().video()?;
-        let stream_source_color = ffmpeg_color_metadata::from_decoder(&decoder);
-
         let stream = input_context
             .stream(video_stream_index)
             .ok_or(LibraryError::FfmpegOther("Stream not found".to_string()))?;
@@ -192,7 +188,6 @@ impl VideoReader {
             ocio_processor: None,
             current_color_space: None,
             last_decode_stats: DecodeStats::default(),
-            stream_source_color,
         })
     }
 
@@ -247,20 +242,6 @@ impl VideoReader {
 
     pub fn last_decode_stats(&self) -> DecodeStats {
         self.last_decode_stats
-    }
-
-    /// Effective detected metadata for the selected decoded frame. Frame tags
-    /// override only the fields they actually carry; absent fields fall back
-    /// to the selected stream's codec metadata.
-    pub fn current_source_color(&self) -> crate::model::asset::SourceColorDescription {
-        self.current_frame.as_ref().map_or_else(
-            || self.stream_source_color.clone(),
-            |buffered| {
-                buffered
-                    .source_color
-                    .with_detected_fallback(&self.stream_source_color)
-            },
-        )
     }
 
     /// Convenience API for callers that have an authoritative CFR ordinal.
@@ -618,7 +599,6 @@ fn receive_until_target(
                     stats,
                 );
                 let decoded = BufferedFrame {
-                    source_color: ffmpeg_color_metadata::from_frame(&frame),
                     frame,
                     pts,
                     fallback_end_pts: pts.saturating_add(duration),
