@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
+use library::cache::CacheManager;
 use library::editor::project_service::{DEFAULT_SHAPE_PATH, ProjectManager};
 use library::framing::get_frame_from_project;
 use library::model::frame::color::Color;
@@ -16,6 +17,8 @@ use library::model::project::{
 use library::model::property::{ColorSpaceRef, ColorValue, Property, PropertyValue};
 use library::model::{Clip, DataContent, GeneratorContent, Node, NodeContent};
 use library::plugin::{PluginManager, property_port_key};
+use library::rendering::renderer::RenderOutput;
+use library::{RenderService, SkiaRenderer};
 
 const WIDTH: u64 = 160;
 const HEIGHT: u64 = 90;
@@ -66,6 +69,24 @@ fn objects(items: &[FrameItem]) -> Vec<&FrameObject> {
     let mut output = Vec::new();
     collect(items, &mut output);
     output
+}
+
+fn poison_legacy_shape_fallbacks(items: &mut [FrameItem]) {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                if let FrameContent::Shape {
+                    path,
+                    canonical_path: Some(_),
+                    ..
+                } = &mut object.content
+                {
+                    *path = "not valid SVG path data".to_string();
+                }
+            }
+            FrameItem::Group(group) => poison_legacy_shape_fallbacks(&mut group.items),
+        }
+    }
 }
 
 fn color_data(value: ColorValue) -> Result<Node> {
@@ -378,7 +399,7 @@ fn path_and_color_values_drive_shape_fill_and_stroke_consumers() -> Result<()> {
 
     let project = project_with_graph(graph)?;
     assert!(project.validate_connections().is_empty());
-    let rendered = frame(&project, &plugins)?;
+    let mut rendered = frame(&project, &plugins)?;
     let rendered_objects = objects(&rendered.items);
     assert_eq!(rendered_objects.len(), 2);
     let mut saw_fill = false;
@@ -422,5 +443,30 @@ fn path_and_color_values_drive_shape_fill_and_stroke_consumers() -> Result<()> {
         }
     }
     assert!(saw_fill && saw_stroke);
+
+    // The renderer must consume the canonical conic carried by the real
+    // Path -> Shape -> Style graph, rather than reparsing its SVG fallback.
+    // Poisoning only that fallback makes a boundary regression deterministic.
+    poison_legacy_shape_fallbacks(&mut rendered.items);
+    let renderer = SkiaRenderer::new(
+        rendered.width as u32,
+        rendered.height as u32,
+        rendered.background_color.clone(),
+        false,
+        None,
+        None,
+    )?;
+    let mut render_service = RenderService::new(
+        renderer,
+        Arc::clone(&plugins),
+        Arc::new(CacheManager::new()),
+    );
+    let RenderOutput::Image(image) = render_service.render_from_frame_info(&rendered)? else {
+        anyhow::bail!("CPU canonical path render unexpectedly returned a texture");
+    };
+    assert!(
+        image.data.chunks_exact(4).any(|pixel| pixel[3] != 0),
+        "canonical conic graph reached Style but painted no raster pixels"
+    );
     Ok(())
 }

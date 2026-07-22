@@ -25,6 +25,40 @@ pub(super) struct StructuredEdit {
     pub finished: bool,
 }
 
+pub(super) fn canonical_color_for_inspector(
+    authored: Option<&PropertyValue>,
+    default: &PropertyValue,
+) -> Option<ColorValue> {
+    let adapt = |value: &PropertyValue| match value {
+        PropertyValue::ColorValue(color) => Some(color.clone()),
+        // Explicit pre-v1 read adapter. The structured editor emits a
+        // ColorValue on the first edit; no Project-wide migration is needed.
+        PropertyValue::Color(color) => Some(ColorValue::from_straight_srgba8(color)),
+        _ => None,
+    };
+    match authored {
+        Some(value) => adapt(value),
+        None => adapt(default),
+    }
+}
+
+pub(super) fn canonical_path_for_inspector(
+    authored: Option<&PropertyValue>,
+    default: &PropertyValue,
+) -> Option<PathValue> {
+    let adapt = |value: &PropertyValue| match value {
+        PropertyValue::Path(path) => Some(path.clone()),
+        // Explicit pre-v1 read adapter. Applying an edit upgrades only this
+        // property to canonical PathValue; the Project is never migrated.
+        PropertyValue::String(svg) => library::model::path::parse_legacy_svg_path_data(svg).ok(),
+        _ => None,
+    };
+    match authored {
+        Some(value) => adapt(value),
+        None => adapt(default),
+    }
+}
+
 /// Edits the authoritative float components directly. A display color picker
 /// is intentionally absent: it would clip HDR/negative RGB and erase the
 /// color-space tag before the user explicitly requested a conversion.
@@ -274,6 +308,7 @@ fn record_structured_test_rect(component_id: String, rect: egui::Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::model::frame::color::Color;
     use library::model::path::{PathContour, PathPoint, PathSegment};
     use std::io;
 
@@ -292,6 +327,51 @@ mod tests {
             FillRule::EvenOdd,
             vec![PathContour::new(PathPoint::new(-2.5, 4.0), segments, true)],
         )
+    }
+
+    #[test]
+    fn legacy_color_is_displayed_exactly_in_a_canonical_color_control(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = Color {
+            r: 17,
+            g: 128,
+            b: 239,
+            a: 64,
+        };
+        let default = PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&Color::white()));
+        let adapted =
+            canonical_color_for_inspector(Some(&PropertyValue::Color(legacy.clone())), &default)
+                .ok_or("legacy color was not adapted")?;
+        assert_eq!(adapted.try_to_straight_srgba8(), Ok(legacy));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_svg_is_displayed_as_its_actual_canonical_path(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = "M 2 3 Q 20 40 38 3 Z";
+        let default = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
+        let adapted = canonical_path_for_inspector(
+            Some(&PropertyValue::String(legacy.to_string())),
+            &default,
+        )
+        .ok_or_else(|| io::Error::other("legacy SVG was not adapted"))?;
+        assert_eq!(
+            adapted,
+            library::model::path::parse_legacy_svg_path_data(legacy)?
+        );
+        assert!(!adapted.contours().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_canonical_values_are_not_displayed_as_defaults() {
+        let color_default =
+            PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&Color::white()));
+        let path_default = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
+        let malformed = PropertyValue::Map(std::collections::HashMap::new());
+        assert!(canonical_color_for_inspector(Some(&malformed), &color_default).is_none());
+        assert!(canonical_path_for_inspector(Some(&malformed), &path_default).is_none());
     }
 
     #[test]

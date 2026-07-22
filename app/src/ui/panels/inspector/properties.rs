@@ -10,22 +10,6 @@ use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragV
 mod structured;
 mod vector;
 
-fn canonical_color_for_inspector(
-    authored: Option<&PropertyValue>,
-    default: &PropertyValue,
-) -> Option<library::model::property::ColorValue> {
-    let adapt = |value: &PropertyValue| match value {
-        PropertyValue::ColorValue(color) => Some(color.clone()),
-        // Explicit pre-v1 read adapter. The structured editor emits a
-        // ColorValue on the first edit; no Project-wide migration is needed.
-        PropertyValue::Color(color) => Some(
-            library::model::property::ColorValue::from_straight_srgba8(color),
-        ),
-        _ => None,
-    };
-    authored.and_then(adapt).or_else(|| adapt(default))
-}
-
 pub struct PropertyRenderContext<'a> {
     pub available_fonts: &'a [String],
     pub in_grid: bool,
@@ -315,7 +299,7 @@ where
                 }
             }
             PropertyUiType::ColorValue => {
-                let value = canonical_color_for_inspector(
+                let value = structured::canonical_color_for_inspector(
                     authored_value.as_ref(),
                     prop_def.default_value(),
                 );
@@ -356,14 +340,10 @@ where
                 }
             }
             PropertyUiType::Path => {
-                let value = authored_value
-                    .clone()
-                    .and_then(|value| value.get_as::<library::model::path::PathValue>())
-                    .or_else(|| {
-                        prop_def
-                            .default_value()
-                            .get_as::<library::model::path::PathValue>()
-                    });
+                let value = structured::canonical_path_for_inspector(
+                    authored_value.as_ref(),
+                    prop_def.default_value(),
+                );
                 if let Some(value) = value {
                     let qa_component_prefix = format!(
                         "inspector.property_component.{}:{}",
@@ -789,25 +769,6 @@ pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
 mod tests {
     use super::*;
     use library::plugin::{PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
-
-    #[test]
-    fn legacy_color_is_displayed_exactly_in_a_canonical_color_control(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let legacy = Color {
-            r: 17,
-            g: 128,
-            b: 239,
-            a: 64,
-        };
-        let default = PropertyValue::ColorValue(
-            library::model::property::ColorValue::from_straight_srgba8(&Color::white()),
-        );
-        let adapted =
-            canonical_color_for_inspector(Some(&PropertyValue::Color(legacy.clone())), &default)
-                .ok_or("legacy color was not adapted")?;
-        assert_eq!(adapted.try_to_straight_srgba8(), Ok(legacy));
-        Ok(())
-    }
 
     #[test]
     fn qa_metadata_preserves_the_complete_property_definition() {
