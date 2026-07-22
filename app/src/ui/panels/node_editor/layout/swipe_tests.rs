@@ -297,6 +297,92 @@ fn releasing_a_before_pointer_cancels_without_project_or_history_change(
         DirectionalLayoutGestureOutcome::Cancelled
     );
     assert!(execution.moved_node_ids.is_empty());
+
+    // The still-down physical pointer keeps ownership after an A-first
+    // cancellation. Its release-only frame is also guarded until every
+    // competing interaction has observed that release.
+    assert!(!recover_directional_layout_release_guard(
+        &mut state, false, true, false
+    ));
+    let guarded = handle_directional_layout_outputs(
+        &fixture.project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[],
+        &mut state,
+        &history,
+    );
+    assert!(guarded.owns_pointer);
+    assert!(!recover_directional_layout_release_guard(
+        &mut state, false, false, true
+    ));
+    assert!(finish_directional_layout_release_guard(&mut state, true));
+    assert!(!state.directional_layout_release_guard);
+    Ok(())
+}
+
+#[test]
+fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let before = fixture.project.clone();
+    let mut state = NodeEditorState::default();
+    let mut history = HistoryManager::new();
+    history.push_project_state(fixture.project.clone());
+    let history_before = (history.undo_depth(), history.redo_depth());
+    for swipe in [
+        intent(
+            LayoutSwipePhase::Start,
+            fixture.source,
+            egui::pos2(400.0, 300.0),
+            None,
+            egui::Modifiers::NONE,
+        ),
+        intent(
+            LayoutSwipePhase::Update,
+            fixture.source,
+            egui::pos2(580.0, 300.0),
+            Some(LayoutSwipeAxis::Horizontal),
+            egui::Modifiers::NONE,
+        ),
+        intent(
+            LayoutSwipePhase::Cancel,
+            fixture.source,
+            egui::pos2(580.0, 300.0),
+            Some(LayoutSwipeAxis::Horizontal),
+            egui::Modifiers::NONE,
+        ),
+    ] {
+        handle_directional_layout_outputs(
+            &fixture.project,
+            fixture.composition_id,
+            &[],
+            &fixture.rects,
+            &[output(swipe)],
+            &mut state,
+            &history,
+        );
+    }
+    assert!(state.directional_layout_release_guard);
+
+    // No release arrives after PointerGone. The repaint following Cancel is
+    // the first stable frame and proves there is no old physical drag left.
+    assert!(recover_directional_layout_release_guard(
+        &mut state, false, false, false
+    ));
+    let normal_input = handle_directional_layout_outputs(
+        &fixture.project,
+        fixture.composition_id,
+        &[],
+        &fixture.rects,
+        &[],
+        &mut state,
+        &history,
+    );
+    assert!(!normal_input.owns_pointer);
+    assert_eq!(fixture.project, before);
+    assert_eq!((history.undo_depth(), history.redo_depth()), history_before);
     Ok(())
 }
 

@@ -46,6 +46,39 @@ pub(in crate::ui::panels::node_editor) struct DirectionalLayoutCommitResult {
     pub(in crate::ui::panels::node_editor) request_repaint: bool,
 }
 
+/// Recover a cancellation guard before normal input arbitration.
+///
+/// A release-only frame must remain guarded until its interactions finish,
+/// because Snarl may still expose a latent drag in that frame. A stable frame
+/// with no primary state proves the release happened outside the window; a
+/// fresh press likewise proves this is a new physical gesture.
+pub(in crate::ui::panels::node_editor) fn recover_directional_layout_release_guard(
+    state: &mut NodeEditorState,
+    primary_pressed: bool,
+    primary_down: bool,
+    primary_released: bool,
+) -> bool {
+    let safe_to_recover = primary_pressed || (!primary_down && !primary_released);
+    if !state.directional_layout_release_guard || !safe_to_recover {
+        return false;
+    }
+    state.directional_layout_release_guard = false;
+    true
+}
+
+/// Clear a release-only guard after every competing interaction has observed
+/// and suppressed that release frame.
+pub(in crate::ui::panels::node_editor) fn finish_directional_layout_release_guard(
+    state: &mut NodeEditorState,
+    primary_released: bool,
+) -> bool {
+    if !state.directional_layout_release_guard || !primary_released {
+        return false;
+    }
+    state.directional_layout_release_guard = false;
+    true
+}
+
 struct PlannedDirectionalLayout {
     positions: BTreeMap<Uuid, [f32; 2]>,
     diagnostics: DirectionalLayoutGestureDiagnostics,

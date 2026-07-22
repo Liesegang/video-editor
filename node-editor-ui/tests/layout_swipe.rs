@@ -526,6 +526,86 @@ fn release_before_threshold_a_release_escape_and_context_loss_cancel() {
 }
 
 #[test]
+fn pointer_gone_focus_loss_without_release_does_not_swallow_the_next_move() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let transform = egui::emath::TSTransform::IDENTITY;
+    let (start, _) = arm(&context, &graph, &mut state, transform, Modifiers::NONE);
+    drop(run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![Event::PointerMoved(start + vec2(20.0, 0.0))],
+            Modifiers::NONE,
+        ),
+    ));
+    let cancelled = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput {
+            focused: false,
+            ..FrameInput::events(vec![Event::PointerGone], Modifiers::NONE)
+        },
+    );
+    assert_eq!(only_swipe(&cancelled).phase, LayoutSwipePhase::Cancel);
+    assert!(!state.is_active());
+
+    drop(run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![key(egui::Key::A, false, Modifiers::NONE)],
+            Modifiers::NONE,
+        ),
+    ));
+    let pressed = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![
+                Event::PointerMoved(start),
+                pointer(start, true, Modifiers::NONE),
+            ],
+            Modifiers::NONE,
+        ),
+    );
+    assert!(pressed.iter().any(|output| matches!(
+        output,
+        Output::Select { items, primary }
+            if items == &[ItemId::Node(1)] && *primary == Some(ItemId::Node(1))
+    )));
+    let moved = run_frame(
+        &context,
+        &graph,
+        &mut state,
+        transform,
+        InteractionOptions::ALL,
+        FrameInput::events(
+            vec![Event::PointerMoved(start + vec2(24.0, 6.0))],
+            Modifiers::NONE,
+        ),
+    );
+    assert!(moved.iter().any(|output| matches!(
+        output,
+        Output::Move { items, delta }
+            if items == &[ItemId::Node(1)] && *delta == vec2(24.0, 6.0)
+    )));
+}
+
+#[test]
 fn same_frame_release_order_distinguishes_commit_from_a_first_cancel() {
     for pointer_first in [true, false] {
         let context = egui::Context::default();

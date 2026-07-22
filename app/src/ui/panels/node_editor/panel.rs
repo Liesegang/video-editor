@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use super::layout::{
     apply_directional_layout_commit, apply_directional_layout_preview,
-    handle_directional_layout_outputs, DirectionalLayoutFrameOutcome,
+    finish_directional_layout_release_guard, handle_directional_layout_outputs,
+    recover_directional_layout_release_guard, DirectionalLayoutFrameOutcome,
 };
 use crate::utils::lock::{mutex_lock_or_recover, write_or_recover};
 
@@ -93,12 +94,19 @@ pub fn node_editor_panel(
     if pending_owner_left_composition {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
     }
-    let (primary_down, primary_released) = ui.input(|input| {
+    let (primary_pressed, primary_down, primary_released) = ui.input(|input| {
         (
+            input.pointer.primary_pressed(),
             input.pointer.primary_down(),
             input.pointer.primary_released(),
         )
     });
+    recover_directional_layout_release_guard(
+        node_editor_state,
+        primary_pressed,
+        primary_down,
+        primary_released,
+    );
     let stale_merge_reorder =
         node_editor_state
             .merge_layer_reorder
@@ -635,9 +643,7 @@ pub fn node_editor_panel(
             history_manager,
         );
         drop(node_rects);
-        if node_editor_state.directional_layout_release_guard && primary_released {
-            node_editor_state.directional_layout_release_guard = false;
-        }
+        finish_directional_layout_release_guard(node_editor_state, primary_released);
         let surface_owned_layout =
             surface_was_active || node_editor_state.surface_interaction.is_active();
 
