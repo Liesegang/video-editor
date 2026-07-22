@@ -426,6 +426,7 @@ pub(in crate::ui::panels::node_editor) fn rects_are_closer_than(
         && left.bottom() + gap > right.top()
 }
 
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) fn canonical_edges(
     project: &Project,
     nodes: &[Uuid],

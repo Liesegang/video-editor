@@ -171,6 +171,44 @@ fn full_layout_preserves_hierarchy_non_overlap_and_global_ltr_in_rendered_rects(
 }
 
 #[test]
+fn startup_repair_preserves_a_valid_manual_back_edge_layout_byte_for_byte() {
+    let (mut project, composition_id, _, _, solid_id, merge_id) = fixture();
+    let initial_plan = compute_full_composition_layout(&project, composition_id).unwrap();
+    assert!(apply_auto_layout(
+        &mut project,
+        composition_id,
+        &initial_plan
+    ));
+    assert!(!layout_needs_reflow(&project, composition_id));
+
+    // Author a deliberate right-to-left edge while keeping both Nodes inside
+    // their Clip and inside the same horizontal envelope as auto-layout.
+    let original_solid_position = project.get_node(solid_id).unwrap().ui_position;
+    let merge_width = estimated_node_size(&project, merge_id).x;
+    project.get_node_mut(merge_id).unwrap().ui_position[0] = original_solid_position[0];
+    project.get_node_mut(solid_id).unwrap().ui_position[0] =
+        original_solid_position[0] + merge_width + AUTO_LAYOUT_NODE_PADDING + 1.0;
+    let solid_rect = estimated_node_rect(&project, solid_id).unwrap();
+    let merge_rect = estimated_node_rect(&project, merge_id).unwrap();
+    assert!(solid_rect.left() > merge_rect.right());
+    assert!(!padded_intersection(solid_rect, merge_rect));
+    assert!(!container_hierarchy_needs_reflow(&project, composition_id));
+
+    let before = serde_json::to_vec(&project).unwrap();
+
+    // Mirror the one-time repair decision made by the Node Editor panel.
+    let repair_plan = layout_needs_reflow(&project, composition_id)
+        .then(|| compute_full_composition_layout(&project, composition_id))
+        .flatten();
+    assert!(repair_plan.is_none());
+    if let Some(plan) = repair_plan {
+        apply_auto_layout(&mut project, composition_id, &plan);
+    }
+
+    assert_eq!(serde_json::to_vec(&project).unwrap(), before);
+}
+
+#[test]
 fn scoped_layouts_leave_every_out_of_scope_entity_byte_identical() {
     let (mut base, ids) = adversarial_hierarchy_fixture();
     let full = compute_full_composition_layout(&base, ids.composition).unwrap();

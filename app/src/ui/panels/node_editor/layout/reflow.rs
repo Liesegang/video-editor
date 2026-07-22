@@ -2,11 +2,10 @@ use eframe::egui;
 use egui_snarl::Snarl;
 use library::model::project::PortOwner;
 use library::model::{NodeContainer, Project};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::node_geometry::estimated_node_size;
-use super::ranking::{canonical_edges, rank_nodes_by_scc};
 use crate::state::context_types::SelectionTarget;
 use crate::ui::panels::node_editor::graph_build::{container_item_position, container_visual};
 use crate::ui::panels::node_editor::{
@@ -283,28 +282,15 @@ pub(in crate::ui::panels::node_editor) fn layout_needs_reflow(
         .filter_map(|node_id| estimated_node_rect(project, node_id).map(|rect| (node_id, rect)))
         .collect::<Vec<_>>();
 
-    if node_rects.iter().enumerate().any(|(index, (_, left))| {
+    // Startup repair is deliberately limited to invalid geometry. A wire that
+    // travels right-to-left can be a valid piece of manual graph authoring;
+    // left-to-right flow is an output guarantee of an explicit auto-layout
+    // command, not a persistence invariant that may rewrite authored positions.
+    node_rects.iter().enumerate().any(|(index, (_, left))| {
         node_rects[index + 1..]
             .iter()
             .any(|(_, right)| padded_intersection(*left, *right))
-    }) {
-        return true;
-    }
-
-    let all_nodes = node_rects.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    let ranks = rank_nodes_by_scc(&all_nodes, &canonical_edges(project, &all_nodes));
-    let rects = node_rects.into_iter().collect::<HashMap<_, _>>();
-    canonical_edges(project, &all_nodes)
-        .into_iter()
-        .any(|(from, to)| {
-            ranks.get(&from) != ranks.get(&to)
-                && rects
-                    .get(&from)
-                    .zip(rects.get(&to))
-                    .is_some_and(|(from_rect, to_rect)| {
-                        from_rect.right() + AUTO_LAYOUT_NODE_PADDING > to_rect.left()
-                    })
-        })
+    })
 }
 
 pub(in crate::ui::panels::node_editor) fn container_hierarchy_needs_reflow(
