@@ -7,7 +7,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use super::super::asset::{Asset, AssetKind};
+use super::super::asset::{
+    Asset, AssetKind, AssetSourceColorSpaceBinding, AssetSourceInterpretation,
+};
 use super::{
     ColorConfigCacheIdentity, ColorConfigIdentity, ColorManagementConfig, ColorManagementField,
     ColorManagementIssue,
@@ -60,18 +62,19 @@ fn asset_source_diagnostics(
     diagnostics
 }
 
-pub(super) fn validate_asset_source_binding(
+pub(super) fn validate_asset_source_binding<'a>(
     config: &ColorManagementConfig,
-    asset: &Asset,
-) -> Result<(), ColorManagementIssue> {
-    if let Some((_, detail)) = asset.source_color.malformed_assigned_space() {
-        return Err(ColorManagementIssue::AssetSourceColorBindingMalformed {
-            asset_id: asset.id,
-            detail: detail.to_string(),
-        });
-    }
-    let Some(binding) = asset.source_color.assigned_space() else {
-        return Ok(());
+    asset: &'a Asset,
+) -> Result<Option<&'a AssetSourceColorSpaceBinding>, ColorManagementIssue> {
+    let binding = match asset.source_color.authoritative_interpretation() {
+        AssetSourceInterpretation::Assigned(binding) => binding,
+        AssetSourceInterpretation::Description(_) => return Ok(None),
+        AssetSourceInterpretation::Malformed { detail, .. } => {
+            return Err(ColorManagementIssue::AssetSourceColorBindingMalformed {
+                asset_id: asset.id,
+                detail: detail.to_string(),
+            });
+        }
     };
     if binding.color_space().trim().is_empty() {
         return Err(ColorManagementIssue::AssetSourceColorSpaceBlank { asset_id: asset.id });
@@ -83,7 +86,7 @@ pub(super) fn validate_asset_source_binding(
             project: Box::new(config.config.clone()),
         });
     }
-    Ok(())
+    Ok(Some(binding))
 }
 
 pub(super) fn stable_cache_identity(config: &ColorManagementConfig) -> ColorConfigCacheIdentity {

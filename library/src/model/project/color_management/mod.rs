@@ -302,8 +302,7 @@ impl ModelValidatedColorManagementConfig {
         &self,
         asset: &'a Asset,
     ) -> Result<Option<&'a super::asset::AssetSourceColorSpaceBinding>, ColorManagementIssue> {
-        validation::validate_asset_source_binding(&self.config, asset)?;
-        Ok(asset.source_color.assigned_space())
+        validation::validate_asset_source_binding(&self.config, asset)
     }
 }
 

@@ -138,13 +138,36 @@ pub struct AssetSourceColorMetadata {
     assigned_space: Option<PersistedAssetSourceColorSpaceBinding>,
 }
 
+/// The single authoritative interpretation of an Asset's encoded color.
+///
+/// A config-bound assignment always wins over CICP/profile descriptions. A
+/// malformed persisted assignment is kept authoritative too: callers must
+/// fail this Asset's ingress rather than silently falling back to detected
+/// metadata and changing its appearance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AssetSourceInterpretation<'a> {
+    Assigned(&'a AssetSourceColorSpaceBinding),
+    Description(&'a SourceColorDescription),
+    Malformed { raw: &'a Value, detail: &'a str },
+}
+
 impl AssetSourceColorMetadata {
     pub fn is_empty(&self) -> bool {
         self.detected.is_empty() && self.user_override.is_none() && self.assigned_space.is_none()
     }
 
-    pub fn effective(&self) -> &SourceColorDescription {
-        self.user_override.as_ref().unwrap_or(&self.detected)
+    pub fn authoritative_interpretation(&self) -> AssetSourceInterpretation<'_> {
+        match self.assigned_space.as_ref() {
+            Some(PersistedAssetSourceColorSpaceBinding::Binding(binding)) => {
+                AssetSourceInterpretation::Assigned(binding)
+            }
+            Some(PersistedAssetSourceColorSpaceBinding::Malformed { raw, detail }) => {
+                AssetSourceInterpretation::Malformed { raw, detail }
+            }
+            None => AssetSourceInterpretation::Description(
+                self.user_override.as_ref().unwrap_or(&self.detected),
+            ),
+        }
     }
 
     pub fn detected(&self) -> &SourceColorDescription {
@@ -302,8 +325,8 @@ pub enum SourceColorProfile {
 #[cfg(test)]
 mod tests {
     use super::{
-        AssetSourceColorMetadata, AssetSourceColorSpaceBinding, SourceColorDescription,
-        SourceColorPrimaries, SourceTransferCharacteristic,
+        AssetSourceColorMetadata, AssetSourceColorSpaceBinding, AssetSourceInterpretation,
+        SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
     };
     use crate::model::project::ColorConfigIdentity;
 
@@ -324,7 +347,10 @@ mod tests {
         metadata.replace_complete_override(authored.clone());
 
         assert_eq!(metadata.detected, detected);
-        assert_eq!(metadata.effective(), &authored);
+        assert_eq!(
+            metadata.authoritative_interpretation(),
+            AssetSourceInterpretation::Description(&authored)
+        );
     }
 
     #[test]
@@ -336,7 +362,12 @@ mod tests {
         });
         metadata.replace_complete_override(SourceColorDescription::default());
 
-        assert!(metadata.effective().is_empty());
+        let AssetSourceInterpretation::Description(description) =
+            metadata.authoritative_interpretation()
+        else {
+            panic!("CICP/profile override must remain authoritative without an assignment");
+        };
+        assert!(description.is_empty());
         assert!(!metadata.detected().is_empty());
     }
 
@@ -376,7 +407,12 @@ mod tests {
         assert!(json.contains(r#""user_override":{}"#));
         let restored: AssetSourceColorMetadata = serde_json::from_str(&json).unwrap();
         assert!(restored.user_override().is_some());
-        assert!(restored.effective().is_empty());
+        let AssetSourceInterpretation::Description(description) =
+            restored.authoritative_interpretation()
+        else {
+            panic!("empty override must remain authoritative without an assignment");
+        };
+        assert!(description.is_empty());
     }
 
     #[test]
@@ -417,6 +453,10 @@ mod tests {
         let restored: AssetSourceColorMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.detected(), &detected);
         assert_eq!(restored.assigned_space(), Some(&binding));
+        assert_eq!(
+            restored.authoritative_interpretation(),
+            AssetSourceInterpretation::Assigned(&binding)
+        );
     }
 
     #[test]
@@ -429,6 +469,10 @@ mod tests {
 
         let metadata: AssetSourceColorMetadata = serde_json::from_value(json).unwrap();
         assert!(metadata.assigned_space().is_none());
+        assert!(matches!(
+            metadata.authoritative_interpretation(),
+            AssetSourceInterpretation::Malformed { raw: persisted, .. } if persisted == &raw
+        ));
         assert_eq!(
             metadata
                 .malformed_assigned_space()
