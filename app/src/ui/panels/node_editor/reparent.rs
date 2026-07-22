@@ -810,9 +810,33 @@ pub(super) fn ensure_reparent_hierarchy_contains(
     container: NodeContainer,
     node_rect: egui::Rect,
 ) -> bool {
+    grow_reparent_hierarchy(project, container, node_rect, true)
+}
+
+/// Grow only the direct owning container and its ancestors around `node_rect`.
+///
+/// Directional layout already owns the exact final position of every Node it
+/// may change. In particular, it must not run structural Merge repair during
+/// commit because that can move Nodes which were fixed in the preview.
+pub(super) fn grow_container_hierarchy_to_rect_all_edges(
+    project: &mut Project,
+    container: NodeContainer,
+    node_rect: egui::Rect,
+) -> bool {
+    grow_reparent_hierarchy(project, container, node_rect, false)
+}
+
+fn grow_reparent_hierarchy(
+    project: &mut Project,
+    container: NodeContainer,
+    node_rect: egui::Rect,
+    repair_structural_merges: bool,
+) -> bool {
     let owner = port_owner_for_node_container(container);
     let mut changed = grow_container_to_rect_all_edges(project, owner, node_rect);
-    changed |= ensure_structural_merge_layout(project, container);
+    if repair_structural_merges {
+        changed |= ensure_structural_merge_layout(project, container);
+    }
 
     // Propagate each *updated child container rectangle*, not only the Node.
     // Expanding the min edge intentionally changes only container chrome;
@@ -825,8 +849,10 @@ pub(super) fn ensure_reparent_hierarchy_contains(
         };
         let child_rect = container_rect(child.position, child.size);
         changed |= grow_container_to_rect_all_edges(project, parent_owner, child_rect);
-        if let Some(parent_container) = node_container_for_port_owner(parent_owner) {
-            changed |= ensure_structural_merge_layout(project, parent_container);
+        if repair_structural_merges {
+            if let Some(parent_container) = node_container_for_port_owner(parent_owner) {
+                changed |= ensure_structural_merge_layout(project, parent_container);
+            }
         }
         child_owner = parent_owner;
     }

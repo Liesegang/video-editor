@@ -23,7 +23,8 @@ use crate::state::node_editor_layout::{
 use crate::ui::panels::node_editor::container_hierarchy_needs_reflow;
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
 use crate::ui::panels::node_editor::{
-    ensure_reparent_hierarchy_contains, GraphItem, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP,
+    grow_container_hierarchy_to_rect_all_edges, GraphItem, AUTO_LAYOUT_COLUMN_GAP,
+    AUTO_LAYOUT_ROW_GAP,
 };
 
 use super::{
@@ -551,7 +552,7 @@ fn build_commit_candidate(
     moved_node_ids.sort_unstable();
 
     if let Some(rect) = branch_rect {
-        ensure_reparent_hierarchy_contains(&mut candidate, gesture.direct_owner, rect);
+        grow_container_hierarchy_to_rect_all_edges(&mut candidate, gesture.direct_owner, rect);
     }
     if container_hierarchy_regresses(project, &candidate, gesture.composition_id) {
         return Err(

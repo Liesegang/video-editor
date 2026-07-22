@@ -146,6 +146,63 @@ fn container_geometry(project: &Project, owner: NodeContainer) -> Option<([f32; 
     }
 }
 
+struct CompositionDirectPair {
+    source: Uuid,
+    sink: Uuid,
+    rects: HashMap<Uuid, egui::Rect>,
+}
+
+fn add_composition_direct_pair(
+    fixture: &mut NestedFixture,
+    source_value: u128,
+    sink_value: u128,
+) -> Result<CompositionDirectPair, Box<dyn std::error::Error>> {
+    let owner = NodeContainer::Composition(fixture.composition_id);
+    let track_rect = fixture
+        .project
+        .get_track(fixture.track_id)
+        .map(|track| container_rect(track.ui_position, track.ui_size))
+        .ok_or("nested fixture Track is missing")?;
+    let y = track_rect.bottom() + AUTO_LAYOUT_ROW_GAP * 2.0;
+    let source = add_node(
+        &mut fixture.project,
+        owner,
+        source_value,
+        "Composition direct source",
+        [track_rect.left(), y],
+    )?;
+    let source_width = estimated_node_size(&fixture.project, source).x;
+    let sink = add_node(
+        &mut fixture.project,
+        owner,
+        sink_value,
+        "Composition direct sink",
+        [track_rect.left() + source_width + AUTO_LAYOUT_COLUMN_GAP, y],
+    )?;
+    connect(&mut fixture.project, source, sink, 0);
+
+    let pair_rect = estimated_node_rect(&fixture.project, source)
+        .ok_or("Composition direct source has no estimated rectangle")?
+        .union(
+            estimated_node_rect(&fixture.project, sink)
+                .ok_or("Composition direct sink has no estimated rectangle")?,
+        );
+    let composition = fixture
+        .project
+        .get_composition_mut(fixture.composition_id)
+        .ok_or("nested fixture Composition is missing")?;
+    composition.ui_size[0] = composition.ui_size[0]
+        .max(pair_rect.right() - composition.ui_position[0] + AUTO_LAYOUT_COMPOSITION_RIGHT);
+    composition.ui_size[1] = composition.ui_size[1]
+        .max(pair_rect.bottom() - composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_BOTTOM);
+    let rects = rendered_rects(&fixture.project, &[source, sink])?;
+    Ok(CompositionDirectPair {
+        source,
+        sink,
+        rects,
+    })
+}
+
 impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let mut project = Project::new("layout swipe adapter");
@@ -226,6 +283,9 @@ fn intent(
 fn output(intent: LayoutSwipeIntent<Uuid>) -> SurfaceOutput {
     EditorOutput::LayoutSwipe(intent)
 }
+
+#[path = "swipe_containment_tests.rs"]
+mod containment;
 
 #[test]
 fn start_and_update_only_change_sparse_display_projection() -> Result<(), Box<dyn std::error::Error>>
@@ -352,7 +412,14 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
         .commit
         .ok_or("activated release did not prepare an atomic commit")?;
     let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, commit);
-    assert!(result.changed);
+    assert!(
+        result.changed,
+        "commit rejected: {:?}",
+        state
+            .last_directional_layout_swipe
+            .as_ref()
+            .and_then(|execution| execution.reason.as_deref())
+    );
     assert_eq!(history.undo_depth(), undo_before + 1);
     assert_eq!(history.redo_depth(), 0);
     let execution = state
@@ -371,202 +438,6 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
         .undo(&project)
         .ok_or("directional layout commit was not undoable")?;
     assert_eq!(restored, before);
-    Ok(())
-}
-
-#[test]
-fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = NestedFixture::new()?;
-    let before = fixture.project.clone();
-    let mut project = fixture.project;
-    let mut state = NodeEditorState::default();
-    let mut history = HistoryManager::new();
-    history.push_project_state(project.clone());
-    let history_before = (history.undo_depth(), history.redo_depth());
-    let mut commit = prepare_horizontal_commit(
-        &project,
-        fixture.composition_id,
-        fixture.source,
-        &fixture.rects,
-        &mut state,
-        &history,
-    )?;
-    let composition_right = project
-        .get_composition(fixture.composition_id)
-        .map(|composition| composition.ui_position[0] + composition.ui_size[0])
-        .ok_or("nested fixture Composition is missing")?;
-    let sink_y = project
-        .get_node(fixture.sink)
-        .map(|node| node.ui_position[1])
-        .ok_or("nested fixture sink is missing")?;
-    commit
-        .positions
-        .insert(fixture.sink, [composition_right + 800.0, sink_y]);
-
-    let clip_before = container_geometry(&project, NodeContainer::Clip(fixture.clip_id))
-        .ok_or("nested fixture Clip geometry is missing")?;
-    let track_before = container_geometry(&project, NodeContainer::Track(fixture.track_id))
-        .ok_or("nested fixture Track geometry is missing")?;
-    let composition_before =
-        container_geometry(&project, NodeContainer::Composition(fixture.composition_id))
-            .ok_or("nested fixture Composition geometry is missing")?;
-    let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, commit);
-
-    assert!(result.changed);
-    assert_eq!(history.undo_depth(), history_before.0 + 1);
-    assert_eq!(history.redo_depth(), 0);
-    let clip_after = container_geometry(&project, NodeContainer::Clip(fixture.clip_id))
-        .ok_or("committed Clip geometry is missing")?;
-    let track_after = container_geometry(&project, NodeContainer::Track(fixture.track_id))
-        .ok_or("committed Track geometry is missing")?;
-    let composition_after =
-        container_geometry(&project, NodeContainer::Composition(fixture.composition_id))
-            .ok_or("committed Composition geometry is missing")?;
-    assert!(clip_after.1[0] > clip_before.1[0]);
-    assert!(track_after.1[0] > track_before.1[0]);
-    assert!(composition_after.1[0] > composition_before.1[0]);
-    assert!(!container_hierarchy_needs_reflow(
-        &project,
-        fixture.composition_id
-    ));
-    let restored = history
-        .undo(&project)
-        .ok_or("nested container layout commit was not undoable")?;
-    assert_eq!(restored, before);
-    Ok(())
-}
-
-#[test]
-fn composition_direct_layout_grows_only_composition_and_preserves_child_track(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut fixture = NestedFixture::new()?;
-    let owner = NodeContainer::Composition(fixture.composition_id);
-    let mut source = Node::new_merge("Composition direct source");
-    source.id = Uuid::from_u128(0x7201);
-    let source_id = source.id;
-    let mut sink = Node::new_merge("Composition direct sink");
-    sink.id = Uuid::from_u128(0x7202);
-    let sink_id = sink.id;
-    let track_rect = fixture
-        .project
-        .get_track(fixture.track_id)
-        .map(|track| container_rect(track.ui_position, track.ui_size))
-        .ok_or("nested fixture Track is missing")?;
-    let source_size = estimated_node_size(&fixture.project, source_id);
-    let direct_y = track_rect.bottom() + AUTO_LAYOUT_ROW_GAP;
-    source.ui_position = [track_rect.left(), direct_y];
-    sink.ui_position = [
-        track_rect.left() + source_size.x + AUTO_LAYOUT_COLUMN_GAP,
-        direct_y,
-    ];
-    fixture.project.add_node(source);
-    fixture.project.add_node(sink);
-    fixture.project.attach_node_to_container(owner, source_id)?;
-    fixture.project.attach_node_to_container(owner, sink_id)?;
-    connect(&mut fixture.project, source_id, sink_id, 0);
-    let sink_rect = estimated_node_rect(&fixture.project, sink_id)
-        .ok_or("Composition direct sink has no estimated rectangle")?;
-    let composition = fixture
-        .project
-        .get_composition_mut(fixture.composition_id)
-        .ok_or("nested fixture Composition is missing")?;
-    composition.ui_size[0] = composition.ui_size[0]
-        .max(sink_rect.right() - composition.ui_position[0] + AUTO_LAYOUT_COMPOSITION_RIGHT);
-    composition.ui_size[1] = composition.ui_size[1]
-        .max(sink_rect.bottom() - composition.ui_position[1] + AUTO_LAYOUT_COMPOSITION_BOTTOM);
-    if container_hierarchy_needs_reflow(&fixture.project, fixture.composition_id) {
-        return Err("Composition direct fixture violates container hierarchy".into());
-    }
-
-    let before = fixture.project.clone();
-    let track_before = container_geometry(&fixture.project, NodeContainer::Track(fixture.track_id))
-        .ok_or("nested fixture Track geometry is missing")?;
-    let composition_before = container_geometry(&fixture.project, owner)
-        .ok_or("nested fixture Composition geometry is missing")?;
-    let rects = rendered_rects(&fixture.project, &[source_id, sink_id])?;
-    let mut project = fixture.project;
-    let mut state = NodeEditorState::default();
-    let mut history = HistoryManager::new();
-    history.push_project_state(project.clone());
-    let mut commit = prepare_horizontal_commit(
-        &project,
-        fixture.composition_id,
-        source_id,
-        &rects,
-        &mut state,
-        &history,
-    )?;
-    let composition_right = composition_before.0[0] + composition_before.1[0];
-    commit
-        .positions
-        .insert(sink_id, [composition_right + 800.0, direct_y]);
-    let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, commit);
-
-    assert!(result.changed);
-    assert_eq!(history.undo_depth(), 2);
-    assert_eq!(
-        container_geometry(&project, NodeContainer::Track(fixture.track_id)),
-        Some(track_before)
-    );
-    let composition_after =
-        container_geometry(&project, owner).ok_or("committed Composition geometry is missing")?;
-    assert!(composition_after.1[0] > composition_before.1[0]);
-    assert!(!container_hierarchy_needs_reflow(
-        &project,
-        fixture.composition_id
-    ));
-    let restored = history
-        .undo(&project)
-        .ok_or("Composition direct layout commit was not undoable")?;
-    assert_eq!(restored, before);
-    Ok(())
-}
-
-#[test]
-fn contained_layout_does_not_resize_any_container() -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = NestedFixture::new()?;
-    let mut project = fixture.project;
-    let clip_before = container_geometry(&project, NodeContainer::Clip(fixture.clip_id))
-        .ok_or("nested fixture Clip geometry is missing")?;
-    let track_before = container_geometry(&project, NodeContainer::Track(fixture.track_id))
-        .ok_or("nested fixture Track geometry is missing")?;
-    let composition_before =
-        container_geometry(&project, NodeContainer::Composition(fixture.composition_id))
-            .ok_or("nested fixture Composition geometry is missing")?;
-    let sink_before = project
-        .get_node(fixture.sink)
-        .map(|node| node.ui_position)
-        .ok_or("nested fixture sink is missing")?;
-    let mut state = NodeEditorState::default();
-    let mut history = HistoryManager::new();
-    history.push_project_state(project.clone());
-    let mut commit = prepare_horizontal_commit(
-        &project,
-        fixture.composition_id,
-        fixture.source,
-        &fixture.rects,
-        &mut state,
-        &history,
-    )?;
-    commit
-        .positions
-        .insert(fixture.sink, [sink_before[0] + 1.0, sink_before[1]]);
-    let result = apply_directional_layout_commit(&mut project, &mut state, &mut history, commit);
-
-    assert!(result.changed);
-    assert_eq!(
-        container_geometry(&project, NodeContainer::Clip(fixture.clip_id)),
-        Some(clip_before)
-    );
-    assert_eq!(
-        container_geometry(&project, NodeContainer::Track(fixture.track_id)),
-        Some(track_before)
-    );
-    assert_eq!(
-        container_geometry(&project, NodeContainer::Composition(fixture.composition_id)),
-        Some(composition_before)
-    );
     Ok(())
 }
 
