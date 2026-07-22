@@ -95,9 +95,8 @@ fn uniform_channel_bit_depth(color: image::ExtendedColorType) -> Option<u8> {
         | Color::Cmyk8 => Some(8),
         Color::L16 | Color::La16 | Color::Rgb16 | Color::Rgba16 | Color::Cmyk16 => Some(16),
         Color::Rgb32F | Color::Rgba32F => Some(32),
-        Color::Unknown(bits) if bits > 0 => Some(bits),
-        // Packed RGB5x1 has padding rather than one uniform bits/channel
-        // value. Future non-exhaustive variants also remain unknown.
+        // `Unknown(bits)` reports bits per pixel, not a proven uniform source
+        // channel depth. Packed RGB5x1 and future variants are unknown too.
         _ => None,
     }
 }
@@ -234,7 +233,7 @@ impl LoadPlugin for NativeImageLoader {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeImageLoader, load_image};
+    use super::{NativeImageLoader, load_image, uniform_channel_bit_depth};
     use crate::cache::CacheManager;
     use crate::plugin::{LoadPlugin, LoadPluginError, LoadRequest};
     use image::ImageEncoder;
@@ -387,6 +386,14 @@ mod tests {
             std::fs::remove_file(path)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn unknown_extended_color_bits_are_not_called_channel_depth() {
+        assert_eq!(
+            uniform_channel_bit_depth(image::ExtendedColorType::Unknown(12)),
+            None
+        );
     }
 
     fn low_bit_png_fixtures() -> [(u8, &'static [u8]); 3] {

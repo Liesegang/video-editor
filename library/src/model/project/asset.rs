@@ -152,7 +152,7 @@ mod tests {
                 primaries: Some(SourceColorPrimaries::Bt709),
                 ..super::SourceColorDescription::default()
             });
-        asset.source_color.replace_override_from_detected(|source| {
+        asset.source_color.edit_override(|source| {
             source.primaries = Some(SourceColorPrimaries::Bt2020);
         });
 

@@ -59,15 +59,16 @@ impl AssetSourceColorMetadata {
         self.user_override.as_ref()
     }
 
-    /// Atomically builds a complete override from the current detection.
+    /// Atomically edits the effective description as a complete override.
     ///
-    /// Use this when correcting individual detected fields: fields not edited
-    /// by `edit` retain their detected values instead of becoming unknown.
-    pub fn replace_override_from_detected(
-        &mut self,
-        edit: impl FnOnce(&mut SourceColorDescription),
-    ) {
-        let mut complete_override = self.detected.clone();
+    /// The first edit starts from detected metadata. Later edits start from
+    /// the existing authored override, so independent corrections accumulate
+    /// instead of resetting earlier changes.
+    pub fn edit_override(&mut self, edit: impl FnOnce(&mut SourceColorDescription)) {
+        let mut complete_override = self
+            .user_override
+            .clone()
+            .unwrap_or_else(|| self.detected.clone());
         edit(&mut complete_override);
         self.user_override = Some(complete_override);
     }
@@ -213,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn field_correction_starts_from_complete_detection() {
+    fn consecutive_field_corrections_accumulate_on_the_effective_description() {
         let detected = SourceColorDescription {
             primaries: Some(SourceColorPrimaries::Bt709),
             transfer: Some(SourceTransferCharacteristic::Bt709),
@@ -222,13 +223,47 @@ mod tests {
         };
         let mut metadata = AssetSourceColorMetadata::default();
         metadata.replace_detected(detected);
-        metadata.replace_override_from_detected(|source| {
+        metadata.edit_override(|source| {
             source.primaries = Some(SourceColorPrimaries::Bt2020);
+        });
+        metadata.edit_override(|source| {
+            source.bit_depth = Some(12);
         });
 
         let authored = metadata.user_override().expect("override must exist");
         assert_eq!(authored.primaries, Some(SourceColorPrimaries::Bt2020));
         assert_eq!(authored.transfer, Some(SourceTransferCharacteristic::Bt709));
-        assert_eq!(authored.bit_depth, Some(10));
+        assert_eq!(authored.bit_depth, Some(12));
+    }
+
+    #[test]
+    fn explicit_empty_override_survives_as_json_object() {
+        let mut metadata = AssetSourceColorMetadata::default();
+        metadata.replace_detected(SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::Bt709),
+            ..SourceColorDescription::default()
+        });
+        metadata.replace_complete_override(SourceColorDescription::default());
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains(r#""user_override":{}"#));
+        let restored: AssetSourceColorMetadata = serde_json::from_str(&json).unwrap();
+        assert!(restored.user_override().is_some());
+        assert!(restored.effective().is_empty());
+    }
+
+    #[test]
+    fn unknown_codes_survive_serde_round_trip() {
+        let source = SourceColorDescription {
+            primaries: Some(SourceColorPrimaries::UnknownCode(90)),
+            transfer: Some(super::SourceTransferCharacteristic::UnknownCode(91)),
+            matrix: Some(super::SourceMatrixCoefficients::UnknownCode(92)),
+            range: Some(super::SourceColorRange::UnknownCode(93)),
+            ..SourceColorDescription::default()
+        };
+
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceColorDescription = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, source);
     }
 }

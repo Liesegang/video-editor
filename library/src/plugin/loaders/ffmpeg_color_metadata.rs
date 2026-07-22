@@ -1,11 +1,9 @@
 //! Translation from FFmpeg/H.273 stream/codec tags into the persisted source
 //! model.
 //!
-//! FFmpeg's safe enums intentionally collapse unrecognized extension codes.
-//! Reading the borrowed codec fields preserves those codes so a newer or
-//! vendor-specific tag survives a Project round trip. Per-frame metadata is
-//! deliberately outside this foundation until the loader response and cache
-//! can transport it without dropping it.
+//! Only values represented by the linked FFmpeg version's safe enums are
+//! mapped. Per-frame metadata is deliberately outside this foundation until
+//! the loader response and cache can transport it without dropping it.
 
 use crate::model::asset::{
     SourceColorDescription, SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
@@ -14,18 +12,24 @@ use crate::model::asset::{
 use ffmpeg_next as ffmpeg;
 
 pub(super) fn from_decoder(decoder: &ffmpeg::decoder::Video) -> SourceColorDescription {
-    // SAFETY: FFmpeg owns this AVCodecContext for the lifetime of `decoder`;
-    // this function only copies scalar metadata while the borrow is active.
-    let context = unsafe { &*decoder.as_ptr() };
     SourceColorDescription {
-        primaries: primaries(context.color_primaries as i32),
-        transfer: transfer(context.color_trc as i32),
-        matrix: matrix(context.colorspace as i32),
-        range: range(context.color_range as i32),
-        bit_depth: positive_bit_depth(context.bits_per_raw_sample)
-            .or_else(|| pixel_bit_depth(decoder.format())),
+        primaries: primaries(decoder.color_primaries()),
+        transfer: transfer(decoder.color_transfer_characteristic()),
+        matrix: matrix(decoder.color_space()),
+        range: range(decoder.color_range()),
+        bit_depth: decoder_raw_bit_depth(decoder).or_else(|| pixel_bit_depth(decoder.format())),
         profile: None,
     }
+}
+
+fn decoder_raw_bit_depth(decoder: &ffmpeg::decoder::Video) -> Option<u8> {
+    // SAFETY: `decoder` owns a live, aligned AVCodecContext. No Rust reference
+    // to the foreign struct is created; only its plain integer field is copied
+    // while `decoder` remains borrowed.
+    let context = unsafe { decoder.as_ptr() };
+    // SAFETY: The same live-context invariant applies to this integer copy.
+    let value = unsafe { std::ptr::addr_of!((*context).bits_per_raw_sample).read() };
+    positive_bit_depth(value)
 }
 
 fn positive_bit_depth(value: i32) -> Option<u8> {
@@ -34,122 +38,148 @@ fn positive_bit_depth(value: i32) -> Option<u8> {
 
 fn pixel_bit_depth(pixel: ffmpeg::format::Pixel) -> Option<u8> {
     let descriptor = pixel.descriptor()?;
-    if descriptor.nb_components() == 0 {
+    let component_count = usize::from(descriptor.nb_components());
+    if component_count == 0 || component_count > 4 {
         return None;
     }
-    // SAFETY: `descriptor` is returned by `av_pix_fmt_desc_get`, and at least
-    // one component was checked above. We only copy the first component depth.
-    let depth = unsafe { (*descriptor.as_ptr()).comp[0].depth };
-    u8::try_from(depth).ok().filter(|depth| *depth > 0)
+
+    // SAFETY: `descriptor` comes from FFmpeg's static pixel-format table. We
+    // form a raw address to its fixed component array without a Rust reference.
+    let components = unsafe { std::ptr::addr_of!((*descriptor.as_ptr()).comp) }
+        .cast::<ffmpeg::ffi::AVComponentDescriptor>();
+    let mut uniform_depth = None;
+    for index in 0..component_count {
+        // SAFETY: AVPixFmtDescriptor has four component descriptors and the
+        // checked `component_count` bounds this access. Only `depth` is copied.
+        let depth = unsafe { std::ptr::addr_of!((*components.add(index)).depth).read() };
+        let depth = positive_bit_depth(depth)?;
+        match uniform_depth {
+            Some(expected) if expected != depth => return None,
+            Some(_) => {}
+            None => uniform_depth = Some(depth),
+        }
+    }
+    uniform_depth
 }
 
-fn primaries(code: i32) -> Option<SourceColorPrimaries> {
-    Some(match code {
-        2 => return None, // AVCOL_PRI_UNSPECIFIED
-        1 => SourceColorPrimaries::Bt709,
-        4 => SourceColorPrimaries::Bt470M,
-        5 => SourceColorPrimaries::Bt470Bg,
-        6 => SourceColorPrimaries::Smpte170M,
-        7 => SourceColorPrimaries::Smpte240M,
-        8 => SourceColorPrimaries::Film,
-        9 => SourceColorPrimaries::Bt2020,
-        10 => SourceColorPrimaries::Smpte428,
-        11 => SourceColorPrimaries::DciP3,
-        12 => SourceColorPrimaries::DisplayP3,
-        22 => SourceColorPrimaries::Ebu3213,
-        other => SourceColorPrimaries::UnknownCode(other),
-    })
+fn primaries(value: ffmpeg::color::Primaries) -> Option<SourceColorPrimaries> {
+    use ffmpeg::color::Primaries as Ffmpeg;
+    match value {
+        Ffmpeg::BT709 => Some(SourceColorPrimaries::Bt709),
+        Ffmpeg::BT470M => Some(SourceColorPrimaries::Bt470M),
+        Ffmpeg::BT470BG => Some(SourceColorPrimaries::Bt470Bg),
+        Ffmpeg::SMPTE170M => Some(SourceColorPrimaries::Smpte170M),
+        Ffmpeg::SMPTE240M => Some(SourceColorPrimaries::Smpte240M),
+        Ffmpeg::Film => Some(SourceColorPrimaries::Film),
+        Ffmpeg::BT2020 => Some(SourceColorPrimaries::Bt2020),
+        Ffmpeg::SMPTE428 => Some(SourceColorPrimaries::Smpte428),
+        Ffmpeg::SMPTE431 => Some(SourceColorPrimaries::DciP3),
+        Ffmpeg::SMPTE432 => Some(SourceColorPrimaries::DisplayP3),
+        Ffmpeg::JEDEC_P22 => Some(SourceColorPrimaries::Ebu3213),
+        Ffmpeg::Unspecified | Ffmpeg::Reserved0 | Ffmpeg::Reserved => None,
+    }
 }
 
-fn transfer(code: i32) -> Option<SourceTransferCharacteristic> {
-    Some(match code {
-        2 => return None, // AVCOL_TRC_UNSPECIFIED
-        1 => SourceTransferCharacteristic::Bt709,
-        4 => SourceTransferCharacteristic::Gamma22,
-        5 => SourceTransferCharacteristic::Gamma28,
-        6 => SourceTransferCharacteristic::Smpte170M,
-        7 => SourceTransferCharacteristic::Smpte240M,
-        8 => SourceTransferCharacteristic::Linear,
-        9 => SourceTransferCharacteristic::Log100,
-        10 => SourceTransferCharacteristic::Log316,
-        11 => SourceTransferCharacteristic::Iec61966_2_4,
-        12 => SourceTransferCharacteristic::Bt1361,
-        13 => SourceTransferCharacteristic::Srgb,
-        14 => SourceTransferCharacteristic::Bt2020_10,
-        15 => SourceTransferCharacteristic::Bt2020_12,
-        16 => SourceTransferCharacteristic::Pq,
-        17 => SourceTransferCharacteristic::Smpte428,
-        18 => SourceTransferCharacteristic::Hlg,
-        other => SourceTransferCharacteristic::UnknownCode(other),
-    })
+fn transfer(value: ffmpeg::color::TransferCharacteristic) -> Option<SourceTransferCharacteristic> {
+    use ffmpeg::color::TransferCharacteristic as Ffmpeg;
+    match value {
+        Ffmpeg::BT709 => Some(SourceTransferCharacteristic::Bt709),
+        Ffmpeg::GAMMA22 => Some(SourceTransferCharacteristic::Gamma22),
+        Ffmpeg::GAMMA28 => Some(SourceTransferCharacteristic::Gamma28),
+        Ffmpeg::SMPTE170M => Some(SourceTransferCharacteristic::Smpte170M),
+        Ffmpeg::SMPTE240M => Some(SourceTransferCharacteristic::Smpte240M),
+        Ffmpeg::Linear => Some(SourceTransferCharacteristic::Linear),
+        Ffmpeg::Log => Some(SourceTransferCharacteristic::Log100),
+        Ffmpeg::LogSqrt => Some(SourceTransferCharacteristic::Log316),
+        Ffmpeg::IEC61966_2_4 => Some(SourceTransferCharacteristic::Iec61966_2_4),
+        Ffmpeg::BT1361_ECG => Some(SourceTransferCharacteristic::Bt1361),
+        Ffmpeg::IEC61966_2_1 => Some(SourceTransferCharacteristic::Srgb),
+        Ffmpeg::BT2020_10 => Some(SourceTransferCharacteristic::Bt2020_10),
+        Ffmpeg::BT2020_12 => Some(SourceTransferCharacteristic::Bt2020_12),
+        Ffmpeg::SMPTE2084 => Some(SourceTransferCharacteristic::Pq),
+        Ffmpeg::SMPTE428 => Some(SourceTransferCharacteristic::Smpte428),
+        Ffmpeg::ARIB_STD_B67 => Some(SourceTransferCharacteristic::Hlg),
+        Ffmpeg::Unspecified | Ffmpeg::Reserved0 | Ffmpeg::Reserved => None,
+    }
 }
 
-fn matrix(code: i32) -> Option<SourceMatrixCoefficients> {
-    Some(match code {
-        2 => return None, // AVCOL_SPC_UNSPECIFIED
-        0 => SourceMatrixCoefficients::Identity,
-        1 => SourceMatrixCoefficients::Bt709,
-        4 => SourceMatrixCoefficients::Fcc,
-        5 => SourceMatrixCoefficients::Bt470Bg,
-        6 => SourceMatrixCoefficients::Smpte170M,
-        7 => SourceMatrixCoefficients::Smpte240M,
-        8 => SourceMatrixCoefficients::YCgCo,
-        9 => SourceMatrixCoefficients::Bt2020NonConstantLuminance,
-        10 => SourceMatrixCoefficients::Bt2020ConstantLuminance,
-        11 => SourceMatrixCoefficients::Smpte2085,
-        12 => SourceMatrixCoefficients::ChromaDerivedNonConstantLuminance,
-        13 => SourceMatrixCoefficients::ChromaDerivedConstantLuminance,
-        14 => SourceMatrixCoefficients::ICtCp,
-        other => SourceMatrixCoefficients::UnknownCode(other),
-    })
+fn matrix(value: ffmpeg::color::Space) -> Option<SourceMatrixCoefficients> {
+    use ffmpeg::color::Space as Ffmpeg;
+    match value {
+        Ffmpeg::RGB => Some(SourceMatrixCoefficients::Identity),
+        Ffmpeg::BT709 => Some(SourceMatrixCoefficients::Bt709),
+        Ffmpeg::FCC => Some(SourceMatrixCoefficients::Fcc),
+        Ffmpeg::BT470BG => Some(SourceMatrixCoefficients::Bt470Bg),
+        Ffmpeg::SMPTE170M => Some(SourceMatrixCoefficients::Smpte170M),
+        Ffmpeg::SMPTE240M => Some(SourceMatrixCoefficients::Smpte240M),
+        Ffmpeg::YCGCO => Some(SourceMatrixCoefficients::YCgCo),
+        Ffmpeg::BT2020NCL => Some(SourceMatrixCoefficients::Bt2020NonConstantLuminance),
+        Ffmpeg::BT2020CL => Some(SourceMatrixCoefficients::Bt2020ConstantLuminance),
+        Ffmpeg::SMPTE2085 => Some(SourceMatrixCoefficients::Smpte2085),
+        Ffmpeg::ChromaDerivedNCL => {
+            Some(SourceMatrixCoefficients::ChromaDerivedNonConstantLuminance)
+        }
+        Ffmpeg::ChromaDerivedCL => Some(SourceMatrixCoefficients::ChromaDerivedConstantLuminance),
+        Ffmpeg::ICTCP => Some(SourceMatrixCoefficients::ICtCp),
+        // Newer FFmpeg matrix variants that do not yet have a typed Project
+        // representation remain unknown rather than being guessed.
+        _ => None,
+    }
 }
 
-fn range(code: i32) -> Option<SourceColorRange> {
-    Some(match code {
-        0 => return None, // AVCOL_RANGE_UNSPECIFIED
-        1 => SourceColorRange::Limited,
-        2 => SourceColorRange::Full,
-        other => SourceColorRange::UnknownCode(other),
-    })
+fn range(value: ffmpeg::color::Range) -> Option<SourceColorRange> {
+    match value {
+        ffmpeg::color::Range::MPEG => Some(SourceColorRange::Limited),
+        ffmpeg::color::Range::JPEG => Some(SourceColorRange::Full),
+        ffmpeg::color::Range::Unspecified => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{matrix, primaries, range, transfer};
+    use super::{matrix, pixel_bit_depth, primaries, range, transfer};
     use crate::model::asset::{
         SourceColorPrimaries, SourceColorRange, SourceMatrixCoefficients,
         SourceTransferCharacteristic,
     };
 
     #[test]
-    fn h273_codes_map_without_guessing_unspecified_values() {
-        assert_eq!(primaries(1), Some(SourceColorPrimaries::Bt709));
-        assert_eq!(primaries(9), Some(SourceColorPrimaries::Bt2020));
-        assert_eq!(transfer(16), Some(SourceTransferCharacteristic::Pq));
-        assert_eq!(transfer(18), Some(SourceTransferCharacteristic::Hlg));
+    fn ffmpeg_defined_values_map_without_guessing_unspecified_values() {
+        use ffmpeg_next::color::{Primaries, Range, Space, TransferCharacteristic};
+
         assert_eq!(
-            matrix(9),
+            primaries(Primaries::BT709),
+            Some(SourceColorPrimaries::Bt709)
+        );
+        assert_eq!(
+            primaries(Primaries::BT2020),
+            Some(SourceColorPrimaries::Bt2020)
+        );
+        assert_eq!(
+            transfer(TransferCharacteristic::SMPTE2084),
+            Some(SourceTransferCharacteristic::Pq)
+        );
+        assert_eq!(
+            transfer(TransferCharacteristic::ARIB_STD_B67),
+            Some(SourceTransferCharacteristic::Hlg)
+        );
+        assert_eq!(
+            matrix(Space::BT2020NCL),
             Some(SourceMatrixCoefficients::Bt2020NonConstantLuminance)
         );
-        assert_eq!(range(1), Some(SourceColorRange::Limited));
-        assert_eq!(range(2), Some(SourceColorRange::Full));
-        assert_eq!(primaries(2), None);
-        assert_eq!(transfer(2), None);
-        assert_eq!(matrix(2), None);
-        assert_eq!(range(0), None);
+        assert_eq!(range(Range::MPEG), Some(SourceColorRange::Limited));
+        assert_eq!(range(Range::JPEG), Some(SourceColorRange::Full));
+        assert_eq!(primaries(Primaries::Unspecified), None);
+        assert_eq!(transfer(TransferCharacteristic::Unspecified), None);
+        assert_eq!(matrix(Space::Unspecified), None);
+        assert_eq!(range(Range::Unspecified), None);
     }
 
     #[test]
-    fn extension_codes_are_not_collapsed_to_unspecified() {
-        assert_eq!(primaries(99), Some(SourceColorPrimaries::UnknownCode(99)));
-        assert_eq!(
-            transfer(100),
-            Some(SourceTransferCharacteristic::UnknownCode(100))
-        );
-        assert_eq!(
-            matrix(101),
-            Some(SourceMatrixCoefficients::UnknownCode(101))
-        );
-        assert_eq!(range(102), Some(SourceColorRange::UnknownCode(102)));
+    fn pixel_depth_requires_uniform_active_components() {
+        use ffmpeg_next::format::Pixel;
+
+        assert_eq!(pixel_bit_depth(Pixel::RGB565LE), None);
+        assert_eq!(pixel_bit_depth(Pixel::YUV420P10LE), Some(10));
     }
 }
