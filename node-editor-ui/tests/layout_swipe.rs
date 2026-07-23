@@ -600,7 +600,7 @@ fn pointer_gone_focus_loss_without_release_does_not_swallow_the_next_move() {
     );
     assert!(moved.iter().any(|output| matches!(
         output,
-        Output::Move { items, delta }
+        Output::Move { items, delta, .. }
             if items == &[ItemId::Node(1)] && *delta == vec2(24.0, 6.0)
     )));
 }
@@ -846,7 +846,7 @@ fn ordinary_header_move_still_works_without_a() {
     );
     assert!(dragged.iter().any(|output| matches!(
         output,
-        Output::Move { items, delta }
+        Output::Move { items, delta, .. }
             if items == &[ItemId::Node(1)] && *delta == vec2(20.0, 4.0)
     )));
 }

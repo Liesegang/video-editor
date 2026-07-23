@@ -238,8 +238,9 @@ impl ProjectNodeViewer<'_> {
                                 "action": "open_authored_blend",
                             }))),
                         );
+                        self.record_body_response(&combo.inner);
                     } else {
-                        bounded_non_selectable_label(
+                        let response = bounded_non_selectable_label(
                             ui,
                             match row.kind {
                                 NativeVariadicMergeKind::List => {
@@ -263,6 +264,7 @@ impl ProjectNodeViewer<'_> {
                                 "Sound inputs are mixed in canonical top-to-bottom order"
                             }
                         });
+                        self.record_body_response(&response);
                     }
 
                     let up_index = match row.kind {
@@ -285,6 +287,7 @@ impl ProjectNodeViewer<'_> {
                     if response.clicked() {
                         requested_order = up_index;
                     }
+                    self.record_body_response(&response);
                     up_response = Some(response);
                     let down_index = match row.kind {
                         NativeVariadicMergeKind::Image => row.canonical_index.checked_sub(1),
@@ -306,6 +309,7 @@ impl ProjectNodeViewer<'_> {
                     if response.clicked() {
                         requested_order = down_index;
                     }
+                    self.record_body_response(&response);
                     down_response = Some(response);
                 });
             })
@@ -314,6 +318,7 @@ impl ProjectNodeViewer<'_> {
         let Some(drag_response) = drag_response else {
             return Some(row.connection_id);
         };
+        self.record_body_response(&drag_response);
 
         if drag_response.drag_started() {
             *self.merge_layer_reorder = Some(NodeEditorMergeLayerReorderGesture {
@@ -559,13 +564,14 @@ impl ProjectNodeViewer<'_> {
                 },
                 |definition| definition.ui_type().supports_expression(),
             );
-            let mode_action = property_mode_control(
+            let (mode_action, mode_response) = property_mode_control(
                 ui,
                 &mode_qa_id,
                 authored_property.as_ref(),
                 property_time,
                 allow_expression,
             );
+            self.record_body_response(&mode_response);
             let replacement = match (mode_action, authored_property.as_ref(), mode_value.clone()) {
                 (Some(PropertyModeAction::SetMode(mode)), current, Some(value)) => {
                     property_for_mode(current, mode, value, property_time).ok()
@@ -812,6 +818,7 @@ impl ProjectNodeViewer<'_> {
         let value = control.value;
         let vector_components = control.components;
         let connected_metadata = control.metadata;
+        self.record_body_response(&response);
         let component_id = format!("node_editor.property.node:{node_id}:{property_key}");
         let unclipped_rect = *self.to_global * response.rect;
         let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
@@ -880,6 +887,7 @@ impl ProjectNodeViewer<'_> {
                 [180.0, PORT_ROW_HEIGHT],
                 egui::TextEdit::singleline(&mut name),
             );
+            self.record_body_response(&response);
             let finished = continuous_response_finished(ui, &response);
             let edit = response
                 .changed()
@@ -914,6 +922,7 @@ impl ProjectNodeViewer<'_> {
                         [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
                         config.widget(&mut edited),
                     );
+                    self.record_body_response(&response);
                     let finished = continuous_response_finished(ui, &response);
                     let edit = response.changed().then(|| NodeEdit::SetProperty {
                         owner,
@@ -939,6 +948,8 @@ impl ProjectNodeViewer<'_> {
                     .range(MIN_CONTAINER_SIZE.y..=8192.0)
                     .suffix(" h"),
             );
+            self.record_body_response(&width_response);
+            self.record_body_response(&height_response);
             let resized = || NodeEdit::ResizeContainer {
                 owner,
                 size: [
@@ -999,6 +1010,7 @@ impl ProjectNodeViewer<'_> {
                 [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
                 egui::TextEdit::singleline(&mut value),
             );
+            self.record_body_response(&response);
             let finished = continuous_response_finished(ui, &response);
             let edit = response.changed().then(|| NodeEdit::SetProperty {
                 owner: PortOwner::Node(node_id),

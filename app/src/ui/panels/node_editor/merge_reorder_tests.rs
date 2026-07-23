@@ -244,7 +244,6 @@ pub(super) fn render_merge_frame(
                 drop(viewer);
                 state.node_editor_canvas_transform = Some(to_global);
                 result.transform = to_global;
-                result.layout_edit_count = collect_layout_edits(project, &snarl).len();
                 result.edges = register_rendered_edges(project, &rendered_ports, canvas_clip, None);
             });
         },
@@ -653,7 +652,6 @@ fn real_pointer_drag_reorders_back_to_front_once_and_preserves_wire_metadata() {
             frame,
             events,
         );
-        assert_eq!(rendered.layout_edit_count, 0);
         assert!(rendered.edits.is_empty());
         panned = rendered.transform;
         frame += 1;
@@ -684,7 +682,6 @@ fn real_pointer_drag_reorders_back_to_front_once_and_preserves_wire_metadata() {
             events,
         );
         drag_transforms.push(rendered.transform);
-        assert_eq!(rendered.layout_edit_count, 0);
         if !rendered.edits.is_empty() {
             assert_eq!(rendered.edits.len(), 1);
             let mut history = HistoryManager::new();
@@ -815,7 +812,6 @@ fn real_pointer_drag_outside_rows_cancels_without_project_or_layout_change() {
             frame,
             events,
         );
-        assert_eq!(rendered.layout_edit_count, 0);
         edits.extend(rendered.edits);
         frame += 1;
     }

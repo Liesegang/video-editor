@@ -13,8 +13,8 @@ use library::model::project::{
 use library::model::Project;
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, EditorOutput, GraphFrame, GroupDescriptor, ItemId,
-    NodeDescriptor, PortDescriptor, PortDirection, PortInstanceId, PortOwner, TypeKey,
-    WireDescriptor,
+    MoveEndOutcome, NodeBodyResponse, NodeDescriptor, PortDescriptor, PortDirection,
+    PortInstanceId, PortOwner, TypeKey, WireDescriptor,
 };
 use uuid::Uuid;
 
@@ -22,8 +22,8 @@ use crate::state::context_types::{NodeEditorEditableWire, SelectionTarget};
 
 use super::{
     container_output_binding_port, container_output_binding_type, container_output_port,
-    parent_container_owner, port_owner_for_node_container, ContainerVisual, RenderedEdge,
-    RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT, PORT_ROW_HEIGHT,
+    parent_container_owner, port_owner_for_node_container, ContainerVisual, LayoutEdit,
+    RenderedEdge, RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT, PORT_ROW_HEIGHT,
 };
 
 pub(super) type SurfacePortId = PortInstanceId<PortAddress, NodeEditorEditableWire>;
@@ -40,6 +40,7 @@ pub(super) struct SurfaceCapture {
     node_headers: HashMap<Uuid, egui::Rect>,
     selectable_order: Vec<SelectionTarget>,
     port_order: Vec<RenderedPortKey>,
+    body_pointer_owned: bool,
 }
 
 impl SurfaceCapture {
@@ -55,6 +56,14 @@ impl SurfaceCapture {
     pub(super) fn record_port(&mut self, key: RenderedPortKey) {
         self.port_order.retain(|existing| *existing != key);
         self.port_order.push(key);
+    }
+
+    pub(super) fn record_body_response(&mut self, response: &egui::Response) {
+        self.body_pointer_owned |= NodeBodyResponse::from_response(response).owns_pointer();
+    }
+
+    pub(super) const fn body_pointer_owned(&self) -> bool {
+        self.body_pointer_owned
     }
 }
 
@@ -330,6 +339,136 @@ pub(super) fn deselects_wire(outputs: &[SurfaceOutput]) -> bool {
     outputs
         .iter()
         .any(|output| matches!(output, SurfaceOutput::DeselectWire { .. }))
+}
+
+/// Return the typed terminal outcome for a position-changing Move. The core
+/// emits exactly one, and production uses it instead of inferring completion
+/// from unrelated raw pointer releases.
+pub(super) fn move_end(outputs: &[SurfaceOutput]) -> Option<MoveEndOutcome> {
+    outputs.iter().find_map(|output| match output {
+        SurfaceOutput::MoveEnd { outcome } => Some(*outcome),
+        _ => None,
+    })
+}
+
+#[derive(Debug)]
+pub(super) struct SurfaceMoveChange {
+    pub(super) edits: Vec<LayoutEdit>,
+    pub(super) grabbed_node: Option<Uuid>,
+}
+
+/// Resolve a domain-neutral incremental Move against the authoritative
+/// Project. Hierarchy filtering belongs here: moving a selected Composition,
+/// Track, or Clip already translates its descendants, so selected descendants
+/// must not receive the same delta twice.
+pub(super) fn move_change(
+    project: &Project,
+    outputs: &[SurfaceOutput],
+) -> Option<SurfaceMoveChange> {
+    outputs.iter().find_map(|output| {
+        let SurfaceOutput::Move {
+            items,
+            grabbed,
+            delta,
+        } = output
+        else {
+            return None;
+        };
+        let candidates = items
+            .iter()
+            .filter_map(selection_target)
+            .collect::<Vec<_>>();
+        let edits = selection_move_roots(project, &candidates)
+            .into_iter()
+            .filter_map(|target| layout_edit_for_delta(project, target, *delta))
+            .collect();
+        Some(SurfaceMoveChange {
+            edits,
+            grabbed_node: match grabbed {
+                ItemId::Node(node_id) => Some(*node_id),
+                ItemId::Group(_) | ItemId::Wire(_) => None,
+            },
+        })
+    })
+}
+
+fn selection_move_roots(project: &Project, selected: &[SelectionTarget]) -> Vec<SelectionTarget> {
+    let mut roots = Vec::new();
+    for target in selected.iter().copied() {
+        if roots.contains(&target)
+            || selected.iter().copied().any(|candidate| {
+                candidate != target && target_is_ancestor(project, candidate, target)
+            })
+        {
+            continue;
+        }
+        roots.push(target);
+    }
+    roots
+}
+
+fn target_is_ancestor(
+    project: &Project,
+    ancestor: SelectionTarget,
+    descendant: SelectionTarget,
+) -> bool {
+    let ancestor = owner_for_selection_target(ancestor);
+    let mut current = parent_owner(project, owner_for_selection_target(descendant));
+    while let Some(owner) = current {
+        if owner == ancestor {
+            return true;
+        }
+        current = parent_owner(project, owner);
+    }
+    false
+}
+
+fn parent_owner(project: &Project, owner: ProjectPortOwner) -> Option<ProjectPortOwner> {
+    match owner {
+        ProjectPortOwner::Node(id) => project
+            .find_node_container(id)
+            .map(port_owner_for_node_container),
+        ProjectPortOwner::Composition(_)
+        | ProjectPortOwner::Track(_)
+        | ProjectPortOwner::Clip(_) => parent_container_owner(project, owner),
+    }
+}
+
+const fn owner_for_selection_target(target: SelectionTarget) -> ProjectPortOwner {
+    match target {
+        SelectionTarget::Node(id) => ProjectPortOwner::Node(id),
+        SelectionTarget::Clip(id) => ProjectPortOwner::Clip(id),
+        SelectionTarget::Track(id) => ProjectPortOwner::Track(id),
+        SelectionTarget::Composition(id) => ProjectPortOwner::Composition(id),
+    }
+}
+
+fn layout_edit_for_delta(
+    project: &Project,
+    target: SelectionTarget,
+    delta: egui::Vec2,
+) -> Option<LayoutEdit> {
+    match target {
+        SelectionTarget::Node(node_id) => {
+            let node = project.get_node(node_id)?;
+            Some(LayoutEdit::MoveNode {
+                node_id,
+                position: [node.ui_position[0] + delta.x, node.ui_position[1] + delta.y],
+            })
+        }
+        SelectionTarget::Clip(id) => Some(LayoutEdit::MoveContainer {
+            owner: ProjectPortOwner::Clip(id),
+            delta: [delta.x, delta.y],
+        }),
+        SelectionTarget::Track(id) => Some(LayoutEdit::MoveContainer {
+            owner: ProjectPortOwner::Track(id),
+            delta: [delta.x, delta.y],
+        }),
+        SelectionTarget::Composition(id) => Some(LayoutEdit::MoveContainer {
+            owner: ProjectPortOwner::Composition(id),
+            delta: [delta.x, delta.y],
+        }),
+    }
 }
 
 fn selection_target(

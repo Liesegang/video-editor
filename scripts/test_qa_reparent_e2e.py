@@ -81,6 +81,8 @@ class ReparentE2ETests(unittest.TestCase):
         source = MODULE_PATH.read_text(encoding="utf-8")
         for endpoint in ('"press"', '"move"', '"release"'):
             self.assertIn(endpoint, source)
+        self.assertIn('client.key("escape", True)', source)
+        self.assertIn("assert_cancelled_move_state", source)
         self.assertIn("node_editor.reparent_target.clip:", source)
         self.assertIn("source_header_rect_points", source)
         self.assertIn("target_content_rect_points", source)

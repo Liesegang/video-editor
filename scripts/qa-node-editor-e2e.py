@@ -142,6 +142,64 @@ def find_primary_pan_gesture(snapshot, dx=112.0, dy=64.0):
     raise QaFailure("no unobstructed primary-pan origin in Node Editor canvas")
 
 
+def assert_header_interaction_metadata(snapshot, expected_move_enabled):
+    """Selection stays available when header movement is gated by LOD."""
+    header_prefixes = (
+        "node_editor.node_header:",
+        "node_editor.container_header.",
+    )
+    headers = [
+        component
+        for component in snapshot["components"]
+        if component["id"].startswith(header_prefixes)
+        and component.get("visible", False)
+    ]
+    if not headers:
+        raise QaFailure(
+            "frame {} has no visible Node/Group header metadata".format(snapshot["frame"])
+        )
+    for component in headers:
+        metadata = component.get("metadata") or {}
+        if metadata.get("selection_enabled") is not True:
+            raise QaFailure("{} disabled semantic selection".format(component["id"]))
+        if metadata.get("move_enabled") is not expected_move_enabled:
+            raise QaFailure(
+                "{} move_enabled={!r}, expected {!r}".format(
+                    component["id"],
+                    metadata.get("move_enabled"),
+                    expected_move_enabled,
+                )
+            )
+
+    move_components = [
+        component
+        for component in snapshot["components"]
+        if component["id"].startswith("node_editor.container_move_header.")
+        and component.get("visible", False)
+    ]
+    if not move_components:
+        raise QaFailure(
+            "frame {} has no visible Group move component".format(snapshot["frame"])
+        )
+    for component in move_components:
+        metadata = component.get("metadata") or {}
+        if component.get("enabled") is not expected_move_enabled:
+            raise QaFailure(
+                "{} component enabled={!r}, expected {!r}".format(
+                    component["id"], component.get("enabled"), expected_move_enabled
+                )
+            )
+        if metadata.get("selection_enabled") is not True:
+            raise QaFailure("{} omitted selection_enabled".format(component["id"]))
+        if metadata.get("move_enabled") is not expected_move_enabled:
+            raise QaFailure("{} metadata disagrees with component gate".format(component["id"]))
+    return {
+        "header_ids": [component["id"] for component in headers],
+        "move_component_ids": [component["id"] for component in move_components],
+        "move_enabled": expected_move_enabled,
+    }
+
+
 def assert_minimum_zoom(before, zoomed, tolerance=1.0e-5):
     if not zoomed["scale"] < before["scale"]:
         raise QaFailure(
@@ -271,6 +329,11 @@ def run_suite(client):
     BASE.wait_fresh_fixture(client)
     tab_click, initial_state = activate_node_editor_tab(client)
     initial_snapshot, _, initial = wait_canvas(client, "final Node Editor canvas metadata")
+    detail_header_evidence = None
+    if initial["detail_enabled"]:
+        detail_header_evidence = assert_header_interaction_metadata(
+            client.component_snapshot(), True
+        )
 
     # A manually reused app may already be at the lower clamp. Recover only
     # through the same public wheel path so the subsequent decrease remains
@@ -300,6 +363,9 @@ def run_suite(client):
         after_frame=scroll_frame,
     )
     assert_minimum_zoom(before, zoomed)
+    overview_header_evidence = assert_header_interaction_metadata(
+        client.component_snapshot(), False
+    )
 
     # Re-query all rectangles after zoom. The drag origin is selected from the
     # completed overview frame and sent as a normal primary-button lifecycle.
@@ -351,6 +417,10 @@ def run_suite(client):
         "panned": panned,
         "zoom_point": zoom_point,
         "pan": {"from": start, "to": end, "actual_delta": actual_delta},
+        "header_lod": {
+            "detail": detail_header_evidence,
+            "overview": overview_header_evidence,
+        },
         "state_guard": {
             "history": final_state["history"],
             "selection": final_state["editor"]["selection"],

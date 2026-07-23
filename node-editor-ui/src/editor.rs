@@ -34,12 +34,26 @@ impl NodeBodyResponse {
 
     /// Convert one real egui widget response into body pointer ownership.
     pub fn from_response(response: &egui::Response) -> Self {
+        let (primary_pressed, press_origin) = response.ctx.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.press_origin(),
+            )
+        });
+        let press_origin = press_origin.map(|position| {
+            response
+                .ctx
+                .layer_transform_from_global(response.layer_id)
+                .map_or(position, |from_global| from_global * position)
+        });
+        let owns_current_press = primary_pressed
+            && press_origin.is_some_and(|position| response.rect.contains(position));
+        let owns_existing_gesture = !primary_pressed
+            && (response.dragged() || response.is_pointer_button_down_on() || response.clicked());
         Self {
             pointer_owned: response.enabled()
                 && response.sense.interactive()
-                && (response.contains_pointer()
-                    || response.dragged()
-                    || response.is_pointer_button_down_on()),
+                && (owns_current_press || owns_existing_gesture),
         }
     }
 
@@ -51,7 +65,8 @@ impl NodeBodyResponse {
         }
     }
 
-    const fn pointer_owned(self) -> bool {
+    /// Whether a body control owns the current primary-pointer lifecycle.
+    pub const fn owns_pointer(self) -> bool {
         self.pointer_owned
     }
 }
@@ -400,7 +415,7 @@ where
                 renderer.show(&node.id, ui)
             })
             .inner
-            .pointer_owned();
+            .owns_pointer();
     }
     false
 }

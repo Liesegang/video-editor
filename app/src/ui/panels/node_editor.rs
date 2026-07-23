@@ -4,9 +4,7 @@ use crate::state::context_types::{
     NodeEditorPendingEdit, NodeEditorReparentGesture, NodeEditorState,
 };
 #[cfg(test)]
-use crate::state::context_types::{
-    NodeEditorEditableWire, NodeEditorWireDragKind, SelectionTarget,
-};
+use crate::state::context_types::{NodeEditorEditableWire, NodeEditorWireDragKind};
 use crate::ui::widgets::searchable_context_menu::{
     register_searchable_popup_qa, searchable_menu_click_is_outside, searchable_popup_placement,
     show_searchable_items_with_qa, show_searchable_popup_frame,
@@ -14,8 +12,6 @@ use crate::ui::widgets::searchable_context_menu::{
 use eframe::egui::{self, Color32};
 #[cfg(test)]
 use egui_snarl::ui::{SnarlPin, SnarlStyle};
-#[cfg(test)]
-use egui_snarl::Snarl;
 use library::model::project::PortOwner;
 #[cfg(test)]
 use library::model::project::{PortAddress, PortDataType, PortDirection};
@@ -105,7 +101,9 @@ use interaction::{
     EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
     WireSecondaryClickHit,
 };
-use surface::{deselects_wire, selection_change, SurfaceCapture, SurfaceProjection};
+use surface::{
+    deselects_wire, move_change, move_end, selection_change, SurfaceCapture, SurfaceProjection,
+};
 mod qa;
 
 #[cfg(test)]
@@ -141,14 +139,8 @@ use qa::{
 };
 mod queries;
 #[cfg(test)]
-use interaction::node_selection_after_snarl_click;
-#[cfg(test)]
 use interaction::resize_regions;
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
-use interaction::{
-    captured_snarl_drag_node, captured_snarl_drag_target, select_logical_item,
-    selected_container_owners, selection_target_for_owner,
-};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
 use interaction::{
@@ -166,6 +158,7 @@ use interaction::{
     register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
     TimeContextNode,
 };
+use interaction::{select_logical_item, selected_container_owners, selection_target_for_owner};
 #[cfg(test)]
 use queries::clip_is_active;
 pub(super) use queries::node_timing_drag_config;
@@ -202,17 +195,14 @@ use components::{merge_images_target_node_id, merge_vacant_slot, WireOrderMenuSt
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]
-use layout::collect_layout_edits;
-#[cfg(test)]
 use layout::padded_intersection;
 use layout::{
     apply_auto_layout, ensure_structural_merge_layout, set_container_geometry, set_container_size,
     translate_container,
 };
 use layout::{
-    apply_layout_edit, collect_layout_edits_for_selection, composition_content_rect,
-    container_hierarchy_needs_reflow, estimated_node_rect, layout_needs_reflow,
-    nested_content_rect, rect_contains_rect,
+    apply_layout_edit, composition_content_rect, container_hierarchy_needs_reflow,
+    estimated_node_rect, layout_needs_reflow, nested_content_rect, rect_contains_rect,
 };
 #[cfg(test)]
 use layout::{canonical_edges, composition_graph_node_ids, estimated_merge_node_width};

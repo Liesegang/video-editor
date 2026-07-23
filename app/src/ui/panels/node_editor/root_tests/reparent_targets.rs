@@ -220,13 +220,17 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
         hovered_node_id: None,
         hovered_score: None,
     };
+    let rendered_rect = egui::Rect::from_min_size(
+        egui::pos2(origin.position[0], origin.position[1]),
+        exact_node_size,
+    );
     let small_min = egui::pos2(origin.position[0] + 4.0, origin.position[1] + 3.0);
     let small_rect = egui::Rect::from_min_size(small_min, exact_node_size);
     assert!(node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &HashMap::from([(node_id, small_rect)]),
+        &HashMap::from([(node_id, rendered_rect)]),
         &HashMap::from([(node_id, [small_min.x, small_min.y])]),
         small_rect.center(),
         1.0,
@@ -246,8 +250,8 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
                 size: [800.0, 500.0],
             },
         ],
+        None,
         &mut non_node_state,
-        true,
     );
     assert!(non_node_state.node_reparent.is_none());
     let Some(clip) = project.get_clip(clip_id) else {
@@ -257,17 +261,17 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
     let padding_min = clip_rect.min + egui::vec2(12.0, 12.0);
     let padding_rect = egui::Rect::from_min_size(padding_min, exact_node_size);
     let padding_positions = HashMap::from([(node_id, [padding_min.x, padding_min.y])]);
-    let padding_rects = HashMap::from([(node_id, padding_rect)]);
     let padding_intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &padding_rects,
+        &HashMap::from([(node_id, rendered_rect)]),
         &padding_positions,
         padding_rect.center(),
         1.0,
     );
     assert_eq!(padding_intents.len(), 1);
+    assert_eq!(padding_intents[0].final_rect, padding_rect);
     assert!(padding_intents.first().is_some_and(|intent| {
         intent.target.container == NodeContainer::Clip(clip_id)
             && intent.target.kind == ReparentTargetKind::RetainedOrigin
@@ -296,17 +300,17 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
     let exited_min = egui::pos2(1_120.0, 470.0);
     let exited_rect = egui::Rect::from_min_size(exited_min, exact_node_size);
     let exited_positions = HashMap::from([(node_id, [exited_min.x, exited_min.y])]);
-    let exited_rects = HashMap::from([(node_id, exited_rect)]);
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &exited_rects,
+        &HashMap::from([(node_id, rendered_rect)]),
         &exited_positions,
         exited_rect.center(),
         1.0,
     );
     assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].final_rect, exited_rect);
     assert!(intents
         .first()
         .is_some_and(|intent| intent.target.container == NodeContainer::Track(track_id)));
@@ -343,18 +347,23 @@ fn subthreshold_screen_drag_repairs_containment_without_changing_owner() {
     let screen_delta = NODE_REPARENT_DRAG_THRESHOLD - 1.0;
     let graph_delta = screen_delta / NODE_EDITOR_MIN_SCALE;
     let final_min = egui::pos2(origin_position[0] + graph_delta, origin_position[1]);
-    let exact_rect =
-        egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id) * 0.4);
+    let exact_size = estimated_node_size(&project, node_id) * 0.4;
+    let exact_rect = egui::Rect::from_min_size(final_min, exact_size);
+    let rendered_rect = egui::Rect::from_min_size(
+        egui::pos2(origin_position[0], origin_position[1]),
+        exact_size,
+    );
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &HashMap::from([(node_id, exact_rect)]),
+        &HashMap::from([(node_id, rendered_rect)]),
         &HashMap::from([(node_id, [final_min.x, final_min.y])]),
         exact_rect.center(),
         NODE_EDITOR_MIN_SCALE,
     );
     assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].final_rect, exact_rect);
     assert!(intents.first().is_some_and(|intent| {
         intent.target.container == NodeContainer::Clip(clip_id)
             && intent.target.kind == ReparentTargetKind::RetainedOrigin
@@ -434,18 +443,23 @@ fn retained_growth_rolls_back_when_it_would_overlap_a_sibling_container() {
     };
     let graph_delta = (NODE_REPARENT_DRAG_THRESHOLD - 1.0) / NODE_EDITOR_MIN_SCALE;
     let final_min = egui::pos2(origin_position[0] + graph_delta, origin_position[1]);
-    let final_rect =
-        egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id) * 0.4);
+    let exact_size = estimated_node_size(&project, node_id) * 0.4;
+    let final_rect = egui::Rect::from_min_size(final_min, exact_size);
+    let rendered_rect = egui::Rect::from_min_size(
+        egui::pos2(origin_position[0], origin_position[1]),
+        exact_size,
+    );
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &HashMap::from([(node_id, final_rect)]),
+        &HashMap::from([(node_id, rendered_rect)]),
         &HashMap::from([(node_id, [final_min.x, final_min.y])]),
         final_rect.center(),
         NODE_EDITOR_MIN_SCALE,
     );
     assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].final_rect, final_rect);
     if let Some(node) = project.get_node_mut(node_id) {
         node.ui_position = [final_min.x, final_min.y];
     }
@@ -516,11 +530,15 @@ fn reparent_applies_when_only_node_overlap_requires_optional_auto_layout() {
         egui::pos2(final_position[0], final_position[1]),
         estimated_node_size(&project, node_id),
     );
+    let rendered_rect = egui::Rect::from_min_size(
+        egui::pos2(origin_position[0], origin_position[1]),
+        final_rect.size(),
+    );
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &HashMap::from([(node_id, final_rect)]),
+        &HashMap::from([(node_id, rendered_rect)]),
         &HashMap::from([(node_id, final_position)]),
         final_rect.center(),
         1.0,
@@ -528,6 +546,7 @@ fn reparent_applies_when_only_node_overlap_requires_optional_auto_layout() {
     assert!(intents
         .first()
         .is_some_and(|intent| { intent.target.container == NodeContainer::Track(track_id) }));
+    assert_eq!(intents[0].final_rect, final_rect);
     if let Some(node) = project.get_node_mut(node_id) {
         node.ui_position = final_position;
     }

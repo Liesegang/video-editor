@@ -190,10 +190,8 @@ impl EditorContext {
         self.node_editor_state.pending_navigation = None;
         self.node_editor_state.layout_changed_during_drag = false;
         self.node_editor_state.node_reparent = None;
-        self.node_editor_state.moved_node_ids.clear();
         self.node_editor_state.container_resize = None;
         self.node_editor_state.surface_interaction.cancel();
-        self.node_editor_state.active_drag_selection = None;
         self.node_editor_state.node_editor_canvas_transform = None;
         self.node_editor_state.selected_connection_id = None;
         self.node_editor_state.wire_gesture = None;

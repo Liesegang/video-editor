@@ -156,6 +156,42 @@ class NodeEditorQaTests(unittest.TestCase):
         self.assertEqual(end["x"] - start["x"], 112.0)
         self.assertEqual(end["y"] - start["y"], 64.0)
 
+    def test_header_metadata_keeps_selection_separate_from_lod_move_gate(self):
+        def snapshot(move_enabled):
+            return {
+                "frame": 42,
+                "components": [
+                    {
+                        "id": "node_editor.node_header:node",
+                        "visible": True,
+                        "enabled": True,
+                        "metadata": {
+                            "selection_enabled": True,
+                            "move_enabled": move_enabled,
+                        },
+                    },
+                    {
+                        "id": "node_editor.container_move_header.clip:clip",
+                        "visible": True,
+                        "enabled": move_enabled,
+                        "metadata": {
+                            "selection_enabled": True,
+                            "move_enabled": move_enabled,
+                        },
+                    },
+                ],
+            }
+
+        detail = NODE_QA.assert_header_interaction_metadata(snapshot(True), True)
+        overview = NODE_QA.assert_header_interaction_metadata(snapshot(False), False)
+        self.assertTrue(detail["move_enabled"])
+        self.assertFalse(overview["move_enabled"])
+
+        invalid = snapshot(False)
+        invalid["components"][1]["enabled"] = True
+        with self.assertRaises(NODE_QA.QaFailure):
+            NODE_QA.assert_header_interaction_metadata(invalid, False)
+
     def test_navigation_state_guard_rejects_selection_or_pending_navigation(self):
         initial = {
             "project": {"nodes": {"node": {"ui_position": [10.0, 20.0]}}},

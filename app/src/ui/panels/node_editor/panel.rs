@@ -23,12 +23,11 @@ use crate::utils::lock::{mutex_lock_or_recover, write_or_recover};
 
 use super::{
     apply_auto_layout, apply_edit, apply_layout_edit, apply_queued_node_edits, build_snarl,
-    capture_container_resize_before_canvas, captured_snarl_drag_node, captured_snarl_drag_target,
-    collect_layout_edits_for_selection, compute_auto_layout, compute_full_composition_layout,
+    capture_container_resize_before_canvas, compute_auto_layout, compute_full_composition_layout,
     container_inactive, container_resize_interactions, final_node_positions, finish_node_reparent,
     flush_pending_continuous_edit, handle_context_menu, implicit_time_overlay_requested,
     layout_needs_reflow, layout_toolbar, native_variadic_merge_target, node_can_splice_connection,
-    node_drop_intents, node_editor_canvas_metadata, node_editor_details_visible,
+    move_change, move_end, node_drop_intents, node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_snarl_style_for, paint_container_foreground,
     port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
     push_history_snapshot, record_node_reparent_origins, register_container_chrome,
@@ -36,9 +35,9 @@ use super::{
     register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
     selected_container_owners, selection_target_for_owner, show_wire_context_menu,
     splice_node_for_release, wire_interactions, wire_port_drop_rect, wire_secondary_click_hit,
-    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
-    ProjectNodeViewer, QueuedNodeEdit, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection,
-    TimeContextNode, WireInteractionFrame, WireSecondaryClickHit,
+    AutoLayoutScope, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
+    QueuedNodeEdit, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
+    WireInteractionFrame, WireSecondaryClickHit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -221,18 +220,18 @@ pub fn node_editor_panel(
         });
     }
 
-    let mut snarl;
     let layout_edits;
     let rendered_edges;
     let mut suppress_wire_secondary_click = false;
     let mut edits = Vec::new();
     let mut drop_intents = Vec::new();
     let mut selection_changed = false;
+    let surface_move_emitted;
+    let surface_move_end;
     let mut context_menu_exclusion_rects = Vec::new();
     let mut wire_context_request = None;
     let mut directional_layout_frame: DirectionalLayoutFrameOutcome;
     let mut directional_layout_outputs = Vec::new();
-    let mut snarl_selected_node_ids: Vec<Uuid>;
     let mut to_global = egui::emath::TSTransform::default();
     let mut canvas_clip = canvas_rect;
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
@@ -244,9 +243,8 @@ pub fn node_editor_panel(
             ui.label("Project is unavailable");
             return;
         };
-        let (mut built_snarl, containers) = build_snarl(&project, comp_id);
-        apply_directional_layout_preview(&mut built_snarl, node_editor_state);
-        snarl = built_snarl;
+        let (mut snarl, containers) = build_snarl(&project, comp_id);
+        apply_directional_layout_preview(&mut snarl, node_editor_state);
 
         let resize_was_active = node_editor_state.container_resize.is_some();
         if let Some(previous_transform) = node_editor_state.node_editor_canvas_transform {
@@ -342,16 +340,6 @@ pub fn node_editor_panel(
         // the raw salt here creates an unrelated, untransformed layer and
         // leaks graph-space chrome over the rest of the application.
         let snarl_id = ui.make_persistent_id(graph_id);
-        snarl_selected_node_ids = egui_snarl::ui::get_selected_nodes(snarl_id, ui.ctx())
-            .into_iter()
-            .filter_map(|snarl_node_id| match snarl.get_node(snarl_node_id) {
-                Some(GraphItem::Node(node_id)) => Some(*node_id),
-                Some(GraphItem::Container(_) | GraphItem::PortAnchor { .. }) | None => None,
-            })
-            .collect();
-        snarl_selected_node_ids.sort_unstable();
-        let captured_drag_node_id = captured_snarl_drag_node(ui.ctx(), &snarl, snarl_id);
-        let captured_drag_target = captured_snarl_drag_target(ui.ctx(), &snarl, snarl_id);
         let graph_layer = egui::LayerId::new(ui.layer_id().order, snarl_id);
         // `Context::layer_painter` starts with a *global* content clip. Calling
         // `with_clip_rect` with this graph-space rect would intersect two
@@ -383,11 +371,7 @@ pub fn node_editor_panel(
                             .map(|(node_id, _)| *node_id)
                     })
                 });
-            let selected_node_ids = selected_nodes
-                .iter()
-                .chain(snarl_selected_node_ids.iter())
-                .copied()
-                .collect::<HashSet<_>>();
+            let selected_node_ids = selected_nodes.iter().copied().collect::<HashSet<_>>();
             let mut time_context_nodes = rendered_node_rects
                 .lock()
                 .map(|node_rects| {
@@ -503,7 +487,7 @@ pub fn node_editor_panel(
                     })
             });
         let surface_options = if node_editor_details_visible(to_global.scaling) {
-            node_editor_ui::InteractionOptions::SELECTION
+            node_editor_ui::InteractionOptions::SELECTION_AND_MOVE
         } else {
             node_editor_ui::InteractionOptions::OVERVIEW_SELECTION
         };
@@ -512,7 +496,8 @@ pub fn node_editor_panel(
             || resize_owned_layout_before
             || pointer_on_port
             || node_editor_state.wire_knife.is_some()
-            || node_editor_state.merge_layer_reorder.is_some();
+            || node_editor_state.merge_layer_reorder.is_some()
+            || egui::Popup::is_any_open(ui.ctx());
         let layout_swipe_preflight = {
             let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
             let port_rects = mutex_lock_or_recover(rendered_ports.as_ref());
@@ -586,7 +571,8 @@ pub fn node_editor_panel(
                 || wire_owned_layout
                 || resize_owned_layout
                 || node_editor_state.wire_knife.is_some()
-                || node_editor_state.merge_layer_reorder.is_some());
+                || node_editor_state.merge_layer_reorder.is_some()
+                || egui::Popup::is_any_open(ui.ctx()));
 
         if primary_pressed {
             if let Some(owner) = resize_started_owner.filter(|owner| {
@@ -601,7 +587,6 @@ pub fn node_editor_panel(
             }
         }
 
-        let surface_was_active = node_editor_state.surface_interaction.is_active();
         let surface_outputs = {
             let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
             let port_rects = mutex_lock_or_recover(rendered_ports.as_ref());
@@ -624,7 +609,7 @@ pub fn node_editor_panel(
                 &projection.frame(),
                 &mut node_editor_state.surface_interaction,
                 surface_options,
-                pointer_is_specialized,
+                pointer_is_specialized || capture.body_pointer_owned(),
             )
         };
         if let Some(change) = super::selection_change(&surface_outputs) {
@@ -645,54 +630,19 @@ pub fn node_editor_panel(
         );
         let directional_pointer_owned =
             directional_layout_was_active || !directional_layout_outputs.is_empty();
-        let surface_owned_layout =
-            surface_was_active || node_editor_state.surface_interaction.is_active();
-
-        let layout_pointer_owned = wire_owned_layout
-            || resize_owned_layout
-            || surface_owned_layout
-            || directional_pointer_owned;
-        if primary_down && !layout_pointer_owned {
-            if let Some(target) = captured_drag_target {
-                if node_editor_state.active_drag_selection != Some(target) {
-                    selection_changed |=
-                        select_logical_item(&mut editor_context.selection, target, modifiers.shift);
-                    node_editor_state.active_drag_selection = Some(target);
-                }
-            }
-        }
-
-        let mut collected = collect_layout_edits_for_selection(
-            &project,
-            &snarl,
-            node_editor_state.active_drag_selection,
-            editor_context.selection.targets(),
-        );
-        // A specialized gesture or marquee owns the physical pointer. If a
-        // backend batches press and motion into one RawInput, Snarl may have
-        // calculated a stale competing move earlier in this same frame.
-        if layout_pointer_owned {
-            collected.clear();
-        }
+        surface_move_end = move_end(&surface_outputs);
+        let surface_move = move_change(&project, &surface_outputs);
+        surface_move_emitted = surface_move.is_some();
+        let grabbed_node = surface_move
+            .as_ref()
+            .and_then(|movement| movement.grabbed_node);
+        let mut collected = surface_move.map_or_else(Vec::new, |movement| movement.edits);
         collected.extend(resize_edits);
-        let gesture_allowed = (primary_down || primary_released)
-            && node_editor_state.container_resize.is_none()
-            && !node_editor_state.surface_interaction.is_marquee_active()
-            && node_editor_state.wire_gesture.is_none()
-            && node_editor_state.normal_connect_gesture.is_none()
-            && node_editor_state.wire_knife.is_none()
-            && node_editor_state.merge_layer_reorder.is_none();
-        record_node_reparent_origins(&project, &collected, node_editor_state, gesture_allowed);
+        record_node_reparent_origins(&project, &collected, grabbed_node, node_editor_state);
         if let (Some(pointer_position), Ok(node_rects)) =
             (pointer_position, rendered_node_rects.lock())
         {
             let graph_drop_point = to_global.inverse() * pointer_position;
-            if let Some(state) = node_editor_state.node_reparent.as_mut() {
-                if state.primary_node_id.is_none() {
-                    state.primary_node_id =
-                        captured_drag_node_id.filter(|node_id| state.origins.contains_key(node_id));
-                }
-            }
             if let Some(gesture) = node_editor_state.node_reparent.as_ref().cloned() {
                 let final_positions = final_node_positions(&project, &gesture, &collected);
                 drop_intents = node_drop_intents(
@@ -723,10 +673,8 @@ pub fn node_editor_panel(
                 }
             }
         }
-        if !primary_down && !primary_released {
+        if !primary_down && !primary_released && surface_move_end.is_none() {
             node_editor_state.node_reparent = None;
-            node_editor_state.moved_node_ids.clear();
-            node_editor_state.active_drag_selection = None;
         }
         if directional_pointer_owned {
             collected.clear();
@@ -740,6 +688,10 @@ pub fn node_editor_panel(
         layout_edits = collected;
     }
 
+    if surface_move_emitted {
+        flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
+    }
+
     if selection_changed {
         editor_context.interaction.preview_edit_target = None;
         // Inspector is normally laid out before Node Editor in the dock tree.
@@ -749,9 +701,6 @@ pub fn node_editor_panel(
     }
 
     let primary_released = ui.input(|input| input.pointer.primary_released());
-    if primary_released {
-        node_editor_state.active_drag_selection = None;
-    }
 
     let mut layout_changed = false;
     let mut directional_layout_changed = false;
@@ -799,16 +748,15 @@ pub fn node_editor_panel(
         for edit in layout_edits {
             layout_changed |= apply_layout_edit(&mut project, edit);
         }
-        if primary_released {
+        if surface_move_end == Some(node_editor_ui::MoveEndOutcome::Released) {
             let reparent_gesture = node_editor_state.node_reparent.take();
             let moved_node_ids = reparent_gesture
                 .as_ref()
                 .map(|gesture| gesture.origins.keys().copied().collect::<HashSet<_>>())
                 .unwrap_or_default();
-            let captured_primary_node_id = reparent_gesture
+            let grabbed_node_id = reparent_gesture
                 .as_ref()
                 .and_then(|gesture| gesture.primary_node_id);
-            node_editor_state.moved_node_ids.clear();
             let reparent_outcome =
                 finish_node_reparent(&mut project, &drop_intents, reparent_gesture.as_ref());
             layout_changed |= reparent_outcome != ReparentReleaseOutcome::NoIntent;
@@ -818,11 +766,7 @@ pub fn node_editor_panel(
                 .and_then(|edge| edge.kind.connection_id());
             if let (Some(connection_id), Some(node_id)) = (
                 dropped_wire,
-                splice_node_for_release(
-                    reparent_outcome,
-                    &moved_node_ids,
-                    captured_primary_node_id,
-                ),
+                splice_node_for_release(reparent_outcome, &moved_node_ids, grabbed_node_id),
             ) {
                 if node_can_splice_connection(&project, connection_id, node_id) {
                     layout_changed |= apply_edit(
@@ -834,10 +778,14 @@ pub fn node_editor_panel(
                     );
                 }
             }
+        } else if surface_move_end == Some(node_editor_ui::MoveEndOutcome::Cancelled) {
+            // Cancellation commits the live positions below as one movement-
+            // only transaction. Never evaluate a drop target or splice a wire.
+            node_editor_state.node_reparent = None;
         }
     }
     finish_directional_layout_release_guard(node_editor_state, primary_released);
-    if directional_layout_frame.request_repaint || directional_layout_changed {
+    if directional_layout_frame.request_repaint || directional_layout_changed || layout_changed {
         ui.ctx().request_repaint();
     }
     if node_editor_state
@@ -874,7 +822,8 @@ pub fn node_editor_panel(
     // composition for any of those edits destroys user-authored positions and
     // can move a newly created Node outside the current viewport. Full layout
     // remains available explicitly and for the one-time invalid-layout repair.
-    let layout_finished = primary_released && node_editor_state.layout_changed_during_drag;
+    let layout_finished = (primary_released || surface_move_end.is_some())
+        && node_editor_state.layout_changed_during_drag;
     if layout_finished {
         node_editor_state.layout_changed_during_drag = false;
     }

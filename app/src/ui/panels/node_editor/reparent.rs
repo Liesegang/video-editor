@@ -250,6 +250,7 @@ pub(super) fn node_drop_intents(
     let scale = sanitized_node_editor_scale(canvas_scale);
     let mut node_ids = gesture.origins.keys().copied().collect::<Vec<_>>();
     node_ids.sort_unstable();
+    let final_rects = final_node_rects(project, gesture, rendered_node_rects, final_positions);
     let Some(primary_node_id) = gesture.primary_node_id else {
         return Vec::new();
     };
@@ -269,17 +270,11 @@ pub(super) fn node_drop_intents(
         primary_final_position[0] - primary_origin.position[0],
         primary_final_position[1] - primary_origin.position[1],
     );
-    let Some(primary_rect) = rendered_node_rects.get(&primary_node_id).copied() else {
+    let Some(primary_rect) = final_rects.get(&primary_node_id).copied() else {
         return Vec::new();
     };
     if displacement.length() * scale < NODE_REPARENT_DRAG_THRESHOLD {
-        return retained_origin_intents(
-            project,
-            composition_id,
-            gesture,
-            rendered_node_rects,
-            drop_point,
-        );
+        return retained_origin_intents(project, composition_id, gesture, &final_rects, drop_point);
     }
     let Some(resolved_target) =
         deepest_legal_reparent_target(project, composition_id, primary_rect, drop_point)
@@ -292,7 +287,7 @@ pub(super) fn node_drop_intents(
                 project,
                 composition_id,
                 gesture,
-                rendered_node_rects,
+                &final_rects,
                 drop_point,
             );
         }
@@ -307,13 +302,7 @@ pub(super) fn node_drop_intents(
         // Header/padding hysteresis retains canonical ownership, but the Node
         // still has an exact final position. Grow the old owner around that
         // position atomically so a later auto-layout pass cannot move it.
-        return retained_origin_intents(
-            project,
-            composition_id,
-            gesture,
-            rendered_node_rects,
-            drop_point,
-        );
+        return retained_origin_intents(project, composition_id, gesture, &final_rects, drop_point);
     }
 
     // A multi-selected drag is one semantic move. Resolve ownership from the
@@ -322,7 +311,7 @@ pub(super) fn node_drop_intents(
     node_ids
         .into_iter()
         .filter_map(|node_id| {
-            rendered_node_rects
+            final_rects
                 .get(&node_id)
                 .copied()
                 .map(|final_rect| NodeDropIntent {
@@ -330,6 +319,31 @@ pub(super) fn node_drop_intents(
                     final_rect,
                     target: resolved_target,
                 })
+        })
+        .collect()
+}
+
+fn final_node_rects(
+    project: &Project,
+    gesture: &NodeEditorReparentGesture,
+    rendered_node_rects: &HashMap<Uuid, egui::Rect>,
+    final_positions: &HashMap<Uuid, [f32; 2]>,
+) -> HashMap<Uuid, egui::Rect> {
+    gesture
+        .origins
+        .keys()
+        .filter_map(|node_id| {
+            let rect = rendered_node_rects.get(node_id).copied()?;
+            let current = project.get_node(*node_id)?.ui_position;
+            let final_position = final_positions.get(node_id).copied().unwrap_or(current);
+            let frame_offset = rect.min - egui::pos2(current[0], current[1]);
+            Some((
+                *node_id,
+                egui::Rect::from_min_size(
+                    egui::pos2(final_position[0], final_position[1]) + frame_offset,
+                    rect.size(),
+                ),
+            ))
         })
         .collect()
 }
@@ -459,12 +473,9 @@ pub(super) fn node_has_clearly_exited_origin(
 pub(super) fn record_node_reparent_origins(
     project: &Project,
     layout_edits: &[LayoutEdit],
+    grabbed_node: Option<Uuid>,
     state: &mut NodeEditorState,
-    gesture_allowed: bool,
 ) {
-    if !gesture_allowed {
-        return;
-    }
     for edit in layout_edits {
         let LayoutEdit::MoveNode { node_id, .. } = edit else {
             continue;
@@ -475,7 +486,6 @@ pub(super) fn record_node_reparent_origins(
         let Some(container) = project.find_node_container(*node_id) else {
             continue;
         };
-        state.moved_node_ids.insert(*node_id);
         let gesture = state
             .node_reparent
             .get_or_insert_with(|| NodeEditorReparentGesture {
@@ -492,6 +502,11 @@ pub(super) fn record_node_reparent_origins(
                 container,
                 position: node.ui_position,
             });
+    }
+    if let (Some(grabbed_node), Some(gesture)) = (grabbed_node, state.node_reparent.as_mut()) {
+        if gesture.origins.contains_key(&grabbed_node) {
+            gesture.primary_node_id = Some(grabbed_node);
+        }
     }
 }
 

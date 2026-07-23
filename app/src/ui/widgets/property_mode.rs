@@ -115,7 +115,7 @@ pub(crate) fn property_mode_control(
     property: Option<&Property>,
     current_time: f64,
     allow_expression: bool,
-) -> Option<PropertyModeAction> {
+) -> (Option<PropertyModeAction>, egui::Response) {
     let presentation = mode_presentation(property, current_time);
     let button = ui
         .push_id(qa_id, |ui| {
@@ -238,7 +238,7 @@ pub(crate) fn property_mode_control(
     if action.is_some() {
         ui.ctx().request_repaint();
     }
-    action
+    (action, button)
 }
 
 pub(crate) fn property_for_mode(

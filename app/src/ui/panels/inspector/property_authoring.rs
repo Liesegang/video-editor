@@ -43,7 +43,7 @@ pub fn render_property_authoring(
         ui.label(definition.label());
         let qa_id = format!("inspector.property_mode.{qa_scope}:{}", definition.name());
         let allow_expression = definition.ui_type().supports_expression();
-        match property_mode_control(ui, &qa_id, property, current_time, allow_expression) {
+        match property_mode_control(ui, &qa_id, property, current_time, allow_expression).0 {
             Some(PropertyModeAction::SetMode(mode)) => {
                 actions.push(PropertyAction::SetMode(
                     definition.name().to_string(),

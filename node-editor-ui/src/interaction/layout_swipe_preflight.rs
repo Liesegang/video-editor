@@ -3,7 +3,7 @@
 use crate::input::interaction_input;
 use crate::{GraphFrame, LayoutSwipeHitArea};
 
-use super::{hit_group_resize, hit_port, InteractionOptions, InteractionState};
+use super::{hit, InteractionOptions, InteractionState};
 
 /// Whether hold-A layout owns this frame's primary press.
 ///
@@ -47,10 +47,10 @@ where
         return false;
     };
     let graph_position = frame.graph_position(screen_position);
-    if options.connect && hit_port(frame, graph_position).is_some() {
+    if options.connect && hit::port(frame, graph_position).is_some() {
         return false;
     }
-    if options.resize_groups && hit_group_resize(frame, graph_position).is_some() {
+    if options.resize_groups && hit::group_resize(frame, graph_position).is_some() {
         return false;
     }
     crate::layout_swipe::hit_anchor(frame, graph_position, options.layout_swipe).is_some()

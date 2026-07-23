@@ -7,6 +7,7 @@ pub(crate) struct InteractionInput {
     pub(crate) pressed: bool,
     pub(crate) down: bool,
     pub(crate) released: bool,
+    pub(crate) has_pointer: bool,
     pub(crate) pointer: Option<Pos2>,
     pub(crate) press_position: Option<Pos2>,
     pub(crate) press_modifiers: Modifiers,
@@ -39,6 +40,7 @@ pub(crate) fn interaction_input(ui: &egui::Ui) -> InteractionInput {
             pressed: input.pointer.primary_pressed(),
             down: input.pointer.primary_down(),
             released: input.pointer.primary_released(),
+            has_pointer: input.pointer.has_pointer(),
             pointer: input.pointer.interact_pos(),
             press_position: primary_press
                 .map(|(_, position, _)| position)

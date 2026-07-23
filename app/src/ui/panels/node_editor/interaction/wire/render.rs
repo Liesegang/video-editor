@@ -13,10 +13,12 @@ use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend,
     container_highlight_metadata, container_inactive, container_output_node_id,
     container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
-    native_variadic_merge_target, overview_wire_graph_points, pin_color, qa_container_key,
-    qa_rect_metadata, reconnect_handle_position, screen_stroke_in_graph_units,
+    native_variadic_merge_target, node_editor_details_visible, overview_wire_graph_points,
+    pin_color, qa_container_key, qa_rect_metadata, reconnect_handle_position,
+    screen_stroke_in_graph_units,
     wire_order_menu_states, ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter,
-    RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_RECONNECT_HANDLE_RADIUS,
+    RenderedEdge, RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT,
+    WIRE_RECONNECT_HANDLE_RADIUS,
 };
 use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
 
@@ -97,6 +99,50 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
             "port_hit_policy": "localized_socket",
             "unclipped_rect": qa_rect_metadata(unclipped_main),
             "visible_in_canvas": main.is_positive(),
+        })),
+    );
+
+    // Snarl's compact title response occupies only the controls at the left
+    // edge. Generic movement intentionally owns the complete semantic Group
+    // header, so publish that exact hit rectangle for coordinate QA.
+    let graph_move_header = egui::Rect::from_min_size(
+        graph_main.min,
+        egui::vec2(
+            graph_main.width(),
+            CONTAINER_HEADER_HEIGHT.min(graph_main.height()),
+        ),
+    );
+    let unclipped_move_header = to_global * graph_move_header;
+    let move_header = clipped_qa_rect(unclipped_move_header, canvas_clip);
+    let move_header_id = format!("node_editor.container_move_header.{owner}");
+    let move_enabled = node_editor_details_visible(to_global.scaling);
+    #[cfg(test)]
+    {
+        capture_test_rect(&move_header_id, move_header);
+        crate::ui::panels::node_editor::capture_test_metadata(
+            &move_header_id,
+            &serde_json::json!({
+                "owner": owner,
+                "selected": selected,
+                "interaction": "move",
+                "selection_enabled": true,
+                "move_enabled": move_enabled,
+            }),
+        );
+    }
+    crate::qa::register_component_with_metadata(
+        move_header_id,
+        "node_container_move_header",
+        move_header,
+        move_enabled,
+        Some(serde_json::json!({
+            "owner": owner,
+            "selected": selected,
+            "interaction": "move",
+            "selection_enabled": true,
+            "move_enabled": move_enabled,
+            "unclipped_rect": qa_rect_metadata(unclipped_move_header),
+            "visible_in_canvas": move_header.is_positive(),
         })),
     );
 

@@ -45,17 +45,40 @@ fn multi_node_drag_uses_primary_target_without_splitting_the_group() {
         (solid_id, [solid_min.x, solid_min.y]),
         (merge_id, [merge_min.x, merge_min.y]),
     ]);
-    let final_rects = HashMap::from([(solid_id, solid_rect), (merge_id, merge_rect)]);
+    let rendered_rects = HashMap::from([
+        (
+            solid_id,
+            egui::Rect::from_min_size(
+                egui::pos2(solid.ui_position[0], solid.ui_position[1]),
+                solid_rect.size(),
+            ),
+        ),
+        (
+            merge_id,
+            egui::Rect::from_min_size(
+                egui::pos2(merge.ui_position[0], merge.ui_position[1]),
+                merge_rect.size(),
+            ),
+        ),
+    ]);
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &final_rects,
+        &rendered_rects,
         &final_positions,
         solid_rect.center(),
         1.0,
     );
     assert_eq!(intents.len(), 2);
+    assert!(intents.iter().all(|intent| {
+        intent.final_rect
+            == if intent.node_id == solid_id {
+                solid_rect
+            } else {
+                merge_rect
+            }
+    }));
     assert!(intents
         .iter()
         .all(|intent| intent.target.container == NodeContainer::Track(track_id)));
@@ -267,17 +290,25 @@ fn composition_root_fallback_expands_same_owner_on_left_and_top() {
     let estimated_size = estimated_node_size(&project, node_id);
     let final_rect = egui::Rect::from_min_size(final_min, estimated_size * 0.4);
     let final_positions = HashMap::from([(node_id, [final_min.x, final_min.y])]);
-    let final_rects = HashMap::from([(node_id, final_rect)]);
+    let rendered_rects = HashMap::from([(
+        node_id,
+        egui::Rect::from_min_size(
+            egui::pos2(origin_node.ui_position[0], origin_node.ui_position[1]),
+            final_rect.size(),
+        ),
+    )]);
     let intents = node_drop_intents(
         &project,
         composition_id,
         &gesture,
-        &final_rects,
+        &rendered_rects,
         &final_positions,
         final_rect.center(),
         1.0,
     );
     assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].final_rect.min, final_rect.min);
+    assert!((intents[0].final_rect.size() - final_rect.size()).length() < 0.001);
     assert!(intents.first().is_some_and(|intent| {
         intent.target.container == NodeContainer::Composition(composition_id)
             && intent.target.root_fallback

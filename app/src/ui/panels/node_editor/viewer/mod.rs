@@ -61,3 +61,11 @@ pub(in crate::ui::panels::node_editor) struct ProjectNodeViewer<'a> {
     /// Actual back-to-front Snarl callback order and exact Node header hits.
     pub(in crate::ui::panels::node_editor) surface_capture: Arc<Mutex<SurfaceCapture>>,
 }
+
+impl ProjectNodeViewer<'_> {
+    pub(super) fn record_body_response(&self, response: &egui::Response) {
+        if let Ok(mut capture) = self.surface_capture.lock() {
+            capture.record_body_response(response);
+        }
+    }
+}

@@ -170,8 +170,8 @@ pub(super) fn node_editor_snarl_style_for(style: &egui::Style) -> SnarlStyle {
         bg_pattern: Some(BackgroundPattern::NoPattern),
         bg_frame: Some(egui::Frame::canvas(style).fill(CanvasTheme::default().background)),
         // Project selection is the only visual authority. Snarl's private
-        // selection still drives gestures but must not paint a stale second
-        // highlight before `EditorContext` resolves the exact owner.
+        // selection is an inert renderer detail while node-editor-ui owns
+        // selection and header movement, so never paint a stale second layer.
         select_style: Some(SelectionStyle {
             margin: egui::Margin::ZERO,
             rounding: egui::CornerRadius::ZERO,

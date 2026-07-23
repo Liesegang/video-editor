@@ -1,4 +1,237 @@
 use super::*;
+use crate::state::context::EditorContext;
+use crate::state::context_types::{NodeEditorPendingEdit, SelectionTarget};
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the headless production-panel frame owns the complete app interaction boundary"
+)]
+fn run_node_editor_panel_frame(
+    context: &egui::Context,
+    screen: egui::Rect,
+    frame: usize,
+    events: Vec<egui::Event>,
+    project: &Arc<RwLock<Project>>,
+    service: &EditorService,
+    history: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+) {
+    reset_test_rects();
+    let command_registry =
+        crate::command::CommandRegistry::new(&crate::config::AppConfig::new());
+    drop(context.run(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(frame as f64 / 60.0),
+            events,
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                node_editor_panel(
+                    ui,
+                    project,
+                    service,
+                    history,
+                    editor_context,
+                    &command_registry,
+                );
+            });
+        },
+    ));
+}
+
+fn primary_button(position: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos: position,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+fn escape_key() -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: Some(egui::Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MoveCancellationInput {
+    Escape,
+    PointerGone,
+}
+
+fn assert_production_move_cancellation(
+    cancellation: MoveCancellationInput,
+    isolate_unrelated_edit: bool,
+) {
+    let (mut project, composition_id, track_id, source_clip_id, solid_id, merge_id) = fixture();
+    project.get_composition_mut(composition_id).unwrap().ui_size = [1_900.0, 1_000.0];
+    project.get_track_mut(track_id).unwrap().ui_size = [1_600.0, 720.0];
+    let mut target_clip = library::model::Clip::new("Cancellation target", 0.0, 5.0);
+    target_clip.ui_position = [1_100.0, 260.0];
+    target_clip.ui_size = [500.0, 480.0];
+    let target_clip_id = target_clip.id;
+    project.add_clip(target_clip);
+    project
+        .attach_clip_to_track(track_id, target_clip_id)
+        .unwrap();
+
+    let project = Arc::new(RwLock::new(project));
+    let service = EditorService::new(
+        Arc::clone(&project),
+        Arc::new(PluginManager::default()),
+        Arc::new(library::cache::CacheManager::new()),
+    )
+    .expect("production EditorService");
+    let mut history = HistoryManager::new();
+    history.push_project_state(project.read().unwrap().clone());
+    let mut editor_context = EditorContext::new(composition_id);
+    editor_context.select_target(SelectionTarget::Node(merge_id));
+    editor_context
+        .node_editor_state
+        .repaired_compositions
+        .insert(composition_id);
+    let context = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3_000.0, 1_800.0));
+
+    for frame in 0..6 {
+        run_node_editor_panel_frame(
+            &context,
+            screen,
+            frame,
+            Vec::new(),
+            &project,
+            &service,
+            &mut history,
+            &mut editor_context,
+        );
+    }
+    let source_header = test_rect(&format!("node_editor.node_header:{merge_id}"))
+        .filter(|rect| rect.is_positive())
+        .expect("production Node header geometry");
+    let source_node = test_rect(&format!("node_editor.node:{merge_id}"))
+        .filter(|rect| rect.is_positive())
+        .expect("production Node geometry");
+    let target = test_rect(&format!("node_editor.container.clip:{target_clip_id}"))
+        .filter(|rect| rect.is_positive())
+        .expect("production target Clip geometry");
+    let start = source_header.center();
+    let end = target.center() + (start - source_node.center());
+
+    let before_move = project.read().unwrap().clone();
+    let history_before_unrelated = history.undo_depth();
+    if isolate_unrelated_edit {
+        project
+            .write()
+            .unwrap()
+            .get_node_mut(solid_id)
+            .unwrap()
+            .name = "Unrelated pending name".to_string();
+        editor_context.node_editor_state.pending_continuous_edit = Some(NodeEditorPendingEdit {
+            owner: PortOwner::Node(solid_id),
+            key: "name".to_string(),
+        });
+    }
+    let movement_base = project.read().unwrap().clone();
+
+    run_node_editor_panel_frame(
+        &context,
+        screen,
+        6,
+        vec![
+            egui::Event::PointerMoved(start),
+            primary_button(start, true),
+            egui::Event::PointerMoved(end),
+        ],
+        &project,
+        &service,
+        &mut history,
+        &mut editor_context,
+    );
+    let moved_before_cancel = project.read().unwrap().clone();
+    assert_ne!(moved_before_cancel, movement_base);
+    assert_eq!(
+        moved_before_cancel.find_node_container(merge_id),
+        Some(NodeContainer::Clip(source_clip_id))
+    );
+    assert_eq!(
+        editor_context
+            .node_editor_state
+            .node_reparent
+            .as_ref()
+            .and_then(|gesture| gesture.hovered_target),
+        Some(NodeContainer::Clip(target_clip_id)),
+        "the held pointer must be over a legal release-only reparent target"
+    );
+    let history_before_cancel = history.undo_depth();
+    assert_eq!(
+        history_before_cancel,
+        history_before_unrelated + usize::from(isolate_unrelated_edit),
+        "a pending unrelated edit must close before movement is applied"
+    );
+
+    let cancel_event = match cancellation {
+        MoveCancellationInput::Escape => escape_key(),
+        MoveCancellationInput::PointerGone => egui::Event::PointerGone,
+    };
+    run_node_editor_panel_frame(
+        &context,
+        screen,
+        7,
+        vec![cancel_event],
+        &project,
+        &service,
+        &mut history,
+        &mut editor_context,
+    );
+    let cancelled = project.read().unwrap().clone();
+    assert_eq!(
+        cancelled, moved_before_cancel,
+        "cancellation must retain live positions"
+    );
+    assert_eq!(
+        cancelled.find_node_container(merge_id),
+        Some(NodeContainer::Clip(source_clip_id)),
+        "cancellation must not reparent onto the hovered target"
+    );
+    assert_eq!(cancelled.connections, movement_base.connections);
+    assert_eq!(history.undo_depth(), history_before_cancel + 1);
+    assert_eq!(history.redo_depth(), 0);
+    assert!(editor_context.node_editor_state.node_reparent.is_none());
+    assert!(!editor_context
+        .node_editor_state
+        .surface_interaction
+        .is_active());
+    assert!(!editor_context.node_editor_state.layout_changed_during_drag);
+
+    // The physical button can still release after Escape/pointer loss. It is
+    // inert because the typed cancellation already closed the transaction.
+    run_node_editor_panel_frame(
+        &context,
+        screen,
+        8,
+        vec![primary_button(end, false)],
+        &project,
+        &service,
+        &mut history,
+        &mut editor_context,
+    );
+    assert_eq!(*project.read().unwrap(), cancelled);
+    assert_eq!(history.undo_depth(), history_before_cancel + 1);
+
+    assert_eq!(history.undo(&cancelled), Some(movement_base.clone()));
+    assert_eq!(history.redo(&movement_base), Some(cancelled.clone()));
+    if isolate_unrelated_edit {
+        assert_ne!(movement_base, before_move);
+        assert_eq!(history.undo(&cancelled), Some(movement_base));
+    }
+}
 
 #[test]
 fn real_node_header_capture_includes_the_visual_frame_padding() {
@@ -60,710 +293,140 @@ fn production_container_metadata_exposes_selected_visual_for_all_group_kinds() {
             metadata["highlight_style"]["outer_stroke"]["width_screen"],
             3.0
         );
+        let move_id = format!(
+            "node_editor.container_move_header.{}",
+            qa_container_key(owner)
+        );
+        let move_header = test_rect(&move_id).expect("generic Group move header QA geometry");
+        assert_eq!(move_header.height(), CONTAINER_HEADER_HEIGHT);
+        let move_metadata = test_metadata(&move_id).expect("detail Group move metadata");
+        assert_eq!(move_metadata["selection_enabled"], true);
+        assert_eq!(move_metadata["move_enabled"], true);
     }
-}
 
-#[test]
-fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
-    let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
-    assert!(project.remove_node(solid_id).unwrap().is_some());
-    assert!(project.remove_node(merge_id).unwrap().is_some());
-    // `fixture` also owns generated structural Merge Nodes. They are not part
-    // of this gesture assertion, so keep their frames out of the two subject
-    // headers. Otherwise egui-snarl's independent z-order is free to put one
-    // of those legitimate Nodes over the coordinate used below, making the
-    // test click a different visible Node instead of exercising header input.
-    let mut structural_node_ids = project.nodes.keys().copied().collect::<Vec<_>>();
-    structural_node_ids.sort_unstable();
-    for (index, node_id) in structural_node_ids.into_iter().enumerate() {
-        if let Some(node) = project.get_node_mut(node_id) {
-            node.ui_position = [1_500.0, 120.0 + index as f32 * 320.0];
-        }
-    }
-    if let Some(clip) = project.get_clip_mut(clip_id) {
-        clip.ui_size = [1_300.0, 760.0];
-    }
-    if let Some(track) = project.get_track_mut(track_id) {
-        track.ui_size = [1_800.0, 1_050.0];
-    }
-    if let Some(composition) = project.get_composition_mut(composition_id) {
-        composition.ui_size = [2_200.0, 1_400.0];
-    }
-    let clip_content = project.get_clip(clip_id).map(|clip| {
-        nested_content_rect(
-            container_rect(clip.ui_position, clip.ui_size),
-            AUTO_LAYOUT_CLIP_TOP,
-        )
-    });
-    assert!(clip_content.is_some());
-    let Some(clip_content) = clip_content else {
-        return;
-    };
-    let mut lower = Node::new_merge("Capture Lower");
-    lower.id = Uuid::from_u128(1);
-    lower.ui_position = [clip_content.min.x + 40.0, clip_content.min.y + 40.0];
-    let lower_id = lower.id;
-    let mut upper = Node::new_merge("Capture Upper");
-    upper.id = Uuid::from_u128(2);
-    upper.ui_position = [clip_content.min.x + 520.0, clip_content.min.y + 40.0];
-    let upper_id = upper.id;
-    project.add_node(lower);
-    project.add_node(upper);
-    assert!(project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), lower_id)
-        .is_ok());
-    assert!(project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), upper_id)
-        .is_ok());
-
-    let context = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1800.0, 1200.0));
-    let graph_id = egui::Id::new(("captured-overlap-drag", composition_id));
-    let (mut snarl, containers) = build_snarl(&project, composition_id);
-    let rendered_node_rects = Arc::new(Mutex::new(HashMap::new()));
     reset_test_rects();
-    let render_frame = |project: &Project,
-                        snarl: &mut Snarl<GraphItem>,
-                        frame: usize,
-                        events: Vec<egui::Event>,
-                        modifiers: egui::Modifiers| {
-        let mut layout_edits = Vec::new();
-        let mut captured = None;
-        let mut persistent_snarl_id = None;
-        drop(context.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(frame as f64 / 60.0),
-                events,
-                modifiers,
-                ..Default::default()
-            },
-            |context| {
-                egui::CentralPanel::default().show(context, |ui| {
-                    let mut edits = Vec::new();
-                    let mut navigation = None;
-                    let mut wire_context_request = None;
-                    let mut exclusions = Vec::new();
-                    let mut to_global = egui::emath::TSTransform::IDENTITY;
-                    let mut canvas_clip = ui.clip_rect();
-                    let mut merge_layer_reorder = None;
-                    let mut viewer = ProjectNodeViewer {
-                        project,
-                        plugin_manager: None,
-                        containers: &containers,
-                        edits: &mut edits,
-                        pending_navigation: &mut navigation,
-                        selected_node_ids: &[],
-                        selected_container_owners: &[],
-                        current_time: 0.0,
-                        context_menu_exclusion_rects: &mut exclusions,
-                        wire_context_request: &mut wire_context_request,
-                        suppress_wire_connect: false,
-                        locked_canvas_transform: None,
-                        previous_canvas_transform: None,
-                        to_global: &mut to_global,
-                        canvas_clip: &mut canvas_clip,
-                        rendered_ports: Arc::new(Mutex::new(HashMap::new())),
-                        merge_layer_reorder: &mut merge_layer_reorder,
-                        rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
-                    };
-                    snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
-                    drop(viewer);
-                    let snarl_id = ui.make_persistent_id(graph_id);
-                    persistent_snarl_id = Some(snarl_id);
-                    captured = captured_snarl_drag_node(ui.ctx(), snarl, snarl_id);
-                    layout_edits = collect_layout_edits(project, snarl);
-                });
-            },
-        ));
-        (layout_edits, captured, persistent_snarl_id)
-    };
-
-    let mut persistent_snarl_id = None;
-    for frame in 0..4 {
-        let (_, _, frame_snarl_id) = render_frame(
-            &project,
-            &mut snarl,
-            frame,
-            Vec::new(),
-            egui::Modifiers::NONE,
-        );
-        persistent_snarl_id = frame_snarl_id;
+    let overview = egui::emath::TSTransform::new(egui::Vec2::ZERO, NODE_EDITOR_MIN_SCALE);
+    for container in &containers {
+        register_container_chrome(container, overview, canvas, &project, 0.0, true);
     }
-    let lower_rect = test_rect(&format!("node_editor.node:{lower_id}"));
-    let upper_rect = test_rect(&format!("node_editor.node:{upper_id}"));
-    assert!(lower_rect.is_some_and(|rect| rect.is_positive()));
-    assert!(upper_rect.is_some_and(|rect| rect.is_positive()));
-    assert!(test_rect(&format!("node_editor.node_header:{upper_id}"))
-        .is_some_and(|rect| rect.is_positive()));
-    let Some(persistent_snarl_id) = persistent_snarl_id else {
-        return;
-    };
-    let snarl_node_ids = snarl
-        .node_ids()
-        .filter_map(|(snarl_id, item)| match item {
-            GraphItem::Node(project_id) if [lower_id, upper_id].contains(project_id) => {
-                Some((*project_id, snarl_id))
-            }
-            _ => None,
-        })
-        .collect::<HashMap<_, _>>();
-    let (Some(lower_snarl_id), Some(upper_snarl_id)) = (
-        snarl_node_ids.get(&lower_id).copied(),
-        snarl_node_ids.get(&upper_id).copied(),
-    ) else {
-        return;
-    };
-    // Establish the group through Snarl's real rectangle-selection path.
-    // Starting in the canvas margin avoids invisible container controls;
-    // selecting the other graph items too is harmless for this capture
-    // test and exercises the same group-drag path.
-    let shift = egui::Modifiers {
-        shift: true,
-        ..Default::default()
-    };
-    let mut frame = 4;
-    let selection_start = screen.min + egui::vec2(20.0, 20.0);
-    let selection_drag_start = selection_start + egui::vec2(10.0, 10.0);
-    let selection_end = screen.max - egui::vec2(20.0, 20.0);
-    for events in [
-        vec![egui::Event::PointerMoved(selection_start)],
-        vec![egui::Event::PointerButton {
-            pos: selection_start,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: shift,
-        }],
-        vec![egui::Event::PointerMoved(selection_drag_start)],
-        vec![egui::Event::PointerMoved(selection_end)],
-        vec![egui::Event::PointerButton {
-            pos: selection_end,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: shift,
-        }],
+    for owner in [
+        PortOwner::Composition(composition_id),
+        PortOwner::Track(track_id),
+        PortOwner::Clip(clip_id),
     ] {
-        render_frame(&project, &mut snarl, frame, events, shift);
-        frame += 1;
-    }
-    let selected = egui_snarl::ui::get_selected_nodes(persistent_snarl_id, &context);
-    assert!(
-        selected.contains(&lower_snarl_id),
-        "lower {lower_snarl_id:?} selection missing from {selected:?}; upper is {upper_snarl_id:?}"
-    );
-    assert!(
-        selected.contains(&upper_snarl_id),
-        "upper selection missing from {selected:?}"
-    );
-    // A newly visible body changes Snarl's measured Node width while its
-    // open animation settles. Coordinate input must use geometry from a
-    // settled frame, just like the HTTP QA client does.
-    let mut previous_upper_header = None;
-    let mut stable_header_frames = 0;
-    let mut settled_upper_header = None;
-    for _ in 0..30 {
-        render_frame(
-            &project,
-            &mut snarl,
-            frame,
-            Vec::new(),
-            egui::Modifiers::NONE,
+        let move_id = format!(
+            "node_editor.container_move_header.{}",
+            qa_container_key(owner)
         );
-        frame += 1;
-        let current = test_rect(&format!("node_editor.node_header:{upper_id}"));
-        if current.is_some_and(|rect| rect.is_positive()) && current == previous_upper_header {
-            stable_header_frames += 1;
-            if stable_header_frames >= 2 {
-                settled_upper_header = current;
-                break;
-            }
-        } else {
-            stable_header_frames = 0;
-        }
-        previous_upper_header = current;
+        let metadata = test_metadata(&move_id).expect("overview Group move metadata");
+        assert_eq!(metadata["selection_enabled"], true);
+        assert_eq!(metadata["move_enabled"], false);
     }
-    let Some(upper_header) = settled_upper_header else {
-        panic!("Merge header geometry did not settle before coordinate input");
-    };
-    assert!(upper_header.is_positive());
-    let upper_header_center = upper_header.center();
-    let command = egui::Modifiers {
-        command: true,
-        mac_cmd: cfg!(target_os = "macos"),
-        ctrl: !cfg!(target_os = "macos"),
-        ..Default::default()
-    };
-    for events in [
-        vec![egui::Event::PointerMoved(upper_header_center)],
-        vec![egui::Event::PointerButton {
-            pos: upper_header_center,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: command,
-        }],
-        vec![egui::Event::PointerButton {
-            pos: upper_header_center,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: command,
-        }],
-    ] {
-        render_frame(&project, &mut snarl, frame, events, command);
-        frame += 1;
-    }
-    let selected_after_command = egui_snarl::ui::get_selected_nodes(persistent_snarl_id, &context);
-    assert!(selected_after_command.contains(&lower_snarl_id));
-    assert!(!selected_after_command.contains(&upper_snarl_id));
-    let post_show_project_ids = selected_after_command
-        .iter()
-        .filter_map(|snarl_id| match snarl.get_node(*snarl_id) {
-            Some(GraphItem::Node(node_id)) => Some(*node_id),
-            Some(GraphItem::Container(_) | GraphItem::PortAnchor { .. }) | None => None,
-        })
-        .collect::<Vec<_>>();
-    let (typed_targets, typed_primary) = node_selection_after_snarl_click(
-        &[
-            SelectionTarget::Node(lower_id),
-            SelectionTarget::Node(upper_id),
-        ],
-        Some(SelectionTarget::Node(upper_id)),
-        &post_show_project_ids,
-        upper_id,
-        command,
-    );
-    assert_eq!(typed_targets, vec![SelectionTarget::Node(lower_id)]);
-    assert_eq!(typed_primary, Some(SelectionTarget::Node(lower_id)));
-
-    // Restore the group for the overlapping multi-drag assertion below.
-    let upper_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
-    assert!(upper_header.is_some_and(|rect| rect.is_positive()));
-    let Some(upper_header) = upper_header else {
-        return;
-    };
-    let upper_header_center = upper_header.center();
-    for events in [
-        vec![egui::Event::PointerMoved(upper_header_center)],
-        vec![egui::Event::PointerButton {
-            pos: upper_header_center,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: shift,
-        }],
-        vec![egui::Event::PointerButton {
-            pos: upper_header_center,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: shift,
-        }],
-    ] {
-        render_frame(&project, &mut snarl, frame, events, shift);
-        frame += 1;
-    }
-
-    let overlap_position = egui::pos2(clip_content.min.x + 260.0, clip_content.min.y + 220.0);
-    for node_id in [lower_id, upper_id] {
-        if let Some(node) = project.get_node_mut(node_id) {
-            node.ui_position = [overlap_position.x, overlap_position.y];
-        }
-    }
-    for node_id in [lower_id, upper_id] {
-        if let Some(snarl_id) = snarl_node_ids.get(&node_id).copied() {
-            if let Some(node) = snarl.get_node_info_mut(snarl_id) {
-                node.pos = overlap_position;
-            }
-        }
-    }
-    for _ in 0..2 {
-        render_frame(
-            &project,
-            &mut snarl,
-            frame,
-            Vec::new(),
-            egui::Modifiers::NONE,
-        );
-        frame += 1;
-    }
-    let top_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
-    assert!(top_header.is_some_and(|rect| rect.is_positive()));
-    let Some(top_header) = top_header else {
-        return;
-    };
-    let start = top_header.center();
-    render_frame(
-        &project,
-        &mut snarl,
-        frame,
-        vec![egui::Event::PointerMoved(start)],
-        egui::Modifiers::NONE,
-    );
-    frame += 1;
-    render_frame(
-        &project,
-        &mut snarl,
-        frame,
-        vec![egui::Event::PointerButton {
-            pos: start,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
-        }],
-        egui::Modifiers::NONE,
-    );
-    frame += 1;
-    let end = start + egui::vec2(48.0, 24.0);
-    let (layout_edits, captured, _) = render_frame(
-        &project,
-        &mut snarl,
-        frame,
-        vec![egui::Event::PointerMoved(end)],
-        egui::Modifiers::NONE,
-    );
-    assert_eq!(captured, Some(upper_id));
-    assert_ne!(captured, Some(lower_id));
-    let moved_nodes = layout_edits
-        .iter()
-        .filter_map(|edit| match edit {
-            LayoutEdit::MoveNode { node_id, .. }
-                if *node_id == lower_id || *node_id == upper_id =>
-            {
-                Some(*node_id)
-            }
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
-    assert_eq!(moved_nodes, HashSet::from([lower_id, upper_id]));
-    let mut state = NodeEditorState::default();
-    record_node_reparent_origins(&project, &layout_edits, &mut state, true);
-    if let Some(gesture) = state.node_reparent.as_mut() {
-        gesture.primary_node_id = captured.filter(|node_id| gesture.origins.contains_key(node_id));
-    }
-    assert_eq!(
-        state
-            .node_reparent
-            .as_ref()
-            .and_then(|gesture| gesture.primary_node_id),
-        Some(upper_id)
-    );
 }
 
 #[test]
-fn cmd_deselect_uses_post_snarl_state_without_reselecting_clicked_node() {
-    let first = Uuid::from_u128(1);
-    let second = Uuid::from_u128(2);
-    let current = [SelectionTarget::Node(first), SelectionTarget::Node(second)];
-    let command = egui::Modifiers {
-        command: true,
-        mac_cmd: cfg!(target_os = "macos"),
-        ctrl: !cfg!(target_os = "macos"),
-        ..Default::default()
-    };
-
-    let (targets, primary) = node_selection_after_snarl_click(
-        &current,
-        Some(SelectionTarget::Node(second)),
-        &[first],
-        second,
-        command,
-    );
-
-    assert_eq!(targets, vec![SelectionTarget::Node(first)]);
-    assert_eq!(primary, Some(SelectionTarget::Node(first)));
-}
-
-#[test]
-fn shift_node_selection_keeps_same_uuid_non_node_target() {
-    let shared_id = Uuid::from_u128(1);
-    let other_node_id = Uuid::from_u128(2);
-    let shift = egui::Modifiers {
-        shift: true,
-        ..Default::default()
-    };
-
-    let (targets, primary) = node_selection_after_snarl_click(
-        &[SelectionTarget::Clip(shared_id)],
-        Some(SelectionTarget::Clip(shared_id)),
-        &[other_node_id, shared_id, shared_id],
-        shared_id,
-        shift,
-    );
-
-    assert_eq!(
-        targets,
-        vec![
-            SelectionTarget::Clip(shared_id),
-            SelectionTarget::Node(other_node_id),
-            SelectionTarget::Node(shared_id),
-        ]
-    );
-    assert_eq!(primary, Some(SelectionTarget::Node(shared_id)));
-}
-
-#[test]
-fn real_egui_node_header_drag_reparents_once_from_final_snarl_rect() {
-    let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
-    if let Some(track) = project.get_track_mut(track_id) {
-        track.ui_size = [1_800.0, 1_000.0];
-    }
-    if let Some(composition) = project.get_composition_mut(composition_id) {
-        composition.ui_size = [2_200.0, 1_400.0];
-    }
-    let track_structural_merge_id = project
-        .get_track(track_id)
-        .expect("fixture Track")
-        .structural_merge_node_id;
-    if let Some(structural_merge) = project.get_node_mut(track_structural_merge_id) {
-        // This test exercises the Solid header gesture itself. Keep the
-        // generated Track sink clear of that header; production performs
-        // the same collision repair before the first interactive frame.
-        structural_merge.ui_position = [1_450.0, 760.0];
-    }
-    assert!(project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(solid_id))
-        .is_ok());
-    let explicit_wire = project
-        .connections
-        .iter()
-        .find(|connection| {
-            connection.from.owner == PortOwner::Node(solid_id)
-                && connection.to.owner == PortOwner::Node(merge_id)
-        })
-        .cloned();
-    assert!(explicit_wire.is_some());
+fn production_panel_header_drag_commits_once_and_round_trips_history() {
+    let (project, composition_id, _track_id, clip_id, _solid_id, merge_id) = fixture();
+    let initial_position = project.get_node(merge_id).unwrap().ui_position;
     let initial = project.clone();
-    let initial_position = project.get_node(solid_id).map(|node| node.ui_position);
-    assert!(initial_position.is_some());
+    let project = Arc::new(RwLock::new(project));
+    let service = EditorService::new(
+        Arc::clone(&project),
+        Arc::new(PluginManager::default()),
+        Arc::new(library::cache::CacheManager::new()),
+    )
+    .expect("production EditorService");
     let mut history = HistoryManager::new();
     history.push_project_state(initial.clone());
-
+    let mut editor_context = EditorContext::new(composition_id);
+    editor_context.select_target(SelectionTarget::Node(merge_id));
+    editor_context
+        .node_editor_state
+        .repaired_compositions
+        .insert(composition_id);
     let context = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1800.0, 1200.0));
-    let (mut snarl, containers) = build_snarl(&project, composition_id);
-    let rendered_node_rects = Arc::new(Mutex::new(HashMap::new()));
-    let mut state = NodeEditorState::default();
-    let mut final_transform = egui::emath::TSTransform::IDENTITY;
-    reset_test_rects();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2_400.0, 1_600.0));
 
-    for frame in 0..5 {
-        drop(context.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(frame as f64 / 60.0),
-                ..Default::default()
-            },
-            |context| {
-                egui::CentralPanel::default().show(context, |ui| {
-                    let mut edits = Vec::new();
-                    let mut navigation = None;
-                    let mut wire_context_request = None;
-                    let mut exclusions = Vec::new();
-                    let mut to_global = egui::emath::TSTransform::IDENTITY;
-                    let mut canvas_clip = ui.clip_rect();
-                    let mut merge_layer_reorder = None;
-                    let mut viewer = ProjectNodeViewer {
-                        project: &project,
-                        plugin_manager: None,
-                        containers: &containers,
-                        edits: &mut edits,
-                        pending_navigation: &mut navigation,
-                        selected_node_ids: &[],
-                        selected_container_owners: &[],
-                        current_time: 0.0,
-                        context_menu_exclusion_rects: &mut exclusions,
-                        wire_context_request: &mut wire_context_request,
-                        suppress_wire_connect: false,
-                        locked_canvas_transform: None,
-                        previous_canvas_transform: None,
-                        to_global: &mut to_global,
-                        canvas_clip: &mut canvas_clip,
-                        rendered_ports: Arc::new(Mutex::new(HashMap::new())),
-                        merge_layer_reorder: &mut merge_layer_reorder,
-                        rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
-                    };
-                    snarl.show(
-                        &mut viewer,
-                        &node_editor_snarl_style(),
-                        egui::Id::new(("real-reparent-drag", composition_id)),
-                        ui,
-                    );
-                    final_transform = to_global;
-                });
-            },
-        ));
+    for frame in 0..6 {
+        run_node_editor_panel_frame(
+            &context,
+            screen,
+            frame,
+            Vec::new(),
+            &project,
+            &service,
+            &mut history,
+            &mut editor_context,
+        );
     }
-
-    let header = test_rect(&format!("node_editor.node_header:{solid_id}"));
-    assert!(header.is_some_and(|rect| rect.is_positive()));
-    let Some(header) = header else {
-        return;
-    };
-    let Some(initial_position) = initial_position else {
-        return;
-    };
+    let header = test_rect(&format!("node_editor.node_header:{merge_id}"))
+        .filter(|rect| rect.is_positive())
+        .expect("production Node header geometry");
+    let header_metadata = test_metadata(&format!("node_editor.node_header:{merge_id}"))
+        .expect("detail Node header interaction metadata");
+    assert_eq!(header_metadata["selection_enabled"], true);
+    assert_eq!(header_metadata["move_enabled"], true);
+    let transform = editor_context
+        .node_editor_state
+        .node_editor_canvas_transform
+        .expect("production Snarl transform");
     let start = header.center();
-    let desired_position = [1_120.0, 470.0];
+    let final_position = [initial_position[0] + 42.0, initial_position[1] + 24.0];
     let graph_delta = egui::vec2(
-        desired_position[0] - initial_position[0],
-        desired_position[1] - initial_position[1],
+        final_position[0] - initial_position[0],
+        final_position[1] - initial_position[1],
     );
-    let end = start + graph_delta * final_transform.scaling;
-    assert!(screen.contains(end));
-    let drag_start = start + (end - start).normalized() * 12.0;
-    let event_frames = [
+    let end = start + graph_delta * transform.scaling;
+    let pointer_frames = [
         vec![egui::Event::PointerMoved(start)],
-        vec![egui::Event::PointerButton {
-            pos: start,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
-        }],
-        vec![egui::Event::PointerMoved(drag_start)],
-        vec![egui::Event::PointerMoved(end)],
-        vec![egui::Event::PointerButton {
-            pos: end,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        }],
+        vec![
+            egui::Event::PointerMoved(start),
+            primary_button(start, true),
+            egui::Event::PointerMoved(end),
+        ],
+        vec![primary_button(end, false)],
     ];
-    let mut history_commits = 0;
-    let mut release_outcome = ReparentReleaseOutcome::NoIntent;
-    for (offset, events) in event_frames.into_iter().enumerate() {
-        let mut frame_layout_edits = Vec::new();
-        let mut frame_drop_intents = Vec::new();
-        let mut frame_released = false;
-        if let Ok(mut rects) = rendered_node_rects.lock() {
-            rects.clear();
-        }
-        drop(context.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some((offset + 5) as f64 / 60.0),
-                events,
-                ..Default::default()
-            },
-            |context| {
-                egui::CentralPanel::default().show(context, |ui| {
-                    let mut edits = Vec::new();
-                    let mut navigation = None;
-                    let mut wire_context_request = None;
-                    let mut exclusions = Vec::new();
-                    let mut to_global = egui::emath::TSTransform::IDENTITY;
-                    let mut canvas_clip = ui.clip_rect();
-                    let mut merge_layer_reorder = None;
-                    let mut viewer = ProjectNodeViewer {
-                        project: &project,
-                        plugin_manager: None,
-                        containers: &containers,
-                        edits: &mut edits,
-                        pending_navigation: &mut navigation,
-                        selected_node_ids: &[],
-                        selected_container_owners: &[],
-                        current_time: 0.0,
-                        context_menu_exclusion_rects: &mut exclusions,
-                        wire_context_request: &mut wire_context_request,
-                        suppress_wire_connect: false,
-                        locked_canvas_transform: None,
-                        previous_canvas_transform: None,
-                        to_global: &mut to_global,
-                        canvas_clip: &mut canvas_clip,
-                        rendered_ports: Arc::new(Mutex::new(HashMap::new())),
-                        merge_layer_reorder: &mut merge_layer_reorder,
-                        rendered_node_rects: Arc::clone(&rendered_node_rects),
-                        surface_capture: Arc::new(Mutex::new(SurfaceCapture::default())),
-                    };
-                    let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
-                    snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
-                    drop(viewer);
-                    let captured_drag_node_id =
-                        captured_snarl_drag_node(ui.ctx(), &snarl, ui.make_persistent_id(graph_id));
-                    frame_layout_edits = collect_layout_edits(&project, &snarl);
-                    let (primary_down, primary_released, pointer) = ui.input(|input| {
-                        (
-                            input.pointer.primary_down(),
-                            input.pointer.primary_released(),
-                            input.pointer.interact_pos(),
-                        )
-                    });
-                    frame_released = primary_released;
-                    record_node_reparent_origins(
-                        &project,
-                        &frame_layout_edits,
-                        &mut state,
-                        primary_down || primary_released,
-                    );
-                    let Some(pointer) = pointer else {
-                        return;
-                    };
-                    let graph_point = to_global.inverse() * pointer;
-                    let Ok(rects) = rendered_node_rects.lock() else {
-                        return;
-                    };
-                    if let Some(gesture) = state.node_reparent.as_mut() {
-                        if gesture.primary_node_id.is_none() {
-                            gesture.primary_node_id = captured_drag_node_id
-                                .filter(|node_id| gesture.origins.contains_key(node_id));
-                        }
-                    }
-                    if let Some(gesture) = state.node_reparent.as_ref() {
-                        frame_drop_intents = node_drop_intents(
-                            &project,
-                            composition_id,
-                            gesture,
-                            &rects,
-                            &final_node_positions(&project, gesture, &frame_layout_edits),
-                            graph_point,
-                            to_global.scaling,
-                        );
-                    }
-                });
-            },
-        ));
-        let mut frame_changed = false;
-        for edit in frame_layout_edits {
-            frame_changed |= apply_layout_edit(&mut project, edit);
-        }
-        if frame_released {
-            let reparent_gesture = state.node_reparent.take();
-            release_outcome =
-                finish_node_reparent(&mut project, &frame_drop_intents, reparent_gesture.as_ref());
-            frame_changed |= release_outcome != ReparentReleaseOutcome::NoIntent;
-            state.moved_node_ids.clear();
-            if frame_changed {
-                history.push_project_state(project.clone());
-                history_commits += 1;
-            }
-        }
+    for (offset, events) in pointer_frames.into_iter().enumerate() {
+        run_node_editor_panel_frame(
+            &context,
+            screen,
+            6 + offset,
+            events,
+            &project,
+            &service,
+            &mut history,
+            &mut editor_context,
+        );
     }
 
-    assert_eq!(release_outcome, ReparentReleaseOutcome::Applied);
-    assert_eq!(history_commits, 1);
+    let edited = project.read().unwrap().clone();
+    let node = edited.get_node(merge_id).unwrap();
+    assert_eq!(
+        edited.find_node_container(merge_id),
+        Some(NodeContainer::Clip(clip_id))
+    );
+    assert!(
+        (node.ui_position[0] - final_position[0]).abs() < 0.01,
+        "x position {:?}, expected {final_position:?}",
+        node.ui_position
+    );
+    assert!(
+        (node.ui_position[1] - final_position[1]).abs() < 0.01,
+        "y position {:?}, expected {final_position:?}",
+        node.ui_position
+    );
+    assert!(edited.validate_connections().is_empty());
     assert_eq!(history.undo_depth(), 2);
-    assert_eq!(
-        project.find_node_container(solid_id),
-        Some(NodeContainer::Track(track_id))
-    );
-    assert_eq!(
-        project
-            .get_clip(clip_id)
-            .and_then(|clip| clip.output_node_id),
-        None
-    );
-    assert_eq!(
-        explicit_wire.as_ref().and_then(|wire| {
-            project
-                .connections
-                .iter()
-                .find(|connection| connection.id == wire.id)
-        }),
-        explicit_wire.as_ref(),
-    );
-    assert!(project
-        .get_node(solid_id)
-        .is_some_and(|node| node.ui_position != initial_position));
-    assert!(project.validate_containment().is_empty());
-    assert!(project.validate_connections().is_empty());
-    let edited = project.clone();
-    assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+    assert_eq!(history.undo(&edited), Some(initial.clone()));
+    assert_eq!(history.redo(&initial), Some(edited));
+}
+
+#[test]
+fn production_escape_after_delta_commits_movement_only_and_isolates_unrelated_edit() {
+    assert_production_move_cancellation(MoveCancellationInput::Escape, true);
+}
+
+#[test]
+fn production_pointer_loss_after_delta_commits_movement_only_once() {
+    assert_production_move_cancellation(MoveCancellationInput::PointerGone, false);
 }

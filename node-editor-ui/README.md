@@ -45,7 +45,8 @@ egui responses into `NodeBodyResponse`; a slider or drag value therefore owns
 its drag instead of moving the Node. The same frame path emits:
 
 - `Select` and `DeselectWire`
-- `Move` and `ResizeGroup`
+- incremental `Move`, followed once by `MoveEnd { Released | Cancelled }`, and
+  `ResizeGroup`
 - `Connect` and `Disconnect`
 - `Delete` and `Reparent`
 
@@ -58,11 +59,18 @@ video type.
 RuViE's production Node Editor now projects its authoritative `Project`,
 rendered geometry, actual Snarl draw order, and `SelectionState` through
 `app/src/ui/panels/node_editor/surface.rs`. Blank click, marquee, Node/Group
-selection, and wire deselection use `Editor::interact` and the same
-`InteractionState` as the standalone renderer. Selection is no longer
-implemented as a parallel app-only gesture state machine. Overview scale keeps
-large Node/Group click targets and blank deselection while precise marquee and
-wire selection remain gated.
+selection, wire deselection, Node/Group header movement, drag threshold, and
+multi-selection deltas use `Editor::interact` and the same `InteractionState`
+as the standalone renderer. Selection and movement are no longer parallel
+app-only gesture state machines. Overview scale keeps large Node/Group click
+targets and blank deselection while precise marquee, wire selection, and
+movement remain gated.
+
+A Move end is emitted only after the drag threshold produced a real `Move`.
+Hosts close exactly one movement transaction for either outcome. `Cancelled`
+(Escape, pointer/capture loss, or movement being disabled) commits the current
+positions as a movement-only transaction and must never run drop, reparent, or
+splice behavior; `Released` alone permits those release semantics.
 
 This is a usable reusable-core vertical slice, **not completion of the RuViE
 renderer migration**. Production Node body/header shells, selection emphasis,
@@ -75,11 +83,10 @@ The following production behavior still belongs to the existing Snarl adapter
 and must move in coherent slices:
 
 1. Project-specific Node body/input controls and Group header commands.
-2. Node movement plus multi-selection position application.
-3. Group edge resize and nested containment constraints.
-4. Connect/reconnect/disconnect, wire knife, and connection context menus.
-5. Reparent/drop scoring and Merge physical-layer reorder gestures.
-6. Snarl viewport/layout ownership and RuViE HTTP QA publication.
+2. Group edge resize and nested containment constraints.
+3. Connect/reconnect/disconnect, wire knife, and connection context menus.
+4. Reparent/drop scoring and Merge physical-layer reorder gestures.
+5. Snarl viewport/layout ownership and RuViE HTTP QA publication.
 
 The generic intents already cover those operations so later slices can replace
 adapter ownership without changing the public graph contract or inventing a

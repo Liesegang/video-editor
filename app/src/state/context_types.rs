@@ -711,14 +711,8 @@ pub struct NodeEditorState {
     pub pending_navigation: Option<Uuid>,
     #[serde(skip)]
     pub layout_changed_during_drag: bool,
-    /// Nodes whose Snarl positions changed during the current pointer drag.
-    /// Membership is resolved once, at pointer release, from the final drop
-    /// position so geometry and containment share one history transaction.
-    #[serde(skip)]
-    pub moved_node_ids: std::collections::HashSet<Uuid>,
-    /// One physical Node-body drag, from the first observed Snarl position
-    /// change through primary release.  The snapshot is transient UI gesture
-    /// state; authoritative positions and containment remain in `Project`.
+    /// Project-specific reparent transaction state created from generic Move
+    /// intents. Authoritative positions and containment remain in `Project`.
     #[serde(skip)]
     pub node_reparent: Option<NodeEditorReparentGesture>,
     /// Compositions whose legacy/fixture layout has already received its one
@@ -740,11 +734,6 @@ pub struct NodeEditorState {
         NodeEditorEditableWire,
         PortOwner,
     >,
-    /// Logical Project item whose Snarl frame currently owns the pointer.
-    /// This bridges Snarl's transient node IDs to the typed selection model
-    /// exactly once per physical drag (important for Shift toggle semantics).
-    #[serde(skip)]
-    pub active_drag_selection: Option<SelectionTarget>,
     /// Most recently rendered Node Editor transform. Custom foreground
     /// gestures use this one-frame snapshot to capture a press before Snarl's
     /// background pan handler runs on the next frame.
@@ -806,7 +795,7 @@ pub struct NodeEditorNodeDragOrigin {
 #[derive(Clone, Debug)]
 pub struct NodeEditorReparentGesture {
     pub origins: std::collections::HashMap<Uuid, NodeEditorNodeDragOrigin>,
-    /// Node whose body/header physically captured the pointer. Multi-select
+    /// Node whose generic header physically captured the pointer. Multi-select
     /// drags use this Node's one target for the complete moved set.
     pub primary_node_id: Option<Uuid>,
     /// The deterministic target selected from the most recent rendered Node

@@ -1,14 +1,13 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
-use eframe::egui::{self, Color32};
+use eframe::egui;
 use egui_phosphor::regular as icons;
 use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
 };
 use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
-use library::model::property::PropertyValue;
-use library::model::{GeneratorContent, NodeContent};
+use library::model::NodeContent;
 use library::plugin::property_name_from_port;
 use node_editor_ui::{Editor, HeaderGlyph, NodeHeader, PortLabel};
 use std::sync::Arc;
@@ -100,6 +99,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
 
         match item {
             GraphItem::Node(project_node_id) => {
+                let move_enabled = node_editor_details_visible(self.to_global.scaling);
                 let palette = node_palette(self.project, project_node_id);
                 let selection = super::selection::node_selection_presentation(
                     self.project,
@@ -131,7 +131,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         min_width: NODE_HEADER_WIDTH,
                         title_width: NODE_HEADER_WIDTH - 48.0,
                         row_height: PORT_ROW_HEIGHT,
-                        details_visible: node_editor_details_visible(self.to_global.scaling),
+                        details_visible: move_enabled,
                     },
                 );
                 let response = graph_item_inactive_reason(
@@ -172,6 +172,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             "selected": selected,
                             "highlight_style": highlight_metadata,
                             "content_rect": qa_rect_metadata(unclipped_content_rect),
+                            "selection_enabled": true,
+                            "move_enabled": move_enabled,
                         }),
                     );
                 }
@@ -184,6 +186,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         "node_id": project_node_id,
                         "selected": selected,
                         "highlight_style": highlight_metadata,
+                        "selection_enabled": true,
+                        "move_enabled": move_enabled,
                         "hovered": response.hovered(),
                         "content_rect": qa_rect_metadata(unclipped_content_rect),
                         "unclipped_rect": qa_rect_metadata(unclipped_header_rect),
@@ -199,6 +203,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 }
             }
             GraphItem::Container(owner) => {
+                let move_enabled = node_editor_details_visible(self.to_global.scaling);
                 let collapsed = container_collapsed(self.project, owner).unwrap_or(false);
                 let selection = super::selection::container_selection_presentation(
                     self.project,
@@ -212,7 +217,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 let header_width = container_name_and_size(self.project, owner)
                     .map_or(240.0, |(_, size)| (size[0] - 28.0).max(240.0));
                 ui.set_min_width(header_width);
-                let response = if node_editor_details_visible(self.to_global.scaling) {
+                let response = if move_enabled {
                     ui.horizontal(|ui| {
                         let (toggle_icon, toggle_label, toggle_action) = if collapsed {
                             (icons::CARET_RIGHT, "Expand container", "expand")
@@ -220,6 +225,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             (icons::CARET_DOWN, "Collapse container", "collapse")
                         };
                         let toggle = ui.small_button(toggle_icon).on_hover_text(toggle_label);
+                        self.record_body_response(&toggle);
                         let unclipped_toggle_rect = *self.to_global * toggle.rect;
                         let toggle_rect = clipped_qa_rect(unclipped_toggle_rect, *self.canvas_clip);
                         let coordinate_clicked = ui.input(|input| {
@@ -283,6 +289,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             "owner": qa_container_key(owner),
                             "selected": selected,
                             "highlight_style": highlight_metadata,
+                            "selection_enabled": true,
+                            "move_enabled": move_enabled,
                         }),
                     );
                 }
@@ -295,6 +303,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         "owner": qa_container_key(owner),
                         "selected": selected,
                         "highlight_style": highlight_metadata,
+                        "selection_enabled": true,
+                        "move_enabled": move_enabled,
                         "unclipped_rect": qa_rect_metadata(unclipped_header_rect),
                         "visible_in_canvas": header_rect.is_positive(),
                     })),
@@ -543,6 +553,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
                         egui::TextEdit::singleline(&mut name),
                     );
+                    self.record_body_response(&response);
                     let finished = continuous_response_finished(ui, &response);
                     let edit = response.changed().then_some(NodeEdit::Rename {
                         node_id: project_node_id,
@@ -626,6 +637,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         }
                         let (response, popup_closed) =
                             continuous_color_edit_button(ui, &mut edited);
+                        self.record_body_response(&response);
                         let finished = popup_closed || continuous_response_finished(ui, &response);
                         let edit = response.changed().then(|| NodeEdit::SetProperty {
                             owner: PortOwner::Node(project_node_id),

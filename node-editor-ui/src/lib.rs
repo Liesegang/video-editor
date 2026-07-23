@@ -24,7 +24,7 @@ pub use graph::{
     AuthoritativeSelection, GraphFrame, GroupDescriptor, ItemId, NodeDescriptor, PortDescriptor,
     PortDirection, PortInstanceId, PortOwner, TypeKey, WireDescriptor,
 };
-pub use interaction::{EditorOutput, InteractionOptions, InteractionState};
+pub use interaction::{EditorOutput, InteractionOptions, InteractionState, MoveEndOutcome};
 pub use layout_swipe::{LayoutSwipeAxis, LayoutSwipeHitArea, LayoutSwipeIntent, LayoutSwipePhase};
 pub use selection::{after_click, after_marquee, topmost_hit};
 pub use wire::{CubicBezier, HitRegion};

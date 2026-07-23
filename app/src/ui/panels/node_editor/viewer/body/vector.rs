@@ -96,6 +96,7 @@ pub(super) fn register_components(
     components: Vec<VectorAxisResponse>,
 ) {
     for component in components {
+        viewer.record_body_response(&component.response);
         let axis = component.axis.to_ascii_lowercase();
         let component_id =
             format!("node_editor.property_component.node:{node_id}:{property_key}:{axis}");

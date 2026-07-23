@@ -11,13 +11,11 @@ pub mod handler;
 
 pub fn node_layout_command_blocked(state: &NodeEditorState) -> bool {
     state.layout_changed_during_drag
-        || !state.moved_node_ids.is_empty()
         || state.node_reparent.is_some()
         || state.container_resize.is_some()
         || state.directional_layout_swipe.is_some()
         || state.directional_layout_release_guard
         || state.surface_interaction.is_active()
-        || state.active_drag_selection.is_some()
         || state.wire_gesture.is_some()
         || state.normal_wire_drag_active
         || state.normal_connect_gesture.is_some()
@@ -179,8 +177,11 @@ pub fn commit_live_project_edits(
     editor_context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Idle;
     editor_context.node_editor_state.layout_changed_during_drag = false;
     editor_context.node_editor_state.node_reparent = None;
-    editor_context.node_editor_state.moved_node_ids.clear();
     editor_context.node_editor_state.container_resize = None;
+    editor_context
+        .node_editor_state
+        .surface_interaction
+        .cancel();
     editor_context.node_editor_state.pending_continuous_edit = None;
     true
 }
@@ -243,11 +244,6 @@ mod tests {
             CommandId::NodeEditorCleanLayoutAll
         ));
         state.normal_connect_cancel_pending_release = false;
-        state.active_drag_selection = Some(SelectionTarget::Node(Uuid::new_v4()));
-        assert!(!request_node_layout_command(
-            &mut state,
-            CommandId::NodeEditorCleanLayoutSelection
-        ));
     }
 
     #[test]
