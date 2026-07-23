@@ -1,13 +1,14 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
-use eframe::egui;
+use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
 use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
 };
 use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
-use library::model::NodeContent;
+use library::model::property::PropertyValue;
+use library::model::{GeneratorContent, NodeContent};
 use library::plugin::property_name_from_port;
 use node_editor_ui::{Editor, HeaderGlyph, NodeHeader, PortLabel};
 use std::sync::Arc;
