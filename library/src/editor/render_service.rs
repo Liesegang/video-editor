@@ -42,6 +42,32 @@ enum RenderColorAuthority<'a> {
     UnmanagedAbi,
 }
 
+fn prepare_effect_colors(
+    params: &mut std::collections::HashMap<String, crate::model::property::PropertyValue>,
+    color_parameters: &[String],
+    color_authority: &RenderColorAuthority<'_>,
+) -> Result<(), LibraryError> {
+    let RenderColorAuthority::Project { pipeline, .. } = color_authority else {
+        return Ok(());
+    };
+    for name in color_parameters {
+        let Some(value) = params.get_mut(name) else {
+            continue;
+        };
+        let authored = match value {
+            crate::model::property::PropertyValue::Color(color) => {
+                crate::model::property::ColorValue::from_straight_srgba8(color)
+            }
+            crate::model::property::PropertyValue::ColorValue(color) => color.clone(),
+            _ => continue,
+        };
+        *value = crate::model::property::PropertyValue::ColorValue(
+            pipeline.effect_color_to_working(&authored)?,
+        );
+    }
+    Ok(())
+}
+
 struct MediaRenderInput<'a> {
     request: &'a LoadRequest,
     surface: &'a ImageSurface,
@@ -237,7 +263,12 @@ impl<T: Renderer> RenderService<T> {
         let output_result = self.renderer.end_group();
         children_result?;
         let output = output_result?;
-        let output = self.apply_effects(output, &group.effects, group.effect_time.into_inner())?;
+        let output = self.apply_effects(
+            output,
+            &group.effects,
+            group.effect_time.into_inner(),
+            color_authority,
+        )?;
         self.renderer.draw_layer_affine_with_blend(
             &output,
             &Affine2D::IDENTITY,
@@ -307,7 +338,12 @@ impl<T: Renderer> RenderService<T> {
         let output_result = self.renderer.end_group();
         children_result?;
         let output = output_result?;
-        let output = self.apply_effects(output, &group.effects, group.effect_time.into_inner())?;
+        let output = self.apply_effects(
+            output,
+            &group.effects,
+            group.effect_time.into_inner(),
+            color_authority,
+        )?;
 
         let pixel_to_local = Affine2D::scale(
             1.0 / parent_context.render_scale,
@@ -400,7 +436,8 @@ impl<T: Renderer> RenderService<T> {
                         current_time,
                     })
                 })?;
-                let final_image = self.apply_effects(text_layer, effects, current_time)?;
+                let final_image =
+                    self.apply_effects(text_layer, effects, current_time, color_authority)?;
                 measure_debug(format!("Composite text '{}'", text), || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -430,7 +467,8 @@ impl<T: Renderer> RenderService<T> {
                         transform: render_transform,
                     })
                 })?;
-                let final_image = self.apply_effects(shape_layer, effects, current_time)?;
+                let final_image =
+                    self.apply_effects(shape_layer, effects, current_time, color_authority)?;
                 measure_debug(format!("Composite shape {}", path), || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -457,7 +495,8 @@ impl<T: Renderer> RenderService<T> {
                         color_domain: *color_domain,
                     })
                 })?;
-                let final_image = self.apply_effects(sksl_layer, effects, current_time)?;
+                let final_image =
+                    self.apply_effects(sksl_layer, effects, current_time, color_authority)?;
                 measure_debug("Composite SkSL", || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
@@ -503,6 +542,7 @@ impl<T: Renderer> RenderService<T> {
         layer: RenderOutput,
         effects: &[crate::model::frame::effect::ImageEffect],
         current_time: f64,
+        color_authority: &RenderColorAuthority<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         if effects.is_empty() {
             Ok(layer)
@@ -514,6 +554,12 @@ impl<T: Renderer> RenderService<T> {
                 let gpu_context = self.renderer.get_gpu_context();
 
                 let mut params = effect.properties.clone();
+                if matches!(current_layer, RenderOutput::Working(_)) {
+                    let color_parameters = self
+                        .plugin_manager
+                        .effect_project_linear_color_parameters(effect_type);
+                    prepare_effect_colors(&mut params, &color_parameters, color_authority)?;
+                }
                 params.insert(
                     "u_time".to_string(),
                     crate::model::property::PropertyValue::Number(ordered_float::OrderedFloat(
@@ -553,7 +599,9 @@ impl<T: Renderer> RenderService<T> {
                 .load_resource(request, &self.cache_manager)
         })?;
         let layer = match color_authority {
-            RenderColorAuthority::Project { project, pipeline } => {
+            RenderColorAuthority::Project {
+                project, pipeline, ..
+            } => {
                 let working =
                     ingest_loaded_media(project, pipeline, surface, expected_kind, response)?;
                 RenderOutput::Working(working)
@@ -564,7 +612,8 @@ impl<T: Renderer> RenderService<T> {
             }
         };
 
-        let final_image = self.apply_effects(layer, &surface.effects, current_time)?;
+        let final_image =
+            self.apply_effects(layer, &surface.effects, current_time, color_authority)?;
 
         let render_transform = context.transform(&surface.transform);
 

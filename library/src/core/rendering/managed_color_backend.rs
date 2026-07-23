@@ -16,6 +16,7 @@ use crate::model::project::{
     ColorConfigIdentity, DEFAULT_BUNDLED_COLOR_CONFIG_ID, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID,
     ModelValidatedColorManagementConfig, Project, ResolvedColorManagementConfig,
 };
+use crate::model::property::{ColorSpaceRef, ColorValue};
 use crate::plugin::{DecodedPixelBuffer, DecodedStraightRgba16F};
 use crate::rendering::renderer::WorkingSurfaceContract;
 
@@ -160,6 +161,38 @@ impl ProjectColorPipeline {
             self.authoring_srgb.clone(),
             self.source_processor(&self.authoring_srgb)?,
         )
+    }
+
+    /// Convert a graph-authored straight color into this Project's exact
+    /// working space for a project-linear Effect uniform.
+    ///
+    /// The canonical `srgb` model tag is resolved through the Project's exact
+    /// sRGB authoring binding, including OCIO configs whose local space has a
+    /// different name. Other tags are resolved by the selected backend.
+    pub(crate) fn effect_color_to_working(
+        &self,
+        color: &ColorValue,
+    ) -> Result<ColorValue, LibraryError> {
+        let source = if color.color_space() == &ColorSpaceRef::srgb() {
+            self.authoring_srgb.clone()
+        } else {
+            self.resolve_source_space(color.color_space().as_str())?
+        };
+        let [r, g, b, a] = color.rgba();
+        let rgb = self
+            .source_processor(&source)?
+            .transform_rgb([r, g, b])
+            .map_err(color_error)?;
+        let working_space = ColorSpaceRef::new(self.working.working_space()).map_err(|error| {
+            LibraryError::Render(format!(
+                "Project working color-space identity is invalid: {error}"
+            ))
+        })?;
+        ColorValue::new(working_space, [rgb[0], rgb[1], rgb[2], a]).map_err(|error| {
+            LibraryError::Render(format!(
+                "Effect color conversion produced an invalid Project working value: {error}"
+            ))
+        })
     }
 
     fn ingest_rgba16f(

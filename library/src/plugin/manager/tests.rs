@@ -1,6 +1,6 @@
 use super::*;
 use ordered_float::OrderedFloat;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::model::frame::color::Color;
@@ -12,6 +12,8 @@ use crate::plugin::{
     EffectColorDomain, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError,
     PropertyEvaluator, PropertyPlugin,
 };
+use crate::rendering::renderer::RenderOutput;
+use crate::rendering::skia_utils::GpuContext;
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
     LINEAR_SRGB_SPACE_ID, ManagedLinearWorkingImage, SRGB_SPACE_ID, WorkingColorIdentity,

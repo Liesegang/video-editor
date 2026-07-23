@@ -31,6 +31,37 @@ use crate::plugin::{
 use crate::rendering::renderer::RenderOutput;
 use crate::{RenderDestination, RenderService, SkiaRenderer};
 
+#[test]
+fn effect_color_conversion_uses_the_exact_project_working_processor() {
+    let project = Project::new("effect color conversion");
+    let pipeline = super::managed_color_backend::ProjectColorPipeline::for_project(
+        &project,
+        super::managed_color_backend::ManagedRenderDestination::Preview,
+    )
+    .expect("default Project color pipeline");
+    let authored = crate::model::property::ColorValue::from_straight_srgba8(&Color {
+        r: 128,
+        g: 128,
+        b: 128,
+        a: 127,
+    });
+    let working = pipeline
+        .effect_color_to_working(&authored)
+        .expect("convert effect color through Project processor");
+    assert_eq!(
+        working.color_space(),
+        &crate::model::property::ColorSpaceRef::linear_srgb()
+    );
+    let [r, g, b, a] = working.rgba();
+    for component in [r, g, b] {
+        assert!(
+            (component - 0.215_860_500_113_899_26).abs() <= 1.0e-12,
+            "encoded gray 128 was not linearized: {component}"
+        );
+    }
+    assert_eq!(a, 127.0 / 255.0);
+}
+
 #[derive(Clone)]
 struct Payload {
     pixels: DecodedPixelBuffer,

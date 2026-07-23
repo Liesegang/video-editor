@@ -54,6 +54,17 @@ pub trait EffectPlugin: Plugin {
         EffectColorDomain::UnmanagedSrgba8Only
     }
 
+    /// Authored color parameters which must be converted to an exact
+    /// Project-working [`PropertyValue::ColorValue`] before this effect runs
+    /// on a project-linear frame.
+    ///
+    /// This is deliberately opt-in so native effects retaining their legacy
+    /// `PropertyValue::Color` ABI are never mutated as a side effect of some
+    /// other plugin's color contract.
+    fn project_linear_color_parameters(&self) -> Vec<&str> {
+        Vec::new()
+    }
+
     /// Authoritative graph operation description. Existing native effects
     /// keep their property-definition implementation as the compatibility
     /// source while all Node construction and execution consumes this common

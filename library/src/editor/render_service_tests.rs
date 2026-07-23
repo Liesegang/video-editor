@@ -9,7 +9,10 @@ use crate::model::project::{
     PortAddress, PortOwner,
 };
 use crate::model::property::{Property, PropertyValue};
-use crate::model::{BlendMode, Clip, Node, Project, Track};
+use crate::model::{
+    BlendMode, COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_RED_PORT,
+    COLOR_SPACE_PORT, COLOR_VALUE_PORT, Clip, ColorContent, Node, Project, Track,
+};
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::skia_renderer::SkiaRenderer;
 use ordered_float::OrderedFloat;
@@ -488,6 +491,106 @@ fn managed_export_uses_the_same_shape_graph_with_a_linear_working_surface() {
         export.image().data,
         [188, 188, 188, 255],
         "half-white over black must composite in linear light and terminal exactly once"
+    );
+}
+
+#[test]
+fn managed_silhouette_converts_wired_gray_through_project_working_space() {
+    let plugin_manager = Arc::new(PluginManager::default());
+    let sksl_directory =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/plugins/sksl");
+    plugin_manager
+        .load_sksl_plugins_from_directory(sksl_directory)
+        .expect("load bundled SkSL effects");
+
+    let mut project = Project::new("managed silhouette color test");
+    let (mut composition, track) = Composition::new("main", 1, 1, 30.0, 1.0);
+    composition.background_color = Color::black();
+    let track_id = track.id;
+    project.add_track(track).expect("insert fixture Track");
+    project
+        .add_composition(composition)
+        .expect("insert fixture Composition");
+    let (clip_id, source_id) = add_solid(&mut project, track_id, Color::white());
+
+    let silhouette = plugin_manager
+        .create_effect_operation_node("silhouette")
+        .expect("bundled silhouette operation");
+    assert!(matches!(
+        silhouette
+            .properties()
+            .get("color")
+            .and_then(|property| property.value()),
+        Some(PropertyValue::ColorValue(_))
+    ));
+    let silhouette_id = silhouette.id;
+    project.add_node(silhouette);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), silhouette_id)
+        .unwrap();
+
+    let mut authored_color = Node::new_color("Authored gray", ColorContent::Compose);
+    for (name, value) in [
+        (
+            COLOR_SPACE_PORT,
+            PropertyValue::String(crate::color_management::encoded_srgb_space_id().to_string()),
+        ),
+        (
+            COLOR_RED_PORT,
+            PropertyValue::Number(OrderedFloat(128.0 / 255.0)),
+        ),
+        (
+            COLOR_GREEN_PORT,
+            PropertyValue::Number(OrderedFloat(128.0 / 255.0)),
+        ),
+        (
+            COLOR_BLUE_PORT,
+            PropertyValue::Number(OrderedFloat(128.0 / 255.0)),
+        ),
+        (COLOR_ALPHA_PORT, PropertyValue::Number(OrderedFloat(1.0))),
+    ] {
+        authored_color
+            .set_property(name.to_string(), Property::constant(value))
+            .expect("set authored graph color component");
+    }
+    let authored_color_id = authored_color.id;
+    project.add_node(authored_color);
+    project
+        .attach_node_to_container(NodeContainer::Clip(clip_id), authored_color_id)
+        .unwrap();
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(authored_color_id), COLOR_VALUE_PORT),
+            PortAddress::new(
+                PortOwner::Node(silhouette_id),
+                crate::plugin::property_port_key("color"),
+            ),
+        )
+        .expect("connect typed graph color to silhouette");
+    project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(silhouette_id), IMAGE_INPUT_PORT),
+        )
+        .unwrap();
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(silhouette_id))
+        .unwrap();
+
+    let project_model = ProjectModel::new(Arc::new(project), 0).expect("valid fixture Project");
+    let renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    let mut service = RenderService::new(
+        renderer,
+        Arc::clone(&plugin_manager),
+        Arc::new(CacheManager::new()),
+    );
+    let export = service
+        .render_export_frame(&project_model, 0.0)
+        .expect("silhouette should render through Project linear RGBAF32");
+    assert_eq!(
+        export.image().data,
+        [128, 128, 128, 255],
+        "authored sRGB 128 must become about 0.21586 in linear-sRGB and transform back once; treating 128/255 as linear would produce about 188"
     );
 }
 

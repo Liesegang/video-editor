@@ -1,28 +1,24 @@
 //! Plugin manager for registering, loading, and accessing plugins.
 
 mod bundled;
+mod effects;
 mod registration;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use libloading::{Library, Symbol};
-use log::debug;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::AssetKind;
 use crate::model::property::PropertyDefinition;
-use crate::model::property::PropertyValue;
 use crate::plugin::EntityConverterPlugin;
-use crate::rendering::renderer::RenderOutput;
-use crate::rendering::skia_utils::GpuContext;
 use crate::util::local_file::DirectRegularFile;
 
 use crate::plugin::PluginCategory;
-use crate::plugin::effects::{EffectColorDomain, EffectDefinition, EffectPlugin};
+use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::{ExportPlugin, ExportSettings};
 use crate::plugin::loaders::{
@@ -816,75 +812,6 @@ impl PluginManager {
             .iter()
             .filter_map(|id| inner.load_plugins.get(id).map(|p| (id.clone(), p.name())))
             .collect()
-    }
-
-    pub fn apply_effect(
-        &self,
-        key: &str,
-        input: &RenderOutput,
-        params: &HashMap<String, PropertyValue>,
-        gpu_context: Option<&mut GpuContext>,
-    ) -> Result<RenderOutput, LibraryError> {
-        let plugin = {
-            let inner = self.read_registry();
-            inner.effect_plugins.get(key).cloned()
-        };
-        if let Some(plugin) = plugin {
-            let working_identity = match input {
-                RenderOutput::Working(image) => Some(image.identity().clone()),
-                RenderOutput::Image(_) | RenderOutput::Texture(_) => None,
-            };
-            if working_identity.is_some()
-                && plugin.color_domain() != EffectColorDomain::ProjectLinearPreserving
-            {
-                return Err(LibraryError::Plugin(format!(
-                    "Effect '{key}' supports only the unmanaged encoded-sRGBA8 boundary; it cannot process a Project linear RGBAF32 frame"
-                )));
-            }
-            debug!("PluginManager: Applying effect '{}'", key);
-            let output = plugin.apply(input, params, gpu_context)?;
-            if let Some(expected) = working_identity {
-                match &output {
-                    RenderOutput::Working(image) if image.identity() == &expected => {}
-                    RenderOutput::Working(image) => {
-                        return Err(LibraryError::Plugin(format!(
-                            "Effect '{key}' changed Project working identity from {expected:?} to {:?}",
-                            image.identity()
-                        )));
-                    }
-                    RenderOutput::Image(_) | RenderOutput::Texture(_) => {
-                        return Err(LibraryError::Plugin(format!(
-                            "Effect '{key}' dropped the Project working RGBAF32 contract"
-                        )));
-                    }
-                }
-            }
-            Ok(output)
-        } else {
-            if matches!(input, RenderOutput::Working(_)) {
-                Err(LibraryError::Plugin(format!(
-                    "Effect '{key}' is unavailable; refusing to bypass it in a Project linear render"
-                )))
-            } else {
-                log::warn!("Effect '{}' not found", key);
-                Ok(input.clone())
-            }
-        }
-    }
-
-    pub fn get_effect_definition(&self, effect_id: &str) -> Option<EffectDefinition> {
-        let descriptor =
-            match self.operation_descriptor(EFFECT_CATEGORY, effect_id, EFFECT_APPLY_OPERATION) {
-                Ok(descriptor) => descriptor,
-                Err(error) => {
-                    log::warn!("Invalid or unavailable Effect descriptor {effect_id}: {error}");
-                    return None;
-                }
-            };
-        Some(EffectDefinition {
-            label: descriptor.label().to_string(),
-            properties: descriptor.properties().to_vec(),
-        })
     }
 
     /// Load a resource (image or video frame).

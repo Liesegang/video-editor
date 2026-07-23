@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::{EffectColorDomain, EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use serde::Deserialize;
@@ -13,7 +13,23 @@ pub struct SkslPluginConfig {
     pub name: String,
     pub category: String,
     pub version: Option<(u32, u32, u32)>,
+    #[serde(default)]
+    pub color_domain: SkslEffectColorDomain,
     pub properties: Vec<SkslPropertyConfig>,
+}
+
+/// Pixel contract authored by one SkSL effect.
+///
+/// Existing third-party shaders remain on the historical encoded-sRGBA8
+/// boundary unless they explicitly opt in. Project-linear shaders receive and
+/// return premultiplied RGBAF32 through Skia without a display transform or an
+/// 8-bit compatibility roundtrip.
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkslEffectColorDomain {
+    #[default]
+    UnmanagedSrgba8,
+    ProjectLinear,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -120,6 +136,25 @@ impl Plugin for SkslEffectPlugin {
 }
 
 impl EffectPlugin for SkslEffectPlugin {
+    fn color_domain(&self) -> EffectColorDomain {
+        match self.config.color_domain {
+            SkslEffectColorDomain::UnmanagedSrgba8 => EffectColorDomain::UnmanagedSrgba8Only,
+            SkslEffectColorDomain::ProjectLinear => EffectColorDomain::ProjectLinearPreserving,
+        }
+    }
+
+    fn project_linear_color_parameters(&self) -> Vec<&str> {
+        if self.config.color_domain != SkslEffectColorDomain::ProjectLinear {
+            return Vec::new();
+        }
+        self.config
+            .properties
+            .iter()
+            .filter(|property| property.r#type == "Color")
+            .map(|property| property.name.as_str())
+            .collect()
+    }
+
     fn apply(
         &self,
         input: &RenderOutput,
@@ -187,6 +222,15 @@ impl EffectPlugin for SkslEffectPlugin {
                                 uniform_bytes.extend_from_slice(&w.to_le_bytes());
                             }
                             PropertyValue::Color(c) => {
+                                if matches!(input, RenderOutput::Working(_))
+                                    && self.config.color_domain
+                                        == SkslEffectColorDomain::ProjectLinear
+                                {
+                                    return Err(LibraryError::Render(format!(
+                                        "Project-linear SkSL effect '{}' received encoded sRGBA8 property '{}'; RenderService must convert authored colors into the exact Project working space",
+                                        self.config.name, prop.name
+                                    )));
+                                }
                                 let r = c.r as f32 / 255.0;
                                 let g = c.g as f32 / 255.0;
                                 let b = c.b as f32 / 255.0;
@@ -196,6 +240,41 @@ impl EffectPlugin for SkslEffectPlugin {
                                 uniform_bytes.extend_from_slice(&b.to_le_bytes());
                                 uniform_bytes.extend_from_slice(&a.to_le_bytes());
                             }
+                            PropertyValue::ColorValue(c) => {
+                                let RenderOutput::Working(working) = input else {
+                                    return Err(LibraryError::Render(format!(
+                                        "SkSL effect '{}' received a typed color outside the Project-linear render boundary",
+                                        self.config.name
+                                    )));
+                                };
+                                if self.config.color_domain != SkslEffectColorDomain::ProjectLinear
+                                {
+                                    return Err(LibraryError::Render(format!(
+                                        "SkSL effect '{}' did not declare the Project-linear color domain",
+                                        self.config.name
+                                    )));
+                                }
+                                let expected = working.identity().working_space();
+                                if c.color_space().as_str() != expected {
+                                    return Err(LibraryError::Render(format!(
+                                        "Project-linear SkSL effect '{}' property '{}' is in color space '{}', expected exact Project working space '{}'",
+                                        self.config.name,
+                                        prop.name,
+                                        c.color_space(),
+                                        expected
+                                    )));
+                                }
+                                for component in c.rgba() {
+                                    let component = component as f32;
+                                    if !component.is_finite() {
+                                        return Err(LibraryError::Render(format!(
+                                            "Project-linear SkSL effect '{}' property '{}' exceeds RGBAF32 range",
+                                            self.config.name, prop.name
+                                        )));
+                                    }
+                                    uniform_bytes.extend_from_slice(&component.to_le_bytes());
+                                }
+                            }
                             _ => {
                                 log::warn!(
                                     "[WARN] SkSL: Unsupported property value type: {:?}",
@@ -203,6 +282,14 @@ impl EffectPlugin for SkslEffectPlugin {
                                 );
                             }
                         }
+                    } else if prop.r#type == "Color"
+                        && matches!(input, RenderOutput::Working(_))
+                        && self.config.color_domain == SkslEffectColorDomain::ProjectLinear
+                    {
+                        return Err(LibraryError::Render(format!(
+                            "Project-linear SkSL effect '{}' is missing converted working-space color property '{}'",
+                            self.config.name, prop.name
+                        )));
                     } else if let Some(def) = &prop.default {
                         match def {
                             ValueWrapper::Float(f) => {
@@ -340,6 +427,9 @@ impl EffectPlugin for SkslEffectPlugin {
                         max_hard_limit: p.max_hard_limit.unwrap_or(false),
                     },
                     "Bool" => PropertyUiType::Bool,
+                    "Color" if self.config.color_domain == SkslEffectColorDomain::ProjectLinear => {
+                        PropertyUiType::ColorValue
+                    }
                     "Color" => PropertyUiType::Color,
                     "Vec2" => PropertyUiType::vec2_with_range(
                         p.min.unwrap_or(-1_000_000.0),
@@ -394,13 +484,22 @@ impl EffectPlugin for SkslEffectPlugin {
                         })
                     }
                     Some(ValueWrapper::Vec3(v)) => {
-                        if matches!(ui_type, PropertyUiType::Color) {
-                            PropertyValue::Color(crate::model::frame::color::Color {
+                        if matches!(ui_type, PropertyUiType::Color | PropertyUiType::ColorValue) {
+                            let color = crate::model::frame::color::Color {
                                 r: (v[0] * 255.0) as u8,
                                 g: (v[1] * 255.0) as u8,
                                 b: (v[2] * 255.0) as u8,
                                 a: 255,
-                            })
+                            };
+                            if matches!(ui_type, PropertyUiType::ColorValue) {
+                                PropertyValue::ColorValue(
+                                    crate::model::property::ColorValue::from_straight_srgba8(
+                                        &color,
+                                    ),
+                                )
+                            } else {
+                                PropertyValue::Color(color)
+                            }
                         } else {
                             PropertyValue::Vec3(crate::model::property::Vec3 {
                                 x: OrderedFloat(v[0]),
@@ -410,13 +509,22 @@ impl EffectPlugin for SkslEffectPlugin {
                         }
                     }
                     Some(ValueWrapper::Vec4(v)) => {
-                        if matches!(ui_type, PropertyUiType::Color) {
-                            PropertyValue::Color(crate::model::frame::color::Color {
+                        if matches!(ui_type, PropertyUiType::Color | PropertyUiType::ColorValue) {
+                            let color = crate::model::frame::color::Color {
                                 r: (v[0] * 255.0) as u8,
                                 g: (v[1] * 255.0) as u8,
                                 b: (v[2] * 255.0) as u8,
                                 a: (v[3] * 255.0) as u8,
-                            })
+                            };
+                            if matches!(ui_type, PropertyUiType::ColorValue) {
+                                PropertyValue::ColorValue(
+                                    crate::model::property::ColorValue::from_straight_srgba8(
+                                        &color,
+                                    ),
+                                )
+                            } else {
+                                PropertyValue::Color(color)
+                            }
                         } else {
                             PropertyValue::Vec4(crate::model::property::Vec4 {
                                 x: OrderedFloat(v[0]),
@@ -484,5 +592,112 @@ impl EffectPlugin for SkslEffectPlugin {
                 PropertyDefinition::new(&p.name, ui_type, &p.label, default_value)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::property::{ColorSpaceRef, ColorValue};
+    use crate::plugin::PluginManager;
+    use ruvie_color_management::{
+        BuiltinColorTransform, ColorContext, ColorTransformBackend, LINEAR_SRGB_SPACE_ID,
+        LinearWorkingImage, ManagedLinearWorkingImage, WorkingColorIdentity,
+    };
+    use std::sync::Arc;
+
+    const SILHOUETTE_CONFIG: &str =
+        include_str!("../../../../assets/plugins/sksl/silhouette/config.toml");
+    const SILHOUETTE_SHADER: &str =
+        include_str!("../../../../assets/plugins/sksl/silhouette/shader.sksl");
+
+    fn managed_pixel(pixel: [f32; 4]) -> RenderOutput {
+        let backend = BuiltinColorTransform;
+        let working = backend
+            .verify_working_space(LINEAR_SRGB_SPACE_ID, &ColorContext::default())
+            .expect("verify test working space");
+        let identity =
+            WorkingColorIdentity::from_verified("silhouette-linear-test", working).unwrap();
+        let pixels = LinearWorkingImage::from_premultiplied_rgba_f32(1, 1, vec![pixel]).unwrap();
+        // SAFETY: The fixture pixel is authored directly in the verified
+        // linear-sRGB test identity and uses premultiplied alpha.
+        RenderOutput::Working(unsafe {
+            ManagedLinearWorkingImage::from_working_pixels_unchecked(identity, pixels)
+        })
+    }
+
+    fn working_color(rgba: [f64; 4]) -> PropertyValue {
+        PropertyValue::ColorValue(
+            ColorValue::new(ColorSpaceRef::linear_srgb(), rgba).expect("valid working test color"),
+        )
+    }
+
+    fn assert_pixel_near(actual: [f32; 4], expected: [f32; 4]) {
+        for (component, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 2.0e-3,
+                "component {component}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn silhouette_keeps_working_identity_and_applies_straight_color_as_premultiplied() {
+        let manager = PluginManager::new();
+        let plugin = SkslEffectPlugin::new(SILHOUETTE_CONFIG, SILHOUETTE_SHADER).unwrap();
+        assert_eq!(
+            plugin.color_domain(),
+            EffectColorDomain::ProjectLinearPreserving
+        );
+        assert_eq!(plugin.project_linear_color_parameters(), ["color"]);
+        manager.register_effect(Arc::new(plugin));
+
+        let input = managed_pixel([-0.25, 1.5, 0.75, 0.5]);
+        let RenderOutput::Working(input_working) = &input else {
+            panic!("managed_pixel must return a working image");
+        };
+        let expected_identity = input_working.identity().clone();
+        let params = HashMap::from([("color".to_string(), working_color([0.25, 0.5, 2.0, 0.5]))]);
+        let output = manager
+            .apply_effect("silhouette", &input, &params, None)
+            .expect("linear silhouette should process RGBAF32 directly");
+        let RenderOutput::Working(output) = output else {
+            panic!("silhouette dropped the managed working contract");
+        };
+        assert_eq!(output.identity(), &expected_identity);
+        assert_pixel_near(output.pixels().pixels()[0], [0.0625, 0.125, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn silhouette_transparent_input_has_no_hidden_rgb() {
+        let manager = PluginManager::new();
+        manager.register_effect(Arc::new(
+            SkslEffectPlugin::new(SILHOUETTE_CONFIG, SILHOUETTE_SHADER).unwrap(),
+        ));
+        let params = HashMap::from([("color".to_string(), working_color([3.0, -1.0, 2.0, 1.0]))]);
+        let output = manager
+            .apply_effect("silhouette", &managed_pixel([0.0; 4]), &params, None)
+            .unwrap();
+        let RenderOutput::Working(output) = output else {
+            panic!("silhouette dropped the managed working contract");
+        };
+        assert_eq!(output.pixels().pixels()[0], [0.0; 4]);
+    }
+
+    #[test]
+    fn sksl_effects_remain_legacy_only_without_explicit_linear_opt_in() {
+        let config = r#"
+id = "legacy-test"
+name = "Legacy Test"
+category = "Test"
+properties = []
+"#;
+        let shader = "half4 main(float2 p) { return half4(0); }";
+        let plugin = SkslEffectPlugin::new(config, shader).unwrap();
+        assert_eq!(
+            plugin.color_domain(),
+            EffectColorDomain::UnmanagedSrgba8Only
+        );
+        assert!(plugin.project_linear_color_parameters().is_empty());
     }
 }
