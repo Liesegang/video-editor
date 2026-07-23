@@ -46,14 +46,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Container(_) | GraphItem::PortAnchor { .. } => egui::Frame::NONE,
             GraphItem::Node(project_node_id) => {
-                let style = super::selection::node_selection_presentation(
-                    self.project,
-                    self.selected_node_ids,
-                    project_node_id,
-                    self.current_time,
-                    self.to_global.scaling,
-                )
-                .visual;
+                let style = self.node_selection_presentation(project_node_id).visual;
                 Editor::node_frame(style)
             }
         }
@@ -73,14 +66,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Container(_) | GraphItem::PortAnchor { .. } => egui::Frame::NONE,
             GraphItem::Node(project_node_id) => {
-                let style = super::selection::node_selection_presentation(
-                    self.project,
-                    self.selected_node_ids,
-                    project_node_id,
-                    self.current_time,
-                    self.to_global.scaling,
-                )
-                .visual;
+                let style = self.node_selection_presentation(project_node_id).visual;
                 Editor::node_header_frame(style)
             }
         }
@@ -102,13 +88,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             GraphItem::Node(project_node_id) => {
                 let move_enabled = node_editor_details_visible(self.to_global.scaling);
                 let palette = node_palette(self.project, project_node_id);
-                let selection = super::selection::node_selection_presentation(
-                    self.project,
-                    self.selected_node_ids,
-                    project_node_id,
-                    self.current_time,
-                    self.to_global.scaling,
-                );
+                let selection = self.node_selection_presentation(project_node_id);
                 let (inactive, selected, visual) =
                     (selection.inactive, selection.selected, selection.visual);
                 let bypassed = bypass_menu::is_bypassed(self.project.get_node(project_node_id));
@@ -206,14 +186,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             GraphItem::Container(owner) => {
                 let move_enabled = node_editor_details_visible(self.to_global.scaling);
                 let collapsed = container_collapsed(self.project, owner).unwrap_or(false);
-                let selection = super::selection::container_selection_presentation(
-                    self.project,
-                    self.containers,
-                    self.selected_container_owners,
-                    owner,
-                    self.current_time,
-                    self.to_global.scaling,
-                );
+                let selection = self.container_selection_presentation(owner);
                 let selected = selection.selected;
                 let header_width = container_name_and_size(self.project, owner)
                     .map_or(240.0, |(_, size)| (size[0] - 28.0).max(240.0));
@@ -830,13 +803,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 if let Ok(mut node_rects) = self.rendered_node_rects.lock() {
                     node_rects.insert(id, graph_rect);
                 }
-                let selection = super::selection::node_selection_presentation(
-                    self.project,
-                    self.selected_node_ids,
-                    id,
-                    self.current_time,
-                    self.to_global.scaling,
-                );
+                let selection = self.node_selection_presentation(id);
                 let (inactive, selected, visual) =
                     (selection.inactive, selection.selected, selection.visual);
                 let highlight_metadata = super::selection::node_highlight_metadata(visual);

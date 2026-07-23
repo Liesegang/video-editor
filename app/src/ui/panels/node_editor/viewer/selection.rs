@@ -7,6 +7,8 @@ use library::model::Project;
 use node_editor_ui::{Editor, NodeVisualStyle};
 use uuid::Uuid;
 
+use super::ProjectNodeViewer;
+
 pub(super) fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
     native_variadic_merge_for_node(project, node_id).is_some()
 }
@@ -63,6 +65,32 @@ pub(super) fn node_selection_presentation(
             selected,
             scale,
         ),
+    }
+}
+
+impl ProjectNodeViewer<'_> {
+    pub(super) fn container_selection_presentation(
+        &self,
+        owner: PortOwner,
+    ) -> ContainerSelectionPresentation {
+        container_selection_presentation(
+            self.project,
+            self.containers,
+            self.selected_container_owners,
+            owner,
+            self.current_time,
+            self.to_global.scaling,
+        )
+    }
+
+    pub(super) fn node_selection_presentation(&self, node_id: Uuid) -> NodeSelectionPresentation {
+        node_selection_presentation(
+            self.project,
+            self.selected_node_ids,
+            node_id,
+            self.current_time,
+            self.to_global.scaling,
+        )
     }
 }
 
