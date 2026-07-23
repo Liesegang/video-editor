@@ -286,7 +286,7 @@ half4 main(half4 source_pm, half4 base_pm) {{
     float3 premul = source_alpha * ((1.0 - base_alpha) * source + base_alpha * blended)
         + (1.0 - source_alpha) * base_alpha * base;
     float output_alpha = source_alpha + base_alpha * (1.0 - source_alpha);
-    return half4(half3(clamp(premul, 0.0, 1.0)), half(output_alpha));
+    return half4(half3(premul), half(output_alpha));
 }}
 "#
     )

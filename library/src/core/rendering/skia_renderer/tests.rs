@@ -16,6 +16,19 @@ use ruvie_color_management::{
 };
 use uuid::Uuid;
 
+const CUSTOM_BLEND_MODES: [BlendMode; 10] = [
+    BlendMode::LinearBurn,
+    BlendMode::DarkerColor,
+    BlendMode::LinearDodge,
+    BlendMode::LighterColor,
+    BlendMode::VividLight,
+    BlendMode::LinearLight,
+    BlendMode::PinLight,
+    BlendMode::HardMix,
+    BlendMode::Subtract,
+    BlendMode::Divide,
+];
+
 fn working_identity(config: &str) -> WorkingColorIdentity {
     let verified = BuiltinColorTransform
         .verify_working_space(LINEAR_SRGB_SPACE_ID, &ColorContext::default())
@@ -371,6 +384,79 @@ fn project_surface_keeps_normal_multiply_and_add_in_linear_working_space() {
                 )
                 .unwrap();
         }
+        let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
+            panic!("Project root must remain working-linear");
+        };
+        assert_pixel_near(output.pixels().pixels()[0], expected);
+    }
+}
+
+#[test]
+fn custom_blends_pass_extended_source_through_a_transparent_working_backdrop() {
+    let config = "custom-blend-transparent-extended";
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let source = RenderOutput::Working(working_pixel(config, [-0.25, 2.0, 0.5, 1.0]));
+    let mut renderer = SkiaRenderer::new(1, 1, transparent, false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+
+    for mode in CUSTOM_BLEND_MODES {
+        renderer.clear().unwrap();
+        renderer
+            .draw_layer_affine_with_blend(&source, &Affine2D::IDENTITY, 1.0, mode)
+            .unwrap();
+        let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
+            panic!("Project root must remain working-linear");
+        };
+        assert_pixel_near(output.pixels().pixels()[0], [-0.25, 2.0, 0.5, 1.0]);
+    }
+}
+
+#[test]
+fn custom_blends_use_unclamped_premultiplied_source_over_on_partial_backdrops() {
+    let config = "custom-blend-partial-extended";
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let base = RenderOutput::Working(working_pixel(config, [-0.12, 0.9, 0.18, 0.6]));
+    let source = RenderOutput::Working(working_pixel(config, [-0.2, 1.2, 0.3, 0.5]));
+    let mut renderer = SkiaRenderer::new(1, 1, transparent, false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+
+    // The straight base/source values are [-0.2, 1.5, 0.3] and
+    // [-0.4, 2.4, 0.6]. With Ab = 0.6 and As = 0.5, W3C source-over is
+    // Co = 0.2 * Cs + 0.3 * B(Cb, Cs) + 0.3 * Cb, Ao = 0.8.
+    let cases = [
+        (BlendMode::LinearBurn, [-0.14, 1.8, 0.21, 0.8]),
+        (BlendMode::DarkerColor, [-0.2, 1.38, 0.3, 0.8]),
+        (BlendMode::LinearDodge, [-0.32, 1.23, 0.48, 0.8]),
+        (BlendMode::LighterColor, [-0.26, 1.65, 0.39, 0.8]),
+        (BlendMode::VividLight, [-0.14, 1.23, 0.3225, 0.8]),
+        (BlendMode::LinearLight, [-0.14, 1.23, 0.36, 0.8]),
+        (BlendMode::PinLight, [-0.38, 2.07, 0.3, 0.8]),
+        (BlendMode::HardMix, [-0.14, 1.23, 0.21, 0.8]),
+        (BlendMode::Subtract, [-0.08, 0.93, 0.21, 0.8]),
+        (BlendMode::Divide, [0.16, 1.1175, 0.36, 0.8]),
+    ];
+    for (mode, expected) in cases {
+        renderer.clear().unwrap();
+        renderer
+            .draw_layer_affine_with_blend(&base, &Affine2D::IDENTITY, 1.0, BlendMode::Normal)
+            .unwrap();
+        renderer
+            .draw_layer_affine_with_blend(&source, &Affine2D::IDENTITY, 1.0, mode)
+            .unwrap();
         let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
             panic!("Project root must remain working-linear");
         };
