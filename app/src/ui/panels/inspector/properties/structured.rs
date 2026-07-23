@@ -202,6 +202,12 @@ pub(in crate::ui::panels::inspector) fn register_color_picker(
             "saturation_value",
         ),
         (
+            "picker_authored_space",
+            "canonical_color_picker_authored_space",
+            geometry.authored_space,
+            "authored_space",
+        ),
+        (
             "picker_hue",
             "canonical_color_picker_hue",
             geometry.hue,

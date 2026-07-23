@@ -682,13 +682,15 @@ fn real_pointer_drag_reorders_back_to_front_once_and_preserves_wire_metadata() {
             events,
         );
         drag_transforms.push(rendered.transform);
-        if !rendered.edits.is_empty() {
-            assert_eq!(rendered.edits.len(), 1);
+        let mut release_edits = rendered.edits;
+        panel::retain_merge_reorder_release_edits(&mut release_edits);
+        if !release_edits.is_empty() {
+            assert_eq!(release_edits.len(), 1);
             let mut history = HistoryManager::new();
             history.push_project_state(initial.clone());
             assert!(apply_queued_node_edits(
                 &mut project,
-                rendered.edits,
+                release_edits,
                 &mut history,
                 &mut state,
             ));

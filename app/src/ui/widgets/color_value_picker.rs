@@ -57,6 +57,7 @@ impl PickerDraft {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ColorPickerGeometry {
     pub popup: Rect,
+    pub authored_space: Rect,
     pub saturation_value: Rect,
     pub hue: Rect,
     pub alpha: Rect,
@@ -147,26 +148,35 @@ pub(crate) fn color_value_picker(ui: &mut Ui, id: Id, value: &ColorValue) -> Col
                     );
                 }
 
+                let mut authored_space_rect = Rect::NOTHING;
                 match library::color_management::available_color_spaces() {
                     Ok(spaces) => {
                         let mut selected_space = value.color_space().as_str().to_string();
                         let before = selected_space.clone();
-                        egui::ComboBox::from_id_salt(id.with("authored_space"))
-                            .selected_text(
-                                spaces
-                                    .iter()
-                                    .find(|space| space.id == selected_space)
-                                    .map_or(selected_space.as_str(), |space| space.label.as_str()),
-                            )
-                            .show_ui(ui, |ui| {
-                                for space in &spaces {
-                                    ui.selectable_value(
-                                        &mut selected_space,
-                                        space.id.clone(),
-                                        &space.label,
-                                    );
-                                }
-                            });
+                        let selected_label = spaces
+                            .iter()
+                            .find(|space| space.id == selected_space)
+                            .map_or(selected_space.as_str(), |space| space.label.as_str())
+                            .to_owned();
+                        authored_space_rect = ui
+                            .push_id(id.with("authored_space"), |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Authored space");
+                                    ui.menu_button(selected_label, |ui| {
+                                        for space in &spaces {
+                                            ui.selectable_value(
+                                                &mut selected_space,
+                                                space.id.clone(),
+                                                &space.label,
+                                            );
+                                        }
+                                    })
+                                    .response
+                                })
+                                .inner
+                            })
+                            .inner
+                            .rect;
                         if selected_space != before {
                             match library::model::property::ColorSpaceRef::new(selected_space)
                                 .map_err(library::color_management::ColorTransformError::from)
@@ -202,7 +212,12 @@ pub(crate) fn color_value_picker(ui: &mut Ui, id: Id, value: &ColorValue) -> Col
                     || saturation_value.changed()
                     || hue.changed()
                     || alpha.changed();
-                sub_geometry = Some((saturation_value.rect, hue.rect, alpha.rect));
+                sub_geometry = Some((
+                    authored_space_rect,
+                    saturation_value.rect,
+                    hue.rect,
+                    alpha.rect,
+                ));
             })
     });
     let is_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -240,12 +255,15 @@ pub(crate) fn color_value_picker(ui: &mut Ui, id: Id, value: &ColorValue) -> Col
     }
 
     let geometry = popup.and_then(|popup| {
-        sub_geometry.map(|(saturation_value, hue, alpha)| ColorPickerGeometry {
-            popup: popup.response.rect,
-            saturation_value,
-            hue,
-            alpha,
-        })
+        sub_geometry.map(
+            |(authored_space, saturation_value, hue, alpha)| ColorPickerGeometry {
+                popup: popup.response.rect,
+                authored_space,
+                saturation_value,
+                hue,
+                alpha,
+            },
+        )
     });
     if let Some(error) = conversion_error.as_deref() {
         ui.colored_label(
@@ -604,6 +622,46 @@ mod tests {
             .iter()
             .all(|component| (0.0..=1.0).contains(component)));
         assert!((display[3] - 0.75).abs() < f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn authored_space_menu_keeps_the_color_palette_open() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let context = egui::Context::default();
+        context.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let source = ColorValue::new(ColorSpaceRef::srgb(), [0.5, 0.2, 0.0, 0.75])?;
+        let mut snapshot = Snapshot::default();
+        let mut frame = 0;
+        let geometry = open_picker(&context, &source, &mut snapshot, &mut frame)?;
+        let position = geometry.authored_space.center();
+
+        render(
+            &context,
+            &source,
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer_button(position, true),
+            ],
+            frame,
+            &mut snapshot,
+        );
+        frame += 1;
+        render(
+            &context,
+            &source,
+            vec![pointer_button(position, false)],
+            frame,
+            &mut snapshot,
+        );
+        frame += 1;
+        render(&context, &source, Vec::new(), frame, &mut snapshot);
+
+        assert!(
+            snapshot.geometry.is_some(),
+            "opening the authored-space submenu must not close its parent palette"
+        );
+        assert!(!snapshot.finished);
         Ok(())
     }
 

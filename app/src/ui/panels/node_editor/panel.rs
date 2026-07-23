@@ -59,6 +59,18 @@ fn replace_selection_if_changed(
     true
 }
 
+pub(super) fn retain_merge_reorder_release_edits(edits: &mut Vec<QueuedNodeEdit>) {
+    edits.retain(|queued| {
+        queued.finishes_continuous_edit()
+            || matches!(
+                queued,
+                QueuedNodeEdit::Atomic(
+                    NodeEdit::ReorderConnection { .. } | NodeEdit::ReorderStructuralChild { .. }
+                )
+            )
+    });
+}
+
 fn discard_layout_request_without_composition(state: &mut NodeEditorState) -> bool {
     state.pending_layout_command.take().is_some()
 }
@@ -321,8 +333,10 @@ pub fn node_editor_panel(
         };
         let snarl_style = node_editor_snarl_style_for(ui.style());
         let graph_id = egui::Id::new(("project_node_editor", comp_id));
+        let popup_was_open = egui::Popup::is_any_open(ui.ctx());
         snarl.show(&mut viewer, &snarl_style, graph_id, ui);
         drop(viewer);
+        let popup_owns_pointer = popup_was_open || egui::Popup::is_any_open(ui.ctx());
         node_editor_state.node_editor_canvas_transform = Some(to_global);
         // The early registration makes the canvas discoverable even if graph
         // construction exits before Snarl renders. Replace it in the same
@@ -497,7 +511,7 @@ pub fn node_editor_panel(
             || pointer_on_port
             || node_editor_state.wire_knife.is_some()
             || node_editor_state.merge_layer_reorder.is_some()
-            || egui::Popup::is_any_open(ui.ctx());
+            || popup_owns_pointer;
         let layout_swipe_preflight = {
             let node_rects = mutex_lock_or_recover(rendered_node_rects.as_ref());
             let port_rects = mutex_lock_or_recover(rendered_ports.as_ref());
@@ -524,7 +538,7 @@ pub fn node_editor_panel(
             )
         };
         let wire_owned_layout_before = wire_pointer_owns_layout(node_editor_state);
-        if !layout_swipe_preflight && !resize_owned_layout_before {
+        if !layout_swipe_preflight && !resize_owned_layout_before && !popup_owns_pointer {
             edits.extend(wire_interactions(
                 ui,
                 node_editor_state,
@@ -572,7 +586,7 @@ pub fn node_editor_panel(
                 || resize_owned_layout
                 || node_editor_state.wire_knife.is_some()
                 || node_editor_state.merge_layer_reorder.is_some()
-                || egui::Popup::is_any_open(ui.ctx()));
+                || popup_owns_pointer);
 
         if primary_pressed {
             if let Some(owner) = resize_started_owner.filter(|owner| {
@@ -682,7 +696,10 @@ pub fn node_editor_panel(
             drop_intents.clear();
         } else if node_editor_state.merge_layer_reorder.is_some() {
             collected.clear();
-            edits.clear();
+            // The Merge body has already resolved the physical release into
+            // its one authoritative reorder edit. Suppress competing canvas
+            // intents without discarding that release edit itself.
+            retain_merge_reorder_release_edits(&mut edits);
             drop_intents.clear();
         }
         layout_edits = collected;
