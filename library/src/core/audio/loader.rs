@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn late_mp3_chunk_seek_has_bounded_io_and_decode_work() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/test_sound.mp3");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/test_sound2.mp3");
         let format = AudioDecodeFormat::new(48_000, 2).unwrap();
         let source = AudioSourceKey::read(&path, None, format).unwrap();
         let (file, bytes_read) = CountingFile::open(&path).unwrap();
@@ -645,8 +645,8 @@ mod tests {
         let (early, early_bytes) = decode_work_at(&mut opened, &source, &bytes_read, 1).unwrap();
         // The first distant jump extends the demuxer's progressive seek index.
         let (indexing, indexing_bytes) =
-            decode_work_at(&mut opened, &source, &bytes_read, 100).unwrap();
-        let (late, late_bytes) = decode_work_at(&mut opened, &source, &bytes_read, 101).unwrap();
+            decode_work_at(&mut opened, &source, &bytes_read, 60).unwrap();
+        let (late, late_bytes) = decode_work_at(&mut opened, &source, &bytes_read, 61).unwrap();
 
         assert!(early.seek_actual_seconds.is_some());
         assert!(indexing.seek_actual_seconds.is_some());

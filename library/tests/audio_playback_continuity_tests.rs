@@ -4,7 +4,8 @@ use library::audio::loader::AudioLoader;
 
 #[test]
 fn compressed_chunk_preroll_prevents_artificial_boundary_silence() -> Result<()> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/test_sound.mp3");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_data/test_sound2.mp3");
     let format = AudioDecodeFormat::new(48_000, 2).context("stereo test format")?;
     let source = AudioSourceKey::read(path, None, format)?;
     for index in [0, 3, 7] {
