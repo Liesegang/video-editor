@@ -428,8 +428,26 @@ where
                     egui::ComboBox::from_id_salt(format!("combo_{}", prop_def.name()))
                         .selected_text(&selected)
                         .show_ui(ui, |ui| {
-                            for opt in options {
-                                ui.selectable_value(&mut selected, opt.clone(), opt.clone());
+                            for (index, opt) in options.iter().enumerate() {
+                                let response =
+                                    ui.selectable_value(&mut selected, opt.clone(), opt.clone());
+                                crate::qa::register_component_with_metadata(
+                                    format!(
+                                        "inspector.property_option.{}:{}:{}",
+                                        context.qa_scope,
+                                        prop_def.name(),
+                                        index
+                                    ),
+                                    "inspector_property_dropdown_option",
+                                    response.rect,
+                                    response.enabled(),
+                                    Some(serde_json::json!({
+                                        "scope": context.qa_scope,
+                                        "property": prop_def.name(),
+                                        "option": opt,
+                                        "option_index": index,
+                                    })),
+                                );
                             }
                         });
                 register_property_control(
