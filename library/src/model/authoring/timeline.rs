@@ -59,6 +59,7 @@ pub struct TimelineItem {
     pub constraints: Vec<Constraint>,
     pub transition_in: Option<TransitionId>,
     pub transition_out: Option<TransitionId>,
+    pub generated_item_id: Option<super::GeneratedItemId>,
     pub authored_properties: PropertyMap,
 }
 

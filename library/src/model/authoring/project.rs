@@ -225,6 +225,16 @@ impl AuthoringProject {
             {
                 return Err(format!("Item {} has an invalid interval", item.id));
             }
+            if let Some(generated_id) = item.generated_item_id {
+                if item.id.as_uuid() != generated_id.as_uuid()
+                    || !self.generated_items.contains_key(&generated_id)
+                {
+                    return Err(format!(
+                        "Item {} has invalid GeneratedItem provenance",
+                        item.id
+                    ));
+                }
+            }
             if let Some(parent) = item.parent {
                 let Some(parent_item) = self.items.get(&parent) else {
                     return Err(format!("Item {} refers to a missing parent", item.id));
@@ -347,6 +357,43 @@ impl AuthoringProject {
         }
         for definition in self.module_definitions.values() {
             definition.validate()?;
+        }
+        for generated in self.generated_items.values() {
+            if generated.stable_id
+                != GeneratedItem::stable_id(generated.generator_id, &generated.source_key)
+            {
+                return Err(format!(
+                    "Generated item {} has an unstable provenance ID",
+                    generated.stable_id
+                ));
+            }
+            let item_id = TimelineItemId::from_uuid(generated.stable_id.as_uuid());
+            if self
+                .items
+                .get(&item_id)
+                .and_then(|item| item.generated_item_id)
+                != Some(generated.stable_id)
+            {
+                return Err(format!(
+                    "Generated item {} is not materialized on a Timeline",
+                    generated.stable_id
+                ));
+            }
+        }
+        for authored_override in self.overrides.values() {
+            if !self
+                .generated_items
+                .contains_key(&authored_override.generated_item_id)
+                && !matches!(
+                    authored_override.status,
+                    crate::model::authoring::OverrideStatus::Orphaned
+                )
+            {
+                return Err(format!(
+                    "Override {} has no GeneratedItem and is not Orphaned",
+                    authored_override.id
+                ));
+            }
         }
         for instance in self.module_instances.values() {
             if !self

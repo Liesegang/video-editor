@@ -7,7 +7,8 @@ use crate::model::project::property::{Property, PropertyMap};
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, MaskId,
     ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
-    ModuleRole, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
+    ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch, OverridePath,
+    OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
     SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
     TimelineTrackId, TimelineTrackKind,
 };
@@ -137,6 +138,7 @@ impl AuthoringSession {
                 constraints: Vec::new(),
                 transition_in: None,
                 transition_out: None,
+                generated_item_id: None,
                 authored_properties: PropertyMap::new(),
             },
         );
@@ -459,12 +461,24 @@ impl AuthoringSession {
         value: crate::model::project::property::PropertyValue,
     ) -> Result<ChangeSet, String> {
         let timeline_id = self.timeline_for_item(item_id)?;
+        let generated_item_id = self
+            .project
+            .items
+            .get(&item_id)
+            .and_then(|item| item.generated_item_id);
         self.project
             .items
             .get_mut(&item_id)
             .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
             .authored_properties
-            .update_property_or_keyframe(&key, time, value, None);
+            .update_property_or_keyframe(&key, time, value.clone(), None);
+        if let Some(generated_item_id) = generated_item_id {
+            self.record_generated_override(
+                generated_item_id,
+                OverridePath::AuthoredProperty { key: key.clone() },
+                value,
+            );
+        }
         Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
             timeline_id,
             item_id,
@@ -568,6 +582,11 @@ impl AuthoringSession {
 
     pub fn set_text(&mut self, item_id: TimelineItemId, text: String) -> Result<ChangeSet, String> {
         let timeline_id = self.timeline_for_item(item_id)?;
+        let generated_item_id = self
+            .project
+            .items
+            .get(&item_id)
+            .and_then(|item| item.generated_item_id);
         let item = self
             .project
             .items
@@ -576,7 +595,14 @@ impl AuthoringSession {
         let SourceRef::Text { text: current } = &mut item.source else {
             return Err("Selected Timeline item is not Text".to_string());
         };
-        *current = text;
+        *current = text.clone();
+        if let Some(generated_item_id) = generated_item_id {
+            self.record_generated_override(
+                generated_item_id,
+                OverridePath::SourceText,
+                crate::model::project::property::PropertyValue::String(text),
+            );
+        }
         Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
             timeline_id,
             item_id,
@@ -830,6 +856,51 @@ impl AuthoringSession {
             timeline_id,
             item_id,
         }]))
+    }
+
+    fn record_generated_override(
+        &mut self,
+        generated_item_id: crate::model::authoring::GeneratedItemId,
+        path: OverridePath,
+        value: crate::model::project::property::PropertyValue,
+    ) {
+        if let Some(authored_override) = self
+            .project
+            .overrides
+            .values_mut()
+            .find(|authored_override| authored_override.generated_item_id == generated_item_id)
+        {
+            if let Some(patch) = authored_override
+                .patch
+                .iter_mut()
+                .find(|patch| patch.path == path)
+            {
+                patch.operator = OverrideOperator::Replace;
+                patch.value = value;
+            } else {
+                authored_override.patch.push(OverridePatch {
+                    path,
+                    operator: OverrideOperator::Replace,
+                    value,
+                });
+            }
+            authored_override.status = OverrideStatus::Active;
+            return;
+        }
+        let id = OverrideId::new();
+        self.project.overrides.insert(
+            id,
+            Override {
+                id,
+                generated_item_id,
+                patch: vec![OverridePatch {
+                    path,
+                    operator: OverrideOperator::Replace,
+                    value,
+                }],
+                status: OverrideStatus::Active,
+            },
+        );
     }
 
     fn timeline_for_track(&self, track_id: TimelineTrackId) -> Result<TimelineId, String> {

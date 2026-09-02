@@ -80,6 +80,7 @@ fn compiler_orders_schedule_without_creating_nodes() {
         constraints: Vec::new(),
         transition_in: None,
         transition_out: None,
+        generated_item_id: None,
         authored_properties: PropertyMap::new(),
     };
     let project = project_with_items(
@@ -124,6 +125,7 @@ fn nested_timeline_cycles_are_rejected() {
         constraints: Vec::new(),
         transition_in: None,
         transition_out: None,
+        generated_item_id: None,
         authored_properties: PropertyMap::new(),
     };
     let mut project = project_with_items(
@@ -181,6 +183,7 @@ fn repeated_module_instances_share_one_compiled_definition() {
                 constraints: Vec::new(),
                 transition_in: None,
                 transition_out: None,
+                generated_item_id: None,
                 authored_properties: PropertyMap::new(),
             },
         );
@@ -245,6 +248,7 @@ fn instance_parameter_change_reuses_compiled_definition() {
                 constraints: Vec::new(),
                 transition_in: None,
                 transition_out: None,
+                generated_item_id: None,
                 authored_properties: PropertyMap::new(),
             },
         )]),

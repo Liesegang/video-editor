@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
     GeneratedItem, GeneratedItemId, GeneratedItemSpec, Override, OverrideOperator, OverridePath,
-    OverrideStatus, SourceRef,
+    OverrideStatus, SourceRef, TimelineItem, TimelineItemId, TimelineTrackId,
 };
 use crate::model::project::property::PropertyValue;
+use crate::model::project::property::{Property, PropertyMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ReconciliationSummary {
@@ -53,6 +54,101 @@ pub fn reconcile_generation(
         }
     }
     *generated_items = next;
+    Ok(summary)
+}
+
+pub fn reconcile_and_materialize(
+    project: &mut crate::model::authoring::AuthoringProject,
+    track_id: TimelineTrackId,
+    generator_id: crate::model::authoring::ModuleInstanceId,
+    regenerated: Vec<GeneratedItem>,
+) -> Result<ReconciliationSummary, String> {
+    if !project.tracks.contains_key(&track_id) {
+        return Err(format!("Generator target Track {track_id} is missing"));
+    }
+    if regenerated
+        .iter()
+        .any(|item| item.generator_id != generator_id)
+    {
+        return Err("Generator result contains another Generator instance".to_string());
+    }
+    let previous_ids: HashSet<_> = project
+        .generated_items
+        .values()
+        .filter(|item| item.generator_id == generator_id)
+        .map(|item| item.stable_id)
+        .collect();
+    let regenerated_ids: HashSet<_> = regenerated.iter().map(|item| item.stable_id).collect();
+    let scoped_ids: HashSet<_> = previous_ids.union(&regenerated_ids).copied().collect();
+    let mut scoped_items: HashMap<_, _> = previous_ids
+        .iter()
+        .filter_map(|id| project.generated_items.remove(id).map(|item| (*id, item)))
+        .collect();
+    let mut scoped_overrides: HashMap<_, _> = project
+        .overrides
+        .iter()
+        .filter(|(_, authored_override)| scoped_ids.contains(&authored_override.generated_item_id))
+        .map(|(id, authored_override)| (*id, authored_override.clone()))
+        .collect();
+    let summary = reconcile_generation(&mut scoped_items, &mut scoped_overrides, regenerated)?;
+    project.generated_items.extend(scoped_items);
+    project.overrides.extend(scoped_overrides);
+    for generated_id in previous_ids {
+        if !project.generated_items.contains_key(&generated_id) {
+            project
+                .items
+                .remove(&TimelineItemId::from_uuid(generated_id.as_uuid()));
+        }
+    }
+    let generated: Vec<_> = project
+        .generated_items
+        .values()
+        .filter(|item| item.generator_id == generator_id)
+        .cloned()
+        .collect();
+    for generated_item in generated {
+        let item_id = TimelineItemId::from_uuid(generated_item.stable_id.as_uuid());
+        if project
+            .items
+            .get(&item_id)
+            .is_some_and(|item| item.generated_item_id != Some(generated_item.stable_id))
+        {
+            return Err(format!(
+                "Generated item {} collides with an authored Timeline item",
+                generated_item.stable_id
+            ));
+        }
+        let spec = effective_generated_spec(
+            &generated_item,
+            project.overrides.values().filter(|authored_override| {
+                authored_override.generated_item_id == generated_item.stable_id
+            }),
+        )?;
+        let mut properties = PropertyMap::new();
+        for (key, value) in spec.authored_values {
+            properties.set(key, Property::constant(value));
+        }
+        project.items.insert(
+            item_id,
+            TimelineItem {
+                id: item_id,
+                track_id,
+                name: spec.name,
+                source: spec.source,
+                interval: spec.interval,
+                layer: spec.layer,
+                parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
+                generated_item_id: Some(generated_item.stable_id),
+                authored_properties: properties,
+            },
+        );
+    }
+    project.validate()?;
     Ok(summary)
 }
 
@@ -154,7 +250,9 @@ fn numeric_value(value: &PropertyValue) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::model::authoring::{
-        GeneratedProvenance, ModuleInstanceId, OverrideId, OverridePatch, TimelineInterval,
+        AuthoringProject, AuthoringSession, GeneratedProvenance, ModuleDefinition,
+        ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleRole, OverrideId,
+        OverridePatch, TimelineInterval,
     };
 
     fn generated(generator: ModuleInstanceId, source_key: &str, x: f64) -> GeneratedItem {
@@ -240,5 +338,93 @@ mod tests {
             .expect("reconciliation");
         assert_eq!(summary.orphaned, 1);
         assert_eq!(overrides[&override_id].status, OverrideStatus::Orphaned);
+    }
+
+    #[test]
+    fn materialized_item_keeps_direct_edit_across_removal_and_return() {
+        let mut project =
+            AuthoringProject::new("Data", 1920, 1080, 30.0, 10.0).expect("valid project");
+        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+        let definition_id = ModuleDefinitionId::new();
+        let generator_id = ModuleInstanceId::new();
+        project.module_definitions.insert(
+            definition_id,
+            ModuleDefinition {
+                id: definition_id,
+                name: "Table rows".to_string(),
+                role: ModuleRole::Generator,
+                graph: ModuleGraph::default(),
+                published_parameters: Vec::new(),
+                published_signals: Vec::new(),
+                published_actions: Vec::new(),
+                version: 1,
+            },
+        );
+        project.module_instances.insert(
+            generator_id,
+            ModuleInstance {
+                id: generator_id,
+                definition_id,
+                parameter_overrides: HashMap::new(),
+            },
+        );
+
+        let first = generated(generator_id, "row-1", 10.0);
+        let stable_id = first.stable_id;
+        reconcile_and_materialize(&mut project, track_id, generator_id, vec![first])
+            .expect("initial generation");
+        let item_id = TimelineItemId::from_uuid(stable_id.as_uuid());
+        let mut session = AuthoringSession::new(project).expect("valid materialized project");
+        session
+            .update_item_property_value(
+                item_id,
+                "x".to_string(),
+                0.0,
+                PropertyValue::Number(OrderedFloat(25.0)),
+            )
+            .expect("direct edit");
+        let mut project = session.into_project();
+
+        reconcile_and_materialize(
+            &mut project,
+            track_id,
+            generator_id,
+            vec![generated(generator_id, "row-1", 20.0)],
+        )
+        .expect("refresh");
+        assert_eq!(
+            project.items[&item_id]
+                .authored_properties
+                .get("x")
+                .and_then(|property| property.get_static_value()),
+            Some(&PropertyValue::Number(OrderedFloat(25.0)))
+        );
+
+        let removed = reconcile_and_materialize(&mut project, track_id, generator_id, Vec::new())
+            .expect("row removal");
+        assert_eq!(removed.orphaned, 1);
+        assert!(!project.items.contains_key(&item_id));
+        assert!(
+            project
+                .overrides
+                .values()
+                .all(|authored_override| authored_override.status == OverrideStatus::Orphaned)
+        );
+
+        let restored = reconcile_and_materialize(
+            &mut project,
+            track_id,
+            generator_id,
+            vec![generated(generator_id, "row-1", 30.0)],
+        )
+        .expect("row restoration");
+        assert_eq!(restored.active, 1);
+        assert_eq!(
+            project.items[&item_id]
+                .authored_properties
+                .get("x")
+                .and_then(|property| property.get_static_value()),
+            Some(&PropertyValue::Number(OrderedFloat(25.0)))
+        );
     }
 }
