@@ -1,6 +1,5 @@
 mod binding;
 mod edit;
-mod event_runtime;
 mod file_store;
 mod generated;
 mod ids;
@@ -11,7 +10,6 @@ mod timeline;
 
 pub use binding::*;
 pub use edit::*;
-pub use event_runtime::*;
 pub use file_store::*;
 pub use generated::*;
 pub use ids::*;

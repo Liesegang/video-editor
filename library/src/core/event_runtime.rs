@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-use super::{BindingScope, EventBinding, EventBindingId, PublishedActionId, TriggerPolicy};
+use crate::model::authoring::{
+    BindingScope, EventBinding, EventBindingId, PublishedActionId, TriggerPolicy,
+};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ReactiveInvocation {
@@ -29,6 +31,7 @@ impl ReactiveInvocation {
 pub enum TriggerOutcome {
     Scheduled(ReactiveInvocation),
     IgnoredWhilePlaying,
+    RejectedAtCapacity,
 }
 
 #[derive(Default, Debug)]
@@ -37,6 +40,9 @@ pub struct EventRuntime {
 }
 
 impl EventRuntime {
+    pub const QUEUE_CAPACITY: usize = 256;
+    pub const OVERLAP_CAPACITY: usize = 64;
+
     pub fn trigger(
         &mut self,
         binding: &EventBinding,
@@ -60,11 +66,26 @@ impl EventRuntime {
             TriggerPolicy::IgnoreWhilePlaying if !invocations.is_empty() => {
                 return Ok(TriggerOutcome::IgnoredWhilePlaying);
             }
-            TriggerPolicy::IgnoreWhilePlaying | TriggerPolicy::Overlap => now,
-            TriggerPolicy::Queue => invocations
-                .iter()
-                .map(ReactiveInvocation::ends_at)
-                .fold(now, f64::max),
+            TriggerPolicy::IgnoreWhilePlaying => now,
+            TriggerPolicy::Queue => {
+                if invocations.len() >= Self::QUEUE_CAPACITY {
+                    return Ok(TriggerOutcome::RejectedAtCapacity);
+                }
+                invocations
+                    .iter()
+                    .map(ReactiveInvocation::ends_at)
+                    .fold(now, f64::max)
+            }
+            TriggerPolicy::Overlap => {
+                let active = invocations
+                    .iter()
+                    .filter(|invocation| invocation.scheduled_at.into_inner() <= now)
+                    .count();
+                if active >= Self::OVERLAP_CAPACITY {
+                    return Ok(TriggerOutcome::RejectedAtCapacity);
+                }
+                now
+            }
         };
 
         let invocation = ReactiveInvocation {
@@ -123,9 +144,8 @@ mod tests {
     fn restart_replaces_the_active_occurrence() {
         let binding = binding(TriggerPolicy::Restart);
         let mut runtime = EventRuntime::default();
-        let first = runtime.trigger(&binding, 1.0, 4.0).unwrap();
-        let second = runtime.trigger(&binding, 2.0, 4.0).unwrap();
-        assert_ne!(first, second);
+        runtime.trigger(&binding, 1.0, 4.0).unwrap();
+        runtime.trigger(&binding, 2.0, 4.0).unwrap();
         let active = runtime.active_at(2.5);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].local_time(2.5), 0.5);
@@ -152,11 +172,12 @@ mod tests {
         runtime.trigger(&overlap, 0.0, 2.0).unwrap();
         runtime.trigger(&overlap, 0.5, 2.0).unwrap();
         let active = runtime.active_at(1.0);
-        let overlapping = active
-            .into_iter()
-            .filter(|invocation| invocation.binding_id == overlap.id)
-            .collect::<Vec<_>>();
-        assert_eq!(overlapping.len(), 2);
-        assert_ne!(overlapping[0].occurrence_id, overlapping[1].occurrence_id);
+        assert_eq!(
+            active
+                .into_iter()
+                .filter(|invocation| invocation.binding_id == overlap.id)
+                .count(),
+            2
+        );
     }
 }

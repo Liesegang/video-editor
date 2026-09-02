@@ -5,6 +5,7 @@ pub mod binding_runtime;
 pub mod cache;
 pub mod data_source_runtime;
 pub mod ensemble;
+pub mod event_runtime;
 pub mod framing;
 pub mod generator_runtime;
 pub mod render_plan;

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
-    BindingOperator, BindingScope, EffectiveValue, EffectiveValueContribution, EventBindingId,
-    InstancePath, ModuleDefinitionId, ModuleInstance, ModuleInstanceId, PublishedActionId,
-    PublishedParameter, SignalBinding, SignalBindingId, SignalMapping, TriggerPolicy,
+    BindingOperator, BindingScope, EffectiveValue, EffectiveValueContribution, InstancePath,
+    ModuleDefinitionId, ModuleInstance, ModuleInstanceId, PublishedParameter, SignalBinding,
+    SignalBindingId, SignalMapping,
 };
 use crate::model::project::property::PropertyValue;
 
@@ -189,101 +189,6 @@ fn number(value: f64) -> PropertyValue {
     PropertyValue::Number(OrderedFloat(value))
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
-pub struct EventTarget {
-    pub instance_path: InstancePath,
-    pub module_instance_id: ModuleInstanceId,
-    pub action_id: PublishedActionId,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EventDecision {
-    Started { spawn_sequence: u64 },
-    Restarted,
-    Ignored,
-    Queued { position: usize },
-    RejectedAtCapacity,
-}
-
-#[derive(Default)]
-pub struct EventRuntime {
-    targets: HashMap<EventTarget, EventTargetState>,
-    next_spawn_sequence: u64,
-}
-
-#[derive(Default)]
-struct EventTargetState {
-    active: usize,
-    queued: usize,
-}
-
-impl EventRuntime {
-    pub const QUEUE_CAPACITY: usize = 256;
-    pub const OVERLAP_CAPACITY: usize = 64;
-
-    pub fn trigger(
-        &mut self,
-        _binding_id: EventBindingId,
-        target: EventTarget,
-        policy: TriggerPolicy,
-    ) -> EventDecision {
-        let spawn_sequence = self.next_spawn_sequence;
-        self.next_spawn_sequence = self.next_spawn_sequence.wrapping_add(1);
-        let state = self.targets.entry(target).or_default();
-        match policy {
-            TriggerPolicy::Restart => {
-                let restarted = state.active > 0;
-                state.active = 1;
-                state.queued = 0;
-                if restarted {
-                    EventDecision::Restarted
-                } else {
-                    EventDecision::Started { spawn_sequence }
-                }
-            }
-            TriggerPolicy::IgnoreWhilePlaying if state.active > 0 => EventDecision::Ignored,
-            TriggerPolicy::IgnoreWhilePlaying => {
-                state.active = 1;
-                EventDecision::Started { spawn_sequence }
-            }
-            TriggerPolicy::Queue if state.active == 0 => {
-                state.active = 1;
-                EventDecision::Started { spawn_sequence }
-            }
-            TriggerPolicy::Queue if state.queued >= Self::QUEUE_CAPACITY => {
-                EventDecision::RejectedAtCapacity
-            }
-            TriggerPolicy::Queue => {
-                state.queued += 1;
-                EventDecision::Queued {
-                    position: state.queued,
-                }
-            }
-            TriggerPolicy::Overlap if state.active >= Self::OVERLAP_CAPACITY => {
-                EventDecision::RejectedAtCapacity
-            }
-            TriggerPolicy::Overlap => {
-                state.active += 1;
-                EventDecision::Started { spawn_sequence }
-            }
-        }
-    }
-
-    pub fn complete(&mut self, target: &EventTarget) -> Option<EventDecision> {
-        let spawn_sequence = self.next_spawn_sequence;
-        let state = self.targets.get_mut(target)?;
-        state.active = state.active.saturating_sub(1);
-        if state.active == 0 && state.queued > 0 {
-            state.queued -= 1;
-            state.active = 1;
-            self.next_spawn_sequence = self.next_spawn_sequence.wrapping_add(1);
-            Some(EventDecision::Started { spawn_sequence })
-        } else {
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,27 +285,5 @@ mod tests {
         .unwrap();
         assert_eq!(targeted.value, number(5.0));
         assert_eq!(sibling.value, number(10.0));
-    }
-
-    #[test]
-    fn queued_event_starts_after_active_event_completes() {
-        let target = EventTarget {
-            instance_path: InstancePath::root(TimelineId::new()),
-            module_instance_id: ModuleInstanceId::new(),
-            action_id: PublishedActionId::new(),
-        };
-        let mut runtime = EventRuntime::default();
-        assert!(matches!(
-            runtime.trigger(EventBindingId::new(), target.clone(), TriggerPolicy::Queue),
-            EventDecision::Started { .. }
-        ));
-        assert_eq!(
-            runtime.trigger(EventBindingId::new(), target.clone(), TriggerPolicy::Queue),
-            EventDecision::Queued { position: 1 }
-        );
-        assert!(matches!(
-            runtime.complete(&target),
-            Some(EventDecision::Started { .. })
-        ));
     }
 }
