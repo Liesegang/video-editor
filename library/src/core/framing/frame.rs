@@ -8,7 +8,6 @@ use crate::model::project::{Composition, Project};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use crate::util::timing::ScopedTimer;
 
-mod authoring_frame;
 mod color_graph;
 mod container_graph;
 mod data_graph;
@@ -21,7 +20,6 @@ mod scope;
 mod shape_graph;
 mod value_graph;
 
-pub use authoring_frame::{evaluate_authoring_frame, evaluate_authoring_timeline_frame};
 pub use evaluator::FrameEvaluator;
 pub use input_preview::InputValuePreview;
 
