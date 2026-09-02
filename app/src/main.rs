@@ -1,17 +1,6 @@
 use eframe::egui;
 
-mod action;
-mod app;
-mod command;
-mod config;
-mod model;
-mod qa;
-mod shortcut;
-mod state;
-#[cfg(test)]
-mod test_support;
-mod ui;
-pub mod utils;
+mod timeline_app;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
@@ -22,6 +11,6 @@ fn main() -> eframe::Result<()> {
             viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]),
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(app::RuViEApp::new(cc)?))),
+        Box::new(|cc| Ok(Box::new(timeline_app::TimelineApp::new(cc)?))),
     )
 }
