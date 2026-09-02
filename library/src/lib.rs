@@ -24,10 +24,8 @@ pub mod util;
 pub mod error;
 pub use error::LibraryError;
 
-// Re-export animation types from model for backward compatibility
 pub use model::animation;
 
-// Re-exports for backward compatibility
 pub use core::audio;
 pub use core::cache;
 pub use core::ensemble;
@@ -42,10 +40,6 @@ pub use core::rendering::render_server::{
     RenderFrameAuthority, RenderRequestId, RenderResult, RenderServer,
 };
 pub use core::rendering::skia_renderer::SkiaRenderer;
-pub use editor::ExportService;
-pub use editor::ProjectModel;
-pub use editor::ProjectService;
-pub use editor::{ClipBundle, EditorService, KeyframeBatchUpdate, NodeGraphBundle, PropertyOwner};
 pub use editor::{RenderDestination, RenderService};
 pub use editor::TimelineEditorService;
 
