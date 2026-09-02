@@ -6,13 +6,13 @@ use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
-    ConstraintId, ConstraintKind, DataSource, GeneratedItem, Mask, MaskId, MaskMode, MatteRef,
-    ModuleConnection, ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleGraph,
-    ModuleInstance, ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator,
-    OverridePatch, OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId,
-    SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId, TimelineInterval,
-    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition,
-    TransitionId, TransitionKind,
+    ConstraintId, ConstraintKind, DataSource, EventBinding, EventBindingId, GeneratedItem, Mask,
+    MaskId, MaskMode, MatteRef, ModuleConnection, ModuleConnectionId, ModuleDefinition,
+    ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleRole, Override,
+    OverrideId, OverrideOperator, OverridePatch, OverridePath, OverrideStatus, PublishedParameter,
+    PublishedParameterId, SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId,
+    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind, Transition, TransitionId, TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -1037,6 +1037,32 @@ impl AuthoringSession {
             .signal_bindings
             .remove(&binding_id)
             .ok_or_else(|| format!("Missing Signal Binding {binding_id}"))?;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure {
+            timeline_id: self.project.root_timeline_id,
+        }]))
+    }
+
+    pub fn add_event_binding(&mut self, binding: EventBinding) -> Result<ChangeSet, String> {
+        if self.project.event_bindings.contains_key(&binding.id) {
+            return Err(format!("Event Binding {} already exists", binding.id));
+        }
+        let mut candidate = self.project.clone();
+        candidate.event_bindings.insert(binding.id, binding.clone());
+        candidate.validate()?;
+        self.project.event_bindings.insert(binding.id, binding);
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure {
+            timeline_id: self.project.root_timeline_id,
+        }]))
+    }
+
+    pub fn remove_event_binding(
+        &mut self,
+        binding_id: EventBindingId,
+    ) -> Result<ChangeSet, String> {
+        self.project
+            .event_bindings
+            .remove(&binding_id)
+            .ok_or_else(|| format!("Missing Event Binding {binding_id}"))?;
         Ok(self.finish(vec![ProjectInvalidation::TimelineStructure {
             timeline_id: self.project.root_timeline_id,
         }]))

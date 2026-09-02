@@ -12,9 +12,9 @@ use crate::core::render_plan::{RenderPlan, RenderPlanCache, RenderPlanCacheStats
 use crate::error::LibraryError;
 use crate::model::authoring::{
     AuthoringProject, AuthoringSession, ChangeSet, CompositionInstance, DataSource, DataSourceId,
-    DurationPolicy, ModuleDefinition, ModuleGraph, ModuleInstance, ModuleRole, ProjectDocument,
-    ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId, TimelineInterval,
-    TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    DurationPolicy, EventBinding, EventBindingId, ModuleDefinition, ModuleGraph, ModuleInstance,
+    ModuleRole, ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use crate::model::authoring::{
     ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
@@ -403,6 +403,21 @@ impl TimelineEditorService {
     ) -> Result<ChangeSet, LibraryError> {
         self.write_session()?
             .remove_signal_binding(binding_id)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn add_event_binding(&self, binding: EventBinding) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .add_event_binding(binding)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn remove_event_binding(
+        &self,
+        binding_id: EventBindingId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_event_binding(binding_id)
             .map_err(LibraryError::Validation)
     }
 
