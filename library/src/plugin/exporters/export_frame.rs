@@ -1,4 +1,6 @@
+use crate::core::rendering::managed_color_backend::ProjectColorAuthority;
 use crate::error::LibraryError;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
 use crate::model::project::{Project, ResolvedColorManagementConfig};
 
@@ -23,6 +25,10 @@ pub enum ExportColorAuthority {
 
 impl ExportColorAuthority {
     pub(crate) fn from_project(project: &Project) -> Result<Self, LibraryError> {
+        Self::from_authority(project)
+    }
+
+    fn from_authority(project: &dyn ProjectColorAuthority) -> Result<Self, LibraryError> {
         let intent = match project.resolved_color_management() {
             ResolvedColorManagementConfig::Ready(intent) => intent,
             ResolvedColorManagementConfig::Unavailable { diagnostics, .. } => {
@@ -83,6 +89,14 @@ impl ExportFrame {
         image: Image,
     ) -> Result<Self, LibraryError> {
         let color_authority = ExportColorAuthority::from_project(project)?;
+        Self::new_verified(image, color_authority)
+    }
+
+    pub(crate) fn from_authoring_render(
+        project: &AuthoringProject,
+        image: Image,
+    ) -> Result<Self, LibraryError> {
+        let color_authority = ExportColorAuthority::from_authority(project)?;
         Self::new_verified(image, color_authority)
     }
 
@@ -233,5 +247,17 @@ mod tests {
 
         assert_ne!(first.pipeline_identity(), second.pipeline_identity());
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn timeline_first_project_produces_typed_export_authority() {
+        let project = AuthoringProject::new("export", 1, 1, 24.0, 1.0).expect("Project");
+        let frame =
+            ExportFrame::from_authoring_render(&project, Image::new(1, 1, vec![10, 20, 30, 255]))
+                .expect("typed export frame");
+        assert!(matches!(
+            frame.color_authority(),
+            ExportColorAuthority::SdrSrgbFullRangeStraightRgba8 { .. }
+        ));
     }
 }

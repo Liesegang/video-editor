@@ -11,7 +11,9 @@ use ruvie_color_management::{
 };
 
 use crate::error::LibraryError;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
+use crate::model::project::asset::Asset;
 use crate::model::project::{
     ColorConfigIdentity, DEFAULT_BUNDLED_COLOR_CONFIG_ID, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID,
     ModelValidatedColorManagementConfig, Project, ResolvedColorManagementConfig,
@@ -21,6 +23,31 @@ use crate::plugin::{DecodedPixelBuffer, DecodedStraightRgba16F};
 use crate::rendering::renderer::WorkingSurfaceContract;
 
 const MAX_MEDIA_INGRESS_TRANSIENT_BYTES: u64 = 768 * 1024 * 1024;
+
+pub(crate) trait ProjectColorAuthority {
+    fn assets(&self) -> &[Asset];
+    fn resolved_color_management(&self) -> ResolvedColorManagementConfig;
+}
+
+impl ProjectColorAuthority for Project {
+    fn assets(&self) -> &[Asset] {
+        &self.assets
+    }
+
+    fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
+        Project::resolved_color_management(self)
+    }
+}
+
+impl ProjectColorAuthority for AuthoringProject {
+    fn assets(&self) -> &[Asset] {
+        &self.assets
+    }
+
+    fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
+        AuthoringProject::resolved_color_management(self)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ManagedRenderDestination {
@@ -44,7 +71,7 @@ enum ProjectTerminal {
 
 impl ProjectColorPipeline {
     pub(crate) fn for_project(
-        project: &Project,
+        project: &dyn ProjectColorAuthority,
         destination: ManagedRenderDestination,
     ) -> Result<Self, LibraryError> {
         let intent = resolved_intent(project)?;
@@ -365,7 +392,9 @@ fn validate_terminal_backend_binding(
     Ok(())
 }
 
-fn resolved_intent(project: &Project) -> Result<ModelValidatedColorManagementConfig, LibraryError> {
+fn resolved_intent(
+    project: &dyn ProjectColorAuthority,
+) -> Result<ModelValidatedColorManagementConfig, LibraryError> {
     match project.resolved_color_management() {
         ResolvedColorManagementConfig::Ready(intent) => Ok(*intent),
         ResolvedColorManagementConfig::Unavailable { diagnostics, .. } => {
@@ -382,7 +411,7 @@ fn resolved_intent(project: &Project) -> Result<ModelValidatedColorManagementCon
 }
 
 fn backend_for_project(
-    project: &Project,
+    project: &dyn ProjectColorAuthority,
     intent: &ModelValidatedColorManagementConfig,
 ) -> Result<Box<dyn ColorTransformBackend>, LibraryError> {
     match intent.config().config() {
@@ -404,7 +433,7 @@ fn backend_for_project(
             ocio_version,
         } => {
             let asset = project
-                .assets
+                .assets()
                 .iter()
                 .find(|asset| asset.id == *asset_id)
                 .ok_or_else(|| {

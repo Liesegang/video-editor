@@ -9,10 +9,13 @@ use std::collections::BTreeSet;
 
 use ruvie_color_management::ExactColorConfigFile;
 
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{FrameContent, FrameItem};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::project::{ColorConfigIdentity, Project};
 use crate::plugin::loaders::FileIdentity;
+
+use super::managed_color_backend::ProjectColorAuthority;
 
 /// Compact equality token for resources outside the authoritative Project.
 ///
@@ -27,6 +30,22 @@ pub struct RenderFrameAuthority {
 
 impl RenderFrameAuthority {
     pub fn capture(project: &Project, frame: &FrameInfo, plugin_revision: u64) -> Self {
+        Self::capture_with_authority(project, frame, plugin_revision)
+    }
+
+    pub fn capture_authoring(
+        project: &AuthoringProject,
+        frame: &FrameInfo,
+        plugin_revision: u64,
+    ) -> Self {
+        Self::capture_with_authority(project, frame, plugin_revision)
+    }
+
+    fn capture_with_authority(
+        project: &dyn ProjectColorAuthority,
+        frame: &FrameInfo,
+        plugin_revision: u64,
+    ) -> Self {
         let mut paths = BTreeSet::new();
         collect_frame_paths(&frame.items, &mut paths);
         let mut resources = paths
@@ -67,7 +86,7 @@ fn resource_authority(path: &str) -> ResourceAuthority {
     }
 }
 
-fn color_config_authority(project: &Project) -> ResourceAuthority {
+fn color_config_authority(project: &dyn ProjectColorAuthority) -> ResourceAuthority {
     let resolved = project.resolved_color_management();
     let Some(intent) = resolved.model_validated_intent() else {
         return ResourceAuthority::InvalidColorConfig;
@@ -78,7 +97,7 @@ fn color_config_authority(project: &Project) -> ResourceAuthority {
     else {
         return ResourceAuthority::BuiltinColorConfig;
     };
-    let Some(asset) = project.assets.iter().find(|asset| asset.id == *asset_id) else {
+    let Some(asset) = project.assets().iter().find(|asset| asset.id == *asset_id) else {
         return ResourceAuthority::InvalidColorConfig;
     };
     ResourceAuthority::ExactColorConfig {
@@ -136,6 +155,16 @@ mod tests {
         assert_ne!(
             RenderFrameAuthority::capture(&project, &frame, 1),
             RenderFrameAuthority::capture(&project, &frame, 2)
+        );
+    }
+
+    #[test]
+    fn timeline_first_project_captures_external_authority() {
+        let project = AuthoringProject::new("authority", 1, 1, 24.0, 1.0).expect("Project");
+        let frame = empty_frame();
+        assert_ne!(
+            RenderFrameAuthority::capture_authoring(&project, &frame, 1),
+            RenderFrameAuthority::capture_authoring(&project, &frame, 2)
         );
     }
 

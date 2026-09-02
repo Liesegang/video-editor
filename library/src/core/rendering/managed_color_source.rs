@@ -2,18 +2,17 @@
 
 use ruvie_color_management::{ManagedLinearWorkingImage, SRGB_SPACE_ID, StandardColorSpaceId};
 
-use super::managed_color_backend::ProjectColorPipeline;
+use super::managed_color_backend::{ProjectColorAuthority, ProjectColorPipeline};
 use super::media_color_ingress::{
     MediaAssetKind, reconcile_detected_source, source_asset, standard_space_for_description,
     validate_decoded_storage_fidelity,
 };
 use crate::error::LibraryError;
 use crate::model::asset::{Asset, AssetSourceInterpretation, SourceColorDescription};
-use crate::model::project::Project;
 use crate::plugin::{DecodedColorSpace, DecodedPixelDescription, LoadResponse};
 
 pub(crate) fn ingest_loaded_media(
-    project: &Project,
+    project: &dyn ProjectColorAuthority,
     pipeline: &ProjectColorPipeline,
     surface: &crate::model::frame::entity::ImageSurface,
     kind: MediaAssetKind,

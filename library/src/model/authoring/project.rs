@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::project::asset::Asset;
 use crate::model::project::property::PropertyMap;
+use crate::model::project::{
+    ColorManagementConfig, ColorManagementIssue, ExportConfig, RequestedColorManagementConfig,
+    ResolvedColorManagementConfig,
+};
 
 use super::{
     AttachmentId, DataSource, DataSourceId, EventBinding, EventBindingId, GeneratedItem,
@@ -77,6 +81,8 @@ pub struct AuthoringProject {
     pub masks: HashMap<MaskId, Mask>,
     pub transitions: HashMap<TransitionId, Transition>,
     pub assets: Vec<Asset>,
+    pub(crate) color_management: RequestedColorManagementConfig,
+    pub export: ExportConfig,
 }
 
 impl AuthoringProject {
@@ -138,7 +144,33 @@ impl AuthoringProject {
             masks: HashMap::new(),
             transitions: HashMap::new(),
             assets: Vec::new(),
+            color_management: RequestedColorManagementConfig::default(),
+            export: ExportConfig::default(),
         })
+    }
+
+    pub fn requested_color_management(&self) -> &RequestedColorManagementConfig {
+        &self.color_management
+    }
+
+    pub fn set_color_management(
+        &mut self,
+        color_management: ColorManagementConfig,
+    ) -> Result<(), Vec<ColorManagementIssue>> {
+        let diagnostics = color_management.blocking_diagnostics(&self.assets);
+        if diagnostics.is_empty() {
+            self.color_management = RequestedColorManagementConfig::from_config(color_management);
+            Ok(())
+        } else {
+            Err(diagnostics)
+        }
+    }
+
+    pub fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
+        crate::model::project::color_management::resolve_color_management(
+            &self.color_management,
+            &self.assets,
+        )
     }
 
     pub fn validate(&self) -> Result<(), String> {

@@ -7,8 +7,12 @@ use crate::model::asset::{
     Asset, AssetKind, SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
 };
 use crate::model::frame::entity::ImageSurface;
-use crate::model::project::Project;
 use crate::plugin::{DecodedColorSpace, DecodedPixelBuffer, DecodedPixelDescription};
+
+use super::managed_color_backend::ProjectColorAuthority;
+
+#[cfg(test)]
+use crate::model::project::Project;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MediaAssetKind {
@@ -33,7 +37,7 @@ impl MediaAssetKind {
 }
 
 pub(crate) fn source_asset<'a>(
-    project: &'a Project,
+    project: &'a dyn ProjectColorAuthority,
     surface: &ImageSurface,
     expected_kind: MediaAssetKind,
 ) -> Result<Option<&'a Asset>, LibraryError> {
@@ -41,7 +45,9 @@ pub(crate) fn source_asset<'a>(
         return Ok(None);
     };
     let asset = project
-        .get_asset(asset_id)
+        .assets()
+        .iter()
+        .find(|asset| asset.id == asset_id)
         .ok_or_else(|| LibraryError::Render(format!("source Asset {asset_id} no longer exists")))?;
     if !expected_kind.matches(&asset.kind) || asset.path != surface.file_path {
         return Err(LibraryError::Render(format!(

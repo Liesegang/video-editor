@@ -54,6 +54,8 @@ fn project_with_items(
         masks: HashMap::new(),
         transitions: HashMap::new(),
         assets: Vec::new(),
+        color_management: Default::default(),
+        export: Default::default(),
     }
 }
 

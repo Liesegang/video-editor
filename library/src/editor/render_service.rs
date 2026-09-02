@@ -1,7 +1,7 @@
 use crate::core::cache::SharedCacheManager;
 use crate::core::framing::get_frame_from_project;
 use crate::core::rendering::managed_color_backend::{
-    ManagedRenderDestination, ProjectColorPipeline,
+    ManagedRenderDestination, ProjectColorAuthority, ProjectColorPipeline,
 };
 use crate::core::rendering::managed_color_source::ingest_loaded_media;
 use crate::core::rendering::media_color_ingress::{
@@ -12,6 +12,7 @@ use crate::core::rendering::renderer::{
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{
     FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, ImageSurface,
 };
@@ -36,7 +37,7 @@ pub enum RenderDestination {
 
 enum RenderColorAuthority<'a> {
     Project {
-        project: &'a Project,
+        project: &'a dyn ProjectColorAuthority,
         pipeline: &'a ProjectColorPipeline,
     },
     UnmanagedAbi,
@@ -152,6 +153,40 @@ impl<T: Renderer> RenderService<T> {
     pub fn render_project_frame(
         &mut self,
         project: &Project,
+        frame_info: &FrameInfo,
+        destination: RenderDestination,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        self.render_managed_frame(project, frame_info, destination)
+    }
+
+    /// Render a Timeline-first Project frame without constructing an old
+    /// Composition/Track/Clip Project.
+    pub fn render_authoring_frame(
+        &mut self,
+        project: &AuthoringProject,
+        frame_info: &FrameInfo,
+        destination: RenderDestination,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        self.render_managed_frame(project, frame_info, destination)
+    }
+
+    pub fn render_authoring_export_frame(
+        &mut self,
+        project: &AuthoringProject,
+        frame_info: &FrameInfo,
+    ) -> Result<ExportFrame, LibraryError> {
+        let output = self.render_authoring_frame(project, frame_info, RenderDestination::Export)?;
+        let RenderOutput::Image(image) = output else {
+            return Err(LibraryError::Render(
+                "export received a non-terminal Timeline frame".to_string(),
+            ));
+        };
+        ExportFrame::from_authoring_render(project, image)
+    }
+
+    fn render_managed_frame(
+        &mut self,
+        project: &dyn ProjectColorAuthority,
         frame_info: &FrameInfo,
         destination: RenderDestination,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
@@ -381,7 +416,7 @@ impl<T: Renderer> RenderService<T> {
             } => {
                 let source_color_authority = match color_authority {
                     RenderColorAuthority::Project { project, .. } => {
-                        source_asset(project, surface, MediaAssetKind::Video)?
+                        source_asset(*project, surface, MediaAssetKind::Video)?
                             .and_then(|asset| asset.source_color.decoder_color_authority())
                     }
                     RenderColorAuthority::UnmanagedAbi => None,
@@ -606,7 +641,7 @@ impl<T: Renderer> RenderService<T> {
                 project, pipeline, ..
             } => {
                 let working =
-                    ingest_loaded_media(project, pipeline, surface, expected_kind, response)?;
+                    ingest_loaded_media(*project, pipeline, surface, expected_kind, response)?;
                 RenderOutput::Working(working)
             }
             RenderColorAuthority::UnmanagedAbi => {
