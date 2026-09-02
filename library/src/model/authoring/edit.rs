@@ -64,6 +64,10 @@ impl AuthoringSession {
         self.revision
     }
 
+    pub fn into_project(self) -> AuthoringProject {
+        self.project
+    }
+
     pub fn add_item(
         &mut self,
         track_id: TimelineTrackId,
@@ -84,6 +88,11 @@ impl AuthoringSession {
                 interval,
                 layer,
                 parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
                 authored_properties: PropertyMap::new(),
             },
         );

@@ -34,6 +34,8 @@ fn empty_project() -> AuthoringProject {
         data_sources: HashMap::new(),
         generated_items: HashMap::new(),
         overrides: HashMap::new(),
+        masks: HashMap::new(),
+        transitions: HashMap::new(),
         assets: Vec::new(),
     }
 }
@@ -128,4 +130,38 @@ fn project_file_store_rejects_versionless_input_and_round_trips_atomically() {
     );
     std::fs::write(&path, r#"{"name":"old","compositions":[]}"#).expect("test fixture must write");
     assert!(ProjectFileStore::load(&path).is_err());
+}
+
+#[test]
+fn parent_cycles_are_rejected_by_the_timeline_model() {
+    let project =
+        AuthoringProject::new("Parents", 1920, 1080, 30.0, 10.0).expect("Project must be valid");
+    let track_id = *project.tracks.keys().next().expect("default Track");
+    let mut session = AuthoringSession::new(project).expect("session must open");
+    let (first, _) = session
+        .add_item(
+            track_id,
+            "First".to_string(),
+            SourceRef::Text {
+                text: "First".to_string(),
+            },
+            TimelineInterval::new(0.0, 1.0).expect("valid interval"),
+            0,
+        )
+        .expect("first item");
+    let (second, _) = session
+        .add_item(
+            track_id,
+            "Second".to_string(),
+            SourceRef::Text {
+                text: "Second".to_string(),
+            },
+            TimelineInterval::new(1.0, 1.0).expect("valid interval"),
+            0,
+        )
+        .expect("second item");
+    let mut project = session.into_project();
+    project.items.get_mut(&first).expect("first").parent = Some(second);
+    project.items.get_mut(&second).expect("second").parent = Some(first);
+    assert!(project.validate().is_err());
 }

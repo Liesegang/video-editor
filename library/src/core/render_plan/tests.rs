@@ -50,6 +50,8 @@ fn project_with_items(
         data_sources: HashMap::new(),
         generated_items: HashMap::new(),
         overrides: HashMap::new(),
+        masks: HashMap::new(),
+        transitions: HashMap::new(),
         assets: Vec::new(),
     }
 }
@@ -70,6 +72,11 @@ fn compiler_orders_schedule_without_creating_nodes() {
         interval: TimelineInterval::new(start, 1.0).expect("valid interval"),
         layer,
         parent: None,
+        mask_ids: Vec::new(),
+        matte: None,
+        constraints: Vec::new(),
+        transition_in: None,
+        transition_out: None,
         authored_properties: PropertyMap::new(),
     };
     let project = project_with_items(
@@ -109,6 +116,11 @@ fn nested_timeline_cycles_are_rejected() {
         interval: TimelineInterval::new(0.0, 1.0).expect("valid interval"),
         layer: 0,
         parent: None,
+        mask_ids: Vec::new(),
+        matte: None,
+        constraints: Vec::new(),
+        transition_in: None,
+        transition_out: None,
         authored_properties: PropertyMap::new(),
     };
     let mut project = project_with_items(
@@ -161,6 +173,11 @@ fn repeated_module_instances_share_one_compiled_definition() {
                 interval: TimelineInterval::new(index as f64, 1.0).expect("valid interval"),
                 layer: 0,
                 parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
                 authored_properties: PropertyMap::new(),
             },
         );
@@ -219,6 +236,11 @@ fn instance_parameter_change_reuses_compiled_definition() {
                 interval: TimelineInterval::new(0.0, 1.0).expect("valid interval"),
                 layer: 0,
                 parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
                 authored_properties: PropertyMap::new(),
             },
         )]),

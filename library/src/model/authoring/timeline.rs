@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::project::property::{PropertyMap, PropertyValue};
 
-use super::{ModuleInstanceId, TimelineId, TimelineItemId, TimelineTrackId};
+use super::{
+    Constraint, MaskId, MatteRef, ModuleInstanceId, TimelineId, TimelineItemId, TimelineTrackId,
+    TransitionId,
+};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +53,11 @@ pub struct TimelineItem {
     pub interval: TimelineInterval,
     pub layer: i64,
     pub parent: Option<TimelineItemId>,
+    pub mask_ids: Vec<MaskId>,
+    pub matte: Option<MatteRef>,
+    pub constraints: Vec<Constraint>,
+    pub transition_in: Option<TransitionId>,
+    pub transition_out: Option<TransitionId>,
     pub authored_properties: PropertyMap,
 }
 

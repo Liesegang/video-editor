@@ -9,9 +9,10 @@ use crate::model::project::property::PropertyMap;
 
 use super::{
     AttachmentId, DataSource, DataSourceId, EventBinding, EventBindingId, GeneratedItem,
-    GeneratedItemId, ModuleDefinition, ModuleDefinitionId, ModuleInstance, ModuleInstanceId,
-    Override, OverrideId, SignalBinding, SignalBindingId, Timeline, TimelineId, TimelineItem,
-    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
+    GeneratedItemId, Mask, MaskId, ModuleDefinition, ModuleDefinitionId, ModuleInstance,
+    ModuleInstanceId, Override, OverrideId, SignalBinding, SignalBindingId, Timeline, TimelineId,
+    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition,
+    TransitionId,
 };
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -73,6 +74,8 @@ pub struct AuthoringProject {
     pub data_sources: HashMap<DataSourceId, DataSource>,
     pub generated_items: HashMap<GeneratedItemId, GeneratedItem>,
     pub overrides: HashMap<OverrideId, Override>,
+    pub masks: HashMap<MaskId, Mask>,
+    pub transitions: HashMap<TransitionId, Transition>,
     pub assets: Vec<Asset>,
 }
 
@@ -131,6 +134,8 @@ impl AuthoringProject {
             data_sources: HashMap::new(),
             generated_items: HashMap::new(),
             overrides: HashMap::new(),
+            masks: HashMap::new(),
+            transitions: HashMap::new(),
             assets: Vec::new(),
         })
     }
@@ -176,6 +181,70 @@ impl AuthoringProject {
                     return Err(format!("Item {} has a parent in another Timeline", item.id));
                 }
             }
+            if let Some(matte) = item.matte {
+                let matte_item = self
+                    .items
+                    .get(&matte.item_id)
+                    .ok_or_else(|| format!("Item {} has a missing Matte item", item.id))?;
+                let matte_track = self
+                    .tracks
+                    .get(&matte_item.track_id)
+                    .ok_or_else(|| format!("Item {} has a Matte on a missing Track", item.id))?;
+                if matte_item.id == item.id || matte_track.timeline_id != track.timeline_id {
+                    return Err(format!("Item {} has an invalid Matte item", item.id));
+                }
+            }
+            for constraint in &item.constraints {
+                let target = self.items.get(&constraint.target_item_id).ok_or_else(|| {
+                    format!("Item {} has a Constraint with a missing target", item.id)
+                })?;
+                let target_track = self.tracks.get(&target.track_id).ok_or_else(|| {
+                    format!(
+                        "Item {} has a Constraint target on a missing Track",
+                        item.id
+                    )
+                })?;
+                if target.id == item.id || target_track.timeline_id != track.timeline_id {
+                    return Err(format!("Item {} has an invalid Constraint target", item.id));
+                }
+            }
+        }
+        self.validate_parent_cycles()?;
+        let mut referenced_masks = std::collections::HashSet::new();
+        for item in self.items.values() {
+            for mask_id in &item.mask_ids {
+                if !self.masks.contains_key(mask_id) {
+                    return Err(format!("Item {} lists a missing Mask", item.id));
+                }
+                if !referenced_masks.insert(*mask_id) {
+                    return Err(format!("Mask {mask_id} is owned by multiple items"));
+                }
+            }
+        }
+        if referenced_masks.len() != self.masks.len() {
+            return Err("Project contains a Mask without a Timeline item owner".to_string());
+        }
+        for transition in self.transitions.values() {
+            if !transition.duration.is_finite() || transition.duration.into_inner() < 0.0 {
+                return Err(format!(
+                    "Transition {} has an invalid duration",
+                    transition.id
+                ));
+            }
+            let from = self
+                .items
+                .get(&transition.from_item_id)
+                .ok_or_else(|| format!("Transition {} has a missing source item", transition.id))?;
+            let to = self
+                .items
+                .get(&transition.to_item_id)
+                .ok_or_else(|| format!("Transition {} has a missing target item", transition.id))?;
+            if from.id == to.id || from.track_id != to.track_id {
+                return Err(format!(
+                    "Transition {} must join two items on one Track",
+                    transition.id
+                ));
+            }
         }
         for definition in self.module_definitions.values() {
             definition.validate()?;
@@ -210,6 +279,20 @@ impl AuthoringProject {
             };
             if !owner_exists {
                 return Err(format!("Attachment {} has a missing owner", attachment.id));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_parent_cycles(&self) -> Result<(), String> {
+        for item in self.items.values() {
+            let mut active = std::collections::HashSet::new();
+            let mut current = Some(item.id);
+            while let Some(item_id) = current {
+                if !active.insert(item_id) {
+                    return Err(format!("Parent cycle reaches Timeline item {item_id}"));
+                }
+                current = self.items.get(&item_id).and_then(|item| item.parent);
             }
         }
         Ok(())
