@@ -17,6 +17,7 @@ fn empty_project() -> AuthoringProject {
         fps: OrderedFloat(30.0),
         duration: OrderedFloat(10.0),
         background_color: Color::black(),
+        color_profile: "sRGB".to_string(),
         track_order: Vec::new(),
         authored_properties: PropertyMap::new(),
     };

@@ -21,6 +21,7 @@ pub struct Timeline {
     pub fps: OrderedFloat<f64>,
     pub duration: OrderedFloat<f64>,
     pub background_color: Color,
+    pub color_profile: String,
     pub track_order: Vec<TimelineTrackId>,
     pub authored_properties: PropertyMap,
 }

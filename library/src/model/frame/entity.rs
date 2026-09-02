@@ -347,6 +347,10 @@ pub struct FrameObject {
 /// The kind of isolated image produced by a frame group.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FrameGroupKind {
+    /// A Timeline definition evaluated as an isolated visual canvas.
+    Timeline,
+    /// One authored Timeline item. This is a render-time boundary, not a Node.
+    TimelineItem,
     Track,
     Clip,
     Composition,

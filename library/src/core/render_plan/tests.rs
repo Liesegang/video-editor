@@ -17,6 +17,7 @@ fn timeline(id: TimelineId, track_id: TimelineTrackId) -> Timeline {
         fps: OrderedFloat(30.0),
         duration: OrderedFloat(10.0),
         background_color: Color::black(),
+        color_profile: "sRGB".to_string(),
         track_order: vec![track_id],
         authored_properties: PropertyMap::new(),
     }

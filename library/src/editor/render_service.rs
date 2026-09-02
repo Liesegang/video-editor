@@ -232,7 +232,10 @@ impl<T: Renderer> RenderService<T> {
         parent_context: &RenderContext,
         color_authority: &RenderColorAuthority<'_>,
     ) -> Result<(), LibraryError> {
-        if group.kind == FrameGroupKind::Composition {
+        if matches!(
+            group.kind,
+            FrameGroupKind::Composition | FrameGroupKind::Timeline
+        ) {
             return self.render_composition_group(group, parent_context, color_authority);
         }
         if group.kind == FrameGroupKind::ImageTransform {

@@ -111,6 +111,7 @@ impl AuthoringProject {
                     fps: OrderedFloat(fps),
                     duration: OrderedFloat(duration),
                     background_color: Color::black(),
+                    color_profile: "sRGB".to_string(),
                     track_order: vec![track_id],
                     authored_properties: PropertyMap::new(),
                 },
@@ -145,6 +146,21 @@ impl AuthoringProject {
             return Err("Project root Timeline does not exist".to_string());
         }
         for timeline in self.timelines.values() {
+            if timeline.width == 0 || timeline.height == 0 {
+                return Err(format!(
+                    "Timeline {} dimensions must be greater than zero",
+                    timeline.id
+                ));
+            }
+            if !timeline.fps.is_finite() || timeline.fps.into_inner() <= 0.0 {
+                return Err(format!("Timeline {} has invalid FPS", timeline.id));
+            }
+            if !timeline.duration.is_finite() || timeline.duration.into_inner() < 0.0 {
+                return Err(format!("Timeline {} has invalid duration", timeline.id));
+            }
+            if timeline.color_profile.trim().is_empty() {
+                return Err(format!("Timeline {} has no color profile", timeline.id));
+            }
             let mut seen_tracks = std::collections::HashSet::new();
             for track_id in &timeline.track_order {
                 if !seen_tracks.insert(*track_id) {
@@ -170,6 +186,13 @@ impl AuthoringProject {
             let Some(track) = self.tracks.get(&item.track_id) else {
                 return Err(format!("Item {} refers to a missing Track", item.id));
             };
+            if !item.interval.start.is_finite()
+                || item.interval.start.into_inner() < 0.0
+                || !item.interval.duration.is_finite()
+                || item.interval.duration.into_inner() < 0.0
+            {
+                return Err(format!("Item {} has an invalid interval", item.id));
+            }
             if let Some(parent) = item.parent {
                 let Some(parent_item) = self.items.get(&parent) else {
                     return Err(format!("Item {} refers to a missing parent", item.id));
