@@ -152,6 +152,8 @@ pub struct TimelineApp {
     instance_path: InstancePath,
     selected_item: Option<TimelineItemId>,
     current_time: f64,
+    is_playing: bool,
+    last_playback_tick: Instant,
     preview: Option<egui::TextureHandle>,
     preview_key: Option<(library::model::authoring::ProjectRevision, TimelineId, u64)>,
     undo: Vec<AuthoringProject>,
@@ -179,6 +181,8 @@ impl TimelineApp {
             instance_path,
             selected_item: None,
             current_time: 0.0,
+            is_playing: false,
+            last_playback_tick: Instant::now(),
             preview: None,
             preview_key: None,
             undo: Vec::new(),
@@ -198,6 +202,7 @@ impl TimelineApp {
                 self.instance_path = InstancePath::root(self.open_timeline);
                 self.selected_item = None;
                 self.current_time = 0.0;
+                self.is_playing = false;
                 self.undo.clear();
                 self.redo.clear();
                 self.last_history_group = None;
@@ -222,6 +227,7 @@ impl TimelineApp {
                 self.instance_path = InstancePath::root(self.open_timeline);
                 self.selected_item = None;
                 self.current_time = 0.0;
+                self.is_playing = false;
                 self.undo.clear();
                 self.redo.clear();
                 self.last_history_group = None;
@@ -667,6 +673,7 @@ impl TimelineApp {
                 self.instance_path = path;
                 self.selected_item = None;
                 self.current_time = 0.0;
+                self.is_playing = false;
                 self.invalidate_preview();
                 return;
             }
@@ -785,6 +792,52 @@ impl TimelineApp {
         self.preview_key = None;
     }
 
+    fn toggle_playback(&mut self) {
+        if !self.is_playing {
+            let duration = self
+                .editor
+                .snapshot()
+                .ok()
+                .and_then(|project| project.timelines.get(&self.open_timeline).cloned())
+                .map(|timeline| timeline.duration.into_inner())
+                .unwrap_or(0.0);
+            if self.current_time >= duration {
+                self.current_time = 0.0;
+            }
+        }
+        self.is_playing = !self.is_playing;
+        self.last_playback_tick = Instant::now();
+    }
+
+    fn stop_playback(&mut self) {
+        self.is_playing = false;
+        self.current_time = 0.0;
+        self.last_playback_tick = Instant::now();
+        self.invalidate_preview();
+    }
+
+    fn advance_playback(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_playback_tick).as_secs_f64();
+        self.last_playback_tick = now;
+        if !self.is_playing {
+            return;
+        }
+        let duration = self
+            .editor
+            .snapshot()
+            .ok()
+            .and_then(|project| project.timelines.get(&self.open_timeline).cloned())
+            .map(|timeline| timeline.duration.into_inner())
+            .unwrap_or(0.0);
+        self.current_time = (self.current_time + elapsed.min(0.25)).min(duration);
+        if self.current_time >= duration {
+            self.is_playing = false;
+        }
+        self.invalidate_preview();
+        ctx.request_repaint();
+    }
+
     fn refresh_preview(&mut self, ctx: &egui::Context) {
         let Ok(revision) = self.editor.revision() else {
             return;
@@ -839,6 +892,10 @@ impl TimelineApp {
 
 impl eframe::App for TimelineApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !ctx.wants_keyboard_input() && ctx.input(|input| input.key_pressed(egui::Key::Space)) {
+            self.toggle_playback();
+        }
+        self.advance_playback(ctx);
         egui::TopBottomPanel::top("main-toolbar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("New").clicked() {
@@ -871,6 +928,18 @@ impl eframe::App for TimelineApp {
                 if ui.button("Export Video").clicked() {
                     self.export_video();
                 }
+                ui.separator();
+                if ui
+                    .button(if self.is_playing { "Pause" } else { "Play" })
+                    .on_hover_text("Play/Pause (Space)")
+                    .clicked()
+                {
+                    self.toggle_playback();
+                }
+                if ui.button("Stop").clicked() {
+                    self.stop_playback();
+                }
+                ui.label(format!("{:.2}s", self.current_time));
                 ui.separator();
                 if ui.button("Import").clicked() {
                     self.import_asset();
