@@ -1061,6 +1061,50 @@ impl AuthoringSession {
         ))
     }
 
+    pub fn update_mask(
+        &mut self,
+        item_id: TimelineItemId,
+        mask_id: MaskId,
+        _time: f64,
+        mode: MaskMode,
+        inverted: bool,
+        feather: f64,
+        opacity: f64,
+    ) -> Result<ChangeSet, String> {
+        if !feather.is_finite() || !opacity.is_finite() {
+            return Err("Mask controls must be finite".to_string());
+        }
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let mut candidate = self.project.clone();
+        let item = candidate
+            .items
+            .get(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+        if !item.mask_ids.contains(&mask_id) {
+            return Err(format!(
+                "Mask {mask_id} is not owned by Timeline item {item_id}"
+            ));
+        }
+        let mask = candidate
+            .masks
+            .get_mut(&mask_id)
+            .ok_or_else(|| format!("Missing Mask {mask_id}"))?;
+        mask.mode = mode;
+        mask.inverted = inverted;
+        mask.feather = Property::constant(crate::model::project::property::PropertyValue::Number(
+            OrderedFloat(feather.max(0.0)),
+        ));
+        mask.opacity = Property::constant(crate::model::project::property::PropertyValue::Number(
+            OrderedFloat(opacity.clamp(0.0, 1.0)),
+        ));
+        candidate.validate()?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     pub fn replace_data_source_generation(
         &mut self,
         track_id: TimelineTrackId,

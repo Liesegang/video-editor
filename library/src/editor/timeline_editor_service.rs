@@ -445,6 +445,21 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn update_mask(
+        &self,
+        item_id: TimelineItemId,
+        mask_id: crate::model::authoring::MaskId,
+        time: f64,
+        mode: crate::model::authoring::MaskMode,
+        inverted: bool,
+        feather: f64,
+        opacity: f64,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .update_mask(item_id, mask_id, time, mode, inverted, feather, opacity)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_srt(
         &self,
         path: &Path,
@@ -1027,6 +1042,17 @@ mod tests {
             )
             .expect("solid");
         let (mask_id, _) = service.add_rectangle_mask(item_id).expect("mask");
+        service
+            .update_mask(
+                item_id,
+                mask_id,
+                0.0,
+                crate::model::authoring::MaskMode::Difference,
+                true,
+                12.0,
+                0.75,
+            )
+            .expect("mask controls");
         let (project, frame) = service
             .evaluate_frame(
                 service.snapshot().expect("snapshot").root_timeline_id,
@@ -1036,6 +1062,11 @@ mod tests {
             )
             .expect("frame");
         assert!(project.masks.contains_key(&mask_id));
+        assert_eq!(
+            project.masks[&mask_id].mode,
+            crate::model::authoring::MaskMode::Difference
+        );
+        assert!(project.masks[&mask_id].inverted);
         assert!(project.module_definitions.is_empty());
         let crate::model::frame::entity::FrameItem::Group(track) = &frame.items[0] else {
             panic!("Track group expected");

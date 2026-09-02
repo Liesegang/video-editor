@@ -6,9 +6,9 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
-    InstancePath, ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId,
-    SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    InstancePath, MaskId, MaskMode, ModuleDefinitionId, ModuleInstanceId, OverrideId,
+    PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef,
+    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -100,6 +100,7 @@ enum Edit {
     CrossDissolve(TimelineItemId, f64),
     AddConstraint(TimelineItemId, TimelineItemId, ConstraintKind),
     AddRectangleMask(TimelineItemId),
+    UpdateMask(TimelineItemId, MaskId, MaskMode, bool, f64, f64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +147,7 @@ impl Edit {
             Self::CrossDissolve(item, _) => Some(HistoryKey::Item(*item, "transition")),
             Self::AddConstraint(item, ..) => Some(HistoryKey::Item(*item, "constraint")),
             Self::AddRectangleMask(item) => Some(HistoryKey::Item(*item, "mask")),
+            Self::UpdateMask(item, ..) => Some(HistoryKey::Item(*item, "mask")),
         }
     }
 }
@@ -812,6 +814,18 @@ impl TimelineApp {
                 .add_constraint(item_id, target_id, kind)
                 .map(|_| ()),
             Edit::AddRectangleMask(item_id) => self.editor.add_rectangle_mask(item_id).map(|_| ()),
+            Edit::UpdateMask(item_id, mask_id, mode, inverted, feather, opacity) => self
+                .editor
+                .update_mask(
+                    item_id,
+                    mask_id,
+                    self.current_time,
+                    mode,
+                    inverted,
+                    feather,
+                    opacity,
+                )
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -1635,6 +1649,55 @@ fn inspector_ui(
                 edits.push(Edit::AddRectangleMask(id));
             }
         });
+        for mask_id in &item.mask_ids {
+            let Some(mask) = project.masks.get(mask_id) else {
+                continue;
+            };
+            let numeric = |property: &Property, fallback: f64| {
+                property
+                    .evaluate_at(current_time)
+                    .ok()
+                    .and_then(|value| match value {
+                        PropertyValue::Number(value) => Some(value.into_inner()),
+                        PropertyValue::Integer(value) => Some(value as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(fallback)
+            };
+            let mut mode = mask.mode;
+            let mut inverted = mask.inverted;
+            let mut feather = numeric(&mask.feather, 0.0);
+            let mut opacity = numeric(&mask.opacity, 1.0);
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt(("mask-mode", mask_id))
+                    .selected_text(format!("{mode:?}"))
+                    .show_ui(ui, |ui| {
+                        for candidate in [
+                            MaskMode::Add,
+                            MaskMode::Subtract,
+                            MaskMode::Intersect,
+                            MaskMode::Difference,
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut mode, candidate, format!("{candidate:?}"))
+                                .changed();
+                        }
+                    });
+                changed |= ui.checkbox(&mut inverted, "Invert").changed();
+            });
+            changed |= ui
+                .add(egui::Slider::new(&mut feather, 0.0..=100.0).text("Feather"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Mask opacity"))
+                .changed();
+            if changed {
+                edits.push(Edit::UpdateMask(
+                    id, *mask_id, mode, inverted, feather, opacity,
+                ));
+            }
+        }
         ui.collapsing("Constraints", |ui| {
             for constraint in &item.constraints {
                 let target = project
