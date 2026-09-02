@@ -15,7 +15,7 @@ use library::model::project::asset::{Asset, AssetKind};
 use library::model::project::property::{Keyframe, KeyframeId, KeyframeUpdate, Property};
 use library::model::project::property::{PropertyValue, Vec2};
 use library::rendering::renderer::RenderOutput;
-use library::{RenderDestination, RenderService, SkiaRenderer, TimelineEditorService};
+use library::{AuthoringRenderService, RenderDestination, SkiaRenderer, TimelineEditorService};
 use ordered_float::OrderedFloat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,7 +151,7 @@ impl Edit {
 pub struct TimelineApp {
     editor: TimelineEditorService,
     plugins: Arc<library::plugin::PluginManager>,
-    renderer: RenderService<SkiaRenderer>,
+    renderer: AuthoringRenderService<SkiaRenderer>,
     dock: DockState<Tab>,
     workspace: Workspace,
     open_timeline: TimelineId,
@@ -180,7 +180,7 @@ impl TimelineApp {
         Ok(Self {
             editor,
             plugins: plugins.clone(),
-            renderer: RenderService::new(skia, plugins, cache),
+            renderer: AuthoringRenderService::new(skia, plugins, cache),
             dock: dock_for(Workspace::Edit),
             workspace: Workspace::Edit,
             open_timeline,
@@ -326,7 +326,7 @@ impl TimelineApp {
         };
         let result = self.editor.snapshot().and_then(|project| {
             let timeline = &project.timelines[&self.open_timeline];
-            self.renderer.renderer.resize_render_target(
+            self.renderer.renderer_mut().resize_render_target(
                 timeline.width as u32,
                 timeline.height as u32,
                 timeline.background_color.clone(),
@@ -337,7 +337,7 @@ impl TimelineApp {
                     .evaluate_frame(self.open_timeline, self.current_time, 1.0, None)?;
             let exported = self
                 .renderer
-                .render_authoring_export_frame(project.as_ref(), &frame)?;
+                .render_export_frame(project.as_ref(), &frame)?;
             let image = exported.image();
             image::save_buffer(
                 &path,
@@ -420,7 +420,7 @@ impl TimelineApp {
                 return;
             }
         };
-        if let Err(error) = self.renderer.renderer.resize_render_target(
+        if let Err(error) = self.renderer.renderer_mut().resize_render_target(
             timeline.width as u32,
             timeline.height as u32,
             timeline.background_color.clone(),
@@ -437,7 +437,7 @@ impl TimelineApp {
                         .evaluate_frame(self.open_timeline, time, 1.0, None)?;
                 let frame = self
                     .renderer
-                    .render_authoring_export_frame(project.as_ref(), &frame)?;
+                    .render_export_frame(project.as_ref(), &frame)?;
                 self.plugins
                     .export_frame("ffmpeg_export", &output, &frame, &settings)?;
             }
@@ -893,7 +893,7 @@ impl TimelineApp {
         let scale = (720.0 / timeline.width as f64).min(1.0);
         let width = (timeline.width as f64 * scale).round().max(1.0) as u32;
         let height = (timeline.height as f64 * scale).round().max(1.0) as u32;
-        if let Err(error) = self.renderer.renderer.resize_render_target(
+        if let Err(error) = self.renderer.renderer_mut().resize_render_target(
             width,
             height,
             timeline.background_color.clone(),
@@ -905,11 +905,8 @@ impl TimelineApp {
             .editor
             .evaluate_frame(self.open_timeline, self.current_time, scale, None)
             .and_then(|(project, frame)| {
-                self.renderer.render_authoring_frame(
-                    project.as_ref(),
-                    &frame,
-                    RenderDestination::Preview,
-                )
+                self.renderer
+                    .render_frame(project.as_ref(), &frame, RenderDestination::Preview)
             });
         match rendered {
             Ok(RenderOutput::Image(image)) => {
