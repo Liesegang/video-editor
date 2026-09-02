@@ -67,6 +67,7 @@ pub struct GeneratedItemSpec {
     pub interval: TimelineInterval,
     pub layer: i64,
     pub authored_values: HashMap<String, PropertyValue>,
+    pub module_parameters: HashMap<String, PropertyValue>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
