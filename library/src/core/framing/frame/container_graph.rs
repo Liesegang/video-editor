@@ -110,6 +110,7 @@ impl FrameEvaluator<'_> {
             width: scope.width,
             height: scope.height,
             background_color: transparent_background(),
+            inherited_transforms: Vec::new(),
             transform: self
                 .context(composition, Some(&inputs))
                 .build_transform(&track.properties, scope.time),
@@ -160,6 +161,7 @@ impl FrameEvaluator<'_> {
             width: scope.width,
             height: scope.height,
             background_color: transparent_background(),
+            inherited_transforms: Vec::new(),
             transform: self
                 .context(composition, Some(&inputs))
                 .build_transform(&clip.properties, scope.time),

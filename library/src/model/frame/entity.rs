@@ -385,6 +385,10 @@ pub struct FrameGroup {
     pub width: u64,
     pub height: u64,
     pub background_color: crate::model::frame::color::Color,
+    /// Ordered root-to-leaf transforms inherited from authored Timeline
+    /// parents. Parenting does not change layer scheduling.
+    #[serde(default)]
+    pub inherited_transforms: Vec<Transform>,
     pub transform: Transform,
     pub blend_mode: BlendMode,
     pub effect_time: OrderedFloat<f64>,

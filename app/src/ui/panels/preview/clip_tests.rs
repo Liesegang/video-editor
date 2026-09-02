@@ -59,6 +59,7 @@ mod tests {
                 b: 0,
                 a: 0,
             },
+            inherited_transforms: Vec::new(),
             transform: Transform::default(),
             blend_mode: BlendMode::Normal,
             effect_time: OrderedFloat(0.0),

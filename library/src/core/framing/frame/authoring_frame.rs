@@ -115,6 +115,7 @@ fn collect_timeline_items(
                 width: timeline.width,
                 height: timeline.height,
                 background_color: transparent(),
+                inherited_transforms: Vec::new(),
                 transform: transform_at(&track.authored_properties, timeline_time)?,
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(timeline_time),
@@ -178,6 +179,7 @@ fn collect_item(
                 width: nested.width,
                 height: nested.height,
                 background_color: nested.background_color.clone(),
+                inherited_transforms: Vec::new(),
                 transform: Transform::default(),
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(nested_time),
@@ -198,13 +200,20 @@ fn collect_item(
             )));
         }
     };
+    let inherited_transforms = inherited_transforms(project, item, timeline_time)?;
+    let mut transform = transform_at(&item.authored_properties, local_time)?;
+    transform.opacity *= inherited_transforms
+        .iter()
+        .map(|transform| transform.opacity)
+        .product::<f64>();
     Ok(FrameItem::Group(FrameGroup {
         source_id: item.id.as_uuid(),
         kind: FrameGroupKind::TimelineItem,
         width: owner_timeline.width,
         height: owner_timeline.height,
         background_color: transparent(),
-        transform: transform_at(&item.authored_properties, local_time)?,
+        inherited_transforms,
+        transform,
         blend_mode: BlendMode::Normal,
         effect_time: OrderedFloat(local_time),
         effects: Vec::new(),
@@ -245,6 +254,7 @@ fn asset_item(
                 width: 0,
                 height: 0,
                 background_color: transparent(),
+                inherited_transforms: Vec::new(),
                 transform: Transform::default(),
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(source_time),
@@ -384,6 +394,25 @@ fn shape_object(
             transform: Transform::default(),
         },
     })
+}
+
+fn inherited_transforms(
+    project: &AuthoringProject,
+    item: &TimelineItem,
+    timeline_time: f64,
+) -> Result<Vec<Transform>, LibraryError> {
+    let mut transforms = Vec::new();
+    let mut parent_id = item.parent;
+    while let Some(id) = parent_id {
+        let parent = project.items.get(&id).ok_or_else(|| {
+            LibraryError::Validation(format!("Timeline item {} has a missing parent", item.id))
+        })?;
+        let local_time = timeline_time - parent.interval.start.into_inner();
+        transforms.push(transform_at(&parent.authored_properties, local_time)?);
+        parent_id = parent.parent;
+    }
+    transforms.reverse();
+    Ok(transforms)
 }
 
 fn transform_at(properties: &PropertyMap, time: f64) -> Result<Transform, LibraryError> {
@@ -609,5 +638,66 @@ mod tests {
         let error = evaluate_authoring_frame(&project, &plan, 5, 1.0, None)
             .expect_err("stale plan must fail");
         assert!(error.to_string().contains("stale"));
+    }
+
+    #[test]
+    fn child_keeps_layer_order_while_inheriting_parent_transform() {
+        let project = AuthoringProject::new("Parents", 640, 360, 10.0, 3.0).expect("valid Project");
+        let track_id = *project.tracks.keys().next().expect("default Track");
+        let mut session = AuthoringSession::new(project).expect("session");
+        let (parent_id, _) = session
+            .add_item(
+                track_id,
+                "Parent".to_string(),
+                SourceRef::Text {
+                    text: "P".to_string(),
+                },
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("parent");
+        let (child_id, _) = session
+            .add_item(
+                track_id,
+                "Child".to_string(),
+                SourceRef::Text {
+                    text: "C".to_string(),
+                },
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                1,
+            )
+            .expect("child");
+        session
+            .set_item_property(
+                parent_id,
+                "position".to_string(),
+                Property::constant(PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(25.0),
+                    y: OrderedFloat(10.0),
+                })),
+            )
+            .expect("parent position");
+        session
+            .set_item_property(
+                parent_id,
+                "opacity".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(0.5))),
+            )
+            .expect("parent opacity");
+        let mut project = session.into_project();
+        project.items.get_mut(&child_id).expect("child").parent = Some(parent_id);
+        let plan = RenderPlanCompiler::compile(&project).expect("compile");
+        let frame = evaluate_authoring_frame(&project, &plan, 5, 1.0, None).expect("frame");
+
+        let FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let FrameItem::Group(child) = &track.items[1] else {
+            panic!("Child item group expected");
+        };
+        assert_eq!(child.source_id, child_id.as_uuid());
+        assert_eq!(child.inherited_transforms.len(), 1);
+        assert_eq!(child.inherited_transforms[0].position.x, 25.0);
+        assert_eq!(child.transform.opacity, 0.5);
     }
 }

@@ -277,7 +277,7 @@ impl<T: Renderer> RenderService<T> {
             return self.render_image_transform_group(group, parent_context, color_authority);
         }
 
-        let child_context = parent_context.with_transform(&group.transform);
+        let child_context = parent_context.with_group_transforms(group);
         if !group_requires_isolation(group) {
             return self.render_items(
                 &group.items,
@@ -344,8 +344,8 @@ impl<T: Renderer> RenderService<T> {
             1.0 / parent_context.render_scale,
         );
         let transform = parent_context
+            .with_group_transforms(group)
             .logical_to_target
-            .compose(Affine2D::from(&group.transform))
             .compose(pixel_to_local);
         self.renderer.draw_layer_affine_with_blend(
             &output,
@@ -388,8 +388,8 @@ impl<T: Renderer> RenderService<T> {
             1.0 / parent_context.render_scale,
         );
         let transform = parent_context
+            .with_group_transforms(group)
             .logical_to_target
-            .compose(Affine2D::from(&group.transform))
             .compose(pixel_to_local);
         self.renderer.draw_layer_affine_with_blend(
             &output,
@@ -677,6 +677,16 @@ struct RenderContext {
 }
 
 impl RenderContext {
+    fn with_group_transforms(&self, group: &FrameGroup) -> Self {
+        group
+            .inherited_transforms
+            .iter()
+            .fold(*self, |context, transform| {
+                context.with_transform(transform)
+            })
+            .with_transform(&group.transform)
+    }
+
     fn root(frame: &FrameInfo) -> Self {
         let render_scale = frame.render_scale.into_inner().max(f64::EPSILON);
         let (region_x, region_y, logical_width, logical_height) = frame.region.as_ref().map_or(
