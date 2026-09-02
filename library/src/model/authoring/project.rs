@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
+use crate::model::frame::color::Color;
 use crate::model::project::asset::Asset;
+use crate::model::project::property::PropertyMap;
 
 use super::{
     AttachmentId, DataSource, DataSourceId, EventBinding, EventBindingId, GeneratedItem,
     GeneratedItemId, ModuleDefinition, ModuleDefinitionId, ModuleInstance, ModuleInstanceId,
     Override, OverrideId, SignalBinding, SignalBindingId, Timeline, TimelineId, TimelineItem,
-    TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
 };
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -42,6 +45,13 @@ impl ProjectDocument {
     }
 
     pub fn to_json(&self) -> Result<String, String> {
+        if self.format_version != PROJECT_FORMAT_VERSION {
+            return Err(format!(
+                "Cannot save Project format version {}; expected {}",
+                self.format_version, PROJECT_FORMAT_VERSION
+            ));
+        }
+        self.project.validate()?;
         serde_json::to_string_pretty(self)
             .map_err(|error| format!("Cannot serialize Project: {error}"))
     }
@@ -67,6 +77,64 @@ pub struct AuthoringProject {
 }
 
 impl AuthoringProject {
+    pub fn new(
+        name: impl Into<String>,
+        width: u64,
+        height: u64,
+        fps: f64,
+        duration: f64,
+    ) -> Result<Self, String> {
+        if width == 0 || height == 0 {
+            return Err("Timeline dimensions must be greater than zero".to_string());
+        }
+        if !fps.is_finite() || fps <= 0.0 {
+            return Err("Timeline FPS must be finite and greater than zero".to_string());
+        }
+        if !duration.is_finite() || duration < 0.0 {
+            return Err("Timeline duration must be finite and non-negative".to_string());
+        }
+        let timeline_id = TimelineId::new();
+        let track_id = TimelineTrackId::new();
+        Ok(Self {
+            name: name.into(),
+            root_timeline_id: timeline_id,
+            timelines: HashMap::from([(
+                timeline_id,
+                Timeline {
+                    id: timeline_id,
+                    name: "Main".to_string(),
+                    width,
+                    height,
+                    fps: OrderedFloat(fps),
+                    duration: OrderedFloat(duration),
+                    background_color: Color::black(),
+                    track_order: vec![track_id],
+                    authored_properties: PropertyMap::new(),
+                },
+            )]),
+            tracks: HashMap::from([(
+                track_id,
+                TimelineTrack {
+                    id: track_id,
+                    timeline_id,
+                    name: "Video 1".to_string(),
+                    kind: TimelineTrackKind::AudioVisual,
+                    authored_properties: PropertyMap::new(),
+                },
+            )]),
+            items: HashMap::new(),
+            module_definitions: HashMap::new(),
+            module_instances: HashMap::new(),
+            attachments: HashMap::new(),
+            signal_bindings: HashMap::new(),
+            event_bindings: HashMap::new(),
+            data_sources: HashMap::new(),
+            generated_items: HashMap::new(),
+            overrides: HashMap::new(),
+            assets: Vec::new(),
+        })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.timelines.contains_key(&self.root_timeline_id) {
             return Err("Project root Timeline does not exist".to_string());

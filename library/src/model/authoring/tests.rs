@@ -80,3 +80,52 @@ fn generated_identity_ignores_generator_version() {
     assert_eq!(before, after);
     assert_ne!(before, other);
 }
+
+#[test]
+fn direct_item_edit_invalidates_only_its_timeline_property_target() {
+    let project =
+        AuthoringProject::new("Edit", 1920, 1080, 30.0, 10.0).expect("Project must be valid");
+    let track_id = *project.tracks.keys().next().expect("default Track");
+    let mut session = AuthoringSession::new(project).expect("session must open");
+    let (item_id, _) = session
+        .add_item(
+            track_id,
+            "Title".to_string(),
+            SourceRef::Text {
+                text: "Hello".to_string(),
+            },
+            TimelineInterval::new(0.0, 3.0).expect("valid interval"),
+            0,
+        )
+        .expect("item must be added");
+    let change = session
+        .set_item_property(
+            item_id,
+            "opacity".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.82)),
+            ),
+        )
+        .expect("property must change");
+    assert_eq!(change.invalidations.len(), 1);
+    assert!(matches!(
+        change.invalidations[0],
+        ProjectInvalidation::ItemProperties { item_id: changed, .. } if changed == item_id
+    ));
+}
+
+#[test]
+fn project_file_store_rejects_versionless_input_and_round_trips_atomically() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("project.ruvie");
+    let document = ProjectDocument::new(
+        AuthoringProject::new("Save", 1280, 720, 24.0, 5.0).expect("Project must be valid"),
+    );
+    ProjectFileStore::save(&path, &document).expect("Project must save");
+    assert_eq!(
+        ProjectFileStore::load(&path).expect("Project must load"),
+        document
+    );
+    std::fs::write(&path, r#"{"name":"old","compositions":[]}"#).expect("test fixture must write");
+    assert!(ProjectFileStore::load(&path).is_err());
+}
