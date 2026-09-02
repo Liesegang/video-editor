@@ -383,6 +383,16 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn add_cross_dissolve(
+        &self,
+        to_item_id: TimelineItemId,
+        duration: f64,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .add_cross_dissolve(to_item_id, duration)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_srt(
         &self,
         path: &Path,
@@ -894,5 +904,36 @@ mod tests {
                 .overrides
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn cross_dissolve_creates_overlap_without_a_node() {
+        let service = TimelineEditorService::create_default("Transition").expect("service");
+        let snapshot = service.snapshot().expect("snapshot");
+        let track_id = snapshot.timelines[&snapshot.root_timeline_id].track_order[0];
+        drop(snapshot);
+        service
+            .add_solid(
+                track_id,
+                Color::black(),
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("first");
+        let (second, _) = service
+            .add_solid(
+                track_id,
+                Color::white(),
+                TimelineInterval::new(2.0, 2.0).expect("interval"),
+                1,
+            )
+            .expect("second");
+        service
+            .add_cross_dissolve(second, 0.5)
+            .expect("cross dissolve");
+        let snapshot = service.snapshot().expect("transition snapshot");
+        assert_eq!(snapshot.items[&second].interval.start.into_inner(), 1.5);
+        assert_eq!(snapshot.transitions.len(), 1);
+        assert!(snapshot.module_definitions.is_empty());
     }
 }

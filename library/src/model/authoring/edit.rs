@@ -10,7 +10,8 @@ use super::{
     ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch,
     OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding,
     SignalBindingId, SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem,
-    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
+    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition, TransitionId,
+    TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -856,6 +857,68 @@ impl AuthoringSession {
             timeline_id,
             item_id,
         }]))
+    }
+
+    pub fn add_cross_dissolve(
+        &mut self,
+        to_item_id: TimelineItemId,
+        duration: f64,
+    ) -> Result<ChangeSet, String> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err("Cross dissolve duration must be positive".to_string());
+        }
+        let mut candidate = self.project.clone();
+        let to_item = candidate
+            .items
+            .get(&to_item_id)
+            .cloned()
+            .ok_or_else(|| format!("Missing Timeline item {to_item_id}"))?;
+        let from_item = candidate
+            .items
+            .values()
+            .filter(|item| {
+                item.track_id == to_item.track_id
+                    && item.id != to_item.id
+                    && item.interval.start < to_item.interval.start
+            })
+            .max_by_key(|item| item.interval.start)
+            .cloned()
+            .ok_or_else(|| {
+                "Cross dissolve requires a previous item on the same Track".to_string()
+            })?;
+        if from_item.transition_out.is_some() || to_item.transition_in.is_some() {
+            return Err("One of the Timeline items already has a transition".to_string());
+        }
+        let duration = duration
+            .min(from_item.interval.duration.into_inner())
+            .min(to_item.interval.duration.into_inner());
+        let overlap_start = (from_item.interval.start.into_inner()
+            + from_item.interval.duration.into_inner()
+            - duration)
+            .max(0.0);
+        candidate.items.get_mut(&to_item_id).unwrap().interval.start = OrderedFloat(overlap_start);
+        let id = TransitionId::new();
+        candidate.transitions.insert(
+            id,
+            Transition {
+                id,
+                from_item_id: from_item.id,
+                to_item_id,
+                duration: OrderedFloat(duration),
+                kind: TransitionKind::CrossDissolve,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        candidate
+            .items
+            .get_mut(&from_item.id)
+            .unwrap()
+            .transition_out = Some(id);
+        candidate.items.get_mut(&to_item_id).unwrap().transition_in = Some(id);
+        candidate.validate()?;
+        self.project = candidate;
+        let timeline_id = self.timeline_for_track(to_item.track_id)?;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
     }
 
     pub fn replace_data_source_generation(

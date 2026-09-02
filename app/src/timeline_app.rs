@@ -97,6 +97,7 @@ enum Edit {
     RefreshData(DataSourceId),
     DiscardOverride(OverrideId),
     ImportSubtitles(std::path::PathBuf, TimelineTrackId),
+    CrossDissolve(TimelineItemId, f64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +141,7 @@ impl Edit {
             | Self::RefreshData(_)
             | Self::DiscardOverride(_)
             | Self::ImportSubtitles(..) => Some(HistoryKey::Data),
+            Self::CrossDissolve(item, _) => Some(HistoryKey::Item(*item, "transition")),
         }
     }
 }
@@ -797,6 +799,10 @@ impl TimelineApp {
             Edit::ImportSubtitles(path, track_id) => {
                 self.editor.import_srt(&path, track_id).map(|_| ())
             }
+            Edit::CrossDissolve(item_id, duration) => self
+                .editor
+                .add_cross_dissolve(item_id, duration)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -1604,6 +1610,15 @@ fn inspector_ui(
     }
     if ui.button("Fade In / Out").clicked() {
         edits.push(Edit::Fade(id, 0.5));
+    }
+    if ui
+        .add_enabled(
+            item.transition_in.is_none(),
+            egui::Button::new("Cross Dissolve from Previous"),
+        )
+        .clicked()
+    {
+        edits.push(Edit::CrossDissolve(id, 0.5));
     }
     let is_audio = match &item.source {
         SourceRef::Asset { asset_id, .. } => project
