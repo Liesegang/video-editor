@@ -12,6 +12,7 @@ pub mod ocio_shim;
 pub mod project_model;
 pub mod project_service;
 pub mod render_service;
+pub mod timeline_editor_service;
 
 // Re-exports for convenient access
 pub use crate::model::NodeGraphBundle;
@@ -25,3 +26,4 @@ pub use handlers::property_ops::PropertyOwner;
 pub use project_model::ProjectModel;
 pub use project_service::ProjectManager as ProjectService;
 pub use render_service::{RenderDestination, RenderService};
+pub use timeline_editor_service::TimelineEditorService;

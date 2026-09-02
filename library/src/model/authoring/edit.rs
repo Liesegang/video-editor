@@ -1,10 +1,13 @@
 use ordered_float::OrderedFloat;
 
+use crate::model::frame::color::Color;
+use crate::model::project::asset::Asset;
 use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
-    AttachmentId, AttachmentOwner, AuthoringProject, MaskId, ModuleInstanceId, SourceRef,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrackId,
+    AttachmentId, AttachmentOwner, AuthoringProject, MaskId, ModuleInstanceId, SourceRef, Timeline,
+    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -33,6 +36,9 @@ pub enum ProjectInvalidation {
     ItemProperties {
         timeline_id: TimelineId,
         item_id: TimelineItemId,
+    },
+    Asset {
+        asset_id: uuid::Uuid,
     },
 }
 
@@ -100,6 +106,89 @@ impl AuthoringSession {
             item_id,
             self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]),
         ))
+    }
+
+    pub fn add_timeline(
+        &mut self,
+        name: String,
+        width: u64,
+        height: u64,
+        fps: f64,
+        duration: f64,
+    ) -> Result<(TimelineId, TimelineTrackId, ChangeSet), String> {
+        validate_timeline_settings(width, height, fps, duration)?;
+        let timeline_id = TimelineId::new();
+        let track_id = TimelineTrackId::new();
+        self.project.timelines.insert(
+            timeline_id,
+            Timeline {
+                id: timeline_id,
+                name,
+                width,
+                height,
+                fps: OrderedFloat(fps),
+                duration: OrderedFloat(duration),
+                background_color: Color::black(),
+                color_profile: "sRGB".to_string(),
+                track_order: vec![track_id],
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        self.project.tracks.insert(
+            track_id,
+            TimelineTrack {
+                id: track_id,
+                timeline_id,
+                name: "Video 1".to_string(),
+                kind: TimelineTrackKind::AudioVisual,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        let change = self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]);
+        Ok((timeline_id, track_id, change))
+    }
+
+    pub fn add_track(
+        &mut self,
+        timeline_id: TimelineId,
+        name: String,
+        kind: TimelineTrackKind,
+    ) -> Result<(TimelineTrackId, ChangeSet), String> {
+        let timeline = self
+            .project
+            .timelines
+            .get_mut(&timeline_id)
+            .ok_or_else(|| format!("Missing Timeline {timeline_id}"))?;
+        let track_id = TimelineTrackId::new();
+        timeline.track_order.push(track_id);
+        self.project.tracks.insert(
+            track_id,
+            TimelineTrack {
+                id: track_id,
+                timeline_id,
+                name,
+                kind,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        Ok((
+            track_id,
+            self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]),
+        ))
+    }
+
+    pub fn add_asset(&mut self, asset: Asset) -> Result<ChangeSet, String> {
+        if self
+            .project
+            .assets
+            .iter()
+            .any(|current| current.id == asset.id)
+        {
+            return Err(format!("Asset {} already exists", asset.id));
+        }
+        let asset_id = asset.id;
+        self.project.assets.push(asset);
+        Ok(self.finish(vec![ProjectInvalidation::Asset { asset_id }]))
     }
 
     pub fn move_item(
@@ -248,12 +337,51 @@ impl AuthoringSession {
         }]))
     }
 
+    pub fn set_parent(
+        &mut self,
+        item_id: TimelineItemId,
+        parent: Option<TimelineItemId>,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        if let Some(parent_id) = parent {
+            if parent_id == item_id || self.timeline_for_item(parent_id)? != timeline_id {
+                return Err("Parent must be another item in the same Timeline".to_string());
+            }
+            let mut current = Some(parent_id);
+            while let Some(id) = current {
+                if id == item_id {
+                    return Err("Timeline parent assignment would create a cycle".to_string());
+                }
+                current = self.project.items.get(&id).and_then(|item| item.parent);
+            }
+        }
+        self.project
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .parent = parent;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     fn timeline_for_track(&self, track_id: TimelineTrackId) -> Result<TimelineId, String> {
         self.project
             .tracks
             .get(&track_id)
             .map(|track| track.timeline_id)
             .ok_or_else(|| format!("Missing Timeline Track {track_id}"))
+    }
+
+    fn timeline_for_item(&self, item_id: TimelineItemId) -> Result<TimelineId, String> {
+        let track_id = self
+            .project
+            .items
+            .get(&item_id)
+            .map(|item| item.track_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+        self.timeline_for_track(track_id)
     }
 
     fn clone_masks(&mut self, mask_ids: &[MaskId]) -> Vec<MaskId> {
@@ -353,4 +481,22 @@ fn range_invalidation(timeline_id: TimelineId, interval: TimelineInterval) -> Pr
         start: interval.start,
         duration: interval.duration,
     }
+}
+
+fn validate_timeline_settings(
+    width: u64,
+    height: u64,
+    fps: f64,
+    duration: f64,
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("Timeline dimensions must be greater than zero".to_string());
+    }
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err("Timeline FPS must be finite and greater than zero".to_string());
+    }
+    if !duration.is_finite() || duration < 0.0 {
+        return Err("Timeline duration must be finite and non-negative".to_string());
+    }
+    Ok(())
 }

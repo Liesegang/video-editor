@@ -47,6 +47,7 @@ pub use editor::ProjectModel;
 pub use editor::ProjectService;
 pub use editor::{ClipBundle, EditorService, KeyframeBatchUpdate, NodeGraphBundle, PropertyOwner};
 pub use editor::{RenderDestination, RenderService};
+pub use editor::TimelineEditorService;
 
 /// Explicitly starts the trusted in-process CPython host. GUI applications
 /// call this once during startup before projects or plugins can execute code.
