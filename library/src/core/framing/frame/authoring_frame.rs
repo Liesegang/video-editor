@@ -36,6 +36,24 @@ pub fn evaluate_authoring_frame(
     render_scale: f64,
     region: Option<Region>,
 ) -> Result<FrameInfo, LibraryError> {
+    evaluate_authoring_timeline_frame(
+        project,
+        plan,
+        project.root_timeline_id,
+        frame_number,
+        render_scale,
+        region,
+    )
+}
+
+pub fn evaluate_authoring_timeline_frame(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    timeline_id: TimelineId,
+    frame_number: u64,
+    render_scale: f64,
+    region: Option<Region>,
+) -> Result<FrameInfo, LibraryError> {
     project.validate().map_err(LibraryError::Validation)?;
     if plan.root_timeline_id != project.root_timeline_id {
         return Err(LibraryError::Validation(
@@ -44,8 +62,8 @@ pub fn evaluate_authoring_frame(
     }
     let root = project
         .timelines
-        .get(&plan.root_timeline_id)
-        .ok_or_else(|| LibraryError::Validation("Root Timeline is missing".to_string()))?;
+        .get(&timeline_id)
+        .ok_or_else(|| LibraryError::Validation(format!("Timeline {timeline_id} is missing")))?;
     let time = frame_number as f64 / root.fps.into_inner();
     let mut items = collect_timeline_items(project, plan, root, time, &mut HashSet::new())?;
     let root_effects = attachment_effects(

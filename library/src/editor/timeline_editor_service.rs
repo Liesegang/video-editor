@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::core::framing::evaluate_authoring_frame;
+use crate::core::framing::evaluate_authoring_timeline_frame;
 use crate::core::render_plan::{RenderPlan, RenderPlanCache, RenderPlanCacheStats};
 use crate::error::LibraryError;
 use crate::model::authoring::{
@@ -311,11 +311,6 @@ impl TimelineEditorService {
         region: Option<Region>,
     ) -> Result<(Arc<AuthoringProject>, FrameInfo), LibraryError> {
         let project = self.snapshot()?;
-        if timeline_id != project.root_timeline_id {
-            return Err(LibraryError::Validation(
-                "Preview currently requires the root Timeline as its entry point".to_string(),
-            ));
-        }
         let timeline = project
             .timelines
             .get(&timeline_id)
@@ -325,8 +320,14 @@ impl TimelineEditorService {
             .lock_plan_cache()?
             .compile(project.as_ref())
             .map_err(LibraryError::Validation)?;
-        let frame =
-            evaluate_authoring_frame(project.as_ref(), &plan, frame_number, render_scale, region)?;
+        let frame = evaluate_authoring_timeline_frame(
+            project.as_ref(),
+            &plan,
+            timeline_id,
+            frame_number,
+            render_scale,
+            region,
+        )?;
         Ok((project, frame))
     }
 
@@ -455,5 +456,28 @@ mod tests {
         service.save_as(&path).expect("save");
         let reopened = TimelineEditorService::open(&path).expect("open");
         assert_eq!(reopened.snapshot().expect("snapshot").items.len(), 2);
+    }
+
+    #[test]
+    fn an_open_nested_timeline_is_a_preview_entry_point() {
+        let service = TimelineEditorService::create_default("Nested preview").expect("service");
+        let (nested_id, nested_track_id, _) = service
+            .add_timeline("Title".to_string(), 640, 360, 24.0, 5.0)
+            .expect("nested Timeline");
+        service
+            .add_solid(
+                nested_track_id,
+                Color::white(),
+                TimelineInterval::new(0.0, 5.0).expect("interval"),
+                0,
+            )
+            .expect("solid");
+
+        let (_, frame) = service
+            .evaluate_frame(nested_id, 1.0, 1.0, None)
+            .expect("nested frame");
+
+        assert_eq!((frame.width, frame.height), (640, 360));
+        assert_eq!(frame.object_count(), 1);
     }
 }

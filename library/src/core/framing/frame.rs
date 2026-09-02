@@ -21,7 +21,7 @@ mod scope;
 mod shape_graph;
 mod value_graph;
 
-pub use authoring_frame::evaluate_authoring_frame;
+pub use authoring_frame::{evaluate_authoring_frame, evaluate_authoring_timeline_frame};
 pub use evaluator::FrameEvaluator;
 pub use input_preview::InputValuePreview;
 
