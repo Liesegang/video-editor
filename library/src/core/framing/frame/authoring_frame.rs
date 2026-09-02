@@ -21,8 +21,8 @@ use crate::model::authoring::{
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{
-    FrameBounds, FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, ImageSurface,
-    StyleConfig,
+    FrameBounds, FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameMask, FrameObject,
+    ImageSurface, StyleConfig,
 };
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::frame::transform::Transform;
@@ -90,6 +90,7 @@ pub fn evaluate_authoring_timeline_frame(
             blend_mode: BlendMode::Normal,
             effect_time: OrderedFloat(time),
             effects: root_effects,
+            masks: Vec::new(),
             items,
         })];
         transparent()
@@ -172,6 +173,7 @@ fn collect_timeline_items(
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(timeline_time),
                 effects,
+                masks: Vec::new(),
                 items: children,
             }));
         }
@@ -245,6 +247,7 @@ fn collect_item(
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(nested_time),
                 effects,
+                masks: Vec::new(),
                 items: collect_timeline_items(project, plan, nested, nested_time, active)?,
             })
         }
@@ -280,6 +283,7 @@ fn collect_item(
             blend_mode: BlendMode::Normal,
             effect_time: OrderedFloat(local_time),
             effects: pre_effects,
+            masks: Vec::new(),
             items: vec![child],
         });
     }
@@ -309,6 +313,7 @@ fn collect_item(
         blend_mode: BlendMode::Normal,
         effect_time: OrderedFloat(local_time),
         effects: post_effects,
+        masks: evaluate_masks(project, item, local_time)?,
         items: vec![child],
     }))
 }
@@ -409,6 +414,40 @@ fn apply_constraints(
     Ok(())
 }
 
+fn evaluate_masks(
+    project: &AuthoringProject,
+    item: &TimelineItem,
+    local_time: f64,
+) -> Result<Vec<FrameMask>, LibraryError> {
+    item.mask_ids
+        .iter()
+        .map(|mask_id| {
+            let mask = project.masks.get(mask_id).ok_or_else(|| {
+                LibraryError::Validation(format!("Timeline item {} has a missing Mask", item.id))
+            })?;
+            let number =
+                |property: &crate::model::project::property::Property, fallback: f64| -> f64 {
+                    property
+                        .evaluate_at(local_time)
+                        .ok()
+                        .and_then(|value| match value {
+                            PropertyValue::Number(value) => Some(value.into_inner()),
+                            PropertyValue::Integer(value) => Some(value as f64),
+                            _ => None,
+                        })
+                        .unwrap_or(fallback)
+                };
+            Ok(FrameMask {
+                path: mask.path.clone(),
+                mode: mask.mode,
+                inverted: mask.inverted,
+                feather: OrderedFloat(number(&mask.feather, 0.0).max(0.0)),
+                opacity: OrderedFloat(number(&mask.opacity, 1.0).clamp(0.0, 1.0)),
+            })
+        })
+        .collect()
+}
+
 fn sample_path(path: &PathValue, progress: f64) -> Option<(PathPoint, (f64, f64))> {
     let segments: Vec<_> = path
         .contours()
@@ -480,6 +519,12 @@ fn sample_segment(from: PathPoint, segment: &PathSegment, t: f64) -> (PathPoint,
             let u = 1.0 - t;
             let w = weight.into_inner();
             let denominator = u * u + 2.0 * w * u * t + t * t;
+            if denominator.abs() <= f64::EPSILON {
+                return (
+                    point(x0 + (to.x() - x0) * t, y0 + (to.y() - y0) * t),
+                    (to.x() - x0, to.y() - y0),
+                );
+            }
             let x = (u * u * x0 + 2.0 * w * u * t * control.x() + t * t * to.x()) / denominator;
             let y = (u * u * y0 + 2.0 * w * u * t * control.y() + t * t * to.y()) / denominator;
             let adjacent_t = if t < 1.0 {
@@ -491,6 +536,9 @@ fn sample_segment(from: PathPoint, segment: &PathSegment, t: f64) -> (PathPoint,
             let adjacent_denominator = adjacent_u * adjacent_u
                 + 2.0 * w * adjacent_u * adjacent_t
                 + adjacent_t * adjacent_t;
+            if adjacent_denominator.abs() <= f64::EPSILON {
+                return (point(x, y), (to.x() - x0, to.y() - y0));
+            }
             let adjacent_x = (adjacent_u * adjacent_u * x0
                 + 2.0 * w * adjacent_u * adjacent_t * control.x()
                 + adjacent_t * adjacent_t * to.x())
@@ -596,6 +644,7 @@ fn asset_item(
                 blend_mode: BlendMode::Normal,
                 effect_time: OrderedFloat(source_time),
                 effects: Vec::new(),
+                masks: Vec::new(),
                 items: Vec::new(),
             }));
         }

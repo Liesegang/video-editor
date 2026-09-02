@@ -1,10 +1,12 @@
 use super::{RenderOutput, Renderer, SkiaRenderer};
 use crate::error::LibraryError;
 use crate::model::BlendMode;
+use crate::model::authoring::MaskMode;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
-use crate::model::frame::entity::{SkSLColorDomain, StyleConfig};
+use crate::model::frame::entity::{FrameMask, SkSLColorDomain, StyleConfig};
+use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
 use crate::rendering::renderer::{
     Affine2D, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo,
     WorkingSurfaceContract,
@@ -15,6 +17,42 @@ use ruvie_color_management::{
     VerifiedSourceSpace, WorkingColorIdentity,
 };
 use uuid::Uuid;
+
+#[test]
+fn timeline_path_mask_removes_pixels_outside_the_authored_path() {
+    let mut renderer = SkiaRenderer::new(4, 4, Color::black(), false, None, None).unwrap();
+    let source = RenderOutput::Image(Image::new(4, 4, [255, 0, 0, 255].repeat(16)));
+    let path = PathValue::new(
+        FillRule::NonZero,
+        vec![PathContour::new(
+            PathPoint::new(0.0, 0.0),
+            vec![
+                PathSegment::line(PathPoint::new(2.0, 0.0)),
+                PathSegment::line(PathPoint::new(2.0, 4.0)),
+                PathSegment::line(PathPoint::new(0.0, 4.0)),
+            ],
+            true,
+        )],
+    )
+    .unwrap();
+    let RenderOutput::Image(masked) = renderer
+        .apply_masks(
+            &source,
+            &[FrameMask {
+                path,
+                mode: MaskMode::Add,
+                inverted: false,
+                feather: ordered_float::OrderedFloat(0.0),
+                opacity: ordered_float::OrderedFloat(1.0),
+            }],
+        )
+        .unwrap()
+    else {
+        panic!("unmanaged CPU mask should return an image");
+    };
+    assert_eq!(masked.data[3], 255);
+    assert_eq!(masked.data[(3 * 4 + 3) * 4 + 3], 0);
+}
 
 const CUSTOM_BLEND_MODES: [BlendMode; 10] = [
     BlendMode::LinearBurn,

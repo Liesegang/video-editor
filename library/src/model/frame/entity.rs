@@ -394,8 +394,20 @@ pub struct FrameGroup {
     pub effect_time: OrderedFloat<f64>,
     #[serde(default)]
     pub effects: Vec<ImageEffect>,
+    /// Timeline-authored masks evaluated at this group's local time.
+    #[serde(default)]
+    pub masks: Vec<FrameMask>,
     #[serde(default)]
     pub items: Vec<FrameItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FrameMask {
+    pub path: crate::model::path::PathValue,
+    pub mode: crate::model::authoring::MaskMode,
+    pub inverted: bool,
+    pub feather: OrderedFloat<f64>,
+    pub opacity: OrderedFloat<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]

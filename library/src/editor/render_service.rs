@@ -307,6 +307,7 @@ impl<T: Renderer> RenderService<T> {
             group.effect_time.into_inner(),
             color_authority,
         )?;
+        let output = self.renderer.apply_masks(&output, &group.masks)?;
         self.renderer.draw_layer_affine_with_blend(
             &output,
             &Affine2D::IDENTITY,
@@ -740,6 +741,7 @@ fn transparent_color() -> crate::model::frame::color::Color {
 fn group_requires_isolation(group: &FrameGroup) -> bool {
     group.kind == FrameGroupKind::Merge
         || !group.effects.is_empty()
+        || !group.masks.is_empty()
         || group.blend_mode != crate::model::BlendMode::Normal
         || (group.transform.opacity - 1.0).abs() > f64::EPSILON
 }

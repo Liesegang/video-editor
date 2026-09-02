@@ -306,6 +306,20 @@ pub trait Renderer {
     /// effects before drawing this output into its parent target.
     fn end_group(&mut self) -> Result<RenderOutput, LibraryError>;
 
+    /// Apply Timeline-authored path masks to an isolated local-space layer.
+    fn apply_masks(
+        &mut self,
+        layer: &RenderOutput,
+        masks: &[crate::model::frame::entity::FrameMask],
+    ) -> Result<RenderOutput, LibraryError> {
+        if masks.is_empty() {
+            return Ok(layer.clone());
+        }
+        Err(LibraryError::Render(
+            "renderer does not implement Timeline masks".to_string(),
+        ))
+    }
+
     fn rasterize_text_layer(
         &mut self,
         request: TextRasterRequest<'_>,

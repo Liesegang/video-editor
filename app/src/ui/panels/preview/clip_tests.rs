@@ -64,6 +64,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             effect_time: OrderedFloat(0.0),
             effects: Vec::new(),
+            masks: Vec::new(),
             items,
         }
     }

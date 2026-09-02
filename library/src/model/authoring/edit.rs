@@ -6,12 +6,12 @@ use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
-    ConstraintId, ConstraintKind, DataSource, GeneratedItem, MaskId, ModuleDefinition,
-    ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleRole, Override,
-    OverrideId, OverrideOperator, OverridePatch, OverridePath, OverrideStatus, PublishedParameter,
-    PublishedParameterId, SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId,
-    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, Transition, TransitionId, TransitionKind,
+    ConstraintId, ConstraintKind, DataSource, GeneratedItem, Mask, MaskId, MaskMode,
+    ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
+    ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch, OverridePath,
+    OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
+    SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
+    TimelineTrackId, TimelineTrackKind, Transition, TransitionId, TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -1018,6 +1018,47 @@ impl AuthoringSession {
             timeline_id,
             item_id,
         }]))
+    }
+
+    pub fn add_mask(
+        &mut self,
+        item_id: TimelineItemId,
+        path: crate::model::path::PathValue,
+        mode: MaskMode,
+    ) -> Result<(MaskId, ChangeSet), String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let mut candidate = self.project.clone();
+        let id = MaskId::new();
+        candidate.masks.insert(
+            id,
+            Mask {
+                id,
+                path,
+                mode,
+                inverted: false,
+                feather: Property::constant(
+                    crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+                ),
+                opacity: Property::constant(
+                    crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                ),
+            },
+        );
+        candidate
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .mask_ids
+            .push(id);
+        candidate.validate()?;
+        self.project = candidate;
+        Ok((
+            id,
+            self.finish(vec![ProjectInvalidation::ItemProperties {
+                timeline_id,
+                item_id,
+            }]),
+        ))
     }
 
     pub fn replace_data_source_generation(

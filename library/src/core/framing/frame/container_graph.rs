@@ -117,6 +117,7 @@ impl FrameEvaluator<'_> {
             blend_mode: track.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items,
         });
         path.remove(&owner);
@@ -168,6 +169,7 @@ impl FrameEvaluator<'_> {
             blend_mode: clip.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items,
         });
         path.remove(&owner);

@@ -99,6 +99,7 @@ enum Edit {
     ImportSubtitles(std::path::PathBuf, TimelineTrackId),
     CrossDissolve(TimelineItemId, f64),
     AddConstraint(TimelineItemId, TimelineItemId, ConstraintKind),
+    AddRectangleMask(TimelineItemId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +145,7 @@ impl Edit {
             | Self::ImportSubtitles(..) => Some(HistoryKey::Data),
             Self::CrossDissolve(item, _) => Some(HistoryKey::Item(*item, "transition")),
             Self::AddConstraint(item, ..) => Some(HistoryKey::Item(*item, "constraint")),
+            Self::AddRectangleMask(item) => Some(HistoryKey::Item(*item, "mask")),
         }
     }
 }
@@ -809,6 +811,7 @@ impl TimelineApp {
                 .editor
                 .add_constraint(item_id, target_id, kind)
                 .map(|_| ()),
+            Edit::AddRectangleMask(item_id) => self.editor.add_rectangle_mask(item_id).map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -1626,6 +1629,12 @@ fn inspector_ui(
         edits.push(Edit::CrossDissolve(id, 0.5));
     }
     if workspace.depth() >= 2 {
+        ui.horizontal(|ui| {
+            ui.label(format!("Masks: {}", item.mask_ids.len()));
+            if ui.small_button("Add Rectangle Mask").clicked() {
+                edits.push(Edit::AddRectangleMask(id));
+            }
+        });
         ui.collapsing("Constraints", |ui| {
             for constraint in &item.constraints {
                 let target = project

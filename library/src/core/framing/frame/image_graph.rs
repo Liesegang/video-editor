@@ -129,6 +129,7 @@ impl FrameEvaluator<'_> {
                     blend_mode: node.blend_mode,
                     effect_time: OrderedFloat(scope.time),
                     effects: Vec::new(),
+                    masks: Vec::new(),
                     items: vec![FrameItem::Object(object)],
                 })
             }),
@@ -219,6 +220,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items: vec![source],
         })))
     }
@@ -309,6 +311,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items: vec![source],
         })))
     }
@@ -408,6 +411,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: vec![effect],
+            masks: Vec::new(),
             items: vec![source],
         })))
     }
@@ -495,6 +499,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items: objects.into_iter().map(FrameItem::Object).collect(),
         })))
     }
@@ -567,6 +572,7 @@ impl FrameEvaluator<'_> {
                 blend_mode,
                 effect_time: OrderedFloat(scope.time),
                 effects: Vec::new(),
+                masks: Vec::new(),
                 items: vec![source],
             }));
         }
@@ -584,6 +590,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items,
         })))
     }
@@ -626,6 +633,7 @@ impl FrameEvaluator<'_> {
                     blend_mode: composition.blend_mode,
                     effect_time: OrderedFloat(scope.time),
                     effects: Vec::new(),
+                    masks: Vec::new(),
                     items,
                 })))
             }
@@ -747,6 +755,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
+            masks: Vec::new(),
             items: vec![item],
         })))
     }

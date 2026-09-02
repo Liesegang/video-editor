@@ -404,6 +404,47 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn add_rectangle_mask(
+        &self,
+        item_id: TimelineItemId,
+    ) -> Result<(crate::model::authoring::MaskId, ChangeSet), LibraryError> {
+        let mut session = self.write_session()?;
+        let timeline_id = session
+            .project()
+            .items
+            .get(&item_id)
+            .and_then(|item| session.project().tracks.get(&item.track_id))
+            .map(|track| track.timeline_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline item {item_id}")))?;
+        let timeline = &session.project().timelines[&timeline_id];
+        let left = timeline.width as f64 * 0.1;
+        let top = timeline.height as f64 * 0.1;
+        let right = timeline.width as f64 * 0.9;
+        let bottom = timeline.height as f64 * 0.9;
+        let path = crate::model::path::PathValue::new(
+            crate::model::path::FillRule::NonZero,
+            vec![crate::model::path::PathContour::new(
+                crate::model::path::PathPoint::new(left, top),
+                vec![
+                    crate::model::path::PathSegment::line(crate::model::path::PathPoint::new(
+                        right, top,
+                    )),
+                    crate::model::path::PathSegment::line(crate::model::path::PathPoint::new(
+                        right, bottom,
+                    )),
+                    crate::model::path::PathSegment::line(crate::model::path::PathPoint::new(
+                        left, bottom,
+                    )),
+                ],
+                true,
+            )],
+        )
+        .map_err(|error| LibraryError::Validation(error.to_string()))?;
+        session
+            .add_mask(item_id, path, crate::model::authoring::MaskMode::Add)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_srt(
         &self,
         path: &Path,
@@ -969,5 +1010,39 @@ mod tests {
             .expect("cleaned transition snapshot")
             .validate()
             .expect("transition references remain valid");
+    }
+
+    #[test]
+    fn rectangle_mask_is_timeline_owned_and_reaches_frame_plan() {
+        let service = TimelineEditorService::create_default("Mask").expect("service");
+        let snapshot = service.snapshot().expect("snapshot");
+        let track_id = snapshot.timelines[&snapshot.root_timeline_id].track_order[0];
+        drop(snapshot);
+        let (item_id, _) = service
+            .add_solid(
+                track_id,
+                Color::white(),
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("solid");
+        let (mask_id, _) = service.add_rectangle_mask(item_id).expect("mask");
+        let (project, frame) = service
+            .evaluate_frame(
+                service.snapshot().expect("snapshot").root_timeline_id,
+                0.0,
+                1.0,
+                None,
+            )
+            .expect("frame");
+        assert!(project.masks.contains_key(&mask_id));
+        assert!(project.module_definitions.is_empty());
+        let crate::model::frame::entity::FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let crate::model::frame::entity::FrameItem::Group(item) = &track.items[0] else {
+            panic!("Item group expected");
+        };
+        assert_eq!(item.masks.len(), 1);
     }
 }

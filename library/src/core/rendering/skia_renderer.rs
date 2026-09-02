@@ -563,6 +563,116 @@ impl Renderer for SkiaRenderer {
         self.snapshot_surface(&mut group.surface, group.width, group.height)
     }
 
+    fn apply_masks(
+        &mut self,
+        layer: &RenderOutput,
+        masks: &[crate::model::frame::entity::FrameMask],
+    ) -> Result<RenderOutput, LibraryError> {
+        if masks.is_empty() {
+            return Ok(layer.clone());
+        }
+        let source = match layer {
+            RenderOutput::Image(image) => {
+                if self.surface_contract.working().is_some() {
+                    return Err(LibraryError::Render(
+                        "encoded mask input cannot enter a Project linear surface".to_string(),
+                    ));
+                }
+                image_to_skia(image)?
+            }
+            RenderOutput::Working(image) => {
+                let contract = self.surface_contract.working().ok_or_else(|| {
+                    LibraryError::Render(
+                        "Project linear mask input cannot enter an unmanaged surface".to_string(),
+                    )
+                })?;
+                skia_working_surface::managed_working_to_skia_image(image, contract)?
+            }
+            RenderOutput::Texture(_) => {
+                return Err(LibraryError::Render(
+                    "Timeline masks require an owned raster layer".to_string(),
+                ));
+            }
+        };
+        let width = source.width() as u32;
+        let height = source.height() as u32;
+        let mut output_surface = skia_working_surface::create_surface(
+            width,
+            height,
+            self.gpu_context
+                .as_mut()
+                .map(|context| &mut context.direct_context),
+            &self.surface_contract,
+        )?;
+        output_surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        output_surface
+            .canvas()
+            .draw_image(&source, (0.0, 0.0), Some(&Paint::default()));
+
+        let mut combined = skia_working_surface::create_surface(
+            width,
+            height,
+            self.gpu_context
+                .as_mut()
+                .map(|context| &mut context.direct_context),
+            &self.surface_contract,
+        )?;
+        combined.canvas().clear(skia_safe::Color::TRANSPARENT);
+        for (index, mask) in masks.iter().enumerate() {
+            let mut individual = skia_working_surface::create_surface(
+                width,
+                height,
+                self.gpu_context
+                    .as_mut()
+                    .map(|context| &mut context.direct_context),
+                &self.surface_contract,
+            )?;
+            let canvas = individual.canvas();
+            canvas.clear(if mask.inverted {
+                skia_safe::Color::WHITE
+            } else {
+                skia_safe::Color::TRANSPARENT
+            });
+            let path = crate::core::rendering::path_geometry::to_skia_path(&mask.path)?;
+            let mut path_paint = Paint::default();
+            path_paint.set_anti_alias(true);
+            path_paint.set_color(skia_safe::Color::WHITE);
+            if mask.inverted {
+                path_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
+            }
+            let feather = mask.feather.into_inner() as f32;
+            if feather > 0.0 {
+                path_paint.set_mask_filter(skia_safe::MaskFilter::blur(
+                    skia_safe::BlurStyle::Normal,
+                    feather,
+                    false,
+                ));
+            }
+            canvas.draw_path(&path, &path_paint);
+            let individual_image = individual.image_snapshot();
+            let mut combine_paint = Paint::default();
+            combine_paint.set_alpha_f(mask.opacity.into_inner() as f32);
+            combine_paint.set_blend_mode(match (index, mask.mode) {
+                (0, _) | (_, crate::model::authoring::MaskMode::Add) => {
+                    skia_safe::BlendMode::SrcOver
+                }
+                (_, crate::model::authoring::MaskMode::Subtract) => skia_safe::BlendMode::DstOut,
+                (_, crate::model::authoring::MaskMode::Intersect) => skia_safe::BlendMode::DstIn,
+                (_, crate::model::authoring::MaskMode::Difference) => skia_safe::BlendMode::Xor,
+            });
+            combined
+                .canvas()
+                .draw_image(&individual_image, (0.0, 0.0), Some(&combine_paint));
+        }
+        let mask_image = combined.image_snapshot();
+        let mut mask_paint = Paint::default();
+        mask_paint.set_blend_mode(skia_safe::BlendMode::DstIn);
+        output_surface
+            .canvas()
+            .draw_image(&mask_image, (0.0, 0.0), Some(&mask_paint));
+        self.snapshot_surface(&mut output_surface, width, height)
+    }
+
     fn rasterize_sksl_layer(
         &mut self,
         request: SkSLRasterRequest<'_>,
