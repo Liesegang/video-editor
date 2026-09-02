@@ -196,3 +196,67 @@ fn repeated_module_instances_share_one_compiled_definition() {
         100
     );
 }
+
+#[test]
+fn instance_parameter_change_reuses_compiled_definition() {
+    let timeline_id = TimelineId::new();
+    let track_id = TimelineTrackId::new();
+    let definition_id = ModuleDefinitionId::new();
+    let instance_id = ModuleInstanceId::new();
+    let item_id = TimelineItemId::new();
+    let mut project = project_with_items(
+        timeline_id,
+        track_id,
+        HashMap::from([(
+            item_id,
+            TimelineItem {
+                id: item_id,
+                track_id,
+                name: "Generator".to_string(),
+                source: SourceRef::Module {
+                    module_instance_id: instance_id,
+                },
+                interval: TimelineInterval::new(0.0, 1.0).expect("valid interval"),
+                layer: 0,
+                parent: None,
+                authored_properties: PropertyMap::new(),
+            },
+        )]),
+    );
+    project.module_definitions.insert(
+        definition_id,
+        ModuleDefinition {
+            id: definition_id,
+            name: "Generator".to_string(),
+            graph: ModuleGraph::default(),
+            published_parameters: Vec::new(),
+            published_signals: Vec::new(),
+            published_actions: Vec::new(),
+            version: 1,
+        },
+    );
+    project.module_instances.insert(
+        instance_id,
+        ModuleInstance {
+            id: instance_id,
+            definition_id,
+            parameter_overrides: HashMap::new(),
+        },
+    );
+    let mut cache = RenderPlanCache::default();
+    let (_, first) = cache.compile(&project).expect("first compile");
+    assert_eq!(first.compiled_definitions, 1);
+
+    project
+        .module_instances
+        .get_mut(&instance_id)
+        .expect("instance")
+        .parameter_overrides
+        .insert(
+            PublishedParameterId::new(),
+            crate::model::project::property::PropertyValue::Integer(42),
+        );
+    let (_, second) = cache.compile(&project).expect("incremental compile");
+    assert_eq!(second.compiled_definitions, 0);
+    assert_eq!(second.reused_definitions, 1);
+}

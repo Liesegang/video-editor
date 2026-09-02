@@ -13,14 +13,21 @@ pub struct RenderPlanCompiler;
 
 impl RenderPlanCompiler {
     pub fn compile(project: &AuthoringProject) -> Result<RenderPlan, String> {
-        project.validate()?;
-        validate_nested_timelines(project)?;
-
         let module_definitions = project
             .module_definitions
             .iter()
             .map(|(id, definition)| compile_module(*id, definition).map(|module| (*id, module)))
             .collect::<Result<HashMap<_, _>, _>>()?;
+
+        Self::compile_with_definitions(project, module_definitions)
+    }
+
+    pub(super) fn compile_with_definitions(
+        project: &AuthoringProject,
+        module_definitions: HashMap<ModuleDefinitionId, CompiledModuleDefinition>,
+    ) -> Result<RenderPlan, String> {
+        project.validate()?;
+        validate_nested_timelines(project)?;
 
         let mut module_invocations = Vec::new();
         let mut dependencies = DependencyIndex::default();
@@ -165,7 +172,7 @@ fn register_invocation(
     Ok(())
 }
 
-fn compile_module(
+pub(super) fn compile_module(
     id: ModuleDefinitionId,
     definition: &ModuleDefinition,
 ) -> Result<CompiledModuleDefinition, String> {
@@ -215,8 +222,17 @@ fn compile_module(
     Ok(CompiledModuleDefinition {
         id,
         version: definition.version,
+        fingerprint: definition_fingerprint(definition)?,
         evaluation_order,
     })
+}
+
+pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+
+    let encoded = serde_json::to_vec(definition)
+        .map_err(|error| format!("Cannot fingerprint Module definition: {error}"))?;
+    Ok(Sha256::digest(encoded).into())
 }
 
 fn validate_nested_timelines(project: &AuthoringProject) -> Result<(), String> {

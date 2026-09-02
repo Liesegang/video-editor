@@ -54,6 +54,7 @@ pub enum PlannedSource {
 pub struct CompiledModuleDefinition {
     pub id: ModuleDefinitionId,
     pub version: u64,
+    pub fingerprint: [u8; 32],
     pub evaluation_order: Vec<uuid::Uuid>,
 }
 
