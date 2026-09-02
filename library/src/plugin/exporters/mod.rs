@@ -9,6 +9,7 @@ pub use self::ffmpeg_export::FfmpegExportPlugin;
 pub use self::png_export::PngExportPlugin;
 
 use crate::error::LibraryError;
+use crate::model::authoring::{AuthoringProject, Timeline};
 use crate::model::project::Composition;
 use crate::model::project::Project;
 use crate::model::property::PropertyDefinition;
@@ -140,6 +141,33 @@ impl ExportSettings {
             }
         }
 
+        Ok(settings)
+    }
+
+    pub fn from_authoring_project(
+        project: &AuthoringProject,
+        timeline: &Timeline,
+    ) -> Result<Self, LibraryError> {
+        let mut settings = ExportSettings::for_dimensions(
+            timeline.width as u32,
+            timeline.height as u32,
+            timeline.fps.into_inner(),
+        );
+        settings.color_authority = Some(ExportColorAuthority::from_authority(project)?);
+        let config = &project.export;
+        if let Some(value) = &config.container {
+            settings.container = value.clone();
+        }
+        if let Some(value) = &config.codec {
+            settings.codec = value.clone();
+        }
+        if let Some(value) = &config.pixel_format {
+            settings.pixel_format = value.clone();
+        }
+        settings.parameters = config.parameters.clone();
+        for runtime_key in ["audio_source", "audio_channels", "audio_sample_rate"] {
+            settings.parameters.remove(runtime_key);
+        }
         Ok(settings)
     }
 
@@ -450,5 +478,19 @@ mod tests {
         assert!(settings.runtime_audio_source().is_none());
         assert!(!settings.parameters.contains_key("audio_source"));
         assert!(!settings.parameters.contains_key("audio_channels"));
+    }
+
+    #[test]
+    fn timeline_project_creates_color_authorized_export_settings() {
+        let project =
+            crate::model::authoring::AuthoringProject::new("Timeline export", 1280, 720, 24.0, 5.0)
+                .unwrap();
+        let timeline = &project.timelines[&project.root_timeline_id];
+
+        let settings = ExportSettings::from_authoring_project(&project, timeline).unwrap();
+
+        assert_eq!((settings.width, settings.height), (1280, 720));
+        assert_eq!(settings.fps, 24.0);
+        assert!(settings.color_authority().is_some());
     }
 }

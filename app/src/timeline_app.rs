@@ -283,6 +283,90 @@ impl TimelineApp {
         self.invalidate_preview();
     }
 
+    fn export_video(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MP4 video", &["mp4"])
+            .set_file_name("video.mp4")
+            .save_file()
+        else {
+            return;
+        };
+        let output = path.to_string_lossy().into_owned();
+        let project = match self.editor.snapshot() {
+            Ok(project) => project,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        if project.assets.iter().any(|asset| {
+            !asset.path.is_empty()
+                && Path::new(&asset.path)
+                    .canonicalize()
+                    .ok()
+                    .zip(path.canonicalize().ok())
+                    .is_some_and(|(source, destination)| source == destination)
+        }) {
+            self.status = "Export path cannot overwrite a source asset".to_string();
+            return;
+        }
+        let timeline = project.timelines[&self.open_timeline].clone();
+        let mut settings = match library::plugin::ExportSettings::from_authoring_project(
+            project.as_ref(),
+            &timeline,
+        ) {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        settings.container = "mp4".to_string();
+        settings.codec = "libx264".to_string();
+        settings.pixel_format = "yuv420p".to_string();
+        let frame_count = match settings.frame_count_for_duration(timeline.duration.into_inner()) {
+            Ok(count) => count,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        if let Err(error) = self.renderer.renderer.resize_render_target(
+            timeline.width as u32,
+            timeline.height as u32,
+            timeline.background_color.clone(),
+        ) {
+            self.status = error.to_string();
+            return;
+        }
+        drop(project);
+        let result = (|| {
+            for frame_index in 0..frame_count {
+                let time = settings.frame_time(frame_index)?;
+                let (project, frame) =
+                    self.editor
+                        .evaluate_frame(self.open_timeline, time, 1.0, None)?;
+                let frame = self
+                    .renderer
+                    .render_authoring_export_frame(project.as_ref(), &frame)?;
+                self.plugins
+                    .export_frame("ffmpeg_export", &output, &frame, &settings)?;
+            }
+            self.plugins
+                .finish_export("ffmpeg_export", &output, &settings)
+        })();
+        if result.is_err() {
+            let _ = self
+                .plugins
+                .finish_export("ffmpeg_export", &output, &settings);
+        }
+        match result {
+            Ok(()) => self.status = format!("Exported {output}"),
+            Err(error) => self.status = error.to_string(),
+        }
+        self.invalidate_preview();
+    }
+
     fn import_asset(&mut self) {
         let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
@@ -618,6 +702,9 @@ impl eframe::App for TimelineApp {
                 }
                 if ui.button("Export Frame").clicked() {
                     self.export_frame();
+                }
+                if ui.button("Export Video").clicked() {
+                    self.export_video();
                 }
                 ui.separator();
                 if ui.button("Import").clicked() {

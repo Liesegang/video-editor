@@ -28,7 +28,9 @@ impl ExportColorAuthority {
         Self::from_authority(project)
     }
 
-    fn from_authority(project: &dyn ProjectColorAuthority) -> Result<Self, LibraryError> {
+    pub(super) fn from_authority(
+        project: &dyn ProjectColorAuthority,
+    ) -> Result<Self, LibraryError> {
         let intent = match project.resolved_color_management() {
             ResolvedColorManagementConfig::Ready(intent) => intent,
             ResolvedColorManagementConfig::Unavailable { diagnostics, .. } => {
