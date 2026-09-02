@@ -19,7 +19,7 @@ bash -n "${SCRIPT_DIR}"/*.sh
 echo "[quality] Rust file size ratchet"
 "${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
 
-echo "[quality] Node Editor dependency boundary"
+echo "[quality] Timeline/Module UI boundary"
 "${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"
 
 echo "[quality] rustfmt"

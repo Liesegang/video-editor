@@ -19,34 +19,29 @@ library = { path = "${REPOSITORY_ROOT}/library" }
 EOF
 
 cat >"${PROBE_ROOT}/src/bin/pass.rs" <<'EOF'
-use std::sync::{Arc, RwLock};
-
-use library::editor::ProjectService;
 use library::model::frame::color::Color;
-use library::model::property::{Property, PropertyValue};
-use library::model::Project;
+use library::model::authoring::TimelineInterval;
 use library::plugin::PluginManager;
+use library::TimelineEditorService;
 
 fn main() -> Result<(), String> {
-    let plugins = Arc::new(PluginManager::default());
-    let project = Arc::new(RwLock::new(Project::new("external authoring probe")));
-    let service = ProjectService::new(project, Arc::clone(&plugins));
-
-    let mut solid = service
-        .create_solid_node(Color::white(), 1920, 1080)
+    let service = TimelineEditorService::create_default("external authoring probe")
         .map_err(|error| error.to_string())?;
-    solid.set_property(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color::black())),
-    )?;
-
-    let mut fill = plugins
-        .create_style_operation_node("fill")
+    let project = service.snapshot().map_err(|error| error.to_string())?;
+    let timeline_id = project.root_timeline_id;
+    let track_id = project.timelines[&timeline_id].track_order[0];
+    drop(project);
+    let (solid, _) = service
+        .add_solid(
+            track_id,
+            Color::white(),
+            TimelineInterval::new(0.0, 2.0)?,
+            0,
+        )
         .map_err(|error| error.to_string())?;
-    fill.set_property(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color::white())),
-    )?;
+    service
+        .attach_effect(solid, "blur", &PluginManager::default())
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 EOF
@@ -71,7 +66,7 @@ EOF
 
 export CARGO_TARGET_DIR="${REPOSITORY_ROOT}/target"
 
-echo "[node-api] supported external authoring compiles"
+echo "[node-api] supported Timeline-first authoring compiles"
 cargo check --quiet --offline --manifest-path "${PROBE_ROOT}/Cargo.toml" --bin pass
 
 expect_compile_failure() {

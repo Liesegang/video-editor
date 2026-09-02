@@ -37,42 +37,20 @@ if grep -REn '(^|[^[:alnum:]_])(app|library|uuid)::' node-editor-ui/src node-edi
 fi
 
 app_tree="$(cargo tree -p app --edges normal --locked --prefix none)"
-if ! grep -Eq '^node-editor-ui v' <<<"${app_tree}"; then
-    echo "app must consume node-editor-ui through its adapter boundary" >&2
+if grep -Eq '^node-editor-ui v' <<<"${app_tree}"; then
+    echo "the basic editor must not depend on the optional Node editor package" >&2
     exit 1
 fi
 
-adapter_path="app/src/ui/panels/node_editor/surface.rs"
-panel_path="app/src/ui/panels/node_editor/panel.rs"
-viewer_path="app/src/ui/panels/node_editor/viewer/snarl.rs"
-theme_path="app/src/ui/panels/node_editor/components/theme.rs"
-if [[ -d "app/src/ui/panels/node_editor" ]]; then
-    if [[ ! -f "${adapter_path}" ]] \
-        || ! grep -Fq 'SurfaceProjection' "${adapter_path}" \
-        || ! grep -Fq 'node_editor_ui::Editor::interact' "${panel_path}" \
-        || ! grep -Fq 'InteractionOptions::SELECTION' "${panel_path}"; then
-        echo "app must drive production Node selection through the node-editor-ui frame adapter" >&2
-        exit 1
-    fi
-    for production_chrome_call in \
-        'Editor::node_frame' \
-        'Editor::node_header_frame' \
-        'Editor::show_node_header' \
-        'Editor::show_port_label'; do
-        if ! grep -Fq "${production_chrome_call}" "${viewer_path}"; then
-            echo "app must render production Node chrome through ${production_chrome_call}" >&2
-            exit 1
-        fi
-    done
-    for production_theme_call in \
-        'Editor::paint_group_backdrop' \
-        'Editor::paint_group_foreground' \
-        'Editor::port_visual_style'; do
-        if ! grep -Fq "${production_theme_call}" "${theme_path}"; then
-            echo "app must render production group/port chrome through ${production_theme_call}" >&2
-            exit 1
-        fi
-    done
+if grep -REn 'structural_merge_node_id|NodeContent::CompositionInstance|model::project::Project' \
+    app/src library/src; then
+    echo "production code must not recover the retired graph-owned Timeline model" >&2
+    exit 1
 fi
 
-echo "[quality] node-editor-ui dependency boundary passed"
+if ! grep -Fq 'Timeline items are never expanded into nodes' app/src/timeline_app.rs; then
+    echo "the Logic workspace must state and retain the Timeline/Module boundary" >&2
+    exit 1
+fi
+
+echo "[quality] Timeline/Module UI boundary passed"
