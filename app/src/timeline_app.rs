@@ -4,7 +4,8 @@ use std::sync::Arc;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
-    AuthoringProject, DurationPolicy, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
+    AuthoringProject, DurationPolicy, ModuleInstanceId, PublishedParameterId, SourceRef,
+    TimelineId, TimelineInterval, TimelineItemId,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -78,6 +79,7 @@ enum Edit {
     Property(TimelineItemId, String, PropertyValue),
     Split(TimelineItemId),
     Blur(TimelineItemId),
+    ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
 }
 
 pub struct TimelineApp {
@@ -167,6 +169,45 @@ impl TimelineApp {
             Ok(()) => self.status = format!("Saved {}", path.display()),
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    fn export_frame(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG image", &["png"])
+            .set_file_name("frame.png")
+            .save_file()
+        else {
+            return;
+        };
+        let result = self.editor.snapshot().and_then(|project| {
+            let timeline = &project.timelines[&self.open_timeline];
+            self.renderer.renderer.resize_render_target(
+                timeline.width as u32,
+                timeline.height as u32,
+                timeline.background_color.clone(),
+            )?;
+            drop(project);
+            let (project, frame) =
+                self.editor
+                    .evaluate_frame(self.open_timeline, self.current_time, 1.0, None)?;
+            let exported = self
+                .renderer
+                .render_authoring_export_frame(project.as_ref(), &frame)?;
+            let image = exported.image();
+            image::save_buffer(
+                &path,
+                &image.data,
+                image.width,
+                image.height,
+                image::ColorType::Rgba8,
+            )
+            .map_err(|error| library::LibraryError::Runtime(error.to_string()))
+        });
+        match result {
+            Ok(()) => self.status = format!("Exported {}", path.display()),
+            Err(error) => self.status = error.to_string(),
+        }
+        self.invalidate_preview();
     }
 
     fn import_asset(&mut self) {
@@ -330,6 +371,10 @@ impl TimelineApp {
                 .editor
                 .attach_effect(id, "blur", self.plugins.as_ref())
                 .map(|_| ()),
+            Edit::ModuleParameter(instance, parameter, value) => self
+                .editor
+                .set_module_parameter(instance, parameter, value)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -411,6 +456,9 @@ impl eframe::App for TimelineApp {
                 }
                 if ui.button("Save As").clicked() {
                     self.save(true);
+                }
+                if ui.button("Export Frame").clicked() {
+                    self.export_frame();
                 }
                 ui.separator();
                 if ui.button("Import").clicked() {
@@ -496,7 +544,13 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Preview => preview_ui(ui, self.preview),
+            Tab::Preview => preview_ui(
+                ui,
+                self.preview,
+                self.project,
+                self.selected_item,
+                self.edits,
+            ),
             Tab::Timeline => timeline_ui(
                 ui,
                 self.project,
@@ -529,13 +583,31 @@ impl TabViewer for Viewer<'_> {
     }
 }
 
-fn preview_ui(ui: &mut egui::Ui, preview: Option<&egui::TextureHandle>) {
+fn preview_ui(
+    ui: &mut egui::Ui,
+    preview: Option<&egui::TextureHandle>,
+    project: &AuthoringProject,
+    selected: Option<TimelineItemId>,
+    edits: &mut Vec<Edit>,
+) {
     ui.centered_and_justified(|ui| {
         if let Some(texture) = preview {
             let available = ui.available_size();
             let size = texture.size_vec2();
             let scale = (available.x / size.x).min(available.y / size.y).min(1.0);
-            ui.image((texture.id(), size * scale));
+            let response =
+                ui.add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::drag()));
+            if response.dragged() {
+                if let Some(item) = selected.and_then(|id| project.items.get(&id)) {
+                    let (x, y) = vec2_property(item, "position", (0.0, 0.0));
+                    let delta = ui.input(|input| input.pointer.delta()) / scale;
+                    edits.push(Edit::Property(
+                        item.id,
+                        "position".to_string(),
+                        property_vec2(x + f64::from(delta.x), y + f64::from(delta.y)),
+                    ));
+                }
+            }
         } else {
             ui.spinner();
         }
@@ -692,7 +764,28 @@ fn inspector_ui(
                 .parameter_overrides
                 .get(&parameter.id)
                 .unwrap_or(&parameter.default_value);
-            ui.small(format!("{} = {:?}", parameter.name, value));
+            match value {
+                PropertyValue::Number(number) => {
+                    let mut number = number.into_inner();
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut number)
+                                .speed(0.1)
+                                .prefix(format!("{} ", parameter.name)),
+                        )
+                        .changed()
+                    {
+                        edits.push(Edit::ModuleParameter(
+                            instance.id,
+                            parameter.id,
+                            PropertyValue::Number(OrderedFloat(number)),
+                        ));
+                    }
+                }
+                _ => {
+                    ui.small(format!("{} = {:?}", parameter.name, value));
+                }
+            }
         }
     }
 }
