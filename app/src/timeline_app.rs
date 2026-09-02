@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
@@ -90,6 +91,42 @@ enum Edit {
     Delete(TimelineItemId, bool),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HistoryKey {
+    Item(TimelineItemId, &'static str),
+    Property(TimelineItemId, String),
+    ModuleParameter(ModuleInstanceId, PublishedParameterId),
+    ModuleNode(ModuleDefinitionId, uuid::Uuid),
+    Binding,
+}
+
+impl Edit {
+    fn history_key(&self) -> Option<HistoryKey> {
+        match self {
+            Self::Select(_) | Self::OpenTimeline(_, _) => None,
+            Self::Rename(item, _) => Some(HistoryKey::Item(*item, "rename")),
+            Self::SetText(item, _) => Some(HistoryKey::Item(*item, "text")),
+            Self::Move(item, ..) => Some(HistoryKey::Item(*item, "move")),
+            Self::Trim(item, _) => Some(HistoryKey::Item(*item, "trim")),
+            Self::Property(item, key, _) | Self::Keyframe(item, key, _) => {
+                Some(HistoryKey::Property(*item, key.clone()))
+            }
+            Self::Split(item) => Some(HistoryKey::Item(*item, "split")),
+            Self::Blur(item) => Some(HistoryKey::Item(*item, "effect")),
+            Self::ModuleParameter(instance, parameter, _) => {
+                Some(HistoryKey::ModuleParameter(*instance, *parameter))
+            }
+            Self::ModuleNodeState(definition, node, ..) => {
+                Some(HistoryKey::ModuleNode(*definition, *node))
+            }
+            Self::AddSignalBinding(_) => Some(HistoryKey::Binding),
+            Self::SetParent(item, _) => Some(HistoryKey::Item(*item, "parent")),
+            Self::DurationPolicy(item, _) => Some(HistoryKey::Item(*item, "duration-policy")),
+            Self::Delete(item, _) => Some(HistoryKey::Item(*item, "delete")),
+        }
+    }
+}
+
 pub struct TimelineApp {
     editor: TimelineEditorService,
     plugins: Arc<library::plugin::PluginManager>,
@@ -104,6 +141,7 @@ pub struct TimelineApp {
     preview_key: Option<(library::model::authoring::ProjectRevision, TimelineId, u64)>,
     undo: Vec<AuthoringProject>,
     redo: Vec<AuthoringProject>,
+    last_history_group: Option<(HistoryKey, Instant)>,
     status: String,
 }
 
@@ -130,6 +168,7 @@ impl TimelineApp {
             preview_key: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            last_history_group: None,
             status: "Timeline-first project ready".to_string(),
         })
     }
@@ -146,6 +185,7 @@ impl TimelineApp {
                 self.current_time = 0.0;
                 self.undo.clear();
                 self.redo.clear();
+                self.last_history_group = None;
                 self.invalidate_preview();
                 self.status = "New project".to_string();
             }
@@ -169,6 +209,7 @@ impl TimelineApp {
                 self.current_time = 0.0;
                 self.undo.clear();
                 self.redo.clear();
+                self.last_history_group = None;
                 self.invalidate_preview();
                 self.status = format!("Opened {}", path.display());
             }
@@ -195,9 +236,11 @@ impl TimelineApp {
     fn record(&mut self, before: AuthoringProject) {
         self.undo.push(before);
         self.redo.clear();
+        self.last_history_group = None;
     }
 
     fn undo(&mut self) {
+        self.last_history_group = None;
         let Some(project) = self.undo.pop() else {
             return;
         };
@@ -214,6 +257,7 @@ impl TimelineApp {
     }
 
     fn redo(&mut self) {
+        self.last_history_group = None;
         let Some(project) = self.redo.pop() else {
             return;
         };
@@ -579,17 +623,31 @@ impl TimelineApp {
     }
 
     fn apply(&mut self, edit: Edit) {
-        let before = self
-            .editor
-            .snapshot()
-            .ok()
-            .map(|project| project.as_ref().clone());
+        let history_key = edit.history_key();
+        let now = Instant::now();
+        let begins_group = history_key.as_ref().is_some_and(|key| {
+            self.last_history_group
+                .as_ref()
+                .is_none_or(|(previous, at)| {
+                    previous != key || now.duration_since(*at) > Duration::from_millis(750)
+                })
+        });
+        let before = if begins_group {
+            self.editor
+                .snapshot()
+                .ok()
+                .map(|project| project.as_ref().clone())
+        } else {
+            None
+        };
         let result = match edit {
             Edit::Select(item) => {
+                self.last_history_group = None;
                 self.selected_item = item;
                 return;
             }
             Edit::OpenTimeline(id, path) => {
+                self.last_history_group = None;
                 self.open_timeline = id;
                 self.instance_path = path;
                 self.selected_item = None;
@@ -636,6 +694,9 @@ impl TimelineApp {
             Ok(()) => {
                 if let Some(before) = before {
                     self.record(before);
+                }
+                if let Some(key) = history_key {
+                    self.last_history_group = Some((key, now));
                 }
                 self.invalidate_preview();
                 self.status = "Edit applied".to_string();
@@ -1594,5 +1655,13 @@ mod tests {
     fn timeline_snap_prefers_nearby_item_edges_then_frames() {
         assert_eq!(snap_time(1.94, 30.0, &[2.0]), 2.0);
         assert_eq!(snap_time(1.26, 10.0, &[]), 1.3);
+    }
+
+    #[test]
+    fn continuous_property_updates_share_one_history_key() {
+        let item = TimelineItemId::new();
+        let first = Edit::Property(item, "position".to_string(), property_vec2(10.0, 20.0));
+        let second = Edit::Property(item, "position".to_string(), property_vec2(30.0, 40.0));
+        assert_eq!(first.history_key(), second.history_key());
     }
 }
