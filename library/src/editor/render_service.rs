@@ -16,6 +16,7 @@ use crate::model::frame::entity::{
 };
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
+#[cfg(test)]
 use crate::model::project::Project;
 use crate::plugin::{ExportFrame, LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
@@ -86,9 +87,10 @@ impl<T: Renderer> RenderService<T> {
         }
     }
 
-    /// Render a Project-evaluated frame with its exact color and Asset
-    /// authority. Preview and export must use this entry point.
-    pub fn render_project_frame(
+    /// Test-only bridge for exercising the renderer's color pipeline against
+    /// the retired graph Project while its low-level tests are being replaced.
+    #[cfg(test)]
+    pub(crate) fn render_project_frame(
         &mut self,
         project: &Project,
         frame_info: &FrameInfo,
@@ -150,8 +152,8 @@ impl<T: Renderer> RenderService<T> {
         pipeline.terminal_image(&working).map(RenderOutput::Image)
     }
 
-    /// Project-free compatibility boundary for versioned native plugin probes.
-    /// File-backed Preview/export must use [`Self::render_project_frame`].
+    /// Project-free boundary for versioned native plugin probes.
+    /// File-backed Preview/export must use [`Self::render_authoring_frame`].
     pub fn render_from_frame_info(
         &mut self,
         frame_info: &FrameInfo,

@@ -9,7 +9,6 @@ use crate::editor::RenderService;
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::Project;
 use crate::plugin::PluginManager;
 use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::rendering::skia_renderer::SkiaRenderer;
@@ -23,8 +22,7 @@ pub struct RenderServer {
 }
 
 enum RenderRequest {
-    Render(RenderRequestId, Arc<Project>, FrameInfo),
-    RenderAuthoring(RenderRequestId, Arc<AuthoringProject>, FrameInfo),
+    Render(RenderRequestId, Arc<AuthoringProject>, FrameInfo),
     SetSharingContext(usize, Option<isize>),
     Shutdown,
 }
@@ -94,14 +92,7 @@ impl RenderServer {
                 for request in std::iter::once(first_request).chain(rx.try_iter()) {
                     match request {
                         RenderRequest::Render(request_id, project, frame_info) => {
-                            pending_render = Some(PendingRender::Graph {
-                                request_id,
-                                project,
-                                frame_info,
-                            });
-                        }
-                        RenderRequest::RenderAuthoring(request_id, project, frame_info) => {
-                            pending_render = Some(PendingRender::Timeline {
+                            pending_render = Some(PendingRender {
                                 request_id,
                                 project,
                                 frame_info,
@@ -187,19 +178,11 @@ impl RenderServer {
                     }
                 }
 
-                let output = match &pending {
-                    PendingRender::Graph { project, .. } => render_service.render_project_frame(
-                        project.as_ref(),
-                        &frame_info,
-                        RenderDestination::Preview,
-                    ),
-                    PendingRender::Timeline { project, .. } => render_service
-                        .render_authoring_frame(
-                            project.as_ref(),
-                            &frame_info,
-                            RenderDestination::Preview,
-                        ),
-                };
+                let output = render_service.render_authoring_frame(
+                    pending.project.as_ref(),
+                    &frame_info,
+                    RenderDestination::Preview,
+                );
                 if let Err(error) = &output {
                     error!("Failed to render frame: {error}");
                 }
@@ -231,28 +214,13 @@ impl RenderServer {
     pub fn send_request(
         &self,
         request_id: RenderRequestId,
-        project: Arc<Project>,
+        project: Arc<AuthoringProject>,
         frame_info: FrameInfo,
     ) -> bool {
         if let Err(error) = self
             .tx
             .send(RenderRequest::Render(request_id, project, frame_info))
         {
-            log::debug!("Render server is unavailable: {error}");
-            return false;
-        }
-        true
-    }
-
-    pub fn send_authoring_request(
-        &self,
-        request_id: RenderRequestId,
-        project: Arc<AuthoringProject>,
-        frame_info: FrameInfo,
-    ) -> bool {
-        if let Err(error) = self.tx.send(RenderRequest::RenderAuthoring(
-            request_id, project, frame_info,
-        )) {
             log::debug!("Render server is unavailable: {error}");
             return false;
         }
@@ -270,30 +238,19 @@ impl RenderServer {
     }
 }
 
-enum PendingRender {
-    Graph {
-        request_id: RenderRequestId,
-        project: Arc<Project>,
-        frame_info: FrameInfo,
-    },
-    Timeline {
-        request_id: RenderRequestId,
-        project: Arc<AuthoringProject>,
-        frame_info: FrameInfo,
-    },
+struct PendingRender {
+    request_id: RenderRequestId,
+    project: Arc<AuthoringProject>,
+    frame_info: FrameInfo,
 }
 
 impl PendingRender {
     fn request_id(&self) -> RenderRequestId {
-        match self {
-            Self::Graph { request_id, .. } | Self::Timeline { request_id, .. } => *request_id,
-        }
+        self.request_id
     }
 
     fn frame_info(&self) -> &FrameInfo {
-        match self {
-            Self::Graph { frame_info, .. } | Self::Timeline { frame_info, .. } => frame_info,
-        }
+        &self.frame_info
     }
 }
 
@@ -315,7 +272,6 @@ mod tests {
     use crate::model::authoring::AuthoringProject;
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::FrameInfo;
-    use crate::model::project::Project;
     use crate::plugin::PluginManager;
     use crate::rendering::renderer::RenderOutput;
     use ordered_float::OrderedFloat;
@@ -341,7 +297,9 @@ mod tests {
             Arc::new(PluginManager::default()),
             Arc::new(CacheManager::new()),
         );
-        let project = Arc::new(Project::new("render server test"));
+        let project = Arc::new(
+            AuthoringProject::new("render server test", 2, 2, 24.0, 1.0).expect("Project"),
+        );
         assert!(server.send_request(
             RenderRequestId::new(41),
             Arc::clone(&project),
@@ -375,11 +333,7 @@ mod tests {
         let project = Arc::new(
             AuthoringProject::new("timeline server test", 2, 2, 24.0, 1.0).expect("Project"),
         );
-        assert!(server.send_authoring_request(
-            RenderRequestId::new(43),
-            project,
-            empty_frame(2, 2)
-        ));
+        assert!(server.send_request(RenderRequestId::new(43), project, empty_frame(2, 2)));
         let rendered = server
             .rx_result
             .recv_timeout(Duration::from_secs(5))
