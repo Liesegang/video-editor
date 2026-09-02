@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{BlendMode, Clip, Node, NodeContent, Track};
+use super::{BlendMode, Node, NodeContent};
 use crate::model::frame::color::Color;
+use crate::model::node::{Clip, Track};
 use crate::model::project::asset::Asset;
 use crate::model::project::property::PropertyMap;
 pub mod asset;

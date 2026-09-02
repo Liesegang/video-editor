@@ -1,5 +1,6 @@
+use crate::model::node::Clip;
 use crate::model::property::PropertyValue;
-use crate::model::{Clip, GeneratorContent, Node, NodeContent};
+use crate::model::{GeneratorContent, Node, NodeContent};
 
 impl Clip {
     /// Returns this timeline container's duration in seconds.

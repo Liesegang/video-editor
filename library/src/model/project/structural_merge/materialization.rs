@@ -6,7 +6,8 @@ use super::super::{
     NodeContainer, PortAddress, PortOwner, Project, ProjectConnection, ProjectGraphError,
 };
 use super::contract::{StructuralMergeKind, StructuralMergePairSpec, structural_merge_pair};
-use crate::model::{Clip, Composition, Track};
+use crate::model::node::{Clip, Track};
+use crate::model::project::Composition;
 
 impl Project {
     pub(in crate::model::project) fn insert_composition_with_structural_merge(
