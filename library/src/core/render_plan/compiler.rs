@@ -21,99 +21,47 @@ impl RenderPlanCompiler {
             .map(|(id, definition)| compile_module(*id, definition).map(|module| (*id, module)))
             .collect::<Result<HashMap<_, _>, _>>()?;
 
-        Self::compile_with_definitions(project, module_definitions)
+        Self::compile_with_parts(project, module_definitions, None)
     }
 
-    pub(super) fn compile_with_definitions(
+    pub(super) fn compile_with_parts(
         project: &AuthoringProject,
         module_definitions: HashMap<ModuleDefinitionId, CompiledModuleDefinition>,
+        compiled_timelines: Option<HashMap<TimelineId, CompiledTimeline>>,
     ) -> Result<RenderPlan, String> {
         project.validate()?;
         validate_nested_timelines(project)?;
 
         let mut module_invocations = Vec::new();
         let mut dependencies = DependencyIndex::default();
-        let mut timelines = HashMap::new();
+        let timelines = match compiled_timelines {
+            Some(timelines) => timelines,
+            None => project
+                .timelines
+                .keys()
+                .copied()
+                .map(|timeline_id| {
+                    compile_timeline(project, timeline_id).map(|timeline| (timeline_id, timeline))
+                })
+                .collect::<Result<HashMap<_, _>, _>>()?,
+        };
 
-        for timeline in project.timelines.values() {
-            let track_order: HashMap<_, _> = timeline
-                .track_order
-                .iter()
-                .enumerate()
-                .map(|(index, id)| (*id, index))
-                .collect();
-            let mut schedule = Vec::new();
-            for item in project.items.values().filter(|item| {
-                project
-                    .tracks
-                    .get(&item.track_id)
-                    .is_some_and(|track| track.timeline_id == timeline.id)
-            }) {
-                let source = match &item.source {
-                    SourceRef::Asset { .. } => PlannedSource::Asset,
-                    SourceRef::Text { .. } => PlannedSource::Text,
-                    SourceRef::Shape { .. } => PlannedSource::Shape,
-                    SourceRef::Solid { .. } => PlannedSource::Solid,
-                    SourceRef::Composition(instance) => PlannedSource::Composition {
-                        timeline_id: instance.timeline_id,
-                    },
-                    SourceRef::Module { module_instance_id } => {
-                        register_invocation(
-                            project,
-                            &mut module_invocations,
-                            &mut dependencies,
-                            ModuleInvocationOwner::Item(item.id),
-                            *module_instance_id,
-                        )?;
-                        PlannedSource::Module {
-                            module_instance_id: *module_instance_id,
-                        }
-                    }
-                };
+        for timeline in timelines.values() {
+            for item in &timeline.schedule {
                 dependencies.timeline_ranges.insert(
-                    item.id,
+                    item.item_id,
                     (timeline.id, item.interval.start, item.interval.duration),
                 );
-                schedule.push(ScheduledItem {
-                    item_id: item.id,
-                    track_id: item.track_id,
-                    track_order: *track_order
-                        .get(&item.track_id)
-                        .ok_or_else(|| format!("Item {} is on an unordered Track", item.id))?,
-                    layer: item.layer,
-                    interval: item.interval,
-                    source,
-                });
+                if let PlannedSource::Module { module_instance_id } = &item.source {
+                    register_invocation(
+                        project,
+                        &mut module_invocations,
+                        &mut dependencies,
+                        ModuleInvocationOwner::Item(item.item_id),
+                        *module_instance_id,
+                    )?;
+                }
             }
-            schedule.sort_by_key(|item| {
-                (
-                    item.track_order,
-                    item.layer,
-                    item.interval.start,
-                    item.item_id,
-                )
-            });
-            let mut timeline_attachment_ids: Vec<_> = project
-                .attachments
-                .values()
-                .filter_map(|attachment| match &attachment.owner {
-                    crate::model::authoring::AttachmentOwner::Timeline { timeline_id }
-                        if *timeline_id == timeline.id =>
-                    {
-                        Some(attachment.id)
-                    }
-                    _ => None,
-                })
-                .collect();
-            timeline_attachment_ids.sort();
-            timelines.insert(
-                timeline.id,
-                CompiledTimeline {
-                    id: timeline.id,
-                    schedule,
-                    attachment_ids: timeline_attachment_ids,
-                },
-            );
         }
 
         let mut attachments: Vec<_> = project.attachments.values().collect();
@@ -147,6 +95,78 @@ impl RenderPlanCompiler {
             dependencies,
         })
     }
+}
+
+pub(super) fn compile_timeline(
+    project: &AuthoringProject,
+    timeline_id: TimelineId,
+) -> Result<CompiledTimeline, String> {
+    let timeline = project
+        .timelines
+        .get(&timeline_id)
+        .ok_or_else(|| format!("Missing Timeline {timeline_id}"))?;
+    let track_order: HashMap<_, _> = timeline
+        .track_order
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect();
+    let mut schedule = Vec::new();
+    for item in project.items.values().filter(|item| {
+        project
+            .tracks
+            .get(&item.track_id)
+            .is_some_and(|track| track.timeline_id == timeline.id)
+    }) {
+        let source = match &item.source {
+            SourceRef::Asset { .. } => PlannedSource::Asset,
+            SourceRef::Text { .. } => PlannedSource::Text,
+            SourceRef::Shape { .. } => PlannedSource::Shape,
+            SourceRef::Solid { .. } => PlannedSource::Solid,
+            SourceRef::Composition(instance) => PlannedSource::Composition {
+                timeline_id: instance.timeline_id,
+            },
+            SourceRef::Module { module_instance_id } => PlannedSource::Module {
+                module_instance_id: *module_instance_id,
+            },
+        };
+        schedule.push(ScheduledItem {
+            item_id: item.id,
+            track_id: item.track_id,
+            track_order: *track_order
+                .get(&item.track_id)
+                .ok_or_else(|| format!("Item {} is on an unordered Track", item.id))?,
+            layer: item.layer,
+            interval: item.interval,
+            source,
+        });
+    }
+    schedule.sort_by_key(|item| {
+        (
+            item.track_order,
+            item.layer,
+            item.interval.start,
+            item.item_id,
+        )
+    });
+    let mut attachment_ids: Vec<_> = project
+        .attachments
+        .values()
+        .filter_map(|attachment| match &attachment.owner {
+            crate::model::authoring::AttachmentOwner::Timeline { timeline_id: owner }
+                if *owner == timeline.id =>
+            {
+                Some(attachment.id)
+            }
+            _ => None,
+        })
+        .collect();
+    attachment_ids.sort();
+    Ok(CompiledTimeline {
+        id: timeline.id,
+        schedule,
+        attachment_ids,
+    })
 }
 
 fn register_invocation(

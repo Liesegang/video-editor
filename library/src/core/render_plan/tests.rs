@@ -297,6 +297,53 @@ fn instance_parameter_change_reuses_compiled_definition() {
 }
 
 #[test]
+fn text_edit_reuses_timeline_schedule_but_placement_edit_recompiles_it() {
+    let timeline_id = TimelineId::new();
+    let track_id = TimelineTrackId::new();
+    let item_id = TimelineItemId::new();
+    let mut project = project_with_items(
+        timeline_id,
+        track_id,
+        HashMap::from([(
+            item_id,
+            TimelineItem {
+                id: item_id,
+                track_id,
+                name: "Caption".to_string(),
+                source: SourceRef::Text {
+                    text: "Before".to_string(),
+                },
+                interval: TimelineInterval::new(0.0, 2.0).unwrap(),
+                layer: 0,
+                parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
+                generated_item_id: None,
+                authored_properties: PropertyMap::new(),
+            },
+        )]),
+    );
+    let mut cache = RenderPlanCache::default();
+    let (_, first) = cache.compile(&project).expect("first compile");
+    assert_eq!(first.compiled_timelines, 1);
+
+    project.items.get_mut(&item_id).unwrap().source = SourceRef::Text {
+        text: "After".to_string(),
+    };
+    let (_, text_edit) = cache.compile(&project).expect("text edit compile");
+    assert_eq!(text_edit.compiled_timelines, 0);
+    assert_eq!(text_edit.reused_timelines, 1);
+
+    project.items.get_mut(&item_id).unwrap().interval.start = OrderedFloat(1.0);
+    let (_, placement_edit) = cache.compile(&project).expect("placement compile");
+    assert_eq!(placement_edit.compiled_timelines, 1);
+    assert_eq!(placement_edit.reused_timelines, 0);
+}
+
+#[test]
 fn module_compilation_only_includes_nodes_reaching_the_selected_output() {
     let plugins = crate::plugin::PluginManager::default();
     let first = plugins
