@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
-    AuthoringProject, BindingOperator, BindingScope, DataSourceId, DurationPolicy, InstancePath,
-    ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId, SignalBinding,
-    SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval,
-    TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
+    InstancePath, ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId,
+    SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -98,6 +98,7 @@ enum Edit {
     DiscardOverride(OverrideId),
     ImportSubtitles(std::path::PathBuf, TimelineTrackId),
     CrossDissolve(TimelineItemId, f64),
+    AddConstraint(TimelineItemId, TimelineItemId, ConstraintKind),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +143,7 @@ impl Edit {
             | Self::DiscardOverride(_)
             | Self::ImportSubtitles(..) => Some(HistoryKey::Data),
             Self::CrossDissolve(item, _) => Some(HistoryKey::Item(*item, "transition")),
+            Self::AddConstraint(item, ..) => Some(HistoryKey::Item(*item, "constraint")),
         }
     }
 }
@@ -803,6 +805,10 @@ impl TimelineApp {
                 .editor
                 .add_cross_dissolve(item_id, duration)
                 .map(|_| ()),
+            Edit::AddConstraint(item_id, target_id, kind) => self
+                .editor
+                .add_constraint(item_id, target_id, kind)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -1219,6 +1225,7 @@ impl TabViewer for Viewer<'_> {
                 self.selected_item,
                 self.instance_path,
                 *self.current_time,
+                self.workspace,
                 self.edits,
             ),
             Tab::Assets => assets_ui(ui, self.project),
@@ -1502,6 +1509,7 @@ fn inspector_ui(
     selected: Option<TimelineItemId>,
     instance_path: &InstancePath,
     current_time: f64,
+    workspace: Workspace,
     edits: &mut Vec<Edit>,
 ) {
     let Some(id) = selected else {
@@ -1619,6 +1627,39 @@ fn inspector_ui(
         .clicked()
     {
         edits.push(Edit::CrossDissolve(id, 0.5));
+    }
+    if workspace.depth() >= 2 {
+        ui.collapsing("Constraints", |ui| {
+            for constraint in &item.constraints {
+                let target = project
+                    .items
+                    .get(&constraint.target_item_id)
+                    .map(|item| item.name.as_str())
+                    .unwrap_or("Missing");
+                ui.label(format!("{:?} → {target}", constraint.kind));
+            }
+            for candidate in project.items.values().filter(|candidate| {
+                candidate.id != id && project.tracks[&candidate.track_id].timeline_id == timeline_id
+            }) {
+                ui.horizontal(|ui| {
+                    ui.label(&candidate.name);
+                    if ui.small_button("Copy Position").clicked() {
+                        edits.push(Edit::AddConstraint(
+                            id,
+                            candidate.id,
+                            ConstraintKind::CopyPosition,
+                        ));
+                    }
+                    if ui.small_button("Look At").clicked() {
+                        edits.push(Edit::AddConstraint(
+                            id,
+                            candidate.id,
+                            ConstraintKind::LookAt,
+                        ));
+                    }
+                });
+            }
+        });
     }
     let is_audio = match &item.source {
         SourceRef::Asset { asset_id, .. } => project

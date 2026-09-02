@@ -5,13 +5,13 @@ use crate::model::project::asset::Asset;
 use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
-    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, DataSource,
-    GeneratedItem, MaskId, ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance,
-    ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch,
-    OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding,
-    SignalBindingId, SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem,
-    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition, TransitionId,
-    TransitionKind,
+    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
+    ConstraintId, ConstraintKind, DataSource, GeneratedItem, MaskId, ModuleDefinition,
+    ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleRole, Override,
+    OverrideId, OverrideOperator, OverridePatch, OverridePath, OverrideStatus, PublishedParameter,
+    PublishedParameterId, SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId,
+    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind, Transition, TransitionId, TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -919,6 +919,37 @@ impl AuthoringSession {
         self.project = candidate;
         let timeline_id = self.timeline_for_track(to_item.track_id)?;
         Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
+    }
+
+    pub fn add_constraint(
+        &mut self,
+        item_id: TimelineItemId,
+        target_item_id: TimelineItemId,
+        kind: ConstraintKind,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let mut candidate = self.project.clone();
+        let id = ConstraintId::new();
+        candidate
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .constraints
+            .push(Constraint {
+                id,
+                target_item_id,
+                kind,
+                influence: Property::constant(
+                    crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                ),
+                parameters: PropertyMap::new(),
+            });
+        candidate.validate()?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
     }
 
     pub fn replace_data_source_generation(

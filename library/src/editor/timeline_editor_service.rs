@@ -393,6 +393,17 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn add_constraint(
+        &self,
+        item_id: TimelineItemId,
+        target_item_id: TimelineItemId,
+        kind: crate::model::authoring::ConstraintKind,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .add_constraint(item_id, target_item_id, kind)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_srt(
         &self,
         path: &Path,
@@ -931,9 +942,25 @@ mod tests {
         service
             .add_cross_dissolve(second, 0.5)
             .expect("cross dissolve");
+        let first = service
+            .snapshot()
+            .expect("item snapshot")
+            .items
+            .values()
+            .find(|item| item.id != second)
+            .expect("first item")
+            .id;
+        service
+            .add_constraint(
+                second,
+                first,
+                crate::model::authoring::ConstraintKind::CopyPosition,
+            )
+            .expect("constraint");
         let snapshot = service.snapshot().expect("transition snapshot");
         assert_eq!(snapshot.items[&second].interval.start.into_inner(), 1.5);
         assert_eq!(snapshot.transitions.len(), 1);
+        assert_eq!(snapshot.items[&second].constraints.len(), 1);
         assert!(snapshot.module_definitions.is_empty());
     }
 }
