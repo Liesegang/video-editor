@@ -84,6 +84,8 @@ enum Edit {
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
     AddSignalBinding(SignalBinding),
+    SetParent(TimelineItemId, Option<TimelineItemId>),
+    DurationPolicy(TimelineItemId, DurationPolicy),
 }
 
 pub struct TimelineApp {
@@ -510,6 +512,11 @@ impl TimelineApp {
                 .set_module_node_state(definition, node, name, enabled, bypassed)
                 .map(|_| ()),
             Edit::AddSignalBinding(binding) => self.editor.add_signal_binding(binding).map(|_| ()),
+            Edit::SetParent(item, parent) => self.editor.set_parent(item, parent).map(|_| ()),
+            Edit::DurationPolicy(item, policy) => self
+                .editor
+                .set_composition_duration_policy(item, policy)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -892,6 +899,47 @@ fn inspector_ui(
         .changed()
     {
         edits.push(Edit::Move(id, start, layer));
+    }
+    let timeline_id = project.tracks[&item.track_id].timeline_id;
+    egui::ComboBox::from_label("Parent")
+        .selected_text(
+            item.parent
+                .and_then(|parent| project.items.get(&parent))
+                .map(|parent| parent.name.as_str())
+                .unwrap_or("None"),
+        )
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(item.parent.is_none(), "None").clicked() {
+                edits.push(Edit::SetParent(id, None));
+            }
+            for candidate in project.items.values().filter(|candidate| {
+                candidate.id != id && project.tracks[&candidate.track_id].timeline_id == timeline_id
+            }) {
+                if ui
+                    .selectable_label(item.parent == Some(candidate.id), &candidate.name)
+                    .clicked()
+                {
+                    edits.push(Edit::SetParent(id, Some(candidate.id)));
+                }
+            }
+        });
+    if let SourceRef::Composition(instance) = &item.source {
+        egui::ComboBox::from_label("Duration")
+            .selected_text(format!("{:?}", instance.duration_policy))
+            .show_ui(ui, |ui| {
+                for (label, policy) in [
+                    ("Fixed", DurationPolicy::Fixed),
+                    ("Scale", DurationPolicy::Scale),
+                    ("Loop", DurationPolicy::Loop),
+                ] {
+                    if ui
+                        .selectable_label(instance.duration_policy == policy, label)
+                        .clicked()
+                    {
+                        edits.push(Edit::DurationPolicy(id, policy));
+                    }
+                }
+            });
     }
     ui.separator();
     ui.heading("Transform");

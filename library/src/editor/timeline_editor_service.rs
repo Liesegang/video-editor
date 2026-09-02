@@ -339,6 +339,16 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn set_composition_duration_policy(
+        &self,
+        item_id: TimelineItemId,
+        policy: DurationPolicy,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_composition_duration_policy(item_id, policy)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn compile_render_plan(&self) -> Result<(RenderPlan, RenderPlanCacheStats), LibraryError> {
         let project = self.snapshot()?;
         self.lock_plan_cache()?

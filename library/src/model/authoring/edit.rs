@@ -649,6 +649,29 @@ impl AuthoringSession {
         }]))
     }
 
+    pub fn set_composition_duration_policy(
+        &mut self,
+        item_id: TimelineItemId,
+        policy: crate::model::authoring::DurationPolicy,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let mut candidate = self.project.clone();
+        let item = candidate
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+        let SourceRef::Composition(instance) = &mut item.source else {
+            return Err("Selected Timeline item is not a nested Composition".to_string());
+        };
+        instance.duration_policy = policy;
+        candidate.validate()?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     fn timeline_for_track(&self, track_id: TimelineTrackId) -> Result<TimelineId, String> {
         self.project
             .tracks
