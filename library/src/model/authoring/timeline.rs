@@ -94,6 +94,7 @@ impl TimelineInterval {
 pub enum SourceRef {
     Asset {
         asset_id: uuid::Uuid,
+        time_map: TimeMap,
     },
     Text {
         text: String,

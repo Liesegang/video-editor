@@ -263,34 +263,49 @@ impl AuthoringProject {
                     return Err(format!("Item {} has an invalid Constraint target", item.id));
                 }
             }
-            if let crate::model::authoring::SourceRef::Composition(instance) = &item.source {
-                let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {
-                    format!("Item {} refers to a missing nested Timeline", item.id)
-                })?;
-                if !instance.time_map.source_start.is_finite()
-                    || !instance.time_map.playback_rate.is_finite()
-                {
-                    return Err(format!("Item {} has a non-finite time map", item.id));
+            match &item.source {
+                crate::model::authoring::SourceRef::Asset { asset_id, time_map } => {
+                    if !self.assets.iter().any(|asset| asset.id == *asset_id) {
+                        return Err(format!("Item {} refers to a missing Asset", item.id));
+                    }
+                    validate_time_map(item.id, time_map)?;
                 }
-                if let crate::model::authoring::DurationPolicy::Responsive {
-                    intro_end,
-                    outro_start,
-                } = &instance.duration_policy
-                {
-                    let definition_duration = nested.duration.into_inner();
-                    let minimum =
-                        intro_end.into_inner() + definition_duration - outro_start.into_inner();
-                    if intro_end.into_inner() < 0.0
-                        || intro_end > outro_start
-                        || outro_start.into_inner() > definition_duration
-                        || item.interval.duration.into_inner() < minimum
+                crate::model::authoring::SourceRef::Composition(instance) => {
+                    let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {
+                        format!("Item {} refers to a missing nested Timeline", item.id)
+                    })?;
+                    validate_time_map(item.id, &instance.time_map)?;
+                    if let crate::model::authoring::DurationPolicy::Responsive {
+                        intro_end,
+                        outro_start,
+                    } = &instance.duration_policy
                     {
+                        let definition_duration = nested.duration.into_inner();
+                        let minimum =
+                            intro_end.into_inner() + definition_duration - outro_start.into_inner();
+                        if intro_end.into_inner() < 0.0
+                            || intro_end > outro_start
+                            || outro_start.into_inner() > definition_duration
+                            || item.interval.duration.into_inner() < minimum
+                        {
+                            return Err(format!(
+                                "Item {} has invalid Responsive duration markers",
+                                item.id
+                            ));
+                        }
+                    }
+                }
+                crate::model::authoring::SourceRef::Module { module_instance_id } => {
+                    if !self.module_instances.contains_key(module_instance_id) {
                         return Err(format!(
-                            "Item {} has invalid Responsive duration markers",
+                            "Item {} refers to a missing Module instance",
                             item.id
                         ));
                     }
                 }
+                crate::model::authoring::SourceRef::Text { .. }
+                | crate::model::authoring::SourceRef::Shape { .. }
+                | crate::model::authoring::SourceRef::Solid { .. } => {}
             }
         }
         self.validate_parent_cycles()?;
@@ -381,6 +396,19 @@ impl AuthoringProject {
         }
         Ok(())
     }
+}
+
+fn validate_time_map(
+    item_id: TimelineItemId,
+    time_map: &crate::model::authoring::TimeMap,
+) -> Result<(), String> {
+    if !time_map.source_start.is_finite()
+        || time_map.source_start.into_inner() < 0.0
+        || !time_map.playback_rate.is_finite()
+    {
+        return Err(format!("Item {item_id} has an invalid time map"));
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

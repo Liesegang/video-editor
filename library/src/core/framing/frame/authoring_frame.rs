@@ -138,8 +138,10 @@ fn collect_item(
 ) -> Result<FrameItem, LibraryError> {
     let local_time = timeline_time - item.interval.start.into_inner();
     let child = match (&item.source, planned_source) {
-        (SourceRef::Asset { asset_id }, PlannedSource::Asset) => {
-            asset_item(project, item, *asset_id, local_time)?
+        (SourceRef::Asset { asset_id, time_map }, PlannedSource::Asset) => {
+            let source_time = time_map.source_start.into_inner()
+                + local_time * time_map.playback_rate.into_inner();
+            asset_item(project, item, *asset_id, source_time)?
         }
         (SourceRef::Text { text }, PlannedSource::Text) => text_item(item, text, local_time)?,
         (SourceRef::Shape { shape }, PlannedSource::Shape) => {

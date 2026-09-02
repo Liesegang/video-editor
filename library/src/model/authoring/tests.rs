@@ -168,3 +168,42 @@ fn parent_cycles_are_rejected_by_the_timeline_model() {
     project.items.get_mut(&second).expect("second").parent = Some(first);
     assert!(project.validate().is_err());
 }
+
+#[test]
+fn split_asset_item_preserves_continuous_source_time() {
+    let mut project =
+        AuthoringProject::new("Split", 1920, 1080, 30.0, 10.0).expect("Project must be valid");
+    let track_id = *project.tracks.keys().next().expect("default Track");
+    let asset = crate::model::asset::Asset::new(
+        "source",
+        "source.mp4",
+        crate::model::asset::AssetKind::Video,
+    );
+    let asset_id = asset.id;
+    project.assets.push(asset);
+    let mut session = AuthoringSession::new(project).expect("session must open");
+    let (left_id, _) = session
+        .add_item(
+            track_id,
+            "Video".to_string(),
+            SourceRef::Asset {
+                asset_id,
+                time_map: TimeMap {
+                    source_start: OrderedFloat(5.0),
+                    playback_rate: OrderedFloat(2.0),
+                },
+            },
+            TimelineInterval::new(1.0, 5.0).expect("interval"),
+            0,
+        )
+        .expect("item must be added");
+    let (right_id, _) = session.split_item(left_id, 3.0).expect("split");
+    let project = session.into_project();
+
+    assert_eq!(project.items[&left_id].interval.duration, OrderedFloat(2.0));
+    assert_eq!(project.items[&right_id].interval.start, OrderedFloat(3.0));
+    let SourceRef::Asset { time_map, .. } = &project.items[&right_id].source else {
+        panic!("Asset source expected");
+    };
+    assert_eq!(time_map.source_start, OrderedFloat(9.0));
+}
