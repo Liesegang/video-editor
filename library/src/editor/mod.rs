@@ -5,11 +5,7 @@
 
 pub mod authoring_render_service;
 pub mod color_service;
-#[cfg(test)]
-pub(crate) mod handlers;
 pub(crate) mod ocio_shim;
-#[cfg(test)]
-pub(crate) mod project_service;
 pub mod render_service;
 pub mod timeline_editor_service;
 

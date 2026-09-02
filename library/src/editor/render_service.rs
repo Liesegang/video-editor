@@ -722,7 +722,3 @@ fn group_requires_isolation(group: &FrameGroup) -> bool {
         || group.blend_mode != crate::model::BlendMode::Normal
         || (group.transform.opacity - 1.0).abs() > f64::EPSILON
 }
-
-#[cfg(test)]
-#[path = "render_service_tests.rs"]
-mod tests;

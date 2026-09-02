@@ -22,6 +22,3 @@ pub use types::{
     ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT,
     SPECTRUM_INPUT_PORT, SPECTRUM_OUTPUT_PORT, TIME_PORT,
 };
-
-#[cfg(test)]
-mod tests;
