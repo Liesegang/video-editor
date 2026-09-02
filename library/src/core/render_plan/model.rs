@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::model::project::property::PropertyMap;
 use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
@@ -56,6 +57,18 @@ pub struct CompiledModuleDefinition {
     pub version: u64,
     pub fingerprint: [u8; 32],
     pub evaluation_order: Vec<uuid::Uuid>,
+    pub operations: Vec<CompiledModuleOperation>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum CompiledModuleOperation {
+    ImageEffect {
+        node_id: uuid::Uuid,
+        effect_type: String,
+        enabled: bool,
+        bypassed: bool,
+        properties: PropertyMap,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

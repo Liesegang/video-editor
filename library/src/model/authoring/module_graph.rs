@@ -16,11 +16,21 @@ use super::{
 pub struct ModuleDefinition {
     pub id: ModuleDefinitionId,
     pub name: String,
+    pub role: ModuleRole,
     pub graph: ModuleGraph,
     pub published_parameters: Vec<PublishedParameter>,
     pub published_signals: Vec<PublishedSignal>,
     pub published_actions: Vec<PublishedAction>,
     pub version: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleRole {
+    Effect,
+    Generator,
+    Behavior,
+    Analyzer,
 }
 
 impl ModuleDefinition {

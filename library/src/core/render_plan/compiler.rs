@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::model::authoring::{
-    AuthoringProject, ModuleDefinition, ModuleDefinitionId, SourceRef, TimelineId,
+    AuthoringProject, ModuleDefinition, ModuleDefinitionId, ModuleRole, SourceRef, TimelineId,
 };
+use crate::model::node::NodeContent;
+use crate::plugin::{EFFECT_APPLY_OPERATION, EFFECT_CATEGORY};
 
 use super::{
-    CompiledModuleDefinition, CompiledTimeline, DependencyIndex, ModuleInvocation,
-    ModuleInvocationOwner, PlannedSource, RenderPlan, ScheduledItem,
+    CompiledModuleDefinition, CompiledModuleOperation, CompiledTimeline, DependencyIndex,
+    ModuleInvocation, ModuleInvocationOwner, PlannedSource, RenderPlan, ScheduledItem,
 };
 
 pub struct RenderPlanCompiler;
@@ -219,11 +221,41 @@ pub(super) fn compile_module(
     if evaluation_order.len() != definition.graph.nodes.len() {
         return Err(format!("Module definition {id} contains a cycle"));
     }
+    let operations = match definition.role {
+        ModuleRole::Effect => evaluation_order
+            .iter()
+            .map(|node_id| {
+                let node = &definition.graph.nodes[node_id];
+                let NodeContent::PluginOperation(operation) = node.content() else {
+                    return Err(format!(
+                        "Effect Module {id} contains non-Effect Node {node_id}"
+                    ));
+                };
+                if operation.category != EFFECT_CATEGORY
+                    || operation.operation != EFFECT_APPLY_OPERATION
+                {
+                    return Err(format!(
+                        "Effect Module {id} contains incompatible operation {}/{}/{}",
+                        operation.category, operation.component_id, operation.operation
+                    ));
+                }
+                Ok(CompiledModuleOperation::ImageEffect {
+                    node_id: *node_id,
+                    effect_type: operation.component_id.clone(),
+                    enabled: node.enabled,
+                    bypassed: node.bypassed,
+                    properties: node.properties().clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        ModuleRole::Generator | ModuleRole::Behavior | ModuleRole::Analyzer => Vec::new(),
+    };
     Ok(CompiledModuleDefinition {
         id,
         version: definition.version,
         fingerprint: definition_fingerprint(definition)?,
         evaluation_order,
+        operations,
     })
 }
 

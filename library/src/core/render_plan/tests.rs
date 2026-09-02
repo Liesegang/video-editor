@@ -199,6 +199,7 @@ fn repeated_module_instances_share_one_compiled_definition() {
         ModuleDefinition {
             id: definition_id,
             name: "Lower Third".to_string(),
+            role: ModuleRole::Generator,
             graph: ModuleGraph::default(),
             published_parameters: Vec::new(),
             published_signals: Vec::new(),
@@ -253,6 +254,7 @@ fn instance_parameter_change_reuses_compiled_definition() {
         ModuleDefinition {
             id: definition_id,
             name: "Generator".to_string(),
+            role: ModuleRole::Generator,
             graph: ModuleGraph::default(),
             published_parameters: Vec::new(),
             published_signals: Vec::new(),
