@@ -392,6 +392,23 @@ impl TimelineApp {
         settings.container = "mp4".to_string();
         settings.codec = "libx264".to_string();
         settings.pixel_format = "yuv420p".to_string();
+        let runtime_audio = match render_timeline_audio(project.as_ref(), self.open_timeline) {
+            Ok(audio) => audio,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if let Some(audio_path) = runtime_audio.as_ref() {
+            if let Err(error) = settings.bind_runtime_audio_source(
+                audio_path.to_string_lossy().into_owned(),
+                2,
+                48_000,
+            ) {
+                self.status = error.to_string();
+                return;
+            }
+        }
         let frame_count = match settings.frame_count_for_duration(timeline.duration.into_inner()) {
             Ok(count) => count,
             Err(error) => {
@@ -427,6 +444,9 @@ impl TimelineApp {
             let _ = self
                 .plugins
                 .finish_export("ffmpeg_export", &output, &settings);
+        }
+        if let Some(audio_path) = runtime_audio {
+            let _ = std::fs::remove_file(audio_path);
         }
         match result {
             Ok(()) => self.status = format!("Exported {output}"),
@@ -893,6 +913,113 @@ impl TimelineApp {
             Err(error) => self.status = error.to_string(),
         }
     }
+}
+
+fn render_timeline_audio(
+    project: &AuthoringProject,
+    timeline_id: TimelineId,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let timeline = project
+        .timelines
+        .get(&timeline_id)
+        .ok_or_else(|| format!("Missing Timeline {timeline_id}"))?;
+    let mut clips = project
+        .items
+        .values()
+        .filter_map(|item| {
+            let track = project.tracks.get(&item.track_id)?;
+            if track.timeline_id != timeline_id {
+                return None;
+            }
+            let SourceRef::Asset { asset_id, time_map } = &item.source else {
+                return None;
+            };
+            let asset = project.assets.iter().find(|asset| asset.id == *asset_id)?;
+            matches!(asset.kind, AssetKind::Audio).then_some((item, asset, time_map))
+        })
+        .collect::<Vec<_>>();
+    clips.sort_by_key(|(item, _, _)| (item.interval.start, item.layer));
+    if clips.is_empty() {
+        return Ok(None);
+    }
+    let output = std::env::temp_dir().join(format!("ruvie-audio-{}.f32le", uuid::Uuid::new_v4()));
+    let mut command = std::process::Command::new("ffmpeg");
+    command.arg("-hide_banner").arg("-loglevel").arg("error");
+    for (_, asset, _) in &clips {
+        command.arg("-i").arg(&asset.path);
+    }
+    let mut filters = Vec::new();
+    let mut labels = String::new();
+    for (index, (item, _, time_map)) in clips.iter().enumerate() {
+        let rate = time_map.playback_rate.into_inner();
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(format!(
+                "Audio item {} has an invalid playback rate",
+                item.id
+            ));
+        }
+        let volume = item
+            .authored_properties
+            .get("volume")
+            .and_then(Property::get_static_value)
+            .and_then(|value| match value {
+                PropertyValue::Number(value) => Some(value.into_inner()),
+                PropertyValue::Integer(value) => Some(*value as f64),
+                _ => None,
+            })
+            .unwrap_or(1.0);
+        let source_duration = item.interval.duration.into_inner() * rate;
+        filters.push(format!(
+            "[{index}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS,{},volume={},adelay={}:all=1[a{index}]",
+            time_map.source_start,
+            source_duration,
+            atempo_filter(rate),
+            volume,
+            (item.interval.start.into_inner() * 1000.0).round() as u64
+        ));
+        labels.push_str(&format!("[a{index}]"));
+    }
+    filters.push(format!(
+        "{labels}amix=inputs={}:normalize=0,atrim=duration={}[mix]",
+        clips.len(),
+        timeline.duration
+    ));
+    let status = command
+        .arg("-filter_complex")
+        .arg(filters.join(";"))
+        .arg("-map")
+        .arg("[mix]")
+        .arg("-f")
+        .arg("f32le")
+        .arg("-acodec")
+        .arg("pcm_f32le")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("2")
+        .arg("-y")
+        .arg(&output)
+        .status()
+        .map_err(|error| format!("Cannot start FFmpeg audio mix: {error}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&output);
+        return Err(format!("FFmpeg audio mix failed with {status}"));
+    }
+    Ok(Some(output))
+}
+
+fn atempo_filter(mut rate: f64) -> String {
+    let mut stages = Vec::new();
+    while rate < 0.5 {
+        stages.push("atempo=0.5".to_string());
+        rate /= 0.5;
+    }
+    while rate > 100.0 {
+        stages.push("atempo=100".to_string());
+        rate /= 100.0;
+    }
+    stages.push(format!("atempo={rate}"));
+    stages.join(",")
 }
 
 impl eframe::App for TimelineApp {
@@ -1478,6 +1605,27 @@ fn inspector_ui(
     if ui.button("Fade In / Out").clicked() {
         edits.push(Edit::Fade(id, 0.5));
     }
+    let is_audio = match &item.source {
+        SourceRef::Asset { asset_id, .. } => project
+            .assets
+            .iter()
+            .find(|asset| asset.id == *asset_id)
+            .is_some_and(|asset| matches!(asset.kind, AssetKind::Audio)),
+        _ => false,
+    };
+    if is_audio {
+        let mut volume = number_property_at(item, "volume", current_time, 1.0);
+        if ui
+            .add(egui::Slider::new(&mut volume, 0.0..=2.0).text("Volume"))
+            .changed()
+        {
+            edits.push(Edit::Property(
+                id,
+                "volume".to_string(),
+                PropertyValue::Number(OrderedFloat(volume)),
+            ));
+        }
+    }
     ui.separator();
     ui.heading("Transform");
     let (mut x, mut y) = vec2_property_at(item, "position", current_time, (0.0, 0.0));
@@ -2045,5 +2193,51 @@ mod tests {
         let first = Edit::Property(item, "position".to_string(), property_vec2(10.0, 20.0));
         let second = Edit::Property(item, "position".to_string(), property_vec2(30.0, 40.0));
         assert_eq!(first.history_key(), second.history_key());
+    }
+
+    #[test]
+    fn audio_tempo_chain_covers_extreme_playback_rates() {
+        assert_eq!(atempo_filter(1.0), "atempo=1");
+        assert_eq!(atempo_filter(0.25), "atempo=0.5,atempo=0.5");
+        assert_eq!(atempo_filter(200.0), "atempo=100,atempo=2");
+    }
+
+    #[test]
+    fn timeline_audio_mix_produces_runtime_pcm() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("tone.wav");
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:duration=0.2")
+            .args(["-y"])
+            .arg(&source)
+            .status()
+            .expect("FFmpeg fixture");
+        assert!(status.success());
+        let mut project = AuthoringProject::new("Audio", 320, 180, 30.0, 1.0).expect("project");
+        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+        let asset = Asset::new("Tone", &source.to_string_lossy(), AssetKind::Audio);
+        let asset_id = asset.id;
+        project.assets.push(asset);
+        let mut session =
+            library::model::authoring::AuthoringSession::new(project).expect("session");
+        session
+            .add_item(
+                track_id,
+                "Tone".to_string(),
+                SourceRef::Asset {
+                    asset_id,
+                    time_map: Default::default(),
+                },
+                TimelineInterval::new(0.1, 0.2).expect("interval"),
+                0,
+            )
+            .expect("audio item");
+        let project = session.into_project();
+        let output = render_timeline_audio(&project, project.root_timeline_id)
+            .expect("audio mix")
+            .expect("PCM output");
+        assert!(std::fs::metadata(&output).expect("PCM metadata").len() > 0);
+        std::fs::remove_file(output).expect("remove PCM");
     }
 }
