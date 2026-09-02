@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod authoring;
 mod blend;
 pub mod frame;
 pub mod node;
