@@ -7,9 +7,9 @@ use crate::model::project::property::{Property, PropertyMap};
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, MaskId,
     ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
-    ModuleRole, PublishedParameter, PublishedParameterId, SourceRef, Timeline, TimelineId,
-    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind,
+    ModuleRole, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
+    SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
+    TimelineTrackId, TimelineTrackKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -589,6 +589,34 @@ impl AuthoringSession {
             .ok_or_else(|| "Module definition version overflow".to_string())?;
         Ok(self.finish(vec![ProjectInvalidation::ModuleDefinition {
             definition_id,
+        }]))
+    }
+
+    pub fn add_signal_binding(&mut self, binding: SignalBinding) -> Result<ChangeSet, String> {
+        if self.project.signal_bindings.contains_key(&binding.id) {
+            return Err(format!("Signal Binding {} already exists", binding.id));
+        }
+        let mut candidate = self.project.clone();
+        candidate
+            .signal_bindings
+            .insert(binding.id, binding.clone());
+        candidate.validate()?;
+        self.project.signal_bindings.insert(binding.id, binding);
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure {
+            timeline_id: self.project.root_timeline_id,
+        }]))
+    }
+
+    pub fn remove_signal_binding(
+        &mut self,
+        binding_id: SignalBindingId,
+    ) -> Result<ChangeSet, String> {
+        self.project
+            .signal_bindings
+            .remove(&binding_id)
+            .ok_or_else(|| format!("Missing Signal Binding {binding_id}"))?;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure {
+            timeline_id: self.project.root_timeline_id,
         }]))
     }
 

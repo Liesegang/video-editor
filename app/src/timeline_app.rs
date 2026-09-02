@@ -4,8 +4,9 @@ use std::sync::Arc;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
-    AuthoringProject, DurationPolicy, ModuleDefinitionId, ModuleInstanceId, PublishedParameterId,
-    SourceRef, TimelineId, TimelineInterval, TimelineItemId,
+    AuthoringProject, BindingOperator, BindingScope, DurationPolicy, InstancePath,
+    ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
+    SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -71,7 +72,7 @@ enum Tab {
 #[derive(Debug)]
 enum Edit {
     Select(Option<TimelineItemId>),
-    OpenTimeline(TimelineId),
+    OpenTimeline(TimelineId, InstancePath),
     Rename(TimelineItemId, String),
     SetText(TimelineItemId, String),
     Move(TimelineItemId, f64, i64),
@@ -82,6 +83,7 @@ enum Edit {
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
+    AddSignalBinding(SignalBinding),
 }
 
 pub struct TimelineApp {
@@ -91,6 +93,7 @@ pub struct TimelineApp {
     dock: DockState<Tab>,
     workspace: Workspace,
     open_timeline: TimelineId,
+    instance_path: InstancePath,
     selected_item: Option<TimelineItemId>,
     current_time: f64,
     preview: Option<egui::TextureHandle>,
@@ -105,6 +108,7 @@ impl TimelineApp {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let editor = TimelineEditorService::create_default("Untitled")?;
         let open_timeline = editor.snapshot()?.root_timeline_id;
+        let instance_path = InstancePath::root(open_timeline);
         let plugins = Arc::new(library::plugin::PluginManager::default());
         let cache = Arc::new(library::cache::CacheManager::new());
         let skia = SkiaRenderer::new(16, 16, Color::black(), false, None, Some(cache.clone()))?;
@@ -115,6 +119,7 @@ impl TimelineApp {
             dock: dock_for(Workspace::Edit),
             workspace: Workspace::Edit,
             open_timeline,
+            instance_path,
             selected_item: None,
             current_time: 0.0,
             preview: None,
@@ -132,6 +137,7 @@ impl TimelineApp {
         {
             Ok(()) => {
                 self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
+                self.instance_path = InstancePath::root(self.open_timeline);
                 self.selected_item = None;
                 self.current_time = 0.0;
                 self.undo.clear();
@@ -154,6 +160,7 @@ impl TimelineApp {
             Ok(editor) => {
                 self.editor = editor;
                 self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
+                self.instance_path = InstancePath::root(self.open_timeline);
                 self.selected_item = None;
                 self.current_time = 0.0;
                 self.undo.clear();
@@ -222,6 +229,7 @@ impl TimelineApp {
         if let Ok(project) = self.editor.snapshot() {
             if !project.timelines.contains_key(&self.open_timeline) {
                 self.open_timeline = project.root_timeline_id;
+                self.instance_path = InstancePath::root(self.open_timeline);
             }
             if self
                 .selected_item
@@ -460,8 +468,9 @@ impl TimelineApp {
                 self.selected_item = item;
                 return;
             }
-            Edit::OpenTimeline(id) => {
+            Edit::OpenTimeline(id, path) => {
                 self.open_timeline = id;
+                self.instance_path = path;
                 self.selected_item = None;
                 self.current_time = 0.0;
                 self.invalidate_preview();
@@ -500,6 +509,7 @@ impl TimelineApp {
                 .editor
                 .set_module_node_state(definition, node, name, enabled, bypassed)
                 .map(|_| ()),
+            Edit::AddSignalBinding(binding) => self.editor.add_signal_binding(binding).map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -643,6 +653,7 @@ impl eframe::App for TimelineApp {
         let mut viewer = Viewer {
             project: project.as_ref(),
             open_timeline: self.open_timeline,
+            instance_path: &self.instance_path,
             selected_item: self.selected_item,
             current_time: &mut self.current_time,
             preview: self.preview.as_ref(),
@@ -672,6 +683,7 @@ impl eframe::App for TimelineApp {
 struct Viewer<'a> {
     project: &'a AuthoringProject,
     open_timeline: TimelineId,
+    instance_path: &'a InstancePath,
     selected_item: Option<TimelineItemId>,
     current_time: &'a mut f64,
     preview: Option<&'a egui::TextureHandle>,
@@ -696,6 +708,7 @@ impl TabViewer for Viewer<'_> {
                 ui,
                 self.project,
                 self.open_timeline,
+                self.instance_path,
                 self.selected_item,
                 self.current_time,
                 self.edits,
@@ -704,6 +717,7 @@ impl TabViewer for Viewer<'_> {
                 ui,
                 self.project,
                 self.selected_item,
+                self.instance_path,
                 *self.current_time,
                 self.edits,
             ),
@@ -766,6 +780,7 @@ fn timeline_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
     timeline_id: TimelineId,
+    instance_path: &InstancePath,
     selected: Option<TimelineItemId>,
     time: &mut f64,
     edits: &mut Vec<Edit>,
@@ -773,7 +788,10 @@ fn timeline_ui(
     let timeline = &project.timelines[&timeline_id];
     ui.horizontal(|ui| {
         if timeline_id != project.root_timeline_id && ui.button("← Main").clicked() {
-            edits.push(Edit::OpenTimeline(project.root_timeline_id));
+            edits.push(Edit::OpenTimeline(
+                project.root_timeline_id,
+                InstancePath::root(project.root_timeline_id),
+            ));
         }
         ui.heading(&timeline.name);
         ui.add(egui::Slider::new(time, 0.0..=timeline.duration.into_inner()).text("time"));
@@ -804,7 +822,10 @@ fn timeline_ui(
                     }
                     if response.double_clicked() {
                         if let SourceRef::Composition(instance) = &item.source {
-                            edits.push(Edit::OpenTimeline(instance.timeline_id));
+                            edits.push(Edit::OpenTimeline(
+                                instance.timeline_id,
+                                instance_path.clone().nested(item.id),
+                            ));
                         }
                     }
                 }
@@ -818,6 +839,7 @@ fn inspector_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
+    instance_path: &InstancePath,
     current_time: f64,
     edits: &mut Vec<Edit>,
 ) {
@@ -949,6 +971,62 @@ fn inspector_ui(
                     ui.small(format!("{} = {:?}", parameter.name, value));
                 }
             }
+            ui.indent((instance.id, parameter.id), |ui| {
+                ui.small(format!("Base: {:?}", parameter.default_value));
+                if let Some(value) = instance.parameter_overrides.get(&parameter.id) {
+                    ui.small(format!("Instance override: {:?}", value));
+                }
+                let bindings: Vec<_> = project
+                    .signal_bindings
+                    .values()
+                    .filter(|binding| {
+                        binding.target_parameter_id == parameter.id
+                            && match &binding.scope {
+                                BindingScope::Definition { definition_id } => {
+                                    *definition_id == definition.id
+                                }
+                                BindingScope::Instance {
+                                    instance_path: target_path,
+                                    module_instance_id,
+                                } => {
+                                    *module_instance_id == instance.id
+                                        && target_path == instance_path
+                                }
+                                BindingScope::Query { .. } => false,
+                            }
+                    })
+                    .collect();
+                for binding in &bindings {
+                    ui.small(format!(
+                        "Automation: {:?} via {:?}",
+                        binding.source, binding.operator
+                    ));
+                }
+                if bindings.is_empty() && ui.button("Bind audio envelope").clicked() {
+                    let binding_id = SignalBindingId::new();
+                    edits.push(Edit::AddSignalBinding(SignalBinding {
+                        id: binding_id,
+                        source: SignalSource::AudioEnvelope {
+                            channel: "master".to_string(),
+                        },
+                        scope: BindingScope::Instance {
+                            instance_path: instance_path.clone(),
+                            module_instance_id: instance.id,
+                        },
+                        target_parameter_id: parameter.id,
+                        mapping: SignalMapping {
+                            input_min: OrderedFloat(0.0),
+                            input_max: OrderedFloat(1.0),
+                            output_min: OrderedFloat(0.0),
+                            output_max: OrderedFloat(1.0),
+                            clamp: true,
+                        },
+                        operator: BindingOperator::Multiply,
+                        smoothing_seconds: OrderedFloat(0.05),
+                        priority: 0,
+                    }));
+                }
+            });
         }
     }
 }

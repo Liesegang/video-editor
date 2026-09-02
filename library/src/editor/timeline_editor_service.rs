@@ -15,7 +15,9 @@ use crate::model::authoring::{
     ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
     TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
-use crate::model::authoring::{ModuleDefinitionId, ModuleInstanceId, PublishedParameterId};
+use crate::model::authoring::{
+    ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
+};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::project::asset::Asset;
@@ -312,6 +314,21 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn add_signal_binding(&self, binding: SignalBinding) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .add_signal_binding(binding)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn remove_signal_binding(
+        &self,
+        binding_id: SignalBindingId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_signal_binding(binding_id)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn set_parent(
         &self,
         item_id: TimelineItemId,
@@ -464,6 +481,37 @@ mod tests {
                 PropertyValue::Number(ordered_float::OrderedFloat(8.0)),
             )
             .expect("effect parameter");
+        let binding_id = SignalBindingId::new();
+        service
+            .add_signal_binding(SignalBinding {
+                id: binding_id,
+                source: crate::model::authoring::SignalSource::AudioEnvelope {
+                    channel: "master".to_string(),
+                },
+                scope: crate::model::authoring::BindingScope::Instance {
+                    instance_path: crate::model::authoring::InstancePath::root(timeline_id),
+                    module_instance_id: effect_instance,
+                },
+                target_parameter_id: sigma_x,
+                mapping: crate::model::authoring::SignalMapping {
+                    input_min: ordered_float::OrderedFloat(0.0),
+                    input_max: ordered_float::OrderedFloat(1.0),
+                    output_min: ordered_float::OrderedFloat(0.0),
+                    output_max: ordered_float::OrderedFloat(1.0),
+                    clamp: true,
+                },
+                operator: crate::model::authoring::BindingOperator::Multiply,
+                smoothing_seconds: ordered_float::OrderedFloat(0.05),
+                priority: 0,
+            })
+            .expect("Published parameter Binding");
+        assert!(
+            service
+                .snapshot()
+                .expect("binding snapshot")
+                .signal_bindings
+                .contains_key(&binding_id)
+        );
         let before_logic_edit = service.snapshot().expect("logic snapshot");
         let placement = before_logic_edit.items[&item_id].clone();
         let definition = &before_logic_edit.module_definitions[&definition_id];
