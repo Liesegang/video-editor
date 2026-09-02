@@ -14,9 +14,9 @@ use crate::model::project::{
 use super::{
     AttachmentId, DataSource, DataSourceId, EventBinding, EventBindingId, GeneratedItem,
     GeneratedItemId, Mask, MaskId, ModuleDefinition, ModuleDefinitionId, ModuleInstance,
-    ModuleInstanceId, Override, OverrideId, SignalBinding, SignalBindingId, Timeline, TimelineId,
-    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition,
-    TransitionId,
+    ModuleInstanceId, Override, OverrideId, PublishedParameterId, SignalBinding, SignalBindingId,
+    Timeline, TimelineId, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind, Transition, TransitionId,
 };
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -380,7 +380,212 @@ impl AuthoringProject {
                 return Err(format!("Attachment {} has a missing owner", attachment.id));
             }
         }
+        for binding in self.signal_bindings.values() {
+            self.validate_signal_source(&binding.source)?;
+            self.validate_binding_target(&binding.scope, binding.target_parameter_id, None)?;
+            if !binding.mapping.input_min.is_finite()
+                || !binding.mapping.input_max.is_finite()
+                || !binding.mapping.output_min.is_finite()
+                || !binding.mapping.output_max.is_finite()
+                || binding.mapping.input_min == binding.mapping.input_max
+                || !binding.smoothing_seconds.is_finite()
+                || binding.smoothing_seconds.into_inner() < 0.0
+            {
+                return Err(format!(
+                    "Signal Binding {} has an invalid mapping",
+                    binding.id
+                ));
+            }
+        }
+        for binding in self.event_bindings.values() {
+            self.validate_event_source(&binding.source)?;
+            self.validate_binding_target(
+                &binding.scope,
+                PublishedParameterId::from_uuid(uuid::Uuid::nil()),
+                Some(binding.target_action_id),
+            )?;
+        }
         Ok(())
+    }
+
+    fn validate_instance_path(
+        &self,
+        path: &crate::model::authoring::InstancePath,
+    ) -> Result<TimelineId, String> {
+        let mut timeline_id = path.root_timeline_id;
+        if !self.timelines.contains_key(&timeline_id) {
+            return Err("Binding InstancePath has a missing root Timeline".to_string());
+        }
+        for item_id in &path.composition_items {
+            let item = self
+                .items
+                .get(item_id)
+                .ok_or_else(|| "Binding InstancePath has a missing item".to_string())?;
+            let track = self
+                .tracks
+                .get(&item.track_id)
+                .ok_or_else(|| "Binding InstancePath item has a missing Track".to_string())?;
+            if track.timeline_id != timeline_id {
+                return Err(
+                    "Binding InstancePath does not follow the Timeline hierarchy".to_string(),
+                );
+            }
+            let crate::model::authoring::SourceRef::Composition(instance) = &item.source else {
+                return Err("Binding InstancePath contains a non-Composition item".to_string());
+            };
+            timeline_id = instance.timeline_id;
+        }
+        Ok(timeline_id)
+    }
+
+    fn validate_binding_target(
+        &self,
+        scope: &crate::model::authoring::BindingScope,
+        parameter_id: PublishedParameterId,
+        action_id: Option<crate::model::authoring::PublishedActionId>,
+    ) -> Result<(), String> {
+        let definition = match scope {
+            crate::model::authoring::BindingScope::Definition { definition_id } => self
+                .module_definitions
+                .get(definition_id)
+                .ok_or_else(|| "Binding scope has a missing Module definition".to_string())?,
+            crate::model::authoring::BindingScope::Instance {
+                instance_path,
+                module_instance_id,
+            } => {
+                self.validate_instance_path(instance_path)?;
+                let instance = self
+                    .module_instances
+                    .get(module_instance_id)
+                    .ok_or_else(|| "Binding scope has a missing Module instance".to_string())?;
+                self.module_definitions
+                    .get(&instance.definition_id)
+                    .ok_or_else(|| "Binding target has a missing Module definition".to_string())?
+            }
+            crate::model::authoring::BindingScope::Query {
+                collection,
+                predicate,
+            } => {
+                if collection.trim().is_empty() || predicate.trim().is_empty() {
+                    return Err(
+                        "Query Binding scope must name a collection and predicate".to_string()
+                    );
+                }
+                return if action_id.is_some() {
+                    self.module_definitions
+                        .values()
+                        .any(|definition| {
+                            definition
+                                .published_actions
+                                .iter()
+                                .any(|action| Some(action.id) == action_id)
+                        })
+                        .then_some(())
+                        .ok_or_else(|| {
+                            "Query Binding targets an unknown PublishedAction".to_string()
+                        })
+                } else {
+                    self.module_definitions
+                        .values()
+                        .any(|definition| {
+                            definition
+                                .published_parameters
+                                .iter()
+                                .any(|parameter| parameter.id == parameter_id)
+                        })
+                        .then_some(())
+                        .ok_or_else(|| {
+                            "Query Binding targets an unknown PublishedParameter".to_string()
+                        })
+                };
+            }
+        };
+        if let Some(action_id) = action_id {
+            definition
+                .published_actions
+                .iter()
+                .any(|action| action.id == action_id)
+                .then_some(())
+                .ok_or_else(|| "Event Binding targets an unknown PublishedAction".to_string())
+        } else {
+            definition
+                .published_parameters
+                .iter()
+                .any(|parameter| parameter.id == parameter_id)
+                .then_some(())
+                .ok_or_else(|| "Signal Binding targets an unknown PublishedParameter".to_string())
+        }
+    }
+
+    fn validate_signal_source(
+        &self,
+        source: &crate::model::authoring::SignalSource,
+    ) -> Result<(), String> {
+        match source {
+            crate::model::authoring::SignalSource::Published {
+                instance_path,
+                module_instance_id,
+                signal_id,
+            } => {
+                self.validate_instance_path(instance_path)?;
+                let instance = self
+                    .module_instances
+                    .get(module_instance_id)
+                    .ok_or_else(|| "Signal source has a missing Module instance".to_string())?;
+                let definition = self
+                    .module_definitions
+                    .get(&instance.definition_id)
+                    .ok_or_else(|| "Signal source has a missing Module definition".to_string())?;
+                definition
+                    .published_signals
+                    .iter()
+                    .any(|signal| signal.id == *signal_id)
+                    .then_some(())
+                    .ok_or_else(|| "Signal source targets an unknown PublishedSignal".to_string())
+            }
+            crate::model::authoring::SignalSource::AudioEnvelope { channel }
+                if channel.trim().is_empty() =>
+            {
+                Err("Audio Envelope source must name a channel".to_string())
+            }
+            crate::model::authoring::SignalSource::MidiControl { device, .. }
+                if device.trim().is_empty() =>
+            {
+                Err("MIDI source must name a device".to_string())
+            }
+            crate::model::authoring::SignalSource::DataField { data_source, field }
+                if data_source.trim().is_empty() || field.trim().is_empty() =>
+            {
+                Err("Data source must name a source and field".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_event_source(
+        &self,
+        source: &crate::model::authoring::EventSource,
+    ) -> Result<(), String> {
+        match source {
+            crate::model::authoring::EventSource::Published {
+                instance_path,
+                module_instance_id,
+                signal_id,
+            } => self.validate_signal_source(&crate::model::authoring::SignalSource::Published {
+                instance_path: instance_path.clone(),
+                module_instance_id: *module_instance_id,
+                signal_id: *signal_id,
+            }),
+            crate::model::authoring::EventSource::MidiNoteOn { device, .. }
+                if device.trim().is_empty() =>
+            {
+                Err("MIDI event source must name a device".to_string())
+            }
+            crate::model::authoring::EventSource::Marker { name } if name.trim().is_empty() => {
+                Err("Marker event source must have a name".to_string())
+            }
+            _ => Ok(()),
+        }
     }
 
     fn validate_parent_cycles(&self) -> Result<(), String> {

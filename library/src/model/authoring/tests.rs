@@ -207,3 +207,76 @@ fn split_asset_item_preserves_continuous_source_time() {
     };
     assert_eq!(time_map.source_start, OrderedFloat(9.0));
 }
+
+#[test]
+fn signal_bindings_target_only_published_parameters() {
+    let mut project = empty_project();
+    let definition_id = ModuleDefinitionId::new();
+    let parameter_id = PublishedParameterId::new();
+    let node = crate::model::node::Node::new_merge("Internal");
+    let node_id = node.id;
+    project.module_definitions.insert(
+        definition_id,
+        ModuleDefinition {
+            id: definition_id,
+            name: "Effect".to_string(),
+            role: ModuleRole::Effect,
+            graph: ModuleGraph {
+                nodes: HashMap::from([(node_id, node)]),
+                connections: Vec::new(),
+            },
+            published_parameters: vec![PublishedParameter {
+                id: parameter_id,
+                name: "Amount".to_string(),
+                data_type: crate::model::project::connection::PortDataType::Numeric,
+                default_value: crate::model::project::property::PropertyValue::Number(
+                    OrderedFloat(1.0),
+                ),
+                target: ModulePortAddress {
+                    node_id,
+                    port: "amount".to_string(),
+                },
+            }],
+            published_signals: Vec::new(),
+            published_actions: Vec::new(),
+            version: 1,
+        },
+    );
+    let binding_id = SignalBindingId::new();
+    project.signal_bindings.insert(
+        binding_id,
+        SignalBinding {
+            id: binding_id,
+            source: SignalSource::AudioEnvelope {
+                channel: "music".to_string(),
+            },
+            scope: BindingScope::Definition { definition_id },
+            target_parameter_id: PublishedParameterId::new(),
+            mapping: SignalMapping {
+                input_min: OrderedFloat(0.0),
+                input_max: OrderedFloat(1.0),
+                output_min: OrderedFloat(0.0),
+                output_max: OrderedFloat(2.0),
+                clamp: true,
+            },
+            operator: BindingOperator::Multiply,
+            smoothing_seconds: OrderedFloat(0.05),
+            priority: 0,
+        },
+    );
+
+    assert!(
+        project
+            .validate()
+            .unwrap_err()
+            .contains("PublishedParameter")
+    );
+    project
+        .signal_bindings
+        .get_mut(&binding_id)
+        .unwrap()
+        .target_parameter_id = parameter_id;
+    project
+        .validate()
+        .expect("Published parameter target is stable");
+}
