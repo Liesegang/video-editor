@@ -15,8 +15,8 @@ use crate::core::timeline_runtime::map_composition_time;
 use crate::error::LibraryError;
 use crate::model::BlendMode;
 use crate::model::authoring::{
-    AttachmentOwner, AttachmentStage, AuthoringProject, ShapeKind, SourceRef, Timeline, TimelineId,
-    TimelineItem,
+    AttachmentOwner, AttachmentStage, AuthoringProject, ConstraintKind, ShapeKind, SourceRef,
+    Timeline, TimelineId, TimelineItem, TransitionKind,
 };
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::effect::ImageEffect;
@@ -291,6 +291,8 @@ fn collect_item(
     )?;
     let inherited_transforms = inherited_transforms(project, item, timeline_time)?;
     let mut transform = transform_at(&item.authored_properties, local_time)?;
+    apply_constraints(project, item, timeline_time, &mut transform)?;
+    transform.opacity *= transition_opacity(project, item, local_time);
     transform.opacity *= inherited_transforms
         .iter()
         .map(|transform| transform.opacity)
@@ -308,6 +310,87 @@ fn collect_item(
         effects: post_effects,
         items: vec![child],
     }))
+}
+
+fn apply_constraints(
+    project: &AuthoringProject,
+    item: &TimelineItem,
+    timeline_time: f64,
+    transform: &mut Transform,
+) -> Result<(), LibraryError> {
+    for constraint in &item.constraints {
+        let target = project
+            .items
+            .get(&constraint.target_item_id)
+            .ok_or_else(|| {
+                LibraryError::Validation(format!(
+                    "Constraint {} has a missing target",
+                    constraint.id
+                ))
+            })?;
+        let target_local_time = timeline_time - target.interval.start.into_inner();
+        let target_transform = transform_at(&target.authored_properties, target_local_time)?;
+        let influence = constraint
+            .influence
+            .evaluate_at(timeline_time)
+            .ok()
+            .and_then(|value| match value {
+                PropertyValue::Number(value) => Some(value.into_inner()),
+                PropertyValue::Integer(value) => Some(value as f64),
+                _ => None,
+            })
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        match constraint.kind {
+            ConstraintKind::CopyPosition => {
+                transform.position.x +=
+                    (target_transform.position.x - transform.position.x) * influence;
+                transform.position.y +=
+                    (target_transform.position.y - transform.position.y) * influence;
+            }
+            ConstraintKind::CopyRotation => {
+                transform.rotation += (target_transform.rotation - transform.rotation) * influence;
+            }
+            ConstraintKind::CopyScale => {
+                transform.scale.x += (target_transform.scale.x - transform.scale.x) * influence;
+                transform.scale.y += (target_transform.scale.y - transform.scale.y) * influence;
+            }
+            ConstraintKind::LookAt => {
+                let angle = (target_transform.position.y - transform.position.y)
+                    .atan2(target_transform.position.x - transform.position.x)
+                    .to_degrees();
+                transform.rotation += (angle - transform.rotation) * influence;
+            }
+            ConstraintKind::FollowPath => {}
+        }
+    }
+    Ok(())
+}
+
+fn transition_opacity(project: &AuthoringProject, item: &TimelineItem, local_time: f64) -> f64 {
+    let mut opacity: f64 = 1.0;
+    if let Some(transition) = item
+        .transition_in
+        .and_then(|id| project.transitions.get(&id))
+        && matches!(transition.kind, TransitionKind::CrossDissolve)
+    {
+        let duration = transition.duration.into_inner();
+        if duration > 0.0 {
+            opacity *= (local_time / duration).clamp(0.0, 1.0);
+        }
+    }
+    if let Some(transition) = item
+        .transition_out
+        .and_then(|id| project.transitions.get(&id))
+        && matches!(transition.kind, TransitionKind::CrossDissolve)
+    {
+        let duration = transition.duration.into_inner();
+        if duration > 0.0 {
+            let remaining = item.interval.duration.into_inner() - local_time;
+            opacity *= (remaining / duration).clamp(0.0, 1.0);
+        }
+    }
+    opacity
 }
 
 fn asset_item(
@@ -721,7 +804,7 @@ mod tests {
         Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringSession,
         ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
         ModulePortAddress, ModuleRole, PublishedParameter, PublishedParameterId, SourceRef,
-        TimelineInterval,
+        TimelineInterval, Transition, TransitionId, TransitionKind,
     };
     use crate::model::frame::entity::{FrameContent, FrameItem};
     use crate::model::project::property::{Keyframe, Property, PropertyValue, Vec2};
@@ -809,6 +892,65 @@ mod tests {
         let plan = RenderPlanCompiler::compile(&project).expect("compile");
         let frame = evaluate_authoring_frame(&project, &plan, 10, 1.0, None).expect("frame");
         assert!(frame.items.is_empty());
+    }
+
+    #[test]
+    fn cross_dissolve_is_evaluated_as_timeline_owned_opacity() {
+        let project =
+            AuthoringProject::new("Transition", 640, 360, 10.0, 3.0).expect("valid Project");
+        let track_id = *project.tracks.keys().next().expect("default Track");
+        let mut session = AuthoringSession::new(project).expect("session");
+        let (from_id, _) = session
+            .add_item(
+                track_id,
+                "From".to_string(),
+                SourceRef::Solid {
+                    color: crate::model::frame::color::Color::black(),
+                },
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("from item");
+        let (to_id, _) = session
+            .add_item(
+                track_id,
+                "To".to_string(),
+                SourceRef::Solid {
+                    color: crate::model::frame::color::Color::white(),
+                },
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                1,
+            )
+            .expect("to item");
+        let mut project = session.into_project();
+        let transition_id = TransitionId::new();
+        project.transitions.insert(
+            transition_id,
+            Transition {
+                id: transition_id,
+                from_item_id: from_id,
+                to_item_id: to_id,
+                duration: OrderedFloat(1.0),
+                kind: TransitionKind::CrossDissolve,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        project.items.get_mut(&from_id).unwrap().transition_out = Some(transition_id);
+        project.items.get_mut(&to_id).unwrap().transition_in = Some(transition_id);
+        let plan = RenderPlanCompiler::compile(&project).expect("compile");
+        let frame = evaluate_authoring_frame(&project, &plan, 5, 1.0, None).expect("frame");
+        let FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let to = track
+            .items
+            .iter()
+            .find_map(|item| match item {
+                FrameItem::Group(group) if group.source_id == to_id.as_uuid() => Some(group),
+                _ => None,
+            })
+            .expect("incoming item");
+        assert_eq!(to.transform.opacity, 0.5);
     }
 
     #[test]
