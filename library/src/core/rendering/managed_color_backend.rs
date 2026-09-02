@@ -13,10 +13,12 @@ use ruvie_color_management::{
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
+#[cfg(test)]
+use crate::model::project::Project;
 use crate::model::project::asset::Asset;
 use crate::model::project::{
     ColorConfigIdentity, DEFAULT_BUNDLED_COLOR_CONFIG_ID, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID,
-    ModelValidatedColorManagementConfig, Project, ResolvedColorManagementConfig,
+    ModelValidatedColorManagementConfig, ResolvedColorManagementConfig,
 };
 use crate::model::property::{ColorSpaceRef, ColorValue};
 use crate::plugin::{DecodedPixelBuffer, DecodedStraightRgba16F};
@@ -29,6 +31,7 @@ pub(crate) trait ProjectColorAuthority {
     fn resolved_color_management(&self) -> ResolvedColorManagementConfig;
 }
 
+#[cfg(test)]
 impl ProjectColorAuthority for Project {
     fn assets(&self) -> &[Asset] {
         &self.assets

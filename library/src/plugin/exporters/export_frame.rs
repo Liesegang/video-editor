@@ -2,7 +2,9 @@ use crate::core::rendering::managed_color_backend::ProjectColorAuthority;
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
-use crate::model::project::{Project, ResolvedColorManagementConfig};
+#[cfg(test)]
+use crate::model::project::Project;
+use crate::model::project::ResolvedColorManagementConfig;
 
 /// Exact color and pixel-storage semantics of a rendered export frame.
 ///
@@ -24,6 +26,7 @@ pub enum ExportColorAuthority {
 }
 
 impl ExportColorAuthority {
+    #[cfg(test)]
     pub(crate) fn from_project(project: &Project) -> Result<Self, LibraryError> {
         Self::from_authority(project)
     }
@@ -86,7 +89,8 @@ pub struct ExportFrame {
 }
 
 impl ExportFrame {
-    pub(crate) fn from_project_render(
+    #[cfg(test)]
+    pub(crate) fn from_graph_project_render(
         project: &Project,
         image: Image,
     ) -> Result<Self, LibraryError> {
@@ -94,7 +98,7 @@ impl ExportFrame {
         Self::new_verified(image, color_authority)
     }
 
-    pub(crate) fn from_authoring_render(
+    pub(crate) fn from_project_render(
         project: &AuthoringProject,
         image: Image,
     ) -> Result<Self, LibraryError> {
@@ -173,7 +177,7 @@ mod tests {
     fn malformed_rgba_storage_cannot_become_an_export_frame() {
         let project = Project::new("bad frame");
         let image = Image::new(2, 2, vec![0; 15]);
-        let error = ExportFrame::from_project_render(&project, image).unwrap_err();
+        let error = ExportFrame::from_graph_project_render(&project, image).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -255,7 +259,7 @@ mod tests {
     fn timeline_first_project_produces_typed_export_authority() {
         let project = AuthoringProject::new("export", 1, 1, 24.0, 1.0).expect("Project");
         let frame =
-            ExportFrame::from_authoring_render(&project, Image::new(1, 1, vec![10, 20, 30, 255]))
+            ExportFrame::from_project_render(&project, Image::new(1, 1, vec![10, 20, 30, 255]))
                 .expect("typed export frame");
         assert!(matches!(
             frame.color_authority(),

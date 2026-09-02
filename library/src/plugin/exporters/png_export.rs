@@ -135,7 +135,7 @@ mod tests {
     }
 
     fn test_frame(project: &Project) -> ExportFrame {
-        ExportFrame::from_project_render(
+        ExportFrame::from_graph_project_render(
             project,
             Image::new(2, 1, vec![255, 0, 0, 255, 0, 128, 255, 64]),
         )

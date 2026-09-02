@@ -12,7 +12,9 @@ use ruvie_color_management::ExactColorConfigFile;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{FrameContent, FrameItem};
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::{ColorConfigIdentity, Project};
+use crate::model::project::ColorConfigIdentity;
+#[cfg(test)]
+use crate::model::project::Project;
 use crate::plugin::loaders::FileIdentity;
 
 use super::managed_color_backend::ProjectColorAuthority;
@@ -29,15 +31,16 @@ pub struct RenderFrameAuthority {
 }
 
 impl RenderFrameAuthority {
-    pub fn capture(project: &Project, frame: &FrameInfo, plugin_revision: u64) -> Self {
-        Self::capture_with_authority(project, frame, plugin_revision)
-    }
-
-    pub fn capture_authoring(
-        project: &AuthoringProject,
+    #[cfg(test)]
+    pub(crate) fn capture_graph_project(
+        project: &Project,
         frame: &FrameInfo,
         plugin_revision: u64,
     ) -> Self {
+        Self::capture_with_authority(project, frame, plugin_revision)
+    }
+
+    pub fn capture(project: &AuthoringProject, frame: &FrameInfo, plugin_revision: u64) -> Self {
         Self::capture_with_authority(project, frame, plugin_revision)
     }
 
@@ -157,8 +160,8 @@ mod tests {
         let project = Project::new("authority");
         let frame = empty_frame();
         assert_ne!(
-            RenderFrameAuthority::capture(&project, &frame, 1),
-            RenderFrameAuthority::capture(&project, &frame, 2)
+            RenderFrameAuthority::capture_graph_project(&project, &frame, 1),
+            RenderFrameAuthority::capture_graph_project(&project, &frame, 2)
         );
     }
 
@@ -167,8 +170,8 @@ mod tests {
         let project = AuthoringProject::new("authority", 1, 1, 24.0, 1.0).expect("Project");
         let frame = empty_frame();
         assert_ne!(
-            RenderFrameAuthority::capture_authoring(&project, &frame, 1),
-            RenderFrameAuthority::capture_authoring(&project, &frame, 2)
+            RenderFrameAuthority::capture(&project, &frame, 1),
+            RenderFrameAuthority::capture(&project, &frame, 2)
         );
     }
 

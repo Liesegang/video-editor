@@ -354,7 +354,7 @@ fn production_preview_and_export_compile_distinct_terminal_processors() {
     let RenderOutput::Image(export_image) = export else {
         panic!("managed media-only export must produce owned CPU pixels");
     };
-    let export_frame = crate::plugin::ExportFrame::from_project_render(&project, export_image)
+    let export_frame = crate::plugin::ExportFrame::from_graph_project_render(&project, export_image)
         .expect("managed media-only export must retain typed Project color authority");
     assert_eq!(export_frame.image().data, [128, 128, 128, 255]);
 }
@@ -392,7 +392,7 @@ fn former_builtin_v1_project_renders_preview_and_typed_export_without_reinterpre
     let RenderOutput::Image(image) = export else {
         panic!("managed v1 Export must produce typed CPU pixels");
     };
-    let typed = crate::plugin::ExportFrame::from_project_render(&project, image)
+    let typed = crate::plugin::ExportFrame::from_graph_project_render(&project, image)
         .expect("v1 terminal pixels retain Project-derived export authority");
     assert_eq!(typed.image().data, [0, 0, 0, 255]);
 }

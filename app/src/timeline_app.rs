@@ -404,16 +404,14 @@ impl TimelineApp {
             return;
         }
         let timeline = project.timelines[&self.open_timeline].clone();
-        let mut settings = match library::plugin::ExportSettings::from_authoring_project(
-            project.as_ref(),
-            &timeline,
-        ) {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.status = error.to_string();
-                return;
-            }
-        };
+        let mut settings =
+            match library::plugin::ExportSettings::from_project(project.as_ref(), &timeline) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            };
         settings.container = "mp4".to_string();
         settings.codec = "libx264".to_string();
         settings.pixel_format = "yuv420p".to_string();
@@ -2475,9 +2473,11 @@ mod tests {
 
     #[test]
     fn basic_workspaces_never_surface_logic() {
-        assert!(dock_for(Workspace::Beginner)
-            .find_tab(&Tab::Logic)
-            .is_none());
+        assert!(
+            dock_for(Workspace::Beginner)
+                .find_tab(&Tab::Logic)
+                .is_none()
+        );
         assert!(dock_for(Workspace::Edit).find_tab(&Tab::Logic).is_none());
         assert!(dock_for(Workspace::Logic).find_tab(&Tab::Logic).is_some());
     }

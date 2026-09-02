@@ -121,7 +121,7 @@ impl<T: Renderer> RenderService<T> {
                 "export received a non-terminal Timeline frame".to_string(),
             ));
         };
-        ExportFrame::from_authoring_render(project, image)
+        ExportFrame::from_project_render(project, image)
     }
 
     fn render_managed_frame(

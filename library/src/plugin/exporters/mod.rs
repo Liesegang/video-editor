@@ -10,7 +10,9 @@ pub use self::png_export::PngExportPlugin;
 
 use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, Timeline};
+#[cfg(test)]
 use crate::model::project::Composition;
+#[cfg(test)]
 use crate::model::project::Project;
 use crate::model::property::PropertyDefinition;
 use crate::plugin::{Plugin, PluginCategory};
@@ -98,7 +100,8 @@ struct RuntimeAudioSource {
 }
 
 impl ExportSettings {
-    pub fn from_project(
+    #[cfg(test)]
+    pub(crate) fn from_graph_project(
         project: &Project,
         composition: &Composition,
     ) -> Result<Self, LibraryError> {
@@ -144,7 +147,7 @@ impl ExportSettings {
         Ok(settings)
     }
 
-    pub fn from_authoring_project(
+    pub fn from_project(
         project: &AuthoringProject,
         timeline: &Timeline,
     ) -> Result<Self, LibraryError> {
@@ -190,7 +193,11 @@ impl ExportSettings {
     /// Bind this encoder configuration to the exact output semantics of a
     /// validated Project. Settings created only for dimensions remain
     /// intentionally unusable for export until this succeeds.
-    pub fn bind_project_color_authority(&mut self, project: &Project) -> Result<(), LibraryError> {
+    #[cfg(test)]
+    pub(crate) fn bind_project_color_authority(
+        &mut self,
+        project: &Project,
+    ) -> Result<(), LibraryError> {
         self.color_authority = Some(ExportColorAuthority::from_project(project)?);
         Ok(())
     }
@@ -472,7 +479,7 @@ mod tests {
             .insert("audio_channels".to_string(), json!(8));
         let (composition, _track) = Composition::new("main", 16, 16, 24.0, 1.0);
 
-        let settings = ExportSettings::from_project(&project, &composition).unwrap();
+        let settings = ExportSettings::from_graph_project(&project, &composition).unwrap();
 
         assert!(settings.trusted_ffmpeg_path().is_none());
         assert!(settings.runtime_audio_source().is_none());
@@ -487,7 +494,7 @@ mod tests {
                 .unwrap();
         let timeline = &project.timelines[&project.root_timeline_id];
 
-        let settings = ExportSettings::from_authoring_project(&project, timeline).unwrap();
+        let settings = ExportSettings::from_project(&project, timeline).unwrap();
 
         assert_eq!((settings.width, settings.height), (1280, 720));
         assert_eq!(settings.fps, 24.0);
