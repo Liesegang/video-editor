@@ -73,6 +73,13 @@ pub struct ModuleGraph {
 
 impl ModuleGraph {
     pub fn validate(&self) -> Result<(), String> {
+        let mut indegree: HashMap<_, usize> = self
+            .nodes
+            .keys()
+            .copied()
+            .map(|node_id| (node_id, 0))
+            .collect();
+        let mut outgoing: HashMap<_, Vec<_>> = HashMap::new();
         for connection in &self.connections {
             if !self.nodes.contains_key(&connection.from.node_id) {
                 return Err(format!(
@@ -86,6 +93,35 @@ impl ModuleGraph {
                     connection.id
                 ));
             }
+            if connection.from.node_id == connection.to.node_id {
+                return Err(format!(
+                    "Module connection {} is a self-cycle",
+                    connection.id
+                ));
+            }
+            *indegree.get_mut(&connection.to.node_id).expect("checked") += 1;
+            outgoing
+                .entry(connection.from.node_id)
+                .or_default()
+                .push(connection.to.node_id);
+        }
+        let mut ready: Vec<_> = indegree
+            .iter()
+            .filter_map(|(node_id, degree)| (*degree == 0).then_some(*node_id))
+            .collect();
+        let mut visited = 0;
+        while let Some(node_id) = ready.pop() {
+            visited += 1;
+            for target in outgoing.get(&node_id).into_iter().flatten() {
+                let degree = indegree.get_mut(target).expect("checked");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push(*target);
+                }
+            }
+        }
+        if visited != self.nodes.len() {
+            return Err("Module graph contains a cycle".to_string());
         }
         Ok(())
     }

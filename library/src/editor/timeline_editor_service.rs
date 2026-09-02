@@ -348,6 +348,49 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn add_effect_node_to_module(
+        &self,
+        definition_id: ModuleDefinitionId,
+        effect_type: &str,
+        plugins: &PluginManager,
+    ) -> Result<(uuid::Uuid, ChangeSet), LibraryError> {
+        let node = plugins.create_effect_operation_node(effect_type)?;
+        self.write_session()?
+            .add_effect_node_to_module(definition_id, node)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn remove_module_node(
+        &self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_module_node(definition_id, node_id)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn connect_module_nodes(
+        &self,
+        definition_id: ModuleDefinitionId,
+        from_node_id: uuid::Uuid,
+        to_node_id: uuid::Uuid,
+    ) -> Result<(crate::model::authoring::ModuleConnectionId, ChangeSet), LibraryError> {
+        self.write_session()?
+            .connect_module_nodes(definition_id, from_node_id, to_node_id)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn disconnect_module_connection(
+        &self,
+        definition_id: ModuleDefinitionId,
+        connection_id: crate::model::authoring::ModuleConnectionId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .disconnect_module_connection(definition_id, connection_id)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn add_signal_binding(&self, binding: SignalBinding) -> Result<ChangeSet, LibraryError> {
         self.write_session()?
             .add_signal_binding(binding)
@@ -843,6 +886,44 @@ mod tests {
             definition_version + 1
         );
         drop(after_logic_edit);
+        let (second_node, _) = service
+            .add_effect_node_to_module(definition_id, "blur", &plugins)
+            .expect("add Module Node");
+        let graph_snapshot = service.snapshot().expect("graph snapshot");
+        let connection_id = graph_snapshot.module_definitions[&definition_id]
+            .graph
+            .connections[0]
+            .id;
+        assert_eq!(
+            graph_snapshot.module_definitions[&definition_id]
+                .graph
+                .nodes
+                .len(),
+            2
+        );
+        drop(graph_snapshot);
+        assert!(
+            service
+                .connect_module_nodes(definition_id, second_node, node_id)
+                .is_err(),
+            "Module cycles must be rejected"
+        );
+        service
+            .disconnect_module_connection(definition_id, connection_id)
+            .expect("disconnect Module Nodes");
+        service
+            .connect_module_nodes(definition_id, node_id, second_node)
+            .expect("connect Module Nodes");
+        service
+            .remove_module_node(definition_id, second_node)
+            .expect("remove Module Node");
+        assert_eq!(
+            service.snapshot().expect("pruned graph").module_definitions[&definition_id]
+                .graph
+                .nodes
+                .len(),
+            1
+        );
         service.split_item(item_id, 1.0).expect("split");
         let (_, frame) = service
             .evaluate_frame(timeline_id, 0.5, 1.0, None)

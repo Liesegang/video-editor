@@ -7,11 +7,12 @@ use crate::model::project::property::{Property, PropertyMap};
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
     ConstraintId, ConstraintKind, DataSource, GeneratedItem, Mask, MaskId, MaskMode, MatteRef,
-    ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
-    ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch, OverridePath,
-    OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
-    SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
-    TimelineTrackId, TimelineTrackKind, Transition, TransitionId, TransitionKind,
+    ModuleConnection, ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleGraph,
+    ModuleInstance, ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator,
+    OverridePatch, OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId,
+    SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId, TimelineInterval,
+    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, Transition,
+    TransitionId, TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -791,6 +792,219 @@ impl AuthoringSession {
         node.name = name;
         node.enabled = enabled;
         node.bypassed = bypassed;
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        Ok(self.finish(vec![ProjectInvalidation::ModuleDefinition {
+            definition_id,
+        }]))
+    }
+
+    pub fn add_effect_node_to_module(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        node: crate::model::node::Node,
+    ) -> Result<(uuid::Uuid, ChangeSet), String> {
+        let mut candidate = self.project.clone();
+        let definition = candidate
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        if definition.role != ModuleRole::Effect {
+            return Err("Only Effect Modules accept image-effect Nodes".to_string());
+        }
+        let crate::model::node::NodeContent::PluginOperation(operation) = node.content() else {
+            return Err("Effect Module Nodes must be plugin operations".to_string());
+        };
+        if operation.category != crate::plugin::EFFECT_CATEGORY
+            || operation.operation != crate::plugin::EFFECT_APPLY_OPERATION
+        {
+            return Err("Node is not an image Effect operation".to_string());
+        }
+        let node_id = node.id;
+        if definition.graph.nodes.contains_key(&node_id) {
+            return Err(format!("Module Node {node_id} already exists"));
+        }
+        let previous = definition
+            .graph
+            .nodes
+            .keys()
+            .copied()
+            .filter(|node_id| {
+                !definition
+                    .graph
+                    .connections
+                    .iter()
+                    .any(|connection| connection.from.node_id == *node_id)
+            })
+            .max();
+        for (property_name, property) in node.properties().iter() {
+            let port = format!("{}{}", crate::plugin::PROPERTY_PORT_PREFIX, property_name);
+            let data_type = operation
+                .declared_ports
+                .iter()
+                .find(|definition| definition.key == port)
+                .map(|definition| definition.data_type)
+                .unwrap_or(crate::model::project::PortDataType::Any);
+            if let Some(default_value) = property.value().cloned() {
+                definition.published_parameters.push(PublishedParameter {
+                    id: PublishedParameterId::new(),
+                    name: property_name.clone(),
+                    data_type,
+                    default_value,
+                    target: super::ModulePortAddress { node_id, port },
+                });
+            }
+        }
+        definition.graph.nodes.insert(node_id, node);
+        if let Some(previous) = previous {
+            definition.graph.connections.push(ModuleConnection {
+                id: ModuleConnectionId::new(),
+                from: super::ModulePortAddress {
+                    node_id: previous,
+                    port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
+                },
+                to: super::ModulePortAddress {
+                    node_id,
+                    port: crate::model::project::IMAGE_INPUT_PORT.to_string(),
+                },
+                order: 0,
+            });
+        }
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        candidate.validate()?;
+        self.project = candidate;
+        Ok((
+            node_id,
+            self.finish(vec![ProjectInvalidation::ModuleDefinition {
+                definition_id,
+            }]),
+        ))
+    }
+
+    pub fn remove_module_node(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+    ) -> Result<ChangeSet, String> {
+        let mut candidate = self.project.clone();
+        let definition = candidate
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        definition
+            .graph
+            .nodes
+            .remove(&node_id)
+            .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
+        definition.graph.connections.retain(|connection| {
+            connection.from.node_id != node_id && connection.to.node_id != node_id
+        });
+        let removed_parameters: std::collections::HashSet<_> = definition
+            .published_parameters
+            .iter()
+            .filter(|parameter| parameter.target.node_id == node_id)
+            .map(|parameter| parameter.id)
+            .collect();
+        definition
+            .published_parameters
+            .retain(|parameter| parameter.target.node_id != node_id);
+        definition
+            .published_signals
+            .retain(|signal| signal.source.node_id != node_id);
+        definition
+            .published_actions
+            .retain(|action| action.target.node_id != node_id);
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        for instance in candidate
+            .module_instances
+            .values_mut()
+            .filter(|instance| instance.definition_id == definition_id)
+        {
+            instance
+                .parameter_overrides
+                .retain(|parameter_id, _| !removed_parameters.contains(parameter_id));
+        }
+        candidate.validate()?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::ModuleDefinition {
+            definition_id,
+        }]))
+    }
+
+    pub fn connect_module_nodes(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        from_node_id: uuid::Uuid,
+        to_node_id: uuid::Uuid,
+    ) -> Result<(ModuleConnectionId, ChangeSet), String> {
+        let mut candidate = self.project.clone();
+        let definition = candidate
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        if !definition.graph.nodes.contains_key(&from_node_id)
+            || !definition.graph.nodes.contains_key(&to_node_id)
+        {
+            return Err("Module connection endpoint is missing".to_string());
+        }
+        if definition.graph.connections.iter().any(|connection| {
+            connection.from.node_id == from_node_id && connection.to.node_id == to_node_id
+        }) {
+            return Err("Module Nodes are already connected".to_string());
+        }
+        let id = ModuleConnectionId::new();
+        definition.graph.connections.push(ModuleConnection {
+            id,
+            from: super::ModulePortAddress {
+                node_id: from_node_id,
+                port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
+            },
+            to: super::ModulePortAddress {
+                node_id: to_node_id,
+                port: crate::model::project::IMAGE_INPUT_PORT.to_string(),
+            },
+            order: 0,
+        });
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        candidate.validate()?;
+        self.project = candidate;
+        Ok((
+            id,
+            self.finish(vec![ProjectInvalidation::ModuleDefinition {
+                definition_id,
+            }]),
+        ))
+    }
+
+    pub fn disconnect_module_connection(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        connection_id: ModuleConnectionId,
+    ) -> Result<ChangeSet, String> {
+        let definition = self
+            .project
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        let before = definition.graph.connections.len();
+        definition
+            .graph
+            .connections
+            .retain(|connection| connection.id != connection_id);
+        if definition.graph.connections.len() == before {
+            return Err(format!("Missing Module connection {connection_id}"));
+        }
         definition.version = definition
             .version
             .checked_add(1)

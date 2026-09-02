@@ -6,9 +6,10 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
-    InstancePath, MaskId, MaskMode, MatteMode, MatteRef, ModuleDefinitionId, ModuleInstanceId,
-    OverrideId, PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource,
-    SourceRef, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    InstancePath, MaskId, MaskMode, MatteMode, MatteRef, ModuleConnectionId, ModuleDefinitionId,
+    ModuleInstanceId, OverrideId, PublishedParameterId, SignalBinding, SignalBindingId,
+    SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
+    TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -86,6 +87,10 @@ enum Edit {
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
+    AddModuleEffect(ModuleDefinitionId, String),
+    RemoveModuleNode(ModuleDefinitionId, uuid::Uuid),
+    ConnectModuleNodes(ModuleDefinitionId, uuid::Uuid, uuid::Uuid),
+    DisconnectModuleConnection(ModuleDefinitionId, ModuleConnectionId),
     AddSignalBinding(SignalBinding),
     SetParent(TimelineItemId, Option<TimelineItemId>),
     DurationPolicy(TimelineItemId, DurationPolicy),
@@ -132,6 +137,16 @@ impl Edit {
             }
             Self::ModuleNodeState(definition, node, ..) => {
                 Some(HistoryKey::ModuleNode(*definition, *node))
+            }
+            Self::AddModuleEffect(definition, _) => {
+                Some(HistoryKey::ModuleNode(*definition, uuid::Uuid::nil()))
+            }
+            Self::RemoveModuleNode(definition, node)
+            | Self::ConnectModuleNodes(definition, node, _) => {
+                Some(HistoryKey::ModuleNode(*definition, *node))
+            }
+            Self::DisconnectModuleConnection(definition, connection) => {
+                Some(HistoryKey::ModuleNode(*definition, connection.as_uuid()))
             }
             Self::AddSignalBinding(_) => Some(HistoryKey::Binding),
             Self::SetParent(item, _) => Some(HistoryKey::Item(*item, "parent")),
@@ -735,6 +750,21 @@ impl TimelineApp {
             Edit::ModuleNodeState(definition, node, name, enabled, bypassed) => self
                 .editor
                 .set_module_node_state(definition, node, name, enabled, bypassed)
+                .map(|_| ()),
+            Edit::AddModuleEffect(definition, effect_type) => self
+                .editor
+                .add_effect_node_to_module(definition, &effect_type, self.plugins.as_ref())
+                .map(|_| ()),
+            Edit::RemoveModuleNode(definition, node) => {
+                self.editor.remove_module_node(definition, node).map(|_| ())
+            }
+            Edit::ConnectModuleNodes(definition, from, to) => self
+                .editor
+                .connect_module_nodes(definition, from, to)
+                .map(|_| ()),
+            Edit::DisconnectModuleConnection(definition, connection) => self
+                .editor
+                .disconnect_module_connection(definition, connection)
                 .map(|_| ()),
             Edit::AddSignalBinding(binding) => self.editor.add_signal_binding(binding).map(|_| ()),
             Edit::SetParent(item, parent) => self.editor.set_parent(item, parent).map(|_| ()),
@@ -2258,6 +2288,12 @@ fn logic_ui(
                 "Published parameters: {}",
                 definition.published_parameters.len()
             ));
+            if definition.role == library::model::authoring::ModuleRole::Effect
+                && ui.button("Add Blur Node").clicked()
+            {
+                edits.push(Edit::AddModuleEffect(definition.id, "blur".to_string()));
+            }
+            let node_ids: Vec<_> = definition.graph.nodes.keys().copied().collect();
             for node in definition.graph.nodes.values() {
                 ui.group(|ui| {
                     let mut name = node.name.clone();
@@ -2280,8 +2316,58 @@ fn logic_ui(
                             bypassed,
                         ));
                     }
+                    if ui.small_button("Delete Node").clicked() {
+                        edits.push(Edit::RemoveModuleNode(definition.id, node.id));
+                    }
                 });
             }
+            ui.collapsing(
+                format!("Connections ({})", definition.graph.connections.len()),
+                |ui| {
+                    for connection in &definition.graph.connections {
+                        let from = definition
+                            .graph
+                            .nodes
+                            .get(&connection.from.node_id)
+                            .map(|node| node.name.as_str())
+                            .unwrap_or("Missing");
+                        let to = definition
+                            .graph
+                            .nodes
+                            .get(&connection.to.node_id)
+                            .map(|node| node.name.as_str())
+                            .unwrap_or("Missing");
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{from} → {to}"));
+                            if ui.small_button("Disconnect").clicked() {
+                                edits.push(Edit::DisconnectModuleConnection(
+                                    definition.id,
+                                    connection.id,
+                                ));
+                            }
+                        });
+                    }
+                    for from in &node_ids {
+                        for to in &node_ids {
+                            if from == to
+                                || definition.graph.connections.iter().any(|connection| {
+                                    connection.from.node_id == *from && connection.to.node_id == *to
+                                })
+                            {
+                                continue;
+                            }
+                            let from_name = &definition.graph.nodes[from].name;
+                            let to_name = &definition.graph.nodes[to].name;
+                            if ui
+                                .small_button(format!("Connect {from_name} → {to_name}"))
+                                .clicked()
+                            {
+                                edits.push(Edit::ConnectModuleNodes(definition.id, *from, *to));
+                            }
+                        }
+                    }
+                },
+            );
         });
     }
 }
