@@ -70,7 +70,13 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
             crate::model::NodeContent::Media(media) => Some(media),
             _ => None,
         };
-        let asset = media.and_then(|media| evaluator.project.get_asset(media.asset_id));
+        let asset = media.and_then(|media| {
+            evaluator
+                .project
+                .assets
+                .iter()
+                .find(|asset| asset.id == media.asset_id)
+        });
 
         // Calculate evaluation time based on Node timeframe
         let eval_time = time;

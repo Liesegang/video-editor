@@ -65,7 +65,11 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         }
         let props = node.properties();
         let asset = match node.content() {
-            NodeContent::Media(media) => evaluator.project.get_asset(media.asset_id),
+            NodeContent::Media(media) => evaluator
+                .project
+                .assets
+                .iter()
+                .find(|asset| asset.id == media.asset_id),
             _ => None,
         };
         let file_path = asset

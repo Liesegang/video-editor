@@ -1,9 +1,9 @@
 use crate::model::Node;
-use crate::model::Project;
+use crate::model::authoring::{AuthoringProject, Timeline};
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::RuntimeShape;
 use crate::model::frame::transform::{Position, Scale, Transform};
-use crate::model::project::{Composition, EvalOutput};
+use crate::model::project::EvalOutput;
 use crate::model::property::{PropertyMap, PropertyValue, Vec2};
 use crate::plugin::{
     EvaluationContext, PluginManager, PropertyEvaluationError, PropertyEvaluatorRegistry,
@@ -47,8 +47,8 @@ impl ResolvedNodeInputs {
 }
 
 pub struct FrameEvaluationContext<'a> {
-    pub project: &'a Project,
-    pub composition: &'a Composition,
+    pub project: &'a AuthoringProject,
+    pub timeline: &'a Timeline,
     pub property_evaluators: &'a PropertyEvaluatorRegistry,
     pub plugin_manager: &'a PluginManager,
     /// Render-time values arriving through canonical Project connections.
@@ -87,7 +87,7 @@ impl<'a> FrameEvaluationContext<'a> {
         self.metadata_input(crate::model::project::FPS_PORT)
             .and_then(|value| value.get_as::<f64>())
             .filter(|fps| fps.is_finite() && *fps > 0.0)
-            .unwrap_or(self.composition.fps)
+            .unwrap_or(self.timeline.fps.into_inner())
     }
 
     pub fn evaluation_resolution(&self) -> (u64, u64) {
@@ -99,7 +99,7 @@ impl<'a> FrameEvaluationContext<'a> {
                     value.y.into_inner().max(1.0) as u64,
                 )
             })
-            .unwrap_or((self.composition.width, self.composition.height))
+            .unwrap_or((self.timeline.width, self.timeline.height))
     }
 
     fn evaluate_key(&self, props: &PropertyMap, key: &str, time: f64) -> Option<PropertyValue> {

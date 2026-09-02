@@ -3,10 +3,11 @@ use ordered_float::OrderedFloat;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::StyleConfig;
-use crate::model::project::{Composition, EvalOutput, PortDirection, Project, TIME_PORT};
+use crate::model::project::{EvalOutput, PortDirection, TIME_PORT};
 use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::{
     EffectColorDomain, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError,
@@ -669,24 +670,13 @@ fn operation_validation_materializes_stateful_values_before_plugin_evaluation() 
     )
     .expect("descriptor initializes the value property");
 
-    let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
-    let composition_id = composition.id;
-    let mut project = Project::new("stateful operation property");
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    let composition = project
-        .get_composition(composition_id)
-        .expect("test composition exists");
+    let project = AuthoringProject::new("stateful operation property", 640, 360, 30.0, 1.0)
+        .expect("Timeline-first Project");
+    let timeline = &project.timelines[&project.root_timeline_id];
     let property_evaluators = manager.get_property_evaluators();
     let context = FrameEvaluationContext {
         project: &project,
-        composition,
+        timeline,
         property_evaluators: &property_evaluators,
         plugin_manager: &manager,
         resolved_inputs: None,

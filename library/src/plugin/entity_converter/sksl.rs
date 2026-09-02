@@ -87,7 +87,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         time: f64,
     ) -> Option<FrameObject> {
         let props = node.properties();
-        let _comp_fps = evaluator.composition.fps;
+        let _timeline_fps = evaluator.timeline.fps;
 
         // Calculate evaluation time based on Node timeframe
         let eval_time = time;
@@ -124,7 +124,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
         let props = node.properties();
-        let _comp_fps = evaluator.composition.fps;
+        let _timeline_fps = evaluator.timeline.fps;
 
         // Calculate evaluation time based on Node timeframe
         let eval_time = time;
