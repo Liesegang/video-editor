@@ -354,6 +354,39 @@ impl AuthoringProject {
                     transition.id
                 ));
             }
+            if from.transition_out != Some(transition.id) || to.transition_in != Some(transition.id)
+            {
+                return Err(format!(
+                    "Transition {} is not referenced by both endpoint items",
+                    transition.id
+                ));
+            }
+        }
+        for item in self.items.values() {
+            if let Some(transition_id) = item.transition_in {
+                let transition = self
+                    .transitions
+                    .get(&transition_id)
+                    .ok_or_else(|| format!("Item {} has a missing incoming Transition", item.id))?;
+                if transition.to_item_id != item.id {
+                    return Err(format!(
+                        "Item {} has the wrong incoming Transition",
+                        item.id
+                    ));
+                }
+            }
+            if let Some(transition_id) = item.transition_out {
+                let transition = self
+                    .transitions
+                    .get(&transition_id)
+                    .ok_or_else(|| format!("Item {} has a missing outgoing Transition", item.id))?;
+                if transition.from_item_id != item.id {
+                    return Err(format!(
+                        "Item {} has the wrong outgoing Transition",
+                        item.id
+                    ));
+                }
+            }
         }
         for definition in self.module_definitions.values() {
             definition.validate()?;

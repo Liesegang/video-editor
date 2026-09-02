@@ -378,6 +378,15 @@ impl AuthoringSession {
                 );
             }
         }
+        let removed_transition_ids = self
+            .project
+            .transitions
+            .values()
+            .filter(|transition| {
+                transition.from_item_id == item_id || transition.to_item_id == item_id
+            })
+            .map(|transition| transition.id)
+            .collect::<std::collections::HashSet<_>>();
         for child in self.project.items.values_mut() {
             if child.parent == Some(item_id) {
                 child.parent = None;
@@ -388,6 +397,18 @@ impl AuthoringSession {
             child
                 .constraints
                 .retain(|constraint| constraint.target_item_id != item_id);
+            if child
+                .transition_in
+                .is_some_and(|id| removed_transition_ids.contains(&id))
+            {
+                child.transition_in = None;
+            }
+            if child
+                .transition_out
+                .is_some_and(|id| removed_transition_ids.contains(&id))
+            {
+                child.transition_out = None;
+            }
         }
         for mask_id in &item.mask_ids {
             self.project.masks.remove(mask_id);

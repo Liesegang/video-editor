@@ -962,5 +962,12 @@ mod tests {
         assert_eq!(snapshot.transitions.len(), 1);
         assert_eq!(snapshot.items[&second].constraints.len(), 1);
         assert!(snapshot.module_definitions.is_empty());
+        drop(snapshot);
+        service.delete_item(first, false).expect("delete endpoint");
+        service
+            .snapshot()
+            .expect("cleaned transition snapshot")
+            .validate()
+            .expect("transition references remain valid");
     }
 }
