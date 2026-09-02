@@ -359,6 +359,30 @@ impl AuthoringSession {
         }]))
     }
 
+    pub fn upsert_item_keyframe(
+        &mut self,
+        item_id: TimelineItemId,
+        key: String,
+        time: f64,
+        value: crate::model::project::property::PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<ChangeSet, String> {
+        if !time.is_finite() || time < 0.0 {
+            return Err("Keyframe time must be finite and non-negative".to_string());
+        }
+        let timeline_id = self.timeline_for_item(item_id)?;
+        self.project
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .authored_properties
+            .upsert_keyframe(&key, time, value, easing);
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     pub fn rename_item(
         &mut self,
         item_id: TimelineItemId,

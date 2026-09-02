@@ -9,7 +9,7 @@ use library::model::authoring::{
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
-use library::model::project::property::{Property, PropertyValue, Vec2};
+use library::model::project::property::{PropertyValue, Vec2};
 use library::rendering::renderer::RenderOutput;
 use library::{RenderDestination, RenderService, SkiaRenderer, TimelineEditorService};
 use ordered_float::OrderedFloat;
@@ -77,6 +77,7 @@ enum Edit {
     Move(TimelineItemId, f64, i64),
     Trim(TimelineItemId, TimelineInterval),
     Property(TimelineItemId, String, PropertyValue),
+    Keyframe(TimelineItemId, String, PropertyValue),
     Split(TimelineItemId),
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
@@ -481,6 +482,10 @@ impl TimelineApp {
                 .editor
                 .update_item_property_value(id, key, self.current_time, value)
                 .map(|_| ()),
+            Edit::Keyframe(id, key, value) => self
+                .editor
+                .upsert_item_keyframe(id, key, self.current_time, value, None)
+                .map(|_| ()),
             Edit::Split(id) => self.editor.split_item(id, self.current_time).map(|_| ()),
             Edit::Blur(id) => self
                 .editor
@@ -679,6 +684,7 @@ impl TabViewer for Viewer<'_> {
                 self.preview,
                 self.project,
                 self.selected_item,
+                *self.current_time,
                 self.edits,
             ),
             Tab::Timeline => timeline_ui(
@@ -689,7 +695,13 @@ impl TabViewer for Viewer<'_> {
                 self.current_time,
                 self.edits,
             ),
-            Tab::Inspector => inspector_ui(ui, self.project, self.selected_item, self.edits),
+            Tab::Inspector => inspector_ui(
+                ui,
+                self.project,
+                self.selected_item,
+                *self.current_time,
+                self.edits,
+            ),
             Tab::Assets => assets_ui(ui, self.project),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item),
             Tab::Data => data_ui(ui, self.project),
@@ -718,6 +730,7 @@ fn preview_ui(
     preview: Option<&egui::TextureHandle>,
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
+    current_time: f64,
     edits: &mut Vec<Edit>,
 ) {
     ui.centered_and_justified(|ui| {
@@ -729,7 +742,7 @@ fn preview_ui(
                 ui.add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::drag()));
             if response.dragged() {
                 if let Some(item) = selected.and_then(|id| project.items.get(&id)) {
-                    let (x, y) = vec2_property(item, "position", (0.0, 0.0));
+                    let (x, y) = vec2_property_at(item, "position", current_time, (0.0, 0.0));
                     let delta = ui.input(|input| input.pointer.delta()) / scale;
                     edits.push(Edit::Property(
                         item.id,
@@ -800,6 +813,7 @@ fn inspector_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
+    current_time: f64,
     edits: &mut Vec<Edit>,
 ) {
     let Some(id) = selected else {
@@ -854,7 +868,7 @@ fn inspector_ui(
     }
     ui.separator();
     ui.heading("Transform");
-    let (mut x, mut y) = vec2_property(item, "position", (0.0, 0.0));
+    let (mut x, mut y) = vec2_property_at(item, "position", current_time, (0.0, 0.0));
     let x_changed = ui
         .add(egui::DragValue::new(&mut x).speed(1.0).prefix("X "))
         .changed();
@@ -868,12 +882,26 @@ fn inspector_ui(
             property_vec2(x, y),
         ));
     }
-    let mut opacity = number_property(item, "opacity", 1.0);
+    if ui.button("Add position keyframe").clicked() {
+        edits.push(Edit::Keyframe(
+            id,
+            "position".to_string(),
+            property_vec2(x, y),
+        ));
+    }
+    let mut opacity = number_property_at(item, "opacity", current_time, 1.0);
     if ui
         .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))
         .changed()
     {
         edits.push(Edit::Property(
+            id,
+            "opacity".to_string(),
+            PropertyValue::Number(OrderedFloat(opacity)),
+        ));
+    }
+    if ui.button("Add opacity keyframe").clicked() {
+        edits.push(Edit::Keyframe(
             id,
             "opacity".to_string(),
             PropertyValue::Number(OrderedFloat(opacity)),
@@ -1033,23 +1061,35 @@ fn property_vec2(x: f64, y: f64) -> PropertyValue {
     })
 }
 
-fn vec2_property(
+fn vec2_property_at(
     item: &library::model::authoring::TimelineItem,
     name: &str,
+    time: f64,
     default: (f64, f64),
 ) -> (f64, f64) {
-    match item.authored_properties.get(name).and_then(Property::value) {
+    match item
+        .authored_properties
+        .get(name)
+        .and_then(|property| property.evaluate_at(time).ok())
+        .as_ref()
+    {
         Some(PropertyValue::Vec2(value)) => (value.x.into_inner(), value.y.into_inner()),
         _ => default,
     }
 }
 
-fn number_property(
+fn number_property_at(
     item: &library::model::authoring::TimelineItem,
     name: &str,
+    time: f64,
     default: f64,
 ) -> f64 {
-    match item.authored_properties.get(name).and_then(Property::value) {
+    match item
+        .authored_properties
+        .get(name)
+        .and_then(|property| property.evaluate_at(time).ok())
+        .as_ref()
+    {
         Some(PropertyValue::Number(value)) => value.into_inner(),
         Some(PropertyValue::Integer(value)) => *value as f64,
         _ => default,

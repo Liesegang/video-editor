@@ -243,6 +243,19 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn upsert_item_keyframe(
+        &self,
+        item_id: TimelineItemId,
+        key: String,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .upsert_item_keyframe(item_id, key, time, value, easing)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn rename_item(
         &self,
         item_id: TimelineItemId,
@@ -464,7 +477,7 @@ mod tests {
         let (nested_id, nested_track_id, _) = service
             .add_timeline("Title".to_string(), 640, 360, 24.0, 5.0)
             .expect("nested Timeline");
-        service
+        let (solid_id, _) = service
             .add_solid(
                 nested_track_id,
                 Color::white(),
@@ -472,6 +485,18 @@ mod tests {
                 0,
             )
             .expect("solid");
+        service
+            .upsert_item_keyframe(
+                solid_id,
+                "position".to_string(),
+                1.0,
+                PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                    x: ordered_float::OrderedFloat(40.0),
+                    y: ordered_float::OrderedFloat(20.0),
+                }),
+                None,
+            )
+            .expect("position keyframe");
 
         let (_, frame) = service
             .evaluate_frame(nested_id, 1.0, 1.0, None)
@@ -479,5 +504,12 @@ mod tests {
 
         assert_eq!((frame.width, frame.height), (640, 360));
         assert_eq!(frame.object_count(), 1);
+        let crate::model::frame::entity::FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let crate::model::frame::entity::FrameItem::Group(item) = &track.items[0] else {
+            panic!("Item group expected");
+        };
+        assert_eq!(item.transform.position.x, 40.0);
     }
 }
