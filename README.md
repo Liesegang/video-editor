@@ -6,13 +6,19 @@ AviUtlの代替を目指した、Rustで書かれたオープンソースの動�
 
 ![プレビュー画面](https://github.com/user-attachments/assets/9c372278-cd8e-4c23-bc61-a581617bd042)
 
-## 特徴（予定）
+## 現在の編集モデル
 
-- **直感的なUI**: 初心者から上級者まで幅広く利用可能な使いやすいインターフェース
-- **マルチトラック編集**: 動画、音声、画像を無制限のトラックで編集可能
-- **豊富なエフェクトとフィルター**: プラグインで自由に拡張可能なエフェクトやフィルター機能
-- **クロスプラットフォーム対応**: Windows、macOS、Linuxで動作
-- **完全オープンソース**: MITライセンスに基づいて公開され、自由な改変と再配布が可能
+RuViEは、配置と時間を扱う**Timeline**と、再利用可能な処理を扱う**Module**を分離しています。
+通常の編集操作からNode Editorを開く必要はありません。
+
+- **Timeline編集**：動画、音声、画像、Text、Solid、Nested Compositionを複数Trackへ配置できます。
+- **直接操作**：移動、Trim、Split、Snap、Ripple Delete、親子付け、キーフレーム、FadeをTimelineとInspectorから編集できます。
+- **Nested Composition**：Compositionは別種の編集モデルではなく、Timelineを入れ子にしたものです。
+- **Effect Stack**：Node Moduleを使う処理も、通常画面ではEffectとして追加し、公開パラメータだけを編集します。
+- **段階的な画面構成**：Beginner、Edit、Motion、Data、Logic、Diagnosticsの順に高度な機能を表示します。
+- **PreviewとExport**：新しいTimeline ProjectをRenderPlanへコンパイルし、Preview、PNG、MP4を旧Projectへの変換なしで描画します。
+
+編集データの所有権と評価順序は、[Timeline-first authoring model](docs/adr/0001-timeline-first-authoring.md)に記録しています。
 
 ## インストール（開発版）
 
@@ -50,27 +56,15 @@ host binaryからdescriptor/default/evaluateまで確認するテストは次で
 ABI、bundle構成、対応categoryの詳細は
 [Runtime native plugins](docs/runtime-plugins.md)を参照してください。
 
-### FFmpeg エクスポーター
+### PreviewとExport
 
-`export` ブロックをプロジェクト JSON に追加すると、動画を書き出すフォーマットをプロパティで指定できます。例えば:
+ツールバーの `Export Frame` は、現在位置をPNGで保存します。
+`Export Video` は、開いているTimelineをMP4（H.264、YUV 4:2:0）で保存します。
+動画出力には、システムの `PATH` から実行できるFFmpegが必要です。
 
-```json
-"export": {
-  "container": { "type": "constant", "properties": { "value": "mp4" } },
-  "codec": { "type": "constant", "properties": { "value": "libx264" } },
-  "pixel_format": { "type": "constant", "properties": { "value": "yuv420p" } },
-  "bitrate": { "type": "constant", "properties": { "value": 8000.0 } },
-  "quality": { "type": "constant", "properties": { "value": 23.0 } }
-}
-```
-
-- `container`: 出力コンテナ (`mp4`, `mkv` など)。`png` を指定すると従来通り連番画像を書き出します。
-- `codec`: FFmpeg のコーデック名 (`libx264`, `libx265` など)。
-- `pixel_format`: 出力ピクセルフォーマット (`yuv420p`, `rgba` 等)。
-- `bitrate`: kbps 単位の映像ビットレート (任意)。
-- `quality`: H.264 の CRF など品質値 (任意)。
-
-動画出力はアプリのExportダイアログから実行します。FFmpegバイナリはシステムPATH上にある前提です（必要に応じて`ffmpeg_path`プロパティで明示できます）。
+Projectファイルは、新しいTimeline-first schemaだけを読み書きします。
+このリポジトリはpre-v1のため、旧形式のreader、migrator、双方向同期は提供しません。
+切替前のコードはGit tag `pre-b-architecture-20260903` から復元できます。
 
 ## 開発への貢献
 
