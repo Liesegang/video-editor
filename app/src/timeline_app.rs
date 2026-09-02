@@ -93,6 +93,8 @@ pub struct TimelineApp {
     current_time: f64,
     preview: Option<egui::TextureHandle>,
     preview_key: Option<(library::model::authoring::ProjectRevision, TimelineId, u64)>,
+    undo: Vec<AuthoringProject>,
+    redo: Vec<AuthoringProject>,
     status: String,
 }
 
@@ -115,6 +117,8 @@ impl TimelineApp {
             current_time: 0.0,
             preview: None,
             preview_key: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
             status: "Timeline-first project ready".to_string(),
         })
     }
@@ -128,6 +132,8 @@ impl TimelineApp {
                 self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
                 self.selected_item = None;
                 self.current_time = 0.0;
+                self.undo.clear();
+                self.redo.clear();
                 self.invalidate_preview();
                 self.status = "New project".to_string();
             }
@@ -148,6 +154,8 @@ impl TimelineApp {
                 self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
                 self.selected_item = None;
                 self.current_time = 0.0;
+                self.undo.clear();
+                self.redo.clear();
                 self.invalidate_preview();
                 self.status = format!("Opened {}", path.display());
             }
@@ -169,6 +177,58 @@ impl TimelineApp {
             Ok(()) => self.status = format!("Saved {}", path.display()),
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    fn record(&mut self, before: AuthoringProject) {
+        self.undo.push(before);
+        self.redo.clear();
+    }
+
+    fn undo(&mut self) {
+        let Some(project) = self.undo.pop() else {
+            return;
+        };
+        let Ok(current) = self.editor.snapshot() else {
+            return;
+        };
+        self.redo.push(current.as_ref().clone());
+        if let Err(error) = self.editor.replace_project(project) {
+            self.status = error.to_string();
+            return;
+        }
+        self.repair_navigation();
+        self.status = "Undo".to_string();
+    }
+
+    fn redo(&mut self) {
+        let Some(project) = self.redo.pop() else {
+            return;
+        };
+        let Ok(current) = self.editor.snapshot() else {
+            return;
+        };
+        self.undo.push(current.as_ref().clone());
+        if let Err(error) = self.editor.replace_project(project) {
+            self.status = error.to_string();
+            return;
+        }
+        self.repair_navigation();
+        self.status = "Redo".to_string();
+    }
+
+    fn repair_navigation(&mut self) {
+        if let Ok(project) = self.editor.snapshot() {
+            if !project.timelines.contains_key(&self.open_timeline) {
+                self.open_timeline = project.root_timeline_id;
+            }
+            if self
+                .selected_item
+                .is_some_and(|id| !project.items.contains_key(&id))
+            {
+                self.selected_item = None;
+            }
+        }
+        self.invalidate_preview();
     }
 
     fn export_frame(&mut self) {
@@ -214,6 +274,11 @@ impl TimelineApp {
         let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
         };
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
         let kind = asset_kind(&path);
         let name = path
             .file_name()
@@ -240,15 +305,28 @@ impl TimelineApp {
         });
         match result {
             Ok((id, _)) => {
+                if let Some(before) = before {
+                    self.record(before);
+                }
                 self.selected_item = Some(id);
                 self.invalidate_preview();
                 self.status = "Asset imported and placed".to_string();
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => {
+                if let Some(before) = before {
+                    let _ = self.editor.replace_project(before);
+                }
+                self.status = error.to_string();
+            }
         }
     }
 
     fn add_text(&mut self) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
             let track = project.timelines[&self.open_timeline].track_order[0];
             drop(project);
@@ -260,10 +338,15 @@ impl TimelineApp {
                 1,
             )
         });
-        self.finish_add(result, "Text added");
+        self.finish_add(result, before, "Text added");
     }
 
     fn add_solid(&mut self) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
             let track = project.timelines[&self.open_timeline].track_order[0];
             drop(project);
@@ -280,10 +363,15 @@ impl TimelineApp {
                 0,
             )
         });
-        self.finish_add(result, "Solid added");
+        self.finish_add(result, before, "Solid added");
     }
 
     fn add_nested_timeline(&mut self) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
         let result = self
             .editor
             .add_timeline("Composition".to_string(), 1920, 1080, 30.0, 5.0);
@@ -308,14 +396,27 @@ impl TimelineApp {
                     1,
                 ) {
                     Ok((item, _)) => {
+                        if let Some(before) = before {
+                            self.record(before);
+                        }
                         self.selected_item = Some(item);
                         self.invalidate_preview();
                         self.status = "Nested composition added; double-click to open".to_string();
                     }
-                    Err(error) => self.status = error.to_string(),
+                    Err(error) => {
+                        if let Some(before) = before {
+                            let _ = self.editor.replace_project(before);
+                        }
+                        self.status = error.to_string();
+                    }
                 }
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => {
+                if let Some(before) = before {
+                    let _ = self.editor.replace_project(before);
+                }
+                self.status = error.to_string();
+            }
         }
     }
 
@@ -325,19 +426,33 @@ impl TimelineApp {
             (TimelineItemId, library::model::authoring::ChangeSet),
             library::LibraryError,
         >,
+        before: Option<AuthoringProject>,
         message: &str,
     ) {
         match result {
             Ok((item, _)) => {
+                if let Some(before) = before {
+                    self.record(before);
+                }
                 self.selected_item = Some(item);
                 self.invalidate_preview();
                 self.status = message.to_string();
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => {
+                if let Some(before) = before {
+                    let _ = self.editor.replace_project(before);
+                }
+                self.status = error.to_string();
+            }
         }
     }
 
     fn apply(&mut self, edit: Edit) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
         let result = match edit {
             Edit::Select(item) => {
                 self.selected_item = item;
@@ -378,6 +493,9 @@ impl TimelineApp {
         };
         match result {
             Ok(()) => {
+                if let Some(before) = before {
+                    self.record(before);
+                }
                 self.invalidate_preview();
                 self.status = "Edit applied".to_string();
             }
@@ -456,6 +574,18 @@ impl eframe::App for TimelineApp {
                 }
                 if ui.button("Save As").clicked() {
                     self.save(true);
+                }
+                if ui
+                    .add_enabled(!self.undo.is_empty(), egui::Button::new("Undo"))
+                    .clicked()
+                {
+                    self.undo();
+                }
+                if ui
+                    .add_enabled(!self.redo.is_empty(), egui::Button::new("Redo"))
+                    .clicked()
+                {
+                    self.redo();
                 }
                 if ui.button("Export Frame").clicked() {
                     self.export_frame();
