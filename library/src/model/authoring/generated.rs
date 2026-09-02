@@ -7,12 +7,15 @@ use crate::model::project::property::PropertyValue;
 
 use super::{
     DataSourceId, GeneratedItemId, ModuleInstanceId, OverrideId, SourceRef, TimelineInterval,
+    TimelineTrackId,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct DataSource {
     pub id: DataSourceId,
+    pub generator_id: ModuleInstanceId,
+    pub target_track_id: TimelineTrackId,
     pub name: String,
     pub source: DataSourceRef,
     pub stable_key_field: String,

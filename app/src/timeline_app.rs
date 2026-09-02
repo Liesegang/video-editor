@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
-    AuthoringProject, BindingOperator, BindingScope, DurationPolicy, InstancePath,
-    ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
-    SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
-    TimelineTrackId, TimelineTrackKind,
+    AuthoringProject, BindingOperator, BindingScope, DataSourceId, DurationPolicy, InstancePath,
+    ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId, SignalBinding,
+    SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval,
+    TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -93,6 +93,9 @@ enum Edit {
     Fade(TimelineItemId, f64),
     UpdateKeyframe(TimelineItemId, String, KeyframeId, KeyframeUpdate),
     RemoveKeyframe(TimelineItemId, String, KeyframeId),
+    ImportData(std::path::PathBuf, TimelineTrackId),
+    RefreshData(DataSourceId),
+    DiscardOverride(OverrideId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +105,7 @@ enum HistoryKey {
     ModuleParameter(ModuleInstanceId, PublishedParameterId),
     ModuleNode(ModuleDefinitionId, uuid::Uuid),
     Binding,
+    Data,
 }
 
 impl Edit {
@@ -130,6 +134,9 @@ impl Edit {
             Self::Fade(item, _) => Some(HistoryKey::Property(*item, "opacity".to_string())),
             Self::UpdateKeyframe(item, key, ..) | Self::RemoveKeyframe(item, key, _) => {
                 Some(HistoryKey::Property(*item, key.clone()))
+            }
+            Self::ImportData(..) | Self::RefreshData(_) | Self::DiscardOverride(_) => {
+                Some(HistoryKey::Data)
             }
         }
     }
@@ -748,6 +755,16 @@ impl TimelineApp {
                 .editor
                 .remove_item_keyframe(item, key, keyframe)
                 .map(|_| ()),
+            Edit::ImportData(path, track_id) => {
+                self.editor.import_data_source(&path, track_id).map(|_| ())
+            }
+            Edit::RefreshData(data_source_id) => {
+                self.editor.refresh_data_source(data_source_id).map(|_| ())
+            }
+            Edit::DiscardOverride(override_id) => self
+                .editor
+                .remove_generated_override(override_id)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -982,7 +999,7 @@ impl TabViewer for Viewer<'_> {
             ),
             Tab::Assets => assets_ui(ui, self.project),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item, self.edits),
-            Tab::Data => data_ui(ui, self.project),
+            Tab::Data => data_ui(ui, self.project, self.open_timeline, self.edits),
             Tab::Logic => logic_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Diagnostics => diagnostics_ui(ui, self.project, self.workspace),
         }
@@ -1659,15 +1676,110 @@ fn draw_numeric_curve(ui: &mut egui::Ui, keyframes: &[Keyframe], duration: f64) 
     }
 }
 
-fn data_ui(ui: &mut egui::Ui, project: &AuthoringProject) {
+fn data_ui(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    open_timeline: TimelineId,
+    edits: &mut Vec<Edit>,
+) {
     ui.heading("Data and generated items");
-    ui.label(format!("Data sources: {}", project.data_sources.len()));
+    ui.label("Import a CSV or JSON table. Each stable row becomes an ordinary Timeline item.");
+    let target_track = project
+        .timelines
+        .get(&open_timeline)
+        .and_then(|timeline| timeline.track_order.first())
+        .copied();
+    if ui
+        .add_enabled(
+            target_track.is_some(),
+            egui::Button::new("Import CSV / JSON"),
+        )
+        .clicked()
+    {
+        if let (Some(path), Some(track_id)) = (
+            rfd::FileDialog::new()
+                .add_filter("Table data", &["csv", "json"])
+                .pick_file(),
+            target_track,
+        ) {
+            edits.push(Edit::ImportData(path, track_id));
+        }
+    }
+    ui.separator();
+    for data_source in project.data_sources.values() {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong(&data_source.name);
+                if ui.button("Refresh").clicked() {
+                    edits.push(Edit::RefreshData(data_source.id));
+                }
+            });
+            ui.label(format!(
+                "{} rows  ·  stable key: {}",
+                data_source.cached_rows.len(),
+                data_source.stable_key_field
+            ));
+        });
+    }
     ui.label(format!(
         "Generated items: {}",
         project.generated_items.len()
     ));
-    ui.label(format!("Overrides: {}", project.overrides.len()));
-    ui.small("Stable provenance keeps manual corrections across regeneration.");
+    let active = project
+        .overrides
+        .values()
+        .filter(|authored_override| {
+            matches!(
+                authored_override.status,
+                library::model::authoring::OverrideStatus::Active
+            )
+        })
+        .count();
+    let orphaned = project
+        .overrides
+        .values()
+        .filter(|authored_override| {
+            matches!(
+                authored_override.status,
+                library::model::authoring::OverrideStatus::Orphaned
+            )
+        })
+        .count();
+    let conflicts = project.overrides.len().saturating_sub(active + orphaned);
+    ui.label(format!(
+        "Manual corrections: {active} active · {orphaned} orphaned · {conflicts} conflicts"
+    ));
+    for authored_override in project.overrides.values() {
+        match &authored_override.status {
+            library::model::authoring::OverrideStatus::Orphaned => {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!(
+                            "Orphaned correction: {}",
+                            authored_override.generated_item_id
+                        ),
+                    );
+                    if ui.button("Discard correction").clicked() {
+                        edits.push(Edit::DiscardOverride(authored_override.id));
+                    }
+                });
+            }
+            library::model::authoring::OverrideStatus::Conflict { reason } => {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Conflicting correction: {reason}"),
+                    );
+                    if ui.button("Use generated value").clicked() {
+                        edits.push(Edit::DiscardOverride(authored_override.id));
+                    }
+                });
+            }
+            library::model::authoring::OverrideStatus::Active => {}
+        }
+    }
+    ui.small("Canvas and Inspector edits are stored as overrides and survive data refresh.");
 }
 
 fn logic_ui(

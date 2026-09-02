@@ -11,9 +11,10 @@ use crate::core::framing::evaluate_authoring_timeline_frame;
 use crate::core::render_plan::{RenderPlan, RenderPlanCache, RenderPlanCacheStats};
 use crate::error::LibraryError;
 use crate::model::authoring::{
-    AuthoringProject, AuthoringSession, ChangeSet, CompositionInstance, DurationPolicy,
-    ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    AuthoringProject, AuthoringSession, ChangeSet, CompositionInstance, DataSource, DataSourceId,
+    DurationPolicy, ModuleDefinition, ModuleGraph, ModuleInstance, ModuleRole, ProjectDocument,
+    ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId, TimelineInterval,
+    TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use crate::model::authoring::{
     ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
@@ -382,6 +383,153 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn import_data_source(
+        &self,
+        path: &Path,
+        target_track_id: TimelineTrackId,
+    ) -> Result<(DataSourceId, ChangeSet), LibraryError> {
+        let source = std::fs::read_to_string(path).map_err(|error| {
+            LibraryError::Project(format!(
+                "Cannot read Data source {}: {error}",
+                path.display()
+            ))
+        })?;
+        let (source_ref, table) = crate::core::data_source_runtime::parse_table(path, &source)
+            .map_err(LibraryError::Validation)?;
+        let snapshot = self.snapshot()?;
+        let timeline_id = snapshot
+            .tracks
+            .get(&target_track_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Track {target_track_id}")))?
+            .timeline_id;
+        let duration = snapshot.timelines[&timeline_id].duration.into_inner();
+        drop(snapshot);
+        let data_source_id = DataSourceId::new();
+        let definition_id = ModuleDefinitionId::new();
+        let generator_id = ModuleInstanceId::new();
+        let definition = ModuleDefinition {
+            id: definition_id,
+            name: format!(
+                "{} row generator",
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Data")
+            ),
+            role: ModuleRole::Generator,
+            graph: ModuleGraph::default(),
+            published_parameters: Vec::new(),
+            published_signals: Vec::new(),
+            published_actions: Vec::new(),
+            version: 1,
+        };
+        let instance = ModuleInstance {
+            id: generator_id,
+            definition_id,
+            parameter_overrides: Default::default(),
+        };
+        let generated = crate::core::data_source_runtime::generate_text_items(
+            generator_id,
+            &table,
+            duration,
+            self.revision()?.get().wrapping_add(1),
+            data_source_id,
+        )
+        .map_err(LibraryError::Validation)?;
+        let data_source = DataSource {
+            id: data_source_id,
+            generator_id,
+            target_track_id,
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Data")
+                .to_string(),
+            source: source_ref,
+            stable_key_field: table.stable_key_field,
+            cached_rows: table.rows,
+        };
+        let change = self
+            .write_session()?
+            .replace_data_source_generation(
+                target_track_id,
+                data_source,
+                Some(definition),
+                Some(instance),
+                generated,
+            )
+            .map_err(LibraryError::Validation)?;
+        Ok((data_source_id, change))
+    }
+
+    pub fn refresh_data_source(
+        &self,
+        data_source_id: DataSourceId,
+    ) -> Result<ChangeSet, LibraryError> {
+        let snapshot = self.snapshot()?;
+        let previous = snapshot
+            .data_sources
+            .get(&data_source_id)
+            .cloned()
+            .ok_or_else(|| {
+                LibraryError::Validation(format!("Missing Data source {data_source_id}"))
+            })?;
+        let path = match &previous.source {
+            crate::model::authoring::DataSourceRef::Csv { path }
+            | crate::model::authoring::DataSourceRef::Json { path } => PathBuf::from(path),
+            crate::model::authoring::DataSourceRef::EmbeddedTable => {
+                return Err(LibraryError::Validation(
+                    "Embedded tables do not have an external file to refresh".to_string(),
+                ));
+            }
+        };
+        let source = std::fs::read_to_string(&path).map_err(|error| {
+            LibraryError::Project(format!(
+                "Cannot read Data source {}: {error}",
+                path.display()
+            ))
+        })?;
+        let (source_ref, table) = crate::core::data_source_runtime::parse_table(&path, &source)
+            .map_err(LibraryError::Validation)?;
+        if table.stable_key_field != previous.stable_key_field {
+            return Err(LibraryError::Validation(format!(
+                "Stable key changed from '{}' to '{}'; choose how to reconcile before refreshing",
+                previous.stable_key_field, table.stable_key_field
+            )));
+        }
+        let timeline_id = snapshot.tracks[&previous.target_track_id].timeline_id;
+        let duration = snapshot.timelines[&timeline_id].duration.into_inner();
+        drop(snapshot);
+        let generated = crate::core::data_source_runtime::generate_text_items(
+            previous.generator_id,
+            &table,
+            duration,
+            self.revision()?.get().wrapping_add(1),
+            data_source_id,
+        )
+        .map_err(LibraryError::Validation)?;
+        let mut refreshed = previous;
+        refreshed.source = source_ref;
+        refreshed.cached_rows = table.rows;
+        self.write_session()?
+            .replace_data_source_generation(
+                refreshed.target_track_id,
+                refreshed,
+                None,
+                None,
+                generated,
+            )
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn remove_generated_override(
+        &self,
+        override_id: crate::model::authoring::OverrideId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_generated_override(override_id)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn compile_render_plan(&self) -> Result<(RenderPlan, RenderPlanCacheStats), LibraryError> {
         let project = self.snapshot()?;
         self.lock_plan_cache()?
@@ -660,5 +808,63 @@ mod tests {
             panic!("Item group expected");
         };
         assert_eq!(item.transform.position.x, 40.0);
+    }
+
+    #[test]
+    fn csv_refresh_keeps_direct_timeline_corrections_and_reports_removed_rows() {
+        let service = TimelineEditorService::create_default("Data-driven").expect("service");
+        let snapshot = service.snapshot().expect("snapshot");
+        let track_id = snapshot.timelines[&snapshot.root_timeline_id].track_order[0];
+        drop(snapshot);
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("labels.csv");
+        std::fs::write(&path, "id,text,x\nhero,Generated,10\n").expect("fixture");
+        let (data_source_id, _) = service
+            .import_data_source(&path, track_id)
+            .expect("import data");
+        let snapshot = service.snapshot().expect("generated snapshot");
+        let item_id = *snapshot.items.keys().next().expect("materialized item");
+        drop(snapshot);
+        service
+            .set_text(item_id, "Manual correction".to_string())
+            .expect("direct edit");
+
+        std::fs::write(&path, "id,text,x\nhero,Updated source,20\n").expect("updated fixture");
+        service
+            .refresh_data_source(data_source_id)
+            .expect("refresh data");
+        let snapshot = service.snapshot().expect("refreshed snapshot");
+        assert!(matches!(
+            &snapshot.items[&item_id].source,
+            SourceRef::Text { text } if text == "Manual correction"
+        ));
+        assert_eq!(
+            snapshot.overrides.values().next().expect("override").status,
+            crate::model::authoring::OverrideStatus::Active
+        );
+        drop(snapshot);
+
+        std::fs::write(&path, "id,text,x\n").expect("empty fixture");
+        service
+            .refresh_data_source(data_source_id)
+            .expect("refresh removed row");
+        let snapshot = service.snapshot().expect("orphan snapshot");
+        assert!(!snapshot.items.contains_key(&item_id));
+        assert_eq!(
+            snapshot.overrides.values().next().expect("override").status,
+            crate::model::authoring::OverrideStatus::Orphaned
+        );
+        let override_id = *snapshot.overrides.keys().next().expect("override id");
+        drop(snapshot);
+        service
+            .remove_generated_override(override_id)
+            .expect("discard orphaned correction");
+        assert!(
+            service
+                .snapshot()
+                .expect("resolved snapshot")
+                .overrides
+                .is_empty()
+        );
     }
 }

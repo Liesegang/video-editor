@@ -358,7 +358,57 @@ impl AuthoringProject {
         for definition in self.module_definitions.values() {
             definition.validate()?;
         }
+        for data_source in self.data_sources.values() {
+            if !self.tracks.contains_key(&data_source.target_track_id) {
+                return Err(format!(
+                    "Data source {} has no target Track",
+                    data_source.id
+                ));
+            }
+            let instance = self
+                .module_instances
+                .get(&data_source.generator_id)
+                .ok_or_else(|| {
+                    format!("Data source {} has no Generator instance", data_source.id)
+                })?;
+            let definition = self
+                .module_definitions
+                .get(&instance.definition_id)
+                .ok_or_else(|| {
+                    format!("Data source {} has no Generator definition", data_source.id)
+                })?;
+            if !matches!(
+                definition.role,
+                crate::model::authoring::ModuleRole::Generator
+            ) {
+                return Err(format!(
+                    "Data source {} refers to a non-Generator Module",
+                    data_source.id
+                ));
+            }
+            if data_source.stable_key_field.trim().is_empty() {
+                return Err(format!(
+                    "Data source {} has no stable key field",
+                    data_source.id
+                ));
+            }
+            let mut row_keys = std::collections::HashSet::new();
+            for row in &data_source.cached_rows {
+                if row.stable_key.trim().is_empty() || !row_keys.insert(&row.stable_key) {
+                    return Err(format!(
+                        "Data source {} has an empty or duplicate stable row key",
+                        data_source.id
+                    ));
+                }
+            }
+        }
         for generated in self.generated_items.values() {
+            if !self.module_instances.contains_key(&generated.generator_id) {
+                return Err(format!(
+                    "Generated item {} has no Generator instance",
+                    generated.stable_id
+                ));
+            }
             if generated.stable_id
                 != GeneratedItem::stable_id(generated.generator_id, &generated.source_key)
             {
@@ -366,6 +416,20 @@ impl AuthoringProject {
                     "Generated item {} has an unstable provenance ID",
                     generated.stable_id
                 ));
+            }
+            if let Some(data_source_id) = generated.provenance.data_source_id {
+                let data_source = self.data_sources.get(&data_source_id).ok_or_else(|| {
+                    format!(
+                        "Generated item {} has a missing Data source",
+                        generated.stable_id
+                    )
+                })?;
+                if data_source.generator_id != generated.generator_id {
+                    return Err(format!(
+                        "Generated item {} belongs to a different Generator",
+                        generated.stable_id
+                    ));
+                }
             }
             let item_id = TimelineItemId::from_uuid(generated.stable_id.as_uuid());
             if self

@@ -16,6 +16,7 @@ RuViEは、配置と時間を扱う**Timeline**と、再利用可能な処理を
 - **Nested Composition**：Compositionは別種の編集モデルではなく、Timelineを入れ子にしたものです。
 - **Effect Stack**：Node Moduleを使う処理も、通常画面ではEffectとして追加し、公開パラメータだけを編集します。
 - **段階的な画面構成**：Beginner、Edit、Motion、Data、Logic、Diagnosticsの順に高度な機能を表示します。
+- **データ駆動編集**：CSV/JSONの行をstable key付きTimeline Itemとして配置し、再読込後もCanvasやInspectorでの手動修正を維持します。削除された行の修正はOrphanedとして残します。
 - **PreviewとExport**：新しいTimeline ProjectをRenderPlanへコンパイルし、Preview、PNG、MP4を旧Projectへの変換なしで描画します。
 
 編集データの所有権と評価順序は、[Timeline-first authoring model](docs/adr/0001-timeline-first-authoring.md)に記録しています。

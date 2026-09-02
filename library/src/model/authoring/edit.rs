@@ -5,12 +5,12 @@ use crate::model::project::asset::Asset;
 use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
-    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, MaskId,
-    ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
-    ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch, OverridePath,
-    OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
-    SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
-    TimelineTrackId, TimelineTrackKind,
+    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, DataSource,
+    GeneratedItem, MaskId, ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance,
+    ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch,
+    OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding,
+    SignalBindingId, SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem,
+    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -856,6 +856,79 @@ impl AuthoringSession {
             timeline_id,
             item_id,
         }]))
+    }
+
+    pub fn replace_data_source_generation(
+        &mut self,
+        track_id: TimelineTrackId,
+        data_source: DataSource,
+        definition: Option<ModuleDefinition>,
+        instance: Option<ModuleInstance>,
+        generated: Vec<GeneratedItem>,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_track(track_id)?;
+        let mut candidate = self.project.clone();
+        if let Some(definition) = definition {
+            candidate
+                .module_definitions
+                .insert(definition.id, definition);
+        }
+        if let Some(instance) = instance {
+            candidate.module_instances.insert(instance.id, instance);
+        }
+        let generator_id = data_source.generator_id;
+        candidate.data_sources.insert(data_source.id, data_source);
+        crate::core::generator_runtime::reconcile_and_materialize(
+            &mut candidate,
+            track_id,
+            generator_id,
+            generated,
+        )?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
+    }
+
+    pub fn remove_generated_override(
+        &mut self,
+        override_id: OverrideId,
+    ) -> Result<ChangeSet, String> {
+        let mut candidate = self.project.clone();
+        let authored_override = candidate
+            .overrides
+            .remove(&override_id)
+            .ok_or_else(|| format!("Missing generated Override {override_id}"))?;
+        let mut timeline_id = candidate.root_timeline_id;
+        if let Some(generated) = candidate
+            .generated_items
+            .get(&authored_override.generated_item_id)
+            .cloned()
+        {
+            let item_id = TimelineItemId::from_uuid(generated.stable_id.as_uuid());
+            let track_id = candidate
+                .items
+                .get(&item_id)
+                .map(|item| item.track_id)
+                .ok_or_else(|| {
+                    format!("Generated item {} is not materialized", generated.stable_id)
+                })?;
+            timeline_id = candidate.tracks[&track_id].timeline_id;
+            let regenerated = candidate
+                .generated_items
+                .values()
+                .filter(|item| item.generator_id == generated.generator_id)
+                .cloned()
+                .collect();
+            crate::core::generator_runtime::reconcile_and_materialize(
+                &mut candidate,
+                track_id,
+                generated.generator_id,
+                regenerated,
+            )?;
+        } else {
+            candidate.validate()?;
+        }
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
     }
 
     fn record_generated_override(
