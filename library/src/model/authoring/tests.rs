@@ -280,3 +280,53 @@ fn signal_bindings_target_only_published_parameters() {
         .validate()
         .expect("Published parameter target is stable");
 }
+
+#[test]
+fn ripple_delete_closes_only_the_removed_track_gap() {
+    let project = AuthoringProject::new("Ripple", 1920, 1080, 30.0, 20.0).unwrap();
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let mut session = AuthoringSession::new(project).unwrap();
+    let first = session
+        .add_item(
+            track_id,
+            "First".to_string(),
+            SourceRef::Text {
+                text: "First".to_string(),
+            },
+            TimelineInterval::new(0.0, 2.0).unwrap(),
+            0,
+        )
+        .unwrap()
+        .0;
+    let middle = session
+        .add_item(
+            track_id,
+            "Middle".to_string(),
+            SourceRef::Text {
+                text: "Middle".to_string(),
+            },
+            TimelineInterval::new(2.0, 2.0).unwrap(),
+            0,
+        )
+        .unwrap()
+        .0;
+    let last = session
+        .add_item(
+            track_id,
+            "Last".to_string(),
+            SourceRef::Text {
+                text: "Last".to_string(),
+            },
+            TimelineInterval::new(5.0, 2.0).unwrap(),
+            0,
+        )
+        .unwrap()
+        .0;
+
+    session.delete_item(middle, true).unwrap();
+    let project = session.into_project();
+
+    assert!(project.items.contains_key(&first));
+    assert!(!project.items.contains_key(&middle));
+    assert_eq!(project.items[&last].interval.start, OrderedFloat(3.0));
+}

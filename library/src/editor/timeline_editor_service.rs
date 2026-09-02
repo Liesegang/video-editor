@@ -222,6 +222,16 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn delete_item(
+        &self,
+        item_id: TimelineItemId,
+        ripple: bool,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .delete_item(item_id, ripple)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn set_item_property(
         &self,
         item_id: TimelineItemId,

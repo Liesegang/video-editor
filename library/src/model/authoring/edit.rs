@@ -25,6 +25,39 @@ impl ProjectRevision {
     }
 }
 
+fn binding_references_item(
+    scope: &crate::model::authoring::BindingScope,
+    item_id: TimelineItemId,
+) -> bool {
+    matches!(
+        scope,
+        crate::model::authoring::BindingScope::Instance { instance_path, .. }
+            if instance_path.composition_items.contains(&item_id)
+    )
+}
+
+fn signal_source_references_item(
+    source: &crate::model::authoring::SignalSource,
+    item_id: TimelineItemId,
+) -> bool {
+    matches!(
+        source,
+        crate::model::authoring::SignalSource::Published { instance_path, .. }
+            if instance_path.composition_items.contains(&item_id)
+    )
+}
+
+fn event_source_references_item(
+    source: &crate::model::authoring::EventSource,
+    item_id: TimelineItemId,
+) -> bool {
+    matches!(
+        source,
+        crate::model::authoring::EventSource::Published { instance_path, .. }
+            if instance_path.composition_items.contains(&item_id)
+    )
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ProjectInvalidation {
     TimelineStructure {
@@ -316,6 +349,82 @@ impl AuthoringSession {
             right_id,
             self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]),
         ))
+    }
+
+    pub fn delete_item(
+        &mut self,
+        item_id: TimelineItemId,
+        ripple: bool,
+    ) -> Result<ChangeSet, String> {
+        let item = self
+            .project
+            .items
+            .get(&item_id)
+            .cloned()
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+        let timeline_id = self.timeline_for_track(item.track_id)?;
+        let removed_end = item.interval.start.into_inner() + item.interval.duration.into_inner();
+        if ripple {
+            for candidate in self.project.items.values_mut().filter(|candidate| {
+                candidate.track_id == item.track_id
+                    && candidate.id != item_id
+                    && candidate.interval.start.into_inner() >= removed_end
+            }) {
+                candidate.interval.start = OrderedFloat(
+                    candidate.interval.start.into_inner() - item.interval.duration.into_inner(),
+                );
+            }
+        }
+        for child in self.project.items.values_mut() {
+            if child.parent == Some(item_id) {
+                child.parent = None;
+            }
+            if child.matte.is_some_and(|matte| matte.item_id == item_id) {
+                child.matte = None;
+            }
+            child
+                .constraints
+                .retain(|constraint| constraint.target_item_id != item_id);
+        }
+        for mask_id in &item.mask_ids {
+            self.project.masks.remove(mask_id);
+        }
+        self.project.transitions.retain(|_, transition| {
+            transition.from_item_id != item_id && transition.to_item_id != item_id
+        });
+        let removed_instances: Vec<_> = self
+            .project
+            .attachments
+            .values()
+            .filter(|attachment| attachment.owner == (AttachmentOwner::Item { item_id }))
+            .map(|attachment| attachment.module_instance_id)
+            .collect();
+        self.project
+            .attachments
+            .retain(|_, attachment| attachment.owner != (AttachmentOwner::Item { item_id }));
+        for instance_id in removed_instances {
+            if !self
+                .project
+                .attachments
+                .values()
+                .any(|attachment| attachment.module_instance_id == instance_id)
+                && !self.project.items.values().any(|candidate| {
+                    matches!(candidate.source, SourceRef::Module { module_instance_id } if module_instance_id == instance_id)
+                })
+            {
+                self.project.module_instances.remove(&instance_id);
+            }
+        }
+        self.project.signal_bindings.retain(|_, binding| {
+            !binding_references_item(&binding.scope, item_id)
+                && !signal_source_references_item(&binding.source, item_id)
+        });
+        self.project.event_bindings.retain(|_, binding| {
+            !binding_references_item(&binding.scope, item_id)
+                && !event_source_references_item(&binding.source, item_id)
+        });
+        self.project.items.remove(&item_id);
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
     }
 
     pub fn set_item_property(

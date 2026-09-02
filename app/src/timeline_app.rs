@@ -86,6 +86,7 @@ enum Edit {
     AddSignalBinding(SignalBinding),
     SetParent(TimelineItemId, Option<TimelineItemId>),
     DurationPolicy(TimelineItemId, DurationPolicy),
+    Delete(TimelineItemId, bool),
 }
 
 pub struct TimelineApp {
@@ -517,6 +518,7 @@ impl TimelineApp {
                 .editor
                 .set_composition_duration_policy(item, policy)
                 .map(|_| ()),
+            Edit::Delete(item, ripple) => self.editor.delete_item(item, ripple).map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -633,6 +635,18 @@ impl eframe::App for TimelineApp {
                 if ui.button("Split").clicked() {
                     if let Some(id) = self.selected_item {
                         self.apply(Edit::Split(id));
+                    }
+                }
+                if ui.button("Delete").clicked() {
+                    if let Some(id) = self.selected_item {
+                        self.apply(Edit::Delete(id, false));
+                        self.selected_item = None;
+                    }
+                }
+                if ui.button("Ripple Delete").clicked() {
+                    if let Some(id) = self.selected_item {
+                        self.apply(Edit::Delete(id, true));
+                        self.selected_item = None;
                     }
                 }
                 if ui.button("Blur").clicked() {
@@ -803,43 +817,203 @@ fn timeline_ui(
         ui.heading(&timeline.name);
         ui.add(egui::Slider::new(time, 0.0..=timeline.duration.into_inner()).text("time"));
     });
+    timeline_canvas_ui(ui, project, timeline, instance_path, selected, time, edits);
+}
+
+fn timeline_canvas_ui(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    timeline: &library::model::authoring::Timeline,
+    instance_path: &InstancePath,
+    selected: Option<TimelineItemId>,
+    time: &mut f64,
+    edits: &mut Vec<Edit>,
+) {
+    const HEADER: f32 = 128.0;
+    const ROW_HEIGHT: f32 = 52.0;
+    const PX: f32 = 80.0;
+    let tracks: Vec<_> = timeline.track_order.iter().rev().copied().collect();
     egui::ScrollArea::both().show(ui, |ui| {
-        for track_id in timeline.track_order.iter().rev() {
+        let width = HEADER + timeline.duration.into_inner() as f32 * PX;
+        let height = 24.0 + tracks.len() as f32 * ROW_HEIGHT;
+        let (canvas, ruler) = ui.allocate_exact_size(
+            egui::vec2(width.max(ui.available_width()), height),
+            egui::Sense::click(),
+        );
+        let painter = ui.painter_at(canvas);
+        painter.rect_filled(canvas, 0.0, ui.visuals().extreme_bg_color);
+        for second in 0..=timeline.duration.into_inner().ceil() as usize {
+            let x = canvas.left() + HEADER + second as f32 * PX;
+            painter.line_segment(
+                [egui::pos2(x, canvas.top()), egui::pos2(x, canvas.bottom())],
+                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            );
+            painter.text(
+                egui::pos2(x + 3.0, canvas.top() + 3.0),
+                egui::Align2::LEFT_TOP,
+                format!("{second}s"),
+                egui::FontId::monospace(10.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+        if ruler.clicked() {
+            if let Some(pointer) = ruler.interact_pointer_pos() {
+                let raw = f64::from((pointer.x - canvas.left() - HEADER) / PX).max(0.0);
+                *time = snap_time(raw, timeline.fps.into_inner(), &[])
+                    .min(timeline.duration.into_inner());
+            }
+        }
+        for (row, track_id) in tracks.iter().enumerate() {
             let track = &project.tracks[track_id];
-            ui.horizontal(|ui| {
-                ui.label(format!("{}", track.name));
-                let mut items: Vec<_> = project
-                    .items
-                    .values()
-                    .filter(|item| item.track_id == *track_id)
-                    .collect();
-                items.sort_by_key(|item| (item.interval.start, item.layer));
-                for item in items {
-                    let response = ui.selectable_label(
-                        selected == Some(item.id),
-                        format!(
-                            "{}  {:.2}–{:.2}",
-                            item.name,
-                            item.interval.start,
-                            item.interval.start + item.interval.duration
-                        ),
-                    );
-                    if response.clicked() {
-                        edits.push(Edit::Select(Some(item.id)));
-                    }
-                    if response.double_clicked() {
-                        if let SourceRef::Composition(instance) = &item.source {
-                            edits.push(Edit::OpenTimeline(
-                                instance.timeline_id,
-                                instance_path.clone().nested(item.id),
-                            ));
-                        }
+            let top = canvas.top() + 24.0 + row as f32 * ROW_HEIGHT;
+            let row_rect = egui::Rect::from_min_size(
+                egui::pos2(canvas.left(), top),
+                egui::vec2(canvas.width(), ROW_HEIGHT),
+            );
+            painter.rect_filled(
+                row_rect,
+                0.0,
+                if row % 2 == 0 {
+                    ui.visuals().faint_bg_color
+                } else {
+                    ui.visuals().extreme_bg_color
+                },
+            );
+            painter.text(
+                egui::pos2(row_rect.left() + 8.0, row_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &track.name,
+                egui::FontId::proportional(13.0),
+                ui.visuals().text_color(),
+            );
+            let boundaries: Vec<f64> = project
+                .items
+                .values()
+                .filter(|candidate| candidate.track_id == *track_id)
+                .flat_map(|candidate| {
+                    [
+                        candidate.interval.start.into_inner(),
+                        candidate.interval.start.into_inner()
+                            + candidate.interval.duration.into_inner(),
+                    ]
+                })
+                .collect();
+            let mut items: Vec<_> = project
+                .items
+                .values()
+                .filter(|item| item.track_id == *track_id)
+                .collect();
+            items.sort_by_key(|item| (item.layer, item.interval.start));
+            for item in items {
+                let left = canvas.left() + HEADER + item.interval.start.into_inner() as f32 * PX;
+                let width = (item.interval.duration.into_inner() as f32 * PX).max(12.0);
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(left, top + 6.0),
+                    egui::vec2(width, ROW_HEIGHT - 12.0),
+                );
+                let trim_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - 7.0, rect.top()),
+                    rect.right_bottom(),
+                );
+                let trim = ui.interact(
+                    trim_rect,
+                    ui.make_persistent_id(("trim", item.id.as_uuid())),
+                    egui::Sense::drag(),
+                );
+                let body = ui.interact(
+                    egui::Rect::from_min_max(rect.min, egui::pos2(trim_rect.left(), rect.bottom())),
+                    ui.make_persistent_id(("move", item.id.as_uuid())),
+                    egui::Sense::click_and_drag(),
+                );
+                let visual = rect.translate(if body.dragged() {
+                    egui::vec2(body.drag_delta().x, 0.0)
+                } else {
+                    egui::Vec2::ZERO
+                });
+                let color = if selected == Some(item.id) {
+                    ui.visuals().selection.bg_fill
+                } else {
+                    item_color(&item.source)
+                };
+                painter.rect_filled(visual, 4.0, color);
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(visual.right() - 7.0, visual.top()),
+                        visual.right_bottom(),
+                    ),
+                    2.0,
+                    color.gamma_multiply(1.35),
+                );
+                painter.text(
+                    visual.left_center() + egui::vec2(7.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    &item.name,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::WHITE,
+                );
+                if body.clicked() {
+                    edits.push(Edit::Select(Some(item.id)));
+                }
+                if body.double_clicked() {
+                    if let SourceRef::Composition(instance) = &item.source {
+                        edits.push(Edit::OpenTimeline(
+                            instance.timeline_id,
+                            instance_path.clone().nested(item.id),
+                        ));
                     }
                 }
-            });
-            ui.separator();
+                if body.drag_stopped() {
+                    let raw =
+                        item.interval.start.into_inner() + f64::from(body.drag_delta().x / PX);
+                    edits.push(Edit::Move(
+                        item.id,
+                        snap_time(raw.max(0.0), timeline.fps.into_inner(), &boundaries),
+                        item.layer,
+                    ));
+                }
+                if trim.drag_stopped() {
+                    let raw_end = item.interval.start.into_inner()
+                        + item.interval.duration.into_inner()
+                        + f64::from(trim.drag_delta().x / PX);
+                    let end = snap_time(raw_end, timeline.fps.into_inner(), &boundaries);
+                    if let Ok(interval) = TimelineInterval::new(
+                        item.interval.start.into_inner(),
+                        (end - item.interval.start.into_inner()).max(0.0),
+                    ) {
+                        edits.push(Edit::Trim(item.id, interval));
+                    }
+                }
+            }
         }
+        let playhead_x = canvas.left() + HEADER + *time as f32 * PX;
+        painter.line_segment(
+            [
+                egui::pos2(playhead_x, canvas.top()),
+                egui::pos2(playhead_x, canvas.bottom()),
+            ],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(245, 90, 75)),
+        );
     });
+}
+
+fn item_color(source: &SourceRef) -> egui::Color32 {
+    match source {
+        SourceRef::Text { .. } => egui::Color32::from_rgb(190, 92, 160),
+        SourceRef::Composition(_) => egui::Color32::from_rgb(112, 92, 196),
+        SourceRef::Asset { .. } => egui::Color32::from_rgb(55, 135, 185),
+        SourceRef::Solid { .. } | SourceRef::Shape { .. } => egui::Color32::from_rgb(75, 145, 105),
+        SourceRef::Module { .. } => egui::Color32::from_rgb(190, 125, 45),
+    }
+}
+
+fn snap_time(raw: f64, fps: f64, boundaries: &[f64]) -> f64 {
+    let frame = (raw * fps).round() / fps;
+    boundaries
+        .iter()
+        .copied()
+        .filter(|boundary| (*boundary - raw).abs() <= 0.12)
+        .min_by(|left, right| (left - raw).abs().total_cmp(&(right - raw).abs()))
+        .unwrap_or(frame)
 }
 
 fn inspector_ui(
@@ -1282,5 +1456,11 @@ mod tests {
             .is_none());
         assert!(dock_for(Workspace::Edit).find_tab(&Tab::Logic).is_none());
         assert!(dock_for(Workspace::Logic).find_tab(&Tab::Logic).is_some());
+    }
+
+    #[test]
+    fn timeline_snap_prefers_nearby_item_edges_then_frames() {
+        assert_eq!(snap_time(1.94, 30.0, &[2.0]), 2.0);
+        assert_eq!(snap_time(1.26, 10.0, &[]), 1.3);
     }
 }
