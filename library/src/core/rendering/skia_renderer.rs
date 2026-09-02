@@ -38,6 +38,24 @@ half4 main(float2 position) {
 }
 "#;
 
+const SKSL_TIMELINE_MATTE: &str = r#"
+uniform shader content_image;
+uniform shader matte_image;
+uniform float mode;
+
+half4 main(float2 position) {
+    half4 content = content_image.eval(position);
+    half4 matte = matte_image.eval(position);
+    half amount = mode < 1.5
+        ? matte.a
+        : dot(matte.rgb, half3(0.2126, 0.7152, 0.0722));
+    if ((mode > 0.5 && mode < 1.5) || mode > 2.5) {
+        amount = 1.0 - amount;
+    }
+    return content * clamp(amount, 0.0, 1.0);
+}
+"#;
+
 pub struct SkiaRenderer {
     width: u32,
     height: u32,
@@ -47,6 +65,7 @@ pub struct SkiaRenderer {
     group_surfaces: Vec<GroupSurface>,
     blend_runtime: BlendRuntime,
     sksl_straight_to_premultiplied: Option<skia_safe::RuntimeEffect>,
+    timeline_matte_effect: Option<skia_safe::RuntimeEffect>,
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
@@ -160,6 +179,7 @@ impl SkiaRenderer {
             group_surfaces: Vec::new(),
             blend_runtime: BlendRuntime::new(),
             sksl_straight_to_premultiplied: None,
+            timeline_matte_effect: None,
             gpu_context,
             sharing_handle: None,
             sharing_hwnd: None,
@@ -671,6 +691,96 @@ impl Renderer for SkiaRenderer {
             .canvas()
             .draw_image(&mask_image, (0.0, 0.0), Some(&mask_paint));
         self.snapshot_surface(&mut output_surface, width, height)
+    }
+
+    fn apply_matte(
+        &mut self,
+        content: &RenderOutput,
+        matte: &RenderOutput,
+        mode: crate::model::authoring::MatteMode,
+    ) -> Result<RenderOutput, LibraryError> {
+        let to_image = |output: &RenderOutput,
+                        contract: &SkiaSurfaceContract|
+         -> Result<skia_safe::Image, LibraryError> {
+            match output {
+                RenderOutput::Image(image) if contract.working().is_none() => image_to_skia(image),
+                RenderOutput::Working(image) => {
+                    let working = contract.working().ok_or_else(|| {
+                        LibraryError::Render(
+                            "Project linear matte entered an unmanaged surface".to_string(),
+                        )
+                    })?;
+                    skia_working_surface::managed_working_to_skia_image(image, working)
+                }
+                RenderOutput::Image(_) => Err(LibraryError::Render(
+                    "encoded matte entered a Project linear surface".to_string(),
+                )),
+                RenderOutput::Texture(_) => Err(LibraryError::Render(
+                    "Timeline matte requires an owned raster layer".to_string(),
+                )),
+            }
+        };
+        let content_image = to_image(content, &self.surface_contract)?;
+        let matte_image = to_image(matte, &self.surface_contract)?;
+        if content_image.width() != matte_image.width()
+            || content_image.height() != matte_image.height()
+        {
+            return Err(LibraryError::Render(
+                "Timeline matte dimensions do not match its content".to_string(),
+            ));
+        }
+        if self.timeline_matte_effect.is_none() {
+            self.timeline_matte_effect = Some(
+                skia_safe::RuntimeEffect::make_for_shader(SKSL_TIMELINE_MATTE, None).map_err(
+                    |error| LibraryError::Render(format!("Cannot compile Timeline matte: {error}")),
+                )?,
+            );
+        }
+        let sampling = SamplingOptions::default();
+        let content_shader = content_image
+            .to_shader(None, sampling, None)
+            .ok_or_else(|| {
+                LibraryError::Render("Cannot create matte content shader".to_string())
+            })?;
+        let matte_shader = matte_image
+            .to_shader(None, sampling, None)
+            .ok_or_else(|| LibraryError::Render("Cannot create matte source shader".to_string()))?;
+        let mode = match mode {
+            crate::model::authoring::MatteMode::Alpha => 0.0f32,
+            crate::model::authoring::MatteMode::AlphaInverted => 1.0,
+            crate::model::authoring::MatteMode::Luma => 2.0,
+            crate::model::authoring::MatteMode::LumaInverted => 3.0,
+        };
+        let uniforms = skia_safe::Data::new_copy(&mode.to_ne_bytes());
+        let shader = self
+            .timeline_matte_effect
+            .as_ref()
+            .and_then(|effect| {
+                effect.make_shader(
+                    uniforms,
+                    &[ChildPtr::from(content_shader), ChildPtr::from(matte_shader)],
+                    None,
+                )
+            })
+            .ok_or_else(|| LibraryError::Render("Cannot instantiate Timeline matte".to_string()))?;
+        let width = content_image.width() as u32;
+        let height = content_image.height() as u32;
+        let mut surface = skia_working_surface::create_surface(
+            width,
+            height,
+            self.gpu_context
+                .as_mut()
+                .map(|context| &mut context.direct_context),
+            &self.surface_contract,
+        )?;
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        let mut paint = Paint::default();
+        paint.set_shader(shader);
+        surface.canvas().draw_rect(
+            skia_safe::Rect::from_wh(width as f32, height as f32),
+            &paint,
+        );
+        self.snapshot_surface(&mut surface, width, height)
     }
 
     fn rasterize_sksl_layer(

@@ -320,6 +320,17 @@ pub trait Renderer {
         ))
     }
 
+    fn apply_matte(
+        &mut self,
+        _content: &RenderOutput,
+        _matte: &RenderOutput,
+        _mode: crate::model::authoring::MatteMode,
+    ) -> Result<RenderOutput, LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not implement Timeline mattes".to_string(),
+        ))
+    }
+
     fn rasterize_text_layer(
         &mut self,
         request: TextRasterRequest<'_>,

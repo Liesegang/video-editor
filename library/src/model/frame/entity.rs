@@ -415,6 +415,12 @@ pub struct FrameMask {
 pub enum FrameItem {
     Object(FrameObject),
     Group(FrameGroup),
+    /// A Timeline item composited through another Timeline item's image.
+    Matte {
+        content: Box<FrameItem>,
+        matte: Box<FrameItem>,
+        mode: crate::model::authoring::MatteMode,
+    },
 }
 
 impl FrameItem {
@@ -422,6 +428,7 @@ impl FrameItem {
         match self {
             Self::Object(_) => 1,
             Self::Group(group) => group.items.iter().map(Self::object_count).sum(),
+            Self::Matte { content, matte, .. } => content.object_count() + matte.object_count(),
         }
     }
 }

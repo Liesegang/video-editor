@@ -54,6 +54,37 @@ fn timeline_path_mask_removes_pixels_outside_the_authored_path() {
     assert_eq!(masked.data[(3 * 4 + 3) * 4 + 3], 0);
 }
 
+#[test]
+fn timeline_matte_supports_alpha_and_luma_modes() {
+    let mut renderer = SkiaRenderer::new(2, 1, Color::black(), false, None, None).unwrap();
+    let content = RenderOutput::Image(Image::new(2, 1, vec![255, 0, 0, 255, 255, 0, 0, 255]));
+    let alpha_matte = RenderOutput::Image(Image::new(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 0]));
+    let RenderOutput::Image(alpha) = renderer
+        .apply_matte(
+            &content,
+            &alpha_matte,
+            crate::model::authoring::MatteMode::Alpha,
+        )
+        .unwrap()
+    else {
+        panic!("alpha matte output");
+    };
+    assert_eq!([alpha.data[3], alpha.data[7]], [255, 0]);
+
+    let luma_matte = RenderOutput::Image(Image::new(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255]));
+    let RenderOutput::Image(luma) = renderer
+        .apply_matte(
+            &content,
+            &luma_matte,
+            crate::model::authoring::MatteMode::Luma,
+        )
+        .unwrap()
+    else {
+        panic!("luma matte output");
+    };
+    assert_eq!([luma.data[3], luma.data[7]], [255, 0]);
+}
+
 const CUSTOM_BLEND_MODES: [BlendMode; 10] = [
     BlendMode::LinearBurn,
     BlendMode::DarkerColor,

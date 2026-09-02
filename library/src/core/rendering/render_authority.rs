@@ -121,6 +121,10 @@ fn collect_frame_paths(items: &[FrameItem], paths: &mut BTreeSet<String>) {
                 | FrameContent::SkSL { .. } => {}
             },
             FrameItem::Group(group) => collect_frame_paths(&group.items, paths),
+            FrameItem::Matte { content, matte, .. } => {
+                collect_frame_paths(std::slice::from_ref(content.as_ref()), paths);
+                collect_frame_paths(std::slice::from_ref(matte.as_ref()), paths);
+            }
         }
     }
 }

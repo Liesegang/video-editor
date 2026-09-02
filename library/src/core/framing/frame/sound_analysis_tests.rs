@@ -124,6 +124,10 @@ fn find_group(items: &[FrameItem], source_id: uuid::Uuid) -> Option<&FrameGroup>
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => find_group(&group.items, source_id),
         FrameItem::Object(_) => None,
+        FrameItem::Matte { content, matte, .. } => {
+            find_group(std::slice::from_ref(content.as_ref()), source_id)
+                .or_else(|| find_group(std::slice::from_ref(matte.as_ref()), source_id))
+        }
     })
 }
 

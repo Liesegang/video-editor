@@ -256,9 +256,71 @@ impl<T: Renderer> RenderService<T> {
                     self.render_object(object, context, current_time, color_authority)?;
                 }
                 FrameItem::Group(group) => self.render_group(group, context, color_authority)?,
+                FrameItem::Matte {
+                    content,
+                    matte,
+                    mode,
+                } => self.render_matte(
+                    content,
+                    matte,
+                    *mode,
+                    context,
+                    current_time,
+                    color_authority,
+                )?,
             }
         }
         Ok(())
+    }
+
+    fn render_matte(
+        &mut self,
+        content: &FrameItem,
+        matte: &FrameItem,
+        mode: crate::model::authoring::MatteMode,
+        context: &RenderContext,
+        current_time: f64,
+        color_authority: &RenderColorAuthority<'_>,
+    ) -> Result<(), LibraryError> {
+        self.renderer.begin_group(
+            context.target_width,
+            context.target_height,
+            &transparent_color(),
+        )?;
+        let content_result = self.render_items(
+            std::slice::from_ref(content),
+            context,
+            current_time,
+            color_authority,
+        );
+        let content_output = self.renderer.end_group();
+        content_result?;
+        let content_output = content_output?;
+
+        self.renderer.begin_group(
+            context.target_width,
+            context.target_height,
+            &transparent_color(),
+        )?;
+        let matte_result = self.render_items(
+            std::slice::from_ref(matte),
+            context,
+            current_time,
+            color_authority,
+        );
+        let matte_output = self.renderer.end_group();
+        matte_result?;
+        let matte_output = matte_output?;
+
+        let output = self
+            .renderer
+            .apply_matte(&content_output, &matte_output, mode)?;
+        self.renderer.draw_layer_affine_with_blend(
+            &output,
+            &Affine2D::IDENTITY,
+            1.0,
+            crate::model::BlendMode::Normal,
+        )
     }
 
     fn render_group(

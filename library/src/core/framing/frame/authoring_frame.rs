@@ -123,6 +123,17 @@ fn collect_timeline_items(
     let compiled = plan.timelines.get(&timeline.id).ok_or_else(|| {
         LibraryError::Validation(format!("RenderPlan is missing Timeline {}", timeline.id))
     })?;
+    let matte_sources: HashSet<_> = project
+        .items
+        .values()
+        .filter(|item| {
+            project
+                .tracks
+                .get(&item.track_id)
+                .is_some_and(|track| track.timeline_id == timeline.id)
+        })
+        .filter_map(|item| item.matte.map(|matte| matte.item_id))
+        .collect();
     let mut output = Vec::new();
     for track_id in &timeline.track_order {
         let track = project.tracks.get(track_id).ok_or_else(|| {
@@ -132,6 +143,9 @@ fn collect_timeline_items(
         for scheduled in compiled.schedule.iter().filter(|scheduled| {
             scheduled.track_id == *track_id && scheduled.interval.contains(timeline_time)
         }) {
+            if matte_sources.contains(&scheduled.item_id) {
+                continue;
+            }
             let item = project.items.get(&scheduled.item_id).ok_or_else(|| {
                 LibraryError::Validation(format!(
                     "RenderPlan refers to a missing Timeline item {}",
@@ -302,7 +316,7 @@ fn collect_item(
         .iter()
         .map(|transform| transform.opacity)
         .product::<f64>();
-    Ok(FrameItem::Group(FrameGroup {
+    let content = FrameItem::Group(FrameGroup {
         source_id: item.id.as_uuid(),
         kind: FrameGroupKind::TimelineItem,
         width: owner_timeline.width,
@@ -315,7 +329,60 @@ fn collect_item(
         effects: post_effects,
         masks: evaluate_masks(project, item, local_time)?,
         items: vec![child],
-    }))
+    });
+    let Some(matte_ref) = item.matte else {
+        return Ok(content);
+    };
+    let matte_item = project.items.get(&matte_ref.item_id).ok_or_else(|| {
+        LibraryError::Validation(format!("Timeline item {} has a missing Matte", item.id))
+    })?;
+    let matte = if matte_item.interval.contains(timeline_time) {
+        let compiled = plan.timelines.get(&owner_timeline.id).ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "RenderPlan is missing Timeline {}",
+                owner_timeline.id
+            ))
+        })?;
+        let scheduled = compiled
+            .schedule
+            .iter()
+            .find(|scheduled| scheduled.item_id == matte_item.id)
+            .ok_or_else(|| {
+                LibraryError::Validation(format!(
+                    "RenderPlan is missing Matte item {}",
+                    matte_item.id
+                ))
+            })?;
+        collect_item(
+            project,
+            plan,
+            owner_timeline,
+            timeline_time,
+            matte_item,
+            &scheduled.source,
+            active,
+        )?
+    } else {
+        FrameItem::Group(FrameGroup {
+            source_id: matte_item.id.as_uuid(),
+            kind: FrameGroupKind::TimelineItem,
+            width: owner_timeline.width,
+            height: owner_timeline.height,
+            background_color: transparent(),
+            inherited_transforms: Vec::new(),
+            transform: Transform::default(),
+            blend_mode: BlendMode::Normal,
+            effect_time: OrderedFloat(local_time),
+            effects: Vec::new(),
+            masks: Vec::new(),
+            items: Vec::new(),
+        })
+    };
+    Ok(FrameItem::Matte {
+        content: Box::new(content),
+        matte: Box::new(matte),
+        mode: matte_ref.mode,
+    })
 }
 
 fn apply_constraints(

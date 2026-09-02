@@ -258,6 +258,20 @@ impl AuthoringProject {
                 if matte_item.id == item.id || matte_track.timeline_id != track.timeline_id {
                     return Err(format!("Item {} has an invalid Matte item", item.id));
                 }
+                let mut seen = std::collections::HashSet::from([item.id]);
+                let mut cursor = matte_item;
+                while let Some(next) = cursor.matte {
+                    if !seen.insert(cursor.id) {
+                        return Err(format!("Item {} participates in a Matte cycle", item.id));
+                    }
+                    cursor = self
+                        .items
+                        .get(&next.item_id)
+                        .ok_or_else(|| format!("Item {} has a missing Matte item", cursor.id))?;
+                }
+                if !seen.insert(cursor.id) {
+                    return Err(format!("Item {} participates in a Matte cycle", item.id));
+                }
             }
             for constraint in &item.constraints {
                 let target = self.items.get(&constraint.target_item_id).ok_or_else(|| {

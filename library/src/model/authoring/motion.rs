@@ -26,7 +26,7 @@ pub enum MaskMode {
     Difference,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum MatteMode {
     Alpha,

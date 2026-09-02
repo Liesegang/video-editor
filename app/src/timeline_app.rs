@@ -6,9 +6,9 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
-    InstancePath, MaskId, MaskMode, ModuleDefinitionId, ModuleInstanceId, OverrideId,
-    PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef,
-    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    InstancePath, MaskId, MaskMode, MatteMode, MatteRef, ModuleDefinitionId, ModuleInstanceId,
+    OverrideId, PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource,
+    SourceRef, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -101,6 +101,7 @@ enum Edit {
     AddConstraint(TimelineItemId, TimelineItemId, ConstraintKind),
     AddRectangleMask(TimelineItemId),
     UpdateMask(TimelineItemId, MaskId, MaskMode, bool, f64, f64),
+    SetMatte(TimelineItemId, Option<MatteRef>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +149,7 @@ impl Edit {
             Self::AddConstraint(item, ..) => Some(HistoryKey::Item(*item, "constraint")),
             Self::AddRectangleMask(item) => Some(HistoryKey::Item(*item, "mask")),
             Self::UpdateMask(item, ..) => Some(HistoryKey::Item(*item, "mask")),
+            Self::SetMatte(item, _) => Some(HistoryKey::Item(*item, "matte")),
         }
     }
 }
@@ -826,6 +828,7 @@ impl TimelineApp {
                     opacity,
                 )
                 .map(|_| ()),
+            Edit::SetMatte(item_id, matte) => self.editor.set_matte(item_id, matte).map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -1698,6 +1701,44 @@ fn inspector_ui(
                 ));
             }
         }
+        ui.collapsing("Track Matte", |ui| {
+            if let Some(matte) = item.matte {
+                let source_name = project
+                    .items
+                    .get(&matte.item_id)
+                    .map(|item| item.name.as_str())
+                    .unwrap_or("Missing");
+                ui.label(format!("{source_name} · {:?}", matte.mode));
+                if ui.small_button("Clear Matte").clicked() {
+                    edits.push(Edit::SetMatte(id, None));
+                }
+            } else {
+                ui.label("Choose another item in this composition as the matte source.");
+            }
+            for candidate in project.items.values().filter(|candidate| {
+                candidate.id != id && project.tracks[&candidate.track_id].timeline_id == timeline_id
+            }) {
+                ui.horizontal(|ui| {
+                    ui.label(&candidate.name);
+                    for (label, mode) in [
+                        ("Alpha", MatteMode::Alpha),
+                        ("Alpha Invert", MatteMode::AlphaInverted),
+                        ("Luma", MatteMode::Luma),
+                        ("Luma Invert", MatteMode::LumaInverted),
+                    ] {
+                        if ui.small_button(label).clicked() {
+                            edits.push(Edit::SetMatte(
+                                id,
+                                Some(MatteRef {
+                                    item_id: candidate.id,
+                                    mode,
+                                }),
+                            ));
+                        }
+                    }
+                });
+            }
+        });
         ui.collapsing("Constraints", |ui| {
             for constraint in &item.constraints {
                 let target = project

@@ -6,7 +6,7 @@ use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
-    ConstraintId, ConstraintKind, DataSource, GeneratedItem, Mask, MaskId, MaskMode,
+    ConstraintId, ConstraintKind, DataSource, GeneratedItem, Mask, MaskId, MaskMode, MatteRef,
     ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
     ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch, OverridePath,
     OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding, SignalBindingId,
@@ -1097,6 +1097,26 @@ impl AuthoringSession {
         mask.opacity = Property::constant(crate::model::project::property::PropertyValue::Number(
             OrderedFloat(opacity.clamp(0.0, 1.0)),
         ));
+        candidate.validate()?;
+        self.project = candidate;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
+    pub fn set_matte(
+        &mut self,
+        item_id: TimelineItemId,
+        matte: Option<MatteRef>,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let mut candidate = self.project.clone();
+        candidate
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .matte = matte;
         candidate.validate()?;
         self.project = candidate;
         Ok(self.finish(vec![ProjectInvalidation::ItemProperties {

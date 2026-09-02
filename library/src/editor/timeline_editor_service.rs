@@ -460,6 +460,16 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn set_matte(
+        &self,
+        item_id: TimelineItemId,
+        matte: Option<crate::model::authoring::MatteRef>,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_matte(item_id, matte)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_srt(
         &self,
         path: &Path,
@@ -1075,5 +1085,63 @@ mod tests {
             panic!("Item group expected");
         };
         assert_eq!(item.masks.len(), 1);
+    }
+
+    #[test]
+    fn matte_source_is_hidden_and_composed_without_nodes() {
+        let service = TimelineEditorService::create_default("Matte").expect("service");
+        let snapshot = service.snapshot().expect("snapshot");
+        let track_id = snapshot.timelines[&snapshot.root_timeline_id].track_order[0];
+        let timeline_id = snapshot.root_timeline_id;
+        drop(snapshot);
+        let (matte_id, _) = service
+            .add_solid(
+                track_id,
+                Color::white(),
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                1,
+            )
+            .expect("matte source");
+        let (content_id, _) = service
+            .add_solid(
+                track_id,
+                Color::black(),
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("content");
+        service
+            .set_matte(
+                content_id,
+                Some(crate::model::authoring::MatteRef {
+                    item_id: matte_id,
+                    mode: crate::model::authoring::MatteMode::Alpha,
+                }),
+            )
+            .expect("set matte");
+        assert!(
+            service
+                .set_matte(
+                    matte_id,
+                    Some(crate::model::authoring::MatteRef {
+                        item_id: content_id,
+                        mode: crate::model::authoring::MatteMode::Alpha,
+                    }),
+                )
+                .is_err(),
+            "Matte cycles must be rejected"
+        );
+        let (project, frame) = service
+            .evaluate_frame(timeline_id, 0.0, 1.0, None)
+            .expect("frame");
+        assert!(project.module_definitions.is_empty());
+        let crate::model::frame::entity::FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        assert_eq!(track.items.len(), 1, "Matte source must not render twice");
+        assert!(matches!(
+            track.items[0],
+            crate::model::frame::entity::FrameItem::Matte { .. }
+        ));
     }
 }
