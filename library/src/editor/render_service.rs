@@ -1,5 +1,4 @@
 use crate::core::cache::SharedCacheManager;
-use crate::core::framing::get_frame_from_project;
 use crate::core::rendering::managed_color_backend::{
     ManagedRenderDestination, ProjectColorAuthority, ProjectColorPipeline,
 };
@@ -10,7 +9,6 @@ use crate::core::rendering::media_color_ingress::{
 use crate::core::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
 };
-use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{
@@ -75,37 +73,6 @@ struct MediaRenderInput<'a> {
     expected_kind: MediaAssetKind,
 }
 
-fn composition_frame_at_time(time: f64, composition_fps: f64) -> Result<u64, LibraryError> {
-    if !time.is_finite() || time < 0.0 {
-        return Err(LibraryError::Render(format!(
-            "render time must be finite and non-negative, not {time}"
-        )));
-    }
-    if !composition_fps.is_finite() || composition_fps <= 0.0 {
-        return Err(LibraryError::Render(format!(
-            "composition fps must be finite and positive, not {composition_fps}"
-        )));
-    }
-    let scaled = time * composition_fps;
-    if !scaled.is_finite() || scaled >= u64::MAX as f64 {
-        return Err(LibraryError::Render(format!(
-            "render frame position is outside the supported u64 range: {scaled}"
-        )));
-    }
-
-    // Frame samples use interval semantics. Correct only arithmetic noise at
-    // mathematically integral boundaries; a genuine half-frame such as 59.5
-    // must still select frame 59 rather than rounding beyond the source end.
-    let nearest = scaled.round();
-    let snap_tolerance = f64::EPSILON * 8.0 * scaled.abs().max(1.0);
-    let interval_position = if (scaled - nearest).abs() <= snap_tolerance {
-        nearest
-    } else {
-        scaled
-    };
-    Ok(interval_position.floor() as u64)
-}
-
 impl<T: Renderer> RenderService<T> {
     pub fn new(
         renderer: T,
@@ -117,35 +84,6 @@ impl<T: Renderer> RenderService<T> {
             plugin_manager,
             cache_manager,
         }
-    }
-
-    /// Render specifically for an exporter and retain the Project-derived
-    /// color authority alongside the terminal pixels.
-    pub fn render_export_frame(
-        &mut self,
-        project_model: &ProjectModel,
-        time: f64,
-    ) -> Result<ExportFrame, LibraryError> {
-        let frame_info = self.get_frame(project_model, time)?;
-        let output = self.render_project_frame(
-            project_model.project().as_ref(),
-            &frame_info,
-            RenderDestination::Export,
-        )?;
-        let image = match output {
-            RenderOutput::Image(image) => image,
-            RenderOutput::Working(_) => {
-                return Err(LibraryError::Render(
-                    "export received an unterminated Project working frame".to_string(),
-                ));
-            }
-            RenderOutput::Texture(_) => {
-                return Err(LibraryError::Render(
-                    "export received a GPU texture without a typed readback boundary".to_string(),
-                ));
-            }
-        };
-        ExportFrame::from_project_render(project_model.project().as_ref(), image)
     }
 
     /// Render a Project-evaluated frame with its exact color and Asset
@@ -611,31 +549,6 @@ impl<T: Renderer> RenderService<T> {
     }
     pub fn clear(&mut self) -> Result<(), LibraryError> {
         measure_debug("RenderService::clear", || self.renderer.clear())
-    }
-
-    fn get_frame(
-        &self,
-        project_model: &ProjectModel,
-        time: f64,
-    ) -> Result<FrameInfo, LibraryError> {
-        let property_evaluators = self.plugin_manager.get_property_evaluators();
-
-        let project = project_model.project();
-        let composition_index = project_model.composition_index();
-        let composition = &project.compositions[composition_index];
-        let composition_fps = composition.fps;
-
-        let frame_number = composition_frame_at_time(time, composition_fps)?;
-
-        get_frame_from_project(
-            project,
-            composition_index,
-            frame_number, // Pass frame_number (u64)
-            1.0,          // Default render_scale to 1.0 for self-managed renders (e.g. export)
-            None,
-            &property_evaluators,
-            &self.plugin_manager,
-        )
     }
 
     fn apply_effects(

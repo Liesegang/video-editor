@@ -5,8 +5,6 @@ use ordered_float::OrderedFloat;
 use ruvie_color_management::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 use uuid::Uuid;
 
-#[cfg(feature = "opencolorio")]
-use crate::ProjectModel;
 use crate::cache::CacheManager;
 use crate::model::Project;
 use crate::model::asset::{
@@ -660,12 +658,13 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
         project
             .add_composition(composition)
             .expect("insert export fixture Composition");
-        let project_model =
-            ProjectModel::new(Arc::new(project.clone()), 0).expect("valid export Project model");
         let export = service
-            .render_export_frame(&project_model, 0.0)
+            .render_project_frame(&project, &authored_frame, RenderDestination::Export)
             .expect("custom nonliteral sRGB surface binding must reach ExportFrame");
-        let export_rgba = &export.image().data;
+        let RenderOutput::Image(export) = export else {
+            panic!("managed export must terminate to an image");
+        };
+        let export_rgba = &export.data;
         assert!(
             (117..=119).contains(&export_rgba[0]),
             "RenderService -> ExportFrame must use the exact custom surface binding; got {export_rgba:?}"
@@ -691,10 +690,12 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
         rejected_project
             .set_color_management(rejected_config)
             .expect("mismatched export intent remains editable");
-        let rejected_model = ProjectModel::new(Arc::new(rejected_project), 0)
-            .expect("valid rejected export Project model");
         let error = service
-            .render_export_frame(&rejected_model, 0.0)
+            .render_project_frame(
+                &rejected_project,
+                &authored_frame,
+                RenderDestination::Export,
+            )
             .expect_err("an unbound literal srgb output must never inherit surface authority");
         assert!(
             error

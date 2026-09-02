@@ -7,7 +7,6 @@ pub mod authoring_render_service;
 pub mod color_service;
 pub mod handlers;
 pub(crate) mod ocio_shim;
-pub(crate) mod project_model;
 pub mod project_service;
 pub mod render_service;
 pub mod timeline_editor_service;

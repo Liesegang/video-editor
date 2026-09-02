@@ -1,6 +1,6 @@
 use super::*;
 use crate::cache::CacheManager;
-use crate::core::framing::FrameEvaluator;
+use crate::core::framing::{FrameEvaluator, get_frame_from_project};
 use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::Region;
@@ -18,35 +18,6 @@ use crate::rendering::skia_renderer::SkiaRenderer;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-#[test]
-fn output_times_map_to_source_frames_with_interval_semantics() {
-    let upsampled: Vec<u64> = (0..120)
-        .map(|output_frame| composition_frame_at_time(output_frame as f64 / 60.0, 30.0).unwrap())
-        .collect();
-    assert_eq!(&upsampled[..6], &[0, 0, 1, 1, 2, 2]);
-    assert_eq!(&upsampled[114..], &[57, 57, 58, 58, 59, 59]);
-    assert_eq!(upsampled.iter().copied().max(), Some(59));
-
-    let downsampled: Vec<u64> = (0..48)
-        .map(|output_frame| composition_frame_at_time(output_frame as f64 / 24.0, 60.0).unwrap())
-        .collect();
-    assert_eq!(&downsampled[..4], &[0, 2, 5, 7]);
-    assert_eq!(downsampled.last(), Some(&117));
-
-    assert_eq!(composition_frame_at_time(59.5 / 30.0, 30.0).unwrap(), 59);
-    assert_eq!(composition_frame_at_time(5.0 / 30.0, 30.0).unwrap(), 5);
-}
-
-#[test]
-fn source_frame_mapping_rejects_invalid_time_and_rate() {
-    for time in [f64::NAN, f64::INFINITY, -0.01] {
-        assert!(composition_frame_at_time(time, 30.0).is_err());
-    }
-    for fps in [f64::NAN, f64::INFINITY, 0.0, -30.0] {
-        assert!(composition_frame_at_time(0.0, fps).is_err());
-    }
-}
 
 struct CountingEffect {
     calls: Arc<AtomicUsize>,
@@ -464,14 +435,20 @@ fn managed_export_uses_the_same_shape_graph_with_a_linear_working_surface() {
     );
 
     let plugin_manager = Arc::new(PluginManager::default());
-    let project_model = ProjectModel::new(Arc::new(project), 0).expect("valid export fixture");
+    let frame = get_frame_from_project(
+        &project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugin_manager.get_property_evaluators(),
+        &plugin_manager,
+    )
+    .expect("evaluate fixture");
     let renderer =
         SkiaRenderer::new(1, 1, Color::black(), false, None, None).expect("CPU export renderer");
     let mut service = RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
 
-    let frame = service
-        .get_frame(&project_model, 0.0)
-        .expect("evaluate half-transparent white fixture");
     let RenderOutput::Image(legacy_image) = service
         .render_from_frame_info(&frame)
         .expect("explicit unmanaged ABI demonstrates the legacy result")
@@ -484,11 +461,14 @@ fn managed_export_uses_the_same_shape_graph_with_a_linear_working_surface() {
         "encoded-sRGB compositing is the gamma-wrong result that export must refuse"
     );
 
-    let export = service
-        .render_export_frame(&project_model, 0.0)
-        .expect("Project shape graph must render through the scene-linear Skia surface");
+    let RenderOutput::Image(export) = service
+        .render_project_frame(&project, &frame, RenderDestination::Export)
+        .expect("Project shape graph must render through the scene-linear Skia surface")
+    else {
+        panic!("managed render must terminate to an image");
+    };
     assert_eq!(
-        export.image().data,
+        export.data,
         [188, 188, 188, 255],
         "half-white over black must composite in linear light and terminal exactly once"
     );
@@ -577,18 +557,30 @@ fn managed_silhouette_converts_wired_gray_through_project_working_space() {
         .set_output_node(NodeContainer::Clip(clip_id), Some(silhouette_id))
         .unwrap();
 
-    let project_model = ProjectModel::new(Arc::new(project), 0).expect("valid fixture Project");
+    let frame = get_frame_from_project(
+        &project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugin_manager.get_property_evaluators(),
+        &plugin_manager,
+    )
+    .expect("evaluate fixture");
     let renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
     let mut service = RenderService::new(
         renderer,
         Arc::clone(&plugin_manager),
         Arc::new(CacheManager::new()),
     );
-    let export = service
-        .render_export_frame(&project_model, 0.0)
-        .expect("silhouette should render through Project linear RGBAF32");
+    let RenderOutput::Image(export) = service
+        .render_project_frame(&project, &frame, RenderDestination::Export)
+        .expect("silhouette should render through Project linear RGBAF32")
+    else {
+        panic!("managed render must terminate to an image");
+    };
     assert_eq!(
-        export.image().data,
+        export.data,
         [128, 128, 128, 255],
         "authored sRGB 128 must become about 0.21586 in linear-sRGB and transform back once; treating 128/255 as linear would produce about 188"
     );
@@ -633,11 +625,20 @@ fn managed_export_rejects_an_untyped_effect_before_plugin_execution() {
         .set_output_node(NodeContainer::Track(track_id), Some(effect_id))
         .unwrap();
 
-    let project_model = ProjectModel::new(Arc::new(project), 0).expect("valid fixture Project");
+    let frame = get_frame_from_project(
+        &project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugin_manager.get_property_evaluators(),
+        &plugin_manager,
+    )
+    .expect("evaluate fixture");
     let renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
     let mut service = RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
     let error = service
-        .render_export_frame(&project_model, 0.0)
+        .render_project_frame(&project, &frame, RenderDestination::Export)
         .expect_err("legacy-only effect must fail before ExportFrame construction");
     assert!(error.to_string().contains("unmanaged encoded-sRGBA8"));
     assert_eq!(
