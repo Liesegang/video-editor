@@ -474,7 +474,15 @@ pub fn preview_panel(
 
         if let Some(submission) = editor_context.preview_render_scheduler.take_submission() {
             let request_id = submission.request_id;
-            if !render_server.send_request(request_id, submission.project, submission.frame) {
+            let accepted = match submission.project {
+                crate::state::preview_render::PreviewProjectSnapshot::Graph(project) => {
+                    render_server.send_request(request_id, project, submission.frame)
+                }
+                crate::state::preview_render::PreviewProjectSnapshot::Timeline(project) => {
+                    render_server.send_authoring_request(request_id, project, submission.frame)
+                }
+            };
+            if !accepted {
                 editor_context
                     .preview_render_scheduler
                     .submission_failed(request_id);

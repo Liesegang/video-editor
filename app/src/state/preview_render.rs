@@ -1,3 +1,4 @@
+use library::model::authoring::AuthoringProject;
 use library::model::frame::frame::{FrameInfo, Region};
 use library::model::project::Project;
 use library::{RenderFrameAuthority, RenderRequestId};
@@ -38,7 +39,7 @@ impl PreviewPresentationKey {
 #[derive(Clone, Debug)]
 struct DesiredRender {
     generation: u64,
-    project: Arc<Project>,
+    project: PreviewProjectSnapshot,
     frame: FrameInfo,
 }
 
@@ -46,7 +47,7 @@ struct DesiredRender {
 struct InFlightRender {
     request_id: RenderRequestId,
     generation: u64,
-    project: Arc<Project>,
+    project: PreviewProjectSnapshot,
     frame: FrameInfo,
 }
 
@@ -59,8 +60,14 @@ struct CompletedRender {
 #[derive(Clone, Debug)]
 pub struct PreviewRenderSubmission {
     pub request_id: RenderRequestId,
-    pub project: Arc<Project>,
+    pub project: PreviewProjectSnapshot,
     pub frame: FrameInfo,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreviewProjectSnapshot {
+    Graph(Arc<Project>),
+    Timeline(Arc<AuthoringProject>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +100,7 @@ pub struct PreviewRenderDiagnostics {
 pub struct PreviewRenderScheduler {
     generation: u64,
     next_request_serial: u64,
-    last_project: Option<Arc<Project>>,
+    last_project: Option<PreviewProjectSnapshot>,
     last_presentation: Option<PreviewPresentationKey>,
     last_render_authority: Option<RenderFrameAuthority>,
     last_seek_revision: Option<u64>,
@@ -142,10 +149,48 @@ impl PreviewRenderScheduler {
         seek_revision: u64,
         render_authority: RenderFrameAuthority,
     ) {
+        self.update_project_desired(
+            PreviewProjectSnapshot::Graph(Arc::new(project.clone())),
+            presentation,
+            frame,
+            playing,
+            seek_revision,
+            render_authority,
+        );
+    }
+
+    pub fn update_authoring_desired(
+        &mut self,
+        project: &AuthoringProject,
+        presentation: PreviewPresentationKey,
+        frame: FrameInfo,
+        playing: bool,
+        seek_revision: u64,
+        render_authority: RenderFrameAuthority,
+    ) {
+        self.update_project_desired(
+            PreviewProjectSnapshot::Timeline(Arc::new(project.clone())),
+            presentation,
+            frame,
+            playing,
+            seek_revision,
+            render_authority,
+        );
+    }
+
+    fn update_project_desired(
+        &mut self,
+        project: PreviewProjectSnapshot,
+        presentation: PreviewPresentationKey,
+        frame: FrameInfo,
+        playing: bool,
+        seek_revision: u64,
+        render_authority: RenderFrameAuthority,
+    ) {
         let project_changed = self
             .last_project
             .as_ref()
-            .is_some_and(|previous| previous.as_ref() != project);
+            .is_some_and(|previous| previous != &project);
         let presentation_changed = self
             .last_presentation
             .as_ref()
@@ -179,13 +224,10 @@ impl PreviewRenderScheduler {
         }
 
         let project_snapshot = match &self.last_project {
-            Some(previous) if !project_changed => Arc::clone(previous),
-            _ => {
-                let snapshot = Arc::new(project.clone());
-                self.last_project = Some(Arc::clone(&snapshot));
-                snapshot
-            }
+            Some(previous) if !project_changed => previous.clone(),
+            _ => project,
         };
+        self.last_project = Some(project_snapshot.clone());
         self.last_presentation = Some(presentation);
         self.last_render_authority = Some(render_authority);
         self.last_seek_revision = Some(seek_revision);
@@ -248,7 +290,7 @@ impl PreviewRenderScheduler {
         self.in_flight = Some(InFlightRender {
             request_id,
             generation: desired.generation,
-            project: Arc::clone(&desired.project),
+            project: desired.project.clone(),
             frame: desired.frame,
         });
         Some(PreviewRenderSubmission {
@@ -288,7 +330,7 @@ impl PreviewRenderScheduler {
             if self.available && in_flight.generation == self.generation && self.desired.is_none() {
                 self.desired = Some(DesiredRender {
                     generation: in_flight.generation,
-                    project: Arc::clone(&in_flight.project),
+                    project: in_flight.project.clone(),
                     frame: in_flight.frame,
                 });
             }
@@ -429,6 +471,30 @@ mod tests {
     }
 
     #[test]
+    fn timeline_project_snapshot_reaches_submission_without_graph_conversion() {
+        let project = AuthoringProject::new("preview", 1920, 1080, 60.0, 1.0).expect("Project");
+        let current_frame = frame(0.0);
+        let presentation =
+            PreviewPresentationKey::from_frame(project.root_timeline_id.as_uuid(), &current_frame);
+        let authority = RenderFrameAuthority::capture_authoring(&project, &current_frame, 1);
+        let mut scheduler = PreviewRenderScheduler::default();
+        scheduler.update_authoring_desired(
+            &project,
+            presentation,
+            current_frame,
+            false,
+            0,
+            authority,
+        );
+
+        let submission = scheduler.take_submission().expect("submission");
+        assert!(matches!(
+            submission.project,
+            PreviewProjectSnapshot::Timeline(_)
+        ));
+    }
+
+    #[test]
     fn slow_continuous_playback_publishes_completed_frame_and_skips_to_latest() {
         let project = Project::new("playback");
         let composition_id = Uuid::new_v4();
@@ -530,7 +596,10 @@ mod tests {
             0,
         );
         let stale = scheduler.take_submission().expect("initial request");
-        assert_eq!(stale.project.name, "before");
+        let PreviewProjectSnapshot::Graph(stale_project) = &stale.project else {
+            panic!("Graph Project snapshot expected");
+        };
+        assert_eq!(stale_project.name, "before");
 
         project.name = "live edit before history commit".to_string();
         update(
@@ -548,7 +617,10 @@ mod tests {
         let current = scheduler
             .take_submission()
             .expect("edited Project snapshot must be submitted");
-        assert_eq!(current.project.name, "live edit before history commit");
+        let PreviewProjectSnapshot::Graph(current_project) = &current.project else {
+            panic!("Graph Project snapshot expected");
+        };
+        assert_eq!(current_project.name, "live edit before history commit");
     }
 
     #[test]
