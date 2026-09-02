@@ -7,6 +7,7 @@ use crate::RenderDestination;
 use crate::cache::SharedCacheManager;
 use crate::editor::RenderService;
 use crate::error::LibraryError;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::frame::FrameInfo;
 use crate::model::project::Project;
 use crate::plugin::PluginManager;
@@ -23,6 +24,7 @@ pub struct RenderServer {
 
 enum RenderRequest {
     Render(RenderRequestId, Arc<Project>, FrameInfo),
+    RenderAuthoring(RenderRequestId, Arc<AuthoringProject>, FrameInfo),
     SetSharingContext(usize, Option<isize>),
     Shutdown,
 }
@@ -92,7 +94,18 @@ impl RenderServer {
                 for request in std::iter::once(first_request).chain(rx.try_iter()) {
                     match request {
                         RenderRequest::Render(request_id, project, frame_info) => {
-                            pending_render = Some((request_id, project, frame_info));
+                            pending_render = Some(PendingRender::Graph {
+                                request_id,
+                                project,
+                                frame_info,
+                            });
+                        }
+                        RenderRequest::RenderAuthoring(request_id, project, frame_info) => {
+                            pending_render = Some(PendingRender::Timeline {
+                                request_id,
+                                project,
+                                frame_info,
+                            });
                         }
                         RenderRequest::SetSharingContext(handle, hwnd) => {
                             if let Some(render_service) = render_service.as_mut()
@@ -106,9 +119,11 @@ impl RenderServer {
                     }
                 }
 
-                let Some((request_id, project, frame_info)) = pending_render else {
+                let Some(pending) = pending_render else {
                     continue;
                 };
+                let request_id = pending.request_id();
+                let frame_info = pending.frame_info().clone();
                 let Some(render_service) = render_service.as_mut() else {
                     let error =
                         LibraryError::Render(initialization_error.clone().unwrap_or_else(|| {
@@ -172,11 +187,19 @@ impl RenderServer {
                     }
                 }
 
-                let output = render_service.render_project_frame(
-                    project.as_ref(),
-                    &frame_info,
-                    RenderDestination::Preview,
-                );
+                let output = match &pending {
+                    PendingRender::Graph { project, .. } => render_service.render_project_frame(
+                        project.as_ref(),
+                        &frame_info,
+                        RenderDestination::Preview,
+                    ),
+                    PendingRender::Timeline { project, .. } => render_service
+                        .render_authoring_frame(
+                            project.as_ref(),
+                            &frame_info,
+                            RenderDestination::Preview,
+                        ),
+                };
                 if let Err(error) = &output {
                     error!("Failed to render frame: {error}");
                 }
@@ -221,6 +244,21 @@ impl RenderServer {
         true
     }
 
+    pub fn send_authoring_request(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        frame_info: FrameInfo,
+    ) -> bool {
+        if let Err(error) = self.tx.send(RenderRequest::RenderAuthoring(
+            request_id, project, frame_info,
+        )) {
+            log::debug!("Render server is unavailable: {error}");
+            return false;
+        }
+        true
+    }
+
     pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {
         self.rx_result.try_recv()
     }
@@ -228,6 +266,33 @@ impl RenderServer {
     pub fn set_sharing_context(&self, handle: usize, hwnd: Option<isize>) {
         if let Err(error) = self.tx.send(RenderRequest::SetSharingContext(handle, hwnd)) {
             log::debug!("Render server is unavailable: {error}");
+        }
+    }
+}
+
+enum PendingRender {
+    Graph {
+        request_id: RenderRequestId,
+        project: Arc<Project>,
+        frame_info: FrameInfo,
+    },
+    Timeline {
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        frame_info: FrameInfo,
+    },
+}
+
+impl PendingRender {
+    fn request_id(&self) -> RenderRequestId {
+        match self {
+            Self::Graph { request_id, .. } | Self::Timeline { request_id, .. } => *request_id,
+        }
+    }
+
+    fn frame_info(&self) -> &FrameInfo {
+        match self {
+            Self::Graph { frame_info, .. } | Self::Timeline { frame_info, .. } => frame_info,
         }
     }
 }
@@ -247,6 +312,7 @@ impl Drop for RenderServer {
 mod tests {
     use super::{RenderRequestId, RenderServer};
     use crate::cache::CacheManager;
+    use crate::model::authoring::AuthoringProject;
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::FrameInfo;
     use crate::model::project::Project;
@@ -295,6 +361,31 @@ mod tests {
             .unwrap();
         assert_eq!(recovered.request_id, RenderRequestId::new(42));
         let RenderOutput::Image(image) = recovered.output.unwrap() else {
+            panic!("CPU fallback must return an image");
+        };
+        assert_eq!((image.width, image.height), (2, 2));
+    }
+
+    #[test]
+    fn timeline_project_renders_without_graph_project_conversion() {
+        let server = RenderServer::new(
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        );
+        let project = Arc::new(
+            AuthoringProject::new("timeline server test", 2, 2, 24.0, 1.0).expect("Project"),
+        );
+        assert!(server.send_authoring_request(
+            RenderRequestId::new(43),
+            project,
+            empty_frame(2, 2)
+        ));
+        let rendered = server
+            .rx_result
+            .recv_timeout(Duration::from_secs(5))
+            .expect("render result");
+        assert_eq!(rendered.request_id, RenderRequestId::new(43));
+        let RenderOutput::Image(image) = rendered.output.expect("render") else {
             panic!("CPU fallback must return an image");
         };
         assert_eq!((image.width, image.height), (2, 2));
