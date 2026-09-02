@@ -12,7 +12,7 @@ use library::model::authoring::{
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
-use library::model::project::property::{Keyframe, Property};
+use library::model::project::property::{Keyframe, KeyframeId, KeyframeUpdate, Property};
 use library::model::project::property::{PropertyValue, Vec2};
 use library::rendering::renderer::RenderOutput;
 use library::{RenderDestination, RenderService, SkiaRenderer, TimelineEditorService};
@@ -91,6 +91,8 @@ enum Edit {
     DurationPolicy(TimelineItemId, DurationPolicy),
     Delete(TimelineItemId, bool),
     Fade(TimelineItemId, f64),
+    UpdateKeyframe(TimelineItemId, String, KeyframeId, KeyframeUpdate),
+    RemoveKeyframe(TimelineItemId, String, KeyframeId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +128,9 @@ impl Edit {
             Self::DurationPolicy(item, _) => Some(HistoryKey::Item(*item, "duration-policy")),
             Self::Delete(item, _) => Some(HistoryKey::Item(*item, "delete")),
             Self::Fade(item, _) => Some(HistoryKey::Property(*item, "opacity".to_string())),
+            Self::UpdateKeyframe(item, key, ..) | Self::RemoveKeyframe(item, key, _) => {
+                Some(HistoryKey::Property(*item, key.clone()))
+            }
         }
     }
 }
@@ -735,6 +740,14 @@ impl TimelineApp {
                     )
                     .map(|_| ())
             }
+            Edit::UpdateKeyframe(item, key, keyframe, update) => self
+                .editor
+                .update_item_keyframe(item, key, keyframe, update)
+                .map(|_| ()),
+            Edit::RemoveKeyframe(item, key, keyframe) => self
+                .editor
+                .remove_item_keyframe(item, key, keyframe)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -968,7 +981,7 @@ impl TabViewer for Viewer<'_> {
                 self.edits,
             ),
             Tab::Assets => assets_ui(ui, self.project),
-            Tab::Motion => motion_ui(ui, self.project, self.selected_item),
+            Tab::Motion => motion_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Data => data_ui(ui, self.project),
             Tab::Logic => logic_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Diagnostics => diagnostics_ui(ui, self.project, self.workspace),
@@ -1398,6 +1411,22 @@ fn inspector_ui(
             PropertyValue::Number(OrderedFloat(opacity)),
         ));
     }
+    ui.indent("opacity-provenance", |ui| {
+        if let Some(property) = item.authored_properties.get("opacity") {
+            if let Some(base) = property.value() {
+                ui.small(format!("Base: {:?}", base));
+            }
+            if property.evaluator == "keyframe" {
+                ui.small(format!("Keyframe at {:.3}s: {:.3}", current_time, opacity));
+            }
+        } else {
+            ui.small("Base: 1.0");
+        }
+        if let Some(parent) = item.parent.and_then(|parent| project.items.get(&parent)) {
+            let inherited = number_property_at(parent, "opacity", current_time, 1.0);
+            ui.small(format!("Parent {}: x{inherited:.3}", parent.name));
+        }
+    });
     ui.separator();
     ui.heading("Effect Stack");
     let attachments: Vec<_> = project.attachments.values().filter(|attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id)).collect();
@@ -1510,7 +1539,12 @@ fn assets_ui(ui: &mut egui::Ui, project: &AuthoringProject) {
     }
 }
 
-fn motion_ui(ui: &mut egui::Ui, project: &AuthoringProject, selected: Option<TimelineItemId>) {
+fn motion_ui(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    selected: Option<TimelineItemId>,
+    edits: &mut Vec<Edit>,
+) {
     ui.heading("Timeline-owned animation");
     let Some(item) = selected.and_then(|id| project.items.get(&id)) else {
         ui.label("Select an item");
@@ -1519,13 +1553,109 @@ fn motion_ui(ui: &mut egui::Ui, project: &AuthoringProject, selected: Option<Tim
     for (name, property) in item.authored_properties.iter() {
         ui.collapsing(name, |ui| {
             if property.evaluator == "keyframe" {
-                for key in property.keyframes() {
-                    ui.label(format!("{:.3}s  {:?}", key.time, key.value));
+                let keyframes = property.keyframes();
+                draw_numeric_curve(ui, &keyframes, item.interval.duration.into_inner());
+                for keyframe in keyframes {
+                    ui.horizontal(|ui| {
+                        let mut time = keyframe.time.into_inner();
+                        let time_changed = ui
+                            .add(egui::DragValue::new(&mut time).speed(0.01).suffix("s"))
+                            .changed();
+                        let mut value_update = None;
+                        match &keyframe.value {
+                            PropertyValue::Number(value) => {
+                                let mut value = value.into_inner();
+                                if ui
+                                    .add(egui::DragValue::new(&mut value).speed(0.01))
+                                    .changed()
+                                {
+                                    value_update = Some(PropertyValue::Number(OrderedFloat(value)));
+                                }
+                            }
+                            PropertyValue::Vec2(value) => {
+                                let (mut x, mut y) = (value.x.into_inner(), value.y.into_inner());
+                                let changed = ui
+                                    .add(egui::DragValue::new(&mut x).prefix("x "))
+                                    .changed()
+                                    | ui.add(egui::DragValue::new(&mut y).prefix("y ")).changed();
+                                if changed {
+                                    value_update = Some(property_vec2(x, y));
+                                }
+                            }
+                            value => {
+                                ui.label(format!("{value:?}"));
+                            }
+                        }
+                        ui.label(format!("{:?}", keyframe.easing));
+                        if time_changed || value_update.is_some() {
+                            edits.push(Edit::UpdateKeyframe(
+                                item.id,
+                                name.clone(),
+                                keyframe.id,
+                                KeyframeUpdate {
+                                    time: time_changed.then_some(time.max(0.0)),
+                                    value: value_update,
+                                    easing: None,
+                                },
+                            ));
+                        }
+                        if ui.small_button("Delete").clicked() {
+                            edits.push(Edit::RemoveKeyframe(item.id, name.clone(), keyframe.id));
+                        }
+                    });
                 }
             } else {
                 ui.label(format!("Base: {:?}", property.value()));
             }
         });
+    }
+}
+
+fn draw_numeric_curve(ui: &mut egui::Ui, keyframes: &[Keyframe], duration: f64) {
+    let points: Vec<_> = keyframes
+        .iter()
+        .filter_map(|keyframe| match keyframe.value {
+            PropertyValue::Number(value) => Some((keyframe.time.into_inner(), value.into_inner())),
+            PropertyValue::Integer(value) => Some((keyframe.time.into_inner(), value as f64)),
+            _ => None,
+        })
+        .collect();
+    if points.is_empty() || duration <= 0.0 {
+        return;
+    }
+    let min = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let span = (max - min).max(0.000_001);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 110.0),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+    let positions: Vec<_> = points
+        .iter()
+        .map(|(time, value)| {
+            egui::pos2(
+                egui::lerp(rect.x_range(), (*time / duration).clamp(0.0, 1.0) as f32),
+                egui::lerp(rect.y_range(), (1.0 - (*value - min) / span) as f32),
+            )
+        })
+        .collect();
+    for segment in positions.windows(2) {
+        ui.painter().line_segment(
+            [segment[0], segment[1]],
+            egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+        );
+    }
+    for point in positions {
+        ui.painter()
+            .circle_filled(point, 4.0, ui.visuals().selection.stroke.color);
     }
 }
 

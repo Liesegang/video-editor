@@ -495,6 +495,57 @@ impl AuthoringSession {
         }]))
     }
 
+    pub fn update_item_keyframe(
+        &mut self,
+        item_id: TimelineItemId,
+        key: String,
+        keyframe_id: crate::model::project::property::KeyframeId,
+        update: crate::model::project::property::KeyframeUpdate,
+    ) -> Result<ChangeSet, String> {
+        if update
+            .time
+            .is_some_and(|time| !time.is_finite() || time < 0.0)
+        {
+            return Err("Keyframe time must be finite and non-negative".to_string());
+        }
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let property = self
+            .project
+            .items
+            .get_mut(&item_id)
+            .and_then(|item| item.authored_properties.get_mut(&key))
+            .ok_or_else(|| format!("Missing keyframed property '{key}'"))?;
+        if !property.update_keyframe_by_id(keyframe_id, update) {
+            return Err(format!("Missing Keyframe {keyframe_id}"));
+        }
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
+    pub fn remove_item_keyframe(
+        &mut self,
+        item_id: TimelineItemId,
+        key: String,
+        keyframe_id: crate::model::project::property::KeyframeId,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let property = self
+            .project
+            .items
+            .get_mut(&item_id)
+            .and_then(|item| item.authored_properties.get_mut(&key))
+            .ok_or_else(|| format!("Missing keyframed property '{key}'"))?;
+        if !property.remove_keyframe_by_id(keyframe_id) {
+            return Err(format!("Missing Keyframe {keyframe_id}"));
+        }
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     pub fn rename_item(
         &mut self,
         item_id: TimelineItemId,

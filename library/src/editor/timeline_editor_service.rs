@@ -268,6 +268,29 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn update_item_keyframe(
+        &self,
+        item_id: TimelineItemId,
+        key: String,
+        keyframe_id: crate::model::project::property::KeyframeId,
+        update: crate::model::project::property::KeyframeUpdate,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .update_item_keyframe(item_id, key, keyframe_id, update)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn remove_item_keyframe(
+        &self,
+        item_id: TimelineItemId,
+        key: String,
+        keyframe_id: crate::model::project::property::KeyframeId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_item_keyframe(item_id, key, keyframe_id)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn rename_item(
         &self,
         item_id: TimelineItemId,
@@ -603,6 +626,26 @@ mod tests {
                 None,
             )
             .expect("position keyframe");
+        let keyframe_id = service.snapshot().expect("keyframe snapshot").items[&solid_id]
+            .authored_properties
+            .get("position")
+            .unwrap()
+            .keyframes()[0]
+            .id;
+        service
+            .update_item_keyframe(
+                solid_id,
+                "position".to_string(),
+                keyframe_id,
+                crate::model::project::property::KeyframeUpdate {
+                    value: Some(PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                        x: ordered_float::OrderedFloat(40.0),
+                        y: ordered_float::OrderedFloat(25.0),
+                    })),
+                    ..Default::default()
+                },
+            )
+            .expect("edit persistent Keyframe");
 
         let (_, frame) = service
             .evaluate_frame(nested_id, 1.0, 1.0, None)
