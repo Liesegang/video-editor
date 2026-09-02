@@ -22,7 +22,14 @@ pub struct ResolvedSignalContribution {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SignalRuntimeValues {
     values: HashMap<SignalBindingId, OrderedFloat<f64>>,
+    smoothing: HashMap<SignalBindingId, SmoothedSignalState>,
     generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct SmoothedSignalState {
+    value: OrderedFloat<f64>,
+    sampled_at: OrderedFloat<f64>,
 }
 
 impl SignalRuntimeValues {
@@ -34,7 +41,53 @@ impl SignalRuntimeValues {
             self.values.insert(binding_id, OrderedFloat(value));
             self.generation = self.generation.wrapping_add(1);
         }
+        self.smoothing.remove(&binding_id);
         Ok(())
+    }
+
+    /// Samples a Binding source through its authored one-pole smoothing time.
+    /// `sampled_at` belongs to the monotonic source clock, not Timeline time.
+    pub fn sample(
+        &mut self,
+        binding: &SignalBinding,
+        raw_value: f64,
+        sampled_at: f64,
+    ) -> Result<f64, String> {
+        let smoothing_seconds = binding.smoothing_seconds.into_inner();
+        if !raw_value.is_finite() || !sampled_at.is_finite() {
+            return Err("Runtime Signal samples must be finite".to_string());
+        }
+        if smoothing_seconds < 0.0 || !smoothing_seconds.is_finite() {
+            return Err("Signal smoothing must be finite and non-negative".to_string());
+        }
+        let value = match self.smoothing.get(&binding.id).copied() {
+            None => raw_value,
+            Some(previous) => {
+                let delta = sampled_at - previous.sampled_at.into_inner();
+                if delta < 0.0 {
+                    return Err("Runtime Signal sample time must be monotonic".to_string());
+                }
+                if smoothing_seconds == 0.0 {
+                    raw_value
+                } else {
+                    let alpha = 1.0 - (-delta / smoothing_seconds).exp();
+                    previous.value.into_inner() + (raw_value - previous.value.into_inner()) * alpha
+                }
+            }
+        };
+        let value = OrderedFloat(value);
+        self.smoothing.insert(
+            binding.id,
+            SmoothedSignalState {
+                value,
+                sampled_at: OrderedFloat(sampled_at),
+            },
+        );
+        if self.values.get(&binding.id).copied() != Some(value) {
+            self.values.insert(binding.id, value);
+            self.generation = self.generation.wrapping_add(1);
+        }
+        Ok(value.into_inner())
     }
 
     pub fn get(&self, binding_id: SignalBindingId) -> Option<f64> {
@@ -285,5 +338,37 @@ mod tests {
         .unwrap();
         assert_eq!(targeted.value, number(5.0));
         assert_eq!(sibling.value, number(10.0));
+    }
+
+    #[test]
+    fn authored_smoothing_is_deterministic_and_uses_a_monotonic_source_clock() {
+        let mut binding = SignalBinding {
+            id: SignalBindingId::new(),
+            source: SignalSource::AudioEnvelope {
+                channel: "music".to_string(),
+            },
+            scope: BindingScope::Definition {
+                definition_id: ModuleDefinitionId::new(),
+            },
+            target_parameter_id: PublishedParameterId::new(),
+            mapping: SignalMapping {
+                input_min: OrderedFloat(0.0),
+                input_max: OrderedFloat(1.0),
+                output_min: OrderedFloat(0.0),
+                output_max: OrderedFloat(1.0),
+                clamp: true,
+            },
+            operator: BindingOperator::Replace,
+            smoothing_seconds: OrderedFloat(1.0),
+            priority: 0,
+        };
+        let mut runtime = SignalRuntimeValues::default();
+        assert_eq!(runtime.sample(&binding, 0.0, 10.0).unwrap(), 0.0);
+        let smoothed = runtime.sample(&binding, 1.0, 11.0).unwrap();
+        assert!((smoothed - (1.0 - (-1.0_f64).exp())).abs() < 1.0e-12);
+        assert!(runtime.sample(&binding, 1.0, 10.5).is_err());
+
+        binding.smoothing_seconds = OrderedFloat(0.0);
+        assert_eq!(runtime.sample(&binding, 0.25, 12.0).unwrap(), 0.25);
     }
 }
