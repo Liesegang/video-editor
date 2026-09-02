@@ -26,6 +26,7 @@ use crate::model::frame::entity::{
 };
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::frame::transform::Transform;
+use crate::model::path::{PathPoint, PathSegment, PathValue};
 use crate::model::project::asset::AssetKind;
 use crate::model::project::property::{PropertyMap, PropertyValue};
 
@@ -318,6 +319,7 @@ fn apply_constraints(
     timeline_time: f64,
     transform: &mut Transform,
 ) -> Result<(), LibraryError> {
+    let item_local_time = timeline_time - item.interval.start.into_inner();
     for constraint in &item.constraints {
         let target = project
             .items
@@ -361,10 +363,173 @@ fn apply_constraints(
                     .to_degrees();
                 transform.rotation += (angle - transform.rotation) * influence;
             }
-            ConstraintKind::FollowPath => {}
+            ConstraintKind::FollowPath => {
+                let SourceRef::Shape { shape } = &target.source else {
+                    return Err(LibraryError::Validation(format!(
+                        "Follow Path constraint {} targets a non-Shape item",
+                        constraint.id
+                    )));
+                };
+                let Some(PropertyValue::Path(path)) = shape.parameters.get("path") else {
+                    return Err(LibraryError::Validation(format!(
+                        "Follow Path constraint {} requires a Path Shape target",
+                        constraint.id
+                    )));
+                };
+                let progress = constraint
+                    .parameters
+                    .get("progress")
+                    .and_then(|property| property.evaluate_at(item_local_time).ok())
+                    .and_then(|value| match value {
+                        PropertyValue::Number(value) => Some(value.into_inner()),
+                        PropertyValue::Integer(value) => Some(value as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                let Some((point, tangent)) = sample_path(path, progress) else {
+                    continue;
+                };
+                let desired_x = target_transform.position.x + point.x();
+                let desired_y = target_transform.position.y + point.y();
+                transform.position.x += (desired_x - transform.position.x) * influence;
+                transform.position.y += (desired_y - transform.position.y) * influence;
+                let auto_orient = constraint
+                    .parameters
+                    .get("auto_orient")
+                    .and_then(|property| property.evaluate_at(item_local_time).ok())
+                    .is_some_and(|value| matches!(value, PropertyValue::Boolean(true)));
+                if auto_orient {
+                    let angle = tangent.1.atan2(tangent.0).to_degrees();
+                    transform.rotation += (angle - transform.rotation) * influence;
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn sample_path(path: &PathValue, progress: f64) -> Option<(PathPoint, (f64, f64))> {
+    let segments: Vec<_> = path
+        .contours()
+        .iter()
+        .flat_map(|contour| {
+            let mut from = contour.start();
+            let mut result = Vec::new();
+            for segment in contour.segments() {
+                result.push((from, segment.clone()));
+                from = segment_end(segment);
+            }
+            if contour.is_closed() && from != contour.start() {
+                result.push((
+                    from,
+                    PathSegment::Line {
+                        to: contour.start(),
+                    },
+                ));
+            }
+            result
+        })
+        .collect();
+    if segments.is_empty() {
+        return path
+            .contours()
+            .first()
+            .map(|contour| (contour.start(), (1.0, 0.0)));
+    }
+    let scaled = progress.clamp(0.0, 1.0) * segments.len() as f64;
+    let index = (scaled.floor() as usize).min(segments.len() - 1);
+    let t = if progress >= 1.0 {
+        1.0
+    } else {
+        scaled - index as f64
+    };
+    Some(sample_segment(segments[index].0, &segments[index].1, t))
+}
+
+fn segment_end(segment: &PathSegment) -> PathPoint {
+    match segment {
+        PathSegment::Line { to }
+        | PathSegment::Quadratic { to, .. }
+        | PathSegment::Conic { to, .. }
+        | PathSegment::Cubic { to, .. } => *to,
+    }
+}
+
+fn sample_segment(from: PathPoint, segment: &PathSegment, t: f64) -> (PathPoint, (f64, f64)) {
+    let point = |x: f64, y: f64| PathPoint::new(x, y);
+    let (x0, y0) = (from.x(), from.y());
+    match segment {
+        PathSegment::Line { to } => (
+            point(x0 + (to.x() - x0) * t, y0 + (to.y() - y0) * t),
+            (to.x() - x0, to.y() - y0),
+        ),
+        PathSegment::Quadratic { control, to } => {
+            let u = 1.0 - t;
+            let x = u * u * x0 + 2.0 * u * t * control.x() + t * t * to.x();
+            let y = u * u * y0 + 2.0 * u * t * control.y() + t * t * to.y();
+            let dx = 2.0 * (u * (control.x() - x0) + t * (to.x() - control.x()));
+            let dy = 2.0 * (u * (control.y() - y0) + t * (to.y() - control.y()));
+            (point(x, y), (dx, dy))
+        }
+        PathSegment::Conic {
+            control,
+            to,
+            weight,
+        } => {
+            let u = 1.0 - t;
+            let w = weight.into_inner();
+            let denominator = u * u + 2.0 * w * u * t + t * t;
+            let x = (u * u * x0 + 2.0 * w * u * t * control.x() + t * t * to.x()) / denominator;
+            let y = (u * u * y0 + 2.0 * w * u * t * control.y() + t * t * to.y()) / denominator;
+            let adjacent_t = if t < 1.0 {
+                (t + 1.0e-5).min(1.0)
+            } else {
+                (t - 1.0e-5).max(0.0)
+            };
+            let adjacent_u = 1.0 - adjacent_t;
+            let adjacent_denominator = adjacent_u * adjacent_u
+                + 2.0 * w * adjacent_u * adjacent_t
+                + adjacent_t * adjacent_t;
+            let adjacent_x = (adjacent_u * adjacent_u * x0
+                + 2.0 * w * adjacent_u * adjacent_t * control.x()
+                + adjacent_t * adjacent_t * to.x())
+                / adjacent_denominator;
+            let adjacent_y = (adjacent_u * adjacent_u * y0
+                + 2.0 * w * adjacent_u * adjacent_t * control.y()
+                + adjacent_t * adjacent_t * to.y())
+                / adjacent_denominator;
+            let direction = if t < 1.0 { 1.0 } else { -1.0 };
+            (
+                point(x, y),
+                ((adjacent_x - x) * direction, (adjacent_y - y) * direction),
+            )
+        }
+        PathSegment::Cubic {
+            control1,
+            control2,
+            to,
+        } => {
+            let u = 1.0 - t;
+            let x = u.powi(3) * x0
+                + 3.0 * u * u * t * control1.x()
+                + 3.0 * u * t * t * control2.x()
+                + t.powi(3) * to.x();
+            let y = u.powi(3) * y0
+                + 3.0 * u * u * t * control1.y()
+                + 3.0 * u * t * t * control2.y()
+                + t.powi(3) * to.y();
+            let dx = 3.0
+                * (u * u * (control1.x() - x0)
+                    + 2.0 * u * t * (control2.x() - control1.x())
+                    + t * t * (to.x() - control2.x()));
+            let dy = 3.0
+                * (u * u * (control1.y() - y0)
+                    + 2.0 * u * t * (control2.y() - control1.y())
+                    + t * t * (to.y() - control2.y()));
+            (point(x, y), (dx, dy))
+        }
+    }
 }
 
 fn transition_opacity(project: &AuthoringProject, item: &TimelineItem, local_time: f64) -> f64 {
@@ -810,6 +975,29 @@ mod tests {
     use crate::model::project::property::{Keyframe, Property, PropertyValue, Vec2};
 
     use super::*;
+
+    #[test]
+    fn path_sampling_preserves_curve_endpoints_and_direction() {
+        let path = PathValue::new(
+            crate::model::path::FillRule::NonZero,
+            vec![crate::model::path::PathContour::new(
+                PathPoint::new(10.0, 20.0),
+                vec![PathSegment::cubic(
+                    PathPoint::new(20.0, 20.0),
+                    PathPoint::new(30.0, 40.0),
+                    PathPoint::new(40.0, 40.0),
+                )],
+                false,
+            )],
+        )
+        .expect("path");
+        let (start, start_tangent) = sample_path(&path, 0.0).expect("start");
+        let (end, end_tangent) = sample_path(&path, 1.0).expect("end");
+        assert_eq!(start, PathPoint::new(10.0, 20.0));
+        assert_eq!(end, PathPoint::new(40.0, 40.0));
+        assert!(start_tangent.0 > 0.0);
+        assert!(end_tangent.0 > 0.0);
+    }
 
     #[test]
     fn text_item_is_assembled_from_timeline_without_creating_a_node() {

@@ -1654,6 +1654,18 @@ fn inspector_ui(
                             ConstraintKind::LookAt,
                         ));
                     }
+                    if matches!(
+                        &candidate.source,
+                        SourceRef::Shape { shape }
+                            if shape.shape_kind == library::model::authoring::ShapeKind::Path
+                    ) && ui.small_button("Follow Path").clicked()
+                    {
+                        edits.push(Edit::AddConstraint(
+                            id,
+                            candidate.id,
+                            ConstraintKind::FollowPath,
+                        ));
+                    }
                 });
             }
         });

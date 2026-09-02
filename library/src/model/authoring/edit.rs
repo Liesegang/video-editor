@@ -951,6 +951,53 @@ impl AuthoringSession {
         let timeline_id = self.timeline_for_item(item_id)?;
         let mut candidate = self.project.clone();
         let id = ConstraintId::new();
+        let item_duration = candidate
+            .items
+            .get(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .interval
+            .duration
+            .into_inner();
+        if kind == ConstraintKind::FollowPath {
+            let target = candidate
+                .items
+                .get(&target_item_id)
+                .ok_or_else(|| format!("Missing Timeline item {target_item_id}"))?;
+            if !matches!(
+                &target.source,
+                SourceRef::Shape { shape }
+                    if shape.shape_kind == super::ShapeKind::Path
+                        && matches!(shape.parameters.get("path"), Some(crate::model::project::property::PropertyValue::Path(_)))
+            ) {
+                return Err("Follow Path requires a Path Shape target".to_string());
+            }
+        }
+        let mut parameters = PropertyMap::new();
+        if kind == ConstraintKind::FollowPath {
+            let number =
+                |value| crate::model::project::property::PropertyValue::Number(OrderedFloat(value));
+            parameters.set(
+                "progress".to_string(),
+                Property::keyframe(vec![
+                    crate::model::project::property::Keyframe::new(
+                        0.0,
+                        number(0.0),
+                        crate::model::animation::EasingFunction::Linear,
+                    ),
+                    crate::model::project::property::Keyframe::new(
+                        item_duration,
+                        number(1.0),
+                        crate::model::animation::EasingFunction::Linear,
+                    ),
+                ]),
+            );
+            parameters.set(
+                "auto_orient".to_string(),
+                Property::constant(crate::model::project::property::PropertyValue::Boolean(
+                    false,
+                )),
+            );
+        }
         candidate
             .items
             .get_mut(&item_id)
@@ -963,7 +1010,7 @@ impl AuthoringSession {
                 influence: Property::constant(
                     crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
                 ),
-                parameters: PropertyMap::new(),
+                parameters,
             });
         candidate.validate()?;
         self.project = candidate;
