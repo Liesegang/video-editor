@@ -5,8 +5,10 @@ use crate::model::project::asset::Asset;
 use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
-    AttachmentId, AttachmentOwner, AuthoringProject, MaskId, ModuleInstanceId, SourceRef, Timeline,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, MaskId,
+    ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
+    ModuleRole, PublishedParameter, PublishedParameterId, SourceRef, Timeline, TimelineId,
+    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
     TimelineTrackKind,
 };
 
@@ -335,6 +337,199 @@ impl AuthoringSession {
             timeline_id,
             item_id,
         }]))
+    }
+
+    pub fn update_item_property_value(
+        &mut self,
+        item_id: TimelineItemId,
+        key: String,
+        time: f64,
+        value: crate::model::project::property::PropertyValue,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        self.project
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .authored_properties
+            .update_property_or_keyframe(&key, time, value, None);
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
+    pub fn rename_item(
+        &mut self,
+        item_id: TimelineItemId,
+        name: String,
+    ) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        if name.trim().is_empty() {
+            return Err("Timeline item name cannot be empty".to_string());
+        }
+        self.project
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
+            .name = name;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
+    pub fn set_text(&mut self, item_id: TimelineItemId, text: String) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let item = self
+            .project
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+        let SourceRef::Text { text: current } = &mut item.source else {
+            return Err("Selected Timeline item is not Text".to_string());
+        };
+        *current = text;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
+    pub fn attach_effect_module(
+        &mut self,
+        item_id: TimelineItemId,
+        name: String,
+        node: crate::model::node::Node,
+    ) -> Result<(ModuleInstanceId, ChangeSet), String> {
+        let timeline_id = self.timeline_for_item(item_id)?;
+        let node_id = node.id;
+        let mut published_parameters = Vec::new();
+        for (property_name, property) in node.properties().iter() {
+            let port = format!("{}{}", crate::plugin::PROPERTY_PORT_PREFIX, property_name);
+            let data_type = match node.content() {
+                crate::model::node::NodeContent::PluginOperation(operation) => operation
+                    .declared_ports
+                    .iter()
+                    .find(|definition| definition.key == port)
+                    .map(|definition| definition.data_type)
+                    .unwrap_or(crate::model::project::PortDataType::Any),
+                _ => crate::model::project::PortDataType::Any,
+            };
+            let Some(default_value) = property.value().cloned() else {
+                continue;
+            };
+            published_parameters.push(PublishedParameter {
+                id: PublishedParameterId::new(),
+                name: property_name.clone(),
+                data_type,
+                default_value,
+                target: super::ModulePortAddress { node_id, port },
+            });
+        }
+        let definition_id = ModuleDefinitionId::new();
+        self.project.module_definitions.insert(
+            definition_id,
+            ModuleDefinition {
+                id: definition_id,
+                name,
+                role: ModuleRole::Effect,
+                graph: ModuleGraph {
+                    nodes: std::collections::HashMap::from([(node_id, node)]),
+                    connections: Vec::new(),
+                },
+                published_parameters,
+                published_signals: Vec::new(),
+                published_actions: Vec::new(),
+                version: 1,
+            },
+        );
+        let instance_id = ModuleInstanceId::new();
+        self.project.module_instances.insert(
+            instance_id,
+            ModuleInstance {
+                id: instance_id,
+                definition_id,
+                parameter_overrides: std::collections::HashMap::new(),
+            },
+        );
+        let attachment_id = AttachmentId::new();
+        let order = self
+            .project
+            .attachments
+            .values()
+            .filter(|attachment| attachment.owner == AttachmentOwner::Item { item_id })
+            .map(|attachment| attachment.order)
+            .max()
+            .unwrap_or(-1)
+            .saturating_add(1);
+        self.project.attachments.insert(
+            attachment_id,
+            Attachment {
+                id: attachment_id,
+                owner: AttachmentOwner::Item { item_id },
+                module_instance_id: instance_id,
+                stage: AttachmentStage::ItemPostTransform,
+                order,
+            },
+        );
+        Ok((
+            instance_id,
+            self.finish(vec![ProjectInvalidation::ItemProperties {
+                timeline_id,
+                item_id,
+            }]),
+        ))
+    }
+
+    pub fn set_module_parameter(
+        &mut self,
+        instance_id: ModuleInstanceId,
+        parameter_id: PublishedParameterId,
+        value: crate::model::project::property::PropertyValue,
+    ) -> Result<ChangeSet, String> {
+        let instance = self
+            .project
+            .module_instances
+            .get_mut(&instance_id)
+            .ok_or_else(|| format!("Missing Module instance {instance_id}"))?;
+        let definition = self
+            .project
+            .module_definitions
+            .get(&instance.definition_id)
+            .ok_or_else(|| format!("Missing Module definition {}", instance.definition_id))?;
+        if !definition
+            .published_parameters
+            .iter()
+            .any(|parameter| parameter.id == parameter_id)
+        {
+            return Err("Published parameter does not belong to the Module definition".to_string());
+        }
+        instance.parameter_overrides.insert(parameter_id, value);
+        let invalidations = self
+            .project
+            .attachments
+            .values()
+            .filter(|attachment| attachment.module_instance_id == instance_id)
+            .filter_map(|attachment| match attachment.owner {
+                AttachmentOwner::Item { item_id } => {
+                    self.timeline_for_item(item_id).ok().map(|timeline_id| {
+                        ProjectInvalidation::ItemProperties {
+                            timeline_id,
+                            item_id,
+                        }
+                    })
+                }
+                AttachmentOwner::Track { track_id } => self
+                    .timeline_for_track(track_id)
+                    .ok()
+                    .map(|timeline_id| ProjectInvalidation::TimelineStructure { timeline_id }),
+                AttachmentOwner::Timeline { timeline_id } => {
+                    Some(ProjectInvalidation::TimelineStructure { timeline_id })
+                }
+            })
+            .collect();
+        Ok(self.finish(invalidations))
     }
 
     pub fn set_parent(

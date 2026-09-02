@@ -15,10 +15,13 @@ use crate::model::authoring::{
     ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
     TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
+use crate::model::authoring::{ModuleInstanceId, PublishedParameterId};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::project::asset::Asset;
 use crate::model::project::property::Property;
+use crate::model::project::property::PropertyValue;
+use crate::plugin::PluginManager;
 
 pub struct TimelineEditorService {
     session: RwLock<AuthoringSession>,
@@ -228,6 +231,61 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn update_item_property_value(
+        &self,
+        item_id: TimelineItemId,
+        key: String,
+        time: f64,
+        value: PropertyValue,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .update_item_property_value(item_id, key, time, value)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn rename_item(
+        &self,
+        item_id: TimelineItemId,
+        name: String,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .rename_item(item_id, name)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn set_text(
+        &self,
+        item_id: TimelineItemId,
+        text: String,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_text(item_id, text)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn attach_effect(
+        &self,
+        item_id: TimelineItemId,
+        effect_type: &str,
+        plugins: &PluginManager,
+    ) -> Result<(ModuleInstanceId, ChangeSet), LibraryError> {
+        let node = plugins.create_effect_operation_node(effect_type)?;
+        self.write_session()?
+            .attach_effect_module(item_id, effect_type.to_string(), node)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn set_module_parameter(
+        &self,
+        instance_id: ModuleInstanceId,
+        parameter_id: PublishedParameterId,
+        value: PropertyValue,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_module_parameter(instance_id, parameter_id, value)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn set_parent(
         &self,
         item_id: TimelineItemId,
@@ -359,11 +417,38 @@ mod tests {
                 0,
             )
             .expect("text");
+        let plugins = PluginManager::default();
+        let (effect_instance, _) = service
+            .attach_effect(item_id, "blur", &plugins)
+            .expect("Blur effect");
+        let snapshot = service.snapshot().expect("effect snapshot");
+        let definition_id = snapshot.module_instances[&effect_instance].definition_id;
+        let sigma_x = snapshot.module_definitions[&definition_id]
+            .published_parameters
+            .iter()
+            .find(|parameter| parameter.name == "sigma_x")
+            .expect("published sigma_x")
+            .id;
+        drop(snapshot);
+        service
+            .set_module_parameter(
+                effect_instance,
+                sigma_x,
+                PropertyValue::Number(ordered_float::OrderedFloat(8.0)),
+            )
+            .expect("effect parameter");
         service.split_item(item_id, 1.0).expect("split");
         let (_, frame) = service
             .evaluate_frame(timeline_id, 0.5, 1.0, None)
             .expect("frame");
         assert_eq!(frame.object_count(), 1);
+        let crate::model::frame::entity::FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let crate::model::frame::entity::FrameItem::Group(item) = &track.items[0] else {
+            panic!("Item group expected");
+        };
+        assert_eq!(item.effects[0].effect_type, "blur");
 
         let directory = tempfile::tempdir().expect("directory");
         let path = directory.path().join("vertical-slice.ruvie");
