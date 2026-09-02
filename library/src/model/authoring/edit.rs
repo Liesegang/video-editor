@@ -42,6 +42,9 @@ pub enum ProjectInvalidation {
     Asset {
         asset_id: uuid::Uuid,
     },
+    ModuleDefinition {
+        definition_id: ModuleDefinitionId,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -554,6 +557,39 @@ impl AuthoringSession {
             })
             .collect();
         Ok(self.finish(invalidations))
+    }
+
+    pub fn set_module_node_state(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+        name: String,
+        enabled: bool,
+        bypassed: bool,
+    ) -> Result<ChangeSet, String> {
+        if name.trim().is_empty() {
+            return Err("Module Node name cannot be empty".to_string());
+        }
+        let definition = self
+            .project
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        let node = definition
+            .graph
+            .nodes
+            .get_mut(&node_id)
+            .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
+        node.name = name;
+        node.enabled = enabled;
+        node.bypassed = bypassed;
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        Ok(self.finish(vec![ProjectInvalidation::ModuleDefinition {
+            definition_id,
+        }]))
     }
 
     pub fn set_parent(

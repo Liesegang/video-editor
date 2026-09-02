@@ -4,8 +4,8 @@ use std::sync::Arc;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::model::authoring::{
-    AuthoringProject, DurationPolicy, ModuleInstanceId, PublishedParameterId, SourceRef,
-    TimelineId, TimelineInterval, TimelineItemId,
+    AuthoringProject, DurationPolicy, ModuleDefinitionId, ModuleInstanceId, PublishedParameterId,
+    SourceRef, TimelineId, TimelineInterval, TimelineItemId,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -81,6 +81,7 @@ enum Edit {
     Split(TimelineItemId),
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
+    ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
 }
 
 pub struct TimelineApp {
@@ -495,6 +496,10 @@ impl TimelineApp {
                 .editor
                 .set_module_parameter(instance, parameter, value)
                 .map(|_| ()),
+            Edit::ModuleNodeState(definition, node, name, enabled, bypassed) => self
+                .editor
+                .set_module_node_state(definition, node, name, enabled, bypassed)
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
@@ -705,7 +710,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Assets => assets_ui(ui, self.project),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item),
             Tab::Data => data_ui(ui, self.project),
-            Tab::Logic => logic_ui(ui, self.project, self.selected_item),
+            Tab::Logic => logic_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Diagnostics => diagnostics_ui(ui, self.project, self.workspace),
         }
     }
@@ -993,7 +998,12 @@ fn data_ui(ui: &mut egui::Ui, project: &AuthoringProject) {
     ui.small("Stable provenance keeps manual corrections across regeneration.");
 }
 
-fn logic_ui(ui: &mut egui::Ui, project: &AuthoringProject, selected: Option<TimelineItemId>) {
+fn logic_ui(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    selected: Option<TimelineItemId>,
+    edits: &mut Vec<Edit>,
+) {
     ui.heading("Logic Module");
     ui.label("Only reusable ModuleDefinitions appear here. Timeline items are never expanded into nodes.");
     let selected_instances: Vec<_> = selected.into_iter().flat_map(|id| project.attachments.values().filter(move |attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id))).collect();
@@ -1010,6 +1020,30 @@ fn logic_ui(ui: &mut egui::Ui, project: &AuthoringProject, selected: Option<Time
                 "Published parameters: {}",
                 definition.published_parameters.len()
             ));
+            for node in definition.graph.nodes.values() {
+                ui.group(|ui| {
+                    let mut name = node.name.clone();
+                    let mut enabled = node.enabled;
+                    let mut bypassed = node.bypassed;
+                    let name_changed = ui.text_edit_singleline(&mut name).changed();
+                    let enabled_changed = ui.checkbox(&mut enabled, "Enabled").changed();
+                    let bypass_changed = if node.supports_bypass() {
+                        ui.checkbox(&mut bypassed, "Bypass").changed()
+                    } else {
+                        false
+                    };
+                    ui.small(format!("{:?}", node.content()));
+                    if name_changed || enabled_changed || bypass_changed {
+                        edits.push(Edit::ModuleNodeState(
+                            definition.id,
+                            node.id,
+                            name,
+                            enabled,
+                            bypassed,
+                        ));
+                    }
+                });
+            }
         });
     }
 }

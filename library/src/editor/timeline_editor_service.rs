@@ -15,7 +15,7 @@ use crate::model::authoring::{
     ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
     TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
 };
-use crate::model::authoring::{ModuleInstanceId, PublishedParameterId};
+use crate::model::authoring::{ModuleDefinitionId, ModuleInstanceId, PublishedParameterId};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::project::asset::Asset;
@@ -299,6 +299,19 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn set_module_node_state(
+        &self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+        name: String,
+        enabled: bool,
+        bypassed: bool,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_module_node_state(definition_id, node_id, name, enabled, bypassed)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn set_parent(
         &self,
         item_id: TimelineItemId,
@@ -451,6 +464,31 @@ mod tests {
                 PropertyValue::Number(ordered_float::OrderedFloat(8.0)),
             )
             .expect("effect parameter");
+        let before_logic_edit = service.snapshot().expect("logic snapshot");
+        let placement = before_logic_edit.items[&item_id].clone();
+        let definition = &before_logic_edit.module_definitions[&definition_id];
+        let definition_version = definition.version;
+        let node = definition.graph.nodes.values().next().expect("Blur Node");
+        let node_id = node.id;
+        let enabled = node.enabled;
+        let bypassed = node.bypassed;
+        drop(before_logic_edit);
+        service
+            .set_module_node_state(
+                definition_id,
+                node_id,
+                "Blur Core".to_string(),
+                enabled,
+                bypassed,
+            )
+            .expect("Logic edit");
+        let after_logic_edit = service.snapshot().expect("edited snapshot");
+        assert_eq!(after_logic_edit.items[&item_id], placement);
+        assert_eq!(
+            after_logic_edit.module_definitions[&definition_id].version,
+            definition_version + 1
+        );
+        drop(after_logic_edit);
         service.split_item(item_id, 1.0).expect("split");
         let (_, frame) = service
             .evaluate_frame(timeline_id, 0.5, 1.0, None)
