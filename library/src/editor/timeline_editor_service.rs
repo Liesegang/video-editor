@@ -383,6 +383,34 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn import_srt(
+        &self,
+        path: &Path,
+        target_track_id: TimelineTrackId,
+    ) -> Result<Vec<TimelineItemId>, LibraryError> {
+        let source = std::fs::read_to_string(path).map_err(|error| {
+            LibraryError::Project(format!("Cannot read subtitles {}: {error}", path.display()))
+        })?;
+        let cues =
+            crate::core::subtitle_runtime::parse_srt(&source).map_err(LibraryError::Validation)?;
+        let mut session = self.write_session()?;
+        cues.into_iter()
+            .enumerate()
+            .map(|(index, cue)| {
+                session
+                    .add_item(
+                        target_track_id,
+                        format!("Subtitle {}", index + 1),
+                        SourceRef::Text { text: cue.text },
+                        TimelineInterval::new(cue.start, cue.end - cue.start)?,
+                        index as i64,
+                    )
+                    .map(|(item_id, _)| item_id)
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn import_data_source(
         &self,
         path: &Path,

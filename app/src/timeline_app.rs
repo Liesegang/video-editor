@@ -96,6 +96,7 @@ enum Edit {
     ImportData(std::path::PathBuf, TimelineTrackId),
     RefreshData(DataSourceId),
     DiscardOverride(OverrideId),
+    ImportSubtitles(std::path::PathBuf, TimelineTrackId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,9 +136,10 @@ impl Edit {
             Self::UpdateKeyframe(item, key, ..) | Self::RemoveKeyframe(item, key, _) => {
                 Some(HistoryKey::Property(*item, key.clone()))
             }
-            Self::ImportData(..) | Self::RefreshData(_) | Self::DiscardOverride(_) => {
-                Some(HistoryKey::Data)
-            }
+            Self::ImportData(..)
+            | Self::RefreshData(_)
+            | Self::DiscardOverride(_)
+            | Self::ImportSubtitles(..) => Some(HistoryKey::Data),
         }
     }
 }
@@ -772,6 +774,9 @@ impl TimelineApp {
                 .editor
                 .remove_generated_override(override_id)
                 .map(|_| ()),
+            Edit::ImportSubtitles(path, track_id) => {
+                self.editor.import_srt(&path, track_id).map(|_| ())
+            }
         };
         match result {
             Ok(()) => {
@@ -943,6 +948,23 @@ impl eframe::App for TimelineApp {
                 ui.separator();
                 if ui.button("Import").clicked() {
                     self.import_asset();
+                }
+                if ui.button("Import Subtitles").clicked() {
+                    let target_track = self.editor.snapshot().ok().and_then(|project| {
+                        project
+                            .timelines
+                            .get(&self.open_timeline)
+                            .and_then(|timeline| timeline.track_order.first())
+                            .copied()
+                    });
+                    if let (Some(path), Some(track_id)) = (
+                        rfd::FileDialog::new()
+                            .add_filter("SubRip subtitles", &["srt"])
+                            .pick_file(),
+                        target_track,
+                    ) {
+                        self.apply(Edit::ImportSubtitles(path, track_id));
+                    }
                 }
                 if ui.button("+ Text").clicked() {
                     self.add_text();
