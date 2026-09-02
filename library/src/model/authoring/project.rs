@@ -208,6 +208,35 @@ impl AuthoringProject {
                     return Err(format!("Item {} has an invalid Constraint target", item.id));
                 }
             }
+            if let crate::model::authoring::SourceRef::Composition(instance) = &item.source {
+                let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {
+                    format!("Item {} refers to a missing nested Timeline", item.id)
+                })?;
+                if !instance.time_map.source_start.is_finite()
+                    || !instance.time_map.playback_rate.is_finite()
+                {
+                    return Err(format!("Item {} has a non-finite time map", item.id));
+                }
+                if let crate::model::authoring::DurationPolicy::Responsive {
+                    intro_end,
+                    outro_start,
+                } = &instance.duration_policy
+                {
+                    let definition_duration = nested.duration.into_inner();
+                    let minimum =
+                        intro_end.into_inner() + definition_duration - outro_start.into_inner();
+                    if intro_end.into_inner() < 0.0
+                        || intro_end > outro_start
+                        || outro_start.into_inner() > definition_duration
+                        || item.interval.duration.into_inner() < minimum
+                    {
+                        return Err(format!(
+                            "Item {} has invalid Responsive duration markers",
+                            item.id
+                        ));
+                    }
+                }
+            }
         }
         self.validate_parent_cycles()?;
         let mut referenced_masks = std::collections::HashSet::new();
