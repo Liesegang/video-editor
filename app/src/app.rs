@@ -10,9 +10,8 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::action::{
-    activate_composition_with_history, commit_live_project_edits,
-    handler::{handle_command, ActionContext},
-    HistoryManager,
+    HistoryManager, activate_composition_with_history, commit_live_project_edits,
+    handler::{ActionContext, handle_command},
 };
 use crate::command::{CommandContext, CommandId, CommandRegistry};
 use crate::config;
@@ -23,7 +22,7 @@ use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::tab_viewer::{active_command_scope, create_initial_dock_state, AppTabViewer};
+use crate::ui::tab_viewer::{AppTabViewer, active_command_scope, create_workspace_dock_state};
 use crate::utils::lock::read_or_recover;
 use library::RenderServer;
 
@@ -90,7 +89,7 @@ impl RuViEApp {
 
         let mut app = Self {
             editor_context,
-            dock_state: create_initial_dock_state(),
+            dock_state: create_workspace_dock_state(app_config.workspace),
             project_service,
             project: default_project,
             history_manager: HistoryManager::new(),
@@ -139,20 +138,25 @@ impl eframe::App for RuViEApp {
         // --- Draw UI and Collect Inputs ---
 
         // 2. Menu Bar
+        let mut workspace_changed = false;
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             let main_ui_enabled = !self.settings_dialog.is_open
                 && !self.settings_dialog.show_close_warning
                 && !self.editor_context.keyframe_dialog.is_open;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
-                crate::ui::menu::menu_bar(
+                workspace_changed = crate::ui::menu::menu_bar(
                     ui,
                     &self.command_registry,
                     &mut self.dock_state,
+                    &mut self.app_config.workspace,
                     &mut self.triggered_action,
                 );
             });
         });
+        if workspace_changed {
+            config::save_config(&self.app_config);
+        }
 
         // 3. Settings Window & Unsaved Changes Dialog
         // 3. Settings Window & Unsaved Changes Dialog
@@ -218,7 +222,10 @@ impl eframe::App for RuViEApp {
             CommandContext::palette_origin(command_context, focused_command_context);
 
         // Palette
-        if let Some(cmd_id) = self.command_palette.show(ctx, &self.command_registry) {
+        if let Some(cmd_id) =
+            self.command_palette
+                .show(ctx, &self.command_registry, self.app_config.workspace)
+        {
             self.triggered_action = Some(cmd_id);
         }
 

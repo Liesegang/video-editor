@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use crate::command::{CommandRegistry, CommandScope};
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
-    action::{activate_composition_with_history, HistoryManager},
+    action::{HistoryManager, activate_composition_with_history},
     model::ui_types::Tab,
     state::context::EditorContext,
     ui::panels::{assets, inspector, node_editor, preview, timeline},
@@ -148,8 +148,8 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Tab::Timeline => format!("{} {}", icons::FILM_STRIP, "Timeline").into(),
             Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
             Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
-            Tab::GraphEditor => format!("{} {}", icons::CHART_LINE, "Graph Editor").into(),
-            Tab::NodeEditor => format!("{} {}", icons::SHARE_NETWORK, "Node Editor").into(),
+            Tab::GraphEditor => format!("{} {}", icons::CHART_LINE, "Motion Curve").into(),
+            Tab::NodeEditor => format!("{} {}", icons::SHARE_NETWORK, "Logic").into(),
         }
     }
 
@@ -197,22 +197,28 @@ pub fn active_command_scope(
 }
 
 pub fn create_initial_dock_state() -> DockState<Tab> {
+    create_workspace_dock_state(crate::model::ui_types::Workspace::Edit)
+}
+
+pub fn create_workspace_dock_state(workspace: crate::model::ui_types::Workspace) -> DockState<Tab> {
     let mut dock_state = DockState::new(vec![Tab::Preview]);
     let surface = dock_state.main_surface_mut();
 
-    // 1. Split off the timeline at the bottom (30% of height)
-    let [main_area, _] = surface.split_below(
-        egui_dock::NodeIndex::root(),
-        0.7,
-        vec![Tab::Timeline, Tab::GraphEditor, Tab::NodeEditor],
-    );
+    let mut lower_tabs = vec![Tab::Timeline];
+    if workspace.depth() >= 2 && workspace != crate::model::ui_types::Workspace::Data {
+        lower_tabs.push(Tab::GraphEditor);
+    }
+    if workspace.depth() >= 3 {
+        lower_tabs.push(Tab::NodeEditor);
+    }
+    let [main_area, _] = surface.split_below(egui_dock::NodeIndex::root(), 0.7, lower_tabs);
 
-    // 2. Split off the inspector on the right (20% of width)
-    // The remaining area is 80% wide, so we split at 0.8
-    let [main_area, _] = surface.split_right(main_area, 0.8, vec![Tab::Inspector]);
+    let main_area = if workspace.depth() >= 1 {
+        surface.split_right(main_area, 0.8, vec![Tab::Inspector])[0]
+    } else {
+        main_area
+    };
 
-    // 3. Split off the assets on the left (20% of original width)
-    // The remaining area is 80% wide. 0.2 / 0.8 = 0.25
     surface.split_left(main_area, 0.25, vec![Tab::Assets]);
 
     dock_state
@@ -220,13 +226,20 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
 
 #[cfg(test)]
 mod tests {
-    use super::{active_command_scope, create_initial_dock_state};
+    use super::{active_command_scope, create_initial_dock_state, create_workspace_dock_state};
     use crate::command::CommandScope;
-    use crate::model::ui_types::Tab;
+    use crate::model::ui_types::{Tab, Workspace};
+
+    #[test]
+    fn edit_workspace_hides_graph_and_node_panels() {
+        let dock = create_initial_dock_state();
+        assert!(dock.find_tab(&Tab::GraphEditor).is_none());
+        assert!(dock.find_tab(&Tab::NodeEditor).is_none());
+    }
 
     #[test]
     fn node_editor_commands_require_the_focused_node_editor_leaf() {
-        let mut dock = create_initial_dock_state();
+        let mut dock = create_workspace_dock_state(Workspace::Logic);
         assert_eq!(
             active_command_scope(&dock, None, None, true),
             CommandScope::Global
@@ -251,7 +264,7 @@ mod tests {
 
     #[test]
     fn pointer_hover_scope_overrides_stale_dock_focus_in_both_directions() {
-        let mut dock = create_initial_dock_state();
+        let mut dock = create_workspace_dock_state(Workspace::Logic);
         let node_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
         let (node_surface, node_leaf, node_tab) =
             dock.find_tab(&Tab::NodeEditor).expect("node editor tab");

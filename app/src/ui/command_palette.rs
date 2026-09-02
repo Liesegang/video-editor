@@ -1,4 +1,5 @@
 use crate::command::{Command, CommandContext, CommandId, CommandRegistry};
+use crate::model::ui_types::{Tab, Workspace};
 use eframe::egui::{self, Align2, Key, RichText, Window};
 
 pub struct CommandPalette {
@@ -32,7 +33,12 @@ impl CommandPalette {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, registry: &CommandRegistry) -> Option<CommandId> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        registry: &CommandRegistry,
+        workspace: Workspace,
+    ) -> Option<CommandId> {
         if !self.is_open {
             return None;
         }
@@ -56,6 +62,9 @@ impl CommandPalette {
             .iter()
             .filter(|cmd| {
                 if !cmd.is_available_in(command_context) {
+                    return false;
+                }
+                if !command_visible_in_workspace(cmd.id, workspace) {
                     return false;
                 }
                 if self.query.is_empty() {
@@ -202,10 +211,19 @@ impl CommandPalette {
     }
 }
 
+fn command_visible_in_workspace(command: CommandId, workspace: Workspace) -> bool {
+    match command {
+        CommandId::TogglePanel(tab) => Tab::all_for_workspace(workspace).contains(&tab),
+        command if command.is_node_editor_layout() => workspace.depth() >= 3,
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::CommandPalette;
+    use super::{CommandPalette, command_visible_in_workspace};
     use crate::command::{CommandContext, CommandScope};
+    use crate::model::ui_types::{Tab, Workspace};
 
     #[test]
     fn palette_latches_its_origin_context_until_close() {
@@ -226,5 +244,21 @@ mod tests {
             has_node_selection: false,
         });
         assert_eq!(palette.command_context, None);
+    }
+
+    #[test]
+    fn basic_workspaces_do_not_expose_logic_commands() {
+        assert!(!command_visible_in_workspace(
+            crate::command::CommandId::TogglePanel(Tab::NodeEditor),
+            Workspace::Edit,
+        ));
+        assert!(!command_visible_in_workspace(
+            crate::command::CommandId::NodeEditorCleanLayout,
+            Workspace::Motion,
+        ));
+        assert!(command_visible_in_workspace(
+            crate::command::CommandId::TogglePanel(Tab::NodeEditor),
+            Workspace::Logic,
+        ));
     }
 }

@@ -24,6 +24,52 @@ pub enum Tab {
     // Add other tabs as needed
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Workspace {
+    Beginner,
+    #[default]
+    Edit,
+    Motion,
+    Data,
+    Logic,
+    Diagnostics,
+}
+
+impl Workspace {
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Beginner,
+            Self::Edit,
+            Self::Motion,
+            Self::Data,
+            Self::Logic,
+            Self::Diagnostics,
+        ]
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Beginner => "Beginner",
+            Self::Edit => "Edit",
+            Self::Motion => "Motion",
+            Self::Data => "Data",
+            Self::Logic => "Logic",
+            Self::Diagnostics => "Diagnostics",
+        }
+    }
+
+    pub const fn depth(self) -> u8 {
+        match self {
+            Self::Beginner => 0,
+            Self::Edit => 1,
+            Self::Motion | Self::Data => 2,
+            Self::Logic => 3,
+            Self::Diagnostics => 4,
+        }
+    }
+}
+
 impl Tab {
     pub fn all() -> &'static [Tab] {
         &[
@@ -34,6 +80,23 @@ impl Tab {
             Tab::GraphEditor,
             Tab::NodeEditor,
         ]
+    }
+
+    pub fn all_for_workspace(workspace: Workspace) -> &'static [Tab] {
+        match workspace {
+            Workspace::Beginner => &[Tab::Preview, Tab::Timeline, Tab::Assets],
+            Workspace::Edit | Workspace::Data => {
+                &[Tab::Preview, Tab::Timeline, Tab::Inspector, Tab::Assets]
+            }
+            Workspace::Motion => &[
+                Tab::Preview,
+                Tab::Timeline,
+                Tab::Inspector,
+                Tab::Assets,
+                Tab::GraphEditor,
+            ],
+            Workspace::Logic | Workspace::Diagnostics => Self::all(),
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -71,7 +134,7 @@ fn get_color_tuple(color: &egui::Color32) -> (u8, u8, u8, u8) {
 }
 impl From<ColorDef> for egui::Color32 {
     fn from(def: ColorDef) -> egui::Color32 {
-        egui::Color32::from_rgba_premultiplied(def.0 .0, def.0 .1, def.0 .2, def.0 .3)
+        egui::Color32::from_rgba_premultiplied(def.0.0, def.0.1, def.0.2, def.0.3)
     }
 }
 

@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::model::ui_types::Workspace;
+
 type ShortcutMap = HashMap<CommandId, Option<(Modifiers, Key)>>;
 
 #[derive(Serialize, Deserialize)]
@@ -172,6 +174,8 @@ pub struct AppConfig {
     pub shortcuts: ShortcutMap,
     pub plugins: PluginConfig,
     pub theme: ThemeConfig,
+    #[serde(default)]
+    pub workspace: Workspace,
 }
 
 impl AppConfig {
@@ -188,6 +192,7 @@ impl AppConfig {
             theme: ThemeConfig {
                 theme_type: ThemeType::Dark,
             },
+            workspace: Workspace::default(),
         }
     }
 }
