@@ -16,7 +16,8 @@ use super::{
     GeneratedItemId, Mask, MaskId, ModuleDefinition, ModuleDefinitionId, ModuleInstance,
     ModuleInstanceId, Override, OverrideId, PublishedParameterId, SignalBinding, SignalBindingId,
     Timeline, TimelineId, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, Transition, TransitionId,
+    TimelineTrackKind, TranscriptDocument, TranscriptDocumentId, TranscriptLink, Transition,
+    TransitionId,
 };
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -80,6 +81,8 @@ pub struct AuthoringProject {
     pub overrides: HashMap<OverrideId, Override>,
     pub masks: HashMap<MaskId, Mask>,
     pub transitions: HashMap<TransitionId, Transition>,
+    pub transcript_documents: HashMap<TranscriptDocumentId, TranscriptDocument>,
+    pub transcript_links: HashMap<TimelineItemId, TranscriptLink>,
     pub assets: Vec<Asset>,
     pub(crate) color_management: RequestedColorManagementConfig,
     pub export: ExportConfig,
@@ -143,6 +146,8 @@ impl AuthoringProject {
             overrides: HashMap::new(),
             masks: HashMap::new(),
             transitions: HashMap::new(),
+            transcript_documents: HashMap::new(),
+            transcript_links: HashMap::new(),
             assets: Vec::new(),
             color_management: RequestedColorManagementConfig::default(),
             export: ExportConfig::default(),
@@ -339,6 +344,53 @@ impl AuthoringProject {
                 crate::model::authoring::SourceRef::Text { .. }
                 | crate::model::authoring::SourceRef::Shape { .. }
                 | crate::model::authoring::SourceRef::Solid { .. } => {}
+            }
+        }
+        for (document_id, document) in &self.transcript_documents {
+            if *document_id != document.id {
+                return Err("Transcript document key does not match its ID".to_string());
+            }
+            if document.name.trim().is_empty() {
+                return Err(format!("Transcript document {} has no name", document.id));
+            }
+        }
+        for (item_id, link) in &self.transcript_links {
+            if *item_id != link.item_id {
+                return Err("Transcript link key does not match its item ID".to_string());
+            }
+            let item = self
+                .items
+                .get(item_id)
+                .ok_or_else(|| format!("Transcript link refers to missing item {item_id}"))?;
+            if !matches!(item.source, crate::model::authoring::SourceRef::Text { .. }) {
+                return Err(format!("Transcript link item {item_id} is not Text"));
+            }
+            let document = self
+                .transcript_documents
+                .get(&link.document_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Transcript link refers to missing document {}",
+                        link.document_id
+                    )
+                })?;
+            if link.text_start > link.text_end
+                || link.text_end > document.text.len()
+                || !document.text.is_char_boundary(link.text_start)
+                || !document.text.is_char_boundary(link.text_end)
+            {
+                return Err(format!(
+                    "Transcript link for item {item_id} has an invalid text range"
+                ));
+            }
+            if !link.source_time.start.is_finite()
+                || link.source_time.start.into_inner() < 0.0
+                || !link.source_time.duration.is_finite()
+                || link.source_time.duration.into_inner() <= 0.0
+            {
+                return Err(format!(
+                    "Transcript link for item {item_id} has an invalid source range"
+                ));
             }
         }
         self.validate_parent_cycles()?;

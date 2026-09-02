@@ -79,13 +79,31 @@ fn youtuber_subtitles_and_ripple_edits_do_not_create_nodes_per_cue() {
     let cues = service
         .import_srt(&subtitles, track_id)
         .expect("SRT import");
+    let split_caption = service.split_item(cues[0], 1.0).expect("subtitle split").0;
     service
         .set_text(cues[0], "Corrected first subtitle".to_string())
         .expect("batch correction");
+    service
+        .trim_item(cues[1], TimelineInterval::new(2.25, 0.5).unwrap())
+        .expect("subtitle trim");
     let project = service.snapshot().expect("project");
     assert_eq!(cues.len(), 2);
     assert!(project.module_definitions.is_empty());
     assert!(project.module_instances.is_empty());
+    assert_eq!(project.transcript_documents.len(), 1);
+    assert_eq!(project.transcript_links.len(), 3);
+    let left = &project.transcript_links[&cues[0]];
+    let right = &project.transcript_links[&split_caption];
+    assert_eq!(left.document_id, right.document_id);
+    assert_eq!(left.text_start, right.text_start);
+    assert_eq!(left.text_end, right.text_end);
+    assert_eq!(left.source_time.duration, OrderedFloat(0.5));
+    assert_eq!(right.source_time.start, OrderedFloat(1.0));
+    let trimmed = &project.transcript_links[&cues[1]];
+    assert_eq!(trimmed.source_time.start, OrderedFloat(2.25));
+    assert_eq!(trimmed.source_time.duration, OrderedFloat(0.5));
+    let document = &project.transcript_documents[&left.document_id];
+    assert_eq!(&document.text[left.text_start..left.text_end], "First");
 }
 
 #[test]

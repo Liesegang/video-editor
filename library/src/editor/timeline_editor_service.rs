@@ -14,7 +14,8 @@ use crate::model::authoring::{
     AuthoringProject, AuthoringSession, ChangeSet, CompositionInstance, DataSource, DataSourceId,
     DurationPolicy, EventBinding, EventBindingId, ModuleDefinition, ModuleGraph, ModuleInstance,
     ModuleRole, ProjectDocument, ProjectFileStore, ProjectRevision, SourceRef, TimeMap, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TranscriptDocument,
+    TranscriptDocumentId, TranscriptLink, TranscriptSource,
 };
 use crate::model::authoring::{
     ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
@@ -548,19 +549,52 @@ impl TimelineEditorService {
         })?;
         let cues =
             crate::core::subtitle_runtime::parse_srt(&source).map_err(LibraryError::Validation)?;
+        let document_id = TranscriptDocumentId::new();
+        let mut transcript_text = String::new();
+        let mut cue_ranges = Vec::with_capacity(cues.len());
+        for cue in &cues {
+            if !transcript_text.is_empty() {
+                transcript_text.push('\n');
+            }
+            let start = transcript_text.len();
+            transcript_text.push_str(&cue.text);
+            cue_ranges.push((start, transcript_text.len()));
+        }
+        let document = TranscriptDocument {
+            id: document_id,
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Subtitles")
+                .to_string(),
+            source: TranscriptSource::SubRipFile {
+                path: path.to_string_lossy().into_owned(),
+            },
+            text: transcript_text,
+        };
         let mut session = self.write_session()?;
+        session
+            .add_transcript_document(document)
+            .map_err(LibraryError::Validation)?;
         cues.into_iter()
+            .zip(cue_ranges)
             .enumerate()
-            .map(|(index, cue)| {
-                session
-                    .add_item(
-                        target_track_id,
-                        format!("Subtitle {}", index + 1),
-                        SourceRef::Text { text: cue.text },
-                        TimelineInterval::new(cue.start, cue.end - cue.start)?,
-                        index as i64,
-                    )
-                    .map(|(item_id, _)| item_id)
+            .map(|(index, (cue, (text_start, text_end)))| {
+                let (item_id, _) = session.add_item(
+                    target_track_id,
+                    format!("Subtitle {}", index + 1),
+                    SourceRef::Text { text: cue.text },
+                    TimelineInterval::new(cue.start, cue.end - cue.start)?,
+                    index as i64,
+                )?;
+                session.link_transcript_item(TranscriptLink {
+                    item_id,
+                    document_id,
+                    text_start,
+                    text_end,
+                    source_time: TimelineInterval::new(cue.start, cue.end - cue.start)?,
+                })?;
+                Ok(item_id)
             })
             .collect::<Result<Vec<_>, String>>()
             .map_err(LibraryError::Validation)

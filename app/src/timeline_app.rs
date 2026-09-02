@@ -2196,7 +2196,7 @@ fn data_ui(
                 .tracks
                 .get(&item.track_id)
                 .is_some_and(|track| track.timeline_id == open_timeline)
-                && item.name.starts_with("Subtitle ")
+                && project.transcript_links.contains_key(&item.id)
                 && matches!(item.source, SourceRef::Text { .. })
         })
         .collect();
@@ -2211,13 +2211,28 @@ fn data_ui(
                 let SourceRef::Text { text } = &item.source else {
                     continue;
                 };
+                let link = project.transcript_links.get(&item.id);
                 let mut edited = text.clone();
                 ui.horizontal(|ui| {
-                    ui.monospace(format!(
+                    let timing = ui.monospace(format!(
                         "{:.2}–{:.2}",
                         item.interval.start,
                         item.interval.start.into_inner() + item.interval.duration.into_inner()
                     ));
+                    if let Some(link) = link {
+                        if let Some(document) = project.transcript_documents.get(&link.document_id)
+                        {
+                            let original = &document.text[link.text_start..link.text_end];
+                            timing.on_hover_text(format!(
+                                "{} · source {:.2}–{:.2}\nOriginal transcript: {}",
+                                document.name,
+                                link.source_time.start,
+                                link.source_time.start.into_inner()
+                                    + link.source_time.duration.into_inner(),
+                                original
+                            ));
+                        }
+                    }
                     if ui.text_edit_singleline(&mut edited).changed() {
                         edits.push(Edit::SetText(item.id, edited));
                     }

@@ -55,3 +55,4 @@ define_id!(DataSourceId);
 define_id!(MaskId);
 define_id!(TransitionId);
 define_id!(ConstraintId);
+define_id!(TranscriptDocumentId);

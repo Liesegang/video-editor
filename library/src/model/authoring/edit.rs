@@ -12,7 +12,8 @@ use super::{
     OverrideId, OverrideOperator, OverridePatch, OverridePath, OverrideStatus, PublishedParameter,
     PublishedParameterId, SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId,
     TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, Transition, TransitionId, TransitionKind,
+    TimelineTrackKind, TranscriptDocument, TranscriptLink, Transition, TransitionId,
+    TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -233,6 +234,41 @@ impl AuthoringSession {
         Ok(self.finish(vec![ProjectInvalidation::Asset { asset_id }]))
     }
 
+    pub fn add_transcript_document(
+        &mut self,
+        document: TranscriptDocument,
+    ) -> Result<ChangeSet, String> {
+        if self.project.transcript_documents.contains_key(&document.id) {
+            return Err(format!(
+                "Transcript document {} already exists",
+                document.id
+            ));
+        }
+        let timeline_id = self.project.root_timeline_id;
+        self.project
+            .transcript_documents
+            .insert(document.id, document);
+        self.project.validate()?;
+        Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
+    }
+
+    pub fn link_transcript_item(&mut self, link: TranscriptLink) -> Result<ChangeSet, String> {
+        let timeline_id = self.timeline_for_item(link.item_id)?;
+        let item_id = link.item_id;
+        if self.project.transcript_links.contains_key(&link.item_id) {
+            return Err(format!(
+                "Timeline item {} already has a Transcript link",
+                link.item_id
+            ));
+        }
+        self.project.transcript_links.insert(item_id, link);
+        self.project.validate()?;
+        Ok(self.finish(vec![ProjectInvalidation::ItemProperties {
+            timeline_id,
+            item_id,
+        }]))
+    }
+
     pub fn move_item(
         &mut self,
         item_id: TimelineItemId,
@@ -289,6 +325,16 @@ impl AuthoringSession {
             &mut source,
             interval.start.into_inner() - old_interval.start.into_inner(),
         )?;
+        let remapped_transcript = self
+            .project
+            .transcript_links
+            .get(&item_id)
+            .cloned()
+            .map(|mut link| {
+                remap_transcript_trim(&mut link, old_interval, interval)?;
+                Ok::<_, String>(link)
+            })
+            .transpose()?;
         let item = self
             .project
             .items
@@ -296,6 +342,9 @@ impl AuthoringSession {
             .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
         item.interval = interval;
         item.source = source;
+        if let Some(link) = remapped_transcript {
+            self.project.transcript_links.insert(item_id, link);
+        }
         Ok(self.finish(vec![
             range_invalidation(timeline_id, old_interval),
             range_invalidation(timeline_id, interval),
@@ -348,6 +397,16 @@ impl AuthoringSession {
             }
         }
         self.project.items.insert(right_id, right);
+        if let Some(original_link) = self.project.transcript_links.get(&item_id).cloned() {
+            let (left_link, right_link) = split_transcript_link(
+                original_link,
+                right_id,
+                offset,
+                original.interval.duration.into_inner(),
+            )?;
+            self.project.transcript_links.insert(item_id, left_link);
+            self.project.transcript_links.insert(right_id, right_link);
+        }
         self.clone_item_attachments(item_id, right_id)?;
         Ok((
             right_id,
@@ -448,6 +507,7 @@ impl AuthoringSession {
             !binding_references_item(&binding.scope, item_id)
                 && !event_source_references_item(&binding.source, item_id)
         });
+        self.project.transcript_links.remove(&item_id);
         self.project.items.remove(&item_id);
         Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
     }
@@ -1624,6 +1684,44 @@ fn shift_source_start(source: &mut SourceRef, timeline_delta: f64) -> Result<(),
     }
     time_map.source_start = OrderedFloat(source_start);
     Ok(())
+}
+
+fn remap_transcript_trim(
+    link: &mut TranscriptLink,
+    old_interval: TimelineInterval,
+    new_interval: TimelineInterval,
+) -> Result<(), String> {
+    let old_duration = old_interval.duration.into_inner();
+    if old_duration <= 0.0 || new_interval.duration.into_inner() <= 0.0 {
+        return Err("A transcript-linked item must retain positive duration".to_string());
+    }
+    let source_rate = link.source_time.duration.into_inner() / old_duration;
+    let delta = new_interval.start.into_inner() - old_interval.start.into_inner();
+    let source_start = link.source_time.start.into_inner() + delta * source_rate;
+    let source_duration = new_interval.duration.into_inner() * source_rate;
+    link.source_time = TimelineInterval::new(source_start, source_duration)?;
+    Ok(())
+}
+
+fn split_transcript_link(
+    mut left: TranscriptLink,
+    right_id: TimelineItemId,
+    timeline_offset: f64,
+    timeline_duration: f64,
+) -> Result<(TranscriptLink, TranscriptLink), String> {
+    if timeline_duration <= 0.0 {
+        return Err("Cannot split a zero-duration Transcript link".to_string());
+    }
+    let ratio = timeline_offset / timeline_duration;
+    let source_duration = left.source_time.duration.into_inner();
+    let left_source_duration = source_duration * ratio;
+    let right_source_start = left.source_time.start.into_inner() + left_source_duration;
+    let mut right = left.clone();
+    right.item_id = right_id;
+    right.source_time =
+        TimelineInterval::new(right_source_start, source_duration - left_source_duration)?;
+    left.source_time.duration = OrderedFloat(left_source_duration);
+    Ok((left, right))
 }
 
 fn range_invalidation(timeline_id: TimelineId, interval: TimelineInterval) -> ProjectInvalidation {

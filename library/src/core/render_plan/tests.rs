@@ -53,6 +53,8 @@ fn project_with_items(
         overrides: HashMap::new(),
         masks: HashMap::new(),
         transitions: HashMap::new(),
+        transcript_documents: HashMap::new(),
+        transcript_links: HashMap::new(),
         assets: Vec::new(),
         color_management: Default::default(),
         export: Default::default(),

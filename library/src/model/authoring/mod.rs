@@ -7,6 +7,7 @@ mod module_graph;
 mod motion;
 mod project;
 mod timeline;
+mod transcript;
 
 pub use binding::*;
 pub use edit::*;
@@ -17,6 +18,7 @@ pub use module_graph::*;
 pub use motion::*;
 pub use project::*;
 pub use timeline::*;
+pub use transcript::*;
 
 #[cfg(test)]
 mod tests;
