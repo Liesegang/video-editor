@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
+use library::core::binding_runtime::{resolve_published_numeric_value, SignalRuntimeValues};
 use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
     InstancePath, MaskId, MaskMode, MatteMode, MatteRef, ModuleConnectionId, ModuleDefinitionId,
@@ -182,9 +183,15 @@ pub struct TimelineApp {
     selected_item: Option<TimelineItemId>,
     current_time: f64,
     is_playing: bool,
+    signal_runtime: SignalRuntimeValues,
     last_playback_tick: Instant,
     preview: Option<egui::TextureHandle>,
-    preview_key: Option<(library::model::authoring::ProjectRevision, TimelineId, u64)>,
+    preview_key: Option<(
+        library::model::authoring::ProjectRevision,
+        TimelineId,
+        u64,
+        u64,
+    )>,
     undo: Vec<AuthoringProject>,
     redo: Vec<AuthoringProject>,
     last_history_group: Option<(HistoryKey, Instant)>,
@@ -211,6 +218,7 @@ impl TimelineApp {
             selected_item: None,
             current_time: 0.0,
             is_playing: false,
+            signal_runtime: SignalRuntimeValues::default(),
             last_playback_tick: Instant::now(),
             preview: None,
             preview_key: None,
@@ -232,6 +240,7 @@ impl TimelineApp {
                 self.selected_item = None;
                 self.current_time = 0.0;
                 self.is_playing = false;
+                self.signal_runtime = SignalRuntimeValues::default();
                 self.undo.clear();
                 self.redo.clear();
                 self.last_history_group = None;
@@ -257,6 +266,7 @@ impl TimelineApp {
                 self.selected_item = None;
                 self.current_time = 0.0;
                 self.is_playing = false;
+                self.signal_runtime = SignalRuntimeValues::default();
                 self.undo.clear();
                 self.redo.clear();
                 self.last_history_group = None;
@@ -355,9 +365,14 @@ impl TimelineApp {
                 timeline.background_color.clone(),
             )?;
             drop(project);
-            let (project, frame) =
-                self.editor
-                    .evaluate_frame(self.open_timeline, self.current_time, 1.0, None)?;
+            let (project, frame) = self.editor.evaluate_frame_with_signals(
+                self.open_timeline,
+                &self.instance_path,
+                self.current_time,
+                1.0,
+                None,
+                &self.signal_runtime,
+            )?;
             let exported = self
                 .renderer
                 .render_export_frame(project.as_ref(), &frame)?;
@@ -453,9 +468,14 @@ impl TimelineApp {
         let result = (|| {
             for frame_index in 0..frame_count {
                 let time = settings.frame_time(frame_index)?;
-                let (project, frame) =
-                    self.editor
-                        .evaluate_frame(self.open_timeline, time, 1.0, None)?;
+                let (project, frame) = self.editor.evaluate_frame_with_signals(
+                    self.open_timeline,
+                    &self.instance_path,
+                    time,
+                    1.0,
+                    None,
+                    &self.signal_runtime,
+                )?;
                 let frame = self
                     .renderer
                     .render_export_frame(project.as_ref(), &frame)?;
@@ -939,7 +959,12 @@ impl TimelineApp {
             return;
         };
         let frame_number = (self.current_time * timeline.fps.into_inner()).floor() as u64;
-        let key = (revision, self.open_timeline, frame_number);
+        let key = (
+            revision,
+            self.open_timeline,
+            frame_number,
+            self.signal_runtime.generation(),
+        );
         if self.preview_key == Some(key) {
             return;
         }
@@ -956,7 +981,14 @@ impl TimelineApp {
         }
         let rendered = self
             .editor
-            .evaluate_frame(self.open_timeline, self.current_time, scale, None)
+            .evaluate_frame_with_signals(
+                self.open_timeline,
+                &self.instance_path,
+                self.current_time,
+                scale,
+                None,
+                &self.signal_runtime,
+            )
             .and_then(|(project, frame)| {
                 self.renderer
                     .render_frame(project.as_ref(), &frame, RenderDestination::Preview)
@@ -1214,6 +1246,7 @@ impl eframe::App for TimelineApp {
             current_time: &mut self.current_time,
             preview: self.preview.as_ref(),
             workspace: self.workspace,
+            signal_runtime: &mut self.signal_runtime,
             edits: &mut edits,
         };
         DockArea::new(&mut self.dock)
@@ -1244,6 +1277,7 @@ struct Viewer<'a> {
     current_time: &'a mut f64,
     preview: Option<&'a egui::TextureHandle>,
     workspace: Workspace,
+    signal_runtime: &'a mut SignalRuntimeValues,
     edits: &'a mut Vec<Edit>,
 }
 
@@ -1276,12 +1310,19 @@ impl TabViewer for Viewer<'_> {
                 self.instance_path,
                 *self.current_time,
                 self.workspace,
+                self.signal_runtime,
                 self.edits,
             ),
             Tab::Assets => assets_ui(ui, self.project),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Data => data_ui(ui, self.project, self.open_timeline, self.edits),
-            Tab::Logic => logic_ui(ui, self.project, self.selected_item, self.edits),
+            Tab::Logic => logic_ui(
+                ui,
+                self.project,
+                self.selected_item,
+                self.signal_runtime,
+                self.edits,
+            ),
             Tab::Diagnostics => diagnostics_ui(ui, self.project, self.workspace),
         }
     }
@@ -1560,6 +1601,7 @@ fn inspector_ui(
     instance_path: &InstancePath,
     current_time: f64,
     workspace: Workspace,
+    signal_runtime: &SignalRuntimeValues,
     edits: &mut Vec<Edit>,
 ) {
     let Some(id) = selected else {
@@ -1932,9 +1974,23 @@ fn inspector_ui(
                 }
             }
             ui.indent((instance.id, parameter.id), |ui| {
-                ui.small(format!("Base: {:?}", parameter.default_value));
-                if let Some(value) = instance.parameter_overrides.get(&parameter.id) {
-                    ui.small(format!("Instance override: {:?}", value));
+                if let Some(effective) = resolve_published_numeric_value(
+                    definition.id,
+                    instance,
+                    instance_path,
+                    parameter,
+                    project.signal_bindings.values(),
+                    signal_runtime,
+                ) {
+                    ui.strong(format!("Effective: {:?}", effective.value));
+                    for contribution in effective.contributions {
+                        ui.small(format!("{}: {:?}", contribution.label, contribution.value));
+                    }
+                } else {
+                    ui.small(format!("Base: {:?}", parameter.default_value));
+                    if let Some(value) = instance.parameter_overrides.get(&parameter.id) {
+                        ui.small(format!("Instance override: {:?}", value));
+                    }
                 }
                 let bindings: Vec<_> = project
                     .signal_bindings
@@ -2273,10 +2329,30 @@ fn logic_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
+    signal_runtime: &mut SignalRuntimeValues,
     edits: &mut Vec<Edit>,
 ) {
     ui.heading("Logic Module");
     ui.label("Only reusable ModuleDefinitions appear here. Timeline items are never expanded into nodes.");
+    if !project.signal_bindings.is_empty() {
+        ui.collapsing("Live signal preview", |ui| {
+            ui.small("Runtime-only source values; these are not saved in the project.");
+            let mut bindings = project.signal_bindings.values().collect::<Vec<_>>();
+            bindings.sort_by_key(|binding| binding.id);
+            for binding in bindings {
+                let mut value = signal_runtime.get(binding.id).unwrap_or(0.0);
+                if ui
+                    .add(
+                        egui::Slider::new(&mut value, 0.0..=1.0)
+                            .text(format!("{:?}", binding.source)),
+                    )
+                    .changed()
+                {
+                    let _ = signal_runtime.set(binding.id, value);
+                }
+            }
+        });
+    }
     let selected_instances: Vec<_> = selected.into_iter().flat_map(|id| project.attachments.values().filter(move |attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id))).collect();
     for attachment in selected_instances {
         let instance = &project.module_instances[&attachment.module_instance_id];

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use ordered_float::OrderedFloat;
 
+use crate::core::binding_runtime::{SignalRuntimeValues, resolve_published_numeric_value};
 use crate::core::render_plan::{
     CompiledModuleOperation, ModuleInvocationOwner, PlannedSource, RenderPlan,
 };
@@ -15,8 +16,8 @@ use crate::core::timeline_runtime::map_composition_time;
 use crate::error::LibraryError;
 use crate::model::BlendMode;
 use crate::model::authoring::{
-    AttachmentOwner, AttachmentStage, AuthoringProject, ConstraintKind, ShapeKind, SourceRef,
-    Timeline, TimelineId, TimelineItem, TransitionKind,
+    AttachmentOwner, AttachmentStage, AuthoringProject, ConstraintKind, InstancePath, ShapeKind,
+    SourceRef, Timeline, TimelineId, TimelineItem, TransitionKind,
 };
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::effect::ImageEffect;
@@ -37,13 +38,15 @@ pub fn evaluate_authoring_frame(
     render_scale: f64,
     region: Option<Region>,
 ) -> Result<FrameInfo, LibraryError> {
-    evaluate_authoring_timeline_frame(
+    evaluate_authoring_timeline_frame_with_signals(
         project,
         plan,
         project.root_timeline_id,
         frame_number,
         render_scale,
         region,
+        &InstancePath::root(project.root_timeline_id),
+        &SignalRuntimeValues::default(),
     )
 }
 
@@ -54,6 +57,28 @@ pub fn evaluate_authoring_timeline_frame(
     frame_number: u64,
     render_scale: f64,
     region: Option<Region>,
+) -> Result<FrameInfo, LibraryError> {
+    evaluate_authoring_timeline_frame_with_signals(
+        project,
+        plan,
+        timeline_id,
+        frame_number,
+        render_scale,
+        region,
+        &InstancePath::root(timeline_id),
+        &SignalRuntimeValues::default(),
+    )
+}
+
+pub fn evaluate_authoring_timeline_frame_with_signals(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    timeline_id: TimelineId,
+    frame_number: u64,
+    render_scale: f64,
+    region: Option<Region>,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
 ) -> Result<FrameInfo, LibraryError> {
     project.validate().map_err(LibraryError::Validation)?;
     if plan.root_timeline_id != project.root_timeline_id {
@@ -66,7 +91,15 @@ pub fn evaluate_authoring_timeline_frame(
         .get(&timeline_id)
         .ok_or_else(|| LibraryError::Validation(format!("Timeline {timeline_id} is missing")))?;
     let time = frame_number as f64 / root.fps.into_inner();
-    let mut items = collect_timeline_items(project, plan, root, time, &mut HashSet::new())?;
+    let mut items = collect_timeline_items(
+        project,
+        plan,
+        root,
+        time,
+        instance_path,
+        runtime_signals,
+        &mut HashSet::new(),
+    )?;
     let root_effects = attachment_effects(
         project,
         plan,
@@ -75,6 +108,8 @@ pub fn evaluate_authoring_timeline_frame(
         },
         AttachmentStage::TimelinePostComposite,
         time,
+        instance_path,
+        runtime_signals,
     )?;
     let background_color = if root_effects.is_empty() {
         root.background_color.clone()
@@ -112,6 +147,8 @@ fn collect_timeline_items(
     plan: &RenderPlan,
     timeline: &Timeline,
     timeline_time: f64,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
     active: &mut HashSet<TimelineId>,
 ) -> Result<Vec<FrameItem>, LibraryError> {
     if !active.insert(timeline.id) {
@@ -165,6 +202,8 @@ fn collect_timeline_items(
                 timeline_time,
                 item,
                 &scheduled.source,
+                instance_path,
+                runtime_signals,
                 active,
             )?);
         }
@@ -175,6 +214,8 @@ fn collect_timeline_items(
                 &AttachmentOwner::Track { track_id: track.id },
                 AttachmentStage::TrackPostComposite,
                 timeline_time,
+                instance_path,
+                runtime_signals,
             )?;
             output.push(FrameItem::Group(FrameGroup {
                 source_id: track.id.as_uuid(),
@@ -203,6 +244,8 @@ fn collect_item(
     timeline_time: f64,
     item: &TimelineItem,
     planned_source: &PlannedSource,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
     active: &mut HashSet<TimelineId>,
 ) -> Result<FrameItem, LibraryError> {
     let local_time = timeline_time - item.interval.start.into_inner();
@@ -241,6 +284,7 @@ fn collect_item(
                     item.id
                 ))
             })?;
+            let nested_path = instance_path.nested(item.id);
             let effects = attachment_effects(
                 project,
                 plan,
@@ -249,6 +293,8 @@ fn collect_item(
                 },
                 AttachmentStage::TimelinePostComposite,
                 nested_time,
+                &nested_path,
+                runtime_signals,
             )?;
             FrameItem::Group(FrameGroup {
                 source_id: nested.id.as_uuid(),
@@ -262,7 +308,15 @@ fn collect_item(
                 effect_time: OrderedFloat(nested_time),
                 effects,
                 masks: Vec::new(),
-                items: collect_timeline_items(project, plan, nested, nested_time, active)?,
+                items: collect_timeline_items(
+                    project,
+                    plan,
+                    nested,
+                    nested_time,
+                    &nested_path,
+                    runtime_signals,
+                    active,
+                )?,
             })
         }
         (SourceRef::Module { .. }, PlannedSource::Module { .. }) => {
@@ -284,6 +338,8 @@ fn collect_item(
         &AttachmentOwner::Item { item_id: item.id },
         AttachmentStage::ItemPreTransform,
         local_time,
+        instance_path,
+        runtime_signals,
     )?;
     if !pre_effects.is_empty() {
         child = FrameItem::Group(FrameGroup {
@@ -307,6 +363,8 @@ fn collect_item(
         &AttachmentOwner::Item { item_id: item.id },
         AttachmentStage::ItemPostTransform,
         local_time,
+        instance_path,
+        runtime_signals,
     )?;
     let inherited_transforms = inherited_transforms(project, item, timeline_time)?;
     let mut transform = transform_at(&item.authored_properties, local_time)?;
@@ -360,6 +418,8 @@ fn collect_item(
             timeline_time,
             matte_item,
             &scheduled.source,
+            instance_path,
+            runtime_signals,
             active,
         )?
     } else {
@@ -874,6 +934,8 @@ fn attachment_effects(
     owner: &AttachmentOwner,
     stage: AttachmentStage,
     time: f64,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
 ) -> Result<Vec<ImageEffect>, LibraryError> {
     let mut invocations: Vec<_> = plan
         .module_invocations
@@ -955,11 +1017,22 @@ fn attachment_effects(
                     .strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX)
                     .unwrap_or(&published.target.port)
                     .to_string();
-                let value = instance
-                    .parameter_overrides
-                    .get(&published.id)
-                    .unwrap_or(&published.default_value)
-                    .clone();
+                let value = resolve_published_numeric_value(
+                    authored.id,
+                    instance,
+                    instance_path,
+                    published,
+                    project.signal_bindings.values(),
+                    runtime_signals,
+                )
+                .map(|effective| effective.value)
+                .unwrap_or_else(|| {
+                    instance
+                        .parameter_overrides
+                        .get(&published.id)
+                        .unwrap_or(&published.default_value)
+                        .clone()
+                });
                 values.insert(key, value);
             }
             effects.push(ImageEffect {
@@ -1083,9 +1156,10 @@ mod tests {
     use crate::core::render_plan::RenderPlanCompiler;
     use crate::model::authoring::{
         Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringSession,
-        ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId,
-        ModulePortAddress, ModuleRole, PublishedParameter, PublishedParameterId, SourceRef,
-        TimelineInterval, Transition, TransitionId, TransitionKind,
+        BindingOperator, BindingScope, ModuleDefinition, ModuleDefinitionId, ModuleGraph,
+        ModuleInstance, ModuleInstanceId, ModulePortAddress, ModuleRole, PublishedParameter,
+        PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource,
+        SourceRef, TimelineInterval, Transition, TransitionId, TransitionKind,
     };
     use crate::model::frame::entity::{FrameContent, FrameItem};
     use crate::model::project::property::{Keyframe, Property, PropertyValue, Vec2};
@@ -1433,6 +1507,56 @@ mod tests {
         assert_eq!(
             item.effects[0].properties["sigma_x"],
             PropertyValue::Number(OrderedFloat(12.0))
+        );
+
+        let binding_id = SignalBindingId::new();
+        project.signal_bindings.insert(
+            binding_id,
+            SignalBinding {
+                id: binding_id,
+                source: SignalSource::AudioEnvelope {
+                    channel: "music".to_string(),
+                },
+                scope: BindingScope::Instance {
+                    instance_path: InstancePath::root(project.root_timeline_id),
+                    module_instance_id: instance_id,
+                },
+                target_parameter_id: parameter_id,
+                mapping: SignalMapping {
+                    input_min: OrderedFloat(0.0),
+                    input_max: OrderedFloat(1.0),
+                    output_min: OrderedFloat(0.0),
+                    output_max: OrderedFloat(1.0),
+                    clamp: true,
+                },
+                operator: BindingOperator::Multiply,
+                smoothing_seconds: OrderedFloat(0.0),
+                priority: 0,
+            },
+        );
+        let plan = RenderPlanCompiler::compile(&project).expect("compile Binding");
+        let mut signals = SignalRuntimeValues::default();
+        signals.set(binding_id, 0.5).expect("finite Signal");
+        let frame = evaluate_authoring_timeline_frame_with_signals(
+            &project,
+            &plan,
+            project.root_timeline_id,
+            5,
+            1.0,
+            None,
+            &InstancePath::root(project.root_timeline_id),
+            &signals,
+        )
+        .expect("bound frame");
+        let FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let FrameItem::Group(item) = &track.items[0] else {
+            panic!("Item group expected");
+        };
+        assert_eq!(
+            item.effects[0].properties["sigma_x"],
+            PropertyValue::Number(OrderedFloat(6.0))
         );
     }
 }

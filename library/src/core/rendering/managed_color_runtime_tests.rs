@@ -6,7 +6,6 @@ use ruvie_color_management::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 use uuid::Uuid;
 
 use crate::cache::CacheManager;
-use crate::model::Project;
 use crate::model::asset::{
     Asset, AssetKind, SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
 };
@@ -17,6 +16,7 @@ use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 #[cfg(feature = "opencolorio")]
 use crate::model::project::Composition;
+use crate::model::project::Project;
 use crate::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementIssue, ExportColorConfig,
     HdrColorField, HdrColorSettings, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID, PreviewColorConfig,
@@ -354,8 +354,9 @@ fn production_preview_and_export_compile_distinct_terminal_processors() {
     let RenderOutput::Image(export_image) = export else {
         panic!("managed media-only export must produce owned CPU pixels");
     };
-    let export_frame = crate::plugin::ExportFrame::from_graph_project_render(&project, export_image)
-        .expect("managed media-only export must retain typed Project color authority");
+    let export_frame =
+        crate::plugin::ExportFrame::from_graph_project_render(&project, export_image)
+            .expect("managed media-only export must retain typed Project color authority");
     assert_eq!(export_frame.image().data, [128, 128, 128, 255]);
 }
 

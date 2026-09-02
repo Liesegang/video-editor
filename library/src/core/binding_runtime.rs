@@ -4,7 +4,8 @@ use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
     BindingOperator, BindingScope, EffectiveValue, EffectiveValueContribution, EventBindingId,
-    InstancePath, ModuleInstanceId, PublishedActionId, SignalBindingId, TriggerPolicy,
+    InstancePath, ModuleDefinitionId, ModuleInstance, ModuleInstanceId, PublishedActionId,
+    PublishedParameter, SignalBinding, SignalBindingId, SignalMapping, TriggerPolicy,
 };
 use crate::model::project::property::PropertyValue;
 
@@ -16,6 +17,110 @@ pub struct ResolvedSignalContribution {
     pub label: String,
     pub operator: BindingOperator,
     pub value: OrderedFloat<f64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SignalRuntimeValues {
+    values: HashMap<SignalBindingId, OrderedFloat<f64>>,
+    generation: u64,
+}
+
+impl SignalRuntimeValues {
+    pub fn set(&mut self, binding_id: SignalBindingId, value: f64) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("Runtime Signal value must be finite".to_string());
+        }
+        if self.values.get(&binding_id).copied() != Some(OrderedFloat(value)) {
+            self.values.insert(binding_id, OrderedFloat(value));
+            self.generation = self.generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, binding_id: SignalBindingId) -> Option<f64> {
+        self.values.get(&binding_id).map(|value| value.into_inner())
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+pub fn resolve_published_numeric_value<'a>(
+    definition_id: ModuleDefinitionId,
+    instance: &ModuleInstance,
+    instance_path: &InstancePath,
+    parameter: &PublishedParameter,
+    bindings: impl Iterator<Item = &'a SignalBinding>,
+    runtime: &SignalRuntimeValues,
+) -> Option<EffectiveValue> {
+    let base = numeric_value(&parameter.default_value)?;
+    let keyed = instance
+        .parameter_overrides
+        .get(&parameter.id)
+        .and_then(numeric_value);
+    let contributions = bindings
+        .filter(|binding| binding.target_parameter_id == parameter.id)
+        .filter(|binding| {
+            binding_scope_matches(&binding.scope, definition_id, instance.id, instance_path)
+        })
+        .filter_map(|binding| {
+            let input = runtime.get(binding.id)?;
+            Some(ResolvedSignalContribution {
+                binding_id: binding.id,
+                scope: binding.scope.clone(),
+                priority: binding.priority,
+                label: format!("{:?}", binding.source),
+                operator: binding.operator,
+                value: OrderedFloat(map_signal_value(&binding.mapping, input)),
+            })
+        })
+        .collect();
+    Some(resolve_numeric_effective_value(
+        base,
+        keyed,
+        contributions,
+        None,
+    ))
+}
+
+fn binding_scope_matches(
+    scope: &BindingScope,
+    definition_id: ModuleDefinitionId,
+    instance_id: ModuleInstanceId,
+    instance_path: &InstancePath,
+) -> bool {
+    match scope {
+        BindingScope::Definition {
+            definition_id: target,
+        } => *target == definition_id,
+        BindingScope::Instance {
+            instance_path: target_path,
+            module_instance_id: target_instance,
+        } => *target_instance == instance_id && target_path == instance_path,
+        // Query membership is resolved by the collection runtime; a raw
+        // invocation must never guess that it belongs to a query.
+        BindingScope::Query { .. } => false,
+    }
+}
+
+fn map_signal_value(mapping: &SignalMapping, input: f64) -> f64 {
+    let input_min = mapping.input_min.into_inner();
+    let input_max = mapping.input_max.into_inner();
+    let mut normalized = (input - input_min) / (input_max - input_min);
+    if mapping.clamp {
+        normalized = normalized.clamp(0.0, 1.0);
+    }
+    mapping.output_min.into_inner()
+        + normalized * (mapping.output_max.into_inner() - mapping.output_min.into_inner())
+}
+
+fn numeric_value(value: &PropertyValue) -> Option<f64> {
+    match value {
+        PropertyValue::Number(value) => Some(value.into_inner()),
+        PropertyValue::Integer(value) => Some(*value as f64),
+        _ => None,
+    }
 }
 
 pub fn resolve_numeric_effective_value(
@@ -182,7 +287,11 @@ impl EventRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::authoring::{ModuleDefinitionId, TimelineId};
+    use crate::model::authoring::{
+        ModuleDefinitionId, ModulePortAddress, PublishedParameterId, SignalMapping, SignalSource,
+        TimelineId, TimelineItemId,
+    };
+    use crate::model::project::PortDataType;
 
     #[test]
     fn provenance_matches_documented_composition_order() {
@@ -204,6 +313,73 @@ mod tests {
         );
         assert_eq!(result.value, number(82.0));
         assert_eq!(result.contributions.len(), 4);
+    }
+
+    #[test]
+    fn instance_binding_matches_the_exact_nested_instance_path() {
+        let definition_id = ModuleDefinitionId::new();
+        let instance = ModuleInstance {
+            id: ModuleInstanceId::new(),
+            definition_id,
+            parameter_overrides: HashMap::new(),
+        };
+        let parameter = PublishedParameter {
+            id: PublishedParameterId::new(),
+            name: "Amount".to_string(),
+            data_type: PortDataType::Number,
+            default_value: number(10.0),
+            target: ModulePortAddress {
+                node_id: uuid::Uuid::new_v4(),
+                port: "property:amount".to_string(),
+            },
+        };
+        let root = TimelineId::new();
+        let target_path = InstancePath::root(root).nested(TimelineItemId::new());
+        let sibling_path = InstancePath::root(root).nested(TimelineItemId::new());
+        let binding = SignalBinding {
+            id: SignalBindingId::new(),
+            source: SignalSource::AudioEnvelope {
+                channel: "music".to_string(),
+            },
+            scope: BindingScope::Instance {
+                instance_path: target_path.clone(),
+                module_instance_id: instance.id,
+            },
+            target_parameter_id: parameter.id,
+            mapping: SignalMapping {
+                input_min: OrderedFloat(0.0),
+                input_max: OrderedFloat(1.0),
+                output_min: OrderedFloat(0.0),
+                output_max: OrderedFloat(1.0),
+                clamp: true,
+            },
+            operator: BindingOperator::Multiply,
+            smoothing_seconds: OrderedFloat(0.0),
+            priority: 0,
+        };
+        let mut runtime = SignalRuntimeValues::default();
+        runtime.set(binding.id, 0.5).unwrap();
+
+        let targeted = resolve_published_numeric_value(
+            definition_id,
+            &instance,
+            &target_path,
+            &parameter,
+            std::iter::once(&binding),
+            &runtime,
+        )
+        .unwrap();
+        let sibling = resolve_published_numeric_value(
+            definition_id,
+            &instance,
+            &sibling_path,
+            &parameter,
+            std::iter::once(&binding),
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(targeted.value, number(5.0));
+        assert_eq!(sibling.value, number(10.0));
     }
 
     #[test]

@@ -57,7 +57,7 @@ fn every_bundled_property_definition_is_valid_and_operations_are_materialized() 
     let mut failures = Vec::new();
     check_definitions(
         "Clip timing",
-        crate::model::Clip::timing_property_definitions(),
+        crate::model::node::Clip::timing_property_definitions(),
         &mut failures,
     );
     for (label, value) in [

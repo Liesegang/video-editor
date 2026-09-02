@@ -749,6 +749,38 @@ impl TimelineEditorService {
         Ok((project, frame))
     }
 
+    pub fn evaluate_frame_with_signals(
+        &self,
+        timeline_id: TimelineId,
+        instance_path: &crate::model::authoring::InstancePath,
+        time: f64,
+        render_scale: f64,
+        region: Option<Region>,
+        runtime_signals: &crate::core::binding_runtime::SignalRuntimeValues,
+    ) -> Result<(Arc<AuthoringProject>, FrameInfo), LibraryError> {
+        let project = self.snapshot()?;
+        let timeline = project
+            .timelines
+            .get(&timeline_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline {timeline_id}")))?;
+        let frame_number = frame_number_at(time, timeline.fps.into_inner())?;
+        let (plan, _) = self
+            .lock_plan_cache()?
+            .compile(project.as_ref())
+            .map_err(LibraryError::Validation)?;
+        let frame = crate::core::framing::evaluate_authoring_timeline_frame_with_signals(
+            project.as_ref(),
+            &plan,
+            timeline_id,
+            frame_number,
+            render_scale,
+            region,
+            instance_path,
+            runtime_signals,
+        )?;
+        Ok((project, frame))
+    }
+
     fn add_item(
         &self,
         track_id: TimelineTrackId,
