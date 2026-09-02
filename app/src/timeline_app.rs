@@ -7,6 +7,7 @@ use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, DurationPolicy, InstancePath,
     ModuleDefinitionId, ModuleInstanceId, PublishedParameterId, SignalBinding, SignalBindingId,
     SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
+    TimelineTrackId, TimelineTrackKind,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -75,7 +76,7 @@ enum Edit {
     OpenTimeline(TimelineId, InstancePath),
     Rename(TimelineItemId, String),
     SetText(TimelineItemId, String),
-    Move(TimelineItemId, f64, i64),
+    Move(TimelineItemId, TimelineTrackId, f64, i64),
     Trim(TimelineItemId, TimelineInterval),
     Property(TimelineItemId, String, PropertyValue),
     Keyframe(TimelineItemId, String, PropertyValue),
@@ -389,7 +390,10 @@ impl TimelineApp {
         let id = asset.id;
         let result = self.editor.add_asset(asset).and_then(|_| {
             let project = self.editor.snapshot()?;
-            let track = project.timelines[&self.open_timeline].track_order[0];
+            let track = *project.timelines[&self.open_timeline]
+                .track_order
+                .last()
+                .unwrap();
             drop(project);
             self.editor.place_asset(
                 track,
@@ -425,7 +429,10 @@ impl TimelineApp {
             .ok()
             .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
-            let track = project.timelines[&self.open_timeline].track_order[0];
+            let track = *project.timelines[&self.open_timeline]
+                .track_order
+                .last()
+                .unwrap();
             drop(project);
             self.editor.add_text(
                 track,
@@ -445,7 +452,10 @@ impl TimelineApp {
             .ok()
             .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
-            let track = project.timelines[&self.open_timeline].track_order[0];
+            let track = *project.timelines[&self.open_timeline]
+                .track_order
+                .last()
+                .unwrap();
             drop(project);
             self.editor.add_solid(
                 track,
@@ -481,7 +491,10 @@ impl TimelineApp {
                         return;
                     }
                 };
-                let track = project.timelines[&self.open_timeline].track_order[0];
+                let track = *project.timelines[&self.open_timeline]
+                    .track_order
+                    .last()
+                    .unwrap();
                 drop(project);
                 let interval = TimelineInterval::new(self.current_time, 5.0).unwrap();
                 match self.editor.place_timeline(
@@ -514,6 +527,27 @@ impl TimelineApp {
                 }
                 self.status = error.to_string();
             }
+        }
+    }
+
+    fn add_track(&mut self) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
+        match self.editor.add_track(
+            self.open_timeline,
+            "Video".to_string(),
+            TimelineTrackKind::AudioVisual,
+        ) {
+            Ok(_) => {
+                if let Some(before) = before {
+                    self.record(before);
+                }
+                self.status = "Track added".to_string();
+            }
+            Err(error) => self.status = error.to_string(),
         }
     }
 
@@ -565,15 +599,9 @@ impl TimelineApp {
             }
             Edit::Rename(id, value) => self.editor.rename_item(id, value).map(|_| ()),
             Edit::SetText(id, value) => self.editor.set_text(id, value).map(|_| ()),
-            Edit::Move(id, start, layer) => self
-                .editor
-                .move_item(
-                    id,
-                    self.editor.snapshot().unwrap().items[&id].track_id,
-                    start,
-                    layer,
-                )
-                .map(|_| ()),
+            Edit::Move(id, track, start, layer) => {
+                self.editor.move_item(id, track, start, layer).map(|_| ())
+            }
             Edit::Trim(id, interval) => self.editor.trim_item(id, interval).map(|_| ()),
             Edit::Property(id, key, value) => self
                 .editor
@@ -718,6 +746,9 @@ impl eframe::App for TimelineApp {
                 }
                 if ui.button("+ Composition").clicked() {
                     self.add_nested_timeline();
+                }
+                if ui.button("+ Track").clicked() {
+                    self.add_track();
                 }
                 if ui.button("Split").clicked() {
                     if let Some(id) = self.selected_item {
@@ -1054,6 +1085,7 @@ fn timeline_canvas_ui(
                         item.interval.start.into_inner() + f64::from(body.drag_delta().x / PX);
                     edits.push(Edit::Move(
                         item.id,
+                        item.track_id,
                         snap_time(raw.max(0.0), timeline.fps.into_inner(), &boundaries),
                         item.layer,
                     ));
@@ -1141,7 +1173,7 @@ fn inspector_ui(
         )
         .changed()
     {
-        edits.push(Edit::Move(id, start.max(0.0), layer));
+        edits.push(Edit::Move(id, item.track_id, start.max(0.0), layer));
     }
     if ui
         .add(
@@ -1159,9 +1191,22 @@ fn inspector_ui(
         .add(egui::DragValue::new(&mut layer).prefix("Layer "))
         .changed()
     {
-        edits.push(Edit::Move(id, start, layer));
+        edits.push(Edit::Move(id, item.track_id, start, layer));
     }
     let timeline_id = project.tracks[&item.track_id].timeline_id;
+    egui::ComboBox::from_label("Track")
+        .selected_text(&project.tracks[&item.track_id].name)
+        .show_ui(ui, |ui| {
+            for track_id in &project.timelines[&timeline_id].track_order {
+                let track = &project.tracks[track_id];
+                if ui
+                    .selectable_label(*track_id == item.track_id, &track.name)
+                    .clicked()
+                {
+                    edits.push(Edit::Move(id, *track_id, start, layer));
+                }
+            }
+        });
     egui::ComboBox::from_label("Parent")
         .selected_text(
             item.parent
