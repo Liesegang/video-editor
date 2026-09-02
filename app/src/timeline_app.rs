@@ -12,6 +12,7 @@ use library::model::authoring::{
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
+use library::model::project::property::{Keyframe, Property};
 use library::model::project::property::{PropertyValue, Vec2};
 use library::rendering::renderer::RenderOutput;
 use library::{RenderDestination, RenderService, SkiaRenderer, TimelineEditorService};
@@ -89,6 +90,7 @@ enum Edit {
     SetParent(TimelineItemId, Option<TimelineItemId>),
     DurationPolicy(TimelineItemId, DurationPolicy),
     Delete(TimelineItemId, bool),
+    Fade(TimelineItemId, f64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +125,7 @@ impl Edit {
             Self::SetParent(item, _) => Some(HistoryKey::Item(*item, "parent")),
             Self::DurationPolicy(item, _) => Some(HistoryKey::Item(*item, "duration-policy")),
             Self::Delete(item, _) => Some(HistoryKey::Item(*item, "delete")),
+            Self::Fade(item, _) => Some(HistoryKey::Property(*item, "opacity".to_string())),
         }
     }
 }
@@ -689,6 +692,49 @@ impl TimelineApp {
                 .set_composition_duration_policy(item, policy)
                 .map(|_| ()),
             Edit::Delete(item, ripple) => self.editor.delete_item(item, ripple).map(|_| ()),
+            Edit::Fade(item, seconds) => {
+                let duration = self
+                    .editor
+                    .snapshot()
+                    .ok()
+                    .and_then(|project| {
+                        project
+                            .items
+                            .get(&item)
+                            .map(|item| item.interval.duration.into_inner())
+                    })
+                    .unwrap_or(0.0);
+                let edge = seconds.min(duration / 2.0).max(0.0);
+                let number = |value| PropertyValue::Number(OrderedFloat(value));
+                self.editor
+                    .set_item_property(
+                        item,
+                        "opacity".to_string(),
+                        Property::keyframe(vec![
+                            Keyframe::new(
+                                0.0,
+                                number(0.0),
+                                library::animation::EasingFunction::Linear,
+                            ),
+                            Keyframe::new(
+                                edge,
+                                number(1.0),
+                                library::animation::EasingFunction::EaseOutSine,
+                            ),
+                            Keyframe::new(
+                                (duration - edge).max(edge),
+                                number(1.0),
+                                library::animation::EasingFunction::Linear,
+                            ),
+                            Keyframe::new(
+                                duration,
+                                number(0.0),
+                                library::animation::EasingFunction::EaseInSine,
+                            ),
+                        ]),
+                    )
+                    .map(|_| ())
+            }
         };
         match result {
             Ok(()) => {
@@ -1307,6 +1353,9 @@ fn inspector_ui(
                     }
                 }
             });
+    }
+    if ui.button("Fade In / Out").clicked() {
+        edits.push(Edit::Fade(id, 0.5));
     }
     ui.separator();
     ui.heading("Transform");
