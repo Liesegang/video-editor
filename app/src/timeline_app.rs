@@ -2058,6 +2058,43 @@ fn data_ui(
     open_timeline: TimelineId,
     edits: &mut Vec<Edit>,
 ) {
+    let mut subtitles: Vec<_> = project
+        .items
+        .values()
+        .filter(|item| {
+            project
+                .tracks
+                .get(&item.track_id)
+                .is_some_and(|track| track.timeline_id == open_timeline)
+                && item.name.starts_with("Subtitle ")
+                && matches!(item.source, SourceRef::Text { .. })
+        })
+        .collect();
+    subtitles.sort_by_key(|item| (item.interval.start, item.layer));
+    ui.heading(format!("Subtitles ({})", subtitles.len()));
+    ui.label("Edit imported subtitle text in one list; cue timing remains attached to each item.");
+    egui::ScrollArea::vertical()
+        .id_salt("subtitle-list")
+        .max_height(260.0)
+        .show(ui, |ui| {
+            for item in subtitles {
+                let SourceRef::Text { text } = &item.source else {
+                    continue;
+                };
+                let mut edited = text.clone();
+                ui.horizontal(|ui| {
+                    ui.monospace(format!(
+                        "{:.2}–{:.2}",
+                        item.interval.start,
+                        item.interval.start.into_inner() + item.interval.duration.into_inner()
+                    ));
+                    if ui.text_edit_singleline(&mut edited).changed() {
+                        edits.push(Edit::SetText(item.id, edited));
+                    }
+                });
+            }
+        });
+    ui.separator();
     ui.heading("Data and generated items");
     ui.label("Import a CSV or JSON table. Each stable row becomes an ordinary Timeline item.");
     let target_track = project
