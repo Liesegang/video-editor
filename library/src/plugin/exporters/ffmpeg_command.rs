@@ -225,10 +225,10 @@ fn bt709_yuv_filter(pixel_format: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::project::Project;
+    use crate::model::authoring::AuthoringProject;
 
     fn settings(pixel_format: &str) -> ExportSettings {
-        let project = Project::new("command test");
+        let project = AuthoringProject::new("command test", 1920, 1080, 24.0, 1.0).unwrap();
         let mut settings = ExportSettings::for_dimensions(1920, 1080, 24.0);
         settings.bind_project_color_authority(&project).unwrap();
         settings.container = "mp4".to_string();

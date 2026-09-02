@@ -9,6 +9,7 @@ use crate::cache::CacheManager;
 use crate::model::asset::{
     Asset, AssetKind, SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
 };
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::entity::{FrameContent, FrameItem, FrameObject, ImageSurface};
@@ -16,10 +17,9 @@ use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 #[cfg(feature = "opencolorio")]
 use crate::model::project::Composition;
-use crate::model::project::Project;
 use crate::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementIssue, ExportColorConfig,
-    HdrColorField, HdrColorSettings, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID, PreviewColorConfig,
+    HdrColorField, HdrColorSettings, PreviewColorConfig,
 };
 use crate::plugin::{
     AssetMetadata, DecodedColorSpace, DecodedPixelBuffer, DecodedPixelDescription,
@@ -29,9 +29,13 @@ use crate::plugin::{
 use crate::rendering::renderer::RenderOutput;
 use crate::{RenderDestination, RenderService, SkiaRenderer};
 
+fn project(name: &str) -> AuthoringProject {
+    AuthoringProject::new(name, 2, 2, 24.0, 1.0).expect("Timeline-first Project")
+}
+
 #[test]
 fn effect_color_conversion_uses_the_exact_project_working_processor() {
-    let project = Project::new("effect color conversion");
+    let project = project("effect color conversion");
     let pipeline = super::managed_color_backend::ProjectColorPipeline::for_project(
         &project,
         super::managed_color_backend::ManagedRenderDestination::Preview,
@@ -272,7 +276,7 @@ fn pq_gray_u8_to_srgb_u8(code: u8, reference_white_nits: f64) -> u8 {
 fn production_call_graph_composites_image_and_video_in_linear_float() {
     let image_asset = asset("managed-red.still", AssetKind::Image);
     let video_asset = asset("managed-green.video", AssetKind::Video);
-    let mut project = Project::new("managed mixed media");
+    let mut project = project("managed mixed media");
     project
         .assets
         .extend([image_asset.clone(), video_asset.clone()]);
@@ -282,7 +286,7 @@ fn production_call_graph_composites_image_and_video_in_linear_float() {
     ]);
 
     let output = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![image_object(&image_asset), video_object(&video_asset)]),
             RenderDestination::Preview,
@@ -300,7 +304,7 @@ fn production_call_graph_composites_image_and_video_in_linear_float() {
 fn production_call_graph_accepts_rgba16f_and_rgba32f_without_rgba8_ingress() {
     let image_asset = asset("managed-red-16f.still", AssetKind::Image);
     let video_asset = asset("managed-green-32f.video", AssetKind::Video);
-    let mut project = Project::new("managed float media");
+    let mut project = project("managed float media");
     project
         .assets
         .extend([image_asset.clone(), video_asset.clone()]);
@@ -316,7 +320,7 @@ fn production_call_graph_accepts_rgba16f_and_rgba32f_without_rgba8_ingress() {
     ]);
 
     let output = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![image_object(&image_asset), video_object(&video_asset)]),
             RenderDestination::Preview,
@@ -329,7 +333,7 @@ fn production_call_graph_accepts_rgba16f_and_rgba32f_without_rgba8_ingress() {
 #[test]
 fn production_preview_and_export_compile_distinct_terminal_processors() {
     let image_asset = asset("managed-terminal.still", AssetKind::Image);
-    let mut project = Project::new("managed terminal intent");
+    let mut project = project("managed terminal intent");
     project.assets.push(image_asset.clone());
     project
         .set_color_management(ColorManagementConfig::new(
@@ -344,58 +348,19 @@ fn production_preview_and_export_compile_distinct_terminal_processors() {
     let frame = frame(vec![image_object(&image_asset)]);
 
     let preview = service
-        .render_project_frame(&project, &frame, RenderDestination::Preview)
+        .render_authoring_frame(&project, &frame, RenderDestination::Preview)
         .expect("sRGB preview terminal");
     let export = service
-        .render_project_frame(&project, &frame, RenderDestination::Export)
+        .render_authoring_frame(&project, &frame, RenderDestination::Export)
         .expect("sRGB export terminal");
 
     assert_eq!(image_data(preview), [128, 128, 128, 255]);
     let RenderOutput::Image(export_image) = export else {
         panic!("managed media-only export must produce owned CPU pixels");
     };
-    let export_frame =
-        crate::plugin::ExportFrame::from_graph_project_render(&project, export_image)
-            .expect("managed media-only export must retain typed Project color authority");
+    let export_frame = crate::plugin::ExportFrame::from_project_render(&project, export_image)
+        .expect("managed media-only export must retain typed Project color authority");
     assert_eq!(export_frame.image().data, [128, 128, 128, 255]);
-}
-
-#[test]
-fn former_builtin_v1_project_renders_preview_and_typed_export_without_reinterpretation() {
-    let project = Project::new("former bundled v1 runtime");
-    let mut persisted = serde_json::to_value(project).unwrap();
-    persisted["color_management"] = serde_json::json!({
-        "config": {
-            "kind": "bundled",
-            "id": LEGACY_BUNDLED_COLOR_CONFIG_V1_ID
-        },
-        "working_space": "linear-srgb",
-        "preview": {
-            "display": "srgb",
-            "view": null
-        },
-        "export": {
-            "output_space": "srgb"
-        }
-    });
-    let project = Project::load(&serde_json::to_string(&persisted).unwrap()).unwrap();
-    let (mut service, _) = service([]);
-    let empty_frame = frame(Vec::new());
-
-    let preview = service
-        .render_project_frame(&project, &empty_frame, RenderDestination::Preview)
-        .expect("v1 Preview backend remains available");
-    assert_eq!(image_data(preview), [0, 0, 0, 255]);
-
-    let export = service
-        .render_project_frame(&project, &empty_frame, RenderDestination::Export)
-        .expect("v1 Export backend remains available");
-    let RenderOutput::Image(image) = export else {
-        panic!("managed v1 Export must produce typed CPU pixels");
-    };
-    let typed = crate::plugin::ExportFrame::from_graph_project_render(&project, image)
-        .expect("v1 terminal pixels retain Project-derived export authority");
-    assert_eq!(typed.image().data, [0, 0, 0, 255]);
 }
 
 #[test]
@@ -408,7 +373,7 @@ fn production_video_uses_detected_display_p3_processor_instead_of_srgb_fallback(
     };
     let mut video_asset = asset("managed-p3.video", AssetKind::Video);
     video_asset.source_color.replace_detected(source.clone());
-    let mut project = Project::new("managed Display P3 video");
+    let mut project = project("managed Display P3 video");
     project.assets.push(video_asset.clone());
     let (mut service, requests) = service([(
         video_asset.path.clone(),
@@ -416,7 +381,7 @@ fn production_video_uses_detected_display_p3_processor_instead_of_srgb_fallback(
     )]);
 
     let output = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![video_object(&video_asset)]),
             RenderDestination::Preview,
@@ -437,7 +402,7 @@ fn production_pq_video_uses_explicit_reference_white_policy_to_srgb_preview() {
     };
     let mut video_asset = asset("managed-pq.video", AssetKind::Video);
     video_asset.source_color.replace_detected(source.clone());
-    let mut project = Project::new("managed PQ video");
+    let mut project = project("managed PQ video");
     project.assets.push(video_asset.clone());
     project
         .set_color_management(
@@ -451,7 +416,7 @@ fn production_pq_video_uses_explicit_reference_white_policy_to_srgb_preview() {
     )]);
 
     let output = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![video_object(&video_asset)]),
             RenderDestination::Preview,
@@ -473,7 +438,7 @@ fn pq_source_without_project_policy_fails_only_that_render_operation() {
     };
     let mut video_asset = asset("managed-pq-missing.video", AssetKind::Video);
     video_asset.source_color.replace_detected(source.clone());
-    let mut project = Project::new("repairable PQ video");
+    let mut project = project("repairable PQ video");
     project.assets.push(video_asset.clone());
     assert!(matches!(
         project.resolved_color_management(),
@@ -487,7 +452,7 @@ fn pq_source_without_project_policy_fails_only_that_render_operation() {
         assert!(diagnostics.iter().any(|issue| matches!(
             issue,
             ColorManagementIssue::MissingHdrSetting { field: missing, required_by }
-                if *missing == field
+                if missing == &field
                     && required_by.contains(&video_asset.id.to_string())
         )));
     }
@@ -497,7 +462,7 @@ fn pq_source_without_project_policy_fails_only_that_render_operation() {
     )]);
 
     let error = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![video_object(&video_asset)]),
             RenderDestination::Preview,
@@ -509,7 +474,7 @@ fn pq_source_without_project_policy_fails_only_that_render_operation() {
 #[test]
 fn non_srgb_preview_terminal_is_rejected_before_untagged_egui_output() {
     let image_asset = asset("managed-p3-display.still", AssetKind::Image);
-    let mut project = Project::new("unsupported P3 display boundary");
+    let mut project = project("unsupported P3 display boundary");
     project.assets.push(image_asset.clone());
     project
         .set_color_management(ColorManagementConfig::new(
@@ -523,7 +488,7 @@ fn non_srgb_preview_terminal_is_rejected_before_untagged_egui_output() {
         service([(image_asset.path.clone(), srgb_payload([128, 128, 128, 255]))]);
 
     let error = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![image_object(&image_asset)]),
             RenderDestination::Preview,
@@ -539,7 +504,7 @@ fn non_srgb_preview_terminal_is_rejected_before_untagged_egui_output() {
 #[test]
 fn non_srgb_export_terminal_is_rejected_before_untagged_rgba8_output() {
     let image_asset = asset("managed-p3-export.still", AssetKind::Image);
-    let mut project = Project::new("unsupported P3 export boundary");
+    let mut project = project("unsupported P3 export boundary");
     project.assets.push(image_asset.clone());
     project
         .set_color_management(ColorManagementConfig::new(
@@ -553,7 +518,7 @@ fn non_srgb_export_terminal_is_rejected_before_untagged_rgba8_output() {
         service([(image_asset.path.clone(), srgb_payload([128, 128, 128, 255]))]);
 
     let error = service
-        .render_project_frame(
+        .render_authoring_frame(
             &project,
             &frame(vec![image_object(&image_asset)]),
             RenderDestination::Export,
@@ -601,7 +566,7 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
             ExportColorConfig::new("fixture-ui-srgb"),
         )
         .with_srgb_surface_space("fixture-ui-srgb");
-        let mut project = Project::new("exact sRGB surface authority");
+        let mut project = project("exact sRGB surface authority");
         project.assets.push(config_asset);
         project
             .set_color_management(config)
@@ -634,7 +599,7 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
             )
             .expect("synchronize the production render target");
         let output = service
-            .render_project_frame(&project, &authored_frame, RenderDestination::Preview)
+            .render_authoring_frame(&project, &authored_frame, RenderDestination::Preview)
             .expect("named view must chain into the exact sRGB surface binding");
         let actual = image_data(output);
         assert!(
@@ -660,7 +625,7 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
             .add_composition(composition)
             .expect("insert export fixture Composition");
         let export = service
-            .render_project_frame(&project, &authored_frame, RenderDestination::Export)
+            .render_authoring_frame(&project, &authored_frame, RenderDestination::Export)
             .expect("custom nonliteral sRGB surface binding must reach ExportFrame");
         let RenderOutput::Image(export) = export else {
             panic!("managed export must terminate to an image");
@@ -692,7 +657,7 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
             .set_color_management(rejected_config)
             .expect("mismatched export intent remains editable");
         let error = service
-            .render_project_frame(
+            .render_authoring_frame(
                 &rejected_project,
                 &authored_frame,
                 RenderDestination::Export,

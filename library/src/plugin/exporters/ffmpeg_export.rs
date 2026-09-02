@@ -304,8 +304,8 @@ impl Drop for FfmpegSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::authoring::AuthoringProject;
     use crate::model::frame::Image;
-    use crate::model::project::Project;
     use std::fs;
     use std::process::Output;
     use uuid::Uuid;
@@ -355,7 +355,7 @@ mod tests {
     }
 
     fn frame_and_settings(pixel_format: &str) -> (ExportFrame, ExportSettings) {
-        let project = Project::new("FFmpeg color metadata");
+        let project = AuthoringProject::new("FFmpeg color metadata", 4, 4, 24.0, 1.0).unwrap();
         let pixels = [
             [24, 64, 112, 255],
             [48, 96, 144, 255],
@@ -367,8 +367,7 @@ mod tests {
         .take(16)
         .flatten()
         .collect();
-        let frame =
-            ExportFrame::from_graph_project_render(&project, Image::new(4, 4, pixels)).unwrap();
+        let frame = ExportFrame::from_project_render(&project, Image::new(4, 4, pixels)).unwrap();
         let mut settings = ExportSettings::for_dimensions(4, 4, 24.0);
         settings.bind_project_color_authority(&project).unwrap();
         settings.pixel_format = pixel_format.to_string();
@@ -501,12 +500,10 @@ mod tests {
 
     #[test]
     fn translucent_pixels_are_rejected_instead_of_dropping_straight_alpha() {
-        let project = Project::new("translucent video");
-        let frame = ExportFrame::from_graph_project_render(
-            &project,
-            Image::new(1, 1, vec![200, 80, 20, 128]),
-        )
-        .unwrap();
+        let project = AuthoringProject::new("translucent video", 1, 1, 24.0, 1.0).unwrap();
+        let frame =
+            ExportFrame::from_project_render(&project, Image::new(1, 1, vec![200, 80, 20, 128]))
+                .unwrap();
         let mut settings = ExportSettings::for_dimensions(1, 1, 24.0);
         settings.bind_project_color_authority(&project).unwrap();
         settings.codec = "libx264".to_string();
@@ -579,10 +576,10 @@ mod tests {
             eprintln!("skipping real FFmpeg metadata test: ffmpeg/ffprobe unavailable");
             return;
         }
-        let project = Project::new("default H.264 color contract");
+        let project =
+            AuthoringProject::new("default H.264 color contract", 4, 4, 24.0, 1.0).unwrap();
         let pixels = [64, 128, 192, 255].repeat(16);
-        let frame =
-            ExportFrame::from_graph_project_render(&project, Image::new(4, 4, pixels)).unwrap();
+        let frame = ExportFrame::from_project_render(&project, Image::new(4, 4, pixels)).unwrap();
         let mut settings = ExportSettings::for_dimensions(4, 4, 24.0);
         settings.bind_project_color_authority(&project).unwrap();
         settings.container = "mp4".to_string();

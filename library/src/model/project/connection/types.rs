@@ -1,7 +1,4 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-use crate::model::BlendMode;
 
 pub const IMAGE_OUTPUT_PORT: &str = "image";
 pub const AUDIO_OUTPUT_PORT: &str = "audio";
@@ -73,38 +70,6 @@ impl<T> EvalOutput<T> {
 
 pub type EvaluationError = crate::error::LibraryError;
 pub type EvalResult<T> = Result<EvalOutput<T>, EvaluationError>;
-
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[serde(tag = "owner_type", content = "owner_id")]
-pub enum PortOwner {
-    Composition(Uuid),
-    Track(Uuid),
-    Clip(Uuid),
-    Node(Uuid),
-}
-
-impl PortOwner {
-    pub fn id(self) -> Uuid {
-        match self {
-            Self::Composition(id) | Self::Track(id) | Self::Clip(id) | Self::Node(id) => id,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct PortAddress {
-    pub owner: PortOwner,
-    pub port: String,
-}
-
-impl PortAddress {
-    pub fn new(owner: PortOwner, port: impl Into<String>) -> Self {
-        Self {
-            owner,
-            port: port.into(),
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PortDirection {
@@ -278,31 +243,5 @@ impl PortDefinition {
     pub fn variadic(mut self) -> Self {
         self.multiplicity = PortMultiplicity::Variadic;
         self
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectConnection {
-    pub id: Uuid,
-    pub from: PortAddress,
-    pub to: PortAddress,
-    /// Stable evaluation order for variadic inputs. It is independent of UI
-    /// pin indices and remains meaningful after layout changes.
-    pub order: i64,
-    /// Compositing mode owned by this wire. This is meaningful only for an
-    /// Image connection targeting a Merge Node's variadic `images` input.
-    pub blend_mode: BlendMode,
-}
-
-impl ProjectConnection {
-    pub fn new(from: PortAddress, to: PortAddress, order: i64) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            from,
-            to,
-            order,
-            blend_mode: BlendMode::Normal,
-        }
     }
 }

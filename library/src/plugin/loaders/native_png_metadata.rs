@@ -427,12 +427,13 @@ mod tests {
         Asset, AssetKind, SourceColorPrimaries, SourceColorProfile, SourceColorRange,
         SourceMatrixCoefficients, SourceTransferCharacteristic,
     };
+    use crate::model::authoring::AuthoringProject;
     use crate::model::frame::color::Color;
     use crate::model::frame::entity::ImageSurface;
     use crate::model::frame::entity::{FrameContent, FrameItem, FrameObject};
     use crate::model::frame::frame::FrameInfo;
     use crate::model::frame::transform::Transform;
-    use crate::model::project::{ColorManagementConfig, HdrColorSettings, Project};
+    use crate::model::project::{ColorManagementConfig, HdrColorSettings};
     use crate::plugin::{
         DecodedColorSpace, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager,
     };
@@ -509,7 +510,7 @@ mod tests {
             output_color_space: None,
             transform: Transform::default(),
         };
-        let mut project = Project::new("PNG cICP precedence");
+        let mut project = AuthoringProject::new("PNG cICP precedence", 1, 1, 24.0, 1.0).unwrap();
         project
             .set_color_management(ColorManagementConfig::default().with_hdr_settings(
                 HdrColorSettings::for_pq(203.0).expect("valid PQ reference white"),
@@ -540,7 +541,7 @@ mod tests {
             })],
         };
         let output = service
-            .render_project_frame(&project, &frame, RenderDestination::Preview)
+            .render_authoring_frame(&project, &frame, RenderDestination::Preview)
             .expect("native PNG must reach the production managed RenderService ingress");
         let RenderOutput::Image(rendered) = output else {
             panic!("preview terminal must return an owned display image");
@@ -583,7 +584,7 @@ mod tests {
             output_color_space: None,
             transform: Transform::default(),
         };
-        let mut project = Project::new("limited PNG cICP");
+        let mut project = AuthoringProject::new("limited PNG cICP", 1, 1, 24.0, 1.0).unwrap();
         project.assets.push(asset.clone());
         let pipeline =
             ProjectColorPipeline::for_project(&project, ManagedRenderDestination::Preview).unwrap();

@@ -13,8 +13,6 @@ use ruvie_color_management::{
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
-#[cfg(test)]
-use crate::model::project::Project;
 use crate::model::project::asset::Asset;
 use crate::model::project::{
     ColorConfigIdentity, DEFAULT_BUNDLED_COLOR_CONFIG_ID, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID,
@@ -29,17 +27,6 @@ const MAX_MEDIA_INGRESS_TRANSIENT_BYTES: u64 = 768 * 1024 * 1024;
 pub(crate) trait ProjectColorAuthority {
     fn assets(&self) -> &[Asset];
     fn resolved_color_management(&self) -> ResolvedColorManagementConfig;
-}
-
-#[cfg(test)]
-impl ProjectColorAuthority for Project {
-    fn assets(&self) -> &[Asset] {
-        &self.assets
-    }
-
-    fn resolved_color_management(&self) -> ResolvedColorManagementConfig {
-        Project::resolved_color_management(self)
-    }
 }
 
 impl ProjectColorAuthority for AuthoringProject {
@@ -605,7 +592,8 @@ mod tests {
 
     #[test]
     fn preview_and_export_build_distinct_terminal_purposes() {
-        let project = Project::new("terminal transform purposes");
+        let project =
+            AuthoringProject::new("terminal transform purposes", 1, 1, 24.0, 1.0).unwrap();
         let intent = resolved_intent(&project).expect("default color intent");
         let context = project_color_context(&intent);
         let working_space = intent.config().working_space();

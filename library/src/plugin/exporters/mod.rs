@@ -10,10 +10,6 @@ pub use self::png_export::PngExportPlugin;
 
 use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, Timeline};
-#[cfg(test)]
-use crate::model::project::Composition;
-#[cfg(test)]
-use crate::model::project::Project;
 use crate::model::property::PropertyDefinition;
 use crate::plugin::{Plugin, PluginCategory};
 use serde_json::Value;
@@ -100,53 +96,6 @@ struct RuntimeAudioSource {
 }
 
 impl ExportSettings {
-    #[cfg(test)]
-    pub(crate) fn from_graph_project(
-        project: &Project,
-        composition: &Composition,
-    ) -> Result<Self, LibraryError> {
-        let mut settings = ExportSettings::for_dimensions(
-            composition.width as u32,
-            composition.height as u32,
-            composition.fps,
-        );
-        settings.bind_project_color_authority(project)?;
-
-        let config = &project.export;
-        if config.container.is_none()
-            && config.codec.is_none()
-            && config.pixel_format.is_none()
-            && config.parameters.is_empty()
-        {
-            return Ok(settings);
-        }
-
-        if let Some(value) = &config.container {
-            settings.container = value.clone();
-        }
-        if let Some(value) = &config.codec {
-            settings.codec = value.clone();
-        }
-        if let Some(value) = &config.pixel_format {
-            settings.pixel_format = value.clone();
-        }
-        settings.parameters = config.parameters.clone();
-        for runtime_key in ["audio_source", "audio_channels", "audio_sample_rate"] {
-            settings.parameters.remove(runtime_key);
-        }
-
-        if matches!(settings.export_format(), ExportFormat::Video) {
-            if settings.codec == "png" {
-                settings.codec = "libx264".into();
-            }
-            if settings.pixel_format == "rgba" {
-                settings.pixel_format = "yuv420p".into();
-            }
-        }
-
-        Ok(settings)
-    }
-
     pub fn from_project(
         project: &AuthoringProject,
         timeline: &Timeline,
@@ -190,20 +139,17 @@ impl ExportSettings {
         }
     }
 
-    /// Bind this encoder configuration to the exact output semantics of a
-    /// validated Project. Settings created only for dimensions remain
-    /// intentionally unusable for export until this succeeds.
+    pub fn color_authority(&self) -> Option<&ExportColorAuthority> {
+        self.color_authority.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn bind_project_color_authority(
         &mut self,
-        project: &Project,
+        project: &AuthoringProject,
     ) -> Result<(), LibraryError> {
-        self.color_authority = Some(ExportColorAuthority::from_project(project)?);
+        self.color_authority = Some(ExportColorAuthority::from_authority(project)?);
         Ok(())
-    }
-
-    pub fn color_authority(&self) -> Option<&ExportColorAuthority> {
-        self.color_authority.as_ref()
     }
 
     pub const fn job_id(&self) -> ExportJobId {
@@ -421,7 +367,7 @@ impl ExportRepository {
 #[cfg(test)]
 mod tests {
     use super::ExportSettings;
-    use crate::model::project::{Composition, Project};
+    use crate::model::authoring::AuthoringProject;
     use serde_json::json;
 
     #[test]
@@ -467,7 +413,8 @@ mod tests {
 
     #[test]
     fn project_data_cannot_select_an_executable_or_runtime_audio_path() {
-        let mut project = Project::new("untrusted export document");
+        let mut project =
+            AuthoringProject::new("untrusted export document", 16, 16, 24.0, 1.0).unwrap();
         project.export.ffmpeg_path = Some("/tmp/document-controlled-executable".to_string());
         project.export.parameters.insert(
             "audio_source".to_string(),
@@ -477,9 +424,8 @@ mod tests {
             .export
             .parameters
             .insert("audio_channels".to_string(), json!(8));
-        let (composition, _track) = Composition::new("main", 16, 16, 24.0, 1.0);
-
-        let settings = ExportSettings::from_graph_project(&project, &composition).unwrap();
+        let timeline = &project.timelines[&project.root_timeline_id];
+        let settings = ExportSettings::from_project(&project, timeline).unwrap();
 
         assert!(settings.trusted_ffmpeg_path().is_none());
         assert!(settings.runtime_audio_source().is_none());

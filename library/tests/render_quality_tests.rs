@@ -348,6 +348,7 @@ fn group(kind: FrameGroupKind, transform: Transform, items: Vec<FrameItem>) -> F
         blend_mode: BlendMode::Normal,
         effect_time: OrderedFloat(0.0),
         effects: Vec::new(),
+        masks: Vec::new(),
         items,
     })
 }
@@ -727,6 +728,7 @@ fn nested_composition_keeps_its_configured_resolution_raster_boundary() -> Resul
         blend_mode: BlendMode::Normal,
         effect_time: OrderedFloat(0.0),
         effects: Vec::new(),
+        masks: Vec::new(),
         items: vec![child],
     });
     let nested = render_frame(&frame(vec![nested]))?;

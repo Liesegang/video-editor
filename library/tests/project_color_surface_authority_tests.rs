@@ -1,12 +1,31 @@
 use anyhow::{Context, Result};
+use library::model::authoring::AuthoringProject;
 use library::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementIssue, ExportColorConfig,
-    PreviewColorConfig, PreviewSurfaceEncoding, Project, ResolvedColorManagementConfig,
+    PreviewColorConfig, PreviewSurfaceEncoding, ResolvedColorManagementConfig,
 };
 use serde_json::{Value, json};
 
 const EXACT_OCIO_CONFIG: &str = "ocio://studio-config-v4.0.0_aces-v2.0_ocio-v2.5";
 const EXACT_OCIO_VIEW_OUTPUT: &str = "sRGB Encoded Rec.709 (sRGB)";
+
+fn test_project(name: &str) -> AuthoringProject {
+    AuthoringProject::new(name, 1920, 1080, 30.0, 60.0).expect("valid test Timeline")
+}
+
+fn load_project(source: &str) -> Result<AuthoringProject> {
+    Ok(serde_json::from_str(source)?)
+}
+
+trait TestProjectJson {
+    fn save(&self) -> Result<String>;
+}
+
+impl TestProjectJson for AuthoringProject {
+    fn save(&self) -> Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+}
 
 fn bound_config(identity: ColorConfigIdentity) -> ColorManagementConfig {
     ColorManagementConfig::new(
@@ -25,7 +44,7 @@ fn bound_config(identity: ColorConfigIdentity) -> ColorManagementConfig {
 
 #[test]
 fn custom_config_without_srgb_surface_binding_is_losslessly_repairable() -> Result<()> {
-    let base = Project::new("repair custom surface binding");
+    let base = test_project("repair custom surface binding");
     let mut value = serde_json::to_value(&base)?;
     let raw = json!({
         "config": {
@@ -44,7 +63,7 @@ fn custom_config_without_srgb_surface_binding_is_losslessly_repairable() -> Resu
     });
     value["color_management"] = raw.clone();
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     let requested = loaded
         .requested_color_management_config()
         .context("structurally valid custom config")?;
@@ -69,7 +88,7 @@ fn custom_srgb_surface_binding_persists_its_exact_config_authority() -> Result<(
         uri: EXACT_OCIO_CONFIG.to_string(),
         ocio_version: "2.5.2".to_string(),
     };
-    let mut project = Project::new("bound custom surface");
+    let mut project = test_project("bound custom surface");
     project
         .set_color_management(bound_config(identity.clone()))
         .map_err(|issues| anyhow::anyhow!("valid binding rejected: {issues:?}"))?;
@@ -78,7 +97,7 @@ fn custom_srgb_surface_binding_persists_its_exact_config_authority() -> Result<(
     let binding = &saved["color_management"]["srgb_surface_space"];
     assert_eq!(binding["color_space"], EXACT_OCIO_VIEW_OUTPUT);
     assert_eq!(binding["config"], serde_json::to_value(identity)?);
-    let loaded = Project::load(&serde_json::to_string(&saved)?)?;
+    let loaded = load_project(&serde_json::to_string(&saved)?)?;
     let resolution = loaded.resolved_color_management();
     let exact = resolution
         .model_validated_intent()
@@ -94,7 +113,7 @@ fn surface_binding_changes_cache_identity_and_rejects_foreign_config_authority()
         uri: EXACT_OCIO_CONFIG.to_string(),
         ocio_version: "2.5.2".to_string(),
     };
-    let mut first = Project::new("first surface binding");
+    let mut first = test_project("first surface binding");
     first
         .set_color_management(bound_config(identity.clone()))
         .map_err(|issues| anyhow::anyhow!("first binding rejected: {issues:?}"))?;
@@ -105,7 +124,7 @@ fn surface_binding_changes_cache_identity_and_rejects_foreign_config_authority()
         .cache_identity()
         .to_string();
 
-    let mut second = Project::new("second surface binding");
+    let mut second = test_project("second surface binding");
     second
         .set_color_management(bound_config(identity).with_srgb_surface_space("show-ui-srgb-v2"))
         .map_err(|issues| anyhow::anyhow!("second binding rejected: {issues:?}"))?;
@@ -122,7 +141,7 @@ fn surface_binding_changes_cache_identity_and_rejects_foreign_config_authority()
         "uri": "ocio://foreign-show-v1.0_ocio-v2.5",
         "ocio_version": "2.5.2"
     });
-    let loaded = Project::load(&serde_json::to_string(&foreign)?)?;
+    let loaded = load_project(&serde_json::to_string(&foreign)?)?;
     assert!(loaded.color_management_diagnostics().iter().any(|issue| {
         matches!(
             issue,

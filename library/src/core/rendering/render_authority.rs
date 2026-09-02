@@ -13,8 +13,6 @@ use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{FrameContent, FrameItem};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::project::ColorConfigIdentity;
-#[cfg(test)]
-use crate::model::project::Project;
 use crate::plugin::loaders::FileIdentity;
 
 use super::managed_color_backend::ProjectColorAuthority;
@@ -31,15 +29,6 @@ pub struct RenderFrameAuthority {
 }
 
 impl RenderFrameAuthority {
-    #[cfg(test)]
-    pub(crate) fn capture_graph_project(
-        project: &Project,
-        frame: &FrameInfo,
-        plugin_revision: u64,
-    ) -> Self {
-        Self::capture_with_authority(project, frame, plugin_revision)
-    }
-
     pub fn capture(project: &AuthoringProject, frame: &FrameInfo, plugin_revision: u64) -> Self {
         Self::capture_with_authority(project, frame, plugin_revision)
     }
@@ -157,11 +146,11 @@ mod tests {
 
     #[test]
     fn plugin_revision_participates_in_authority() {
-        let project = Project::new("authority");
+        let project = AuthoringProject::new("authority", 1, 1, 24.0, 1.0).expect("Project");
         let frame = empty_frame();
         assert_ne!(
-            RenderFrameAuthority::capture_graph_project(&project, &frame, 1),
-            RenderFrameAuthority::capture_graph_project(&project, &frame, 2)
+            RenderFrameAuthority::capture(&project, &frame, 1),
+            RenderFrameAuthority::capture(&project, &frame, 2)
         );
     }
 
@@ -175,7 +164,7 @@ mod tests {
         );
     }
 
-    fn project_with_exact_color_config(path: &std::path::Path, bytes: &[u8]) -> Project {
+    fn project_with_exact_color_config(path: &std::path::Path, bytes: &[u8]) -> AuthoringProject {
         let mut asset = Asset::new(
             "exact config",
             path.to_str().expect("temporary path is UTF-8"),
@@ -187,7 +176,8 @@ mod tests {
             sha256: checksum,
             ocio_version: "2.5.2".to_string(),
         };
-        let mut project = Project::new("exact config authority");
+        let mut project =
+            AuthoringProject::new("exact config authority", 1, 1, 24.0, 1.0).expect("Project");
         project.assets.push(asset);
         project
             .set_color_management(

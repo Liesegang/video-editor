@@ -11,9 +11,6 @@ use crate::plugin::{DecodedColorSpace, DecodedPixelBuffer, DecodedPixelDescripti
 
 use super::managed_color_backend::ProjectColorAuthority;
 
-#[cfg(test)]
-use crate::model::project::Project;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MediaAssetKind {
     Image,

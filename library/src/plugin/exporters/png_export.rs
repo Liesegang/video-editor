@@ -110,8 +110,8 @@ fn png_compression(settings: &ExportSettings) -> Compression {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::authoring::AuthoringProject;
     use crate::model::frame::Image;
-    use crate::model::project::Project;
     use std::fs;
     use std::io::Cursor;
     use uuid::Uuid;
@@ -134,8 +134,12 @@ mod tests {
         }
     }
 
-    fn test_frame(project: &Project) -> ExportFrame {
-        ExportFrame::from_graph_project_render(
+    fn test_project(name: &str) -> AuthoringProject {
+        AuthoringProject::new(name, 2, 1, 24.0, 1.0).unwrap()
+    }
+
+    fn test_frame(project: &AuthoringProject) -> ExportFrame {
+        ExportFrame::from_project_render(
             project,
             Image::new(2, 1, vec![255, 0, 0, 255, 0, 128, 255, 64]),
         )
@@ -144,7 +148,7 @@ mod tests {
 
     #[test]
     fn encoded_png_carries_normative_srgb_chunk() {
-        let project = Project::new("tagged PNG");
+        let project = test_project("tagged PNG");
         let frame = test_frame(&project);
         let mut settings = ExportSettings::for_dimensions(2, 1, 24.0);
         settings.bind_project_color_authority(&project).unwrap();
@@ -178,7 +182,7 @@ mod tests {
 
     #[test]
     fn unbound_settings_are_rejected_instead_of_assuming_srgb() {
-        let project = Project::new("unbound PNG");
+        let project = test_project("unbound PNG");
         let frame = test_frame(&project);
         let settings = ExportSettings::for_dimensions(2, 1, 24.0);
         let path = TestPng::new();
@@ -196,7 +200,7 @@ mod tests {
 
     #[test]
     fn mismatched_dimensions_are_rejected_instead_of_ignoring_export_override() {
-        let project = Project::new("mismatched PNG dimensions");
+        let project = test_project("mismatched PNG dimensions");
         let frame = test_frame(&project);
         let mut settings = ExportSettings::for_dimensions(4, 2, 24.0);
         settings.bind_project_color_authority(&project).unwrap();

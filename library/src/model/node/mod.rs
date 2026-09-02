@@ -15,7 +15,6 @@ use uuid::Uuid;
 
 mod catalog;
 mod color;
-mod containers;
 mod data;
 mod legacy_media_color;
 mod list;
@@ -29,10 +28,6 @@ pub use color::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
     COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
     COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, ColorContent,
-};
-pub use containers::{
-    CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
-    CLIP_TRIM_IN_PROPERTY, Clip, Track,
 };
 pub use data::DataContent;
 pub use legacy_media_color::{
@@ -304,15 +299,6 @@ impl Node {
             NodeContent::Media(content),
             properties,
         ))
-    }
-
-    /// Creates a placement of one top-level Composition definition.
-    pub fn new_composition_instance(name: &str, content: CompositionInstanceContent) -> Self {
-        Self::with_properties(
-            name,
-            NodeContent::CompositionInstance(content),
-            PropertyMap::new(),
-        )
     }
 
     /// Completion point for descriptor-backed Plugin operations. The property
@@ -730,7 +716,6 @@ impl Node {
 pub enum NodeContent {
     Media(MediaContent),
     Generator(GeneratorContent),
-    CompositionInstance(CompositionInstanceContent),
     /// A plugin-defined graph operation whose authored state is entirely
     /// represented by this stable identity, its persisted port contract, and
     /// [`Node::properties`]. Loading and validating a Project never requires
@@ -741,7 +726,7 @@ pub enum NodeContent {
     Value(ValueContent),
     /// First-party heterogeneous List operations. Values are evaluated as
     /// serializable `PropertyValue::Array` payloads; connection order remains
-    /// authoritative on `ProjectConnection::order`.
+    /// authoritative on `ModuleConnection::order`.
     List(ListContent),
     /// Lossless straight-alpha floating-point Color operations. These stay in
     /// the metadata graph and do not cross the current RGBA8 image boundary.
@@ -757,7 +742,7 @@ pub enum NodeContent {
     /// available, while its runtime may still be explicitly design-needed.
     NativeOperation(NativeOperationContent),
     /// Ordered variadic image compositor. Input ordering lives on canonical
-    /// ProjectConnection::order, never on a UI pin index.
+    /// `ModuleConnection::order`, never on a UI pin index.
     Merge,
     /// Ordered variadic Sound mixer. Runtime audio routing traverses these
     /// typed connections before the sample mixer combines Media leaves.
@@ -769,10 +754,7 @@ pub enum NodeContent {
 
 impl NodeContent {
     pub fn is_semantic_visual_source(&self) -> bool {
-        matches!(
-            self,
-            Self::Media(_) | Self::Generator(_) | Self::CompositionInstance(_)
-        )
+        matches!(self, Self::Media(_) | Self::Generator(_))
     }
 }
 
@@ -905,16 +887,6 @@ pub enum GeneratorContent {
     Text,
     Solid,
     SkSL,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct CompositionInstanceContent {
-    /// Stable identity of the top-level Composition definition evaluated by
-    /// this placement. Timing remains owned by the containing Clip, while
-    /// spatial placement belongs to a downstream Image Transform operation;
-    /// the referenced definition is never nested or reparented.
-    pub composition_id: Uuid,
 }
 
 #[cfg(test)]

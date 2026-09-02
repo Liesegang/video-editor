@@ -500,7 +500,7 @@ impl OperationDescriptor {
             })?;
         }
 
-        // PortAddress intentionally has no direction field. Connection source
+        // ModulePortAddress intentionally has no direction field. Connection source
         // and target roles imply direction, but address identity is also used
         // by graph mutation and validation. Therefore one owner may not reuse
         // a key for an input and output even though their directions differ.

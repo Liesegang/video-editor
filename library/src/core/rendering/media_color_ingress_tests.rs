@@ -2,6 +2,7 @@ use super::*;
 use crate::model::asset::{
     SourceColorAssumption, SourceColorProfile, SourceColorRange, SourceMatrixCoefficients,
 };
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{DecodedStraightRgba8, DecodedStraightRgba32F};
@@ -26,7 +27,7 @@ fn rgba8_pixel() -> DecodedPixelBuffer {
 #[test]
 fn source_asset_requires_exact_kind_path_and_identity() {
     let image = Asset::new("source", "source.png", AssetKind::Image);
-    let mut project = Project::new("source authority");
+    let mut project = AuthoringProject::new("source authority", 1, 1, 24.0, 1.0).unwrap();
     project.assets.push(image.clone());
 
     assert_eq!(

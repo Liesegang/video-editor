@@ -4,7 +4,6 @@ use std::sync::{Arc, Barrier};
 
 use anyhow::{Context, Result, anyhow};
 use library::model::property::{Property, PropertyMap, PropertyValue};
-use library::model::{Composition, NodeContainer, Project};
 use library::plugin::native_plugin_api::{
     DECORATOR_CATEGORY, EFFECT_CATEGORY, LOADER_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1,
     STYLE_CATEGORY,
@@ -28,8 +27,6 @@ fn common_effector_operation_factory_materializes_all_known_defaults() -> Result
     assert!(opacity.properties().get("opacity").is_some());
     assert!(opacity.properties().get("mode").is_some());
     assert!(opacity.properties().get("target").is_some());
-    let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
-    let composition_id = composition.id;
     let mut encoded_node = serde_json::to_value(opacity)?;
     encoded_node["content"]["data"]["component_id"] =
         serde_json::Value::String("not.installed".to_string());
@@ -37,29 +34,11 @@ fn common_effector_operation_factory_materializes_all_known_defaults() -> Result
         PropertyValue::String("preserve".to_string()),
     ))?;
     let node: library::model::Node = serde_json::from_value(encoded_node)?;
-    let node_id = node.id;
-
-    let mut project = Project::new("Service boundary");
-    assert!(
-        project.add_track(track).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    assert!(
-        project.add_composition(composition).is_ok(),
-        "container structural Merge insertion must succeed"
-    );
-    project.add_node(node);
-    project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
-        .context("test containment is valid")?;
-    let saved = project.save()?;
-    let loaded = Project::load(&saved)?;
-    assert_eq!(loaded, project);
+    let saved = serde_json::to_string(&node)?;
+    let loaded: library::model::Node = serde_json::from_str(&saved)?;
+    assert_eq!(loaded, node);
     assert_eq!(
-        loaded
-            .get_node(node_id)
-            .and_then(|node| node.properties().get("private"))
-            .and_then(Property::value),
+        loaded.properties().get("private").and_then(Property::value),
         Some(&PropertyValue::String("preserve".to_string()))
     );
     Ok(())

@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
+use library::model::authoring::AuthoringProject;
 use library::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementField, ColorManagementIssue,
     ColorManagementStructureIssue, DEFAULT_BUNDLED_COLOR_CONFIG_ID, DEFAULT_OUTPUT_COLOR_SPACE,
     DEFAULT_PREVIEW_DISPLAY, DEFAULT_PREVIEW_SURFACE_ENCODING, DEFAULT_PREVIEW_VIEW,
     DEFAULT_WORKING_COLOR_SPACE, ExportColorConfig, HdrColorField, HdrColorSettings,
-    PreviewColorConfig, PreviewSurfaceEncoding, Project, RequestedColorManagementConfig,
+    PreviewColorConfig, PreviewSurfaceEncoding, RequestedColorManagementConfig,
     ResolvedColorManagementConfig,
 };
 use library::model::{Asset, AssetKind};
@@ -17,6 +18,24 @@ const TEST_OCIO_BYTES: &[u8] = br#"ocio_profile_version: 2
 roles:
   scene_linear: ACEScg
 "#;
+
+fn test_project(name: &str) -> AuthoringProject {
+    AuthoringProject::new(name, 1920, 1080, 30.0, 60.0).expect("valid test Timeline")
+}
+
+fn load_project(source: &str) -> Result<AuthoringProject> {
+    Ok(serde_json::from_str(source)?)
+}
+
+trait TestProjectJson {
+    fn save(&self) -> Result<String>;
+}
+
+impl TestProjectJson for AuthoringProject {
+    fn save(&self) -> Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+}
 
 fn aces_config(identity: ColorConfigIdentity) -> ColorManagementConfig {
     ColorManagementConfig::new(
@@ -33,7 +52,7 @@ fn aces_config(identity: ColorConfigIdentity) -> ColorManagementConfig {
     .with_srgb_surface_space(EXACT_OCIO_VIEW_OUTPUT)
 }
 
-fn requested(project: &Project) -> Result<&ColorManagementConfig> {
+fn requested(project: &AuthoringProject) -> Result<&ColorManagementConfig> {
     project
         .requested_color_management_config()
         .context("test Project has structurally valid color management")
@@ -41,7 +60,7 @@ fn requested(project: &Project) -> Result<&ColorManagementConfig> {
 
 #[test]
 fn project_default_is_builtin_compatible_and_roundtrips_without_schema_version() -> Result<()> {
-    let project = Project::new("color defaults");
+    let project = test_project("color defaults");
     let requested = requested(&project)?;
     assert_eq!(
         requested.config(),
@@ -87,31 +106,13 @@ fn project_default_is_builtin_compatible_and_roundtrips_without_schema_version()
         value["color_management"]["srgb_surface_space"]["color_space"],
         ruvie_color_management::SRGB_SPACE_ID
     );
-    assert_eq!(Project::load(&encoded)?, project);
-    Ok(())
-}
-
-#[test]
-fn project_without_color_management_loads_with_current_pre_v1_default() -> Result<()> {
-    let project = Project::new("old pre-v1 project");
-    let mut value = serde_json::to_value(&project)?;
-    let object = value
-        .as_object_mut()
-        .context("Project serialization is an object")?;
-    object.remove("color_management");
-
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
-    assert_eq!(requested(&loaded)?, &ColorManagementConfig::default());
-    assert!(matches!(
-        loaded.resolved_color_management(),
-        ResolvedColorManagementConfig::Ready(_)
-    ));
+    assert_eq!(load_project(&encoded)?, project);
     Ok(())
 }
 
 #[test]
 fn existing_asset_without_imported_checksum_remains_compatible() -> Result<()> {
-    let mut project = Project::new("pre-checksum asset");
+    let mut project = test_project("pre-checksum asset");
     project
         .assets
         .push(Asset::new("existing image", "image.png", AssetKind::Image));
@@ -121,15 +122,15 @@ fn existing_asset_without_imported_checksum_remains_compatible() -> Result<()> {
         .context("Asset serialization is an object")?
         .remove("imported_content_sha256");
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert_eq!(loaded.assets[0].imported_content_sha256(), None);
-    assert_eq!(Project::load(&loaded.save()?)?, loaded);
+    assert_eq!(load_project(&loaded.save()?)?, loaded);
     Ok(())
 }
 
 #[test]
 fn partial_color_management_object_uses_field_defaults_without_a_migration() -> Result<()> {
-    let project = Project::new("partial pre-v1 color config");
+    let project = test_project("partial pre-v1 color config");
     let mut value = serde_json::to_value(&project)?;
     value["color_management"] = json!({
         "config": {
@@ -138,7 +139,7 @@ fn partial_color_management_object_uses_field_defaults_without_a_migration() -> 
         }
     });
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert_eq!(requested(&loaded)?, &ColorManagementConfig::default());
     assert!(loaded.color_management_diagnostics().is_empty());
     Ok(())
@@ -146,7 +147,7 @@ fn partial_color_management_object_uses_field_defaults_without_a_migration() -> 
 
 #[test]
 fn exact_ocio_registry_config_and_non_srgb_spaces_are_model_validated() -> Result<()> {
-    let mut project = Project::new("aces project");
+    let mut project = test_project("aces project");
     let config = aces_config(ColorConfigIdentity::OcioBuiltin {
         uri: EXACT_OCIO_CONFIG.to_string(),
         ocio_version: "2.5.2".to_string(),
@@ -155,7 +156,7 @@ fn exact_ocio_registry_config_and_non_srgb_spaces_are_model_validated() -> Resul
         .set_color_management(config.clone())
         .map_err(|issues| anyhow::anyhow!("unexpected color issues: {issues:?}"))?;
 
-    let loaded = Project::load(&project.save()?)?;
+    let loaded = load_project(&project.save()?)?;
     assert_eq!(requested(&loaded)?, &config);
     assert_eq!(
         loaded
@@ -175,7 +176,7 @@ fn asset_source_space_is_bound_to_the_owning_ocio_config() -> Result<()> {
         ocio_version: "2.5.2".to_string(),
     };
     let config = aces_config(identity);
-    let mut project = Project::new("config-bound asset source");
+    let mut project = test_project("config-bound asset source");
     let mut asset = Asset::new("log plate", "plate.exr", AssetKind::Image);
     asset
         .source_color
@@ -185,7 +186,7 @@ fn asset_source_space_is_bound_to_the_owning_ocio_config() -> Result<()> {
         .set_color_management(config)
         .map_err(|issues| anyhow::anyhow!("unexpected color issues: {issues:?}"))?;
 
-    let loaded = Project::load(&project.save()?)?;
+    let loaded = load_project(&project.save()?)?;
     assert!(loaded.color_management_diagnostics().is_empty());
     let resolved = loaded.resolved_color_management();
     let assigned = resolved
@@ -208,7 +209,7 @@ fn mismatched_asset_source_config_is_diagnostic_but_project_remains_loadable() -
         uri: EXACT_OCIO_CONFIG.to_string(),
         ocio_version: "2.5.2".to_string(),
     };
-    let mut project = Project::new("repairable source config mismatch");
+    let mut project = test_project("repairable source config mismatch");
     let mut asset = Asset::new("old-config plate", "plate.exr", AssetKind::Image);
     let asset_id = asset.id;
     let assigned_config = aces_config(assigned.clone());
@@ -219,7 +220,7 @@ fn mismatched_asset_source_config_is_diagnostic_but_project_remains_loadable() -
 
     let mut value = serde_json::to_value(&project)?;
     value["color_management"] = serde_json::to_value(aces_config(project_identity.clone()))?;
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert!(loaded.color_management_diagnostics().contains(
         &ColorManagementIssue::AssetSourceColorConfigMismatch {
             asset_id,
@@ -227,7 +228,7 @@ fn mismatched_asset_source_config_is_diagnostic_but_project_remains_loadable() -
             project: Box::new(project_identity),
         }
     ));
-    assert!(loaded.validation_issues().is_empty());
+    assert!(loaded.validate().is_ok());
     let resolved = loaded.resolved_color_management();
     assert!(matches!(resolved, ResolvedColorManagementConfig::Ready(_)));
     assert!(
@@ -237,7 +238,7 @@ fn mismatched_asset_source_config_is_diagnostic_but_project_remains_loadable() -
             .assigned_source_space(&loaded.assets[0])
             .is_err()
     );
-    assert_eq!(Project::load(&loaded.save()?)?, loaded);
+    assert_eq!(load_project(&loaded.save()?)?, loaded);
     Ok(())
 }
 
@@ -252,7 +253,7 @@ fn blank_asset_source_space_is_repairable_and_project_config_stays_ready() -> Re
             .source_space_binding("  ")
             .is_err()
     );
-    let mut project = Project::new("repairable blank source space");
+    let mut project = test_project("repairable blank source space");
     let asset = Asset::new("untitled source", "plate.exr", AssetKind::Image);
     let asset_id = asset.id;
     project.assets.push(asset);
@@ -269,7 +270,7 @@ fn blank_asset_source_space_is_repairable_and_project_config_stays_ready() -> Re
         }
     });
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert!(
         loaded
             .color_management_diagnostics()
@@ -285,7 +286,7 @@ fn blank_asset_source_space_is_repairable_and_project_config_stays_ready() -> Re
 
 #[test]
 fn malformed_asset_source_binding_roundtrips_without_blocking_project_open() -> Result<()> {
-    let mut project = Project::new("repairable future source binding");
+    let mut project = test_project("repairable future source binding");
     project
         .assets
         .push(Asset::new("future plate", "plate.exr", AssetKind::Image));
@@ -297,7 +298,7 @@ fn malformed_asset_source_binding_roundtrips_without_blocking_project_open() -> 
     let mut value = serde_json::to_value(&project)?;
     value["assets"][0]["source_color"] = json!({ "assigned_space": raw });
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert!(
         loaded
             .color_management_diagnostics()
@@ -312,7 +313,7 @@ fn malformed_asset_source_binding_roundtrips_without_blocking_project_open() -> 
         loaded.resolved_color_management(),
         ResolvedColorManagementConfig::Ready(_)
     ));
-    assert!(loaded.validation_issues().is_empty());
+    assert!(loaded.validate().is_ok());
     let saved: Value = serde_json::from_str(&loaded.save()?)?;
     assert_eq!(saved["assets"][0]["source_color"]["assigned_space"], raw);
     Ok(())
@@ -328,7 +329,7 @@ fn changing_project_config_preserves_and_diagnoses_old_asset_assignment() -> Res
         uri: EXACT_OCIO_CONFIG.to_string(),
         ocio_version: "2.5.2".to_string(),
     };
-    let mut project = Project::new("source assignment survives config switch");
+    let mut project = test_project("source assignment survives config switch");
     let mut asset = Asset::new("plate", "plate.exr", AssetKind::Image);
     let asset_id = asset.id;
     let old_config = aces_config(old_identity.clone());
@@ -357,7 +358,7 @@ fn changing_project_config_preserves_and_diagnoses_old_asset_assignment() -> Res
 
 #[test]
 fn external_ocio_config_requires_imported_bytes_and_matching_model_identity() -> Result<()> {
-    let mut project = Project::new("external config");
+    let mut project = test_project("external config");
     let mut asset = Asset::new("show config", "color/show-v12.ocio", AssetKind::Other);
     let checksum = asset.verify_imported_content(TEST_OCIO_BYTES);
     let asset_id = asset.id;
@@ -371,7 +372,7 @@ fn external_ocio_config_requires_imported_bytes_and_matching_model_identity() ->
         .set_color_management(config.clone())
         .map_err(|issues| anyhow::anyhow!("unexpected color issues: {issues:?}"))?;
 
-    let loaded = Project::load(&project.save()?)?;
+    let loaded = load_project(&project.save()?)?;
     assert_eq!(requested(&loaded)?, &config);
     assert_eq!(
         loaded.assets[0].imported_content_sha256(),
@@ -386,14 +387,14 @@ fn external_ocio_config_requires_imported_bytes_and_matching_model_identity() ->
 
 #[test]
 fn syntactically_valid_but_unverified_external_checksum_is_unavailable() -> Result<()> {
-    let mut project = Project::new("unverified config");
+    let mut project = test_project("unverified config");
     let asset = Asset::new("show config", "color/show.ocio", AssetKind::Other);
     let asset_id = asset.id;
     project.assets.push(asset);
     let mut value = serde_json::to_value(&project)?;
     value["color_management"] = external_config_json(asset_id, DIFFERENT_SHA256);
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert!(
         loaded
             .color_management_diagnostics()
@@ -408,12 +409,12 @@ fn syntactically_valid_but_unverified_external_checksum_is_unavailable() -> Resu
 
 #[test]
 fn missing_external_asset_and_invalid_expected_checksum_are_unavailable() -> Result<()> {
-    let project = Project::new("missing external config");
+    let project = test_project("missing external config");
     let missing_id = uuid::Uuid::new_v4();
     let mut value = serde_json::to_value(&project)?;
     value["color_management"] = external_config_json(missing_id, "not-a-sha256");
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     let diagnostics = loaded.color_management_diagnostics();
     assert!(
         diagnostics.contains(&ColorManagementIssue::ConfigAssetNotFound {
@@ -434,7 +435,7 @@ fn missing_external_asset_and_invalid_expected_checksum_are_unavailable() -> Res
 
 #[test]
 fn external_checksum_mismatch_and_non_ocio_asset_are_distinctly_unavailable() -> Result<()> {
-    let mut project = Project::new("mismatched config");
+    let mut project = test_project("mismatched config");
     let mut asset = Asset::new("not a config", "color/show.txt", AssetKind::Image);
     let imported = asset.verify_imported_content(TEST_OCIO_BYTES);
     assert_ne!(imported, DIFFERENT_SHA256);
@@ -443,7 +444,7 @@ fn external_checksum_mismatch_and_non_ocio_asset_are_distinctly_unavailable() ->
     let mut value = serde_json::to_value(&project)?;
     value["color_management"] = external_config_json(asset_id, DIFFERENT_SHA256);
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     let diagnostics = loaded.color_management_diagnostics();
     assert!(diagnostics.contains(&ColorManagementIssue::ConfigAssetWrongKind { asset_id }));
     assert!(diagnostics.iter().any(|issue| matches!(
@@ -466,7 +467,7 @@ fn external_checksum_mismatch_and_non_ocio_asset_are_distinctly_unavailable() ->
 
 #[test]
 fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -> Result<()> {
-    let base = Project::new("repairable malformed config");
+    let base = test_project("repairable malformed config");
     let cases = [
         (
             json!({ "config": { "kind": "future_config", "id": "future-v1" } }),
@@ -558,7 +559,7 @@ fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -
     for (raw, expected_issue) in cases {
         let mut value = serde_json::to_value(&base)?;
         value["color_management"] = raw.clone();
-        let loaded = Project::load(&serde_json::to_string(&value)?)?;
+        let loaded = load_project(&serde_json::to_string(&value)?)?;
 
         assert_eq!(
             loaded.requested_color_management().malformed_raw(),
@@ -570,7 +571,7 @@ fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -
             }
         ));
         assert!(
-            loaded.validation_issues().is_empty(),
+            loaded.validate().is_ok(),
             "malformed color settings are repairable and not graph errors"
         );
         assert!(matches!(
@@ -586,7 +587,7 @@ fn malformed_color_management_never_prevents_project_load_and_roundtrips_raw() -
 
 #[test]
 fn invalid_semantic_request_is_unavailable_without_a_silent_default() -> Result<()> {
-    let project = Project::new("repairable semantic config");
+    let project = test_project("repairable semantic config");
     let mut value = serde_json::to_value(&project)?;
     let raw = json!({
         "config": {
@@ -600,7 +601,7 @@ fn invalid_semantic_request_is_unavailable_without_a_silent_default() -> Result<
     });
     value["color_management"] = raw;
 
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     let resolved = loaded.resolved_color_management();
     assert!(resolved.model_validated_intent().is_none());
     assert!(resolved.unavailable_request().is_some());
@@ -615,7 +616,7 @@ fn invalid_semantic_request_is_unavailable_without_a_silent_default() -> Result<
 
 #[test]
 fn bundled_preview_is_direct_but_ocio_preview_requires_an_explicit_view() {
-    let mut project = Project::new("preview contracts");
+    let mut project = test_project("preview contracts");
     assert!(project.color_management_diagnostics().is_empty());
 
     let bundled_with_named_view = ColorManagementConfig::new(
@@ -652,7 +653,7 @@ fn bundled_preview_is_direct_but_ocio_preview_requires_an_explicit_view() {
 
 #[test]
 fn preview_surface_contract_is_lossless_nonblocking_and_part_of_cache_identity() -> Result<()> {
-    let baseline = Project::new("baseline Preview surface");
+    let baseline = test_project("baseline Preview surface");
     let baseline_identity = baseline
         .resolved_color_management()
         .model_validated_intent()
@@ -660,10 +661,10 @@ fn preview_surface_contract_is_lossless_nonblocking_and_part_of_cache_identity()
         .cache_identity()
         .to_string();
 
-    let mut value = serde_json::to_value(Project::new("future Preview surface"))?;
+    let mut value = serde_json::to_value(test_project("future Preview surface"))?;
     value["color_management"]["preview"]["surface_encoding"] =
         Value::String("future-display-p3".to_string());
-    let loaded = Project::load(&serde_json::to_string(&value)?)?;
+    let loaded = load_project(&serde_json::to_string(&value)?)?;
     assert_eq!(
         requested(&loaded)?.preview().surface_encoding(),
         &PreviewSurfaceEncoding::Unknown("future-display-p3".to_string())
@@ -688,7 +689,7 @@ fn preview_surface_contract_is_lossless_nonblocking_and_part_of_cache_identity()
 
 #[test]
 fn direct_preview_mismatch_is_nonblocking_but_named_ocio_binding_is_exact() -> Result<()> {
-    let mut direct = Project::new("mismatched direct Preview");
+    let mut direct = test_project("mismatched direct Preview");
     direct
         .set_color_management(ColorManagementConfig::new(
             ColorConfigIdentity::default(),
@@ -719,7 +720,7 @@ fn direct_preview_mismatch_is_nonblocking_but_named_ocio_binding_is_exact() -> R
     );
     assert!(named.preview().surface_encoding().is_srgb());
     assert!(named.diagnostics(&[]).is_empty());
-    let mut first_named_project = Project::new("first named Preview output");
+    let mut first_named_project = test_project("first named Preview output");
     first_named_project
         .set_color_management(named)
         .map_err(|issues| anyhow::anyhow!("valid named Preview rejected: {issues:?}"))?;
@@ -730,7 +731,7 @@ fn direct_preview_mismatch_is_nonblocking_but_named_ocio_binding_is_exact() -> R
         .cache_identity()
         .to_string();
 
-    let mut second_named_project = Project::new("second named Preview output");
+    let mut second_named_project = test_project("second named Preview output");
     second_named_project
         .set_color_management(
             ColorManagementConfig::new(
@@ -773,7 +774,7 @@ fn direct_preview_mismatch_is_nonblocking_but_named_ocio_binding_is_exact() -> R
 
 #[test]
 fn moving_alias_detection_does_not_reject_versioned_names_containing_default_or_latest() {
-    let mut project = Project::new("legitimate names");
+    let mut project = test_project("legitimate names");
     let bundled = ColorManagementConfig::new(
         ColorConfigIdentity::Bundled {
             id: "ruvie://color-config/show-default-look-v12".to_string(),
@@ -794,7 +795,7 @@ fn moving_alias_detection_does_not_reject_versioned_names_containing_default_or_
 
 #[test]
 fn setter_rejects_exact_moving_alias_and_blank_identifiers_without_mutation() {
-    let mut project = Project::new("invalid candidate");
+    let mut project = test_project("invalid candidate");
     let original = project.requested_color_management().clone();
     let candidate = ColorManagementConfig::new(
         ColorConfigIdentity::OcioBuiltin {
@@ -832,8 +833,8 @@ fn setter_rejects_exact_moving_alias_and_blank_identifiers_without_mutation() {
 #[test]
 fn cache_identity_is_stable_for_equal_model_validated_configs_and_changes_with_intent() -> Result<()>
 {
-    let first = Project::new("fingerprint one");
-    let roundtrip = Project::load(&first.save()?)?;
+    let first = test_project("fingerprint one");
+    let roundtrip = load_project(&first.save()?)?;
     let first_resolution = first.resolved_color_management();
     let first_intent = first_resolution
         .model_validated_intent()
@@ -848,7 +849,7 @@ fn cache_identity_is_stable_for_equal_model_validated_configs_and_changes_with_i
     assert!(first_identity.starts_with("sha256:"));
     assert_eq!(first_identity.len(), "sha256:".len() + 64);
 
-    let mut changed = Project::new("fingerprint changed");
+    let mut changed = test_project("fingerprint changed");
     changed
         .set_color_management(ColorManagementConfig::new(
             ColorConfigIdentity::default(),
@@ -867,7 +868,7 @@ fn cache_identity_is_stable_for_equal_model_validated_configs_and_changes_with_i
 
 #[test]
 fn pq_settings_are_nonblocking_diagnostics_and_part_of_cache_identity() -> Result<()> {
-    let mut missing = Project::new("PQ settings missing");
+    let mut missing = test_project("PQ settings missing");
     missing
         .set_color_management(ColorManagementConfig::new(
             ColorConfigIdentity::default(),
@@ -902,7 +903,7 @@ fn pq_settings_are_nonblocking_diagnostics_and_part_of_cache_identity() -> Resul
         .context("missing PQ settings remain model-valid")?
         .cache_identity()
         .to_string();
-    let mut configured = Project::new("PQ settings configured");
+    let mut configured = test_project("PQ settings configured");
     configured
         .set_color_management(
             ColorManagementConfig::new(
@@ -927,7 +928,7 @@ fn pq_settings_are_nonblocking_diagnostics_and_part_of_cache_identity() -> Resul
 
 #[test]
 fn ocio_registry_uri_and_processor_version_must_both_be_exact() {
-    let mut project = Project::new("unpinned ocio");
+    let mut project = test_project("unpinned ocio");
     let candidate = aces_config(ColorConfigIdentity::OcioBuiltin {
         uri: "ocio://studio-config-aces".to_string(),
         ocio_version: "2.5".to_string(),

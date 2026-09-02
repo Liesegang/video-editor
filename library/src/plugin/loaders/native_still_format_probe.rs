@@ -678,9 +678,9 @@ mod tests {
     use crate::core::rendering::managed_color_source::ingest_loaded_media;
     use crate::core::rendering::media_color_ingress::MediaAssetKind;
     use crate::model::asset::{Asset, AssetKind, SourceColorProfile};
+    use crate::model::authoring::AuthoringProject;
     use crate::model::frame::entity::ImageSurface;
     use crate::model::frame::transform::Transform;
-    use crate::model::project::Project;
     use crate::plugin::{
         DecodedColorSpace, DecodedPixelBuffer, LoadPlugin, LoadRequest, NativeImageLoader,
         UntaggedSrgbPolicy,
@@ -832,7 +832,7 @@ mod tests {
         asset
             .source_color
             .replace_detected(metadata[0].source_color.clone());
-        let mut project = Project::new("tagged TGA");
+        let mut project = AuthoringProject::new("tagged TGA", 1, 1, 24.0, 1.0).unwrap();
         project.assets.push(asset.clone());
         let pipeline =
             ProjectColorPipeline::for_project(&project, ManagedRenderDestination::Preview)?;
@@ -900,7 +900,7 @@ mod tests {
         detected: crate::model::asset::SourceColorDescription,
         response: crate::plugin::LoadResponse,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut project = Project::new("ordinary still ingress");
+        let mut project = AuthoringProject::new("ordinary still ingress", 1, 1, 24.0, 1.0).unwrap();
         let mut asset = Asset::new("ordinary", &path, AssetKind::Image);
         asset.source_color.replace_detected(detected);
         project.assets.push(asset.clone());

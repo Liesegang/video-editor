@@ -453,7 +453,7 @@ impl RequestedColorManagementConfig {
         }
     }
 
-    pub(super) fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+    pub(crate) fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
         match self {
             Self::Config(config) => config.diagnostics(assets),
             Self::Malformed {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::node::{Node, NodeContent};
+use crate::model::node::Node;
 use crate::model::project::connection::PortDataType;
 use crate::model::project::property::PropertyValue;
 
@@ -38,11 +38,6 @@ pub enum ModuleRole {
 
 impl ModuleDefinition {
     pub fn validate(&self) -> Result<(), String> {
-        for node in self.graph.nodes.values() {
-            if matches!(node.content(), NodeContent::CompositionInstance(_)) {
-                return Err("A Module graph cannot contain a Composition instance".to_string());
-            }
-        }
         self.graph.validate()?;
         match self.output_node_id {
             Some(node_id) if !self.graph.nodes.contains_key(&node_id) => {

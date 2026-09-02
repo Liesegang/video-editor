@@ -2,8 +2,6 @@ use crate::core::rendering::managed_color_backend::ProjectColorAuthority;
 use crate::error::LibraryError;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
-#[cfg(test)]
-use crate::model::project::Project;
 use crate::model::project::ResolvedColorManagementConfig;
 
 /// Exact color and pixel-storage semantics of a rendered export frame.
@@ -26,11 +24,6 @@ pub enum ExportColorAuthority {
 }
 
 impl ExportColorAuthority {
-    #[cfg(test)]
-    pub(crate) fn from_project(project: &Project) -> Result<Self, LibraryError> {
-        Self::from_authority(project)
-    }
-
     pub(super) fn from_authority(
         project: &dyn ProjectColorAuthority,
     ) -> Result<Self, LibraryError> {
@@ -89,15 +82,6 @@ pub struct ExportFrame {
 }
 
 impl ExportFrame {
-    #[cfg(test)]
-    pub(crate) fn from_graph_project_render(
-        project: &Project,
-        image: Image,
-    ) -> Result<Self, LibraryError> {
-        let color_authority = ExportColorAuthority::from_project(project)?;
-        Self::new_verified(image, color_authority)
-    }
-
     pub(crate) fn from_project_render(
         project: &AuthoringProject,
         image: Image,
@@ -153,9 +137,9 @@ mod tests {
 
     #[test]
     fn current_boundary_accepts_only_exact_srgb_output() {
-        let project = Project::new("sRGB export");
+        let project = AuthoringProject::new("sRGB export", 1, 1, 24.0, 1.0).unwrap();
         assert!(matches!(
-            ExportColorAuthority::from_project(&project).unwrap(),
+            ExportColorAuthority::from_authority(&project).unwrap(),
             ExportColorAuthority::SdrSrgbFullRangeStraightRgba8 { .. }
         ));
 
@@ -168,16 +152,16 @@ mod tests {
             ExportColorConfig::new("display-p3"),
         );
         unsupported.set_color_management(config).unwrap();
-        let error = ExportColorAuthority::from_project(&unsupported).unwrap_err();
+        let error = ExportColorAuthority::from_authority(&unsupported).unwrap_err();
         assert!(error.to_string().contains("display-p3"));
         assert!(error.to_string().contains("explicitly bound sRGB"));
     }
 
     #[test]
     fn malformed_rgba_storage_cannot_become_an_export_frame() {
-        let project = Project::new("bad frame");
+        let project = AuthoringProject::new("bad frame", 1, 1, 24.0, 1.0).unwrap();
         let image = Image::new(2, 2, vec![0; 15]);
-        let error = ExportFrame::from_graph_project_render(&project, image).unwrap_err();
+        let error = ExportFrame::from_project_render(&project, image).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -197,16 +181,20 @@ mod tests {
             PreviewColorConfig::named_view("sRGB", "Display", "srgb", PreviewSurfaceEncoding::Srgb),
             ExportColorConfig::new("srgb"),
         );
-        let mut raw = serde_json::to_value(Project::new("malicious literal")).unwrap();
+        let mut raw = serde_json::to_value(
+            AuthoringProject::new("malicious literal", 1, 1, 24.0, 1.0).unwrap(),
+        )
+        .unwrap();
         raw["color_management"] = serde_json::to_value(unbound).unwrap();
-        let project: Project = serde_json::from_value(raw).unwrap();
-        let error = ExportColorAuthority::from_project(&project).unwrap_err();
+        let project: AuthoringProject = serde_json::from_value(raw).unwrap();
+        let error = ExportColorAuthority::from_authority(&project).unwrap_err();
         assert!(
             error.to_string().contains("no exact sRGB"),
             "unexpected authority error: {error}"
         );
 
-        let mut explicitly_bound = Project::new("bound custom config");
+        let mut explicitly_bound =
+            AuthoringProject::new("bound custom config", 1, 1, 24.0, 1.0).unwrap();
         let bound = ColorManagementConfig::new(
             custom_identity,
             "scene_linear",
@@ -216,7 +204,7 @@ mod tests {
         .with_srgb_surface_space("srgb");
         explicitly_bound.set_color_management(bound).unwrap();
         assert!(matches!(
-            ExportColorAuthority::from_project(&explicitly_bound).unwrap(),
+            ExportColorAuthority::from_authority(&explicitly_bound).unwrap(),
             ExportColorAuthority::SdrSrgbFullRangeStraightRgba8 { .. }
         ));
     }
@@ -224,7 +212,7 @@ mod tests {
     #[test]
     fn authority_token_retains_exact_custom_pipeline_identity() {
         let project_for_uri = |uri: &str| {
-            let mut project = Project::new(uri);
+            let mut project = AuthoringProject::new(uri, 1, 1, 24.0, 1.0).unwrap();
             let config = ColorManagementConfig::new(
                 ColorConfigIdentity::OcioBuiltin {
                     uri: uri.to_string(),
@@ -243,10 +231,11 @@ mod tests {
             project.set_color_management(config).unwrap();
             project
         };
-        let first =
-            ExportColorAuthority::from_project(&project_for_uri("ocio://config/first_ocio-v2.5.2"))
-                .unwrap();
-        let second = ExportColorAuthority::from_project(&project_for_uri(
+        let first = ExportColorAuthority::from_authority(&project_for_uri(
+            "ocio://config/first_ocio-v2.5.2",
+        ))
+        .unwrap();
+        let second = ExportColorAuthority::from_authority(&project_for_uri(
             "ocio://config/second_ocio-v2.5.2",
         ))
         .unwrap();

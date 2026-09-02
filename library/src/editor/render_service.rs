@@ -16,8 +16,6 @@ use crate::model::frame::entity::{
 };
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
-#[cfg(test)]
-use crate::model::project::Project;
 use crate::plugin::{ExportFrame, LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
@@ -85,18 +83,6 @@ impl<T: Renderer> RenderService<T> {
             plugin_manager,
             cache_manager,
         }
-    }
-
-    /// Test-only bridge for exercising the renderer's color pipeline against
-    /// the retired graph Project while its low-level tests are being replaced.
-    #[cfg(test)]
-    pub(crate) fn render_project_frame(
-        &mut self,
-        project: &Project,
-        frame_info: &FrameInfo,
-        destination: RenderDestination,
-    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
-        self.render_managed_frame(project, frame_info, destination)
     }
 
     /// Render a Timeline-first Project frame without constructing an old

@@ -153,6 +153,11 @@ impl AuthoringProject {
         &self.color_management
     }
 
+    /// Returns the structurally valid authored color configuration, if any.
+    pub fn requested_color_management_config(&self) -> Option<&ColorManagementConfig> {
+        self.color_management.as_config()
+    }
+
     pub fn set_color_management(
         &mut self,
         color_management: ColorManagementConfig,
@@ -171,6 +176,10 @@ impl AuthoringProject {
             &self.color_management,
             &self.assets,
         )
+    }
+
+    pub fn color_management_diagnostics(&self) -> Vec<ColorManagementIssue> {
+        self.color_management.diagnostics(&self.assets)
     }
 
     pub fn validate(&self) -> Result<(), String> {

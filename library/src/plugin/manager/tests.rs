@@ -55,11 +55,6 @@ fn every_bundled_property_definition_is_valid_and_operations_are_materialized() 
         .collect::<HashSet<_>>();
 
     let mut failures = Vec::new();
-    check_definitions(
-        "Clip timing",
-        crate::model::node::Clip::timing_property_definitions(),
-        &mut failures,
-    );
     for (label, value) in [
         ("native Fmod", crate::model::ValueContent::Fmod),
         ("native Add", crate::model::ValueContent::Add),
