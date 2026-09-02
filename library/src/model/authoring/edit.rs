@@ -674,6 +674,7 @@ impl AuthoringSession {
                     nodes: std::collections::HashMap::from([(node_id, node)]),
                     connections: Vec::new(),
                 },
+                output_node_id: Some(node_id),
                 published_parameters,
                 published_signals: Vec::new(),
                 published_actions: Vec::new(),
@@ -826,19 +827,7 @@ impl AuthoringSession {
         if definition.graph.nodes.contains_key(&node_id) {
             return Err(format!("Module Node {node_id} already exists"));
         }
-        let previous = definition
-            .graph
-            .nodes
-            .keys()
-            .copied()
-            .filter(|node_id| {
-                !definition
-                    .graph
-                    .connections
-                    .iter()
-                    .any(|connection| connection.from.node_id == *node_id)
-            })
-            .max();
+        let previous = definition.output_node_id;
         for (property_name, property) in node.properties().iter() {
             let port = format!("{}{}", crate::plugin::PROPERTY_PORT_PREFIX, property_name);
             let data_type = operation
@@ -872,6 +861,7 @@ impl AuthoringSession {
                 order: 0,
             });
         }
+        definition.output_node_id = Some(node_id);
         definition.version = definition
             .version
             .checked_add(1)
@@ -886,6 +876,35 @@ impl AuthoringSession {
         ))
     }
 
+    pub fn set_module_output(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+    ) -> Result<ChangeSet, String> {
+        let definition = self
+            .project
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        if !definition.graph.nodes.contains_key(&node_id) {
+            return Err(format!("Missing Module Node {node_id}"));
+        }
+        if definition.output_node_id == Some(node_id) {
+            return Ok(ChangeSet {
+                revision: self.revision,
+                invalidations: Vec::new(),
+            });
+        }
+        definition.output_node_id = Some(node_id);
+        definition.version = definition
+            .version
+            .checked_add(1)
+            .ok_or_else(|| "Module definition version overflow".to_string())?;
+        Ok(self.finish(vec![ProjectInvalidation::ModuleDefinition {
+            definition_id,
+        }]))
+    }
+
     pub fn remove_module_node(
         &mut self,
         definition_id: ModuleDefinitionId,
@@ -896,6 +915,17 @@ impl AuthoringSession {
             .module_definitions
             .get_mut(&definition_id)
             .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
+        let replacement_output = (definition.output_node_id == Some(node_id))
+            .then(|| {
+                definition
+                    .graph
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.to.node_id == node_id)
+                    .map(|connection| connection.from.node_id)
+                    .min()
+            })
+            .flatten();
         definition
             .graph
             .nodes
@@ -904,6 +934,10 @@ impl AuthoringSession {
         definition.graph.connections.retain(|connection| {
             connection.from.node_id != node_id && connection.to.node_id != node_id
         });
+        if definition.output_node_id == Some(node_id) {
+            definition.output_node_id =
+                replacement_output.or_else(|| definition.graph.nodes.keys().copied().min());
+        }
         let removed_parameters: std::collections::HashSet<_> = definition
             .published_parameters
             .iter()

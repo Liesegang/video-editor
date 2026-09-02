@@ -18,6 +18,9 @@ pub struct ModuleDefinition {
     pub name: String,
     pub role: ModuleRole,
     pub graph: ModuleGraph,
+    /// Explicit result of this reusable processing graph. Nodes that cannot
+    /// reach this output remain editable but are not part of the RenderPlan.
+    pub output_node_id: Option<uuid::Uuid>,
     pub published_parameters: Vec<PublishedParameter>,
     pub published_signals: Vec<PublishedSignal>,
     pub published_actions: Vec<PublishedAction>,
@@ -41,6 +44,15 @@ impl ModuleDefinition {
             }
         }
         self.graph.validate()?;
+        match self.output_node_id {
+            Some(node_id) if !self.graph.nodes.contains_key(&node_id) => {
+                return Err(format!("Module output refers to missing Node {node_id}"));
+            }
+            None if !self.graph.nodes.is_empty() => {
+                return Err("A non-empty Module graph must select an output Node".to_string());
+            }
+            _ => {}
+        }
         let mut interface_ids = std::collections::HashSet::new();
         for parameter in &self.published_parameters {
             if !interface_ids.insert(parameter.id.as_uuid()) {

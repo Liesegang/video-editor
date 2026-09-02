@@ -225,6 +225,7 @@ fn signal_bindings_target_only_published_parameters() {
                 nodes: HashMap::from([(node_id, node)]),
                 connections: Vec::new(),
             },
+            output_node_id: Some(node_id),
             published_parameters: vec![PublishedParameter {
                 id: parameter_id,
                 name: "Amount".to_string(),

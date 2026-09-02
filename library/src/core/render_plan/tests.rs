@@ -204,6 +204,7 @@ fn repeated_module_instances_share_one_compiled_definition() {
             name: "Lower Third".to_string(),
             role: ModuleRole::Generator,
             graph: ModuleGraph::default(),
+            output_node_id: None,
             published_parameters: Vec::new(),
             published_signals: Vec::new(),
             published_actions: Vec::new(),
@@ -260,6 +261,7 @@ fn instance_parameter_change_reuses_compiled_definition() {
             name: "Generator".to_string(),
             role: ModuleRole::Generator,
             graph: ModuleGraph::default(),
+            output_node_id: None,
             published_parameters: Vec::new(),
             published_signals: Vec::new(),
             published_actions: Vec::new(),
@@ -290,4 +292,69 @@ fn instance_parameter_change_reuses_compiled_definition() {
     let (_, second) = cache.compile(&project).expect("incremental compile");
     assert_eq!(second.compiled_definitions, 0);
     assert_eq!(second.reused_definitions, 1);
+}
+
+#[test]
+fn module_compilation_only_includes_nodes_reaching_the_selected_output() {
+    let plugins = crate::plugin::PluginManager::default();
+    let first = plugins
+        .create_effect_operation_node("blur")
+        .expect("first effect Node");
+    let output = plugins
+        .create_effect_operation_node("blur")
+        .expect("output effect Node");
+    let disconnected = plugins
+        .create_effect_operation_node("blur")
+        .expect("disconnected effect Node");
+    let first_id = first.id;
+    let output_id = output.id;
+    let disconnected_id = disconnected.id;
+    let definition_id = ModuleDefinitionId::new();
+    let mut definition = ModuleDefinition {
+        id: definition_id,
+        name: "Explicit output".to_string(),
+        role: ModuleRole::Effect,
+        graph: ModuleGraph {
+            nodes: HashMap::from([
+                (first_id, first),
+                (output_id, output),
+                (disconnected_id, disconnected),
+            ]),
+            connections: vec![ModuleConnection {
+                id: ModuleConnectionId::new(),
+                from: ModulePortAddress {
+                    node_id: first_id,
+                    port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
+                },
+                to: ModulePortAddress {
+                    node_id: output_id,
+                    port: crate::model::project::IMAGE_INPUT_PORT.to_string(),
+                },
+                order: 0,
+            }],
+        },
+        output_node_id: Some(output_id),
+        published_parameters: Vec::new(),
+        published_signals: Vec::new(),
+        published_actions: Vec::new(),
+        version: 1,
+    };
+
+    let compiled = super::compiler::compile_module(definition_id, &definition)
+        .expect("connected output ancestry compiles");
+    assert_eq!(compiled.evaluation_order, vec![first_id, output_id]);
+    assert_eq!(compiled.operations.len(), 2);
+    assert!(compiled.operations.iter().all(|operation| {
+        !matches!(
+            operation,
+            CompiledModuleOperation::ImageEffect { node_id, .. }
+                if *node_id == disconnected_id
+        )
+    }));
+
+    definition.output_node_id = Some(disconnected_id);
+    let compiled = super::compiler::compile_module(definition_id, &definition)
+        .expect("switched output compiles");
+    assert_eq!(compiled.evaluation_order, vec![disconnected_id]);
+    assert_eq!(compiled.operations.len(), 1);
 }

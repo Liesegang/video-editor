@@ -178,6 +178,7 @@ pub(super) fn compile_module(
     id: ModuleDefinitionId,
     definition: &ModuleDefinition,
 ) -> Result<CompiledModuleDefinition, String> {
+    definition.validate()?;
     let mut indegree: HashMap<_, usize> = definition
         .graph
         .nodes
@@ -221,6 +222,8 @@ pub(super) fn compile_module(
     if evaluation_order.len() != definition.graph.nodes.len() {
         return Err(format!("Module definition {id} contains a cycle"));
     }
+    let active_nodes = nodes_reaching_output(definition);
+    evaluation_order.retain(|node_id| active_nodes.contains(node_id));
     let operations = match definition.role {
         ModuleRole::Effect => evaluation_order
             .iter()
@@ -257,6 +260,30 @@ pub(super) fn compile_module(
         evaluation_order,
         operations,
     })
+}
+
+fn nodes_reaching_output(definition: &ModuleDefinition) -> std::collections::HashSet<uuid::Uuid> {
+    let Some(output_node_id) = definition.output_node_id else {
+        return std::collections::HashSet::new();
+    };
+    let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+    for connection in &definition.graph.connections {
+        incoming
+            .entry(connection.to.node_id)
+            .or_default()
+            .push(connection.from.node_id);
+    }
+    let mut active = std::collections::HashSet::new();
+    let mut pending = vec![output_node_id];
+    while let Some(node_id) = pending.pop() {
+        if !active.insert(node_id) {
+            continue;
+        }
+        if let Some(sources) = incoming.get(&node_id) {
+            pending.extend(sources.iter().copied());
+        }
+    }
+    active
 }
 
 pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u8; 32], String> {

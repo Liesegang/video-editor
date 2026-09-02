@@ -354,6 +354,7 @@ mod tests {
                 name: "Table rows".to_string(),
                 role: ModuleRole::Generator,
                 graph: ModuleGraph::default(),
+                output_node_id: None,
                 published_parameters: Vec::new(),
                 published_signals: Vec::new(),
                 published_actions: Vec::new(),

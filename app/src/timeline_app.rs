@@ -89,6 +89,7 @@ enum Edit {
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
     AddModuleEffect(ModuleDefinitionId, String),
     RemoveModuleNode(ModuleDefinitionId, uuid::Uuid),
+    SetModuleOutput(ModuleDefinitionId, uuid::Uuid),
     ConnectModuleNodes(ModuleDefinitionId, uuid::Uuid, uuid::Uuid),
     DisconnectModuleConnection(ModuleDefinitionId, ModuleConnectionId),
     AddSignalBinding(SignalBinding),
@@ -142,6 +143,7 @@ impl Edit {
                 Some(HistoryKey::ModuleNode(*definition, uuid::Uuid::nil()))
             }
             Self::RemoveModuleNode(definition, node)
+            | Self::SetModuleOutput(definition, node)
             | Self::ConnectModuleNodes(definition, node, _) => {
                 Some(HistoryKey::ModuleNode(*definition, *node))
             }
@@ -755,6 +757,9 @@ impl TimelineApp {
                 .map(|_| ()),
             Edit::RemoveModuleNode(definition, node) => {
                 self.editor.remove_module_node(definition, node).map(|_| ())
+            }
+            Edit::SetModuleOutput(definition, node) => {
+                self.editor.set_module_output(definition, node).map(|_| ())
             }
             Edit::ConnectModuleNodes(definition, from, to) => self
                 .editor
@@ -2305,6 +2310,11 @@ fn logic_ui(
                         false
                     };
                     ui.small(format!("{:?}", node.content()));
+                    if definition.output_node_id == Some(node.id) {
+                        ui.strong("Module output");
+                    } else if ui.small_button("Use as output").clicked() {
+                        edits.push(Edit::SetModuleOutput(definition.id, node.id));
+                    }
                     if name_changed || enabled_changed || bypass_changed {
                         edits.push(Edit::ModuleNodeState(
                             definition.id,
@@ -2473,11 +2483,9 @@ mod tests {
 
     #[test]
     fn basic_workspaces_never_surface_logic() {
-        assert!(
-            dock_for(Workspace::Beginner)
-                .find_tab(&Tab::Logic)
-                .is_none()
-        );
+        assert!(dock_for(Workspace::Beginner)
+            .find_tab(&Tab::Logic)
+            .is_none());
         assert!(dock_for(Workspace::Edit).find_tab(&Tab::Logic).is_none());
         assert!(dock_for(Workspace::Logic).find_tab(&Tab::Logic).is_some());
     }

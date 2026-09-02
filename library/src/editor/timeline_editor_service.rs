@@ -370,6 +370,16 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn set_module_output(
+        &self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_module_output(definition_id, node_id)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn connect_module_nodes(
         &self,
         definition_id: ModuleDefinitionId,
@@ -590,6 +600,7 @@ impl TimelineEditorService {
             ),
             role: ModuleRole::Generator,
             graph: ModuleGraph::default(),
+            output_node_id: None,
             published_parameters: Vec::new(),
             published_signals: Vec::new(),
             published_actions: Vec::new(),
