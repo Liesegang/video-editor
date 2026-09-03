@@ -122,6 +122,7 @@ enum Edit {
     DurationPolicy(TimelineItemId, DurationPolicy),
     Delete(TimelineItemId, bool),
     Fade(TimelineItemId, f64),
+    UpsertKeyframe(TimelineItemId, String, f64, PropertyValue),
     UpdateKeyframe(TimelineItemId, String, KeyframeId, KeyframeUpdate),
     RemoveKeyframe(TimelineItemId, String, KeyframeId),
     ImportData(std::path::PathBuf, TimelineTrackId),
@@ -195,9 +196,9 @@ impl Edit {
             Self::DurationPolicy(item, _) => Some(HistoryKey::Item(*item, "duration-policy")),
             Self::Delete(item, _) => Some(HistoryKey::Item(*item, "delete")),
             Self::Fade(item, _) => Some(HistoryKey::Property(*item, "opacity".to_string())),
-            Self::UpdateKeyframe(item, key, ..) | Self::RemoveKeyframe(item, key, _) => {
-                Some(HistoryKey::Property(*item, key.clone()))
-            }
+            Self::UpsertKeyframe(item, key, ..)
+            | Self::UpdateKeyframe(item, key, ..)
+            | Self::RemoveKeyframe(item, key, _) => Some(HistoryKey::Property(*item, key.clone())),
             Self::ImportData(..)
             | Self::RefreshData(_)
             | Self::DiscardOverride(_)
@@ -1030,6 +1031,10 @@ impl TimelineApp {
                     )
                     .map(|_| ())
             }
+            Edit::UpsertKeyframe(item, key, time, value) => self
+                .editor
+                .upsert_item_keyframe(item, key, time, value, None)
+                .map(|_| ()),
             Edit::UpdateKeyframe(item, key, keyframe, update) => self
                 .editor
                 .update_item_keyframe(item, key, keyframe, update)
@@ -2560,38 +2565,186 @@ fn inspector_integer(
     .inner
 }
 
-fn inspector_vec2(
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InspectorPropertyResponse {
+    value_changed: bool,
+    toggle_keyframe: bool,
+}
+
+fn inspector_keyframe_control(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash + Copy,
-    label: &str,
-    x: &mut f64,
-    y: &mut f64,
-    suffix: &str,
+    item_id: TimelineItemId,
+    key: &str,
+    property: Option<&Property>,
+    local_time: f64,
 ) -> bool {
-    ui.push_id(id, |ui| {
+    const TOLERANCE: f64 = 0.001;
+    let is_keyframed = property.is_some_and(|property| property.evaluator == "keyframe");
+    let has_key = property.is_some_and(|property| property.has_keyframe_at(local_time, TOLERANCE));
+    let (color, tooltip) = if has_key {
+        (
+            egui::Color32::from_rgb(244, 186, 88),
+            "Remove keyframe at the current local time",
+        )
+    } else if is_keyframed {
+        (
+            egui::Color32::from_rgb(217, 166, 85),
+            "Add keyframe at the current local time",
+        )
+    } else {
+        (
+            ui.visuals().weak_text_color(),
+            "Enable animation and add a keyframe at the current local time",
+        )
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(2.0), 3.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let center = rect.center();
+    let radius = 4.0;
+    let points = vec![
+        center + egui::vec2(0.0, -radius),
+        center + egui::vec2(radius, 0.0),
+        center + egui::vec2(0.0, radius),
+        center + egui::vec2(-radius, 0.0),
+    ];
+    if has_key {
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            color,
+            egui::Stroke::NONE,
+        ));
+    } else {
+        ui.painter().add(egui::Shape::closed_line(
+            points,
+            egui::Stroke::new(1.25, color),
+        ));
+    }
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tooltip);
+    crate::qa::register_component(
+        format!("inspector.keyframe:{item_id}:{key}"),
+        "property_keyframe_toggle",
+        response.rect,
+        serde_json::json!({
+            "property": key,
+            "keyframed": is_keyframed,
+            "key_at_current_time": has_key,
+            "local_time": local_time,
+        }),
+    );
+    response.clicked()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a compact Inspector number row keeps value and animation state together"
+)]
+fn inspector_property_number(
+    ui: &mut egui::Ui,
+    item_id: TimelineItemId,
+    key: &str,
+    label: &str,
+    property: Option<&Property>,
+    local_time: f64,
+    value: &mut f64,
+    speed: f64,
+    suffix: &str,
+) -> InspectorPropertyResponse {
+    ui.push_id((item_id, key), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.add_sized([82.0, 20.0], egui::Label::new(label).selectable(false));
-            let changed_x = ui
-                .add_sized(
-                    [90.0, 20.0],
-                    egui::DragValue::new(x).speed(1.0).prefix("X "),
-                )
-                .changed();
-            let changed_y = ui
-                .add_sized(
-                    [90.0, 20.0],
-                    egui::DragValue::new(y)
-                        .speed(1.0)
-                        .prefix("Y ")
-                        .suffix(suffix),
-                )
-                .changed();
-            changed_x || changed_y
+            ui.add_sized([60.0, 20.0], egui::Label::new(label).selectable(false));
+            let toggle_keyframe =
+                inspector_keyframe_control(ui, item_id, key, property, local_time);
+            let value_response = ui.add_sized(
+                [184.0, 20.0],
+                egui::DragValue::new(value).speed(speed).suffix(suffix),
+            );
+            crate::qa::register_component(
+                format!("inspector.value:{item_id}:{key}"),
+                "inspector_number",
+                value_response.rect,
+                serde_json::json!({"property": key, "value": *value}),
+            );
+            InspectorPropertyResponse {
+                value_changed: value_response.changed(),
+                toggle_keyframe,
+            }
         })
         .inner
     })
     .inner
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a compact Inspector vector row keeps both axes and animation state together"
+)]
+fn inspector_property_vec2(
+    ui: &mut egui::Ui,
+    item_id: TimelineItemId,
+    key: &str,
+    label: &str,
+    property: Option<&Property>,
+    local_time: f64,
+    x: &mut f64,
+    y: &mut f64,
+    speed: f64,
+    suffix: &str,
+) -> InspectorPropertyResponse {
+    ui.push_id((item_id, key), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_sized([60.0, 20.0], egui::Label::new(label).selectable(false));
+            let toggle_keyframe =
+                inspector_keyframe_control(ui, item_id, key, property, local_time);
+            let x_response = ui.add_sized(
+                [90.0, 20.0],
+                egui::DragValue::new(x).speed(speed).prefix("X "),
+            );
+            let y_response = ui.add_sized(
+                [90.0, 20.0],
+                egui::DragValue::new(y)
+                    .speed(speed)
+                    .prefix("Y ")
+                    .suffix(suffix),
+            );
+            for (axis, response, value) in [("x", &x_response, *x), ("y", &y_response, *y)] {
+                crate::qa::register_component(
+                    format!("inspector.value:{item_id}:{key}:{axis}"),
+                    "inspector_vector_component",
+                    response.rect,
+                    serde_json::json!({"property": key, "axis": axis, "value": value}),
+                );
+            }
+            InspectorPropertyResponse {
+                value_changed: x_response.changed() || y_response.changed(),
+                toggle_keyframe,
+            }
+        })
+        .inner
+    })
+    .inner
+}
+
+fn keyframe_toggle_edit(
+    item_id: TimelineItemId,
+    key: &str,
+    property: Option<&Property>,
+    local_time: f64,
+    value: PropertyValue,
+) -> Edit {
+    const TOLERANCE: f64 = 0.001;
+    property
+        .and_then(|property| property.keyframe_id_at(local_time, TOLERANCE))
+        .map_or_else(
+            || Edit::UpsertKeyframe(item_id, key.to_string(), local_time, value),
+            |keyframe_id| Edit::RemoveKeyframe(item_id, key.to_string(), keyframe_id),
+        )
 }
 
 #[expect(
@@ -2858,20 +3011,160 @@ fn inspector_ui(
     ui.separator();
     ui.heading("Transform");
     let (mut x, mut y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
-    if inspector_vec2(ui, (id, "position"), "Position", &mut x, &mut y, " px") {
+    let position = property_vec2(x, y);
+    let response = inspector_property_vec2(
+        ui,
+        id,
+        "position",
+        "Position",
+        item.authored_properties.get("position"),
+        local_time,
+        &mut x,
+        &mut y,
+        1.0,
+        " px",
+    );
+    if response.value_changed {
         edits.push(Edit::Property(
             id,
             "position".to_string(),
             property_vec2(x, y),
         ));
     }
+    if response.toggle_keyframe {
+        edits.push(keyframe_toggle_edit(
+            id,
+            "position",
+            item.authored_properties.get("position"),
+            local_time,
+            position,
+        ));
+    }
+
+    let (scale_x, scale_y) = vec2_property_at(item, "scale", local_time, (1.0, 1.0));
+    let (mut scale_x_percent, mut scale_y_percent) = (scale_x * 100.0, scale_y * 100.0);
+    let scale = property_vec2(scale_x, scale_y);
+    let response = inspector_property_vec2(
+        ui,
+        id,
+        "scale",
+        "Scale",
+        item.authored_properties.get("scale"),
+        local_time,
+        &mut scale_x_percent,
+        &mut scale_y_percent,
+        0.1,
+        "%",
+    );
+    if response.value_changed {
+        edits.push(Edit::Property(
+            id,
+            "scale".to_string(),
+            property_vec2(
+                scale_x_percent.max(0.0) / 100.0,
+                scale_y_percent.max(0.0) / 100.0,
+            ),
+        ));
+    }
+    if response.toggle_keyframe {
+        edits.push(keyframe_toggle_edit(
+            id,
+            "scale",
+            item.authored_properties.get("scale"),
+            local_time,
+            scale,
+        ));
+    }
+
+    let mut rotation = number_property_at(item, "rotation", local_time, 0.0);
+    let rotation_value = PropertyValue::Number(OrderedFloat(rotation));
+    let response = inspector_property_number(
+        ui,
+        id,
+        "rotation",
+        "Rotation",
+        item.authored_properties.get("rotation"),
+        local_time,
+        &mut rotation,
+        1.0,
+        "°",
+    );
+    if response.value_changed {
+        edits.push(Edit::Property(
+            id,
+            "rotation".to_string(),
+            PropertyValue::Number(OrderedFloat(rotation)),
+        ));
+    }
+    if response.toggle_keyframe {
+        edits.push(keyframe_toggle_edit(
+            id,
+            "rotation",
+            item.authored_properties.get("rotation"),
+            local_time,
+            rotation_value,
+        ));
+    }
+
+    let (mut anchor_x, mut anchor_y) = vec2_property_at(item, "anchor", local_time, (0.0, 0.0));
+    let anchor = property_vec2(anchor_x, anchor_y);
+    let response = inspector_property_vec2(
+        ui,
+        id,
+        "anchor",
+        "Anchor",
+        item.authored_properties.get("anchor"),
+        local_time,
+        &mut anchor_x,
+        &mut anchor_y,
+        1.0,
+        " px",
+    );
+    if response.value_changed {
+        edits.push(Edit::Property(
+            id,
+            "anchor".to_string(),
+            property_vec2(anchor_x, anchor_y),
+        ));
+    }
+    if response.toggle_keyframe {
+        edits.push(keyframe_toggle_edit(
+            id,
+            "anchor",
+            item.authored_properties.get("anchor"),
+            local_time,
+            anchor,
+        ));
+    }
+
     let mut opacity = number_property_at(item, "opacity", local_time, 1.0);
-    if inspector_number(ui, (id, "opacity"), "Opacity", &mut opacity, 0.01, "") {
+    let opacity_value = PropertyValue::Number(OrderedFloat(opacity));
+    let response = inspector_property_number(
+        ui,
+        id,
+        "opacity",
+        "Opacity",
+        item.authored_properties.get("opacity"),
+        local_time,
+        &mut opacity,
+        0.01,
+        "",
+    );
+    if response.value_changed {
         opacity = opacity.clamp(0.0, 1.0);
         edits.push(Edit::Property(
             id,
             "opacity".to_string(),
             PropertyValue::Number(OrderedFloat(opacity)),
+        ));
+    }
+    if response.toggle_keyframe {
+        edits.push(keyframe_toggle_edit(
+            id,
+            "opacity",
+            item.authored_properties.get("opacity"),
+            local_time,
+            opacity_value,
         ));
     }
     ui.indent("opacity-provenance", |ui| {
@@ -3747,6 +4040,31 @@ mod tests {
         let first = Edit::Property(item, "position".to_string(), property_vec2(10.0, 20.0));
         let second = Edit::Property(item, "position".to_string(), property_vec2(30.0, 40.0));
         assert_eq!(first.history_key(), second.history_key());
+    }
+
+    #[test]
+    fn compact_property_control_adds_and_removes_the_current_keyframe() {
+        let item = TimelineItemId::new();
+        let value = property_vec2(12.0, 34.0);
+        let constant = Property::constant(value.clone());
+        assert!(matches!(
+            keyframe_toggle_edit(item, "position", Some(&constant), 1.25, value.clone()),
+            Edit::UpsertKeyframe(id, key, time, keyed_value)
+                if id == item && key == "position" && time == 1.25 && keyed_value == value
+        ));
+
+        let keyframe = Keyframe::new(
+            1.25,
+            value.clone(),
+            library::animation::EasingFunction::Linear,
+        );
+        let keyframe_id = keyframe.id;
+        let animated = Property::keyframe(vec![keyframe]);
+        assert!(matches!(
+            keyframe_toggle_edit(item, "position", Some(&animated), 1.25, value),
+            Edit::RemoveKeyframe(id, key, id_at_time)
+                if id == item && key == "position" && id_at_time == keyframe_id
+        ));
     }
 
     #[test]
