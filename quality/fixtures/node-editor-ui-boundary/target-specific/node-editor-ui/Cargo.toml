@@ -5,3 +5,9 @@ edition = "2021"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 library = { path = "../library" }
+
+# This manifest is an intentionally invalid architecture-boundary fixture.
+# Keep its prohibited dependency visible to the boundary test without making
+# the repository-wide unused-dependency audit treat the fixture as production.
+[package.metadata.cargo-machete]
+ignored = ["library"]

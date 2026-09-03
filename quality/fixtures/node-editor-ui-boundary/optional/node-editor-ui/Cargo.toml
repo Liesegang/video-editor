@@ -9,3 +9,9 @@ video-domain = ["dep:library"]
 
 [dependencies]
 library = { path = "../library", optional = true }
+
+# This manifest is an intentionally invalid architecture-boundary fixture.
+# Keep its prohibited dependency visible to the boundary test without making
+# the repository-wide unused-dependency audit treat the fixture as production.
+[package.metadata.cargo-machete]
+ignored = ["library"]
