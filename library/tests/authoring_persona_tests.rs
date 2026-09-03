@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "persona tests use assertion-oriented fixture construction"
+)]
+
 use library::TimelineEditorService;
 use library::core::render_plan::RenderPlanCompiler;
 use library::model::authoring::{
@@ -103,7 +109,10 @@ fn youtuber_subtitles_and_ripple_edits_do_not_create_nodes_per_cue() {
     assert_eq!(trimmed.source_time.start, OrderedFloat(2.25));
     assert_eq!(trimmed.source_time.duration, OrderedFloat(0.5));
     let document = &project.transcript_documents[&left.document_id];
-    assert_eq!(&document.text[left.text_start..left.text_end], "First");
+    assert_eq!(
+        document.text.get(left.text_start..left.text_end),
+        Some("First")
+    );
 }
 
 #[test]

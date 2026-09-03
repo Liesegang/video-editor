@@ -235,17 +235,10 @@ impl TimelineApp {
             .and_then(|project| self.editor.replace_project(project))
         {
             Ok(()) => {
-                self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
-                self.instance_path = InstancePath::root(self.open_timeline);
-                self.selected_item = None;
-                self.current_time = 0.0;
-                self.is_playing = false;
-                self.signal_runtime = SignalRuntimeValues::default();
-                self.undo.clear();
-                self.redo.clear();
-                self.last_history_group = None;
-                self.invalidate_preview();
-                self.status = "New project".to_string();
+                self.status = match self.reset_project_ui() {
+                    Ok(()) => "New project".to_string(),
+                    Err(error) => error.to_string(),
+                };
             }
             Err(error) => self.status = error.to_string(),
         }
@@ -261,17 +254,10 @@ impl TimelineApp {
         match TimelineEditorService::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
-                self.open_timeline = self.editor.snapshot().unwrap().root_timeline_id;
-                self.instance_path = InstancePath::root(self.open_timeline);
-                self.selected_item = None;
-                self.current_time = 0.0;
-                self.is_playing = false;
-                self.signal_runtime = SignalRuntimeValues::default();
-                self.undo.clear();
-                self.redo.clear();
-                self.last_history_group = None;
-                self.invalidate_preview();
-                self.status = format!("Opened {}", path.display());
+                self.status = match self.reset_project_ui() {
+                    Ok(()) => format!("Opened {}", path.display()),
+                    Err(error) => error.to_string(),
+                };
             }
             Err(error) => self.status = error.to_string(),
         }
@@ -297,6 +283,20 @@ impl TimelineApp {
         self.undo.push(before);
         self.redo.clear();
         self.last_history_group = None;
+    }
+
+    fn reset_project_ui(&mut self) -> Result<(), library::LibraryError> {
+        self.open_timeline = self.editor.snapshot()?.root_timeline_id;
+        self.instance_path = InstancePath::root(self.open_timeline);
+        self.selected_item = None;
+        self.current_time = 0.0;
+        self.is_playing = false;
+        self.signal_runtime = SignalRuntimeValues::default();
+        self.undo.clear();
+        self.redo.clear();
+        self.last_history_group = None;
+        self.invalidate_preview();
+        Ok(())
     }
 
     fn undo(&mut self) {
@@ -459,7 +459,7 @@ impl TimelineApp {
         if let Err(error) = self.renderer.renderer_mut().resize_render_target(
             timeline.width as u32,
             timeline.height as u32,
-            timeline.background_color.clone(),
+            timeline.background_color,
         ) {
             self.status = error.to_string();
             return;
@@ -486,12 +486,13 @@ impl TimelineApp {
                 .finish_export("ffmpeg_export", &output, &settings)
         })();
         if result.is_err() {
-            let _ = self
-                .plugins
-                .finish_export("ffmpeg_export", &output, &settings);
+            drop(
+                self.plugins
+                    .finish_export("ffmpeg_export", &output, &settings),
+            );
         }
         if let Some(audio_path) = runtime_audio {
-            let _ = std::fs::remove_file(audio_path);
+            drop(std::fs::remove_file(audio_path));
         }
         match result {
             Ok(()) => self.status = format!("Exported {output}"),
@@ -522,10 +523,7 @@ impl TimelineApp {
         let id = asset.id;
         let result = self.editor.add_asset(asset).and_then(|_| {
             let project = self.editor.snapshot()?;
-            let track = *project.timelines[&self.open_timeline]
-                .track_order
-                .last()
-                .unwrap();
+            let track = last_track(project.as_ref(), self.open_timeline)?;
             drop(project);
             self.editor.place_asset(
                 track,
@@ -547,7 +545,7 @@ impl TimelineApp {
             }
             Err(error) => {
                 if let Some(before) = before {
-                    let _ = self.editor.replace_project(before);
+                    drop(self.editor.replace_project(before));
                 }
                 self.status = error.to_string();
             }
@@ -561,10 +559,7 @@ impl TimelineApp {
             .ok()
             .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
-            let track = *project.timelines[&self.open_timeline]
-                .track_order
-                .last()
-                .unwrap();
+            let track = last_track(project.as_ref(), self.open_timeline)?;
             drop(project);
             self.editor.add_text(
                 track,
@@ -584,10 +579,7 @@ impl TimelineApp {
             .ok()
             .map(|project| project.as_ref().clone());
         let result = self.editor.snapshot().and_then(|project| {
-            let track = *project.timelines[&self.open_timeline]
-                .track_order
-                .last()
-                .unwrap();
+            let track = last_track(project.as_ref(), self.open_timeline)?;
             drop(project);
             self.editor.add_solid(
                 track,
@@ -623,12 +615,21 @@ impl TimelineApp {
                         return;
                     }
                 };
-                let track = *project.timelines[&self.open_timeline]
-                    .track_order
-                    .last()
-                    .unwrap();
+                let track = match last_track(project.as_ref(), self.open_timeline) {
+                    Ok(track) => track,
+                    Err(error) => {
+                        self.status = error.to_string();
+                        return;
+                    }
+                };
                 drop(project);
-                let interval = TimelineInterval::new(self.current_time, 5.0).unwrap();
+                let interval = match TimelineInterval::new(self.current_time, 5.0) {
+                    Ok(interval) => interval,
+                    Err(error) => {
+                        self.status = error;
+                        return;
+                    }
+                };
                 match self.editor.place_timeline(
                     track,
                     timeline_id,
@@ -647,7 +648,7 @@ impl TimelineApp {
                     }
                     Err(error) => {
                         if let Some(before) = before {
-                            let _ = self.editor.replace_project(before);
+                            drop(self.editor.replace_project(before));
                         }
                         self.status = error.to_string();
                     }
@@ -655,7 +656,7 @@ impl TimelineApp {
             }
             Err(error) => {
                 if let Some(before) = before {
-                    let _ = self.editor.replace_project(before);
+                    drop(self.editor.replace_project(before));
                 }
                 self.status = error.to_string();
             }
@@ -703,7 +704,7 @@ impl TimelineApp {
             }
             Err(error) => {
                 if let Some(before) = before {
-                    let _ = self.editor.replace_project(before);
+                    drop(self.editor.replace_project(before));
                 }
                 self.status = error.to_string();
             }
@@ -1096,7 +1097,7 @@ fn render_timeline_audio(
         .status()
         .map_err(|error| format!("Cannot start FFmpeg audio mix: {error}"))?;
     if !status.success() {
-        let _ = std::fs::remove_file(&output);
+        drop(std::fs::remove_file(&output));
         return Err(format!("FFmpeg audio mix failed with {status}"));
     }
     Ok(Some(output))
@@ -1574,6 +1575,24 @@ fn timeline_canvas_ui(
     });
 }
 
+fn last_track(
+    project: &AuthoringProject,
+    timeline_id: TimelineId,
+) -> Result<TimelineTrackId, library::LibraryError> {
+    project
+        .timelines
+        .get(&timeline_id)
+        .ok_or_else(|| {
+            library::LibraryError::Validation(format!("Timeline {timeline_id} is missing"))
+        })?
+        .track_order
+        .last()
+        .copied()
+        .ok_or_else(|| {
+            library::LibraryError::Validation(format!("Timeline {timeline_id} has no Track"))
+        })
+}
+
 fn item_color(source: &SourceRef) -> egui::Color32 {
     match source {
         SourceRef::Text { .. } => egui::Color32::from_rgb(190, 92, 160),
@@ -1594,6 +1613,10 @@ fn snap_time(raw: f64, fps: f64, boundaries: &[f64]) -> f64 {
         .unwrap_or(frame)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the immediate-mode Inspector receives explicit immutable editor context"
+)]
 fn inspector_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
@@ -2222,7 +2245,10 @@ fn data_ui(
                     if let Some(link) = link {
                         if let Some(document) = project.transcript_documents.get(&link.document_id)
                         {
-                            let original = &document.text[link.text_start..link.text_end];
+                            let original = document
+                                .text
+                                .get(link.text_start..link.text_end)
+                                .unwrap_or("<invalid transcript range>");
                             timing.on_hover_text(format!(
                                 "{} · source {:.2}–{:.2}\nOriginal transcript: {}",
                                 document.name,
@@ -2363,7 +2389,7 @@ fn logic_ui(
                     )
                     .changed()
                 {
-                    let _ = signal_runtime.set(binding.id, value);
+                    drop(signal_runtime.set(binding.id, value));
                 }
             }
         });

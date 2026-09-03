@@ -832,7 +832,7 @@ mod tests {
         asset
             .source_color
             .replace_detected(metadata[0].source_color.clone());
-        let mut project = AuthoringProject::new("tagged TGA", 1, 1, 24.0, 1.0).unwrap();
+        let mut project = AuthoringProject::new("tagged TGA", 1, 1, 24.0, 1.0)?;
         project.assets.push(asset.clone());
         let pipeline =
             ProjectColorPipeline::for_project(&project, ManagedRenderDestination::Preview)?;
@@ -900,7 +900,7 @@ mod tests {
         detected: crate::model::asset::SourceColorDescription,
         response: crate::plugin::LoadResponse,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut project = AuthoringProject::new("ordinary still ingress", 1, 1, 24.0, 1.0).unwrap();
+        let mut project = AuthoringProject::new("ordinary still ingress", 1, 1, 24.0, 1.0)?;
         let mut asset = Asset::new("ordinary", &path, AssetKind::Image);
         asset.source_color.replace_detected(detected);
         project.assets.push(asset.clone());

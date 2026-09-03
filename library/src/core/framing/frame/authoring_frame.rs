@@ -70,6 +70,10 @@ pub fn evaluate_authoring_timeline_frame(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public frame evaluation keeps each render authority explicit"
+)]
 pub fn evaluate_authoring_timeline_frame_with_signals(
     project: &AuthoringProject,
     plan: &RenderPlan,
@@ -237,6 +241,10 @@ fn collect_timeline_items(
     Ok(output)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recursive Timeline traversal passes explicit instance and cycle state"
+)]
 fn collect_item(
     project: &AuthoringProject,
     plan: &RenderPlan,

@@ -514,6 +514,10 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mask editing exposes the authored controls as one atomic operation"
+    )]
     pub fn update_mask(
         &self,
         item_id: TimelineItemId,

@@ -2,6 +2,10 @@
 
 pub mod audio;
 pub mod binding_runtime;
+#[allow(
+    dead_code,
+    reason = "waveform cache APIs are activated with the Timeline waveform UI"
+)]
 pub mod cache;
 pub mod data_source_runtime;
 pub mod ensemble;

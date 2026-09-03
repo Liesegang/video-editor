@@ -239,15 +239,14 @@ impl AuthoringProject {
             {
                 return Err(format!("Item {} has an invalid interval", item.id));
             }
-            if let Some(generated_id) = item.generated_item_id {
-                if item.id.as_uuid() != generated_id.as_uuid()
-                    || !self.generated_items.contains_key(&generated_id)
-                {
-                    return Err(format!(
-                        "Item {} has invalid GeneratedItem provenance",
-                        item.id
-                    ));
-                }
+            if let Some(generated_id) = item.generated_item_id
+                && (item.id.as_uuid() != generated_id.as_uuid()
+                    || !self.generated_items.contains_key(&generated_id))
+            {
+                return Err(format!(
+                    "Item {} has invalid GeneratedItem provenance",
+                    item.id
+                ));
             }
             if let Some(parent) = item.parent {
                 let Some(parent_item) = self.items.get(&parent) else {

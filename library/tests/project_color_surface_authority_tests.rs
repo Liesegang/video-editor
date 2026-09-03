@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    reason = "integration tests use expect messages as assertion diagnostics"
+)]
+
 use anyhow::{Context, Result};
 use library::model::authoring::AuthoringProject;
 use library::model::project::{

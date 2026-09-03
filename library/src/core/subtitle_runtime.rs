@@ -50,19 +50,21 @@ fn parse_timestamp(value: &str) -> Result<f64, String> {
         .split_once([',', '.'])
         .ok_or_else(|| format!("Invalid SRT timestamp '{value}'"))?;
     let mut clock = clock.split(':');
-    let hours = clock.next().and_then(|value| value.parse::<u64>().ok());
-    let minutes = clock.next().and_then(|value| value.parse::<u64>().ok());
-    let seconds = clock.next().and_then(|value| value.parse::<u64>().ok());
-    if clock.next().is_some() || hours.is_none() || minutes.is_none() || seconds.is_none() {
+    let components = (
+        clock.next().and_then(|value| value.parse::<u64>().ok()),
+        clock.next().and_then(|value| value.parse::<u64>().ok()),
+        clock.next().and_then(|value| value.parse::<u64>().ok()),
+    );
+    let (Some(hours), Some(minutes), Some(seconds)) = components else {
+        return Err(format!("Invalid SRT timestamp '{value}'"));
+    };
+    if clock.next().is_some() {
         return Err(format!("Invalid SRT timestamp '{value}'"));
     }
     let fraction = format!("0.{milliseconds}")
         .parse::<f64>()
         .map_err(|_| format!("Invalid SRT timestamp '{value}'"))?;
-    Ok(hours.unwrap() as f64 * 3600.0
-        + minutes.unwrap() as f64 * 60.0
-        + seconds.unwrap() as f64
-        + fraction)
+    Ok(hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64 + fraction)
 }
 
 #[cfg(test)]

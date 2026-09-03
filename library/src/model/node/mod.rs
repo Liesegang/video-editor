@@ -263,6 +263,10 @@ pub struct Node {
     pub ui_collapsed: bool,
 }
 
+#[allow(
+    dead_code,
+    reason = "Module Graph authoring uses these constructors and edit operations incrementally"
+)]
 impl Node {
     /// Creates an ordered variadic image compositor.
     pub fn new_merge(name: &str) -> Self {
@@ -803,6 +807,10 @@ impl ValueContent {
         self.descriptor().symbol
     }
 
+    #[allow(
+        dead_code,
+        reason = "compiled Module evaluation consumes the numeric operation"
+    )]
     pub(crate) fn numeric_operation(self) -> NumericBinaryOperation {
         self.descriptor().operation
     }

@@ -23,19 +23,28 @@ pub fn parse_table(path: &Path, source: &str) -> Result<(DataSourceRef, ParsedTa
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let (stable_key_field, rows) = match extension.as_str() {
-        "csv" => parse_csv(source)?,
-        "json" => parse_json(source)?,
+    let (source_ref, stable_key_field, rows) = match extension.as_str() {
+        "csv" => {
+            let (stable_key_field, rows) = parse_csv(source)?;
+            (
+                DataSourceRef::Csv {
+                    path: path.to_string_lossy().into_owned(),
+                },
+                stable_key_field,
+                rows,
+            )
+        }
+        "json" => {
+            let (stable_key_field, rows) = parse_json(source)?;
+            (
+                DataSourceRef::Json {
+                    path: path.to_string_lossy().into_owned(),
+                },
+                stable_key_field,
+                rows,
+            )
+        }
         _ => return Err("Data source must be a CSV or JSON file".to_string()),
-    };
-    let source_ref = match extension.as_str() {
-        "csv" => DataSourceRef::Csv {
-            path: path.to_string_lossy().into_owned(),
-        },
-        "json" => DataSourceRef::Json {
-            path: path.to_string_lossy().into_owned(),
-        },
-        _ => unreachable!(),
     };
     Ok((
         source_ref,
@@ -116,7 +125,7 @@ fn parse_csv(source: &str) -> Result<(String, Vec<DataRow>), String> {
     let key_index = headers
         .iter()
         .position(|header| header == &stable_key_field)
-        .expect("selected CSV key exists");
+        .ok_or_else(|| "Selected CSV stable-key column is missing".to_string())?;
     let mut rows = Vec::new();
     for (index, record) in reader.records().enumerate() {
         let record =

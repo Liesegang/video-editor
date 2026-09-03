@@ -73,6 +73,10 @@ pub(crate) fn to_skia_path(value: &PathValue) -> Result<Path, LibraryError> {
 /// Convert a native Path operation result back into canonical Project data.
 /// Boolean PathOps normalize their result to non-zero winding geometry, so
 /// this boundary never infers a fill rule from renderer-only inverse modes.
+#[expect(
+    dead_code,
+    reason = "reserved for the first-class Canvas path boolean editor"
+)]
 pub(crate) fn from_skia_boolean_path(value: &Path) -> Result<PathValue, LibraryError> {
     if !value.is_finite() {
         return Err(LibraryError::Render(

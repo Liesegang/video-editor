@@ -90,6 +90,8 @@ pub fn create_gpu_context(
 
 pub fn get_current_context_handle() -> Option<usize> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
+    // SAFETY: this query takes no pointers and returns the context bound to
+    // the calling thread without changing its ownership or current state.
     unsafe {
         let handle = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
         if !handle.is_null() {
@@ -109,13 +111,20 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows calls this function with the HWND and message arguments
+    // required by DefWindowProcW; this procedure retains no borrowed data.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn create_dummy_window() -> Result<RawWindowHandle, String> {
+    // SAFETY: all pointers passed below are null or reference buffers that stay
+    // alive through the synchronous Win32 calls. The returned HWND is checked.
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
+        if hinstance.is_null() {
+            return Err("Failed to resolve the current module handle".to_string());
+        }
         let class_name = "VideoEditorDummyClass\0"
             .encode_utf16()
             .collect::<Vec<u16>>();
@@ -156,8 +165,9 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             return Err("Failed to create dummy window".to_string());
         }
 
-        let mut handle =
-            Win32WindowHandle::new(std::num::NonZeroIsize::new(hwnd as isize).unwrap());
+        let hwnd = std::num::NonZeroIsize::new(hwnd as isize)
+            .ok_or_else(|| "Windows returned a null dummy window handle".to_string())?;
+        let mut handle = Win32WindowHandle::new(hwnd);
         handle.hinstance = std::num::NonZeroIsize::new(hinstance as isize);
 
         Ok(RawWindowHandle::Win32(handle))
@@ -166,8 +176,8 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn init_glutin_headless(
-    #[allow(unused)] share_handle: Option<usize>,
-    #[allow(unused)] share_hwnd: Option<isize>,
+    share_handle: Option<usize>,
+    share_hwnd: Option<isize>,
 ) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
@@ -178,6 +188,8 @@ fn init_glutin_headless(
 
     // Identify target pixel format if sharing
     let target_pf_index = if let Some(hwnd_ptr) = share_hwnd {
+        // SAFETY: the caller supplies the live preview HWND. The acquired DC
+        // is checked and released before leaving this synchronous block.
         unsafe {
             let hwnd = hwnd_ptr as HWND;
             let dc = GetDC(hwnd);
@@ -202,6 +214,8 @@ fn init_glutin_headless(
 
     // 2. Create Display
     let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
+    // SAFETY: the raw display handle names the current Windows desktop and is
+    // used only to construct the owned glutin Display returned on success.
     let display = unsafe {
         glutin::display::Display::new(
             raw_display_handle,
@@ -216,6 +230,8 @@ fn init_glutin_headless(
         .with_surface_type(ConfigSurfaceTypes::WINDOW)
         .build();
 
+    // SAFETY: `template` contains no borrowed native handles and `display`
+    // remains alive for every returned configuration.
     let config = unsafe { display.find_configs(template) }
         .map_err(|e| format!("Failed to find configs: {}", e))?
         .reduce(|accum, config| {
@@ -254,16 +270,24 @@ fn init_glutin_headless(
         .with_context_api(glutin::context::ContextApi::OpenGl(None))
         .build(Some(raw_window_handle));
 
+    // SAFETY: the context attributes reference the checked dummy HWND, whose
+    // lifetime is retained by the GpuContext contract.
     let not_current_context = unsafe { display.create_context(&config, &context_attributes) }
         .map_err(|e| format!("Failed to create GL context: {}", e))?;
 
     // 5. Create Window Surface
+    let initial_width = std::num::NonZeroU32::new(1920)
+        .ok_or_else(|| "Initial GL surface width must be non-zero".to_string())?;
+    let initial_height = std::num::NonZeroU32::new(1080)
+        .ok_or_else(|| "Initial GL surface height must be non-zero".to_string())?;
     let attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new().build(
         raw_window_handle,
-        std::num::NonZeroU32::new(1920).unwrap(), // Initial Size
-        std::num::NonZeroU32::new(1080).unwrap(),
+        initial_width,
+        initial_height,
     );
 
+    // SAFETY: the attributes reference the checked live dummy HWND and the
+    // resulting surface is stored with its owning Display and Context.
     let surface = unsafe { display.create_window_surface(&config, &attrs) }
         .map_err(|e| format!("Failed to create window surface: {}", e))?;
 
@@ -274,6 +298,8 @@ fn init_glutin_headless(
 
     // 7. Share Lists (Context Sharing)
     let context = if let Some(share_hglrc) = share_handle {
+        // SAFETY: both HGLRC values are checked live WGL contexts. We release
+        // currentness before sharing and restore it on the owned surface.
         unsafe {
             let my_hglrc = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
             if my_hglrc.is_null() {

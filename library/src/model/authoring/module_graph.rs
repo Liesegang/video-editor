@@ -106,7 +106,10 @@ impl ModuleGraph {
                     connection.id
                 ));
             }
-            *indegree.get_mut(&connection.to.node_id).expect("checked") += 1;
+            let degree = indegree.get_mut(&connection.to.node_id).ok_or_else(|| {
+                format!("Module connection {} has a missing target", connection.id)
+            })?;
+            *degree += 1;
             outgoing
                 .entry(connection.from.node_id)
                 .or_default()
@@ -120,7 +123,9 @@ impl ModuleGraph {
         while let Some(node_id) = ready.pop() {
             visited += 1;
             for target in outgoing.get(&node_id).into_iter().flatten() {
-                let degree = indegree.get_mut(target).expect("checked");
+                let degree = indegree
+                    .get_mut(target)
+                    .ok_or_else(|| format!("Module graph traversal lost Node {target}"))?;
                 *degree -= 1;
                 if *degree == 0 {
                     ready.push(*target);

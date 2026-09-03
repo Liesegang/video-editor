@@ -558,7 +558,7 @@ impl AuthoringSession {
         if let Some(generated_item_id) = generated_item_id {
             self.record_generated_override(
                 generated_item_id,
-                OverridePath::AuthoredProperty { key: key.clone() },
+                OverridePath::AuthoredProperty { key },
                 value,
             );
         }
@@ -1251,7 +1251,12 @@ impl AuthoringSession {
             + from_item.interval.duration.into_inner()
             - duration)
             .max(0.0);
-        candidate.items.get_mut(&to_item_id).unwrap().interval.start = OrderedFloat(overlap_start);
+        candidate
+            .items
+            .get_mut(&to_item_id)
+            .ok_or_else(|| format!("Missing Timeline item {to_item_id}"))?
+            .interval
+            .start = OrderedFloat(overlap_start);
         let id = TransitionId::new();
         candidate.transitions.insert(
             id,
@@ -1267,9 +1272,13 @@ impl AuthoringSession {
         candidate
             .items
             .get_mut(&from_item.id)
-            .unwrap()
+            .ok_or_else(|| format!("Missing Timeline item {}", from_item.id))?
             .transition_out = Some(id);
-        candidate.items.get_mut(&to_item_id).unwrap().transition_in = Some(id);
+        candidate
+            .items
+            .get_mut(&to_item_id)
+            .ok_or_else(|| format!("Missing Timeline item {to_item_id}"))?
+            .transition_in = Some(id);
         candidate.validate()?;
         self.project = candidate;
         let timeline_id = self.timeline_for_track(to_item.track_id)?;
@@ -1395,6 +1404,10 @@ impl AuthoringSession {
         ))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mask editing validates and commits all authored controls atomically"
+    )]
     pub fn update_mask(
         &mut self,
         item_id: TimelineItemId,

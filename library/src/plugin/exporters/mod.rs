@@ -156,6 +156,10 @@ impl ExportSettings {
         self.job_id
     }
 
+    #[allow(
+        dead_code,
+        reason = "multi-export queue reset uses this explicit job boundary"
+    )]
     pub(crate) fn begin_new_job(&mut self) {
         self.job_id = ExportJobId::new();
     }

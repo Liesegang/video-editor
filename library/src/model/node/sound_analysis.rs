@@ -189,6 +189,10 @@ impl SoundAnalysisContent {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "Logic Inspector validation consumes the authored analyzer limits"
+    )]
     pub(crate) fn numeric_property_is_in_hard_limits(self, key: &str, value: f64) -> bool {
         if !value.is_finite() {
             return false;

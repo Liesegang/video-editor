@@ -3,6 +3,10 @@ pub mod authoring;
 mod blend;
 pub mod frame;
 pub mod node;
+#[allow(
+    dead_code,
+    reason = "numeric evaluation is activated by compiled Module operations"
+)]
 pub(crate) mod numeric;
 pub mod path;
 pub mod project;
