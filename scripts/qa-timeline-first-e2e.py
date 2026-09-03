@@ -306,6 +306,50 @@ def run_suite(client: Client, capture: Path | None) -> dict:
         else None,
     )
 
+    click(client, client.components()["inspector.effects.add"])
+    effect_options = wait_for(
+        "Effect catalog",
+        lambda: (options if options else None)
+        if (
+            options := [
+                component
+                for component_id, component in client.components().items()
+                if component_id.startswith("inspector.effects.option:")
+            ]
+        )
+        else None,
+    )
+    effect_option = next(
+        (
+            option
+            for option in effect_options
+            if option["metadata"].get("effect_id") == "blur"
+        ),
+        effect_options[0],
+    )
+    effect_name = effect_option["metadata"]["name"]
+    click(client, effect_option)
+    remove_effect = wait_for(
+        "Effect attachment",
+        lambda: (controls[0] if controls else None)
+        if (
+            controls := [
+                component
+                for component_id, component in client.components().items()
+                if component_id.startswith("inspector.effects.remove:")
+            ]
+        )
+        else None,
+    )
+    click(client, remove_effect)
+    wait_for(
+        "Effect removal",
+        lambda: not any(
+            component_id.startswith("inspector.effects.remove:")
+            for component_id in client.components()
+        ),
+    )
+
     preview = client.components()["preview.canvas"]
     preview_center = center(preview)
     before = client.state()["preview"]
@@ -400,6 +444,7 @@ def run_suite(client: Client, capture: Path | None) -> dict:
         "selected_item": item_id,
         "position_x": x_value,
         "position_keyframed": True,
+        "effect_added_and_removed": effect_name,
         "preview_zoom": zoomed["zoom"],
         "preview_pan": panned["pan"],
         "playback_advanced_to": advanced["frame"]["current_time"],

@@ -385,6 +385,25 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn remove_attachment(
+        &self,
+        attachment_id: crate::model::authoring::AttachmentId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .remove_attachment(attachment_id)
+            .map_err(LibraryError::Validation)
+    }
+
+    pub fn move_attachment(
+        &self,
+        attachment_id: crate::model::authoring::AttachmentId,
+        direction: i32,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .move_attachment(attachment_id, direction)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn set_module_parameter(
         &self,
         instance_id: ModuleInstanceId,
@@ -1073,6 +1092,9 @@ fn frame_number_at(time: f64, fps: f64) -> Result<u64, LibraryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::authoring::{
+        BindingOperator, BindingScope, InstancePath, SignalMapping, SignalSource,
+    };
 
     #[test]
     fn compiled_project_is_shared_until_the_authoring_revision_changes() {
@@ -1096,6 +1118,90 @@ mod tests {
         assert_ne!(changed.revision, first.revision);
         assert!(!Arc::ptr_eq(&changed.project, &first.project));
         assert!(!Arc::ptr_eq(&changed.render_plan, &first.render_plan));
+    }
+
+    #[test]
+    fn effect_stack_reorders_and_removes_private_modules_and_bindings() {
+        let service = TimelineEditorService::create_default("Effect Stack").expect("service");
+        let project = service.snapshot().expect("snapshot");
+        let timeline_id = project.root_timeline_id;
+        let track_id = project.timelines[&timeline_id].track_order[0];
+        drop(project);
+        let (item_id, _) = service
+            .add_text(
+                track_id,
+                "Title".to_string(),
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("text");
+        let plugins = PluginManager::default();
+        let (first_instance, _) = service
+            .attach_effect(item_id, "blur", &plugins)
+            .expect("first effect");
+        let (second_instance, _) = service
+            .attach_effect(item_id, "blur", &plugins)
+            .expect("second effect");
+        let snapshot = service.snapshot().expect("effects");
+        let first_attachment = snapshot
+            .attachments
+            .values()
+            .find(|attachment| attachment.module_instance_id == first_instance)
+            .expect("first attachment")
+            .id;
+        let second_attachment = snapshot
+            .attachments
+            .values()
+            .find(|attachment| attachment.module_instance_id == second_instance)
+            .expect("second attachment")
+            .id;
+        let first_definition = snapshot.module_instances[&first_instance].definition_id;
+        let first_parameter =
+            snapshot.module_definitions[&first_definition].published_parameters[0].id;
+        drop(snapshot);
+        let binding_id = SignalBindingId::new();
+        service
+            .add_signal_binding(SignalBinding {
+                id: binding_id,
+                source: SignalSource::AudioEnvelope {
+                    channel: "master".to_string(),
+                },
+                scope: BindingScope::Instance {
+                    instance_path: InstancePath::root(timeline_id),
+                    module_instance_id: first_instance,
+                },
+                target_parameter_id: first_parameter,
+                mapping: SignalMapping {
+                    input_min: ordered_float::OrderedFloat(0.0),
+                    input_max: ordered_float::OrderedFloat(1.0),
+                    output_min: ordered_float::OrderedFloat(0.0),
+                    output_max: ordered_float::OrderedFloat(1.0),
+                    clamp: true,
+                },
+                operator: BindingOperator::Multiply,
+                smoothing_seconds: ordered_float::OrderedFloat(0.05),
+                priority: 0,
+            })
+            .expect("binding");
+
+        service
+            .move_attachment(second_attachment, -1)
+            .expect("move effect up");
+        let reordered = service.snapshot().expect("reordered");
+        assert_eq!(reordered.attachments[&second_attachment].order, 0);
+        assert_eq!(reordered.attachments[&first_attachment].order, 1);
+        drop(reordered);
+
+        service
+            .remove_attachment(first_attachment)
+            .expect("remove effect");
+        let removed = service.snapshot().expect("removed");
+        assert!(!removed.attachments.contains_key(&first_attachment));
+        assert!(!removed.module_instances.contains_key(&first_instance));
+        assert!(!removed.module_definitions.contains_key(&first_definition));
+        assert!(!removed.signal_bindings.contains_key(&binding_id));
+        assert!(removed.module_instances.contains_key(&second_instance));
+        removed.validate().expect("valid Effect Stack project");
     }
 
     #[test]

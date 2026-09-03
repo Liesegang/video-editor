@@ -8,11 +8,11 @@ use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::core::binding_runtime::{resolve_published_numeric_value, SignalRuntimeValues};
 use library::core::event_runtime::EventRuntime;
 use library::model::authoring::{
-    AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
-    EventBinding, EventBindingId, EventSource, InstancePath, MaskId, MaskMode, MatteMode, MatteRef,
-    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId,
-    SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TriggerPolicy,
+    AttachmentId, AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId,
+    DurationPolicy, EventBinding, EventBindingId, EventSource, InstancePath, MaskId, MaskMode,
+    MatteMode, MatteRef, ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, OverrideId,
+    PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef,
+    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TriggerPolicy,
 };
 use library::model::frame::color::Color;
 use library::model::node::GeneratorContent;
@@ -100,7 +100,9 @@ enum Edit {
     Trim(TimelineItemId, TimelineInterval),
     Property(TimelineItemId, String, PropertyValue),
     Split(TimelineItemId),
-    Blur(TimelineItemId),
+    AddEffect(TimelineItemId, String),
+    RemoveAttachment(AttachmentId),
+    MoveAttachment(AttachmentId, i32),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
     #[cfg(feature = "logic-editor")]
@@ -142,6 +144,7 @@ enum HistoryKey {
     Property(TimelineItemId, String),
     ModuleParameter(ModuleInstanceId, PublishedParameterId),
     ModuleNode(ModuleDefinitionId, uuid::Uuid),
+    Attachment(AttachmentId),
     Binding,
     Data,
 }
@@ -165,7 +168,10 @@ impl Edit {
             Self::Trim(item, _) => Some(HistoryKey::Item(*item, "trim")),
             Self::Property(item, key, _) => Some(HistoryKey::Property(*item, key.clone())),
             Self::Split(item) => Some(HistoryKey::Item(*item, "split")),
-            Self::Blur(item) => Some(HistoryKey::Item(*item, "effect")),
+            Self::AddEffect(item, _) => Some(HistoryKey::Item(*item, "effect")),
+            Self::RemoveAttachment(attachment) | Self::MoveAttachment(attachment, _) => {
+                Some(HistoryKey::Attachment(*attachment))
+            }
             Self::ModuleParameter(instance, parameter, _) => {
                 Some(HistoryKey::ModuleParameter(*instance, *parameter))
             }
@@ -940,9 +946,16 @@ impl TimelineApp {
                     .map(|_| ())
             }),
             Edit::Split(id) => self.editor.split_item(id, self.current_time).map(|_| ()),
-            Edit::Blur(id) => self
+            Edit::AddEffect(id, effect_type) => self
                 .editor
-                .attach_effect(id, "blur", self.plugins.as_ref())
+                .attach_effect(id, &effect_type, self.plugins.as_ref())
+                .map(|_| ()),
+            Edit::RemoveAttachment(attachment_id) => {
+                self.editor.remove_attachment(attachment_id).map(|_| ())
+            }
+            Edit::MoveAttachment(attachment_id, direction) => self
+                .editor
+                .move_attachment(attachment_id, direction)
                 .map(|_| ()),
             Edit::ModuleParameter(instance, parameter, value) => self
                 .editor
@@ -1430,6 +1443,7 @@ impl eframe::App for TimelineApp {
         let mut edits = Vec::new();
         let mut viewer = Viewer {
             project: project.as_ref(),
+            plugins: self.plugins.as_ref(),
             render_plan: compiled.render_plan.as_ref(),
             open_timeline: self.open_timeline,
             instance_path: &self.instance_path,
@@ -1476,6 +1490,7 @@ impl eframe::App for TimelineApp {
 
 struct Viewer<'a> {
     project: &'a AuthoringProject,
+    plugins: &'a library::plugin::PluginManager,
     render_plan: &'a library::core::render_plan::RenderPlan,
     open_timeline: TimelineId,
     instance_path: &'a InstancePath,
@@ -1524,16 +1539,23 @@ impl TabViewer for Viewer<'_> {
                 self.timeline_pixels_per_second,
                 self.edits,
             ),
-            Tab::Inspector => inspector_ui(
-                ui,
-                self.project,
-                self.selected_item,
-                self.instance_path,
-                *self.current_time,
-                self.workspace,
-                self.signal_runtime,
-                self.edits,
-            ),
+            Tab::Inspector => {
+                egui::ScrollArea::vertical()
+                    .id_salt("inspector-scroll")
+                    .show(ui, |ui| {
+                        inspector_ui(
+                            ui,
+                            self.project,
+                            self.plugins,
+                            self.selected_item,
+                            self.instance_path,
+                            *self.current_time,
+                            self.workspace,
+                            self.signal_runtime,
+                            self.edits,
+                        );
+                    });
+            }
             Tab::Assets => assets_ui(ui, self.project, self.edits),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Data => data_ui(ui, self.project, self.open_timeline, self.edits),
@@ -2763,6 +2785,7 @@ fn duration_policy_label(policy: &DurationPolicy) -> &'static str {
 fn inspector_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
+    plugins: &library::plugin::PluginManager,
     selected: Option<TimelineItemId>,
     instance_path: &InstancePath,
     current_time: f64,
@@ -3262,119 +3285,216 @@ fn inspector_ui(
     });
     ui.separator();
     ui.heading("Effect Stack");
-    ui.menu_button("+ Add Effect", |ui| {
-        if ui.button("Blur").clicked() {
-            edits.push(Edit::Blur(id));
-            ui.close();
+    let mut available_effects = plugins.get_available_effects();
+    available_effects.sort_by(|left, right| (&left.2, &left.1).cmp(&(&right.2, &right.1)));
+    let add_effect = ui.menu_button("+ Add Effect", |ui| {
+        if available_effects.is_empty() {
+            ui.label("No effects are installed");
+        }
+        let mut current_category = None;
+        for (effect_id, name, category) in &available_effects {
+            if current_category.as_ref() != Some(category) {
+                if current_category.is_some() {
+                    ui.separator();
+                }
+                ui.strong(category);
+                current_category = Some(category.clone());
+            }
+            let option = ui.button(name);
+            crate::qa::register_component(
+                format!("inspector.effects.option:{effect_id}"),
+                "effect_option",
+                option.rect,
+                serde_json::json!({"effect_id": effect_id, "name": name, "category": category}),
+            );
+            if option.clicked() {
+                edits.push(Edit::AddEffect(id, effect_id.clone()));
+                ui.close();
+            }
         }
     });
-    let attachments: Vec<_> = project.attachments.values().filter(|attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id)).collect();
+    crate::qa::register_component(
+        "inspector.effects.add",
+        "menu_button",
+        add_effect.response.rect,
+        serde_json::json!({"effect_count": available_effects.len()}),
+    );
+    let mut attachments: Vec<_> = project
+        .attachments
+        .values()
+        .filter(|attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id))
+        .collect();
+    attachments.sort_by_key(|attachment| (attachment.order, attachment.id));
     if attachments.is_empty() {
         ui.label("No effects");
     }
-    for attachment in attachments {
+    let attachment_count = attachments.len();
+    for (index, attachment) in attachments.into_iter().enumerate() {
         let instance = &project.module_instances[&attachment.module_instance_id];
         let definition = &project.module_definitions[&instance.definition_id];
-        ui.label(format!("{} · {:?}", definition.name, attachment.stage));
-        for parameter in &definition.published_parameters {
-            let value = instance
-                .parameter_overrides
-                .get(&parameter.id)
-                .unwrap_or(&parameter.default_value);
-            match value {
-                PropertyValue::Number(number) => {
-                    let mut number = number.into_inner();
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut number)
-                                .speed(0.1)
-                                .prefix(format!("{} ", parameter.name)),
-                        )
-                        .changed()
-                    {
-                        edits.push(Edit::ModuleParameter(
-                            instance.id,
-                            parameter.id,
-                            PropertyValue::Number(OrderedFloat(number)),
-                        ));
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong(&definition.name);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let remove = ui.small_button("Remove");
+                    crate::qa::register_component(
+                        format!("inspector.effects.remove:{}", attachment.id),
+                        "effect_remove",
+                        remove.rect,
+                        serde_json::json!({}),
+                    );
+                    if remove.clicked() {
+                        edits.push(Edit::RemoveAttachment(attachment.id));
                     }
-                }
-                _ => {
-                    ui.small(format!("{} = {:?}", parameter.name, value));
-                }
-            }
-            ui.indent((instance.id, parameter.id), |ui| {
-                if let Some(effective) = resolve_published_numeric_value(
-                    definition.id,
+                    let down = ui.add_enabled(
+                        index + 1 < attachment_count,
+                        egui::Button::new("Down").small(),
+                    );
+                    crate::qa::register_component(
+                        format!("inspector.effects.down:{}", attachment.id),
+                        "effect_move_down",
+                        down.rect,
+                        serde_json::json!({"enabled": down.enabled()}),
+                    );
+                    if down.clicked() {
+                        edits.push(Edit::MoveAttachment(attachment.id, 1));
+                    }
+                    let up = ui.add_enabled(index > 0, egui::Button::new("Up").small());
+                    crate::qa::register_component(
+                        format!("inspector.effects.up:{}", attachment.id),
+                        "effect_move_up",
+                        up.rect,
+                        serde_json::json!({"enabled": up.enabled()}),
+                    );
+                    if up.clicked() {
+                        edits.push(Edit::MoveAttachment(attachment.id, -1));
+                    }
+                });
+            });
+            ui.small(format!("{:?}", attachment.stage));
+            for parameter in &definition.published_parameters {
+                effect_parameter_ui(
+                    ui,
+                    project,
+                    definition,
                     instance,
                     instance_path,
                     parameter,
-                    project.signal_bindings.values(),
                     signal_runtime,
-                ) {
-                    ui.strong(format!("Effective: {:?}", effective.value));
-                    for contribution in effective.contributions {
-                        ui.small(format!("{}: {:?}", contribution.label, contribution.value));
-                    }
-                } else {
-                    ui.small(format!("Base: {:?}", parameter.default_value));
-                    if let Some(value) = instance.parameter_overrides.get(&parameter.id) {
-                        ui.small(format!("Instance override: {:?}", value));
-                    }
-                }
-                let bindings: Vec<_> = project
-                    .signal_bindings
-                    .values()
-                    .filter(|binding| {
-                        binding.target_parameter_id == parameter.id
-                            && match &binding.scope {
-                                BindingScope::Definition { definition_id } => {
-                                    *definition_id == definition.id
-                                }
-                                BindingScope::Instance {
-                                    instance_path: target_path,
-                                    module_instance_id,
-                                } => {
-                                    *module_instance_id == instance.id
-                                        && target_path == instance_path
-                                }
-                                BindingScope::Query { .. } => false,
-                            }
-                    })
-                    .collect();
-                for binding in &bindings {
-                    ui.small(format!(
-                        "Automation: {:?} via {:?}",
-                        binding.source, binding.operator
-                    ));
-                }
-                if bindings.is_empty() && ui.button("Bind audio envelope").clicked() {
-                    let binding_id = SignalBindingId::new();
-                    edits.push(Edit::AddSignalBinding(SignalBinding {
-                        id: binding_id,
-                        source: SignalSource::AudioEnvelope {
-                            channel: "master".to_string(),
-                        },
-                        scope: BindingScope::Instance {
-                            instance_path: instance_path.clone(),
-                            module_instance_id: instance.id,
-                        },
-                        target_parameter_id: parameter.id,
-                        mapping: SignalMapping {
-                            input_min: OrderedFloat(0.0),
-                            input_max: OrderedFloat(1.0),
-                            output_min: OrderedFloat(0.0),
-                            output_max: OrderedFloat(1.0),
-                            clamp: true,
-                        },
-                        operator: BindingOperator::Multiply,
-                        smoothing_seconds: OrderedFloat(0.05),
-                        priority: 0,
-                    }));
-                }
-            });
+                    edits,
+                );
+            }
+        });
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an Effect parameter row receives its published-interface and runtime provenance context"
+)]
+fn effect_parameter_ui(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    definition: &library::model::authoring::ModuleDefinition,
+    instance: &library::model::authoring::ModuleInstance,
+    instance_path: &InstancePath,
+    parameter: &library::model::authoring::PublishedParameter,
+    signal_runtime: &SignalRuntimeValues,
+    edits: &mut Vec<Edit>,
+) {
+    let value = instance
+        .parameter_overrides
+        .get(&parameter.id)
+        .unwrap_or(&parameter.default_value);
+    match value {
+        PropertyValue::Number(number) => {
+            let mut number = number.into_inner();
+            if inspector_number(
+                ui,
+                (instance.id, parameter.id),
+                &parameter.name,
+                &mut number,
+                0.1,
+                "",
+            ) {
+                edits.push(Edit::ModuleParameter(
+                    instance.id,
+                    parameter.id,
+                    PropertyValue::Number(OrderedFloat(number)),
+                ));
+            }
+        }
+        _ => {
+            ui.small(format!("{} = {:?}", parameter.name, value));
         }
     }
+    ui.indent((instance.id, parameter.id), |ui| {
+        if let Some(effective) = resolve_published_numeric_value(
+            definition.id,
+            instance,
+            instance_path,
+            parameter,
+            project.signal_bindings.values(),
+            signal_runtime,
+        ) {
+            ui.strong(format!("Effective: {:?}", effective.value));
+            for contribution in effective.contributions {
+                ui.small(format!("{}: {:?}", contribution.label, contribution.value));
+            }
+        } else {
+            ui.small(format!("Base: {:?}", parameter.default_value));
+            if let Some(value) = instance.parameter_overrides.get(&parameter.id) {
+                ui.small(format!("Instance override: {:?}", value));
+            }
+        }
+        let bindings: Vec<_> = project
+            .signal_bindings
+            .values()
+            .filter(|binding| {
+                binding.target_parameter_id == parameter.id
+                    && match &binding.scope {
+                        BindingScope::Definition { definition_id } => {
+                            *definition_id == definition.id
+                        }
+                        BindingScope::Instance {
+                            instance_path: target_path,
+                            module_instance_id,
+                        } => *module_instance_id == instance.id && target_path == instance_path,
+                        BindingScope::Query { .. } => false,
+                    }
+            })
+            .collect();
+        for binding in &bindings {
+            ui.small(format!(
+                "Automation: {:?} via {:?}",
+                binding.source, binding.operator
+            ));
+        }
+        if bindings.is_empty() && ui.button("Bind audio envelope").clicked() {
+            let binding_id = SignalBindingId::new();
+            edits.push(Edit::AddSignalBinding(SignalBinding {
+                id: binding_id,
+                source: SignalSource::AudioEnvelope {
+                    channel: "master".to_string(),
+                },
+                scope: BindingScope::Instance {
+                    instance_path: instance_path.clone(),
+                    module_instance_id: instance.id,
+                },
+                target_parameter_id: parameter.id,
+                mapping: SignalMapping {
+                    input_min: OrderedFloat(0.0),
+                    input_max: OrderedFloat(1.0),
+                    output_min: OrderedFloat(0.0),
+                    output_max: OrderedFloat(1.0),
+                    clamp: true,
+                },
+                operator: BindingOperator::Multiply,
+                smoothing_seconds: OrderedFloat(0.05),
+                priority: 0,
+            }));
+        }
+    });
 }
 
 fn assets_ui(ui: &mut egui::Ui, project: &AuthoringProject, edits: &mut Vec<Edit>) {

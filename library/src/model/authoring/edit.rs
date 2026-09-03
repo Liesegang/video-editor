@@ -5,15 +5,15 @@ use crate::model::project::asset::Asset;
 use crate::model::project::property::{Property, PropertyMap};
 
 use super::{
-    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, Constraint,
-    ConstraintId, ConstraintKind, DataSource, EventBinding, EventBindingId, GeneratedItem, Mask,
-    MaskId, MaskMode, MatteRef, ModuleConnection, ModuleConnectionId, ModuleDefinition,
-    ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleRole, Override,
-    OverrideId, OverrideOperator, OverridePatch, OverridePath, OverrideStatus, PublishedParameter,
-    PublishedParameterId, SignalBinding, SignalBindingId, SourceRef, Timeline, TimelineId,
-    TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, TranscriptDocument, TranscriptLink, Transition, TransitionId,
-    TransitionKind,
+    Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, BindingScope,
+    Constraint, ConstraintId, ConstraintKind, DataSource, EventBinding, EventBindingId,
+    EventSource, GeneratedItem, Mask, MaskId, MaskMode, MatteRef, ModuleConnection,
+    ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleGraph, ModuleInstance,
+    ModuleInstanceId, ModuleRole, Override, OverrideId, OverrideOperator, OverridePatch,
+    OverridePath, OverrideStatus, PublishedParameter, PublishedParameterId, SignalBinding,
+    SignalBindingId, SignalSource, SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem,
+    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, TranscriptDocument,
+    TranscriptLink, Transition, TransitionId, TransitionKind,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -59,6 +59,36 @@ fn event_source_references_item(
         source,
         crate::model::authoring::EventSource::Published { instance_path, .. }
             if instance_path.composition_items.contains(&item_id)
+    )
+}
+
+fn binding_references_instance(scope: &BindingScope, instance_id: ModuleInstanceId) -> bool {
+    matches!(
+        scope,
+        BindingScope::Instance {
+            module_instance_id,
+            ..
+        } if *module_instance_id == instance_id
+    )
+}
+
+fn signal_source_references_instance(source: &SignalSource, instance_id: ModuleInstanceId) -> bool {
+    matches!(
+        source,
+        SignalSource::Published {
+            module_instance_id,
+            ..
+        } if *module_instance_id == instance_id
+    )
+}
+
+fn event_source_references_instance(source: &EventSource, instance_id: ModuleInstanceId) -> bool {
+    matches!(
+        source,
+        EventSource::Published {
+            module_instance_id,
+            ..
+        } if *module_instance_id == instance_id
     )
 }
 
@@ -587,29 +617,19 @@ impl AuthoringSession {
         self.project.transitions.retain(|_, transition| {
             transition.from_item_id != item_id && transition.to_item_id != item_id
         });
-        let removed_instances: Vec<_> = self
+        let mut removed_instances: Vec<_> = self
             .project
             .attachments
             .values()
             .filter(|attachment| attachment.owner == (AttachmentOwner::Item { item_id }))
             .map(|attachment| attachment.module_instance_id)
             .collect();
+        if let SourceRef::Module { module_instance_id } = item.source {
+            removed_instances.push(module_instance_id);
+        }
         self.project
             .attachments
             .retain(|_, attachment| attachment.owner != (AttachmentOwner::Item { item_id }));
-        for instance_id in removed_instances {
-            if !self
-                .project
-                .attachments
-                .values()
-                .any(|attachment| attachment.module_instance_id == instance_id)
-                && !self.project.items.values().any(|candidate| {
-                    matches!(candidate.source, SourceRef::Module { module_instance_id } if module_instance_id == instance_id)
-                })
-            {
-                self.project.module_instances.remove(&instance_id);
-            }
-        }
         self.project.signal_bindings.retain(|_, binding| {
             !binding_references_item(&binding.scope, item_id)
                 && !signal_source_references_item(&binding.source, item_id)
@@ -620,6 +640,11 @@ impl AuthoringSession {
         });
         self.project.transcript_links.remove(&item_id);
         self.project.items.remove(&item_id);
+        removed_instances.sort();
+        removed_instances.dedup();
+        for instance_id in removed_instances {
+            self.remove_module_instance_if_unreferenced(instance_id);
+        }
         Ok(self.finish(vec![ProjectInvalidation::TimelineStructure { timeline_id }]))
     }
 
@@ -888,6 +913,66 @@ impl AuthoringSession {
                 item_id,
             }]),
         ))
+    }
+
+    pub fn remove_attachment(&mut self, attachment_id: AttachmentId) -> Result<ChangeSet, String> {
+        let attachment = self
+            .project
+            .attachments
+            .get(&attachment_id)
+            .cloned()
+            .ok_or_else(|| format!("Missing Attachment {attachment_id}"))?;
+        let invalidation = self.attachment_invalidation(&attachment.owner)?;
+        self.project.attachments.remove(&attachment_id);
+        self.remove_module_instance_if_unreferenced(attachment.module_instance_id);
+        Ok(self.finish(vec![invalidation]))
+    }
+
+    pub fn move_attachment(
+        &mut self,
+        attachment_id: AttachmentId,
+        direction: i32,
+    ) -> Result<ChangeSet, String> {
+        if !matches!(direction, -1 | 1) {
+            return Err("Attachment direction must be -1 or 1".to_string());
+        }
+        let attachment = self
+            .project
+            .attachments
+            .get(&attachment_id)
+            .cloned()
+            .ok_or_else(|| format!("Missing Attachment {attachment_id}"))?;
+        let mut ordered = self
+            .project
+            .attachments
+            .values()
+            .filter(|candidate| {
+                candidate.owner == attachment.owner && candidate.stage == attachment.stage
+            })
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>();
+        ordered.sort_by_key(|id| {
+            let candidate = &self.project.attachments[id];
+            (candidate.order, candidate.id)
+        });
+        let index = ordered
+            .iter()
+            .position(|id| *id == attachment_id)
+            .ok_or_else(|| format!("Missing Attachment {attachment_id} in its Effect Stack"))?;
+        let target = index as i64 + i64::from(direction);
+        if target < 0 || target >= ordered.len() as i64 {
+            return Err("Attachment is already at the edge of its Effect Stack".to_string());
+        }
+        ordered.swap(index, target as usize);
+        for (order, id) in ordered.into_iter().enumerate() {
+            self.project
+                .attachments
+                .get_mut(&id)
+                .ok_or_else(|| format!("Missing Attachment {id}"))?
+                .order = order as i64;
+        }
+        let invalidation = self.attachment_invalidation(&attachment.owner)?;
+        Ok(self.finish(vec![invalidation]))
     }
 
     pub fn set_module_parameter(
@@ -1847,6 +1932,89 @@ impl AuthoringSession {
             self.project.attachments.insert(attachment.id, attachment);
         }
         Ok(())
+    }
+
+    fn attachment_invalidation(
+        &self,
+        owner: &AttachmentOwner,
+    ) -> Result<ProjectInvalidation, String> {
+        match owner {
+            AttachmentOwner::Item { item_id } => Ok(ProjectInvalidation::ItemProperties {
+                timeline_id: self.timeline_for_item(*item_id)?,
+                item_id: *item_id,
+            }),
+            AttachmentOwner::Track { track_id } => Ok(ProjectInvalidation::TimelineStructure {
+                timeline_id: self.timeline_for_track(*track_id)?,
+            }),
+            AttachmentOwner::Timeline { timeline_id } => {
+                if !self.project.timelines.contains_key(timeline_id) {
+                    return Err(format!("Missing Timeline {timeline_id}"));
+                }
+                Ok(ProjectInvalidation::TimelineStructure {
+                    timeline_id: *timeline_id,
+                })
+            }
+        }
+    }
+
+    fn remove_module_instance_if_unreferenced(&mut self, instance_id: ModuleInstanceId) {
+        let is_referenced = self
+            .project
+            .attachments
+            .values()
+            .any(|attachment| attachment.module_instance_id == instance_id)
+            || self.project.items.values().any(|item| {
+                matches!(
+                    item.source,
+                    SourceRef::Module { module_instance_id } if module_instance_id == instance_id
+                )
+            })
+            || self
+                .project
+                .data_sources
+                .values()
+                .any(|source| source.generator_id == instance_id)
+            || self
+                .project
+                .generated_items
+                .values()
+                .any(|item| item.generator_id == instance_id);
+        if is_referenced {
+            return;
+        }
+        let Some(instance) = self.project.module_instances.remove(&instance_id) else {
+            return;
+        };
+        self.project.signal_bindings.retain(|_, binding| {
+            !binding_references_instance(&binding.scope, instance_id)
+                && !signal_source_references_instance(&binding.source, instance_id)
+        });
+        self.project.event_bindings.retain(|_, binding| {
+            !binding_references_instance(&binding.scope, instance_id)
+                && !event_source_references_instance(&binding.source, instance_id)
+        });
+        let definition_id = instance.definition_id;
+        if self
+            .project
+            .module_instances
+            .values()
+            .any(|candidate| candidate.definition_id == definition_id)
+        {
+            return;
+        }
+        self.project.module_definitions.remove(&definition_id);
+        self.project.signal_bindings.retain(|_, binding| {
+            !matches!(
+                binding.scope,
+                BindingScope::Definition { definition_id: target } if target == definition_id
+            )
+        });
+        self.project.event_bindings.retain(|_, binding| {
+            !matches!(
+                binding.scope,
+                BindingScope::Definition { definition_id: target } if target == definition_id
+            )
+        });
     }
 
     fn finish(&mut self, invalidations: Vec<ProjectInvalidation>) -> ChangeSet {
