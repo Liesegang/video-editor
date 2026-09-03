@@ -56,6 +56,14 @@ pub struct RenderResult {
 
 impl RenderServer {
     pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
+        Self::new_with_gpu(plugin_manager, cache_manager, true)
+    }
+
+    fn new_with_gpu(
+        plugin_manager: Arc<PluginManager>,
+        cache_manager: SharedCacheManager,
+        enable_gpu: bool,
+    ) -> Self {
         let (tx, rx) = channel::<RenderRequest>();
         let (tx_result, rx_result) = channel::<RenderResult>();
 
@@ -70,7 +78,7 @@ impl RenderServer {
                 1920,
                 1080,
                 current_background_color.clone(),
-                true,
+                enable_gpu,
                 None,
                 None,
             );
@@ -278,6 +286,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    fn test_server() -> RenderServer {
+        RenderServer::new_with_gpu(
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+            false,
+        )
+    }
+
     fn empty_frame(width: u64, height: u64) -> FrameInfo {
         FrameInfo {
             width,
@@ -293,10 +309,7 @@ mod tests {
 
     #[test]
     fn resize_error_is_returned_and_the_next_valid_frame_recovers() {
-        let server = RenderServer::new(
-            Arc::new(PluginManager::default()),
-            Arc::new(CacheManager::new()),
-        );
+        let server = test_server();
         let project = Arc::new(
             AuthoringProject::new("render server test", 2, 2, 24.0, 1.0).expect("Project"),
         );
@@ -326,10 +339,7 @@ mod tests {
 
     #[test]
     fn timeline_project_renders_without_graph_project_conversion() {
-        let server = RenderServer::new(
-            Arc::new(PluginManager::default()),
-            Arc::new(CacheManager::new()),
-        );
+        let server = test_server();
         let project = Arc::new(
             AuthoringProject::new("timeline server test", 2, 2, 24.0, 1.0).expect("Project"),
         );

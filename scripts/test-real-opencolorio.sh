@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
+# PyO3 and the embedded runtime must use the same pinned interpreter in this
+# standalone gate, just as they do in the repository-wide quality gate.
+# shellcheck source=scripts/managed-python-env.sh
+source "${SCRIPT_DIR}/managed-python-env.sh"
+
 readonly OCIO_VERSION="2.5.2"
 readonly OCIO_SOURCE_SHA256="722601e01b78b7a12da4829cb450674935f404b0e508f3f20046fa77570e3272"
 readonly OCIO_SOURCE_URL="https://github.com/AcademySoftwareFoundation/OpenColorIO/archive/refs/tags/v${OCIO_VERSION}.tar.gz"

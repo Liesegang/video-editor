@@ -72,6 +72,15 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.9"
+          enable-cache: true
+
+      - name: Install pinned managed CPython
+        run: ./scripts/bootstrap-managed-python.sh
+
       - name: Cache pinned dependency-audit tools
         uses: actions/cache@v4
         with:
@@ -154,6 +163,15 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.9"
+          enable-cache: true
+
+      - name: Install pinned managed CPython
+        run: ./scripts/bootstrap-managed-python.sh
 
       - name: Cache checksum-verified OpenColorIO build
         uses: actions/cache@v4

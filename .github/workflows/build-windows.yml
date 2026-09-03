@@ -8,52 +8,68 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@fcf085fcb4b4b8f63f96906cd713eb52181b5ea4
+      - name: Set up the pinned MSVC Rust toolchain
+        shell: pwsh
+        run: .\scripts\bootstrap-windows.ps1
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.9"
+          enable-cache: true
+
+      - name: Install pinned managed CPython
+        shell: pwsh
+        run: uv python install 3.13.14
 
       - name: Setup Visual Studio
         uses: microsoft/setup-msbuild@v1.3.1
 
       - name: Install vcpkg
+        shell: pwsh
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
+          Set-Location vcpkg
           .\bootstrap-vcpkg.bat
           .\vcpkg integrate install
           .\vcpkg install ffmpeg:x64-windows
-          cd ..
 
       - name: Set up environment variables
+        shell: pwsh
         run: |
-          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+          "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+          "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
 
       - name: Install Vulkan SDK
+        shell: pwsh
         run: |
           $vulkanVersion = (Invoke-WebRequest -Uri "https://vulkan.lunarg.com/sdk/latest.json" | ConvertFrom-Json).windows
           $installerUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
           $installerPath = "$env:TEMP\VulkanSDK-$vulkanVersion-Installer.exe"
           Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
-          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
-          Remove-Item $installerPath
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -WindowStyle Hidden
+          Remove-Item -LiteralPath $installerPath
 
-      # The moving vcpkg checkout below does not provide an exact OpenColorIO
+      # The moving vcpkg checkout does not provide an exact OpenColorIO
       # runtime contract. Keep app/opencolorio disabled until a pinned runtime
       # and its DLLs are packaged and tested with the installer.
       - name: Build Release (built-in color backend; no OpenColorIO runtime)
+        shell: pwsh
+        env:
+          FORCE_SKIA_BINARIES_DOWNLOAD: "1"
         run: |
-          # Visual Studioの環境変数を設定
-          $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Community"
-          $vcvarsPath = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvarsPath`" && cargo build -p app --release --no-default-features"
+          $env:PYO3_PYTHON = uv python find --no-project 3.13.14
+          $env:RUVIE_PYTHON_HOME = & $env:PYO3_PYTHON -c "import sys; print(sys.base_prefix)"
+          cargo build -p app --release --no-default-features --locked
 
       - name: Package
+        shell: pwsh
         run: |
-          mkdir installer
-          powershell Compress-Archive -Path target\release\*.exe -DestinationPath installer\app.zip
+          New-Item -ItemType Directory -Path installer
+          Compress-Archive -Path target\release\*.exe -DestinationPath installer\app.zip
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4

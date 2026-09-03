@@ -15,8 +15,6 @@ use crate::model::frame::color::Color;
 use crate::model::frame::entity::{FrameContent, FrameItem, FrameObject, ImageSurface};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
-#[cfg(feature = "opencolorio")]
-use crate::model::project::Composition;
 use crate::model::project::{
     ColorConfigIdentity, ColorManagementConfig, ColorManagementIssue, ExportColorConfig,
     HdrColorField, HdrColorSettings, PreviewColorConfig,
@@ -610,20 +608,6 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
         assert_eq!(actual[1], actual[2]);
         assert_eq!(actual[3], 255);
 
-        let (mut composition, track) = Composition::new("surface export", 1, 1, 24.0, 1.0);
-        composition.background_color = Color {
-            r: 118,
-            g: 118,
-            b: 118,
-            a: 255,
-        };
-        composition.color_profile = "sRGB".to_string();
-        project
-            .add_track(track)
-            .expect("insert export fixture Track");
-        project
-            .add_composition(composition)
-            .expect("insert export fixture Composition");
         let export = service
             .render_authoring_frame(&project, &authored_frame, RenderDestination::Export)
             .expect("custom nonliteral sRGB surface binding must reach ExportFrame");

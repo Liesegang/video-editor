@@ -242,7 +242,8 @@ mod tests {
 
     #[test]
     fn authoritative_sound_operation_keys_match_node_design() {
-        assert!(NODE_DESIGN.contains(&format!(
+        let node_design = NODE_DESIGN.replace("\r\n", "\n");
+        assert!(node_design.contains(&format!(
             "model: SoundMerge\n  operation_key: {SOUND_MERGE_OPERATION_KEY}"
         )));
         for (content, model) in [
@@ -251,14 +252,14 @@ mod tests {
             (SoundAnalysisContent::Spectrum, "SoundAnalysis.Spectrum"),
             (SoundAnalysisContent::BandEnergy, "SoundAnalysis.BandEnergy"),
         ] {
-            assert!(NODE_DESIGN.contains(&format!(
+            assert!(node_design.contains(&format!(
                 "model: {model}\n  operation_key: {}",
                 content.operation_key()
             )));
         }
-        assert!(NODE_DESIGN.contains("model: PortDataType.Audio"));
-        assert!(NODE_DESIGN.contains("model: PortDataType.Spectrum"));
-        assert!(NODE_DESIGN.contains("TODO(sound-analysis): LUFS loudness and envelope/follower"));
+        assert!(node_design.contains("model: PortDataType.Audio"));
+        assert!(node_design.contains("model: PortDataType.Spectrum"));
+        assert!(node_design.contains("TODO(sound-analysis): LUFS loudness and envelope/follower"));
     }
 
     #[test]

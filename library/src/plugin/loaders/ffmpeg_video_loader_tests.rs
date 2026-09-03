@@ -379,6 +379,8 @@ fn valid_ffmpeg_content_with_an_unknown_extension_is_claimed_by_magic_probe()
     )?;
     assert!(loaded.pixels().width() > 0);
     assert!(loaded.pixels().height() > 0);
+    drop(loaded);
+    drop(loader);
     std::fs::remove_file(path)?;
     Ok(())
 }
