@@ -20,3 +20,15 @@ RUVIE_PYTHON_HOME="$(${RUVIE_MANAGED_PYTHON} -c 'import sys; print(sys.base_pref
 export PYO3_PYTHON="${RUVIE_MANAGED_PYTHON}"
 export RUVIE_PYTHON_HOME
 
+# uv's standalone CPython keeps its shared library under the managed prefix.
+# PyO3 records that dynamic dependency in Rust test binaries, so Linux/macOS
+# must be able to resolve it when the binaries start (not only while linking).
+case "$(uname -s)" in
+    Linux)
+        export LD_LIBRARY_PATH="${RUVIE_PYTHON_HOME}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+        ;;
+    Darwin)
+        export DYLD_LIBRARY_PATH="${RUVIE_PYTHON_HOME}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+        ;;
+esac
+
