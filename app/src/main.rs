@@ -1,5 +1,7 @@
 use eframe::egui;
 
+#[cfg(feature = "logic-editor")]
+mod logic_graph_ui;
 mod timeline_app;
 
 fn main() -> eframe::Result<()> {

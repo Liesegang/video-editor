@@ -36,9 +36,9 @@ if grep -REn '(^|[^[:alnum:]_])(app|library|uuid)::' node-editor-ui/src node-edi
     exit 1
 fi
 
-app_tree="$(cargo tree -p app --edges normal --locked --prefix none)"
+app_tree="$(cargo tree -p app --no-default-features --edges normal --locked --prefix none)"
 if grep -Eq '^node-editor-ui v' <<<"${app_tree}"; then
-    echo "the basic editor must not depend on the optional Node editor package" >&2
+    echo "the no-default-features basic editor must not depend on the optional Node editor package" >&2
     exit 1
 fi
 

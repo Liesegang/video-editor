@@ -88,6 +88,14 @@ enum Edit {
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
     ModuleNodeState(ModuleDefinitionId, uuid::Uuid, String, bool, bool),
+    #[cfg(feature = "logic-editor")]
+    ModuleNodePresentation(ModuleDefinitionId, uuid::Uuid, [f32; 2], [f32; 2], bool),
+    #[cfg(feature = "logic-editor")]
+    ConnectModulePorts(
+        ModuleDefinitionId,
+        library::model::authoring::ModulePortAddress,
+        library::model::authoring::ModulePortAddress,
+    ),
     AddModuleEffect(ModuleDefinitionId, String),
     RemoveModuleNode(ModuleDefinitionId, uuid::Uuid),
     SetModuleOutput(ModuleDefinitionId, uuid::Uuid),
@@ -140,6 +148,10 @@ impl Edit {
             Self::ModuleNodeState(definition, node, ..) => {
                 Some(HistoryKey::ModuleNode(*definition, *node))
             }
+            #[cfg(feature = "logic-editor")]
+            Self::ModuleNodePresentation(definition, node, ..) => {
+                Some(HistoryKey::ModuleNode(*definition, *node))
+            }
             Self::AddModuleEffect(definition, _) => {
                 Some(HistoryKey::ModuleNode(*definition, uuid::Uuid::nil()))
             }
@@ -150,6 +162,10 @@ impl Edit {
             }
             Self::DisconnectModuleConnection(definition, connection) => {
                 Some(HistoryKey::ModuleNode(*definition, connection.as_uuid()))
+            }
+            #[cfg(feature = "logic-editor")]
+            Self::ConnectModulePorts(definition, from, _) => {
+                Some(HistoryKey::ModuleNode(*definition, from.node_id))
             }
             Self::AddSignalBinding(_) => Some(HistoryKey::Binding),
             Self::SetParent(item, _) => Some(HistoryKey::Item(*item, "parent")),
@@ -184,6 +200,8 @@ pub struct TimelineApp {
     current_time: f64,
     is_playing: bool,
     signal_runtime: SignalRuntimeValues,
+    #[cfg(feature = "logic-editor")]
+    logic_graph: crate::logic_graph_ui::LogicGraphState,
     last_playback_tick: Instant,
     preview: Option<egui::TextureHandle>,
     preview_key: Option<(
@@ -219,6 +237,8 @@ impl TimelineApp {
             current_time: 0.0,
             is_playing: false,
             signal_runtime: SignalRuntimeValues::default(),
+            #[cfg(feature = "logic-editor")]
+            logic_graph: crate::logic_graph_ui::LogicGraphState::default(),
             last_playback_tick: Instant::now(),
             preview: None,
             preview_key: None,
@@ -774,6 +794,11 @@ impl TimelineApp {
                 .editor
                 .set_module_node_state(definition, node, name, enabled, bypassed)
                 .map(|_| ()),
+            #[cfg(feature = "logic-editor")]
+            Edit::ModuleNodePresentation(definition, node, position, size, collapsed) => self
+                .editor
+                .set_module_node_presentation(definition, node, position, size, collapsed)
+                .map(|_| ()),
             Edit::AddModuleEffect(definition, effect_type) => self
                 .editor
                 .add_effect_node_to_module(definition, &effect_type, self.plugins.as_ref())
@@ -787,6 +812,11 @@ impl TimelineApp {
             Edit::ConnectModuleNodes(definition, from, to) => self
                 .editor
                 .connect_module_nodes(definition, from, to)
+                .map(|_| ()),
+            #[cfg(feature = "logic-editor")]
+            Edit::ConnectModulePorts(definition, from, to) => self
+                .editor
+                .connect_module_ports(definition, from, to)
                 .map(|_| ()),
             Edit::DisconnectModuleConnection(definition, connection) => self
                 .editor
@@ -1261,6 +1291,8 @@ impl eframe::App for TimelineApp {
             preview: self.preview.as_ref(),
             workspace: self.workspace,
             signal_runtime: &mut self.signal_runtime,
+            #[cfg(feature = "logic-editor")]
+            logic_graph: &mut self.logic_graph,
             edits: &mut edits,
         };
         DockArea::new(&mut self.dock)
@@ -1292,6 +1324,8 @@ struct Viewer<'a> {
     preview: Option<&'a egui::TextureHandle>,
     workspace: Workspace,
     signal_runtime: &'a mut SignalRuntimeValues,
+    #[cfg(feature = "logic-editor")]
+    logic_graph: &'a mut crate::logic_graph_ui::LogicGraphState,
     edits: &'a mut Vec<Edit>,
 }
 
@@ -1335,6 +1369,8 @@ impl TabViewer for Viewer<'_> {
                 self.project,
                 self.selected_item,
                 self.signal_runtime,
+                #[cfg(feature = "logic-editor")]
+                self.logic_graph,
                 self.edits,
             ),
             Tab::Diagnostics => diagnostics_ui(ui, self.project, self.workspace),
@@ -2397,6 +2433,7 @@ fn logic_ui(
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
     signal_runtime: &mut SignalRuntimeValues,
+    #[cfg(feature = "logic-editor")] logic_graph: &mut crate::logic_graph_ui::LogicGraphState,
     edits: &mut Vec<Edit>,
 ) {
     ui.heading("Logic Module");
@@ -2421,6 +2458,52 @@ fn logic_ui(
         });
     }
     let selected_instances: Vec<_> = selected.into_iter().flat_map(|id| project.attachments.values().filter(move |attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id))).collect();
+    #[cfg(feature = "logic-editor")]
+    if let Some(attachment) = selected_instances.first() {
+        let instance = &project.module_instances[&attachment.module_instance_id];
+        let definition = &project.module_definitions[&instance.definition_id];
+        ui.collapsing("Node Graph", |ui| {
+            ui.small("This canvas edits only the selected reusable ModuleDefinition.");
+            ui.allocate_ui(egui::vec2(ui.available_width(), 360.0), |ui| {
+                for intent in crate::logic_graph_ui::show(ui, definition, logic_graph) {
+                    use crate::logic_graph_ui::LogicGraphEdit;
+                    match intent {
+                        LogicGraphEdit::MoveNode {
+                            definition_id,
+                            node_id,
+                            position,
+                            size,
+                            collapsed,
+                        } => edits.push(Edit::ModuleNodePresentation(
+                            definition_id,
+                            node_id,
+                            position,
+                            size,
+                            collapsed,
+                        )),
+                        LogicGraphEdit::Connect {
+                            definition_id,
+                            from,
+                            to,
+                        } => edits.push(Edit::ConnectModulePorts(definition_id, from, to)),
+                        LogicGraphEdit::Disconnect {
+                            definition_id,
+                            connection_id,
+                        } => edits.push(Edit::DisconnectModuleConnection(
+                            definition_id,
+                            connection_id,
+                        )),
+                        LogicGraphEdit::DeleteNode {
+                            definition_id,
+                            node_id,
+                        } => edits.push(Edit::RemoveModuleNode(definition_id, node_id)),
+                    }
+                }
+            });
+        });
+    }
+    #[cfg(not(feature = "logic-editor"))]
+    ui.small("This build omits the optional graphical Logic editor.");
     for attachment in selected_instances {
         let instance = &project.module_instances[&attachment.module_instance_id];
         let definition = &project.module_definitions[&instance.definition_id];

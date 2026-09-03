@@ -405,6 +405,17 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn connect_module_ports(
+        &self,
+        definition_id: ModuleDefinitionId,
+        from: crate::model::authoring::ModulePortAddress,
+        to: crate::model::authoring::ModulePortAddress,
+    ) -> Result<(crate::model::authoring::ModuleConnectionId, ChangeSet), LibraryError> {
+        self.write_session()?
+            .connect_module_ports(definition_id, from, to)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn disconnect_module_connection(
         &self,
         definition_id: ModuleDefinitionId,

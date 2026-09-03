@@ -265,6 +265,7 @@ dependencies = [
  "env_logger",
  "image",
  "library",
+ "node-editor-ui",
  "ordered-float",
  "rfd",
  "tempfile",

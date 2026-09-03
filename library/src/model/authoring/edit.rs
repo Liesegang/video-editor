@@ -1077,32 +1077,48 @@ impl AuthoringSession {
         from_node_id: uuid::Uuid,
         to_node_id: uuid::Uuid,
     ) -> Result<(ModuleConnectionId, ChangeSet), String> {
+        self.connect_module_ports(
+            definition_id,
+            super::ModulePortAddress {
+                node_id: from_node_id,
+                port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
+            },
+            super::ModulePortAddress {
+                node_id: to_node_id,
+                port: crate::model::project::IMAGE_INPUT_PORT.to_string(),
+            },
+        )
+    }
+
+    pub fn connect_module_ports(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        from: super::ModulePortAddress,
+        to: super::ModulePortAddress,
+    ) -> Result<(ModuleConnectionId, ChangeSet), String> {
         let mut candidate = self.project.clone();
         let definition = candidate
             .module_definitions
             .get_mut(&definition_id)
             .ok_or_else(|| format!("Missing Module definition {definition_id}"))?;
-        if !definition.graph.nodes.contains_key(&from_node_id)
-            || !definition.graph.nodes.contains_key(&to_node_id)
+        if !definition.graph.nodes.contains_key(&from.node_id)
+            || !definition.graph.nodes.contains_key(&to.node_id)
         {
             return Err("Module connection endpoint is missing".to_string());
         }
-        if definition.graph.connections.iter().any(|connection| {
-            connection.from.node_id == from_node_id && connection.to.node_id == to_node_id
-        }) {
-            return Err("Module Nodes are already connected".to_string());
+        if definition
+            .graph
+            .connections
+            .iter()
+            .any(|connection| connection.from == from && connection.to == to)
+        {
+            return Err("Module ports are already connected".to_string());
         }
         let id = ModuleConnectionId::new();
         definition.graph.connections.push(ModuleConnection {
             id,
-            from: super::ModulePortAddress {
-                node_id: from_node_id,
-                port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
-            },
-            to: super::ModulePortAddress {
-                node_id: to_node_id,
-                port: crate::model::project::IMAGE_INPUT_PORT.to_string(),
-            },
+            from,
+            to,
             order: 0,
         });
         definition.version = definition
