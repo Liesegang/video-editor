@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -230,7 +230,9 @@ pub struct TimelineApp {
     current_time: f64,
     is_playing: bool,
     signal_runtime: SignalRuntimeValues,
+    live_signal_sources: HashMap<SignalSource, f64>,
     event_runtime: EventRuntime,
+    runtime_started_at: Instant,
     #[cfg(feature = "logic-editor")]
     logic_graph: crate::logic_graph_ui::LogicGraphState,
     last_playback_tick: Instant,
@@ -275,7 +277,9 @@ impl TimelineApp {
             current_time: 0.0,
             is_playing: false,
             signal_runtime: SignalRuntimeValues::default(),
+            live_signal_sources: HashMap::new(),
             event_runtime: EventRuntime::default(),
+            runtime_started_at: Instant::now(),
             #[cfg(feature = "logic-editor")]
             logic_graph: crate::logic_graph_ui::LogicGraphState::default(),
             last_playback_tick: Instant::now(),
@@ -350,6 +354,12 @@ impl TimelineApp {
                 "zoom": self.preview_canvas.zoom.x,
                 "grid": self.preview_grid,
             },
+            "runtime": {
+                "signal_binding_count": project.signal_bindings.len(),
+                "signal_generation": self.signal_runtime.generation(),
+                "event_generation": self.event_runtime.generation(),
+                "live_signal_source_count": self.live_signal_sources.len(),
+            },
             "status": self.status,
         }));
     }
@@ -417,7 +427,9 @@ impl TimelineApp {
         self.current_time = 0.0;
         self.is_playing = false;
         self.signal_runtime = SignalRuntimeValues::default();
+        self.live_signal_sources.clear();
         self.event_runtime.clear();
+        self.runtime_started_at = Instant::now();
         self.preview_canvas = CanvasState::uniform(egui::Vec2::ZERO, 1.0);
         self.preview_view_initialized = false;
         self.expanded_layers.clear();
@@ -486,6 +498,13 @@ impl TimelineApp {
         else {
             return;
         };
+        let runtime_events = match self.event_runtime.clone().snapshot_at(self.current_time) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
         let result = self.editor.compiled_project().and_then(|compiled| {
             let timeline = &compiled.project.timelines[&self.open_timeline];
             self.renderer.renderer_mut().resize_render_target(
@@ -493,7 +512,7 @@ impl TimelineApp {
                 timeline.height as u32,
                 timeline.background_color.clone(),
             )?;
-            let frame = self.editor.evaluate_compiled_frame_with_signals(
+            let frame = self.editor.evaluate_compiled_frame_with_runtime(
                 &compiled,
                 self.open_timeline,
                 &self.instance_path,
@@ -501,6 +520,7 @@ impl TimelineApp {
                 1.0,
                 None,
                 &self.signal_runtime,
+                &runtime_events,
             )?;
             let exported = self
                 .renderer
@@ -595,9 +615,13 @@ impl TimelineApp {
             return;
         }
         let result = (|| {
+            let mut event_runtime = self.event_runtime.clone();
             for frame_index in 0..frame_count {
                 let time = settings.frame_time(frame_index)?;
-                let frame = self.editor.evaluate_compiled_frame_with_signals(
+                let runtime_events = event_runtime
+                    .snapshot_at(time)
+                    .map_err(library::LibraryError::Runtime)?;
+                let frame = self.editor.evaluate_compiled_frame_with_runtime(
                     &compiled,
                     self.open_timeline,
                     &self.instance_path,
@@ -605,6 +629,7 @@ impl TimelineApp {
                     1.0,
                     None,
                     &self.signal_runtime,
+                    &runtime_events,
                 )?;
                 let frame = self
                     .renderer
@@ -1422,10 +1447,15 @@ impl eframe::App for TimelineApp {
                 ui.strong("RuViE");
                 ui.separator();
                 for workspace in Workspace::ALL {
-                    if ui
-                        .selectable_label(self.workspace == workspace, workspace.label())
-                        .clicked()
-                    {
+                    let workspace_button =
+                        ui.selectable_label(self.workspace == workspace, workspace.label());
+                    crate::qa::register_component(
+                        format!("workspace.{:?}", workspace).to_lowercase(),
+                        "workspace",
+                        workspace_button.rect,
+                        serde_json::json!({"workspace": workspace.label()}),
+                    );
+                    if workspace_button.clicked() {
                         self.workspace = workspace;
                         self.dock = dock_for(workspace);
                     }
@@ -1441,6 +1471,7 @@ impl eframe::App for TimelineApp {
         };
         let project = &compiled.project;
         let mut edits = Vec::new();
+        let signal_sample_time = self.runtime_started_at.elapsed().as_secs_f64();
         let mut viewer = Viewer {
             project: project.as_ref(),
             plugins: self.plugins.as_ref(),
@@ -1458,7 +1489,10 @@ impl eframe::App for TimelineApp {
             timeline_pixels_per_second: &mut self.timeline_pixels_per_second,
             workspace: self.workspace,
             signal_runtime: &mut self.signal_runtime,
+            live_signal_sources: &mut self.live_signal_sources,
+            signal_sample_time,
             event_runtime: &mut self.event_runtime,
+            status: &mut self.status,
             #[cfg(feature = "logic-editor")]
             logic_graph: &mut self.logic_graph,
             edits: &mut edits,
@@ -1505,7 +1539,10 @@ struct Viewer<'a> {
     timeline_pixels_per_second: &'a mut f32,
     workspace: Workspace,
     signal_runtime: &'a mut SignalRuntimeValues,
+    live_signal_sources: &'a mut HashMap<SignalSource, f64>,
+    signal_sample_time: f64,
     event_runtime: &'a mut EventRuntime,
+    status: &'a mut String,
     #[cfg(feature = "logic-editor")]
     logic_graph: &'a mut crate::logic_graph_ui::LogicGraphState,
     edits: &'a mut Vec<Edit>,
@@ -1567,7 +1604,10 @@ impl TabViewer for Viewer<'_> {
                 self.instance_path,
                 *self.current_time,
                 self.signal_runtime,
+                self.live_signal_sources,
+                self.signal_sample_time,
                 self.event_runtime,
+                self.status,
                 #[cfg(feature = "logic-editor")]
                 self.logic_graph,
                 self.edits,
@@ -3470,7 +3510,17 @@ fn effect_parameter_ui(
                 binding.source, binding.operator
             ));
         }
-        if bindings.is_empty() && ui.button("Bind audio envelope").clicked() {
+        let bind_audio = ui.add_enabled(
+            bindings.is_empty(),
+            egui::Button::new("Bind audio envelope"),
+        );
+        crate::qa::register_component(
+            format!("inspector.binding.audio:{}:{}", instance.id, parameter.id),
+            "add_signal_binding",
+            bind_audio.rect,
+            serde_json::json!({"enabled": bindings.is_empty()}),
+        );
+        if bind_audio.clicked() {
             let binding_id = SignalBindingId::new();
             edits.push(Edit::AddSignalBinding(SignalBinding {
                 id: binding_id,
@@ -3834,30 +3884,59 @@ fn logic_ui(
     instance_path: &InstancePath,
     current_time: f64,
     signal_runtime: &mut SignalRuntimeValues,
+    live_signal_sources: &mut HashMap<SignalSource, f64>,
+    signal_sample_time: f64,
     event_runtime: &mut EventRuntime,
+    status: &mut String,
     #[cfg(feature = "logic-editor")] logic_graph: &mut crate::logic_graph_ui::LogicGraphState,
     edits: &mut Vec<Edit>,
 ) {
     ui.heading("Logic Module");
     ui.label("Only reusable ModuleDefinitions appear here. Timeline items are never expanded into nodes.");
     if !project.signal_bindings.is_empty() {
-        ui.collapsing("Live signal preview", |ui| {
-            ui.small("Runtime-only source values; these are not saved in the project.");
-            let mut bindings = project.signal_bindings.values().collect::<Vec<_>>();
-            bindings.sort_by_key(|binding| binding.id);
-            for binding in bindings {
-                let mut value = signal_runtime.get(binding.id).unwrap_or(0.0);
-                if ui
-                    .add(
-                        egui::Slider::new(&mut value, 0.0..=1.0)
-                            .text(format!("{:?}", binding.source)),
-                    )
-                    .changed()
-                {
-                    drop(signal_runtime.set(binding.id, value));
+        let signal_preview = ui.collapsing("Live signal preview", |ui| {
+            ui.small("Each runtime-only source sample is routed through the compiled Bindings; it is not saved in the project.");
+            let mut sources = project
+                .signal_bindings
+                .values()
+                .map(|binding| binding.source.clone())
+                .collect::<Vec<_>>();
+            sources.sort_by_key(|source| format!("{source:?}"));
+            sources.dedup();
+            for source in sources {
+                let mut value = *live_signal_sources.get(&source).unwrap_or(&0.0);
+                let response = ui.add(
+                    egui::Slider::new(&mut value, 0.0..=1.0)
+                        .text(format!("{source:?}")),
+                );
+                crate::qa::register_component(
+                    format!("logic.signal_source:{source:?}"),
+                    "signal_source",
+                    response.rect,
+                    serde_json::json!({"source": format!("{source:?}"), "value": value}),
+                );
+                if response.changed() {
+                    live_signal_sources.insert(source.clone(), value);
+                    match signal_runtime.sample_source(
+                        &render_plan.bindings,
+                        &source,
+                        value,
+                        signal_sample_time,
+                    ) {
+                        Ok(routes) => {
+                            *status = format!("Signal sample routed to {} Binding(s)", routes.len());
+                        }
+                        Err(error) => *status = error,
+                    }
                 }
             }
         });
+        crate::qa::register_component(
+            "logic.signal_preview",
+            "collapsing_header",
+            signal_preview.header_response.rect,
+            serde_json::json!({"open": signal_preview.body_response.is_some()}),
+        );
     }
     if !project.event_bindings.is_empty() {
         ui.collapsing("Live event preview", |ui| {
@@ -3875,13 +3954,25 @@ fn logic_ui(
                 .unwrap_or(1.0)
                 .max(f64::EPSILON);
             for source in sources {
-                if ui.button(format!("Trigger {source:?}")).clicked() {
-                    drop(event_runtime.trigger_source(
+                let trigger = ui.button(format!("Trigger {source:?}"));
+                crate::qa::register_component(
+                    format!("logic.event_source:{source:?}"),
+                    "event_source",
+                    trigger.rect,
+                    serde_json::json!({"source": format!("{source:?}")}),
+                );
+                if trigger.clicked() {
+                    match event_runtime.trigger_source(
                         &render_plan.bindings,
                         &source,
                         current_time,
                         duration,
-                    ));
+                    ) {
+                        Ok(outcomes) => {
+                            *status = format!("Event routed to {} Binding(s)", outcomes.len());
+                        }
+                        Err(error) => *status = error,
+                    }
                 }
             }
             let active = event_runtime.active_at(current_time);

@@ -36,7 +36,7 @@ pub enum TriggerOutcome {
     RejectedAtCapacity,
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct EventRuntime {
     invocations: HashMap<EventBindingId, Vec<ReactiveInvocation>>,
     next_ordinal: HashMap<EventBindingId, u64>,

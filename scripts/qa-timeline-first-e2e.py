@@ -341,14 +341,112 @@ def run_suite(client: Client, capture: Path | None) -> dict:
         )
         else None,
     )
-    click(client, remove_effect)
-    wait_for(
-        "Effect removal",
-        lambda: not any(
-            component_id.startswith("inspector.effects.remove:")
-            for component_id in client.components()
-        ),
+    add_binding = wait_for(
+        "Effect PublishedParameter binding control",
+        lambda: (controls[0] if controls else None)
+        if (
+            controls := [
+                component
+                for component_id, component in client.components().items()
+                if component_id.startswith("inspector.binding.audio:")
+                and component["metadata"].get("enabled")
+            ]
+        )
+        else None,
     )
+    binding_deadline = time.monotonic() + 12.0
+    while time.monotonic() < binding_deadline:
+        if client.state().get("runtime", {}).get("signal_binding_count") == 1:
+            break
+        current = next(
+            (
+                value
+                for component_id, value in client.components().items()
+                if component_id.startswith("inspector.binding.audio:")
+                and value["metadata"].get("enabled")
+            ),
+            None,
+        )
+        if current is not None:
+            click(client, current)
+        time.sleep(0.35)
+    else:
+        raise QaFailure("timed out creating the compiled Signal Binding")
+
+    click(client, client.components()["workspace.logic"])
+    signal_preview = wait_for(
+        "Logic Signal preview section",
+        lambda: client.components().get("logic.signal_preview"),
+    )
+    if not signal_preview["metadata"].get("open"):
+        click(client, signal_preview)
+    signal_source = wait_for(
+        "Logic Signal source routed through RenderPlan",
+        lambda: (controls[0] if controls else None)
+        if (
+            controls := [
+                component
+                for component in client.components().values()
+                if component["kind"] == "signal_source"
+            ]
+        )
+        else None,
+    )
+    left, top, right, bottom = signal_source["rect"]
+    drag(
+        client,
+        {"x": left + (right - left) * 0.2, "y": (top + bottom) / 2.0},
+        {"x": left + (right - left) * 0.8, "y": (top + bottom) / 2.0},
+    )
+    routed_signal = wait_for(
+        "live Signal source sample",
+        lambda: (component if float(component["metadata"]["value"]) > 0.25 else None)
+        if (
+            component := next(
+                (
+                    value
+                    for value in client.components().values()
+                    if value["kind"] == "signal_source"
+                ),
+                None,
+            )
+        )
+        else None,
+    )
+    wait_for(
+        "Signal route status",
+        lambda: (state if "Signal sample routed to" in state.get("status", "") else None)
+        if (state := client.state())
+        else None,
+    )
+    click(client, client.components()["workspace.edit"])
+    remove_effect = wait_for(
+        "Effect attachment after returning to Edit",
+        lambda: (controls[0] if controls else None)
+        if (
+            controls := [
+                component
+                for component_id, component in client.components().items()
+                if component_id.startswith("inspector.effects.remove:")
+            ]
+        )
+        else None,
+    )
+    removal_deadline = time.monotonic() + 12.0
+    while time.monotonic() < removal_deadline:
+        controls = [
+            component
+            for component_id, component in client.components().items()
+            if component_id.startswith("inspector.effects.remove:")
+        ]
+        if not controls:
+            break
+        click(client, controls[0])
+        time.sleep(0.35)
+    else:
+        raise QaFailure(
+            f"timed out removing Effect; status={client.state().get('status')!r}"
+        )
 
     preview = client.components()["preview.canvas"]
     preview_center = center(preview)
@@ -445,6 +543,7 @@ def run_suite(client: Client, capture: Path | None) -> dict:
         "position_x": x_value,
         "position_keyframed": True,
         "effect_added_and_removed": effect_name,
+        "signal_source_sample": routed_signal["metadata"]["value"],
         "preview_zoom": zoomed["zoom"],
         "preview_pan": panned["pan"],
         "playback_advanced_to": advanced["frame"]["current_time"],
