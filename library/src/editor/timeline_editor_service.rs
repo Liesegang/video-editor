@@ -27,17 +27,31 @@ use crate::model::project::property::Property;
 use crate::model::project::property::PropertyValue;
 use crate::plugin::PluginManager;
 
+type SnapshotCache = Option<(ProjectRevision, Arc<AuthoringProject>)>;
+type CompiledPlanCache = Option<(ProjectRevision, Arc<RenderPlan>)>;
+
 pub struct TimelineEditorService {
     session: RwLock<AuthoringSession>,
+    snapshot_cache: Mutex<SnapshotCache>,
     render_plan_cache: Mutex<RenderPlanCache>,
+    compiled_plan_cache: Mutex<CompiledPlanCache>,
     project_path: RwLock<Option<PathBuf>>,
+}
+
+#[derive(Clone)]
+pub struct CompiledProject {
+    pub revision: ProjectRevision,
+    pub project: Arc<AuthoringProject>,
+    pub render_plan: Arc<RenderPlan>,
 }
 
 impl TimelineEditorService {
     pub fn new(project: AuthoringProject) -> Result<Self, LibraryError> {
         Ok(Self {
             session: RwLock::new(AuthoringSession::new(project).map_err(LibraryError::Validation)?),
+            snapshot_cache: Mutex::new(None),
             render_plan_cache: Mutex::new(RenderPlanCache::default()),
+            compiled_plan_cache: Mutex::new(None),
             project_path: RwLock::new(None),
         })
     }
@@ -58,12 +72,30 @@ impl TimelineEditorService {
     pub fn replace_project(&self, project: AuthoringProject) -> Result<(), LibraryError> {
         let session = AuthoringSession::new(project).map_err(LibraryError::Validation)?;
         *self.write_session()? = session;
+        *self.lock_snapshot_cache()? = None;
         *self.lock_plan_cache()? = RenderPlanCache::default();
+        *self.lock_compiled_plan_cache()? = None;
         Ok(())
     }
 
     pub fn snapshot(&self) -> Result<Arc<AuthoringProject>, LibraryError> {
-        Ok(Arc::new(self.read_session()?.project().clone()))
+        self.snapshot_with_revision().map(|(_, project)| project)
+    }
+
+    pub fn snapshot_with_revision(
+        &self,
+    ) -> Result<(ProjectRevision, Arc<AuthoringProject>), LibraryError> {
+        let session = self.read_session()?;
+        let revision = session.revision();
+        let mut cache = self.lock_snapshot_cache()?;
+        if let Some((cached_revision, project)) = cache.as_ref()
+            && *cached_revision == revision
+        {
+            return Ok((revision, project.clone()));
+        }
+        let project = Arc::new(session.project().clone());
+        *cache = Some((revision, project.clone()));
+        Ok((revision, project))
     }
 
     pub fn revision(&self) -> Result<ProjectRevision, LibraryError> {
@@ -777,10 +809,45 @@ impl TimelineEditorService {
     }
 
     pub fn compile_render_plan(&self) -> Result<(RenderPlan, RenderPlanCacheStats), LibraryError> {
-        let project = self.snapshot()?;
-        self.lock_plan_cache()?
+        let (compiled, stats) = self.compiled_project_with_stats()?;
+        Ok((compiled.render_plan.as_ref().clone(), stats))
+    }
+
+    pub fn compiled_project(&self) -> Result<CompiledProject, LibraryError> {
+        self.compiled_project_with_stats()
+            .map(|(compiled, _)| compiled)
+    }
+
+    fn compiled_project_with_stats(
+        &self,
+    ) -> Result<(CompiledProject, RenderPlanCacheStats), LibraryError> {
+        let (revision, project) = self.snapshot_with_revision()?;
+        if let Some((cached_revision, plan)) = self.lock_compiled_plan_cache()?.as_ref()
+            && *cached_revision == revision
+        {
+            return Ok((
+                CompiledProject {
+                    revision,
+                    project,
+                    render_plan: plan.clone(),
+                },
+                RenderPlanCacheStats::default(),
+            ));
+        }
+        let (plan, stats) = self
+            .lock_plan_cache()?
             .compile(project.as_ref())
-            .map_err(LibraryError::Validation)
+            .map_err(LibraryError::Validation)?;
+        let plan = Arc::new(plan);
+        *self.lock_compiled_plan_cache()? = Some((revision, plan.clone()));
+        Ok((
+            CompiledProject {
+                revision,
+                project,
+                render_plan: plan,
+            },
+            stats,
+        ))
     }
 
     pub fn evaluate_frame(
@@ -790,25 +857,22 @@ impl TimelineEditorService {
         render_scale: f64,
         region: Option<Region>,
     ) -> Result<(Arc<AuthoringProject>, FrameInfo), LibraryError> {
-        let project = self.snapshot()?;
+        let compiled = self.compiled_project()?;
+        let project = &compiled.project;
         let timeline = project
             .timelines
             .get(&timeline_id)
             .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline {timeline_id}")))?;
         let frame_number = frame_number_at(time, timeline.fps.into_inner())?;
-        let (plan, _) = self
-            .lock_plan_cache()?
-            .compile(project.as_ref())
-            .map_err(LibraryError::Validation)?;
         let frame = evaluate_authoring_timeline_frame(
             project.as_ref(),
-            &plan,
+            compiled.render_plan.as_ref(),
             timeline_id,
             frame_number,
             render_scale,
             region,
         )?;
-        Ok((project, frame))
+        Ok((project.clone(), frame))
     }
 
     pub fn evaluate_frame_with_signals(
@@ -820,19 +884,42 @@ impl TimelineEditorService {
         region: Option<Region>,
         runtime_signals: &crate::core::binding_runtime::SignalRuntimeValues,
     ) -> Result<(Arc<AuthoringProject>, FrameInfo), LibraryError> {
-        let project = self.snapshot()?;
+        let compiled = self.compiled_project()?;
+        let frame = self.evaluate_compiled_frame_with_signals(
+            &compiled,
+            timeline_id,
+            instance_path,
+            time,
+            render_scale,
+            region,
+            runtime_signals,
+        )?;
+        Ok((compiled.project, frame))
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "compiled frame evaluation keeps Timeline and runtime authorities explicit"
+    )]
+    pub fn evaluate_compiled_frame_with_signals(
+        &self,
+        compiled: &CompiledProject,
+        timeline_id: TimelineId,
+        instance_path: &crate::model::authoring::InstancePath,
+        time: f64,
+        render_scale: f64,
+        region: Option<Region>,
+        runtime_signals: &crate::core::binding_runtime::SignalRuntimeValues,
+    ) -> Result<FrameInfo, LibraryError> {
+        let project = &compiled.project;
         let timeline = project
             .timelines
             .get(&timeline_id)
             .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline {timeline_id}")))?;
         let frame_number = frame_number_at(time, timeline.fps.into_inner())?;
-        let (plan, _) = self
-            .lock_plan_cache()?
-            .compile(project.as_ref())
-            .map_err(LibraryError::Validation)?;
         let frame = crate::core::framing::evaluate_authoring_timeline_frame_with_signals(
             project.as_ref(),
-            &plan,
+            compiled.render_plan.as_ref(),
             timeline_id,
             frame_number,
             render_scale,
@@ -840,7 +927,7 @@ impl TimelineEditorService {
             instance_path,
             runtime_signals,
         )?;
-        Ok((project, frame))
+        Ok(frame)
     }
 
     fn add_item(
@@ -883,6 +970,22 @@ impl TimelineEditorService {
             .map_err(|_| LibraryError::Runtime("RenderPlan cache lock was poisoned".to_string()))
     }
 
+    fn lock_snapshot_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, SnapshotCache>, LibraryError> {
+        self.snapshot_cache
+            .lock()
+            .map_err(|_| LibraryError::Runtime("Project snapshot cache was poisoned".to_string()))
+    }
+
+    fn lock_compiled_plan_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, CompiledPlanCache>, LibraryError> {
+        self.compiled_plan_cache
+            .lock()
+            .map_err(|_| LibraryError::Runtime("Compiled plan cache was poisoned".to_string()))
+    }
+
     fn read_path(&self) -> Result<std::sync::RwLockReadGuard<'_, Option<PathBuf>>, LibraryError> {
         self.project_path
             .read()
@@ -914,6 +1017,30 @@ fn frame_number_at(time: f64, fps: f64) -> Result<u64, LibraryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_project_is_shared_until_the_authoring_revision_changes() {
+        let service = TimelineEditorService::create_default("Compiled snapshot").expect("service");
+        let first = service.compiled_project().expect("first compile");
+        let second = service.compiled_project().expect("cached compile");
+        assert_eq!(first.revision, second.revision);
+        assert!(Arc::ptr_eq(&first.project, &second.project));
+        assert!(Arc::ptr_eq(&first.render_plan, &second.render_plan));
+
+        let track_id = first.project.timelines[&first.project.root_timeline_id].track_order[0];
+        service
+            .add_text(
+                track_id,
+                "Changed".to_string(),
+                TimelineInterval::new(0.0, 1.0).expect("interval"),
+                0,
+            )
+            .expect("edit");
+        let changed = service.compiled_project().expect("changed compile");
+        assert_ne!(changed.revision, first.revision);
+        assert!(!Arc::ptr_eq(&changed.project, &first.project));
+        assert!(!Arc::ptr_eq(&changed.render_plan, &first.render_plan));
+    }
 
     #[test]
     fn basic_edit_save_open_and_frame_use_only_timeline_project() {

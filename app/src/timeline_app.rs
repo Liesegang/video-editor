@@ -377,15 +377,15 @@ impl TimelineApp {
         else {
             return;
         };
-        let result = self.editor.snapshot().and_then(|project| {
-            let timeline = &project.timelines[&self.open_timeline];
+        let result = self.editor.compiled_project().and_then(|compiled| {
+            let timeline = &compiled.project.timelines[&self.open_timeline];
             self.renderer.renderer_mut().resize_render_target(
                 timeline.width as u32,
                 timeline.height as u32,
                 timeline.background_color.clone(),
             )?;
-            drop(project);
-            let (project, frame) = self.editor.evaluate_frame_with_signals(
+            let frame = self.editor.evaluate_compiled_frame_with_signals(
+                &compiled,
                 self.open_timeline,
                 &self.instance_path,
                 self.current_time,
@@ -395,7 +395,7 @@ impl TimelineApp {
             )?;
             let exported = self
                 .renderer
-                .render_export_frame(project.as_ref(), &frame)?;
+                .render_export_frame(compiled.project.as_ref(), &frame)?;
             let image = exported.image();
             image::save_buffer(
                 &path,
@@ -422,13 +422,14 @@ impl TimelineApp {
             return;
         };
         let output = path.to_string_lossy().into_owned();
-        let project = match self.editor.snapshot() {
-            Ok(project) => project,
+        let compiled = match self.editor.compiled_project() {
+            Ok(compiled) => compiled,
             Err(error) => {
                 self.status = error.to_string();
                 return;
             }
         };
+        let project = &compiled.project;
         if project.assets.iter().any(|asset| {
             !asset.path.is_empty()
                 && Path::new(&asset.path)
@@ -484,11 +485,11 @@ impl TimelineApp {
             self.status = error.to_string();
             return;
         }
-        drop(project);
         let result = (|| {
             for frame_index in 0..frame_count {
                 let time = settings.frame_time(frame_index)?;
-                let (project, frame) = self.editor.evaluate_frame_with_signals(
+                let frame = self.editor.evaluate_compiled_frame_with_signals(
+                    &compiled,
                     self.open_timeline,
                     &self.instance_path,
                     time,
@@ -498,7 +499,7 @@ impl TimelineApp {
                 )?;
                 let frame = self
                     .renderer
-                    .render_export_frame(project.as_ref(), &frame)?;
+                    .render_export_frame(compiled.project.as_ref(), &frame)?;
                 self.plugins
                     .export_frame("ffmpeg_export", &output, &frame, &settings)?;
             }
@@ -993,18 +994,16 @@ impl TimelineApp {
     }
 
     fn refresh_preview(&mut self, ctx: &egui::Context) {
-        let Ok(revision) = self.editor.revision() else {
+        let Ok(compiled) = self.editor.compiled_project() else {
             return;
         };
-        let Ok(project) = self.editor.snapshot() else {
-            return;
-        };
+        let project = &compiled.project;
         let Some(timeline) = project.timelines.get(&self.open_timeline) else {
             return;
         };
         let frame_number = (self.current_time * timeline.fps.into_inner()).floor() as u64;
         let key = (
-            revision,
+            compiled.revision,
             self.open_timeline,
             frame_number,
             self.signal_runtime.generation(),
@@ -1025,7 +1024,8 @@ impl TimelineApp {
         }
         let rendered = self
             .editor
-            .evaluate_frame_with_signals(
+            .evaluate_compiled_frame_with_signals(
+                &compiled,
                 self.open_timeline,
                 &self.instance_path,
                 self.current_time,
@@ -1033,9 +1033,12 @@ impl TimelineApp {
                 None,
                 &self.signal_runtime,
             )
-            .and_then(|(project, frame)| {
-                self.renderer
-                    .render_frame(project.as_ref(), &frame, RenderDestination::Preview)
+            .and_then(|frame| {
+                self.renderer.render_frame(
+                    compiled.project.as_ref(),
+                    &frame,
+                    RenderDestination::Preview,
+                )
             });
         match rendered {
             Ok(RenderOutput::Image(image)) => {

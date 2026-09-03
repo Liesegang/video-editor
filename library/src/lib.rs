@@ -40,8 +40,8 @@ pub use core::rendering::render_server::{
     RenderFrameAuthority, RenderRequestId, RenderResult, RenderServer,
 };
 pub use core::rendering::skia_renderer::SkiaRenderer;
-pub use editor::TimelineEditorService;
 pub use editor::{AuthoringRenderService, RenderDestination, RenderService};
+pub use editor::{CompiledProject, TimelineEditorService};
 
 /// Explicitly starts the trusted in-process CPython host. GUI applications
 /// call this once during startup before projects or plugins can execute code.

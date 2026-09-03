@@ -12,4 +12,4 @@ pub mod timeline_editor_service;
 pub use authoring_render_service::AuthoringRenderService;
 pub use color_service::ColorSpaceManager as ColorService;
 pub use render_service::{RenderDestination, RenderService};
-pub use timeline_editor_service::TimelineEditorService;
+pub use timeline_editor_service::{CompiledProject, TimelineEditorService};
