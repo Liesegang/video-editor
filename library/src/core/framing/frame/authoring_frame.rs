@@ -1520,13 +1520,14 @@ mod tests {
         );
 
         let binding_id = SignalBindingId::new();
+        let signal_source = SignalSource::AudioEnvelope {
+            channel: "music".to_string(),
+        };
         project.signal_bindings.insert(
             binding_id,
             SignalBinding {
                 id: binding_id,
-                source: SignalSource::AudioEnvelope {
-                    channel: "music".to_string(),
-                },
+                source: signal_source.clone(),
                 scope: BindingScope::Instance {
                     instance_path: InstancePath::root(project.root_timeline_id),
                     module_instance_id: instance_id,
@@ -1553,8 +1554,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![binding_id]
         );
+        assert_eq!(
+            plan.bindings.signal_source_bindings(&signal_source).len(),
+            1
+        );
         let mut signals = SignalRuntimeValues::default();
-        signals.set(binding_id, 0.5).expect("finite Signal");
+        signals
+            .sample_source(&plan.bindings, &signal_source, 0.5, 0.0)
+            .expect("finite Signal source sample");
         let frame = evaluate_authoring_timeline_frame_with_signals(
             &project,
             &plan,

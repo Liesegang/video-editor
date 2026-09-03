@@ -8,7 +8,7 @@ use super::{
     PublishedParameterId, PublishedSignalId, SignalBindingId,
 };
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BindingScope {
     Definition {
@@ -24,7 +24,7 @@ pub enum BindingScope {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignalSource {
     Published {
@@ -78,7 +78,7 @@ pub struct SignalBinding {
     pub priority: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventSource {
     Published {

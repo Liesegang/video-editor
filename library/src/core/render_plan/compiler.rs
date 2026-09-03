@@ -107,6 +107,7 @@ fn compile_bindings(project: &AuthoringProject) -> Result<CompiledBindingIndex, 
         for definition_id in binding_target_definitions(project, &binding.scope)? {
             compiled.add_signal(definition_id, binding.clone());
         }
+        compiled.add_signal_source(binding);
     }
     let mut events = project.event_bindings.values().cloned().collect::<Vec<_>>();
     events.sort_by_key(|binding| binding.id);
@@ -114,6 +115,7 @@ fn compile_bindings(project: &AuthoringProject) -> Result<CompiledBindingIndex, 
         for definition_id in binding_target_definitions(project, &binding.scope)? {
             compiled.add_event(definition_id, binding.clone());
         }
+        compiled.add_event_source(binding);
     }
     compiled.finish();
     Ok(compiled)

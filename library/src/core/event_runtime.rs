@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
+use crate::core::render_plan::CompiledBindingIndex;
 use crate::model::authoring::{
-    BindingScope, EventBinding, EventBindingId, PublishedActionId, TriggerPolicy,
+    BindingScope, EventBinding, EventBindingId, EventSource, PublishedActionId, TriggerPolicy,
 };
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -37,6 +38,7 @@ pub enum TriggerOutcome {
 #[derive(Default, Debug)]
 pub struct EventRuntime {
     invocations: HashMap<EventBindingId, Vec<ReactiveInvocation>>,
+    next_ordinal: HashMap<EventBindingId, u64>,
 }
 
 impl EventRuntime {
@@ -55,6 +57,9 @@ impl EventRuntime {
             );
         }
 
+        let ordinal = self.next_ordinal.entry(binding.id).or_default();
+        let occurrence_id = deterministic_occurrence_id(binding.id, now, *ordinal);
+        *ordinal = ordinal.wrapping_add(1);
         let invocations = self.invocations.entry(binding.id).or_default();
         invocations.retain(|invocation| invocation.ends_at() > now);
 
@@ -89,7 +94,7 @@ impl EventRuntime {
         };
 
         let invocation = ReactiveInvocation {
-            occurrence_id: Uuid::new_v4(),
+            occurrence_id,
             binding_id: binding.id,
             scope: binding.scope.clone(),
             action_id: binding.target_action_id,
@@ -98,6 +103,25 @@ impl EventRuntime {
         };
         invocations.push(invocation.clone());
         Ok(TriggerOutcome::Scheduled(invocation))
+    }
+
+    /// Routes a discrete external event to every authored Binding connected
+    /// to its public source. Each target keeps an independent policy queue.
+    pub fn trigger_source(
+        &mut self,
+        bindings: &CompiledBindingIndex,
+        source: &EventSource,
+        now: f64,
+        duration: f64,
+    ) -> Result<Vec<(EventBindingId, TriggerOutcome)>, String> {
+        bindings
+            .event_source_bindings(source)
+            .iter()
+            .map(|binding| {
+                self.trigger(binding, now, duration)
+                    .map(|outcome| (binding.id, outcome))
+            })
+            .collect()
     }
 
     pub fn active_at(&mut self, now: f64) -> Vec<&ReactiveInvocation> {
@@ -116,7 +140,21 @@ impl EventRuntime {
 
     pub fn clear(&mut self) {
         self.invocations.clear();
+        self.next_ordinal.clear();
     }
+}
+
+fn deterministic_occurrence_id(binding_id: EventBindingId, now: f64, ordinal: u64) -> Uuid {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(binding_id.as_uuid().as_bytes());
+    hasher.update(now.to_bits().to_le_bytes());
+    hasher.update(ordinal.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
 }
 
 #[cfg(test)]
@@ -179,5 +217,26 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn occurrence_ids_are_deterministic_for_replayed_input() {
+        let binding = binding(TriggerPolicy::Overlap);
+        let replay = || {
+            let mut runtime = EventRuntime::default();
+            let TriggerOutcome::Scheduled(first) = runtime.trigger(&binding, 1.0, 2.0).unwrap()
+            else {
+                panic!("first occurrence must be scheduled");
+            };
+            let TriggerOutcome::Scheduled(second) = runtime.trigger(&binding, 1.0, 2.0).unwrap()
+            else {
+                panic!("second occurrence must be scheduled");
+            };
+            (first.occurrence_id, second.occurrence_id)
+        };
+        let first_replay = replay();
+        let second_replay = replay();
+        assert_eq!(first_replay, second_replay);
+        assert_ne!(first_replay.0, first_replay.1);
     }
 }

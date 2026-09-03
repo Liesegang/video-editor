@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use ordered_float::OrderedFloat;
 
+use crate::core::render_plan::CompiledBindingIndex;
 use crate::model::authoring::{
     BindingOperator, BindingScope, EffectiveValue, EffectiveValueContribution, InstancePath,
     ModuleDefinitionId, ModuleInstance, ModuleInstanceId, PublishedParameter, SignalBinding,
-    SignalBindingId, SignalMapping,
+    SignalBindingId, SignalMapping, SignalSource,
 };
 use crate::model::project::property::PropertyValue;
 
@@ -96,6 +97,25 @@ impl SignalRuntimeValues {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Routes one external continuous-value sample to every authored Binding
+    /// connected to that public source.
+    pub fn sample_source(
+        &mut self,
+        bindings: &CompiledBindingIndex,
+        source: &SignalSource,
+        raw_value: f64,
+        sampled_at: f64,
+    ) -> Result<Vec<(SignalBindingId, f64)>, String> {
+        bindings
+            .signal_source_bindings(source)
+            .iter()
+            .map(|binding| {
+                self.sample(binding, raw_value, sampled_at)
+                    .map(|value| (binding.id, value))
+            })
+            .collect()
     }
 }
 

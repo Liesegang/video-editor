@@ -4,9 +4,9 @@ use crate::model::project::property::PropertyMap;
 use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
-    AttachmentId, AttachmentOwner, AttachmentStage, EventBinding, ModuleDefinitionId,
-    ModuleInstanceId, PublishedActionId, PublishedParameterId, SignalBinding, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId,
+    AttachmentId, AttachmentOwner, AttachmentStage, EventBinding, EventSource, ModuleDefinitionId,
+    ModuleInstanceId, PublishedActionId, PublishedParameterId, SignalBinding, SignalSource,
+    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
 };
 
 #[derive(Clone, PartialEq, Debug)]
@@ -28,6 +28,8 @@ pub struct RenderPlan {
 pub struct CompiledBindingIndex {
     signal_routes: HashMap<(ModuleDefinitionId, PublishedParameterId), Vec<SignalBinding>>,
     event_routes: HashMap<(ModuleDefinitionId, PublishedActionId), Vec<EventBinding>>,
+    signal_sources: HashMap<SignalSource, Vec<SignalBinding>>,
+    event_sources: HashMap<EventSource, Vec<EventBinding>>,
 }
 
 impl CompiledBindingIndex {
@@ -53,6 +55,20 @@ impl CompiledBindingIndex {
             .unwrap_or_default()
     }
 
+    pub fn signal_source_bindings(&self, source: &SignalSource) -> &[SignalBinding] {
+        self.signal_sources
+            .get(source)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub fn event_source_bindings(&self, source: &EventSource) -> &[EventBinding] {
+        self.event_sources
+            .get(source)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     pub(super) fn add_signal(&mut self, definition_id: ModuleDefinitionId, binding: SignalBinding) {
         self.signal_routes
             .entry((definition_id, binding.target_parameter_id))
@@ -67,11 +83,31 @@ impl CompiledBindingIndex {
             .push(binding);
     }
 
+    pub(super) fn add_signal_source(&mut self, binding: SignalBinding) {
+        self.signal_sources
+            .entry(binding.source.clone())
+            .or_default()
+            .push(binding);
+    }
+
+    pub(super) fn add_event_source(&mut self, binding: EventBinding) {
+        self.event_sources
+            .entry(binding.source.clone())
+            .or_default()
+            .push(binding);
+    }
+
     pub(super) fn finish(&mut self) {
         for routes in self.signal_routes.values_mut() {
             routes.sort_by_key(|binding| (binding.priority, binding.id));
         }
         for routes in self.event_routes.values_mut() {
+            routes.sort_by_key(|binding| (binding.priority, binding.id));
+        }
+        for routes in self.signal_sources.values_mut() {
+            routes.sort_by_key(|binding| (binding.priority, binding.id));
+        }
+        for routes in self.event_sources.values_mut() {
             routes.sort_by_key(|binding| (binding.priority, binding.id));
         }
     }
