@@ -121,6 +121,12 @@ fn serve(listener: TcpListener, shared: Arc<Mutex<Shared>>, repaint: egui::Conte
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // On Windows an accepted socket can inherit the listener's non-blocking
+                // mode. Requests with a body may then be read before the body arrives,
+                // making otherwise valid drag/scroll QA input fail with WSAEWOULDBLOCK.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let response = read_request(&mut stream)
                     .map(|request| route(request, &shared, &repaint))
                     .unwrap_or_else(|error| Response::json(400, json!({"error": error})));
