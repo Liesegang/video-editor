@@ -2747,6 +2747,15 @@ fn keyframe_toggle_edit(
         )
 }
 
+fn duration_policy_label(policy: &DurationPolicy) -> &'static str {
+    match policy {
+        DurationPolicy::Fixed => "Fixed",
+        DurationPolicy::Scale => "Scale",
+        DurationPolicy::Loop => "Loop",
+        DurationPolicy::Responsive { .. } => "Responsive",
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the immediate-mode Inspector receives explicit immutable editor context"
@@ -2820,22 +2829,83 @@ fn inspector_ui(
             }
         });
     if let SourceRef::Composition(instance) = &item.source {
+        let definition_duration = project
+            .timelines
+            .get(&instance.timeline_id)
+            .map(|timeline| timeline.duration.into_inner())
+            .unwrap_or(item.interval.duration.into_inner());
+        let responsive_edge = (definition_duration * 0.2)
+            .min(item.interval.duration.into_inner() * 0.5)
+            .max(0.0);
         egui::ComboBox::from_label("Duration")
-            .selected_text(format!("{:?}", instance.duration_policy))
+            .selected_text(duration_policy_label(&instance.duration_policy))
             .show_ui(ui, |ui| {
                 for (label, policy) in [
                     ("Fixed", DurationPolicy::Fixed),
                     ("Scale", DurationPolicy::Scale),
                     ("Loop", DurationPolicy::Loop),
+                    (
+                        "Responsive",
+                        DurationPolicy::Responsive {
+                            intro_end: OrderedFloat(responsive_edge),
+                            outro_start: OrderedFloat(definition_duration - responsive_edge),
+                        },
+                    ),
                 ] {
                     if ui
-                        .selectable_label(instance.duration_policy == policy, label)
+                        .selectable_label(
+                            duration_policy_label(&instance.duration_policy) == label,
+                            label,
+                        )
                         .clicked()
                     {
                         edits.push(Edit::DurationPolicy(id, policy));
                     }
                 }
             });
+        if let DurationPolicy::Responsive {
+            intro_end,
+            outro_start,
+        } = &instance.duration_policy
+        {
+            let mut intro_end = intro_end.into_inner();
+            let mut outro_start = outro_start.into_inner();
+            let intro_changed = inspector_number(
+                ui,
+                (id, "responsive-intro"),
+                "Intro end",
+                &mut intro_end,
+                0.05,
+                " s",
+            );
+            let outro_changed = inspector_number(
+                ui,
+                (id, "responsive-outro"),
+                "Outro start",
+                &mut outro_start,
+                0.05,
+                " s",
+            );
+            if intro_changed || outro_changed {
+                let placement_duration = item.interval.duration.into_inner();
+                let intro_end = intro_end
+                    .clamp(0.0, definition_duration)
+                    .min(placement_duration);
+                let minimum_outro_start =
+                    (definition_duration + intro_end - placement_duration).max(intro_end);
+                let outro_start = outro_start
+                    .clamp(intro_end, definition_duration)
+                    .max(minimum_outro_start);
+                edits.push(Edit::DurationPolicy(
+                    id,
+                    DurationPolicy::Responsive {
+                        intro_end: OrderedFloat(intro_end),
+                        outro_start: OrderedFloat(outro_start),
+                    },
+                ));
+            }
+            ui.small("Intro and Outro keep their timing; the middle section adapts to the clip.");
+        }
     }
     if ui.button("Fade In / Out").clicked() {
         edits.push(Edit::Fade(id, 0.5));
