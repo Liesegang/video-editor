@@ -242,6 +242,36 @@ impl PluginManager {
             .map_err(|error| LibraryError::Plugin(error.to_string()))
     }
 
+    /// Creates a complete native Generator Node for a reusable Module.
+    /// Timeline placement remains a separate `SourceRef::Module` operation.
+    pub fn create_generator_node(
+        &self,
+        generator: crate::model::GeneratorContent,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<crate::model::Node, LibraryError> {
+        let (kind, name) = match generator {
+            crate::model::GeneratorContent::Text => ("text", "Text"),
+            crate::model::GeneratorContent::Solid => ("solid", "Solid Color"),
+            crate::model::GeneratorContent::Shape => ("shape", "Shape"),
+            crate::model::GeneratorContent::SkSL => ("sksl", "SkSL Shader"),
+        };
+        let converter = self.get_entity_converter(kind).ok_or_else(|| {
+            LibraryError::Plugin(format!(
+                "Native Generator converter '{kind}' is unavailable"
+            ))
+        })?;
+        let definitions = converter.get_property_definitions(
+            canvas_width,
+            canvas_height,
+            canvas_width,
+            canvas_height,
+        );
+        let properties = crate::model::property::PropertyMap::from_definitions(&definitions);
+        crate::model::Node::new_generator(name, generator, &definitions, properties)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn create_style_operation_node(
         &self,
         component_id: &str,

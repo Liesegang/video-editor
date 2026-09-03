@@ -336,7 +336,25 @@ pub(super) fn compile_module(
                 })
             })
             .collect::<Result<Vec<_>, String>>()?,
-        ModuleRole::Generator | ModuleRole::Behavior | ModuleRole::Analyzer => Vec::new(),
+        ModuleRole::Generator => evaluation_order
+            .iter()
+            .map(|node_id| {
+                let node = &definition.graph.nodes[node_id];
+                let NodeContent::Generator(generator) = node.content() else {
+                    return Err(format!(
+                        "Generator Module {id} contains unsupported processing Node {node_id}"
+                    ));
+                };
+                Ok(CompiledModuleOperation::Generator {
+                    node_id: *node_id,
+                    generator: *generator,
+                    enabled: node.enabled,
+                    bypassed: node.bypassed,
+                    properties: node.properties().clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        ModuleRole::Behavior | ModuleRole::Analyzer => Vec::new(),
     };
     Ok(CompiledModuleDefinition {
         id,

@@ -14,6 +14,7 @@ use library::model::authoring::{
     TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TriggerPolicy,
 };
 use library::model::frame::color::Color;
+use library::model::node::GeneratorContent;
 use library::model::project::asset::{Asset, AssetKind};
 use library::model::project::property::{Keyframe, KeyframeId, KeyframeUpdate, Property};
 use library::model::project::property::{PropertyValue, Vec2};
@@ -621,6 +622,28 @@ impl TimelineApp {
             )
         });
         self.finish_add(result, before, "Solid added");
+    }
+
+    fn add_reusable_title(&mut self) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
+        let result = self.editor.snapshot().and_then(|project| {
+            let track = last_track(project.as_ref(), self.open_timeline)?;
+            drop(project);
+            self.editor.add_generator_module(
+                track,
+                "Reusable Title".to_string(),
+                GeneratorContent::Text,
+                TimelineInterval::new(self.current_time, 5.0)
+                    .map_err(library::LibraryError::Validation)?,
+                1,
+                self.plugins.as_ref(),
+            )
+        });
+        self.finish_add(result, before, "Reusable title added");
     }
 
     fn add_nested_timeline(&mut self) {
@@ -1246,6 +1269,9 @@ impl eframe::App for TimelineApp {
                 }
                 if ui.button("+ Solid").clicked() {
                     self.add_solid();
+                }
+                if self.workspace.depth() >= 2 && ui.button("+ Reusable Title").clicked() {
+                    self.add_reusable_title();
                 }
                 if ui.button("+ Composition").clicked() {
                     self.add_nested_timeline();

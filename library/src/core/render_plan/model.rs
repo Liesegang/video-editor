@@ -157,6 +157,13 @@ pub struct CompiledModuleDefinition {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum CompiledModuleOperation {
+    Generator {
+        node_id: uuid::Uuid,
+        generator: crate::model::node::GeneratorContent,
+        enabled: bool,
+        bypassed: bool,
+        properties: PropertyMap,
+    },
     ImageEffect {
         node_id: uuid::Uuid,
         effect_type: String,

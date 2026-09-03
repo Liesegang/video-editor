@@ -22,6 +22,7 @@ use crate::model::authoring::{
 };
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::{FrameInfo, Region};
+use crate::model::node::GeneratorContent;
 use crate::model::project::asset::Asset;
 use crate::model::project::property::Property;
 use crate::model::project::property::PropertyValue;
@@ -199,6 +200,33 @@ impl TimelineEditorService {
             interval,
             layer,
         )
+    }
+
+    pub fn add_generator_module(
+        &self,
+        track_id: TimelineTrackId,
+        name: String,
+        generator: GeneratorContent,
+        interval: TimelineInterval,
+        layer: i64,
+        plugins: &PluginManager,
+    ) -> Result<(TimelineItemId, ChangeSet), LibraryError> {
+        let project = self.snapshot()?;
+        let timeline_id = project
+            .tracks
+            .get(&track_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Track {track_id}")))?
+            .timeline_id;
+        let timeline = project
+            .timelines
+            .get(&timeline_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline {timeline_id}")))?;
+        let node = plugins.create_generator_node(generator, timeline.width, timeline.height)?;
+        drop(project);
+        self.write_session()?
+            .add_generator_module_item(track_id, name, node, interval, layer)
+            .map(|(item_id, _, _, changes)| (item_id, changes))
+            .map_err(LibraryError::Validation)
     }
 
     pub fn place_timeline(

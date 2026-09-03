@@ -151,6 +151,117 @@ impl AuthoringSession {
         ))
     }
 
+    /// Creates a reusable native Generator Module and places one independent
+    /// instance on the Timeline. The Timeline owns only the placement and the
+    /// Module graph is never expanded into Timeline items.
+    pub fn add_generator_module_item(
+        &mut self,
+        track_id: TimelineTrackId,
+        name: String,
+        node: crate::model::node::Node,
+        interval: TimelineInterval,
+        layer: i64,
+    ) -> Result<
+        (
+            TimelineItemId,
+            ModuleDefinitionId,
+            ModuleInstanceId,
+            ChangeSet,
+        ),
+        String,
+    > {
+        if !matches!(
+            node.content(),
+            crate::model::node::NodeContent::Generator(_)
+        ) {
+            return Err("Generator Module item requires a Generator Node".to_string());
+        }
+        let timeline_id = self.timeline_for_track(track_id)?;
+        let node_id = node.id;
+        let descriptor = crate::model::node::native_node_descriptor_for_node(&node)
+            .ok_or_else(|| "Generator Node has no native descriptor".to_string())?;
+        let published_parameters = node
+            .properties()
+            .iter()
+            .filter_map(|(property_name, property)| {
+                let default_value = property.value()?.clone();
+                let data_type = descriptor
+                    .ports()
+                    .iter()
+                    .find(|port| {
+                        port.direction == crate::model::project::PortDirection::Input
+                            && port.key == *property_name
+                    })
+                    .map(|port| port.data_type)
+                    .unwrap_or(crate::model::project::PortDataType::Any);
+                Some(PublishedParameter {
+                    id: PublishedParameterId::new(),
+                    name: property_name.clone(),
+                    data_type,
+                    default_value,
+                    target: super::ModulePortAddress {
+                        node_id,
+                        port: property_name.clone(),
+                    },
+                })
+            })
+            .collect();
+        let definition_id = ModuleDefinitionId::new();
+        self.project.module_definitions.insert(
+            definition_id,
+            ModuleDefinition {
+                id: definition_id,
+                name: name.clone(),
+                role: ModuleRole::Generator,
+                graph: ModuleGraph {
+                    nodes: std::collections::HashMap::from([(node_id, node)]),
+                    connections: Vec::new(),
+                },
+                output_node_id: Some(node_id),
+                published_parameters,
+                published_signals: Vec::new(),
+                published_actions: Vec::new(),
+                version: 1,
+            },
+        );
+        let instance_id = ModuleInstanceId::new();
+        self.project.module_instances.insert(
+            instance_id,
+            ModuleInstance {
+                id: instance_id,
+                definition_id,
+                parameter_overrides: std::collections::HashMap::new(),
+            },
+        );
+        let item_id = TimelineItemId::new();
+        self.project.items.insert(
+            item_id,
+            TimelineItem {
+                id: item_id,
+                track_id,
+                name,
+                source: SourceRef::Module {
+                    module_instance_id: instance_id,
+                },
+                interval,
+                layer,
+                parent: None,
+                mask_ids: Vec::new(),
+                matte: None,
+                constraints: Vec::new(),
+                transition_in: None,
+                transition_out: None,
+                generated_item_id: None,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        let changes = self.finish(vec![
+            ProjectInvalidation::TimelineStructure { timeline_id },
+            ProjectInvalidation::ModuleDefinition { definition_id },
+        ]);
+        Ok((item_id, definition_id, instance_id, changes))
+    }
+
     pub fn add_timeline(
         &mut self,
         name: String,
@@ -803,7 +914,7 @@ impl AuthoringSession {
             return Err("Published parameter does not belong to the Module definition".to_string());
         }
         instance.parameter_overrides.insert(parameter_id, value);
-        let invalidations = self
+        let mut invalidations: Vec<_> = self
             .project
             .attachments
             .values()
@@ -826,6 +937,21 @@ impl AuthoringSession {
                 }
             })
             .collect();
+        invalidations.extend(self.project.items.values().filter_map(|item| {
+            matches!(
+                item.source,
+                SourceRef::Module { module_instance_id } if module_instance_id == instance_id
+            )
+            .then(|| {
+                self.timeline_for_item(item.id).ok().map(|timeline_id| {
+                    ProjectInvalidation::ItemProperties {
+                        timeline_id,
+                        item_id: item.id,
+                    }
+                })
+            })
+            .flatten()
+        }));
         Ok(self.finish(invalidations))
     }
 

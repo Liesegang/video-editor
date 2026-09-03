@@ -23,7 +23,7 @@ use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{
     FrameBounds, FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameMask, FrameObject,
-    ImageSurface, StyleConfig,
+    ImageSurface, SkSLColorDomain, StyleConfig,
 };
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::frame::transform::Transform;
@@ -316,12 +316,21 @@ fn collect_item(
                 )?,
             })
         }
-        (SourceRef::Module { .. }, PlannedSource::Module { .. }) => {
-            return Err(LibraryError::Render(format!(
-                "Module source on Timeline item {} cannot execute yet",
-                item.id
-            )));
-        }
+        (
+            SourceRef::Module { module_instance_id },
+            PlannedSource::Module {
+                module_instance_id: planned_instance_id,
+            },
+        ) if module_instance_id == planned_instance_id => module_source_item(
+            project,
+            plan,
+            item,
+            owner_timeline,
+            *module_instance_id,
+            local_time,
+            instance_path,
+            runtime_signals,
+        )?,
         _ => {
             return Err(LibraryError::Validation(format!(
                 "RenderPlan source does not match Timeline item {}",
@@ -925,6 +934,283 @@ fn inherited_transforms(
     Ok(transforms)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Module source evaluation keeps authored and runtime authorities explicit"
+)]
+fn module_source_item(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    item: &TimelineItem,
+    timeline: &Timeline,
+    module_instance_id: crate::model::authoring::ModuleInstanceId,
+    time: f64,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
+) -> Result<FrameItem, LibraryError> {
+    let invocation = plan
+        .module_invocations
+        .iter()
+        .find(|invocation| {
+            invocation.owner == ModuleInvocationOwner::Item(item.id)
+                && invocation.module_instance_id == module_instance_id
+        })
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "RenderPlan has no Module invocation for Timeline item {}",
+                item.id
+            ))
+        })?;
+    let instance = project
+        .module_instances
+        .get(&module_instance_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!("Missing Module instance {module_instance_id}"))
+        })?;
+    let authored = project
+        .module_definitions
+        .get(&invocation.definition_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Missing Module definition {}",
+                invocation.definition_id
+            ))
+        })?;
+    let compiled = plan
+        .module_definitions
+        .get(&invocation.definition_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "RenderPlan has no compiled Module definition {}",
+                invocation.definition_id
+            ))
+        })?;
+    let output_node_id = authored.output_node_id.ok_or_else(|| {
+        LibraryError::Validation(format!(
+            "Generator Module {} has no output Node",
+            authored.id
+        ))
+    })?;
+    let operation = compiled
+        .operations
+        .iter()
+        .find(|operation| {
+            matches!(
+                operation,
+                CompiledModuleOperation::Generator { node_id, .. } if *node_id == output_node_id
+            )
+        })
+        .ok_or_else(|| {
+            LibraryError::Render(format!(
+                "Generator Module {} has no executable output",
+                authored.id
+            ))
+        })?;
+    let CompiledModuleOperation::Generator {
+        node_id,
+        generator,
+        enabled,
+        bypassed,
+        properties,
+    } = operation
+    else {
+        return Err(LibraryError::Validation(format!(
+            "Generator Module {} selected a non-Generator output",
+            authored.id
+        )));
+    };
+    if !enabled || *bypassed {
+        return Ok(FrameItem::Group(FrameGroup {
+            source_id: item.id.as_uuid(),
+            kind: FrameGroupKind::TimelineItem,
+            width: timeline.width,
+            height: timeline.height,
+            background_color: transparent(),
+            inherited_transforms: Vec::new(),
+            transform: Transform::default(),
+            blend_mode: BlendMode::Normal,
+            effect_time: OrderedFloat(time),
+            effects: Vec::new(),
+            masks: Vec::new(),
+            items: Vec::new(),
+        }));
+    }
+    let values = module_operation_values(
+        properties,
+        *node_id,
+        authored,
+        instance,
+        plan,
+        time,
+        instance_path,
+        runtime_signals,
+    )?;
+    match generator {
+        crate::model::node::GeneratorContent::Text => {
+            let text = required_string_value(&values, "text", "Text Generator")?;
+            let font = required_string_value(&values, "font_family", "Text Generator")?;
+            let size = required_number_value(&values, "size", "Text Generator")?;
+            Ok(FrameItem::Object(FrameObject {
+                source_node_id: item.id.as_uuid(),
+                spatial_transform_node_id: None,
+                spatial_transform: Box::default(),
+                content_bounds: None,
+                content: FrameContent::Text {
+                    text,
+                    font,
+                    size,
+                    styles: vec![StyleConfig {
+                        id: item.id.as_uuid(),
+                        style: DrawStyle::Fill {
+                            color: crate::model::frame::color::Color::white(),
+                            offset: 0.0,
+                        },
+                    }],
+                    effects: Vec::new(),
+                    ensemble: None,
+                    transform: Transform::default(),
+                },
+            }))
+        }
+        crate::model::node::GeneratorContent::Solid => {
+            let color = required_color_value(&values, "color", "Solid Generator")?;
+            Ok(solid_item(item, timeline.width, timeline.height, color))
+        }
+        crate::model::node::GeneratorContent::Shape => {
+            let path = match values.get("path") {
+                Some(PropertyValue::Path(path)) => path.clone(),
+                _ => return Err(type_error("Shape Generator path", "Path")),
+            };
+            let svg = crate::model::path::write_legacy_svg_path_data(&path)
+                .map_err(|error| LibraryError::Render(error.to_string()))?;
+            Ok(shape_object(
+                item,
+                svg,
+                Some(path),
+                crate::model::frame::color::Color::white(),
+                None,
+            ))
+        }
+        crate::model::node::GeneratorContent::SkSL => {
+            let shader = required_string_value(&values, "shader", "SkSL Generator")?;
+            let width = required_number_value(&values, "width", "SkSL Generator")? as f32;
+            let height = required_number_value(&values, "height", "SkSL Generator")? as f32;
+            Ok(FrameItem::Object(FrameObject {
+                source_node_id: item.id.as_uuid(),
+                spatial_transform_node_id: None,
+                spatial_transform: Box::default(),
+                content_bounds: Some(FrameBounds::new(0.0, 0.0, width, height)),
+                content: FrameContent::SkSL {
+                    shader,
+                    resolution: (width, height),
+                    color_domain: SkSLColorDomain::ProjectWorkingLinear,
+                    effects: Vec::new(),
+                    transform: Transform::default(),
+                },
+            }))
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "published parameter evaluation requires explicit instance and runtime scope"
+)]
+fn module_operation_values(
+    properties: &PropertyMap,
+    node_id: uuid::Uuid,
+    authored: &crate::model::authoring::ModuleDefinition,
+    instance: &crate::model::authoring::ModuleInstance,
+    plan: &RenderPlan,
+    time: f64,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
+) -> Result<std::collections::HashMap<String, PropertyValue>, LibraryError> {
+    let mut values = properties
+        .iter()
+        .map(|(name, property)| {
+            property
+                .evaluate_at(time)
+                .map(|value| (name.clone(), value))
+                .map_err(|error| {
+                    LibraryError::Render(format!(
+                        "Cannot evaluate Module property '{name}': {error}"
+                    ))
+                })
+        })
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    for published in authored
+        .published_parameters
+        .iter()
+        .filter(|published| published.target.node_id == node_id)
+    {
+        let key = published
+            .target
+            .port
+            .strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX)
+            .unwrap_or(&published.target.port)
+            .to_string();
+        let value = resolve_published_numeric_value(
+            authored.id,
+            instance,
+            instance_path,
+            published,
+            plan.bindings
+                .signal_bindings(authored.id, published.id)
+                .iter(),
+            runtime_signals,
+        )
+        .map(|effective| effective.value)
+        .unwrap_or_else(|| {
+            instance
+                .parameter_overrides
+                .get(&published.id)
+                .unwrap_or(&published.default_value)
+                .clone()
+        });
+        values.insert(key, value);
+    }
+    Ok(values)
+}
+
+fn required_string_value(
+    values: &std::collections::HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<String, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::String(value)) => Ok(value.clone()),
+        _ => Err(type_error(&format!("{owner} {key}"), "String")),
+    }
+}
+
+fn required_number_value(
+    values: &std::collections::HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<f64, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::Number(value)) => Ok(value.into_inner()),
+        Some(PropertyValue::Integer(value)) => Ok(*value as f64),
+        _ => Err(type_error(&format!("{owner} {key}"), "Number")),
+    }
+}
+
+fn required_color_value(
+    values: &std::collections::HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<crate::model::frame::color::Color, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::Color(value)) => Ok(value.clone()),
+        Some(PropertyValue::ColorValue(value)) => {
+            crate::color_management::to_renderer_srgba8(value)
+                .map_err(|error| LibraryError::Render(error.to_string()))
+        }
+        _ => Err(type_error(&format!("{owner} {key}"), "Color")),
+    }
+}
+
 fn attachment_effects(
     project: &AuthoringProject,
     plan: &RenderPlan,
@@ -986,54 +1272,26 @@ fn attachment_effects(
                 enabled,
                 bypassed,
                 properties,
-            } = operation;
+            } = operation
+            else {
+                return Err(LibraryError::Validation(format!(
+                    "Effect attachment {} compiled a non-Effect operation",
+                    invocation.module_instance_id
+                )));
+            };
             if !enabled || *bypassed {
                 continue;
             }
-            let mut values = properties
-                .iter()
-                .map(|(name, property)| {
-                    property
-                        .evaluate_at(time)
-                        .map(|value| (name.clone(), value))
-                        .map_err(|error| {
-                            LibraryError::Render(format!(
-                                "Cannot evaluate Module property '{name}': {error}"
-                            ))
-                        })
-                })
-                .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
-            for published in authored
-                .published_parameters
-                .iter()
-                .filter(|published| published.target.node_id == *node_id)
-            {
-                let key = published
-                    .target
-                    .port
-                    .strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX)
-                    .unwrap_or(&published.target.port)
-                    .to_string();
-                let value = resolve_published_numeric_value(
-                    authored.id,
-                    instance,
-                    instance_path,
-                    published,
-                    plan.bindings
-                        .signal_bindings(authored.id, published.id)
-                        .iter(),
-                    runtime_signals,
-                )
-                .map(|effective| effective.value)
-                .unwrap_or_else(|| {
-                    instance
-                        .parameter_overrides
-                        .get(&published.id)
-                        .unwrap_or(&published.default_value)
-                        .clone()
-                });
-                values.insert(key, value);
-            }
+            let values = module_operation_values(
+                properties,
+                *node_id,
+                authored,
+                instance,
+                plan,
+                time,
+                instance_path,
+                runtime_signals,
+            )?;
             effects.push(ImageEffect {
                 effect_type: effect_type.clone(),
                 properties: values,
@@ -1161,6 +1419,7 @@ mod tests {
         SourceRef, TimelineInterval, Transition, TransitionId, TransitionKind,
     };
     use crate::model::frame::entity::{FrameContent, FrameItem};
+    use crate::model::node::GeneratorContent;
     use crate::model::project::property::{Keyframe, Property, PropertyValue, Vec2};
 
     use super::*;
@@ -1247,6 +1506,75 @@ mod tests {
             &object.content,
             FrameContent::Text { text, .. } if text == "Timeline first"
         ));
+    }
+
+    #[test]
+    fn generator_module_source_renders_instance_parameters_without_timeline_nodes() {
+        let project =
+            AuthoringProject::new("Generator", 1280, 720, 10.0, 3.0).expect("valid Project");
+        let track_id = *project.tracks.keys().next().expect("default Track");
+        let plugins = crate::plugin::PluginManager::default();
+        let node = plugins
+            .create_generator_node(GeneratorContent::Text, 1280, 720)
+            .expect("complete Text Generator");
+        let mut session = AuthoringSession::new(project).expect("session");
+        let (item_id, definition_id, instance_id, changes) = session
+            .add_generator_module_item(
+                track_id,
+                "Title instance".to_string(),
+                node,
+                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                0,
+            )
+            .expect("Module item");
+        assert!(changes.invalidations.iter().any(|invalidation| matches!(
+            invalidation,
+            crate::model::authoring::ProjectInvalidation::ModuleDefinition { .. }
+        )));
+        let parameter_id = session.project().module_definitions[&definition_id]
+            .published_parameters
+            .iter()
+            .find(|parameter| parameter.target.port == "text")
+            .expect("published Text parameter")
+            .id;
+        let changes = session
+            .set_module_parameter(
+                instance_id,
+                parameter_id,
+                PropertyValue::String("Instance title".to_string()),
+            )
+            .expect("instance Text");
+        assert!(changes.invalidations.iter().any(|invalidation| matches!(
+            invalidation,
+            crate::model::authoring::ProjectInvalidation::ItemProperties {
+                item_id: changed,
+                ..
+            } if *changed == item_id
+        )));
+        let project = session.into_project();
+        let plan = RenderPlanCompiler::compile(&project).expect("compile");
+        let frame = evaluate_authoring_frame(&project, &plan, 5, 1.0, None).expect("frame");
+
+        assert_eq!(plan.module_definitions.len(), 1);
+        assert_eq!(plan.module_invocations.len(), 1);
+        let FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let FrameItem::Group(item) = &track.items[0] else {
+            panic!("Timeline item group expected");
+        };
+        let FrameItem::Object(object) = &item.items[0] else {
+            panic!("Module output expected");
+        };
+        assert!(matches!(
+            &object.content,
+            FrameContent::Text { text, .. } if text == "Instance title"
+        ));
+        assert_eq!(project.items.len(), 1);
+        assert_eq!(
+            project.module_definitions[&definition_id].graph.nodes.len(),
+            1
+        );
     }
 
     #[test]
