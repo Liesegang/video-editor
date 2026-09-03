@@ -392,6 +392,20 @@ def run_suite(client: Client, capture: Path | None) -> dict:
         )
         else None,
     )
+    operation_menu = wait_for(
+        "Module operation catalog",
+        lambda: (controls[0] if controls else None)
+        if (
+            controls := [
+                component
+                for component in client.components().values()
+                if component["kind"] == "module_operation_menu"
+            ]
+        )
+        else None,
+    )
+    if int(operation_menu["metadata"]["operation_count"]) < 1:
+        raise QaFailure("Module operation catalog is empty")
     left, top, right, bottom = signal_source["rect"]
     drag(
         client,

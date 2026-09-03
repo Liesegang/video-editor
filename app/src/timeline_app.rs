@@ -116,7 +116,6 @@ enum Edit {
     AddModuleEffect(ModuleDefinitionId, String),
     RemoveModuleNode(ModuleDefinitionId, uuid::Uuid),
     SetModuleOutput(ModuleDefinitionId, uuid::Uuid),
-    ConnectModuleNodes(ModuleDefinitionId, uuid::Uuid, uuid::Uuid),
     DisconnectModuleConnection(ModuleDefinitionId, ModuleConnectionId),
     AddSignalBinding(SignalBinding),
     AddEventBinding(EventBinding),
@@ -185,9 +184,7 @@ impl Edit {
             Self::AddModuleEffect(definition, _) => {
                 Some(HistoryKey::ModuleNode(*definition, uuid::Uuid::nil()))
             }
-            Self::RemoveModuleNode(definition, node)
-            | Self::SetModuleOutput(definition, node)
-            | Self::ConnectModuleNodes(definition, node, _) => {
+            Self::RemoveModuleNode(definition, node) | Self::SetModuleOutput(definition, node) => {
                 Some(HistoryKey::ModuleNode(*definition, *node))
             }
             Self::DisconnectModuleConnection(definition, connection) => {
@@ -1005,10 +1002,6 @@ impl TimelineApp {
             Edit::SetModuleOutput(definition, node) => {
                 self.editor.set_module_output(definition, node).map(|_| ())
             }
-            Edit::ConnectModuleNodes(definition, from, to) => self
-                .editor
-                .connect_module_nodes(definition, from, to)
-                .map(|_| ()),
             #[cfg(feature = "logic-editor")]
             Edit::ConnectModulePorts(definition, from, to) => self
                 .editor
@@ -1599,6 +1592,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Logic => logic_ui(
                 ui,
                 self.project,
+                self.plugins,
                 self.render_plan,
                 self.selected_item,
                 self.instance_path,
@@ -3879,6 +3873,7 @@ fn data_ui(
 fn logic_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
+    plugins: &library::plugin::PluginManager,
     render_plan: &library::core::render_plan::RenderPlan,
     selected: Option<TimelineItemId>,
     instance_path: &InstancePath,
@@ -3992,52 +3987,67 @@ fn logic_ui(
     if let Some(attachment) = selected_instances.first() {
         let instance = &project.module_instances[&attachment.module_instance_id];
         let definition = &project.module_definitions[&instance.definition_id];
-        ui.collapsing("Node Graph", |ui| {
-            ui.small("This canvas edits only the selected reusable ModuleDefinition.");
-            ui.allocate_ui(egui::vec2(ui.available_width(), 360.0), |ui| {
-                for intent in crate::logic_graph_ui::show(ui, definition, logic_graph) {
-                    use crate::logic_graph_ui::LogicGraphEdit;
-                    match intent {
-                        LogicGraphEdit::MoveNode {
-                            definition_id,
-                            node_id,
-                            position,
-                            size,
-                            collapsed,
-                        } => edits.push(Edit::ModuleNodePresentation(
-                            definition_id,
-                            node_id,
-                            position,
-                            size,
-                            collapsed,
-                        )),
-                        LogicGraphEdit::Connect {
-                            definition_id,
-                            from,
-                            to,
-                        } => edits.push(Edit::ConnectModulePorts(definition_id, from, to)),
-                        LogicGraphEdit::Disconnect {
-                            definition_id,
-                            connection_id,
-                        } => edits.push(Edit::DisconnectModuleConnection(
-                            definition_id,
-                            connection_id,
-                        )),
-                        LogicGraphEdit::DeleteNode {
-                            definition_id,
-                            node_id,
-                        } => edits.push(Edit::RemoveModuleNode(definition_id, node_id)),
+        egui::CollapsingHeader::new("Node Graph")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.small("This canvas edits only the selected reusable ModuleDefinition.");
+                ui.allocate_ui(egui::vec2(ui.available_width(), 360.0), |ui| {
+                    for intent in crate::logic_graph_ui::show(ui, definition, logic_graph) {
+                        use crate::logic_graph_ui::LogicGraphEdit;
+                        match intent {
+                            LogicGraphEdit::MoveNode {
+                                definition_id,
+                                node_id,
+                                position,
+                                size,
+                                collapsed,
+                            } => edits.push(Edit::ModuleNodePresentation(
+                                definition_id,
+                                node_id,
+                                position,
+                                size,
+                                collapsed,
+                            )),
+                            LogicGraphEdit::Connect {
+                                definition_id,
+                                from,
+                                to,
+                            } => edits.push(Edit::ConnectModulePorts(definition_id, from, to)),
+                            LogicGraphEdit::Disconnect {
+                                definition_id,
+                                connection_id,
+                            } => edits.push(Edit::DisconnectModuleConnection(
+                                definition_id,
+                                connection_id,
+                            )),
+                            LogicGraphEdit::DeleteNode {
+                                definition_id,
+                                node_id,
+                            } => edits.push(Edit::RemoveModuleNode(definition_id, node_id)),
+                        }
                     }
-                }
+                });
             });
-        });
     }
     #[cfg(not(feature = "logic-editor"))]
     ui.small("This build omits the optional graphical Logic editor.");
     for attachment in selected_instances {
         let instance = &project.module_instances[&attachment.module_instance_id];
         let definition = &project.module_definitions[&instance.definition_id];
-        ui.collapsing(&definition.name, |ui| {
+        egui::CollapsingHeader::new(&definition.name)
+            .default_open(true)
+            .show(ui, |ui| {
+            let instance_count = project
+                .module_instances
+                .values()
+                .filter(|candidate| candidate.definition_id == definition.id)
+                .count();
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "Editing shared ModuleDefinition — changes affect {instance_count} instance(s)."
+                ),
+            );
             ui.label(format!(
                 "Role: {:?} · Version {}",
                 definition.role, definition.version
@@ -4080,47 +4090,75 @@ fn logic_ui(
                     }));
                 }
             }
-            if definition.role == library::model::authoring::ModuleRole::Effect
-                && ui.button("Add Blur Node").clicked()
-            {
-                edits.push(Edit::AddModuleEffect(definition.id, "blur".to_string()));
-            }
-            let node_ids: Vec<_> = definition.graph.nodes.keys().copied().collect();
-            for node in definition.graph.nodes.values() {
-                ui.group(|ui| {
-                    let mut name = node.name.clone();
-                    let mut enabled = node.enabled;
-                    let mut bypassed = node.bypassed;
-                    let name_changed = ui.text_edit_singleline(&mut name).changed();
-                    let enabled_changed = ui.checkbox(&mut enabled, "Enabled").changed();
-                    let bypass_changed = if node.supports_bypass() {
-                        ui.checkbox(&mut bypassed, "Bypass").changed()
-                    } else {
-                        false
-                    };
-                    ui.small(format!("{:?}", node.content()));
-                    if definition.output_node_id == Some(node.id) {
-                        ui.strong("Module output");
-                    } else if ui.small_button("Use as output").clicked() {
-                        edits.push(Edit::SetModuleOutput(definition.id, node.id));
-                    }
-                    if name_changed || enabled_changed || bypass_changed {
-                        edits.push(Edit::ModuleNodeState(
-                            definition.id,
-                            node.id,
-                            name,
-                            enabled,
-                            bypassed,
-                        ));
-                    }
-                    if ui.small_button("Delete Node").clicked() {
-                        edits.push(Edit::RemoveModuleNode(definition.id, node.id));
+            if definition.role == library::model::authoring::ModuleRole::Effect {
+                let mut effects = plugins.get_available_effects();
+                effects.sort_by(|left, right| (&left.2, &left.1).cmp(&(&right.2, &right.1)));
+                let add_operation = ui.menu_button("+ Add operation", |ui| {
+                    let mut current_category = None;
+                    for (effect_id, name, category) in &effects {
+                        if current_category.as_ref() != Some(category) {
+                            if current_category.is_some() {
+                                ui.separator();
+                            }
+                            ui.strong(category);
+                            current_category = Some(category.clone());
+                        }
+                        let option = ui.button(name);
+                        crate::qa::register_component(
+                            format!("logic.operation.option:{}:{effect_id}", definition.id),
+                            "module_operation_option",
+                            option.rect,
+                            serde_json::json!({"effect_id": effect_id, "name": name, "category": category}),
+                        );
+                        if option.clicked() {
+                            edits.push(Edit::AddModuleEffect(definition.id, effect_id.clone()));
+                            ui.close();
+                        }
                     }
                 });
+                crate::qa::register_component(
+                    format!("logic.operation.add:{}", definition.id),
+                    "module_operation_menu",
+                    add_operation.response.rect,
+                    serde_json::json!({"operation_count": effects.len()}),
+                );
             }
-            ui.collapsing(
-                format!("Connections ({})", definition.graph.connections.len()),
-                |ui| {
+            ui.collapsing("Advanced node details", |ui| {
+                for node in definition.graph.nodes.values() {
+                    ui.group(|ui| {
+                        let mut name = node.name.clone();
+                        let mut enabled = node.enabled;
+                        let mut bypassed = node.bypassed;
+                        let name_changed = ui.text_edit_singleline(&mut name).changed();
+                        let enabled_changed = ui.checkbox(&mut enabled, "Enabled").changed();
+                        let bypass_changed = if node.supports_bypass() {
+                            ui.checkbox(&mut bypassed, "Bypass").changed()
+                        } else {
+                            false
+                        };
+                        ui.small(format!("{:?}", node.content()));
+                        if definition.output_node_id == Some(node.id) {
+                            ui.strong("Module output");
+                        } else if ui.small_button("Use as output").clicked() {
+                            edits.push(Edit::SetModuleOutput(definition.id, node.id));
+                        }
+                        if name_changed || enabled_changed || bypass_changed {
+                            edits.push(Edit::ModuleNodeState(
+                                definition.id,
+                                node.id,
+                                name,
+                                enabled,
+                                bypassed,
+                            ));
+                        }
+                        if ui.small_button("Delete node").clicked() {
+                            edits.push(Edit::RemoveModuleNode(definition.id, node.id));
+                        }
+                    });
+                }
+                ui.collapsing(
+                    format!("Connections ({})", definition.graph.connections.len()),
+                    |ui| {
                     for connection in &definition.graph.connections {
                         let from = definition
                             .graph
@@ -4144,28 +4182,10 @@ fn logic_ui(
                             }
                         });
                     }
-                    for from in &node_ids {
-                        for to in &node_ids {
-                            if from == to
-                                || definition.graph.connections.iter().any(|connection| {
-                                    connection.from.node_id == *from && connection.to.node_id == *to
-                                })
-                            {
-                                continue;
-                            }
-                            let from_name = &definition.graph.nodes[from].name;
-                            let to_name = &definition.graph.nodes[to].name;
-                            if ui
-                                .small_button(format!("Connect {from_name} → {to_name}"))
-                                .clicked()
-                            {
-                                edits.push(Edit::ConnectModuleNodes(definition.id, *from, *to));
-                            }
-                        }
-                    }
-                },
-            );
-        });
+                    },
+                );
+            });
+            });
     }
 }
 
