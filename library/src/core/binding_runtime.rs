@@ -149,12 +149,13 @@ pub fn resolve_published_numeric_value<'a>(
             })
         })
         .collect();
-    Some(resolve_numeric_effective_value(
-        base,
-        keyed,
-        contributions,
-        None,
-    ))
+    let mut effective = resolve_numeric_effective_value(base, keyed, contributions, None);
+    if keyed.is_some()
+        && let Some(contribution) = effective.contributions.get_mut(1)
+    {
+        contribution.label = "Instance Override".to_string();
+    }
+    Some(effective)
 }
 
 fn binding_scope_matches(
@@ -358,6 +359,39 @@ mod tests {
         .unwrap();
         assert_eq!(targeted.value, number(5.0));
         assert_eq!(sibling.value, number(10.0));
+    }
+
+    #[test]
+    fn published_parameter_provenance_names_instance_override_as_instance_state() {
+        let definition_id = ModuleDefinitionId::new();
+        let parameter_id = PublishedParameterId::new();
+        let instance = ModuleInstance {
+            id: ModuleInstanceId::new(),
+            definition_id,
+            parameter_overrides: HashMap::from([(parameter_id, number(24.0))]),
+        };
+        let parameter = PublishedParameter {
+            id: parameter_id,
+            name: "Amount".to_string(),
+            data_type: PortDataType::Number,
+            default_value: number(10.0),
+            target: ModulePortAddress {
+                node_id: uuid::Uuid::new_v4(),
+                port: "property:amount".to_string(),
+            },
+        };
+        let result = resolve_published_numeric_value(
+            definition_id,
+            &instance,
+            &InstancePath::root(TimelineId::new()),
+            &parameter,
+            std::iter::empty(),
+            &SignalRuntimeValues::default(),
+        )
+        .expect("numeric Published Parameter");
+
+        assert_eq!(result.value, number(24.0));
+        assert_eq!(result.contributions[1].label, "Instance Override");
     }
 
     #[test]
