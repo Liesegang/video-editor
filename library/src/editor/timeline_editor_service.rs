@@ -939,13 +939,40 @@ impl TimelineEditorService {
         region: Option<Region>,
         runtime_signals: &crate::core::binding_runtime::SignalRuntimeValues,
     ) -> Result<FrameInfo, LibraryError> {
+        self.evaluate_compiled_frame_with_runtime(
+            compiled,
+            timeline_id,
+            instance_path,
+            time,
+            render_scale,
+            region,
+            runtime_signals,
+            &crate::core::event_runtime::EventRuntimeSnapshot::default(),
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "compiled frame evaluation keeps Timeline and runtime authorities explicit"
+    )]
+    pub fn evaluate_compiled_frame_with_runtime(
+        &self,
+        compiled: &CompiledProject,
+        timeline_id: TimelineId,
+        instance_path: &crate::model::authoring::InstancePath,
+        time: f64,
+        render_scale: f64,
+        region: Option<Region>,
+        runtime_signals: &crate::core::binding_runtime::SignalRuntimeValues,
+        runtime_events: &crate::core::event_runtime::EventRuntimeSnapshot,
+    ) -> Result<FrameInfo, LibraryError> {
         let project = &compiled.project;
         let timeline = project
             .timelines
             .get(&timeline_id)
             .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline {timeline_id}")))?;
         let frame_number = frame_number_at(time, timeline.fps.into_inner())?;
-        let frame = crate::core::framing::evaluate_authoring_timeline_frame_with_signals(
+        let frame = crate::core::framing::evaluate_authoring_timeline_frame_with_runtime(
             project.as_ref(),
             compiled.render_plan.as_ref(),
             timeline_id,
@@ -954,6 +981,7 @@ impl TimelineEditorService {
             region,
             instance_path,
             runtime_signals,
+            runtime_events,
         )?;
         Ok(frame)
     }

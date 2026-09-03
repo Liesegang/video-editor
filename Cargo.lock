@@ -267,7 +267,10 @@ dependencies = [
  "library",
  "node-editor-ui",
  "ordered-float",
+ "pan-zoom-ui",
  "rfd",
+ "serde",
+ "serde_json",
  "tempfile",
  "uuid",
 ]

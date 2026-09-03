@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use library::model::authoring::{
     EventBinding, EventBindingId, EventSource, InstancePath, MaskId, MaskMode, MatteMode, MatteRef,
     ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId,
     SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TriggerPolicy,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TriggerPolicy,
 };
 use library::model::frame::color::Color;
 use library::model::node::GeneratorContent;
@@ -21,6 +22,10 @@ use library::model::project::property::{PropertyValue, Vec2};
 use library::rendering::renderer::RenderOutput;
 use library::{AuthoringRenderService, RenderDestination, SkiaRenderer, TimelineEditorService};
 use ordered_float::OrderedFloat;
+use pan_zoom_ui::{
+    apply_navigation, navigation_delta, paint_canvas, AxisMask, CanvasState, CanvasTheme,
+    GridConfig, InputPolicy, NavigationConfig, NavigationInput, ZoomPolicy,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Workspace {
@@ -78,6 +83,15 @@ enum Tab {
 
 #[derive(Debug)]
 enum Edit {
+    ImportAsset,
+    PlaceAssetAt(uuid::Uuid, TimelineTrackId, f64),
+    OpenSubtitleImport,
+    AddText,
+    AddSolid,
+    AddReusableTitle,
+    AddComposition,
+    TogglePlayback,
+    StopPlayback,
     Select(Option<TimelineItemId>),
     OpenTimeline(TimelineId, InstancePath),
     Rename(TimelineItemId, String),
@@ -85,7 +99,6 @@ enum Edit {
     Move(TimelineItemId, TimelineTrackId, f64, i64),
     Trim(TimelineItemId, TimelineInterval),
     Property(TimelineItemId, String, PropertyValue),
-    Keyframe(TimelineItemId, String, PropertyValue),
     Split(TimelineItemId),
     Blur(TimelineItemId),
     ModuleParameter(ModuleInstanceId, PublishedParameterId, PropertyValue),
@@ -135,14 +148,21 @@ enum HistoryKey {
 impl Edit {
     fn history_key(&self) -> Option<HistoryKey> {
         match self {
+            Self::ImportAsset
+            | Self::OpenSubtitleImport
+            | Self::AddText
+            | Self::AddSolid
+            | Self::AddReusableTitle
+            | Self::AddComposition
+            | Self::TogglePlayback
+            | Self::StopPlayback => None,
+            Self::PlaceAssetAt(..) => Some(HistoryKey::Data),
             Self::Select(_) | Self::OpenTimeline(_, _) => None,
             Self::Rename(item, _) => Some(HistoryKey::Item(*item, "rename")),
             Self::SetText(item, _) => Some(HistoryKey::Item(*item, "text")),
             Self::Move(item, ..) => Some(HistoryKey::Item(*item, "move")),
             Self::Trim(item, _) => Some(HistoryKey::Item(*item, "trim")),
-            Self::Property(item, key, _) | Self::Keyframe(item, key, _) => {
-                Some(HistoryKey::Property(*item, key.clone()))
-            }
+            Self::Property(item, key, _) => Some(HistoryKey::Property(*item, key.clone())),
             Self::Split(item) => Some(HistoryKey::Item(*item, "split")),
             Self::Blur(item) => Some(HistoryKey::Item(*item, "effect")),
             Self::ModuleParameter(instance, parameter, _) => {
@@ -208,9 +228,15 @@ pub struct TimelineApp {
     logic_graph: crate::logic_graph_ui::LogicGraphState,
     last_playback_tick: Instant,
     preview: Option<egui::TextureHandle>,
+    preview_canvas: CanvasState,
+    preview_view_initialized: bool,
+    preview_grid: bool,
+    expanded_layers: HashSet<TimelineTrackId>,
+    timeline_pixels_per_second: f32,
     preview_key: Option<(
         library::model::authoring::ProjectRevision,
         TimelineId,
+        u64,
         u64,
         u64,
     )>,
@@ -218,6 +244,7 @@ pub struct TimelineApp {
     redo: Vec<AuthoringProject>,
     last_history_group: Option<(HistoryKey, Instant)>,
     status: String,
+    qa: Option<crate::qa::QaBridge>,
 }
 
 impl TimelineApp {
@@ -229,7 +256,7 @@ impl TimelineApp {
         let plugins = Arc::new(library::plugin::PluginManager::default());
         let cache = Arc::new(library::cache::CacheManager::new());
         let skia = SkiaRenderer::new(16, 16, Color::black(), false, None, Some(cache.clone()))?;
-        Ok(Self {
+        let mut app = Self {
             editor,
             plugins: plugins.clone(),
             renderer: AuthoringRenderService::new(skia, plugins, cache),
@@ -246,12 +273,78 @@ impl TimelineApp {
             logic_graph: crate::logic_graph_ui::LogicGraphState::default(),
             last_playback_tick: Instant::now(),
             preview: None,
+            preview_canvas: CanvasState::uniform(egui::Vec2::ZERO, 1.0),
+            preview_view_initialized: false,
+            preview_grid: true,
+            expanded_layers: HashSet::new(),
+            timeline_pixels_per_second: 80.0,
             preview_key: None,
             undo: Vec::new(),
             redo: Vec::new(),
             last_history_group: None,
             status: "Timeline-first project ready".to_string(),
-        })
+            qa: crate::qa::QaBridge::from_env(&cc.egui_ctx),
+        };
+        if let Ok(path) = std::env::var("RUVIE_QA_ASSET") {
+            let path = std::path::PathBuf::from(path);
+            match asset_from_path(&path, &app.plugins).and_then(|asset| app.editor.add_asset(asset))
+            {
+                Ok(_) => app.status = "QA fixture imported into Assets".to_string(),
+                Err(error) => app.status = format!("QA fixture failed: {error}"),
+            }
+        }
+        Ok(app)
+    }
+
+    fn publish_qa_state(&self) {
+        let Some(qa) = &self.qa else {
+            return;
+        };
+        let Ok(project) = self.editor.snapshot() else {
+            return;
+        };
+        let layers = project
+            .items
+            .values()
+            .filter(|item| {
+                project
+                    .tracks
+                    .get(&item.track_id)
+                    .is_some_and(|track| track.timeline_id == self.open_timeline)
+            })
+            .map(|item| {
+                serde_json::json!({
+                    "id": item.id.to_string(),
+                    "name": item.name,
+                    "start": item.interval.start.into_inner(),
+                    "duration": item.interval.duration.into_inner(),
+                    "parent": item.parent.map(|id| id.to_string()),
+                    "layer_expanded": self.expanded_layers.contains(&item.track_id),
+                })
+            })
+            .collect::<Vec<_>>();
+        let assets = project
+            .assets
+            .iter()
+            .map(|asset| serde_json::json!({"id": asset.id, "name": asset.name, "kind": format!("{:?}", asset.kind)}))
+            .collect::<Vec<_>>();
+        qa.publish_state(serde_json::json!({
+            "frame": {
+                "timeline_id": self.open_timeline.to_string(),
+                "current_time": self.current_time,
+                "is_playing": self.is_playing,
+                "selected_item": self.selected_item.map(|id| id.to_string()),
+            },
+            "assets": assets,
+            "layers": layers,
+            "preview": {
+                "has_image": self.preview.is_some(),
+                "pan": [self.preview_canvas.pan.x, self.preview_canvas.pan.y],
+                "zoom": self.preview_canvas.zoom.x,
+                "grid": self.preview_grid,
+            },
+            "status": self.status,
+        }));
     }
 
     fn new_project(&mut self) {
@@ -318,6 +411,9 @@ impl TimelineApp {
         self.is_playing = false;
         self.signal_runtime = SignalRuntimeValues::default();
         self.event_runtime.clear();
+        self.preview_canvas = CanvasState::uniform(egui::Vec2::ZERO, 1.0);
+        self.preview_view_initialized = false;
+        self.expanded_layers.clear();
         self.undo.clear();
         self.redo.clear();
         self.last_history_group = None;
@@ -537,38 +633,14 @@ impl TimelineApp {
             .snapshot()
             .ok()
             .map(|project| project.as_ref().clone());
-        let kind = asset_kind(&path);
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        let mut asset = Asset::new(&name, &path.to_string_lossy(), kind);
-        if let Ok(bytes) = std::fs::read(&path) {
-            asset.verify_imported_content(&bytes);
-        }
-        let id = asset.id;
-        let result = self.editor.add_asset(asset).and_then(|_| {
-            let project = self.editor.snapshot()?;
-            let track = last_track(project.as_ref(), self.open_timeline)?;
-            drop(project);
-            self.editor.place_asset(
-                track,
-                id,
-                name,
-                TimelineInterval::new(self.current_time, 5.0)
-                    .map_err(library::LibraryError::Validation)?,
-                0,
-            )
-        });
+        let result =
+            asset_from_path(&path, &self.plugins).and_then(|asset| self.editor.add_asset(asset));
         match result {
-            Ok((id, _)) => {
+            Ok(_) => {
                 if let Some(before) = before {
                     self.record(before);
                 }
-                self.selected_item = Some(id);
-                self.invalidate_preview();
-                self.status = "Asset imported and placed".to_string();
+                self.status = "Asset imported; add it from the Assets panel".to_string();
             }
             Err(error) => {
                 if let Some(before) = before {
@@ -576,6 +648,49 @@ impl TimelineApp {
                 }
                 self.status = error.to_string();
             }
+        }
+    }
+
+    fn place_asset(&mut self, asset_id: uuid::Uuid, track: TimelineTrackId, start: f64) {
+        let before = self
+            .editor
+            .snapshot()
+            .ok()
+            .map(|project| project.as_ref().clone());
+        let result = self.editor.snapshot().and_then(|project| {
+            let asset = project
+                .assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .ok_or_else(|| library::LibraryError::Validation("Asset is missing".to_string()))?;
+            let name = asset.name.clone();
+            let duration = asset.duration.unwrap_or(5.0).max(1.0 / 30.0);
+            drop(project);
+            self.editor.place_asset(
+                track,
+                asset_id,
+                name,
+                TimelineInterval::new(start, duration)
+                    .map_err(library::LibraryError::Validation)?,
+                0,
+            )
+        });
+        self.finish_add(result, before, "Asset added to Timeline");
+    }
+
+    fn import_subtitles(&mut self) {
+        let target_track = self.editor.snapshot().ok().and_then(|project| {
+            project
+                .timelines
+                .get(&self.open_timeline)
+                .and_then(|timeline| timeline.track_order.first())
+                .copied()
+        });
+        let path = rfd::FileDialog::new()
+            .add_filter("SubRip subtitles", &["srt"])
+            .pick_file();
+        if let (Some(path), Some(track_id)) = (path, target_track) {
+            self.apply(Edit::ImportSubtitles(path, track_id));
         }
     }
 
@@ -712,27 +827,6 @@ impl TimelineApp {
         }
     }
 
-    fn add_track(&mut self) {
-        let before = self
-            .editor
-            .snapshot()
-            .ok()
-            .map(|project| project.as_ref().clone());
-        match self.editor.add_track(
-            self.open_timeline,
-            "Video".to_string(),
-            TimelineTrackKind::AudioVisual,
-        ) {
-            Ok(_) => {
-                if let Some(before) = before {
-                    self.record(before);
-                }
-                self.status = "Track added".to_string();
-            }
-            Err(error) => self.status = error.to_string(),
-        }
-    }
-
     fn finish_add(
         &mut self,
         result: Result<
@@ -761,6 +855,45 @@ impl TimelineApp {
     }
 
     fn apply(&mut self, edit: Edit) {
+        let edit = match edit {
+            Edit::ImportAsset => {
+                self.import_asset();
+                return;
+            }
+            Edit::PlaceAssetAt(asset_id, track, start) => {
+                self.place_asset(asset_id, track, start);
+                return;
+            }
+            Edit::OpenSubtitleImport => {
+                self.import_subtitles();
+                return;
+            }
+            Edit::AddText => {
+                self.add_text();
+                return;
+            }
+            Edit::AddSolid => {
+                self.add_solid();
+                return;
+            }
+            Edit::AddReusableTitle => {
+                self.add_reusable_title();
+                return;
+            }
+            Edit::AddComposition => {
+                self.add_nested_timeline();
+                return;
+            }
+            Edit::TogglePlayback => {
+                self.toggle_playback();
+                return;
+            }
+            Edit::StopPlayback => {
+                self.stop_playback();
+                return;
+            }
+            edit => edit,
+        };
         let history_key = edit.history_key();
         let now = Instant::now();
         let begins_group = history_key.as_ref().is_some_and(|key| {
@@ -803,11 +936,6 @@ impl TimelineApp {
             Edit::Property(id, key, value) => self.authored_item_time(id).and_then(|time| {
                 self.editor
                     .update_item_property_value(id, key, time, value)
-                    .map(|_| ())
-            }),
-            Edit::Keyframe(id, key, value) => self.authored_item_time(id).and_then(|time| {
-                self.editor
-                    .upsert_item_keyframe(id, key, time, value, None)
                     .map(|_| ())
             }),
             Edit::Split(id) => self.editor.split_item(id, self.current_time).map(|_| ()),
@@ -945,6 +1073,15 @@ impl TimelineApp {
                 )
                 .map(|_| ()),
             Edit::SetMatte(item_id, matte) => self.editor.set_matte(item_id, matte).map(|_| ()),
+            Edit::ImportAsset
+            | Edit::PlaceAssetAt(..)
+            | Edit::OpenSubtitleImport
+            | Edit::AddText
+            | Edit::AddSolid
+            | Edit::AddReusableTitle
+            | Edit::AddComposition
+            | Edit::TogglePlayback
+            | Edit::StopPlayback => Ok(()),
         };
         match result {
             Ok(()) => {
@@ -1032,11 +1169,19 @@ impl TimelineApp {
             return;
         };
         let frame_number = (self.current_time * timeline.fps.into_inner()).floor() as u64;
+        let runtime_events = match self.event_runtime.snapshot_at(self.current_time) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
         let key = (
             compiled.revision,
             self.open_timeline,
             frame_number,
             self.signal_runtime.generation(),
+            runtime_events.generation(),
         );
         if self.preview_key == Some(key) {
             return;
@@ -1054,7 +1199,7 @@ impl TimelineApp {
         }
         let rendered = self
             .editor
-            .evaluate_compiled_frame_with_signals(
+            .evaluate_compiled_frame_with_runtime(
                 &compiled,
                 self.open_timeline,
                 &self.instance_path,
@@ -1062,6 +1207,7 @@ impl TimelineApp {
                 scale,
                 None,
                 &self.signal_runtime,
+                &runtime_events,
             )
             .and_then(|frame| {
                 self.renderer.render_frame(
@@ -1194,113 +1340,68 @@ fn atempo_filter(mut rate: f64) -> String {
 }
 
 impl eframe::App for TimelineApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(qa) = &self.qa {
+            qa.inject_for_frame(raw_input, ctx);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(qa) = &self.qa {
+            qa.begin_frame();
+            qa.issue_capture(ctx);
+        }
         if !ctx.wants_keyboard_input() && ctx.input(|input| input.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
         }
         self.advance_playback(ctx);
         egui::TopBottomPanel::top("main-toolbar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("New").clicked() {
-                    self.new_project();
-                }
-                if ui.button("Open").clicked() {
-                    self.open_project();
-                }
-                if ui.button("Save").clicked() {
-                    self.save(false);
-                }
-                if ui.button("Save As").clicked() {
-                    self.save(true);
-                }
-                if ui
-                    .add_enabled(!self.undo.is_empty(), egui::Button::new("Undo"))
-                    .clicked()
-                {
-                    self.undo();
-                }
-                if ui
-                    .add_enabled(!self.redo.is_empty(), egui::Button::new("Redo"))
-                    .clicked()
-                {
-                    self.redo();
-                }
-                if ui.button("Export Frame").clicked() {
-                    self.export_frame();
-                }
-                if ui.button("Export Video").clicked() {
-                    self.export_video();
-                }
+            ui.horizontal(|ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New Project").clicked() {
+                        self.new_project();
+                        ui.close();
+                    }
+                    if ui.button("Open…").clicked() {
+                        self.open_project();
+                        ui.close();
+                    }
+                    if ui.button("Save").clicked() {
+                        self.save(false);
+                        ui.close();
+                    }
+                    if ui.button("Save As…").clicked() {
+                        self.save(true);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Export Frame…").clicked() {
+                        self.export_frame();
+                        ui.close();
+                    }
+                    if ui.button("Export Video…").clicked() {
+                        self.export_video();
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(!self.undo.is_empty(), egui::Button::new("Undo"))
+                        .clicked()
+                    {
+                        self.undo();
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(!self.redo.is_empty(), egui::Button::new("Redo"))
+                        .clicked()
+                    {
+                        self.redo();
+                        ui.close();
+                    }
+                });
                 ui.separator();
-                if ui
-                    .button(if self.is_playing { "Pause" } else { "Play" })
-                    .on_hover_text("Play/Pause (Space)")
-                    .clicked()
-                {
-                    self.toggle_playback();
-                }
-                if ui.button("Stop").clicked() {
-                    self.stop_playback();
-                }
-                ui.label(format!("{:.2}s", self.current_time));
-                ui.separator();
-                if ui.button("Import").clicked() {
-                    self.import_asset();
-                }
-                if ui.button("Import Subtitles").clicked() {
-                    let target_track = self.editor.snapshot().ok().and_then(|project| {
-                        project
-                            .timelines
-                            .get(&self.open_timeline)
-                            .and_then(|timeline| timeline.track_order.first())
-                            .copied()
-                    });
-                    if let (Some(path), Some(track_id)) = (
-                        rfd::FileDialog::new()
-                            .add_filter("SubRip subtitles", &["srt"])
-                            .pick_file(),
-                        target_track,
-                    ) {
-                        self.apply(Edit::ImportSubtitles(path, track_id));
-                    }
-                }
-                if ui.button("+ Text").clicked() {
-                    self.add_text();
-                }
-                if ui.button("+ Solid").clicked() {
-                    self.add_solid();
-                }
-                if self.workspace.depth() >= 2 && ui.button("+ Reusable Title").clicked() {
-                    self.add_reusable_title();
-                }
-                if ui.button("+ Composition").clicked() {
-                    self.add_nested_timeline();
-                }
-                if ui.button("+ Track").clicked() {
-                    self.add_track();
-                }
-                if ui.button("Split").clicked() {
-                    if let Some(id) = self.selected_item {
-                        self.apply(Edit::Split(id));
-                    }
-                }
-                if ui.button("Delete").clicked() {
-                    if let Some(id) = self.selected_item {
-                        self.apply(Edit::Delete(id, false));
-                        self.selected_item = None;
-                    }
-                }
-                if ui.button("Ripple Delete").clicked() {
-                    if let Some(id) = self.selected_item {
-                        self.apply(Edit::Delete(id, true));
-                        self.selected_item = None;
-                    }
-                }
-                if ui.button("Blur").clicked() {
-                    if let Some(id) = self.selected_item {
-                        self.apply(Edit::Blur(id));
-                    }
-                }
+                ui.strong("RuViE");
                 ui.separator();
                 for workspace in Workspace::ALL {
                     if ui
@@ -1311,6 +1412,9 @@ impl eframe::App for TimelineApp {
                         self.dock = dock_for(workspace);
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.small("Timeline-first");
+                });
             });
         });
         self.refresh_preview(ctx);
@@ -1326,7 +1430,13 @@ impl eframe::App for TimelineApp {
             instance_path: &self.instance_path,
             selected_item: self.selected_item,
             current_time: &mut self.current_time,
+            is_playing: self.is_playing,
             preview: self.preview.as_ref(),
+            preview_canvas: &mut self.preview_canvas,
+            preview_view_initialized: &mut self.preview_view_initialized,
+            preview_grid: &mut self.preview_grid,
+            expanded_layers: &mut self.expanded_layers,
+            timeline_pixels_per_second: &mut self.timeline_pixels_per_second,
             workspace: self.workspace,
             signal_runtime: &mut self.signal_runtime,
             event_runtime: &mut self.event_runtime,
@@ -1338,8 +1448,12 @@ impl eframe::App for TimelineApp {
             .style(Style::from_egui(ctx.style().as_ref()))
             .show(ctx, &mut viewer);
         drop(compiled);
+        let had_edits = !edits.is_empty();
         for edit in edits {
             self.apply(edit);
+        }
+        if had_edits {
+            ctx.request_repaint();
         }
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -1351,6 +1465,7 @@ impl eframe::App for TimelineApp {
                 ));
             });
         });
+        self.publish_qa_state();
     }
 }
 
@@ -1361,7 +1476,13 @@ struct Viewer<'a> {
     instance_path: &'a InstancePath,
     selected_item: Option<TimelineItemId>,
     current_time: &'a mut f64,
+    is_playing: bool,
     preview: Option<&'a egui::TextureHandle>,
+    preview_canvas: &'a mut CanvasState,
+    preview_view_initialized: &'a mut bool,
+    preview_grid: &'a mut bool,
+    expanded_layers: &'a mut HashSet<TimelineTrackId>,
+    timeline_pixels_per_second: &'a mut f32,
     workspace: Workspace,
     signal_runtime: &'a mut SignalRuntimeValues,
     event_runtime: &'a mut EventRuntime,
@@ -1381,6 +1502,9 @@ impl TabViewer for Viewer<'_> {
                 self.project,
                 self.selected_item,
                 *self.current_time,
+                self.preview_canvas,
+                self.preview_view_initialized,
+                self.preview_grid,
                 self.edits,
             ),
             Tab::Timeline => timeline_ui(
@@ -1390,6 +1514,9 @@ impl TabViewer for Viewer<'_> {
                 self.instance_path,
                 self.selected_item,
                 self.current_time,
+                self.is_playing,
+                self.expanded_layers,
+                self.timeline_pixels_per_second,
                 self.edits,
             ),
             Tab::Inspector => inspector_ui(
@@ -1402,7 +1529,7 @@ impl TabViewer for Viewer<'_> {
                 self.signal_runtime,
                 self.edits,
             ),
-            Tab::Assets => assets_ui(ui, self.project),
+            Tab::Assets => assets_ui(ui, self.project, self.edits),
             Tab::Motion => motion_ui(ui, self.project, self.selected_item, self.edits),
             Tab::Data => data_ui(ui, self.project, self.open_timeline, self.edits),
             Tab::Logic => logic_ui(
@@ -1437,42 +1564,161 @@ impl TabViewer for Viewer<'_> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preview keeps canvas navigation and authored selection state explicit"
+)]
 fn preview_ui(
     ui: &mut egui::Ui,
     preview: Option<&egui::TextureHandle>,
     project: &AuthoringProject,
     selected: Option<TimelineItemId>,
     current_time: f64,
+    canvas_state: &mut CanvasState,
+    view_initialized: &mut bool,
+    show_grid: &mut bool,
     edits: &mut Vec<Edit>,
 ) {
-    ui.centered_and_justified(|ui| {
-        if let Some(texture) = preview {
-            let available = ui.available_size();
-            let size = texture.size_vec2();
-            let scale = (available.x / size.x).min(available.y / size.y).min(1.0);
-            let response =
-                ui.add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::drag()));
-            if response.dragged() {
-                if let Some(item) = selected.and_then(|id| project.items.get(&id)) {
-                    let local_time = library::core::timeline_runtime::editable_item_local_time(
-                        item.interval,
-                        current_time,
-                    );
-                    let (x, y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
-                    let delta = ui.input(|input| input.pointer.delta()) / scale;
-                    edits.push(Edit::Property(
-                        item.id,
-                        "position".to_string(),
-                        property_vec2(x + f64::from(delta.x), y + f64::from(delta.y)),
-                    ));
-                }
-            }
-        } else {
+    let Some(texture) = preview else {
+        ui.centered_and_justified(|ui| {
             ui.spinner();
+        });
+        return;
+    };
+    let texture_size = texture.size_vec2();
+    let mut request_fit = false;
+    ui.horizontal(|ui| {
+        ui.strong("Canvas");
+        let fit_button = ui.small_button("Fit");
+        crate::qa::register_component(
+            "preview.fit",
+            "button",
+            fit_button.rect,
+            serde_json::json!({}),
+        );
+        if fit_button.clicked() {
+            request_fit = true;
         }
+        let grid = ui.toggle_value(show_grid, "Grid");
+        crate::qa::register_component(
+            "preview.grid",
+            "toggle",
+            grid.rect,
+            serde_json::json!({"checked": *show_grid}),
+        );
+        ui.label(format!("{:.0}%", canvas_state.zoom.x * 100.0));
+        ui.separator();
+        ui.small("Wheel: pan  ·  Ctrl+wheel: zoom  ·  Middle-drag: pan  ·  Left-drag: move item");
     });
+    let available = ui.available_size().max(egui::vec2(64.0, 64.0));
+    let (viewport, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+    crate::qa::register_component("preview.canvas", "canvas", viewport, serde_json::json!({}));
+    let fit = |state: &mut CanvasState| {
+        let zoom = (viewport.width() / texture_size.x)
+            .min(viewport.height() / texture_size.y)
+            .max(0.01)
+            * 0.92;
+        *state = CanvasState::uniform((viewport.size() - texture_size * zoom) * 0.5, zoom);
+    };
+    if !*view_initialized || request_fit {
+        fit(canvas_state);
+        *view_initialized = true;
+    }
+    if response.double_clicked_by(egui::PointerButton::Middle) {
+        fit(canvas_state);
+    }
+    let navigation = NavigationConfig {
+        zoom_policy: ZoomPolicy::Uniform,
+        input_policy: InputPolicy::AxisModifiers,
+        pan_axes: AxisMask::BOTH,
+        zoom_axes: AxisMask::BOTH,
+        min_zoom: egui::Vec2::splat(0.05),
+        max_zoom: egui::Vec2::splat(8.0),
+        ..NavigationConfig::default()
+    };
+    let input = ui.input(|input| NavigationInput {
+        anchor: input.pointer.hover_pos().map(|position| {
+            let local = position - viewport.min;
+            egui::pos2(local.x, local.y)
+        }),
+        hovered: response.hovered(),
+        modifiers: input.modifiers,
+        raw_scroll_delta: input.raw_scroll_delta,
+        smooth_scroll_delta: input.smooth_scroll_delta,
+        zoom_delta: input.zoom_delta(),
+        drag_pan_delta: if response.hovered()
+            && input.pointer.button_down(egui::PointerButton::Middle)
+        {
+            input.pointer.delta()
+        } else {
+            egui::Vec2::ZERO
+        },
+        scrub_zoom_delta: 0.0,
+    });
+    apply_navigation(
+        canvas_state,
+        navigation_delta(input, navigation),
+        navigation,
+    );
+    let painter = ui.painter_at(viewport);
+    if *show_grid {
+        paint_canvas(
+            &painter,
+            viewport,
+            viewport.min,
+            *canvas_state,
+            GridConfig {
+                minor_spacing: egui::Vec2::splat(32.0),
+                major_spacing: egui::Vec2::splat(160.0),
+                ..GridConfig::default()
+            },
+            CanvasTheme::default(),
+        );
+    } else {
+        painter.rect_filled(viewport, 0.0, CanvasTheme::default().background);
+    }
+    let image_min = viewport.min + canvas_state.pan;
+    let image_rect = egui::Rect::from_min_size(image_min, texture_size * canvas_state.zoom);
+    painter.image(
+        texture.id(),
+        image_rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    painter.rect_stroke(
+        image_rect,
+        0.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(105)),
+        egui::StrokeKind::Outside,
+    );
+    if response.dragged_by(egui::PointerButton::Primary) {
+        let Some(item) = selected.and_then(|id| project.items.get(&id)) else {
+            return;
+        };
+        let local_time =
+            library::core::timeline_runtime::editable_item_local_time(item.interval, current_time);
+        let (x, y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
+        let timeline_width = project.tracks.get(&item.track_id).and_then(|track| {
+            project
+                .timelines
+                .get(&track.timeline_id)
+                .map(|timeline| timeline.width as f32)
+        });
+        let source_per_texture_pixel = timeline_width.unwrap_or(texture_size.x) / texture_size.x;
+        let delta = ui.input(|input| input.pointer.delta()) / canvas_state.zoom.x
+            * source_per_texture_pixel;
+        edits.push(Edit::Property(
+            item.id,
+            "position".to_string(),
+            property_vec2(x + f64::from(delta.x), y + f64::from(delta.y)),
+        ));
+    }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "timeline panel keeps layer projection, transport, and edit output explicit"
+)]
 fn timeline_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
@@ -1480,6 +1726,9 @@ fn timeline_ui(
     instance_path: &InstancePath,
     selected: Option<TimelineItemId>,
     time: &mut f64,
+    is_playing: bool,
+    expanded_layers: &mut HashSet<TimelineTrackId>,
+    pixels_per_second: &mut f32,
     edits: &mut Vec<Edit>,
 ) {
     let timeline = &project.timelines[&timeline_id];
@@ -1490,12 +1739,183 @@ fn timeline_ui(
                 InstancePath::root(project.root_timeline_id),
             ));
         }
-        ui.heading(&timeline.name);
-        ui.add(egui::Slider::new(time, 0.0..=timeline.duration.into_inner()).text("time"));
+        ui.strong(&timeline.name);
+        ui.separator();
+        let add_menu = ui.menu_button("+ Add", |ui| {
+            for (label, edit) in [
+                ("Import Media…", Edit::ImportAsset),
+                ("Text", Edit::AddText),
+                ("Solid", Edit::AddSolid),
+                ("Composition", Edit::AddComposition),
+                ("Reusable Title", Edit::AddReusableTitle),
+                ("Subtitles…", Edit::OpenSubtitleImport),
+            ] {
+                let item = ui.button(label);
+                crate::qa::register_component(
+                    format!(
+                        "timeline.add.{}",
+                        label.to_ascii_lowercase().replace([' ', '…'], "_")
+                    ),
+                    "menu_item",
+                    item.rect,
+                    serde_json::json!({"label": label}),
+                );
+                if item.clicked() {
+                    edits.push(edit);
+                    ui.close();
+                    break;
+                }
+            }
+        });
+        crate::qa::register_component(
+            "timeline.add",
+            "menu_button",
+            add_menu.response.rect,
+            serde_json::json!({}),
+        );
+        if let Some(id) = selected {
+            ui.separator();
+            if ui.small_button("Split").clicked() {
+                edits.push(Edit::Split(id));
+            }
+            ui.menu_button("Delete", |ui| {
+                if ui.button("Delete layer").clicked() {
+                    edits.push(Edit::Delete(id, false));
+                    ui.close();
+                }
+                if ui.button("Ripple delete").clicked() {
+                    edits.push(Edit::Delete(id, true));
+                    ui.close();
+                }
+            });
+        }
     });
-    timeline_canvas_ui(ui, project, timeline, instance_path, selected, time, edits);
+    timeline_transport_ui(
+        ui,
+        timeline.duration.into_inner(),
+        time,
+        is_playing,
+        pixels_per_second,
+        edits,
+    );
+    ui.separator();
+    timeline_canvas_ui(
+        ui,
+        project,
+        timeline,
+        instance_path,
+        selected,
+        time,
+        expanded_layers,
+        *pixels_per_second,
+        edits,
+    );
 }
 
+fn timeline_transport_ui(
+    ui: &mut egui::Ui,
+    duration: f64,
+    time: &mut f64,
+    is_playing: bool,
+    pixels_per_second: &mut f32,
+    edits: &mut Vec<Edit>,
+) {
+    ui.horizontal(|ui| {
+        let play = ui
+            .button(if is_playing { "Pause" } else { "Play" })
+            .on_hover_text("Play/Pause (Space)");
+        crate::qa::register_component(
+            "timeline.play",
+            "button",
+            play.rect,
+            serde_json::json!({"playing": is_playing}),
+        );
+        if play.clicked() {
+            edits.push(Edit::TogglePlayback);
+        }
+        if ui.button("Stop").clicked() {
+            edits.push(Edit::StopPlayback);
+        }
+        let minutes = (*time / 60.0).floor();
+        let seconds = (*time % 60.0).floor();
+        let centiseconds = ((*time % 1.0) * 100.0).floor();
+        ui.monospace(format!("{minutes:02.0}:{seconds:02.0}.{centiseconds:02.0}"));
+        ui.add(
+            egui::Slider::new(time, 0.0..=duration)
+                .show_value(false)
+                .text("Time"),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("Reset zoom").clicked() {
+                *pixels_per_second = 80.0;
+            }
+            ui.add(
+                egui::Slider::new(pixels_per_second, 20.0..=400.0)
+                    .logarithmic(true)
+                    .show_value(false)
+                    .text("Timeline zoom"),
+            );
+            ui.label(format!("{:.1}×", *pixels_per_second / 80.0));
+        });
+    });
+}
+
+#[derive(Clone, Copy)]
+enum TimelineDisplayRow<'a> {
+    Layer {
+        track: &'a library::model::authoring::TimelineTrack,
+        expanded: bool,
+    },
+    Clip {
+        item: &'a library::model::authoring::TimelineItem,
+        depth: usize,
+    },
+}
+
+fn flatten_timeline_layers<'a>(
+    project: &'a AuthoringProject,
+    timeline: &library::model::authoring::Timeline,
+    expanded: &HashSet<TimelineTrackId>,
+) -> Vec<TimelineDisplayRow<'a>> {
+    let mut rows = Vec::new();
+    for track_id in timeline.track_order.iter().rev() {
+        let Some(track) = project.tracks.get(track_id) else {
+            continue;
+        };
+        let is_expanded = expanded.contains(track_id);
+        rows.push(TimelineDisplayRow::Layer {
+            track,
+            expanded: is_expanded,
+        });
+        if !is_expanded {
+            continue;
+        }
+        let mut clips = project
+            .items
+            .values()
+            .filter(|item| item.track_id == *track_id)
+            .collect::<Vec<_>>();
+        clips.sort_by_key(|item| (std::cmp::Reverse(item.layer), item.interval.start));
+        for item in clips {
+            let mut depth = 1;
+            let mut parent = item.parent;
+            while let Some(parent_id) = parent {
+                let Some(parent_item) = project.items.get(&parent_id) else {
+                    break;
+                };
+                depth += 1;
+                parent = parent_item.parent;
+            }
+            rows.push(TimelineDisplayRow::Clip { item, depth });
+        }
+    }
+    rows
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Timeline surface keeps model, navigation, selection, and deferred edits explicit"
+)]
 fn timeline_canvas_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
@@ -1503,174 +1923,560 @@ fn timeline_canvas_ui(
     instance_path: &InstancePath,
     selected: Option<TimelineItemId>,
     time: &mut f64,
+    expanded_layers: &mut HashSet<TimelineTrackId>,
+    pixels_per_second: f32,
     edits: &mut Vec<Edit>,
 ) {
-    const HEADER: f32 = 128.0;
-    const ROW_HEIGHT: f32 = 52.0;
-    const PX: f32 = 80.0;
-    let tracks: Vec<_> = timeline.track_order.iter().rev().copied().collect();
-    egui::ScrollArea::both().show(ui, |ui| {
-        let width = HEADER + timeline.duration.into_inner() as f32 * PX;
-        let height = 24.0 + tracks.len() as f32 * ROW_HEIGHT;
-        let (canvas, ruler) = ui.allocate_exact_size(
-            egui::vec2(width.max(ui.available_width()), height),
-            egui::Sense::click(),
-        );
-        let painter = ui.painter_at(canvas);
-        painter.rect_filled(canvas, 0.0, ui.visuals().extreme_bg_color);
-        for second in 0..=timeline.duration.into_inner().ceil() as usize {
-            let x = canvas.left() + HEADER + second as f32 * PX;
-            painter.line_segment(
-                [egui::pos2(x, canvas.top()), egui::pos2(x, canvas.bottom())],
-                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    const HEADER: f32 = 176.0;
+    const RULER_HEIGHT: f32 = 26.0;
+    const ROW_HEIGHT: f32 = 34.0;
+    let px = pixels_per_second.max(1.0);
+    let rows = flatten_timeline_layers(project, timeline, expanded_layers);
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = HEADER + timeline.duration.into_inner() as f32 * px;
+            let height = RULER_HEIGHT + (rows.len().max(1) as f32 * ROW_HEIGHT);
+            let (canvas, _) = ui.allocate_exact_size(
+                egui::vec2(width.max(ui.available_width()), height),
+                egui::Sense::hover(),
             );
-            painter.text(
-                egui::pos2(x + 3.0, canvas.top() + 3.0),
-                egui::Align2::LEFT_TOP,
-                format!("{second}s"),
-                egui::FontId::monospace(10.0),
-                ui.visuals().weak_text_color(),
+            let painter = ui.painter_at(canvas);
+            painter.rect_filled(canvas, 0.0, ui.visuals().extreme_bg_color);
+            let ruler_rect = egui::Rect::from_min_max(
+                egui::pos2(canvas.left() + HEADER, canvas.top()),
+                egui::pos2(canvas.right(), canvas.top() + RULER_HEIGHT),
             );
-        }
-        if ruler.clicked() {
-            if let Some(pointer) = ruler.interact_pointer_pos() {
-                let raw = f64::from((pointer.x - canvas.left() - HEADER) / PX).max(0.0);
-                *time = snap_time(raw, timeline.fps.into_inner(), &[])
-                    .min(timeline.duration.into_inner());
-            }
-        }
-        for (row, track_id) in tracks.iter().enumerate() {
-            let track = &project.tracks[track_id];
-            let top = canvas.top() + 24.0 + row as f32 * ROW_HEIGHT;
-            let row_rect = egui::Rect::from_min_size(
-                egui::pos2(canvas.left(), top),
-                egui::vec2(canvas.width(), ROW_HEIGHT),
+            let ruler = ui.interact(
+                ruler_rect,
+                ui.make_persistent_id(("timeline-ruler", timeline.id.as_uuid())),
+                egui::Sense::click_and_drag(),
             );
-            painter.rect_filled(
-                row_rect,
-                0.0,
-                if row % 2 == 0 {
-                    ui.visuals().faint_bg_color
-                } else {
-                    ui.visuals().extreme_bg_color
-                },
+            crate::qa::register_component(
+                "timeline.ruler",
+                "timeline_ruler",
+                ruler_rect,
+                serde_json::json!({"duration": timeline.duration.into_inner()}),
             );
-            painter.text(
-                egui::pos2(row_rect.left() + 8.0, row_rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                &track.name,
-                egui::FontId::proportional(13.0),
-                ui.visuals().text_color(),
-            );
-            let boundaries: Vec<f64> = project
-                .items
-                .values()
-                .filter(|candidate| candidate.track_id == *track_id)
-                .flat_map(|candidate| {
+            for second in 0..=timeline.duration.into_inner().ceil() as usize {
+                let x = canvas.left() + HEADER + second as f32 * px;
+                painter.line_segment(
                     [
-                        candidate.interval.start.into_inner(),
-                        candidate.interval.start.into_inner()
-                            + candidate.interval.duration.into_inner(),
-                    ]
-                })
-                .collect();
-            let mut items: Vec<_> = project
-                .items
-                .values()
-                .filter(|item| item.track_id == *track_id)
-                .collect();
-            items.sort_by_key(|item| (item.layer, item.interval.start));
-            for item in items {
-                let left = canvas.left() + HEADER + item.interval.start.into_inner() as f32 * PX;
-                let width = (item.interval.duration.into_inner() as f32 * PX).max(12.0);
-                let rect = egui::Rect::from_min_size(
-                    egui::pos2(left, top + 6.0),
-                    egui::vec2(width, ROW_HEIGHT - 12.0),
-                );
-                let trim_rect = egui::Rect::from_min_max(
-                    egui::pos2(rect.right() - 7.0, rect.top()),
-                    rect.right_bottom(),
-                );
-                let trim = ui.interact(
-                    trim_rect,
-                    ui.make_persistent_id(("trim", item.id.as_uuid())),
-                    egui::Sense::drag(),
-                );
-                let body = ui.interact(
-                    egui::Rect::from_min_max(rect.min, egui::pos2(trim_rect.left(), rect.bottom())),
-                    ui.make_persistent_id(("move", item.id.as_uuid())),
-                    egui::Sense::click_and_drag(),
-                );
-                let visual = rect.translate(if body.dragged() {
-                    egui::vec2(body.drag_delta().x, 0.0)
-                } else {
-                    egui::Vec2::ZERO
-                });
-                let color = if selected == Some(item.id) {
-                    ui.visuals().selection.bg_fill
-                } else {
-                    item_color(&item.source)
-                };
-                painter.rect_filled(visual, 4.0, color);
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(visual.right() - 7.0, visual.top()),
-                        visual.right_bottom(),
-                    ),
-                    2.0,
-                    color.gamma_multiply(1.35),
+                        egui::pos2(x, canvas.top() + RULER_HEIGHT),
+                        egui::pos2(x, canvas.bottom()),
+                    ],
+                    egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
                 );
                 painter.text(
-                    visual.left_center() + egui::vec2(7.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    &item.name,
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::WHITE,
+                    egui::pos2(x + 3.0, canvas.top() + 3.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{second}s"),
+                    egui::FontId::monospace(10.0),
+                    ui.visuals().weak_text_color(),
                 );
-                if body.clicked() {
-                    edits.push(Edit::Select(Some(item.id)));
+            }
+            if ruler.clicked() || ruler.dragged() {
+                if let Some(pointer) = ruler.interact_pointer_pos() {
+                    let raw = f64::from((pointer.x - canvas.left() - HEADER) / px).max(0.0);
+                    *time = snap_time(raw, timeline.fps.into_inner(), &[])
+                        .min(timeline.duration.into_inner());
                 }
-                if body.double_clicked() {
-                    if let SourceRef::Composition(instance) = &item.source {
-                        edits.push(Edit::OpenTimeline(
-                            instance.timeline_id,
-                            instance_path.clone().nested(item.id),
-                        ));
-                    }
-                }
-                if body.drag_stopped() {
-                    let raw =
-                        item.interval.start.into_inner() + f64::from(body.drag_delta().x / PX);
-                    edits.push(Edit::Move(
-                        item.id,
-                        item.track_id,
-                        snap_time(raw.max(0.0), timeline.fps.into_inner(), &boundaries),
-                        item.layer,
-                    ));
-                }
-                if trim.drag_stopped() {
-                    let raw_end = item.interval.start.into_inner()
-                        + item.interval.duration.into_inner()
-                        + f64::from(trim.drag_delta().x / PX);
-                    let end = snap_time(raw_end, timeline.fps.into_inner(), &boundaries);
-                    if let Ok(interval) = TimelineInterval::new(
+            }
+            let boundaries = project
+                .items
+                .values()
+                .filter(|item| {
+                    project
+                        .tracks
+                        .get(&item.track_id)
+                        .is_some_and(|track| track.timeline_id == timeline.id)
+                })
+                .flat_map(|item| {
+                    [
                         item.interval.start.into_inner(),
-                        (end - item.interval.start.into_inner()).max(0.0),
-                    ) {
-                        edits.push(Edit::Trim(item.id, interval));
+                        item.interval.start.into_inner() + item.interval.duration.into_inner(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            for (row_index, row) in rows.iter().enumerate() {
+                let top = canvas.top() + RULER_HEIGHT + row_index as f32 * ROW_HEIGHT;
+                let row_rect = egui::Rect::from_min_size(
+                    egui::pos2(canvas.left(), top),
+                    egui::vec2(canvas.width(), ROW_HEIGHT),
+                );
+                painter.rect_filled(
+                    row_rect,
+                    0.0,
+                    if row_index.is_multiple_of(2) {
+                        ui.visuals().faint_bg_color
+                    } else {
+                        ui.visuals().extreme_bg_color
+                    },
+                );
+                match row {
+                    TimelineDisplayRow::Layer { track, expanded } => {
+                        let header_rect = egui::Rect::from_min_max(
+                            row_rect.min,
+                            egui::pos2(row_rect.left() + HEADER, row_rect.bottom()),
+                        );
+                        let expander_rect = egui::Rect::from_min_size(
+                            header_rect.min,
+                            egui::vec2(24.0, header_rect.height()),
+                        );
+                        let expander = ui.interact(
+                            expander_rect,
+                            ui.make_persistent_id(("layer-expander", track.id.as_uuid())),
+                            egui::Sense::click(),
+                        );
+                        crate::qa::register_component(
+                            format!("timeline.layer:{}", track.id),
+                            "layer",
+                            header_rect,
+                            serde_json::json!({"name": track.name, "expanded": expanded}),
+                        );
+                        crate::qa::register_component(
+                            format!("timeline.expand:{}", track.id),
+                            "expander",
+                            expander_rect,
+                            serde_json::json!({"expanded": expanded}),
+                        );
+                        if expander.clicked() {
+                            if *expanded {
+                                expanded_layers.remove(&track.id);
+                            } else {
+                                expanded_layers.insert(track.id);
+                            }
+                        }
+                        painter.text(
+                            egui::pos2(header_rect.left() + 8.0, header_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            if *expanded { "v" } else { ">" },
+                            egui::FontId::proportional(10.0),
+                            ui.visuals().weak_text_color(),
+                        );
+                        painter.text(
+                            egui::pos2(header_rect.left() + 25.0, header_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            &track.name,
+                            egui::FontId::proportional(12.0),
+                            ui.visuals().text_color(),
+                        );
+                        if !*expanded {
+                            for item in project
+                                .items
+                                .values()
+                                .filter(|item| item.track_id == track.id)
+                            {
+                                paint_timeline_clip(
+                                    ui,
+                                    &painter,
+                                    canvas,
+                                    row_rect,
+                                    item,
+                                    selected,
+                                    timeline,
+                                    instance_path,
+                                    px,
+                                    &boundaries,
+                                    edits,
+                                );
+                            }
+                        }
+                    }
+                    TimelineDisplayRow::Clip { item, depth } => {
+                        let header_rect = egui::Rect::from_min_max(
+                            row_rect.min,
+                            egui::pos2(row_rect.left() + HEADER, row_rect.bottom()),
+                        );
+                        let header = ui.interact(
+                            header_rect,
+                            ui.make_persistent_id(("clip-header", item.id.as_uuid())),
+                            egui::Sense::click(),
+                        );
+                        crate::qa::register_component(
+                            format!("timeline.clip_label:{}", item.id),
+                            "clip_label",
+                            header_rect,
+                            serde_json::json!({"name": item.name}),
+                        );
+                        painter.text(
+                            egui::pos2(
+                                header_rect.left() + 12.0 + *depth as f32 * 12.0,
+                                header_rect.center().y,
+                            ),
+                            egui::Align2::LEFT_CENTER,
+                            &item.name,
+                            egui::FontId::proportional(12.0),
+                            if selected == Some(item.id) {
+                                ui.visuals().selection.stroke.color
+                            } else {
+                                ui.visuals().text_color()
+                            },
+                        );
+                        if header.clicked() {
+                            edits.push(Edit::Select(Some(item.id)));
+                        }
+                        let left =
+                            canvas.left() + HEADER + item.interval.start.into_inner() as f32 * px;
+                        let width = (item.interval.duration.into_inner() as f32 * px).max(12.0);
+                        let clip_rect = egui::Rect::from_min_size(
+                            egui::pos2(left, top + 4.0),
+                            egui::vec2(width, ROW_HEIGHT - 8.0),
+                        );
+                        let trim_rect = egui::Rect::from_min_max(
+                            egui::pos2(clip_rect.right() - 8.0, clip_rect.top()),
+                            clip_rect.right_bottom(),
+                        );
+                        let trim = ui.interact(
+                            trim_rect,
+                            ui.make_persistent_id(("trim", item.id.as_uuid())),
+                            egui::Sense::drag(),
+                        );
+                        let body = ui.interact(
+                            egui::Rect::from_min_max(
+                                clip_rect.min,
+                                egui::pos2(trim_rect.left(), clip_rect.bottom()),
+                            ),
+                            ui.make_persistent_id(("move", item.id.as_uuid())),
+                            egui::Sense::click_and_drag(),
+                        );
+                        let move_origin_id =
+                            ui.make_persistent_id(("move-origin", item.id.as_uuid()));
+                        let trim_origin_id =
+                            ui.make_persistent_id(("trim-origin", item.id.as_uuid()));
+                        let has_move_origin = ui
+                            .data(|data| data.get_temp::<(f64, f32)>(move_origin_id))
+                            .is_some();
+                        if body.is_pointer_button_down_on() && !has_move_origin {
+                            let pointer_x = body
+                                .interact_pointer_pos()
+                                .map_or(body.rect.center().x, |pointer| pointer.x);
+                            ui.data_mut(|data| {
+                                data.insert_temp(
+                                    move_origin_id,
+                                    (item.interval.start.into_inner(), pointer_x),
+                                )
+                            });
+                        }
+                        let has_trim_origin = ui
+                            .data(|data| data.get_temp::<(f64, f32)>(trim_origin_id))
+                            .is_some();
+                        if trim.is_pointer_button_down_on() && !has_trim_origin {
+                            let pointer_x = trim
+                                .interact_pointer_pos()
+                                .map_or(trim.rect.center().x, |pointer| pointer.x);
+                            ui.data_mut(|data| {
+                                data.insert_temp(
+                                    trim_origin_id,
+                                    (
+                                        item.interval.start.into_inner()
+                                            + item.interval.duration.into_inner(),
+                                        pointer_x,
+                                    ),
+                                )
+                            });
+                        }
+                        crate::qa::register_component(
+                            format!("timeline.clip:{}", item.id),
+                            "timeline_item",
+                            body.rect,
+                            serde_json::json!({
+                                "name": item.name,
+                                "start": item.interval.start.into_inner(),
+                                "duration": item.interval.duration.into_inner(),
+                            }),
+                        );
+                        crate::qa::register_component(
+                            format!("timeline.trim:{}", item.id),
+                            "trim_handle",
+                            trim.rect,
+                            serde_json::json!({}),
+                        );
+                        let visual = clip_rect.translate(if body.dragged() {
+                            egui::vec2(body.drag_delta().x, 0.0)
+                        } else {
+                            egui::Vec2::ZERO
+                        });
+                        let color = if selected == Some(item.id) {
+                            ui.visuals().selection.bg_fill
+                        } else {
+                            item_color(&item.source)
+                        };
+                        painter.rect_filled(visual, 3.0, color);
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(visual.right() - 8.0, visual.top()),
+                                visual.right_bottom(),
+                            ),
+                            2.0,
+                            color.gamma_multiply(1.3),
+                        );
+                        if body.clicked() {
+                            edits.push(Edit::Select(Some(item.id)));
+                        }
+                        if body.double_clicked() {
+                            if let SourceRef::Composition(instance) = &item.source {
+                                edits.push(Edit::OpenTimeline(
+                                    instance.timeline_id,
+                                    instance_path.clone().nested(item.id),
+                                ));
+                            }
+                        }
+                        let released = ui.input(|input| input.pointer.any_released());
+                        let pointer_x =
+                            ui.input(|input| input.pointer.latest_pos().map(|pos| pos.x));
+                        if released {
+                            if let (Some((origin, pressed_x)), Some(pointer_x)) = (
+                                ui.data(|data| data.get_temp::<(f64, f32)>(move_origin_id)),
+                                pointer_x,
+                            ) {
+                                let raw = origin + f64::from((pointer_x - pressed_x) / px);
+                                edits.push(Edit::Move(
+                                    item.id,
+                                    item.track_id,
+                                    snap_time(raw.max(0.0), timeline.fps.into_inner(), &boundaries),
+                                    item.layer,
+                                ));
+                            }
+                            if let (Some((origin, pressed_x)), Some(pointer_x)) = (
+                                ui.data(|data| data.get_temp::<(f64, f32)>(trim_origin_id)),
+                                pointer_x,
+                            ) {
+                                let raw_end = origin + f64::from((pointer_x - pressed_x) / px);
+                                let end =
+                                    snap_time(raw_end, timeline.fps.into_inner(), &boundaries);
+                                if let Ok(interval) = TimelineInterval::new(
+                                    item.interval.start.into_inner(),
+                                    (end - item.interval.start.into_inner()).max(0.0),
+                                ) {
+                                    edits.push(Edit::Trim(item.id, interval));
+                                }
+                            }
+                        }
+                        if released {
+                            ui.data_mut(|data| data.remove::<(f64, f32)>(move_origin_id));
+                        }
+                        if released {
+                            ui.data_mut(|data| data.remove::<(f64, f32)>(trim_origin_id));
+                        }
                     }
                 }
             }
-        }
-        let playhead_x = canvas.left() + HEADER + *time as f32 * PX;
-        painter.line_segment(
-            [
-                egui::pos2(playhead_x, canvas.top()),
-                egui::pos2(playhead_x, canvas.bottom()),
-            ],
-            egui::Stroke::new(2.0, egui::Color32::from_rgb(245, 90, 75)),
-        );
+            let dragged_asset = ui.data(|data| data.get_temp::<uuid::Uuid>(asset_drag_id()));
+            let pointer = ui.input(|input| input.pointer.latest_pos());
+            if let (Some(asset_id), Some(pointer)) = (dragged_asset, pointer) {
+                if canvas.contains(pointer) && pointer.y >= canvas.top() + RULER_HEIGHT {
+                    let row_index = ((pointer.y - canvas.top() - RULER_HEIGHT) / ROW_HEIGHT)
+                        .floor()
+                        .max(0.0) as usize;
+                    if let Some(row) = rows.get(row_index) {
+                        let track_id = match row {
+                            TimelineDisplayRow::Layer { track, .. } => track.id,
+                            TimelineDisplayRow::Clip { item, .. } => item.track_id,
+                        };
+                        let target_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                canvas.left(),
+                                canvas.top() + RULER_HEIGHT + row_index as f32 * ROW_HEIGHT,
+                            ),
+                            egui::vec2(canvas.width(), ROW_HEIGHT),
+                        );
+                        painter.rect_stroke(
+                            target_rect,
+                            0.0,
+                            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                            egui::StrokeKind::Inside,
+                        );
+                        let start = snap_time(
+                            f64::from((pointer.x - canvas.left() - HEADER).max(0.0) / px),
+                            timeline.fps.into_inner(),
+                            &boundaries,
+                        );
+                        let marker_x = canvas.left() + HEADER + start as f32 * px;
+                        painter.line_segment(
+                            [
+                                egui::pos2(marker_x, target_rect.top()),
+                                egui::pos2(marker_x, target_rect.bottom()),
+                            ],
+                            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                        );
+                        if ui.input(|input| input.pointer.any_released()) {
+                            edits.push(Edit::PlaceAssetAt(asset_id, track_id, start));
+                            ui.data_mut(|data| data.remove::<uuid::Uuid>(asset_drag_id()));
+                        }
+                    }
+                } else if ui.input(|input| input.pointer.any_released()) {
+                    ui.data_mut(|data| data.remove::<uuid::Uuid>(asset_drag_id()));
+                }
+            }
+            let playhead_x = canvas.left() + HEADER + *time as f32 * px;
+            painter.line_segment(
+                [
+                    egui::pos2(playhead_x, canvas.top()),
+                    egui::pos2(playhead_x, canvas.bottom()),
+                ],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(245, 90, 75)),
+            );
+        });
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "collapsed layers keep clips directly editable on their shared row"
+)]
+fn paint_timeline_clip(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    canvas: egui::Rect,
+    row_rect: egui::Rect,
+    item: &library::model::authoring::TimelineItem,
+    selected: Option<TimelineItemId>,
+    timeline: &library::model::authoring::Timeline,
+    instance_path: &InstancePath,
+    px: f32,
+    boundaries: &[f64],
+    edits: &mut Vec<Edit>,
+) {
+    const HEADER: f32 = 176.0;
+    let left = canvas.left() + HEADER + item.interval.start.into_inner() as f32 * px;
+    let width = (item.interval.duration.into_inner() as f32 * px).max(12.0);
+    let clip_rect = egui::Rect::from_min_size(
+        egui::pos2(left, row_rect.top() + 4.0),
+        egui::vec2(width, row_rect.height() - 8.0),
+    );
+    let trim_rect = egui::Rect::from_min_max(
+        egui::pos2(clip_rect.right() - 8.0, clip_rect.top()),
+        clip_rect.right_bottom(),
+    );
+    let trim = ui.interact(
+        trim_rect,
+        ui.make_persistent_id(("collapsed-trim", item.id.as_uuid())),
+        egui::Sense::drag(),
+    );
+    let body = ui.interact(
+        egui::Rect::from_min_max(
+            clip_rect.min,
+            egui::pos2(trim_rect.left(), clip_rect.bottom()),
+        ),
+        ui.make_persistent_id(("collapsed-move", item.id.as_uuid())),
+        egui::Sense::click_and_drag(),
+    );
+    crate::qa::register_component(
+        format!("timeline.clip:{}", item.id),
+        "timeline_item",
+        body.rect,
+        serde_json::json!({
+            "name": item.name,
+            "start": item.interval.start.into_inner(),
+            "duration": item.interval.duration.into_inner(),
+        }),
+    );
+    crate::qa::register_component(
+        format!("timeline.trim:{}", item.id),
+        "trim_handle",
+        trim.rect,
+        serde_json::json!({}),
+    );
+    let color = if selected == Some(item.id) {
+        ui.visuals().selection.bg_fill
+    } else {
+        item_color(&item.source)
+    };
+    let visual = clip_rect.translate(if body.dragged() {
+        egui::vec2(body.drag_delta().x, 0.0)
+    } else {
+        egui::Vec2::ZERO
     });
+    painter.rect_filled(visual, 3.0, color);
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(visual.right() - 8.0, visual.top()),
+            visual.right_bottom(),
+        ),
+        2.0,
+        color.gamma_multiply(1.3),
+    );
+    if body.clicked() {
+        edits.push(Edit::Select(Some(item.id)));
+    }
+    if body.double_clicked() {
+        if let SourceRef::Composition(instance) = &item.source {
+            edits.push(Edit::OpenTimeline(
+                instance.timeline_id,
+                instance_path.clone().nested(item.id),
+            ));
+        }
+    }
+    let move_origin_id = ui.make_persistent_id(("collapsed-move-origin", item.id.as_uuid()));
+    let trim_origin_id = ui.make_persistent_id(("collapsed-trim-origin", item.id.as_uuid()));
+    if body.is_pointer_button_down_on()
+        && ui
+            .data(|data| data.get_temp::<(f64, f32)>(move_origin_id))
+            .is_none()
+    {
+        let pointer_x = body
+            .interact_pointer_pos()
+            .map_or(body.rect.center().x, |pointer| pointer.x);
+        ui.data_mut(|data| {
+            data.insert_temp(
+                move_origin_id,
+                (item.interval.start.into_inner(), pointer_x),
+            )
+        });
+    }
+    if trim.is_pointer_button_down_on()
+        && ui
+            .data(|data| data.get_temp::<(f64, f32)>(trim_origin_id))
+            .is_none()
+    {
+        let pointer_x = trim
+            .interact_pointer_pos()
+            .map_or(trim.rect.center().x, |pointer| pointer.x);
+        ui.data_mut(|data| {
+            data.insert_temp(
+                trim_origin_id,
+                (
+                    item.interval.start.into_inner() + item.interval.duration.into_inner(),
+                    pointer_x,
+                ),
+            )
+        });
+    }
+    if ui.input(|input| input.pointer.any_released()) {
+        let pointer_x = ui.input(|input| input.pointer.latest_pos().map(|pos| pos.x));
+        if let (Some((origin, pressed_x)), Some(pointer_x)) = (
+            ui.data(|data| data.get_temp::<(f64, f32)>(move_origin_id)),
+            pointer_x,
+        ) {
+            let raw = origin + f64::from((pointer_x - pressed_x) / px);
+            edits.push(Edit::Move(
+                item.id,
+                item.track_id,
+                snap_time(raw.max(0.0), timeline.fps.into_inner(), boundaries),
+                item.layer,
+            ));
+        }
+        if let (Some((origin, pressed_x)), Some(pointer_x)) = (
+            ui.data(|data| data.get_temp::<(f64, f32)>(trim_origin_id)),
+            pointer_x,
+        ) {
+            let end = snap_time(
+                origin + f64::from((pointer_x - pressed_x) / px),
+                timeline.fps.into_inner(),
+                boundaries,
+            );
+            if let Ok(interval) = TimelineInterval::new(
+                item.interval.start.into_inner(),
+                (end - item.interval.start.into_inner()).max(0.0),
+            ) {
+                edits.push(Edit::Trim(item.id, interval));
+            }
+        }
+        ui.data_mut(|data| {
+            data.remove::<(f64, f32)>(move_origin_id);
+            data.remove::<(f64, f32)>(trim_origin_id);
+        });
+    }
 }
 
 fn last_track(
@@ -1701,6 +2507,10 @@ fn item_color(source: &SourceRef) -> egui::Color32 {
     }
 }
 
+fn asset_drag_id() -> egui::Id {
+    egui::Id::new("ruvie-asset-panel-drag")
+}
+
 fn snap_time(raw: f64, fps: f64, boundaries: &[f64]) -> f64 {
     let frame = (raw * fps).round() / fps;
     boundaries
@@ -1709,6 +2519,79 @@ fn snap_time(raw: f64, fps: f64, boundaries: &[f64]) -> f64 {
         .filter(|boundary| (*boundary - raw).abs() <= 0.12)
         .min_by(|left, right| (left - raw).abs().total_cmp(&(right - raw).abs()))
         .unwrap_or(frame)
+}
+
+fn inspector_number(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    label: &str,
+    value: &mut f64,
+    speed: f64,
+    suffix: &str,
+) -> bool {
+    ui.push_id(id, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_sized([82.0, 20.0], egui::Label::new(label).selectable(false));
+            ui.add_sized(
+                [184.0, 20.0],
+                egui::DragValue::new(value).speed(speed).suffix(suffix),
+            )
+            .changed()
+        })
+        .inner
+    })
+    .inner
+}
+
+fn inspector_integer(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    label: &str,
+    value: &mut i64,
+) -> bool {
+    ui.push_id(id, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_sized([82.0, 20.0], egui::Label::new(label).selectable(false));
+            ui.add_sized([184.0, 20.0], egui::DragValue::new(value).speed(1.0))
+                .changed()
+        })
+        .inner
+    })
+    .inner
+}
+
+fn inspector_vec2(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + Copy,
+    label: &str,
+    x: &mut f64,
+    y: &mut f64,
+    suffix: &str,
+) -> bool {
+    ui.push_id(id, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_sized([82.0, 20.0], egui::Label::new(label).selectable(false));
+            let changed_x = ui
+                .add_sized(
+                    [90.0, 20.0],
+                    egui::DragValue::new(x).speed(1.0).prefix("X "),
+                )
+                .changed();
+            let changed_y = ui
+                .add_sized(
+                    [90.0, 20.0],
+                    egui::DragValue::new(y)
+                        .speed(1.0)
+                        .prefix("Y ")
+                        .suffix(suffix),
+                )
+                .changed();
+            changed_x || changed_y
+        })
+        .inner
+    })
+    .inner
 }
 
 #[expect(
@@ -1749,48 +2632,18 @@ fn inspector_ui(
     let mut start = item.interval.start.into_inner();
     let mut duration = item.interval.duration.into_inner();
     let mut layer = item.layer;
-    if ui
-        .add(
-            egui::DragValue::new(&mut start)
-                .speed(0.05)
-                .prefix("Start "),
-        )
-        .changed()
-    {
+    if inspector_number(ui, (id, "start"), "Start", &mut start, 0.05, " s") {
         edits.push(Edit::Move(id, item.track_id, start.max(0.0), layer));
     }
-    if ui
-        .add(
-            egui::DragValue::new(&mut duration)
-                .speed(0.05)
-                .prefix("Duration "),
-        )
-        .changed()
-    {
+    if inspector_number(ui, (id, "duration"), "Duration", &mut duration, 0.05, " s") {
         if let Ok(interval) = TimelineInterval::new(start, duration.max(0.0)) {
             edits.push(Edit::Trim(id, interval));
         }
     }
-    if ui
-        .add(egui::DragValue::new(&mut layer).prefix("Layer "))
-        .changed()
-    {
+    if inspector_integer(ui, (id, "layer"), "Layer", &mut layer) {
         edits.push(Edit::Move(id, item.track_id, start, layer));
     }
     let timeline_id = project.tracks[&item.track_id].timeline_id;
-    egui::ComboBox::from_label("Track")
-        .selected_text(&project.tracks[&item.track_id].name)
-        .show_ui(ui, |ui| {
-            for track_id in &project.timelines[&timeline_id].track_order {
-                let track = &project.tracks[track_id];
-                if ui
-                    .selectable_label(*track_id == item.track_id, &track.name)
-                    .clicked()
-                {
-                    edits.push(Edit::Move(id, *track_id, start, layer));
-                }
-            }
-        });
     egui::ComboBox::from_label("Parent")
         .selected_text(
             item.parent
@@ -2005,39 +2858,17 @@ fn inspector_ui(
     ui.separator();
     ui.heading("Transform");
     let (mut x, mut y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
-    let x_changed = ui
-        .add(egui::DragValue::new(&mut x).speed(1.0).prefix("X "))
-        .changed();
-    let y_changed = ui
-        .add(egui::DragValue::new(&mut y).speed(1.0).prefix("Y "))
-        .changed();
-    if x_changed || y_changed {
+    if inspector_vec2(ui, (id, "position"), "Position", &mut x, &mut y, " px") {
         edits.push(Edit::Property(
-            id,
-            "position".to_string(),
-            property_vec2(x, y),
-        ));
-    }
-    if ui.button("Add position keyframe").clicked() {
-        edits.push(Edit::Keyframe(
             id,
             "position".to_string(),
             property_vec2(x, y),
         ));
     }
     let mut opacity = number_property_at(item, "opacity", local_time, 1.0);
-    if ui
-        .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))
-        .changed()
-    {
+    if inspector_number(ui, (id, "opacity"), "Opacity", &mut opacity, 0.01, "") {
+        opacity = opacity.clamp(0.0, 1.0);
         edits.push(Edit::Property(
-            id,
-            "opacity".to_string(),
-            PropertyValue::Number(OrderedFloat(opacity)),
-        ));
-    }
-    if ui.button("Add opacity keyframe").clicked() {
-        edits.push(Edit::Keyframe(
             id,
             "opacity".to_string(),
             PropertyValue::Number(OrderedFloat(opacity)),
@@ -2068,6 +2899,12 @@ fn inspector_ui(
     });
     ui.separator();
     ui.heading("Effect Stack");
+    ui.menu_button("+ Add Effect", |ui| {
+        if ui.button("Blur").clicked() {
+            edits.push(Edit::Blur(id));
+            ui.close();
+        }
+    });
     let attachments: Vec<_> = project.attachments.values().filter(|attachment| matches!(attachment.owner, library::model::authoring::AttachmentOwner::Item { item_id } if item_id == id)).collect();
     if attachments.is_empty() {
         ui.label("No effects");
@@ -2177,13 +3014,42 @@ fn inspector_ui(
     }
 }
 
-fn assets_ui(ui: &mut egui::Ui, project: &AuthoringProject) {
+fn assets_ui(ui: &mut egui::Ui, project: &AuthoringProject, edits: &mut Vec<Edit>) {
     ui.heading("Project Assets");
+    let import = ui.button("Import Media...");
+    crate::qa::register_component(
+        "assets.import",
+        "button",
+        import.rect,
+        serde_json::json!({}),
+    );
+    if import.clicked() {
+        edits.push(Edit::ImportAsset);
+    }
     if project.assets.is_empty() {
-        ui.label("Use Import to add media");
+        ui.label("Import media to build the project library.");
+    } else {
+        ui.small("Drag an asset onto a Timeline layer to place it.");
     }
     for asset in &project.assets {
-        ui.label(format!("{} · {:?}", asset.name, asset.kind));
+        let asset_row = ui
+            .add(
+                egui::Label::new(format!("{}  ·  {:?}", asset.name, asset.kind))
+                    .sense(egui::Sense::drag()),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        crate::qa::register_component(
+            format!("assets.asset:{}", asset.id),
+            "draggable_asset",
+            asset_row.rect,
+            serde_json::json!({"name": asset.name}),
+        );
+        if asset_row.drag_started() {
+            ui.data_mut(|data| data.insert_temp(asset_drag_id(), asset.id));
+        }
+        if asset_row.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
     }
     ui.separator();
     ui.label("Compositions");
@@ -2826,6 +3692,36 @@ fn asset_kind(path: &Path) -> AssetKind {
     }
 }
 
+fn asset_from_path(
+    path: &Path,
+    plugins: &library::plugin::PluginManager,
+) -> Result<Asset, library::LibraryError> {
+    let path_string = path.to_string_lossy().into_owned();
+    let metadata = plugins.get_metadata(&path_string)?;
+    let kind = metadata
+        .as_ref()
+        .map_or_else(|| asset_kind(path), |value| value.kind.clone());
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let mut asset = Asset::new(&name, &path_string, kind);
+    if let Some(metadata) = metadata {
+        asset.duration = metadata.duration;
+        asset.width = metadata.width;
+        asset.height = metadata.height;
+        asset.fps = metadata.fps;
+        asset.frame_count = metadata.frame_count;
+        asset.stream_index = metadata.stream_index;
+        asset.source_color.replace_detected(metadata.source_color);
+    }
+    if let Ok(bytes) = std::fs::read(path) {
+        asset.verify_imported_content(&bytes);
+    }
+    Ok(asset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2851,6 +3747,57 @@ mod tests {
         let first = Edit::Property(item, "position".to_string(), property_vec2(10.0, 20.0));
         let second = Edit::Property(item, "position".to_string(), property_vec2(30.0, 40.0));
         assert_eq!(first.history_key(), second.history_key());
+    }
+
+    #[test]
+    fn timeline_layer_expands_to_clip_rows_not_property_rows() {
+        let project = AuthoringProject::new("Layers", 320, 180, 30.0, 10.0).expect("project");
+        let timeline_id = project.root_timeline_id;
+        let track_id = project.timelines[&timeline_id].track_order[0];
+        let mut session =
+            library::model::authoring::AuthoringSession::new(project).expect("session");
+        for (name, start) in [("A", 0.0), ("B", 2.0)] {
+            session
+                .add_item(
+                    track_id,
+                    name.to_string(),
+                    SourceRef::Solid {
+                        color: Color::white(),
+                    },
+                    TimelineInterval::new(start, 1.0).expect("interval"),
+                    0,
+                )
+                .expect("clip");
+        }
+        let project = session.into_project();
+        let timeline = &project.timelines[&timeline_id];
+        let collapsed = flatten_timeline_layers(&project, timeline, &HashSet::new());
+        assert_eq!(collapsed.len(), 1);
+        assert!(matches!(collapsed[0], TimelineDisplayRow::Layer { .. }));
+
+        let expanded = flatten_timeline_layers(&project, timeline, &HashSet::from([track_id]));
+        assert_eq!(expanded.len(), 3);
+        assert!(matches!(expanded[0], TimelineDisplayRow::Layer { .. }));
+        assert!(expanded[1..]
+            .iter()
+            .all(|row| matches!(row, TimelineDisplayRow::Clip { .. })));
+    }
+
+    #[test]
+    fn imported_png_becomes_a_real_project_asset() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("asset.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([20, 80, 160, 255]))
+            .save(&path)
+            .expect("PNG fixture");
+        let plugins = library::plugin::PluginManager::default();
+
+        let asset = asset_from_path(&path, &plugins).expect("asset import");
+
+        assert_eq!(asset.kind, AssetKind::Image);
+        assert_eq!(asset.width, Some(8));
+        assert_eq!(asset.height, Some(6));
+        assert!(asset.imported_content_sha256().is_some());
     }
 
     #[test]

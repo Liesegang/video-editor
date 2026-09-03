@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use ordered_float::OrderedFloat;
 
 use crate::core::binding_runtime::{SignalRuntimeValues, resolve_published_numeric_value};
+use crate::core::event_runtime::EventRuntimeSnapshot;
 use crate::core::render_plan::{
     CompiledModuleOperation, ModuleInvocationOwner, PlannedSource, RenderPlan,
 };
@@ -84,6 +85,34 @@ pub fn evaluate_authoring_timeline_frame_with_signals(
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
 ) -> Result<FrameInfo, LibraryError> {
+    evaluate_authoring_timeline_frame_with_runtime(
+        project,
+        plan,
+        timeline_id,
+        frame_number,
+        render_scale,
+        region,
+        instance_path,
+        runtime_signals,
+        &EventRuntimeSnapshot::default(),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public frame evaluation keeps each render authority explicit"
+)]
+pub fn evaluate_authoring_timeline_frame_with_runtime(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    timeline_id: TimelineId,
+    frame_number: u64,
+    render_scale: f64,
+    region: Option<Region>,
+    instance_path: &InstancePath,
+    runtime_signals: &SignalRuntimeValues,
+    runtime_events: &EventRuntimeSnapshot,
+) -> Result<FrameInfo, LibraryError> {
     if plan.root_timeline_id != project.root_timeline_id {
         return Err(LibraryError::Validation(
             "RenderPlan root does not match the Project root Timeline".to_string(),
@@ -101,6 +130,7 @@ pub fn evaluate_authoring_timeline_frame_with_signals(
         time,
         instance_path,
         runtime_signals,
+        runtime_events,
         &mut HashSet::new(),
     )?;
     let root_effects = attachment_effects(
@@ -113,6 +143,7 @@ pub fn evaluate_authoring_timeline_frame_with_signals(
         time,
         instance_path,
         runtime_signals,
+        runtime_events,
     )?;
     let background_color = if root_effects.is_empty() {
         root.background_color.clone()
@@ -145,6 +176,10 @@ pub fn evaluate_authoring_timeline_frame_with_signals(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "timeline recursion keeps authored, runtime, and cycle state explicit"
+)]
 fn collect_timeline_items(
     project: &AuthoringProject,
     plan: &RenderPlan,
@@ -152,6 +187,7 @@ fn collect_timeline_items(
     timeline_time: f64,
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
+    runtime_events: &EventRuntimeSnapshot,
     active: &mut HashSet<TimelineId>,
 ) -> Result<Vec<FrameItem>, LibraryError> {
     if !active.insert(timeline.id) {
@@ -197,6 +233,7 @@ fn collect_timeline_items(
                 &scheduled.source,
                 instance_path,
                 runtime_signals,
+                runtime_events,
                 active,
             )?);
         }
@@ -209,6 +246,7 @@ fn collect_timeline_items(
                 timeline_time,
                 instance_path,
                 runtime_signals,
+                runtime_events,
             )?;
             output.push(FrameItem::Group(FrameGroup {
                 source_id: track.id.as_uuid(),
@@ -243,6 +281,7 @@ fn collect_item(
     planned_source: &PlannedSource,
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
+    runtime_events: &EventRuntimeSnapshot,
     active: &mut HashSet<TimelineId>,
 ) -> Result<FrameItem, LibraryError> {
     let local_time = item_local_time(item.interval, timeline_time);
@@ -292,6 +331,7 @@ fn collect_item(
                 nested_time,
                 &nested_path,
                 runtime_signals,
+                runtime_events,
             )?;
             FrameItem::Group(FrameGroup {
                 source_id: nested.id.as_uuid(),
@@ -312,6 +352,7 @@ fn collect_item(
                     nested_time,
                     &nested_path,
                     runtime_signals,
+                    runtime_events,
                     active,
                 )?,
             })
@@ -330,6 +371,7 @@ fn collect_item(
             local_time,
             instance_path,
             runtime_signals,
+            runtime_events,
         )?,
         _ => {
             return Err(LibraryError::Validation(format!(
@@ -346,6 +388,7 @@ fn collect_item(
         local_time,
         instance_path,
         runtime_signals,
+        runtime_events,
     )?;
     if !pre_effects.is_empty() {
         child = FrameItem::Group(FrameGroup {
@@ -371,6 +414,7 @@ fn collect_item(
         local_time,
         instance_path,
         runtime_signals,
+        runtime_events,
     )?;
     let inherited_transforms = inherited_transforms(project, item, timeline_time)?;
     let mut transform = transform_at(&item.authored_properties, local_time)?;
@@ -426,6 +470,7 @@ fn collect_item(
             &scheduled.source,
             instance_path,
             runtime_signals,
+            runtime_events,
             active,
         )?
     } else {
@@ -947,6 +992,7 @@ fn module_source_item(
     time: f64,
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
+    runtime_events: &EventRuntimeSnapshot,
 ) -> Result<FrameItem, LibraryError> {
     let invocation = plan
         .module_invocations
@@ -1035,21 +1081,54 @@ fn module_source_item(
             items: Vec::new(),
         }));
     }
-    let values = module_operation_values(
-        properties,
-        *node_id,
-        authored,
-        instance,
-        plan,
-        time,
-        instance_path,
-        runtime_signals,
-    )?;
+    let evaluation_times =
+        runtime_events.operation_times(authored, instance.id, instance_path, *node_id, time);
+    let mut evaluated = evaluation_times
+        .into_iter()
+        .map(|evaluation_time| {
+            let values = module_operation_values(
+                properties,
+                *node_id,
+                authored,
+                instance,
+                plan,
+                evaluation_time,
+                instance_path,
+                runtime_signals,
+            )?;
+            generator_operation_item(item, timeline, generator, &values)
+        })
+        .collect::<Result<Vec<_>, LibraryError>>()?;
+    if evaluated.len() == 1 {
+        return Ok(evaluated.remove(0));
+    }
+    Ok(FrameItem::Group(FrameGroup {
+        source_id: item.id.as_uuid(),
+        kind: FrameGroupKind::TimelineItem,
+        width: timeline.width,
+        height: timeline.height,
+        background_color: transparent(),
+        inherited_transforms: Vec::new(),
+        transform: Transform::default(),
+        blend_mode: BlendMode::Normal,
+        effect_time: OrderedFloat(time),
+        effects: Vec::new(),
+        masks: Vec::new(),
+        items: evaluated,
+    }))
+}
+
+fn generator_operation_item(
+    item: &TimelineItem,
+    timeline: &Timeline,
+    generator: &crate::model::node::GeneratorContent,
+    values: &std::collections::HashMap<String, PropertyValue>,
+) -> Result<FrameItem, LibraryError> {
     match generator {
         crate::model::node::GeneratorContent::Text => {
-            let text = required_string_value(&values, "text", "Text Generator")?;
-            let font = required_string_value(&values, "font_family", "Text Generator")?;
-            let size = required_number_value(&values, "size", "Text Generator")?;
+            let text = required_string_value(values, "text", "Text Generator")?;
+            let font = required_string_value(values, "font_family", "Text Generator")?;
+            let size = required_number_value(values, "size", "Text Generator")?;
             Ok(FrameItem::Object(FrameObject {
                 source_node_id: item.id.as_uuid(),
                 spatial_transform_node_id: None,
@@ -1073,7 +1152,7 @@ fn module_source_item(
             }))
         }
         crate::model::node::GeneratorContent::Solid => {
-            let color = required_color_value(&values, "color", "Solid Generator")?;
+            let color = required_color_value(values, "color", "Solid Generator")?;
             Ok(solid_item(item, timeline.width, timeline.height, color))
         }
         crate::model::node::GeneratorContent::Shape => {
@@ -1092,9 +1171,9 @@ fn module_source_item(
             ))
         }
         crate::model::node::GeneratorContent::SkSL => {
-            let shader = required_string_value(&values, "shader", "SkSL Generator")?;
-            let width = required_number_value(&values, "width", "SkSL Generator")? as f32;
-            let height = required_number_value(&values, "height", "SkSL Generator")? as f32;
+            let shader = required_string_value(values, "shader", "SkSL Generator")?;
+            let width = required_number_value(values, "width", "SkSL Generator")? as f32;
+            let height = required_number_value(values, "height", "SkSL Generator")? as f32;
             Ok(FrameItem::Object(FrameObject {
                 source_node_id: item.id.as_uuid(),
                 spatial_transform_node_id: None,
@@ -1211,6 +1290,10 @@ fn required_color_value(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "effect evaluation keeps owner, time, binding, and event context explicit"
+)]
 fn attachment_effects(
     project: &AuthoringProject,
     plan: &RenderPlan,
@@ -1219,6 +1302,7 @@ fn attachment_effects(
     time: f64,
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
+    runtime_events: &EventRuntimeSnapshot,
 ) -> Result<Vec<ImageEffect>, LibraryError> {
     let mut invocations: Vec<_> = plan
         .module_invocations
@@ -1282,20 +1366,24 @@ fn attachment_effects(
             if !enabled || *bypassed {
                 continue;
             }
-            let values = module_operation_values(
-                properties,
-                *node_id,
-                authored,
-                instance,
-                plan,
-                time,
-                instance_path,
-                runtime_signals,
-            )?;
-            effects.push(ImageEffect {
-                effect_type: effect_type.clone(),
-                properties: values,
-            });
+            for evaluation_time in
+                runtime_events.operation_times(authored, instance.id, instance_path, *node_id, time)
+            {
+                let values = module_operation_values(
+                    properties,
+                    *node_id,
+                    authored,
+                    instance,
+                    plan,
+                    evaluation_time,
+                    instance_path,
+                    runtime_signals,
+                )?;
+                effects.push(ImageEffect {
+                    effect_type: effect_type.clone(),
+                    properties: values,
+                });
+            }
         }
     }
     Ok(effects)
@@ -1413,10 +1501,11 @@ mod tests {
     use crate::core::render_plan::RenderPlanCompiler;
     use crate::model::authoring::{
         Attachment, AttachmentId, AttachmentOwner, AttachmentStage, AuthoringSession,
-        BindingOperator, BindingScope, ModuleDefinition, ModuleDefinitionId, ModuleGraph,
-        ModuleInstance, ModuleInstanceId, ModulePortAddress, ModuleRole, PublishedParameter,
-        PublishedParameterId, SignalBinding, SignalBindingId, SignalMapping, SignalSource,
-        SourceRef, TimelineInterval, Transition, TransitionId, TransitionKind,
+        BindingOperator, BindingScope, EventBinding, EventBindingId, EventSource, ModuleDefinition,
+        ModuleDefinitionId, ModuleGraph, ModuleInstance, ModuleInstanceId, ModulePortAddress,
+        ModuleRole, PublishedAction, PublishedActionId, PublishedParameter, PublishedParameterId,
+        SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineInterval,
+        Transition, TransitionId, TransitionKind, TriggerPolicy,
     };
     use crate::model::frame::entity::{FrameContent, FrameItem};
     use crate::model::node::GeneratorContent;
@@ -1900,5 +1989,140 @@ mod tests {
             item.effects[0].properties["sigma_x"],
             PropertyValue::Number(OrderedFloat(6.0))
         );
+    }
+
+    #[test]
+    fn overlapping_events_evaluate_temporary_module_clocks_in_the_frame() {
+        let project = AuthoringProject::new("Events", 640, 360, 10.0, 3.0).expect("valid Project");
+        let timeline_id = project.root_timeline_id;
+        let track_id = *project.tracks.keys().next().expect("default Track");
+        let mut session = AuthoringSession::new(project).expect("session");
+        let (item_id, _) = session
+            .add_item(
+                track_id,
+                "Title".to_string(),
+                SourceRef::Text {
+                    text: "Reactive".to_string(),
+                },
+                TimelineInterval::new(0.0, 3.0).expect("interval"),
+                0,
+            )
+            .expect("item");
+        let mut project = session.into_project();
+        let plugins = crate::plugin::PluginManager::default();
+        let mut node = plugins
+            .create_effect_operation_node("blur")
+            .expect("Blur operation");
+        node.set_property(
+            "sigma_x".to_string(),
+            Property::keyframe(vec![
+                Keyframe::new(
+                    0.0,
+                    PropertyValue::Number(OrderedFloat(0.0)),
+                    EasingFunction::Linear,
+                ),
+                Keyframe::new(
+                    2.0,
+                    PropertyValue::Number(OrderedFloat(20.0)),
+                    EasingFunction::Linear,
+                ),
+            ]),
+        )
+        .expect("animated blur");
+        let node_id = node.id;
+        let definition_id = ModuleDefinitionId::new();
+        let action_id = PublishedActionId::new();
+        project.module_definitions.insert(
+            definition_id,
+            ModuleDefinition {
+                id: definition_id,
+                name: "Reactive blur".to_string(),
+                role: ModuleRole::Effect,
+                graph: ModuleGraph {
+                    nodes: std::collections::HashMap::from([(node_id, node)]),
+                    connections: Vec::new(),
+                },
+                output_node_id: Some(node_id),
+                published_parameters: Vec::new(),
+                published_signals: Vec::new(),
+                published_actions: vec![PublishedAction {
+                    id: action_id,
+                    name: "Restart".to_string(),
+                    target: ModulePortAddress {
+                        node_id,
+                        port: "restart".to_string(),
+                    },
+                }],
+                version: 1,
+            },
+        );
+        let instance_id = ModuleInstanceId::new();
+        project.module_instances.insert(
+            instance_id,
+            ModuleInstance {
+                id: instance_id,
+                definition_id,
+                parameter_overrides: std::collections::HashMap::new(),
+            },
+        );
+        let attachment_id = AttachmentId::new();
+        project.attachments.insert(
+            attachment_id,
+            Attachment {
+                id: attachment_id,
+                owner: AttachmentOwner::Item { item_id },
+                module_instance_id: instance_id,
+                stage: AttachmentStage::ItemPostTransform,
+                order: 0,
+            },
+        );
+        let binding = EventBinding {
+            id: EventBindingId::new(),
+            source: EventSource::Marker {
+                name: "kick".to_string(),
+            },
+            scope: BindingScope::Instance {
+                instance_path: InstancePath::root(timeline_id),
+                module_instance_id: instance_id,
+            },
+            target_action_id: action_id,
+            trigger_policy: TriggerPolicy::Overlap,
+            priority: 0,
+        };
+        project.event_bindings.insert(binding.id, binding.clone());
+        let plan = RenderPlanCompiler::compile(&project).expect("compile");
+        let mut events = crate::core::event_runtime::EventRuntime::default();
+        events.trigger(&binding, 1.0, 2.0).expect("first trigger");
+        events.trigger(&binding, 1.25, 2.0).expect("second trigger");
+        let snapshot = events.snapshot_at(1.5).expect("event snapshot");
+        let frame = evaluate_authoring_timeline_frame_with_runtime(
+            &project,
+            &plan,
+            timeline_id,
+            15,
+            1.0,
+            None,
+            &InstancePath::root(timeline_id),
+            &SignalRuntimeValues::default(),
+            &snapshot,
+        )
+        .expect("reactive frame");
+
+        let FrameItem::Group(track) = &frame.items[0] else {
+            panic!("Track group expected");
+        };
+        let FrameItem::Group(item) = &track.items[0] else {
+            panic!("Item group expected");
+        };
+        assert_eq!(item.effects.len(), 2);
+        assert_eq!(
+            item.effects[0].properties["sigma_x"],
+            PropertyValue::Number(OrderedFloat(5.0))
+        );
+        assert_eq!(
+            item.effects[1].properties["sigma_x"],
+            PropertyValue::Number(OrderedFloat(2.5))
+        );
+        assert_eq!(plan.module_definitions.len(), 1);
     }
 }

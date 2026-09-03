@@ -23,7 +23,10 @@ library = { version = "0.1.0", path = "../library" }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 node-editor-ui = { version = "0.1.0", path = "../node-editor-ui", optional = true }
+pan-zoom-ui = { version = "0.1.0", path = "../pan-zoom-ui" }
 
 [dev-dependencies]
 tempfile = "3.27"

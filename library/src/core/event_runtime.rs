@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::core::render_plan::CompiledBindingIndex;
 use crate::model::authoring::{
-    BindingScope, EventBinding, EventBindingId, EventSource, PublishedActionId, TriggerPolicy,
+    BindingScope, EventBinding, EventBindingId, EventSource, InstancePath, ModuleDefinition,
+    ModuleDefinitionId, ModuleInstanceId, PublishedActionId, TriggerPolicy,
 };
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -39,6 +40,58 @@ pub enum TriggerOutcome {
 pub struct EventRuntime {
     invocations: HashMap<EventBindingId, Vec<ReactiveInvocation>>,
     next_ordinal: HashMap<EventBindingId, u64>,
+    generation: u64,
+}
+
+/// Immutable event state consumed by one frame evaluation.
+///
+/// The snapshot is derived runtime data. It resolves PublishedAction IDs only
+/// after an invocation reaches its Module scope; authored properties remain
+/// untouched.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct EventRuntimeSnapshot {
+    now: OrderedFloat<f64>,
+    invocations: Vec<ReactiveInvocation>,
+    generation: u64,
+}
+
+impl EventRuntimeSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn invocations(&self) -> &[ReactiveInvocation] {
+        &self.invocations
+    }
+
+    /// Returns the clocks at which one compiled operation must be evaluated.
+    /// With no matching event the normal authored clock is preserved. Active
+    /// overlaps return several local clocks and therefore several temporary
+    /// evaluations of the same shared compiled ModuleDefinition.
+    pub fn operation_times(
+        &self,
+        definition: &ModuleDefinition,
+        instance_id: ModuleInstanceId,
+        instance_path: &InstancePath,
+        node_id: Uuid,
+        authored_time: f64,
+    ) -> Vec<f64> {
+        let mut times = self
+            .invocations
+            .iter()
+            .filter(|invocation| {
+                scope_matches(&invocation.scope, definition.id, instance_id, instance_path)
+                    && definition.published_actions.iter().any(|action| {
+                        action.id == invocation.action_id && action.target.node_id == node_id
+                    })
+            })
+            .map(|invocation| invocation.local_time(self.now.into_inner()))
+            .collect::<Vec<_>>();
+        if times.is_empty() {
+            times.push(authored_time);
+        }
+        times
+    }
 }
 
 impl EventRuntime {
@@ -102,6 +155,7 @@ impl EventRuntime {
             duration: OrderedFloat(duration),
         };
         invocations.push(invocation.clone());
+        self.generation = self.generation.wrapping_add(1);
         Ok(TriggerOutcome::Scheduled(invocation))
     }
 
@@ -138,9 +192,47 @@ impl EventRuntime {
         active
     }
 
+    pub fn snapshot_at(&mut self, now: f64) -> Result<EventRuntimeSnapshot, String> {
+        if !now.is_finite() {
+            return Err("Event snapshot time must be finite".to_string());
+        }
+        let generation = self.generation;
+        let invocations = self.active_at(now).into_iter().cloned().collect();
+        Ok(EventRuntimeSnapshot {
+            now: OrderedFloat(now),
+            invocations,
+            generation,
+        })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn clear(&mut self) {
+        if !self.invocations.is_empty() || !self.next_ordinal.is_empty() {
+            self.generation = self.generation.wrapping_add(1);
+        }
         self.invocations.clear();
         self.next_ordinal.clear();
+    }
+}
+
+fn scope_matches(
+    scope: &BindingScope,
+    definition_id: ModuleDefinitionId,
+    instance_id: ModuleInstanceId,
+    instance_path: &InstancePath,
+) -> bool {
+    match scope {
+        BindingScope::Definition {
+            definition_id: target,
+        } => *target == definition_id,
+        BindingScope::Instance {
+            instance_path: target_path,
+            module_instance_id: target_instance,
+        } => *target_instance == instance_id && target_path == instance_path,
+        BindingScope::Query { .. } => false,
     }
 }
 

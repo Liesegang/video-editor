@@ -3,5 +3,5 @@ mod authoring_frame;
 
 pub use authoring_frame::{
     evaluate_authoring_frame, evaluate_authoring_timeline_frame,
-    evaluate_authoring_timeline_frame_with_signals,
+    evaluate_authoring_timeline_frame_with_runtime, evaluate_authoring_timeline_frame_with_signals,
 };
