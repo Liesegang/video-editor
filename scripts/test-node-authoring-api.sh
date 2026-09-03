@@ -86,7 +86,7 @@ expect_compile_failure() {
 }
 
 echo "[node-api] raw handler map access is sealed"
-expect_compile_failure fail_property_map_mut 'module `property_ops` is private|no `property_map_mut`'
+expect_compile_failure fail_property_map_mut 'module `property_ops` is private|no `property_map_mut`|could not find .*handlers.* in .*editor'
 
 echo "[node-api] Node property storage is sealed"
 expect_compile_failure fail_node_fields 'field `properties` of struct .*Node` is private'

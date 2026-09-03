@@ -182,7 +182,7 @@ jobs:
       - name: Validate the real-runtime gate itself
         run: |
           bash -n scripts/test-real-opencolorio.sh
-          shellcheck scripts/test-real-opencolorio.sh
+          shellcheck -x scripts/test-real-opencolorio.sh
           ./scripts/test-real-opencolorio.sh --self-test
 
       - name: Build and test against real OpenColorIO
