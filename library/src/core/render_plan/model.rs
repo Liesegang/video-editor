@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::project::property::PropertyMap;
 use ordered_float::OrderedFloat;
@@ -117,6 +117,8 @@ impl CompiledBindingIndex {
 pub struct CompiledTimeline {
     pub id: TimelineId,
     pub schedule: Vec<ScheduledItem>,
+    pub track_schedules: HashMap<TimelineTrackId, Vec<usize>>,
+    pub matte_source_ids: HashSet<TimelineItemId>,
     pub attachment_ids: Vec<AttachmentId>,
 }
 

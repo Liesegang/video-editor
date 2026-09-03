@@ -194,6 +194,24 @@ pub(super) fn compile_timeline(
             item.item_id,
         )
     });
+    let mut track_schedules: HashMap<_, Vec<_>> = HashMap::new();
+    for (index, item) in schedule.iter().enumerate() {
+        track_schedules
+            .entry(item.track_id)
+            .or_default()
+            .push(index);
+    }
+    let matte_source_ids = project
+        .items
+        .values()
+        .filter(|item| {
+            project
+                .tracks
+                .get(&item.track_id)
+                .is_some_and(|track| track.timeline_id == timeline.id)
+        })
+        .filter_map(|item| item.matte.map(|matte| matte.item_id))
+        .collect();
     let mut attachment_ids: Vec<_> = project
         .attachments
         .values()
@@ -210,6 +228,8 @@ pub(super) fn compile_timeline(
     Ok(CompiledTimeline {
         id: timeline.id,
         schedule,
+        track_schedules,
+        matte_source_ids,
         attachment_ids,
     })
 }

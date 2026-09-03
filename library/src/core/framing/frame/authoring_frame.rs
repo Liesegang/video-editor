@@ -84,7 +84,6 @@ pub fn evaluate_authoring_timeline_frame_with_signals(
     instance_path: &InstancePath,
     runtime_signals: &SignalRuntimeValues,
 ) -> Result<FrameInfo, LibraryError> {
-    project.validate().map_err(LibraryError::Validation)?;
     if plan.root_timeline_id != project.root_timeline_id {
         return Err(LibraryError::Validation(
             "RenderPlan root does not match the Project root Timeline".to_string(),
@@ -164,27 +163,17 @@ fn collect_timeline_items(
     let compiled = plan.timelines.get(&timeline.id).ok_or_else(|| {
         LibraryError::Validation(format!("RenderPlan is missing Timeline {}", timeline.id))
     })?;
-    let matte_sources: HashSet<_> = project
-        .items
-        .values()
-        .filter(|item| {
-            project
-                .tracks
-                .get(&item.track_id)
-                .is_some_and(|track| track.timeline_id == timeline.id)
-        })
-        .filter_map(|item| item.matte.map(|matte| matte.item_id))
-        .collect();
     let mut output = Vec::new();
     for track_id in &timeline.track_order {
         let track = project.tracks.get(track_id).ok_or_else(|| {
             LibraryError::Validation(format!("Timeline {} has a missing Track", timeline.id))
         })?;
         let mut children = Vec::new();
-        for scheduled in compiled.schedule.iter().filter(|scheduled| {
-            scheduled.track_id == *track_id && scheduled.interval.contains(timeline_time)
-        }) {
-            if matte_sources.contains(&scheduled.item_id) {
+        for schedule_index in compiled.track_schedules.get(track_id).into_iter().flatten() {
+            let scheduled = &compiled.schedule[*schedule_index];
+            if !scheduled.interval.contains(timeline_time)
+                || compiled.matte_source_ids.contains(&scheduled.item_id)
+            {
                 continue;
             }
             let item = project.items.get(&scheduled.item_id).ok_or_else(|| {

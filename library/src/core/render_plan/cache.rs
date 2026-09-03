@@ -129,6 +129,12 @@ fn timeline_schedule_fingerprint(
         hasher.update(item.layer.to_le_bytes());
         hasher.update(item.interval.start.into_inner().to_bits().to_le_bytes());
         hasher.update(item.interval.duration.into_inner().to_bits().to_le_bytes());
+        if let Some(matte) = item.matte {
+            hasher.update([1]);
+            hasher.update(matte.item_id.as_uuid().as_bytes());
+        } else {
+            hasher.update([0]);
+        }
         match &item.source {
             SourceRef::Asset { .. } => hasher.update([0]),
             SourceRef::Text { .. } => hasher.update([1]),
