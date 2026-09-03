@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::model::authoring::{
-    AuthoringProject, ModuleDefinition, ModuleDefinitionId, ModuleRole, SourceRef, TimelineId,
+    AuthoringProject, BindingScope, ModuleDefinition, ModuleDefinitionId, ModuleRole, SourceRef,
+    TimelineId,
 };
 use crate::model::node::NodeContent;
 use crate::plugin::{EFFECT_APPLY_OPERATION, EFFECT_CATEGORY};
 
 use super::{
-    CompiledModuleDefinition, CompiledModuleOperation, CompiledTimeline, DependencyIndex,
-    ModuleInvocation, ModuleInvocationOwner, PlannedSource, RenderPlan, ScheduledItem,
+    CompiledBindingIndex, CompiledModuleDefinition, CompiledModuleOperation, CompiledTimeline,
+    DependencyIndex, ModuleInvocation, ModuleInvocationOwner, PlannedSource, RenderPlan,
+    ScheduledItem,
 };
 
 pub struct RenderPlanCompiler;
@@ -80,21 +82,62 @@ impl RenderPlanCompiler {
             )?;
         }
 
-        let mut signal_binding_ids: Vec<_> = project.signal_bindings.keys().copied().collect();
-        signal_binding_ids.sort();
-        let mut event_binding_ids: Vec<_> = project.event_bindings.keys().copied().collect();
-        event_binding_ids.sort();
+        let bindings = compile_bindings(project)?;
 
         Ok(RenderPlan {
             root_timeline_id: project.root_timeline_id,
             timelines,
             module_definitions,
             module_invocations,
-            signal_binding_ids,
-            event_binding_ids,
+            bindings,
             dependencies,
         })
     }
+}
+
+fn compile_bindings(project: &AuthoringProject) -> Result<CompiledBindingIndex, String> {
+    let mut compiled = CompiledBindingIndex::default();
+    let mut signals = project
+        .signal_bindings
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    signals.sort_by_key(|binding| binding.id);
+    for binding in signals {
+        for definition_id in binding_target_definitions(project, &binding.scope)? {
+            compiled.add_signal(definition_id, binding.clone());
+        }
+    }
+    let mut events = project.event_bindings.values().cloned().collect::<Vec<_>>();
+    events.sort_by_key(|binding| binding.id);
+    for binding in events {
+        for definition_id in binding_target_definitions(project, &binding.scope)? {
+            compiled.add_event(definition_id, binding.clone());
+        }
+    }
+    compiled.finish();
+    Ok(compiled)
+}
+
+fn binding_target_definitions(
+    project: &AuthoringProject,
+    scope: &BindingScope,
+) -> Result<Vec<ModuleDefinitionId>, String> {
+    let mut definitions = match scope {
+        BindingScope::Definition { definition_id } => vec![*definition_id],
+        BindingScope::Instance {
+            module_instance_id, ..
+        } => vec![
+            project
+                .module_instances
+                .get(module_instance_id)
+                .ok_or_else(|| format!("Missing Module instance {module_instance_id}"))?
+                .definition_id,
+        ],
+        BindingScope::Query { .. } => project.module_definitions.keys().copied().collect(),
+    };
+    definitions.sort();
+    Ok(definitions)
 }
 
 pub(super) fn compile_timeline(

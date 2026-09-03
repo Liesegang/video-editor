@@ -4,9 +4,9 @@ use crate::model::project::property::PropertyMap;
 use ordered_float::OrderedFloat;
 
 use crate::model::authoring::{
-    AttachmentId, AttachmentOwner, AttachmentStage, EventBindingId, ModuleDefinitionId,
-    ModuleInstanceId, SignalBindingId, TimelineId, TimelineInterval, TimelineItemId,
-    TimelineTrackId,
+    AttachmentId, AttachmentOwner, AttachmentStage, EventBinding, ModuleDefinitionId,
+    ModuleInstanceId, PublishedActionId, PublishedParameterId, SignalBinding, TimelineId,
+    TimelineInterval, TimelineItemId, TimelineTrackId,
 };
 
 #[derive(Clone, PartialEq, Debug)]
@@ -15,9 +15,66 @@ pub struct RenderPlan {
     pub timelines: HashMap<TimelineId, CompiledTimeline>,
     pub module_definitions: HashMap<ModuleDefinitionId, CompiledModuleDefinition>,
     pub module_invocations: Vec<ModuleInvocation>,
-    pub signal_binding_ids: Vec<SignalBindingId>,
-    pub event_binding_ids: Vec<EventBindingId>,
+    pub bindings: CompiledBindingIndex,
     pub dependencies: DependencyIndex,
+}
+
+/// Published-interface routes compiled from authored Bindings.
+///
+/// The runtime indexes by stable public IDs and never addresses Module-internal
+/// Node UUIDs. Query scopes are expanded only to matching definitions here;
+/// collection membership is still checked by the runtime invocation scope.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct CompiledBindingIndex {
+    signal_routes: HashMap<(ModuleDefinitionId, PublishedParameterId), Vec<SignalBinding>>,
+    event_routes: HashMap<(ModuleDefinitionId, PublishedActionId), Vec<EventBinding>>,
+}
+
+impl CompiledBindingIndex {
+    pub fn signal_bindings(
+        &self,
+        definition_id: ModuleDefinitionId,
+        parameter_id: PublishedParameterId,
+    ) -> &[SignalBinding] {
+        self.signal_routes
+            .get(&(definition_id, parameter_id))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub fn event_bindings(
+        &self,
+        definition_id: ModuleDefinitionId,
+        action_id: PublishedActionId,
+    ) -> &[EventBinding] {
+        self.event_routes
+            .get(&(definition_id, action_id))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn add_signal(&mut self, definition_id: ModuleDefinitionId, binding: SignalBinding) {
+        self.signal_routes
+            .entry((definition_id, binding.target_parameter_id))
+            .or_default()
+            .push(binding);
+    }
+
+    pub(super) fn add_event(&mut self, definition_id: ModuleDefinitionId, binding: EventBinding) {
+        self.event_routes
+            .entry((definition_id, binding.target_action_id))
+            .or_default()
+            .push(binding);
+    }
+
+    pub(super) fn finish(&mut self) {
+        for routes in self.signal_routes.values_mut() {
+            routes.sort_by_key(|binding| (binding.priority, binding.id));
+        }
+        for routes in self.event_routes.values_mut() {
+            routes.sort_by_key(|binding| (binding.priority, binding.id));
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]

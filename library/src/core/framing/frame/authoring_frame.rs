@@ -1030,7 +1030,9 @@ fn attachment_effects(
                     instance,
                     instance_path,
                     published,
-                    project.signal_bindings.values(),
+                    plan.bindings
+                        .signal_bindings(authored.id, published.id)
+                        .iter(),
                     runtime_signals,
                 )
                 .map(|effective| effective.value)
@@ -1543,6 +1545,14 @@ mod tests {
             },
         );
         let plan = RenderPlanCompiler::compile(&project).expect("compile Binding");
+        assert_eq!(
+            plan.bindings
+                .signal_bindings(definition_id, parameter_id)
+                .iter()
+                .map(|binding| binding.id)
+                .collect::<Vec<_>>(),
+            vec![binding_id]
+        );
         let mut signals = SignalRuntimeValues::default();
         signals.set(binding_id, 0.5).expect("finite Signal");
         let frame = evaluate_authoring_timeline_frame_with_signals(
