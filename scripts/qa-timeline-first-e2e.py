@@ -140,7 +140,11 @@ def free_port() -> int:
 
 
 def run_suite(client: Client, capture: Path | None) -> dict:
-    wait_for("QA bridge", lambda: client.get("/health").get("status") == "ok")
+    wait_for(
+        "QA bridge",
+        lambda: client.get("/health").get("status") == "ok",
+        timeout=90.0,
+    )
 
     def initial_components():
         values = client.components()
@@ -207,6 +211,44 @@ def run_suite(client: Client, capture: Path | None) -> dict:
 
     components = client.components()
     ruler = components["timeline.ruler"]
+    ruler_origin = float(ruler["rect"][0])
+    scroll_anchor = {
+        "x": min(float(ruler["rect"][2]) - 1.0, 1_200.0),
+        "y": center(ruler)["y"],
+    }
+    client.post(
+        "/v1/input/scroll",
+        {**scroll_anchor, "delta_x": -480.0, "delta_y": 0.0},
+    )
+    scrolled_ruler = wait_for(
+        "Timeline horizontal scroll",
+        lambda: (
+            current
+            if abs(float(current["rect"][0]) - ruler_origin) > 1.0
+            else None
+        )
+        if (current := client.components().get("timeline.ruler"))
+        else None,
+    )
+    client.post(
+        "/v1/input/scroll",
+        {
+            "x": scroll_anchor["x"],
+            "y": center(scrolled_ruler)["y"],
+            "delta_x": 480.0,
+            "delta_y": 0.0,
+        },
+    )
+    ruler = wait_for(
+        "Timeline scroll return",
+        lambda: (
+            current
+            if abs(float(current["rect"][0]) - ruler_origin) < 1.0
+            else None
+        )
+        if (current := client.components().get("timeline.ruler"))
+        else None,
+    )
     client.post(
         "/v1/input/click",
         {"x": float(ruler["rect"][0]) + 6.0 * pixels_per_second, "y": center(ruler)["y"]},
