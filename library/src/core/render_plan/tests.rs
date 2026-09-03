@@ -418,3 +418,83 @@ fn module_compilation_only_includes_nodes_reaching_the_selected_output() {
     assert_eq!(compiled.evaluation_order, vec![disconnected_id]);
     assert_eq!(compiled.operations.len(), 1);
 }
+
+#[test]
+fn compiled_event_source_routes_to_a_published_action_runtime() {
+    use crate::core::event_runtime::{EventRuntime, TriggerOutcome};
+
+    let timeline_id = TimelineId::new();
+    let track_id = TimelineTrackId::new();
+    let definition_id = ModuleDefinitionId::new();
+    let instance_id = ModuleInstanceId::new();
+    let action_id = PublishedActionId::new();
+    let binding_id = EventBindingId::new();
+    let source = EventSource::Marker {
+        name: "kick".to_string(),
+    };
+    let plugins = crate::plugin::PluginManager::default();
+    let node = plugins
+        .create_effect_operation_node("blur")
+        .expect("Effect Node");
+    let node_id = node.id;
+    let mut project = project_with_items(timeline_id, track_id, HashMap::new());
+    project.module_definitions.insert(
+        definition_id,
+        ModuleDefinition {
+            id: definition_id,
+            name: "Reactive effect".to_string(),
+            role: ModuleRole::Effect,
+            graph: ModuleGraph {
+                nodes: HashMap::from([(node_id, node)]),
+                connections: Vec::new(),
+            },
+            output_node_id: Some(node_id),
+            published_parameters: Vec::new(),
+            published_signals: Vec::new(),
+            published_actions: vec![PublishedAction {
+                id: action_id,
+                name: "Restart".to_string(),
+                target: ModulePortAddress {
+                    node_id,
+                    port: "restart".to_string(),
+                },
+            }],
+            version: 1,
+        },
+    );
+    project.module_instances.insert(
+        instance_id,
+        ModuleInstance {
+            id: instance_id,
+            definition_id,
+            parameter_overrides: HashMap::new(),
+        },
+    );
+    project.event_bindings.insert(
+        binding_id,
+        EventBinding {
+            id: binding_id,
+            source: source.clone(),
+            scope: BindingScope::Instance {
+                instance_path: InstancePath::root(timeline_id),
+                module_instance_id: instance_id,
+            },
+            target_action_id: action_id,
+            trigger_policy: TriggerPolicy::Restart,
+            priority: 0,
+        },
+    );
+
+    let plan = RenderPlanCompiler::compile(&project).expect("compiled event route");
+    assert_eq!(
+        plan.bindings.event_bindings(definition_id, action_id)[0].id,
+        binding_id
+    );
+    let mut runtime = EventRuntime::default();
+    let outcomes = runtime
+        .trigger_source(&plan.bindings, &source, 1.0, 2.0)
+        .expect("trigger source");
+    assert!(
+        matches!(outcomes.as_slice(), [(id, TriggerOutcome::Scheduled(_))] if *id == binding_id)
+    );
+}

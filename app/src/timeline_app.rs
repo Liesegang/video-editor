@@ -5,12 +5,13 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use library::core::binding_runtime::{resolve_published_numeric_value, SignalRuntimeValues};
+use library::core::event_runtime::EventRuntime;
 use library::model::authoring::{
     AuthoringProject, BindingOperator, BindingScope, ConstraintKind, DataSourceId, DurationPolicy,
-    InstancePath, MaskId, MaskMode, MatteMode, MatteRef, ModuleConnectionId, ModuleDefinitionId,
-    ModuleInstanceId, OverrideId, PublishedParameterId, SignalBinding, SignalBindingId,
-    SignalMapping, SignalSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId,
-    TimelineTrackId, TimelineTrackKind,
+    EventBinding, EventBindingId, EventSource, InstancePath, MaskId, MaskMode, MatteMode, MatteRef,
+    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, OverrideId, PublishedParameterId,
+    SignalBinding, SignalBindingId, SignalMapping, SignalSource, SourceRef, TimelineId,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TriggerPolicy,
 };
 use library::model::frame::color::Color;
 use library::model::project::asset::{Asset, AssetKind};
@@ -102,6 +103,7 @@ enum Edit {
     ConnectModuleNodes(ModuleDefinitionId, uuid::Uuid, uuid::Uuid),
     DisconnectModuleConnection(ModuleDefinitionId, ModuleConnectionId),
     AddSignalBinding(SignalBinding),
+    AddEventBinding(EventBinding),
     SetParent(TimelineItemId, Option<TimelineItemId>),
     DurationPolicy(TimelineItemId, DurationPolicy),
     Delete(TimelineItemId, bool),
@@ -167,7 +169,7 @@ impl Edit {
             Self::ConnectModulePorts(definition, from, _) => {
                 Some(HistoryKey::ModuleNode(*definition, from.node_id))
             }
-            Self::AddSignalBinding(_) => Some(HistoryKey::Binding),
+            Self::AddSignalBinding(_) | Self::AddEventBinding(_) => Some(HistoryKey::Binding),
             Self::SetParent(item, _) => Some(HistoryKey::Item(*item, "parent")),
             Self::DurationPolicy(item, _) => Some(HistoryKey::Item(*item, "duration-policy")),
             Self::Delete(item, _) => Some(HistoryKey::Item(*item, "delete")),
@@ -200,6 +202,7 @@ pub struct TimelineApp {
     current_time: f64,
     is_playing: bool,
     signal_runtime: SignalRuntimeValues,
+    event_runtime: EventRuntime,
     #[cfg(feature = "logic-editor")]
     logic_graph: crate::logic_graph_ui::LogicGraphState,
     last_playback_tick: Instant,
@@ -237,6 +240,7 @@ impl TimelineApp {
             current_time: 0.0,
             is_playing: false,
             signal_runtime: SignalRuntimeValues::default(),
+            event_runtime: EventRuntime::default(),
             #[cfg(feature = "logic-editor")]
             logic_graph: crate::logic_graph_ui::LogicGraphState::default(),
             last_playback_tick: Instant::now(),
@@ -312,6 +316,7 @@ impl TimelineApp {
         self.current_time = 0.0;
         self.is_playing = false;
         self.signal_runtime = SignalRuntimeValues::default();
+        self.event_runtime.clear();
         self.undo.clear();
         self.redo.clear();
         self.last_history_group = None;
@@ -824,6 +829,7 @@ impl TimelineApp {
                 .disconnect_module_connection(definition, connection)
                 .map(|_| ()),
             Edit::AddSignalBinding(binding) => self.editor.add_signal_binding(binding).map(|_| ()),
+            Edit::AddEventBinding(binding) => self.editor.add_event_binding(binding).map(|_| ()),
             Edit::SetParent(item, parent) => self.editor.set_parent(item, parent).map(|_| ()),
             Edit::DurationPolicy(item, policy) => self
                 .editor
@@ -967,6 +973,7 @@ impl TimelineApp {
     fn stop_playback(&mut self) {
         self.is_playing = false;
         self.current_time = 0.0;
+        self.event_runtime.clear();
         self.last_playback_tick = Instant::now();
         self.invalidate_preview();
     }
@@ -1281,12 +1288,14 @@ impl eframe::App for TimelineApp {
             });
         });
         self.refresh_preview(ctx);
-        let Ok(project) = self.editor.snapshot() else {
+        let Ok(compiled) = self.editor.compiled_project() else {
             return;
         };
+        let project = &compiled.project;
         let mut edits = Vec::new();
         let mut viewer = Viewer {
             project: project.as_ref(),
+            render_plan: compiled.render_plan.as_ref(),
             open_timeline: self.open_timeline,
             instance_path: &self.instance_path,
             selected_item: self.selected_item,
@@ -1294,6 +1303,7 @@ impl eframe::App for TimelineApp {
             preview: self.preview.as_ref(),
             workspace: self.workspace,
             signal_runtime: &mut self.signal_runtime,
+            event_runtime: &mut self.event_runtime,
             #[cfg(feature = "logic-editor")]
             logic_graph: &mut self.logic_graph,
             edits: &mut edits,
@@ -1301,7 +1311,7 @@ impl eframe::App for TimelineApp {
         DockArea::new(&mut self.dock)
             .style(Style::from_egui(ctx.style().as_ref()))
             .show(ctx, &mut viewer);
-        drop(project);
+        drop(compiled);
         for edit in edits {
             self.apply(edit);
         }
@@ -1320,6 +1330,7 @@ impl eframe::App for TimelineApp {
 
 struct Viewer<'a> {
     project: &'a AuthoringProject,
+    render_plan: &'a library::core::render_plan::RenderPlan,
     open_timeline: TimelineId,
     instance_path: &'a InstancePath,
     selected_item: Option<TimelineItemId>,
@@ -1327,6 +1338,7 @@ struct Viewer<'a> {
     preview: Option<&'a egui::TextureHandle>,
     workspace: Workspace,
     signal_runtime: &'a mut SignalRuntimeValues,
+    event_runtime: &'a mut EventRuntime,
     #[cfg(feature = "logic-editor")]
     logic_graph: &'a mut crate::logic_graph_ui::LogicGraphState,
     edits: &'a mut Vec<Edit>,
@@ -1370,8 +1382,12 @@ impl TabViewer for Viewer<'_> {
             Tab::Logic => logic_ui(
                 ui,
                 self.project,
+                self.render_plan,
                 self.selected_item,
+                self.instance_path,
+                *self.current_time,
                 self.signal_runtime,
+                self.event_runtime,
                 #[cfg(feature = "logic-editor")]
                 self.logic_graph,
                 self.edits,
@@ -2431,11 +2447,19 @@ fn data_ui(
     ui.small("Canvas and Inspector edits are stored as overrides and survive data refresh.");
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Logic workspace keeps Project, compiled routes, instance path, and runtime state explicit"
+)]
 fn logic_ui(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
+    render_plan: &library::core::render_plan::RenderPlan,
     selected: Option<TimelineItemId>,
+    instance_path: &InstancePath,
+    current_time: f64,
     signal_runtime: &mut SignalRuntimeValues,
+    event_runtime: &mut EventRuntime,
     #[cfg(feature = "logic-editor")] logic_graph: &mut crate::logic_graph_ui::LogicGraphState,
     edits: &mut Vec<Edit>,
 ) {
@@ -2457,6 +2481,43 @@ fn logic_ui(
                 {
                     drop(signal_runtime.set(binding.id, value));
                 }
+            }
+        });
+    }
+    if !project.event_bindings.is_empty() {
+        ui.collapsing("Live event preview", |ui| {
+            ui.small("Runtime-only occurrences; Stop clears every queue and overlap.");
+            let mut sources = project
+                .event_bindings
+                .values()
+                .map(|binding| binding.source.clone())
+                .collect::<Vec<_>>();
+            sources.sort_by_key(|source| format!("{source:?}"));
+            sources.dedup();
+            let duration = selected
+                .and_then(|item_id| project.items.get(&item_id))
+                .map(|item| item.interval.duration.into_inner())
+                .unwrap_or(1.0)
+                .max(f64::EPSILON);
+            for source in sources {
+                if ui.button(format!("Trigger {source:?}")).clicked() {
+                    drop(event_runtime.trigger_source(
+                        &render_plan.bindings,
+                        &source,
+                        current_time,
+                        duration,
+                    ));
+                }
+            }
+            let active = event_runtime.active_at(current_time);
+            ui.small(format!("{} active reactive occurrence(s)", active.len()));
+            for invocation in active {
+                ui.small(format!(
+                    "{:?} at {:.3}s (local {:.3}s)",
+                    invocation.action_id,
+                    invocation.scheduled_at,
+                    invocation.local_time(current_time)
+                ));
             }
         });
     }
@@ -2520,6 +2581,39 @@ fn logic_ui(
                 "Published parameters: {}",
                 definition.published_parameters.len()
             ));
+            for action in &definition.published_actions {
+                let exists = project.event_bindings.values().any(|binding| {
+                    binding.target_action_id == action.id
+                        && matches!(
+                            &binding.scope,
+                            BindingScope::Instance {
+                                instance_path: target_path,
+                                module_instance_id,
+                            } if target_path == instance_path && *module_instance_id == instance.id
+                        )
+                });
+                if ui
+                    .add_enabled(
+                        !exists,
+                        egui::Button::new(format!("Add Marker Trigger: {}", action.name)),
+                    )
+                    .clicked()
+                {
+                    edits.push(Edit::AddEventBinding(EventBinding {
+                        id: EventBindingId::new(),
+                        source: EventSource::Marker {
+                            name: format!("{}/{}", definition.name, action.name),
+                        },
+                        scope: BindingScope::Instance {
+                            instance_path: instance_path.clone(),
+                            module_instance_id: instance.id,
+                        },
+                        target_action_id: action.id,
+                        trigger_policy: TriggerPolicy::Restart,
+                        priority: 0,
+                    }));
+                }
+            }
             if definition.role == library::model::authoring::ModuleRole::Effect
                 && ui.button("Add Blur Node").clicked()
             {
