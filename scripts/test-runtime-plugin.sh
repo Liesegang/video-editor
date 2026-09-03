@@ -17,15 +17,13 @@ fi
 host_target="$runtime_target_root/host"
 sample_target="$runtime_target_root/sample"
 
-# Establish the required ordering: both the app and the exact executable probe
-# exist before the third-party plugin is compiled. The sample uses a separate
-# target directory, so it cannot rebuild either host executable afterwards.
+# Establish the required ordering: the real app exists before the third-party
+# plugin is compiled. The sample uses a separate target directory, so it cannot
+# rebuild the host afterwards.
 cargo build --manifest-path "$repo_root/Cargo.toml" -p app \
     --target-dir "$host_target" --locked
-cargo build --manifest-path "$repo_root/Cargo.toml" -p library \
-    --bin runtime_plugin_probe --target-dir "$host_target" --locked
-host_probe="$host_target/debug/runtime_plugin_probe"
-host_fingerprint="$(cksum "$host_probe")"
+host_app="$host_target/debug/app"
+host_fingerprint="$(cksum "$host_app")"
 
 host_dependency_tree="$(cargo tree --manifest-path "$repo_root/Cargo.toml" \
     -p app --locked --prefix none)"
@@ -58,8 +56,6 @@ if nm -g "$bundle/$library_name" | grep -q 'create_property_plugin'; then
     exit 1
 fi
 
-"$host_probe" "$bundle"
-
 # The ignored integration test is deliberately non-vacuous: this script must
 # supply the independently built bundle, and the test concurrently rescans it
 # while counting descriptor callbacks inside the loaded library.
@@ -69,8 +65,8 @@ RUVIE_TEST_PLUGIN_BUNDLE="$bundle" cargo test \
     standalone_runtime_bundle_loads_builds_nodes_and_invokes -- \
     --ignored --exact
 
-host_after_plugin="$(cksum "$host_probe")"
+host_after_plugin="$(cksum "$host_app")"
 if [[ "$host_after_plugin" != "$host_fingerprint" ]]; then
-    printf '%s\n' "host probe changed after third-party plugin build" >&2
+    printf '%s\n' "host app changed after third-party plugin build" >&2
     exit 1
 fi
