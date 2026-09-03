@@ -354,7 +354,13 @@ fn nodes_reaching_output(definition: &ModuleDefinition) -> std::collections::Has
 pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u8; 32], String> {
     use sha2::{Digest, Sha256};
 
-    let encoded = serde_json::to_vec(definition)
+    let mut executable = definition.clone();
+    for node in executable.graph.nodes.values_mut() {
+        node.ui_position = [0.0, 0.0];
+        node.ui_size = [1.0, 1.0];
+        node.ui_collapsed = false;
+    }
+    let encoded = serde_json::to_vec(&executable)
         .map_err(|error| format!("Cannot fingerprint Module definition: {error}"))?;
     Ok(Sha256::digest(encoded).into())
 }

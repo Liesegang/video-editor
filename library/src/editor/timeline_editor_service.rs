@@ -349,6 +349,19 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    pub fn set_module_node_presentation(
+        &self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+        position: [f32; 2],
+        size: [f32; 2],
+        collapsed: bool,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.write_session()?
+            .set_module_node_presentation(definition_id, node_id, position, size, collapsed)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn add_effect_node_to_module(
         &self,
         definition_id: ModuleDefinitionId,

@@ -862,6 +862,44 @@ impl AuthoringSession {
         }]))
     }
 
+    pub fn set_module_node_presentation(
+        &mut self,
+        definition_id: ModuleDefinitionId,
+        node_id: uuid::Uuid,
+        position: [f32; 2],
+        size: [f32; 2],
+        collapsed: bool,
+    ) -> Result<ChangeSet, String> {
+        if position.into_iter().any(|value| !value.is_finite())
+            || size
+                .into_iter()
+                .any(|value| !value.is_finite() || value <= 0.0)
+        {
+            return Err(
+                "Module Node presentation geometry must be finite and positive".to_string(),
+            );
+        }
+        let node = self
+            .project
+            .module_definitions
+            .get_mut(&definition_id)
+            .ok_or_else(|| format!("Missing Module definition {definition_id}"))?
+            .graph
+            .nodes
+            .get_mut(&node_id)
+            .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
+        if node.ui_position == position && node.ui_size == size && node.ui_collapsed == collapsed {
+            return Ok(ChangeSet {
+                revision: self.revision,
+                invalidations: Vec::new(),
+            });
+        }
+        node.ui_position = position;
+        node.ui_size = size;
+        node.ui_collapsed = collapsed;
+        Ok(self.finish(Vec::new()))
+    }
+
     pub fn add_effect_node_to_module(
         &mut self,
         definition_id: ModuleDefinitionId,

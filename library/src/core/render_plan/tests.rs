@@ -401,6 +401,17 @@ fn module_compilation_only_includes_nodes_reaching_the_selected_output() {
         )
     }));
 
+    let executable_fingerprint = compiled.fingerprint;
+    definition
+        .graph
+        .nodes
+        .get_mut(&first_id)
+        .expect("first Node")
+        .ui_position = [320.0, 180.0];
+    let presentation_only = super::compiler::compile_module(definition_id, &definition)
+        .expect("presentation-only change compiles");
+    assert_eq!(presentation_only.fingerprint, executable_fingerprint);
+
     definition.output_node_id = Some(disconnected_id);
     let compiled = super::compiler::compile_module(definition_id, &definition)
         .expect("switched output compiles");
