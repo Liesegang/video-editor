@@ -790,6 +790,24 @@ impl TimelineEditorService {
         &self,
         data_source_id: DataSourceId,
     ) -> Result<ChangeSet, LibraryError> {
+        self.refresh_data_source_with_key_policy(data_source_id, false)
+    }
+
+    /// Refreshes a table after an explicit user decision to adopt its current
+    /// stable-key column. Corrections whose former keys no longer exist stay
+    /// in the Project as Orphaned Overrides.
+    pub fn refresh_data_source_adopting_stable_key(
+        &self,
+        data_source_id: DataSourceId,
+    ) -> Result<ChangeSet, LibraryError> {
+        self.refresh_data_source_with_key_policy(data_source_id, true)
+    }
+
+    fn refresh_data_source_with_key_policy(
+        &self,
+        data_source_id: DataSourceId,
+        adopt_stable_key: bool,
+    ) -> Result<ChangeSet, LibraryError> {
         let snapshot = self.snapshot()?;
         let previous = snapshot
             .data_sources
@@ -815,7 +833,7 @@ impl TimelineEditorService {
         })?;
         let (source_ref, table) = crate::core::data_source_runtime::parse_table(&path, &source)
             .map_err(LibraryError::Validation)?;
-        if table.stable_key_field != previous.stable_key_field {
+        if table.stable_key_field != previous.stable_key_field && !adopt_stable_key {
             return Err(LibraryError::Validation(format!(
                 "Stable key changed from '{}' to '{}'; choose how to reconcile before refreshing",
                 previous.stable_key_field, table.stable_key_field
@@ -834,6 +852,7 @@ impl TimelineEditorService {
         .map_err(LibraryError::Validation)?;
         let mut refreshed = previous;
         refreshed.source = source_ref;
+        refreshed.stable_key_field = table.stable_key_field;
         refreshed.cached_rows = table.rows;
         self.write_session()?
             .replace_data_source_generation(
@@ -1471,6 +1490,67 @@ mod tests {
                 .overrides
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn adopting_a_changed_stable_key_preserves_unmatched_corrections_as_orphans() {
+        let service =
+            TimelineEditorService::create_default("Stable key reconciliation").expect("project");
+        let snapshot = service.snapshot().expect("snapshot");
+        let timeline_id = snapshot.root_timeline_id;
+        let track_id = snapshot.timelines[&timeline_id].track_order[0];
+        drop(snapshot);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("rows.csv");
+        std::fs::write(&path, "id,text,x\nhero,Original,10\n").expect("initial data");
+        let (data_source_id, _) = service
+            .import_data_source(&path, track_id)
+            .expect("import data");
+        let snapshot = service.snapshot().expect("generated snapshot");
+        let original_item_id = snapshot
+            .generated_items
+            .keys()
+            .next()
+            .map(|id| TimelineItemId::from_uuid(id.as_uuid()))
+            .expect("generated item");
+        drop(snapshot);
+        service
+            .set_text(original_item_id, "Manual correction".to_string())
+            .expect("manual correction");
+
+        std::fs::write(&path, "slug,text,x\nnew-hero,Updated,20\n").expect("changed key data");
+        let error = service
+            .refresh_data_source(data_source_id)
+            .expect_err("ordinary refresh must not guess a changed stable key");
+        assert!(error.to_string().contains("Stable key changed"));
+        let unchanged = service.snapshot().expect("unchanged project");
+        assert_eq!(
+            unchanged.data_sources[&data_source_id].stable_key_field,
+            "id"
+        );
+        assert!(matches!(
+            &unchanged.items[&original_item_id].source,
+            SourceRef::Text { text } if text == "Manual correction"
+        ));
+        drop(unchanged);
+
+        service
+            .refresh_data_source_adopting_stable_key(data_source_id)
+            .expect("explicit stable key adoption");
+        let reconciled = service.snapshot().expect("reconciled project");
+        assert_eq!(
+            reconciled.data_sources[&data_source_id].stable_key_field,
+            "slug"
+        );
+        assert!(!reconciled.items.contains_key(&original_item_id));
+        assert_eq!(reconciled.generated_items.len(), 1);
+        let correction = reconciled.overrides.values().next().expect("correction");
+        assert_eq!(
+            correction.status,
+            crate::model::authoring::OverrideStatus::Orphaned
+        );
+        assert!(!correction.patch.is_empty());
+        reconciled.validate().expect("valid reconciled project");
     }
 
     #[test]

@@ -128,6 +128,7 @@ enum Edit {
     RemoveKeyframe(TimelineItemId, String, KeyframeId),
     ImportData(std::path::PathBuf, TimelineTrackId),
     RefreshData(DataSourceId),
+    AdoptDataStableKey(DataSourceId),
     DiscardOverride(OverrideId),
     ImportSubtitles(std::path::PathBuf, TimelineTrackId),
     CrossDissolve(TimelineItemId, f64),
@@ -204,6 +205,7 @@ impl Edit {
             | Self::RemoveKeyframe(item, key, _) => Some(HistoryKey::Property(*item, key.clone())),
             Self::ImportData(..)
             | Self::RefreshData(_)
+            | Self::AdoptDataStableKey(_)
             | Self::DiscardOverride(_)
             | Self::ImportSubtitles(..) => Some(HistoryKey::Data),
             Self::CrossDissolve(item, _) => Some(HistoryKey::Item(*item, "transition")),
@@ -1080,6 +1082,10 @@ impl TimelineApp {
             Edit::RefreshData(data_source_id) => {
                 self.editor.refresh_data_source(data_source_id).map(|_| ())
             }
+            Edit::AdoptDataStableKey(data_source_id) => self
+                .editor
+                .refresh_data_source_adopting_stable_key(data_source_id)
+                .map(|_| ()),
             Edit::DiscardOverride(override_id) => self
                 .editor
                 .remove_generated_override(override_id)
@@ -3797,6 +3803,19 @@ fn data_ui(
                 if ui.button("Refresh").clicked() {
                     edits.push(Edit::RefreshData(data_source.id));
                 }
+                ui.menu_button("Reconcile…", |ui| {
+                    ui.label("If the key column changed, existing corrections cannot be guessed.");
+                    if ui
+                        .button("Adopt file key; keep unmatched corrections")
+                        .on_hover_text(
+                            "Refresh with the file's current first column as the stable key. Unmatched manual corrections remain Orphaned.",
+                        )
+                        .clicked()
+                    {
+                        edits.push(Edit::AdoptDataStableKey(data_source.id));
+                        ui.close();
+                    }
+                });
             });
             ui.label(format!(
                 "{} rows  ·  stable key: {}",
