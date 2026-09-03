@@ -12,7 +12,7 @@ use crate::core::binding_runtime::{SignalRuntimeValues, resolve_published_numeri
 use crate::core::render_plan::{
     CompiledModuleOperation, ModuleInvocationOwner, PlannedSource, RenderPlan,
 };
-use crate::core::timeline_runtime::map_composition_time;
+use crate::core::timeline_runtime::{item_local_time, map_composition_time};
 use crate::error::LibraryError;
 use crate::model::BlendMode;
 use crate::model::authoring::{
@@ -256,7 +256,7 @@ fn collect_item(
     runtime_signals: &SignalRuntimeValues,
     active: &mut HashSet<TimelineId>,
 ) -> Result<FrameItem, LibraryError> {
-    let local_time = timeline_time - item.interval.start.into_inner();
+    let local_time = item_local_time(item.interval, timeline_time);
     let mut child = match (&item.source, planned_source) {
         (SourceRef::Asset { asset_id, time_map }, PlannedSource::Asset) => {
             let source_time = time_map.source_start.into_inner()
@@ -459,7 +459,7 @@ fn apply_constraints(
     timeline_time: f64,
     transform: &mut Transform,
 ) -> Result<(), LibraryError> {
-    let item_local_time = timeline_time - item.interval.start.into_inner();
+    let authored_time = item_local_time(item.interval, timeline_time);
     for constraint in &item.constraints {
         let target = project
             .items
@@ -470,11 +470,11 @@ fn apply_constraints(
                     constraint.id
                 ))
             })?;
-        let target_local_time = timeline_time - target.interval.start.into_inner();
+        let target_local_time = item_local_time(target.interval, timeline_time);
         let target_transform = transform_at(&target.authored_properties, target_local_time)?;
         let influence = constraint
             .influence
-            .evaluate_at(timeline_time)
+            .evaluate_at(authored_time)
             .ok()
             .and_then(|value| match value {
                 PropertyValue::Number(value) => Some(value.into_inner()),
@@ -519,7 +519,7 @@ fn apply_constraints(
                 let progress = constraint
                     .parameters
                     .get("progress")
-                    .and_then(|property| property.evaluate_at(item_local_time).ok())
+                    .and_then(|property| property.evaluate_at(authored_time).ok())
                     .and_then(|value| match value {
                         PropertyValue::Number(value) => Some(value.into_inner()),
                         PropertyValue::Integer(value) => Some(value as f64),
@@ -537,7 +537,7 @@ fn apply_constraints(
                 let auto_orient = constraint
                     .parameters
                     .get("auto_orient")
-                    .and_then(|property| property.evaluate_at(item_local_time).ok())
+                    .and_then(|property| property.evaluate_at(authored_time).ok())
                     .is_some_and(|value| matches!(value, PropertyValue::Boolean(true)));
                 if auto_orient {
                     let angle = tangent.1.atan2(tangent.0).to_degrees();
@@ -928,7 +928,7 @@ fn inherited_transforms(
         let parent = project.items.get(&id).ok_or_else(|| {
             LibraryError::Validation(format!("Timeline item {} has a missing parent", item.id))
         })?;
-        let local_time = timeline_time - parent.interval.start.into_inner();
+        let local_time = item_local_time(parent.interval, timeline_time);
         transforms.push(transform_at(&parent.authored_properties, local_time)?);
         parent_id = parent.parent;
     }
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn text_item_is_assembled_from_timeline_without_creating_a_node() {
-        let project = AuthoringProject::new("Frame", 1280, 720, 10.0, 3.0).expect("valid Project");
+        let project = AuthoringProject::new("Frame", 1280, 720, 10.0, 20.0).expect("valid Project");
         let track_id = *project.tracks.keys().next().expect("default Track");
         let mut session = AuthoringSession::new(project).expect("session");
         let (item_id, _) = session
@@ -1209,7 +1209,7 @@ mod tests {
                 SourceRef::Text {
                     text: "Timeline first".to_string(),
                 },
-                TimelineInterval::new(0.0, 2.0).expect("interval"),
+                TimelineInterval::new(10.0, 2.0).expect("interval"),
                 0,
             )
             .expect("add item");
@@ -1239,7 +1239,7 @@ mod tests {
             .expect("keyframe position");
         let project = session.into_project();
         let plan = RenderPlanCompiler::compile(&project).expect("compile");
-        let frame = evaluate_authoring_frame(&project, &plan, 5, 1.0, None).expect("frame");
+        let frame = evaluate_authoring_frame(&project, &plan, 105, 1.0, None).expect("frame");
 
         let FrameItem::Group(track) = &frame.items[0] else {
             panic!("Track group expected");

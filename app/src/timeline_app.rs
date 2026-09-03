@@ -751,14 +751,16 @@ impl TimelineApp {
                 self.editor.move_item(id, track, start, layer).map(|_| ())
             }
             Edit::Trim(id, interval) => self.editor.trim_item(id, interval).map(|_| ()),
-            Edit::Property(id, key, value) => self
-                .editor
-                .update_item_property_value(id, key, self.current_time, value)
-                .map(|_| ()),
-            Edit::Keyframe(id, key, value) => self
-                .editor
-                .upsert_item_keyframe(id, key, self.current_time, value, None)
-                .map(|_| ()),
+            Edit::Property(id, key, value) => self.authored_item_time(id).and_then(|time| {
+                self.editor
+                    .update_item_property_value(id, key, time, value)
+                    .map(|_| ())
+            }),
+            Edit::Keyframe(id, key, value) => self.authored_item_time(id).and_then(|time| {
+                self.editor
+                    .upsert_item_keyframe(id, key, time, value, None)
+                    .map(|_| ())
+            }),
             Edit::Split(id) => self.editor.split_item(id, self.current_time).map(|_| ()),
             Edit::Blur(id) => self
                 .editor
@@ -897,6 +899,17 @@ impl TimelineApp {
             }
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    fn authored_item_time(&self, item_id: TimelineItemId) -> Result<f64, library::LibraryError> {
+        let project = self.editor.snapshot()?;
+        let item = project.items.get(&item_id).ok_or_else(|| {
+            library::LibraryError::Validation(format!("Timeline item {item_id} is missing"))
+        })?;
+        Ok(library::core::timeline_runtime::editable_item_local_time(
+            item.interval,
+            self.current_time,
+        ))
     }
 
     fn invalidate_preview(&mut self) {
@@ -1360,7 +1373,11 @@ fn preview_ui(
                 ui.add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::drag()));
             if response.dragged() {
                 if let Some(item) = selected.and_then(|id| project.items.get(&id)) {
-                    let (x, y) = vec2_property_at(item, "position", current_time, (0.0, 0.0));
+                    let local_time = library::core::timeline_runtime::editable_item_local_time(
+                        item.interval,
+                        current_time,
+                    );
+                    let (x, y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
                     let delta = ui.input(|input| input.pointer.delta()) / scale;
                     edits.push(Edit::Property(
                         item.id,
@@ -1634,6 +1651,8 @@ fn inspector_ui(
     let Some(item) = project.items.get(&id) else {
         return;
     };
+    let local_time =
+        library::core::timeline_runtime::editable_item_local_time(item.interval, current_time);
     ui.heading("Instance");
     let mut name = item.name.clone();
     if ui.text_edit_singleline(&mut name).changed() {
@@ -1756,7 +1775,7 @@ fn inspector_ui(
             };
             let numeric = |property: &Property, fallback: f64| {
                 property
-                    .evaluate_at(current_time)
+                    .evaluate_at(local_time)
                     .ok()
                     .and_then(|value| match value {
                         PropertyValue::Number(value) => Some(value.into_inner()),
@@ -1890,7 +1909,7 @@ fn inspector_ui(
         _ => false,
     };
     if is_audio {
-        let mut volume = number_property_at(item, "volume", current_time, 1.0);
+        let mut volume = number_property_at(item, "volume", local_time, 1.0);
         if ui
             .add(egui::Slider::new(&mut volume, 0.0..=2.0).text("Volume"))
             .changed()
@@ -1904,7 +1923,7 @@ fn inspector_ui(
     }
     ui.separator();
     ui.heading("Transform");
-    let (mut x, mut y) = vec2_property_at(item, "position", current_time, (0.0, 0.0));
+    let (mut x, mut y) = vec2_property_at(item, "position", local_time, (0.0, 0.0));
     let x_changed = ui
         .add(egui::DragValue::new(&mut x).speed(1.0).prefix("X "))
         .changed();
@@ -1925,7 +1944,7 @@ fn inspector_ui(
             property_vec2(x, y),
         ));
     }
-    let mut opacity = number_property_at(item, "opacity", current_time, 1.0);
+    let mut opacity = number_property_at(item, "opacity", local_time, 1.0);
     if ui
         .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))
         .changed()
@@ -1949,13 +1968,20 @@ fn inspector_ui(
                 ui.small(format!("Base: {:?}", base));
             }
             if property.evaluator == "keyframe" {
-                ui.small(format!("Keyframe at {:.3}s: {:.3}", current_time, opacity));
+                ui.small(format!(
+                    "Keyframe at {:.3}s local: {:.3}",
+                    local_time, opacity
+                ));
             }
         } else {
             ui.small("Base: 1.0");
         }
         if let Some(parent) = item.parent.and_then(|parent| project.items.get(&parent)) {
-            let inherited = number_property_at(parent, "opacity", current_time, 1.0);
+            let parent_time = library::core::timeline_runtime::editable_item_local_time(
+                parent.interval,
+                current_time,
+            );
+            let inherited = number_property_at(parent, "opacity", parent_time, 1.0);
             ui.small(format!("Parent {}: x{inherited:.3}", parent.name));
         }
     });

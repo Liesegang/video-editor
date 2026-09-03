@@ -1,5 +1,15 @@
 use crate::model::authoring::{CompositionInstance, DurationPolicy, TimelineInterval};
 
+/// Convert an owning Timeline time to the Item's authored local time.
+pub fn item_local_time(placement: TimelineInterval, timeline_time: f64) -> f64 {
+    timeline_time - placement.start.into_inner()
+}
+
+/// Local time used by direct editors when the playhead is outside the Item.
+pub fn editable_item_local_time(placement: TimelineInterval, timeline_time: f64) -> f64 {
+    item_local_time(placement, timeline_time).clamp(0.0, placement.duration.into_inner())
+}
+
 pub fn map_composition_time(
     instance: &CompositionInstance,
     placement: TimelineInterval,
@@ -15,7 +25,7 @@ pub fn map_composition_time(
     if !placement.contains(timeline_time) {
         return Ok(None);
     }
-    let local = timeline_time - placement.start.into_inner();
+    let local = item_local_time(placement, timeline_time);
     let mapped = match &instance.duration_policy {
         DurationPolicy::Fixed => {
             if local >= definition_duration {
@@ -128,6 +138,14 @@ mod tests {
         .expect("mapping");
         assert_eq!(first, Some(1.25));
         assert_eq!(moved, first);
+    }
+
+    #[test]
+    fn item_authoring_time_is_local_and_editor_time_is_bounded() {
+        let placement = TimelineInterval::new(10.0, 4.0).expect("interval");
+        assert_eq!(item_local_time(placement, 11.5), 1.5);
+        assert_eq!(editable_item_local_time(placement, 8.0), 0.0);
+        assert_eq!(editable_item_local_time(placement, 20.0), 4.0);
     }
 
     #[test]
