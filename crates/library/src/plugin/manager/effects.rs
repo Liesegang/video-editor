@@ -65,10 +65,7 @@ impl PluginManager {
     }
 
     pub(crate) fn effect_project_linear_color_parameters(&self, key: &str) -> Vec<String> {
-        let inner = self.read_registry();
-        inner
-            .effect_plugins
-            .get(key)
+        self.get_effect_plugin(key)
             .map(|plugin| {
                 plugin
                     .project_linear_color_parameters()

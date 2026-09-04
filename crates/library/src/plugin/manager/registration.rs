@@ -14,9 +14,10 @@ use super::PluginManager;
 
 impl PluginManager {
     pub fn register_effect(&self, plugin: Arc<dyn EffectPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.effect_plugins.register(plugin);
+            let replaced = registry.effect_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -24,9 +25,10 @@ impl PluginManager {
     }
 
     pub fn register_load_plugin(&self, plugin: Arc<dyn LoadPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.load_plugins.register(plugin);
+            let replaced = registry.load_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -34,9 +36,10 @@ impl PluginManager {
     }
 
     pub fn register_export_plugin(&self, plugin: Arc<dyn ExportPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.export_plugins.register(plugin);
+            let replaced = registry.export_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -44,9 +47,10 @@ impl PluginManager {
     }
 
     pub fn register_entity_converter_plugin(&self, plugin: Arc<dyn EntityConverterPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.entity_converter_plugins.register(plugin);
+            let replaced = registry.entity_converter_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -54,13 +58,13 @@ impl PluginManager {
     }
 
     pub fn register_property_plugin(&self, plugin: Arc<dyn PropertyPlugin>) {
-        let evaluator_id = plugin.id();
+        let evaluator_id = plugin.id().to_string();
         let evaluator = plugin.get_evaluator_instance();
         let replaced = {
             let mut registry = self.write_registry();
             let replaced = registry
                 .property_evaluators
-                .register(evaluator_id, evaluator);
+                .register(&evaluator_id, evaluator);
             self.bump_render_revision();
             replaced
         };
@@ -68,9 +72,10 @@ impl PluginManager {
     }
 
     pub fn register_effector_plugin(&self, plugin: Arc<dyn EffectorPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.effector_plugins.register(plugin);
+            let replaced = registry.effector_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -78,9 +83,10 @@ impl PluginManager {
     }
 
     pub fn register_decorator_plugin(&self, plugin: Arc<dyn DecoratorPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.decorator_plugins.register(plugin);
+            let replaced = registry.decorator_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -88,9 +94,10 @@ impl PluginManager {
     }
 
     pub fn register_style_plugin(&self, plugin: Arc<dyn StylePlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.style_plugins.register(plugin);
+            let replaced = registry.style_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };
@@ -98,9 +105,10 @@ impl PluginManager {
     }
 
     pub fn register_path_effect_plugin(&self, plugin: Arc<dyn PathEffectPlugin>) {
+        let id = plugin.id().to_string();
         let replaced = {
             let mut registry = self.write_registry();
-            let replaced = registry.path_effect_plugins.register(plugin);
+            let replaced = registry.path_effect_plugins.register(id, plugin);
             self.bump_render_revision();
             replaced
         };

@@ -22,7 +22,7 @@ use crate::util::local_file::DirectRegularFile;
 use crate::plugin::PluginCategory;
 use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
-use crate::plugin::exporters::ExportSettings;
+use crate::plugin::exporters::{ExportPlugin, ExportSettings};
 use crate::plugin::loaders::{
     AssetMetadata, LoadPluginError, LoadRepository, LoadRequest, LoadResponse,
 };
@@ -33,7 +33,7 @@ use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
     IMAGE_OPACITY_STYLE_COMPONENT_ID, IMAGE_TRANSFORM_COMPONENT_ID, OperationDescriptor,
-    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PathEffectPlugin,
+    PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PathEffectPlugin, Plugin,
     SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
     TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
@@ -202,6 +202,11 @@ impl PluginManager {
     pub fn get_effect_plugin(&self, id: &str) -> Option<Arc<dyn EffectPlugin>> {
         let inner = self.read_registry();
         inner.effect_plugins.get(id).cloned()
+    }
+
+    fn get_export_plugin(&self, id: &str) -> Option<Arc<dyn ExportPlugin>> {
+        let inner = self.read_registry();
+        inner.export_plugins.get(id).cloned()
     }
 
     /// Resolves an executable operation descriptor without making Project
@@ -452,38 +457,22 @@ impl PluginManager {
 
     pub fn get_available_effectors(&self) -> Vec<String> {
         let inner = self.read_registry();
-        inner
-            .effector_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
+        inner.effector_plugins.plugins.keys().cloned().collect()
     }
 
     pub fn get_available_decorators(&self) -> Vec<String> {
         let inner = self.read_registry();
-        inner
-            .decorator_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
+        inner.decorator_plugins.plugins.keys().cloned().collect()
     }
 
     pub fn get_available_styles(&self) -> Vec<String> {
         let inner = self.read_registry();
-        inner
-            .style_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
+        inner.style_plugins.plugins.keys().cloned().collect()
     }
 
     pub fn get_available_path_effects(&self) -> Vec<String> {
         let inner = self.read_registry();
-        inner
-            .path_effect_plugins
-            .values()
-            .map(|plugin| plugin.id().to_string())
-            .collect()
+        inner.path_effect_plugins.plugins.keys().cloned().collect()
     }
 
     pub fn get_effector_properties(&self, id: &str) -> Vec<PropertyDefinition> {
@@ -525,12 +514,13 @@ impl PluginManager {
 
     /// Get list of all registered loader plugins (id, name).
     pub fn get_loader_plugins(&self) -> Vec<(String, String)> {
-        let inner = self.read_registry();
-        inner
-            .load_plugins
-            .get_priority_order()
-            .iter()
-            .filter_map(|id| inner.load_plugins.get(id).map(|p| (id.clone(), p.name())))
+        let plugins = {
+            let inner = self.read_registry();
+            inner.load_plugins.snapshot()
+        };
+        plugins
+            .into_iter()
+            .map(|(id, plugin)| (id, plugin.name()))
             .collect()
     }
 
@@ -553,16 +543,16 @@ impl PluginManager {
         })?;
         let plugins = {
             let inner = self.read_registry();
-            inner.load_plugins.values().cloned().collect::<Vec<_>>()
+            inner.load_plugins.snapshot()
         };
-        for plugin in plugins {
+        for (plugin_id, plugin) in plugins {
             match plugin.load(request, cache) {
                 Ok(response) => return Ok(response),
                 Err(LoadPluginError::Unsupported) => {}
                 Err(LoadPluginError::Failed(error)) => {
                     log::error!(
                         "Load plugin '{}' failed for request {:?}: {}",
-                        plugin.id(),
+                        plugin_id,
                         request,
                         error
                     );
@@ -594,16 +584,16 @@ impl PluginManager {
     ) -> Result<Option<Vec<AssetMetadata>>, LibraryError> {
         let plugins = {
             let inner = self.read_registry();
-            inner.load_plugins.values().cloned().collect::<Vec<_>>()
+            inner.load_plugins.snapshot()
         };
-        for plugin in plugins {
+        for (plugin_id, plugin) in plugins {
             match plugin.open(path) {
                 Ok(streams) => return Ok(Some(streams)),
                 Err(LoadPluginError::Unsupported) => {}
                 Err(LoadPluginError::Failed(error)) => {
                     log::error!(
                         "Load plugin '{}' failed to inspect path {:?}: {}",
-                        plugin.id(),
+                        plugin_id,
                         path,
                         error
                     );
@@ -645,25 +635,17 @@ impl PluginManager {
         frame: &crate::plugin::ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
-        let inner = self.read_registry();
-        if let Some(plugin) = inner.export_plugins.get(exporter_id) {
-            return plugin.export_frame(path, frame, settings);
-        }
-        Err(LibraryError::Plugin(format!(
-            "Exporter '{}' not found",
-            exporter_id
-        )))
+        self.get_export_plugin(exporter_id)
+            .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
+            .export_frame(path, frame, settings)
     }
 
     pub fn get_export_plugin_properties(
         &self,
         exporter_id: &str,
     ) -> Option<Vec<PropertyDefinition>> {
-        let inner = self.read_registry();
-        inner
-            .export_plugins
-            .get(exporter_id)
-            .map(|p| p.properties())
+        self.get_export_plugin(exporter_id)
+            .map(|plugin| plugin.properties())
     }
 
     pub fn finish_export(
@@ -672,14 +654,9 @@ impl PluginManager {
         path: &str,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
-        let inner = self.read_registry();
-        if let Some(plugin) = inner.export_plugins.get(exporter_id) {
-            return plugin.finish_export(path, settings);
-        }
-        Err(LibraryError::Plugin(format!(
-            "Exporter '{}' not found",
-            exporter_id
-        )))
+        self.get_export_plugin(exporter_id)
+            .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
+            .finish_export(path, settings)
     }
 
     pub fn get_property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {
@@ -688,10 +665,17 @@ impl PluginManager {
     }
 
     pub fn get_entity_converter(&self, kind: &str) -> Option<Arc<dyn EntityConverterPlugin>> {
-        let inner = self.read_registry();
-        for plugin in inner.entity_converter_plugins.values() {
+        let plugins = {
+            let inner = self.read_registry();
+            inner
+                .entity_converter_plugins
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for plugin in plugins {
             if plugin.supports_kind(kind) {
-                return Some(plugin.clone());
+                return Some(plugin);
             }
         }
         None
@@ -703,12 +687,13 @@ impl PluginManager {
     }
 
     pub fn get_available_effects(&self) -> Vec<(String, String, String)> {
-        let inner = self.read_registry();
-        inner
-            .effect_plugins
-            .plugins
-            .values()
-            .map(|p| (p.id().to_string(), p.name(), p.category()))
+        let plugins = {
+            let inner = self.read_registry();
+            inner.effect_plugins.snapshot()
+        };
+        plugins
+            .into_iter()
+            .map(|(id, plugin)| (id, plugin.name(), plugin.category()))
             .collect()
     }
 
@@ -719,110 +704,99 @@ impl PluginManager {
     }
 
     pub fn get_available_exporters(&self) -> Vec<(String, String)> {
-        let inner = self.read_registry();
-        inner
-            .export_plugins
-            .plugins
-            .values()
-            .map(|p| (p.id().to_string(), p.name()))
+        let plugins = {
+            let inner = self.read_registry();
+            inner.export_plugins.snapshot()
+        };
+        plugins
+            .into_iter()
+            .map(|(id, plugin)| (id, plugin.name()))
             .collect()
     }
 
     pub fn get_all_plugins(&self) -> Vec<PluginInfo> {
-        let inner = self.read_registry();
+        let (
+            effects,
+            loaders,
+            exporters,
+            entity_converters,
+            effectors,
+            decorators,
+            styles,
+            path_effects,
+        ) = {
+            let inner = self.read_registry();
+            (
+                inner.effect_plugins.snapshot(),
+                inner.load_plugins.snapshot(),
+                inner.export_plugins.snapshot(),
+                inner.entity_converter_plugins.snapshot(),
+                inner.effector_plugins.snapshot(),
+                inner.decorator_plugins.snapshot(),
+                inner.style_plugins.snapshot(),
+                inner.path_effect_plugins.snapshot(),
+            )
+        };
         let mut plugins = Vec::new();
-
-        for p in inner.effect_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.load_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.export_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.entity_converter_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.effector_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.decorator_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.style_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.path_effect_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
+        plugins.extend(
+            effects
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Effect)),
+        );
+        plugins.extend(
+            loaders
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Load)),
+        );
+        plugins.extend(
+            exporters
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Export)),
+        );
+        plugins.extend(
+            entity_converters.into_iter().map(|(id, plugin)| {
+                plugin_info(id, plugin.as_ref(), PluginCategory::EntityConverter)
+            }),
+        );
+        plugins.extend(
+            effectors
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Effector)),
+        );
+        plugins.extend(
+            decorators
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Decorator)),
+        );
+        plugins.extend(
+            styles
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::Style)),
+        );
+        plugins.extend(
+            path_effects
+                .into_iter()
+                .map(|(id, plugin)| plugin_info(id, plugin.as_ref(), PluginCategory::PathEffect)),
+        );
 
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
+    }
+}
+
+fn plugin_info<T: ?Sized + Plugin>(
+    id: String,
+    plugin: &T,
+    plugin_type: PluginCategory,
+) -> PluginInfo {
+    let version = plugin.version();
+    PluginInfo {
+        id,
+        name: plugin.name(),
+        plugin_type,
+        category: plugin.category(),
+        version: format!("{}.{}.{}", version.0, version.1, version.2),
+        impl_type: plugin.impl_type(),
     }
 }
 
@@ -839,5 +813,7 @@ pub struct PluginInfo {
 
 #[cfg(test)]
 mod automatic_locator_tests;
+#[cfg(test)]
+mod callback_lock_tests;
 #[cfg(test)]
 mod tests;

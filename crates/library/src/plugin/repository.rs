@@ -32,12 +32,16 @@ impl<T: ?Sized + Plugin> PluginRepository<T> {
         Self::default()
     }
 
-    /// Registers a plugin and returns the replaced instance, if any.
+    /// Registers a plugin under an identity resolved before the caller takes
+    /// its registry lock and returns the replaced instance, if any.
     ///
     /// Callers holding a manager lock must drop the returned `Arc` only after
     /// releasing that lock: plugin destructors may call back into the manager.
-    pub fn register(&mut self, plugin: Arc<T>) -> Option<Arc<T>> {
-        self.plugins.insert(plugin.id().to_string(), plugin)
+    /// [`Plugin::id`] is executable plugin code. Requiring the key here keeps
+    /// repositories as inert storage and prevents registration from invoking
+    /// a re-entrant callback while the manager write lock is held.
+    pub fn register(&mut self, id: String, plugin: Arc<T>) -> Option<Arc<T>> {
+        self.plugins.insert(id, plugin)
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<T>> {
@@ -46,6 +50,15 @@ impl<T: ?Sized + Plugin> PluginRepository<T> {
 
     pub fn values(&self) -> impl Iterator<Item = &Arc<T>> {
         self.plugins.values()
+    }
+
+    /// Clones immutable endpoints and their registry-owned identities so a
+    /// caller can release its registry lock before invoking plugin code.
+    pub fn snapshot(&self) -> Vec<(String, Arc<T>)> {
+        self.plugins
+            .iter()
+            .map(|(id, plugin)| (id.clone(), Arc::clone(plugin)))
+            .collect()
     }
 }
 

@@ -231,7 +231,10 @@ impl RuntimePluginRegistry {
         for component in prepared {
             match component.adapter {
                 RuntimeAdapter::Effector(plugin) => assert!(
-                    targets.effector_plugins.register(plugin).is_none(),
+                    targets
+                        .effector_plugins
+                        .register(component.key.1.clone(), plugin)
+                        .is_none(),
                     "runtime Effector registration preflight must reject replacements"
                 ),
                 RuntimeAdapter::Property(evaluator) => {
@@ -244,19 +247,31 @@ impl RuntimePluginRegistry {
                     );
                 }
                 RuntimeAdapter::Decorator(plugin) => assert!(
-                    targets.decorator_plugins.register(plugin).is_none(),
+                    targets
+                        .decorator_plugins
+                        .register(component.key.1.clone(), plugin)
+                        .is_none(),
                     "runtime Decorator registration preflight must reject replacements"
                 ),
                 RuntimeAdapter::Style(plugin) => assert!(
-                    targets.style_plugins.register(plugin).is_none(),
+                    targets
+                        .style_plugins
+                        .register(component.key.1.clone(), plugin)
+                        .is_none(),
                     "runtime Style registration preflight must reject replacements"
                 ),
                 RuntimeAdapter::Effect(plugin) => assert!(
-                    targets.effect_plugins.register(plugin).is_none(),
+                    targets
+                        .effect_plugins
+                        .register(component.key.1.clone(), plugin)
+                        .is_none(),
                     "runtime Effect registration preflight must reject replacements"
                 ),
                 RuntimeAdapter::Loader(plugin) => assert!(
-                    targets.load_plugins.register(plugin).is_none(),
+                    targets
+                        .load_plugins
+                        .register(component.key.1.clone(), plugin)
+                        .is_none(),
                     "runtime Loader registration preflight must reject replacements"
                 ),
             }

@@ -560,8 +560,13 @@ impl LoadRepository {
         Self::default()
     }
 
-    pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) -> Option<Arc<dyn LoadPlugin>> {
-        let id = plugin.id().to_string();
+    /// Registers a loader under an identity resolved before the manager takes
+    /// its registry lock. Plugin callbacks must never run under that lock.
+    pub fn register(
+        &mut self,
+        id: String,
+        plugin: Arc<dyn LoadPlugin>,
+    ) -> Option<Arc<dyn LoadPlugin>> {
         if !self.priority_order.contains(&id) {
             self.priority_order.push(id.clone());
         }
@@ -598,6 +603,19 @@ impl LoadRepository {
 
     pub fn values(&self) -> impl Iterator<Item = &Arc<dyn LoadPlugin>> {
         self.values_by_priority()
+    }
+
+    /// Clones immutable endpoints in dispatch order so callers can release
+    /// the manager registry lock before invoking loader code.
+    pub fn snapshot(&self) -> Vec<(String, Arc<dyn LoadPlugin>)> {
+        self.priority_order
+            .iter()
+            .filter_map(|id| {
+                self.plugins
+                    .get(id)
+                    .map(|plugin| (id.clone(), Arc::clone(plugin)))
+            })
+            .collect()
     }
 }
 

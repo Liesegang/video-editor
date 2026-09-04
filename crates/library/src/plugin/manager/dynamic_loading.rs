@@ -24,11 +24,11 @@ impl PluginManager {
     /// and the exact trait definition represented by `T`. `symbol` must return
     /// a non-null pointer produced by `Box::into_raw(Box<T>)` and transfer its
     /// sole ownership to this function.
-    unsafe fn load_plugin_generic<T: ?Sized + 'static>(
+    unsafe fn load_plugin_generic<T: ?Sized + Plugin + 'static>(
         &self,
         path: &Path,
         symbol: &[u8],
-        register: impl FnOnce(&mut PluginRegistry, Arc<T>) -> Option<Arc<T>>,
+        register: impl FnOnce(&mut PluginRegistry, String, Arc<T>) -> Option<Arc<T>>,
     ) -> Result<(), LibraryError> {
         // SAFETY: The caller guarantees that this is a trusted native plugin;
         // loading it may execute platform-specific initializers.
@@ -47,11 +47,12 @@ impl PluginManager {
         }
         // SAFETY: The null check and caller contract guarantee `raw` came from
         // Box::into_raw exactly once. Arc takes ownership of the reconstructed Box.
-        let plugin = unsafe { Arc::from(Box::from_raw(raw)) };
+        let plugin: Arc<T> = unsafe { Arc::from(Box::from_raw(raw)) };
+        let id = plugin.id().to_string();
 
         let replaced = {
             let mut inner = self.write_registry();
-            let replaced = register(&mut inner, plugin);
+            let replaced = register(&mut inner, id, plugin);
             inner.dynamic_libraries.push(library);
             replaced
         };
@@ -70,7 +71,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn EffectPlugin>(
                 path.as_ref(),
                 b"create_effect_plugin",
-                |inner, plugin| inner.effect_plugins.register(plugin),
+                |inner, id, plugin| inner.effect_plugins.register(id, plugin),
             )
         }
     }
@@ -82,7 +83,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn LoadPlugin>(
                 path.as_ref(),
                 b"create_load_plugin",
-                |inner, plugin| inner.load_plugins.register(plugin),
+                |inner, id, plugin| inner.load_plugins.register(id, plugin),
             )
         }
     }
@@ -100,7 +101,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn ExportPlugin>(
                 path.as_ref(),
                 b"create_export_plugin_v2",
-                |inner, plugin| inner.export_plugins.register(plugin),
+                |inner, id, plugin| inner.export_plugins.register(id, plugin),
             )
         }
     }
@@ -115,7 +116,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn EntityConverterPlugin>(
                 path.as_ref(),
                 b"create_entity_converter_plugin",
-                |inner, plugin| inner.entity_converter_plugins.register(plugin),
+                |inner, id, plugin| inner.entity_converter_plugins.register(id, plugin),
             )
         }
     }
