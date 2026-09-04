@@ -199,7 +199,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Host は capability negotiation を行い、未対応 capability を load 成功に見せない。
   - Project は plugin ID/version/state/provenance を保存し、Rust trait object、DLL pointer、GPU handle を保存しない。
 
-- [ ] **未実装：core capability extension interface を定義する。** Plugin が Importer/Decoder/Encoder/Exporter、Effect/Transition、Generator/DataSource、Analyzer、ASR/TTS、Audio Processor/Instrument、MIDI Processor、Module Node、GPU kernel/material、command/tool、panel schema、background job を追加できる typed contract を ADR と ABI にする。
+- [ ] **部分実装：core capability extension interface を定義する。** `docs/adr/0006-plugin-extension-kernel.md` で所有権、capability、transport、lifecycle、failure semantics を固定済み。Plugin が Importer/Decoder/Encoder/Exporter、Effect/Transition、Generator/DataSource、Analyzer、ASR/TTS、Audio Processor/Instrument、MIDI Processor、Module Node、GPU kernel/material、command/tool、panel schema、background job を追加できる typed contract を ABI と runtime に実装する。
   - Plugin は immutable Project snapshot と bounded Host Services を受け、直接 Project を変更せず、validated edit proposal/asset result を返す。
   - Core の transaction service が proposal を適用し、selection、validation、Undo/Redo、dirty state を一括管理する。
   - Timeline placement/hierarchy/time、Module published boundary、RenderPlan scheduling/cache dependency は Core の owner のままにする。
