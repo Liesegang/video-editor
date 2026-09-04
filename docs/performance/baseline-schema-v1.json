@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruvie.invalid/schemas/production-performance-baseline-v1.json",
+  "title": "RuViE production performance baseline v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at_unix_ms",
+    "environment",
+    "build",
+    "fixture",
+    "run",
+    "metrics"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at_unix_ms": { "type": "integer", "minimum": 0 },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "cpu", "gpu", "graphics_driver", "logical_parallelism"],
+      "properties": {
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "architecture", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "architecture": { "type": "string", "minLength": 1 },
+            "version": { "$ref": "#/$defs/probe" }
+          }
+        },
+        "cpu": { "$ref": "#/$defs/probe" },
+        "gpu": { "$ref": "#/$defs/probe" },
+        "graphics_driver": { "$ref": "#/$defs/probe" },
+        "logical_parallelism": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "debug_assertions", "git_commit", "git_dirty", "rustc"],
+      "properties": {
+        "profile": { "const": "bench" },
+        "debug_assertions": { "type": "boolean" },
+        "git_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "git_dirty": { "type": "boolean" },
+        "rustc": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "generator_version",
+        "sha256",
+        "load_document_sha256",
+        "audio_media_sha256",
+        "workloads"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "generator_version": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "load_document_sha256": { "$ref": "#/$defs/sha256" },
+        "audio_media_sha256": { "$ref": "#/$defs/sha256" },
+        "workloads": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "timeline_items", "module_definitions", "module_instances"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "timeline_items": { "type": "integer", "minimum": 0 },
+              "module_definitions": { "type": "integer", "minimum": 0 },
+              "module_instances": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warmup_iterations", "sample_count", "timer"],
+      "properties": {
+        "warmup_iterations": { "type": "integer", "minimum": 0 },
+        "sample_count": { "type": "integer", "minimum": 1 },
+        "timer": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/measuredMetric" },
+          { "$ref": "#/$defs/unavailableMetric" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "reason"],
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "value": { "type": "string", "minLength": 1 },
+            "reason": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "value": { "type": "null" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "metricIdentity": {
+      "type": "object",
+      "required": ["name", "category", "description", "production_path", "status"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "production_path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "measuredMetric": {
+      "allOf": [
+        { "$ref": "#/$defs/metricIdentity" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "category",
+            "description",
+            "production_path",
+            "fixture",
+            "status",
+            "unit",
+            "operations_per_sample",
+            "samples_ns_per_operation",
+            "summary"
+          ],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "category": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 },
+            "production_path": { "type": "string", "minLength": 1 },
+            "fixture": { "type": "string", "minLength": 1 },
+            "status": { "const": "measured" },
+            "unit": { "const": "nanoseconds_per_operation" },
+            "operations_per_sample": { "type": "integer", "minimum": 1 },
+            "samples_ns_per_operation": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "integer", "minimum": 0 }
+            },
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["minimum_ns", "median_ns", "mean_ns", "p95_ns", "maximum_ns"],
+              "properties": {
+                "minimum_ns": { "type": "integer", "minimum": 0 },
+                "median_ns": { "type": "number", "minimum": 0 },
+                "mean_ns": { "type": "number", "minimum": 0 },
+                "p95_ns": { "type": "integer", "minimum": 0 },
+                "maximum_ns": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "unavailableMetric": {
+      "allOf": [
+        { "$ref": "#/$defs/metricIdentity" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "category",
+            "description",
+            "production_path",
+            "status",
+            "value",
+            "reason"
+          ],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "category": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 },
+            "production_path": { "type": "string", "minLength": 1 },
+            "status": { "const": "unavailable" },
+            "value": { "type": "null" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  }
+}

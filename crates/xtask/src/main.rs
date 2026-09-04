@@ -1,5 +1,6 @@
 mod bootstrap;
 mod pe;
+mod performance;
 mod publish;
 
 use std::env;
@@ -34,6 +35,7 @@ impl std::error::Error for TaskError {}
 #[derive(Debug, PartialEq, Eq)]
 enum TaskCommand {
     Bootstrap,
+    PerformanceBaseline(performance::PerformanceOptions),
     Publish(PublishOptions),
     Help,
 }
@@ -49,6 +51,7 @@ fn main() -> TaskResult<()> {
     let repository = repository_root()?;
     match command {
         TaskCommand::Bootstrap => bootstrap::run(&repository),
+        TaskCommand::PerformanceBaseline(options) => performance::run(&repository, &options),
         TaskCommand::Publish(options) => publish::run(&repository, &options),
         TaskCommand::Help => {
             print_usage();
@@ -74,9 +77,13 @@ fn parse_arguments(arguments: impl IntoIterator<Item = OsString>) -> TaskResult<
         }
         return Ok(TaskCommand::Bootstrap);
     }
+    if command == "performance-baseline" {
+        return performance::PerformanceOptions::parse(arguments)
+            .map(TaskCommand::PerformanceBaseline);
+    }
     if command != "publish" {
         return Err(TaskError::new(format!(
-            "unknown xtask command '{}'; expected bootstrap or publish",
+            "unknown xtask command '{}'; expected bootstrap, performance-baseline, or publish",
             command.to_string_lossy()
         )));
     }
@@ -113,6 +120,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = OsString>) -> TaskResult<
 
 fn print_usage() {
     println!("cargo xtask bootstrap");
+    println!("cargo xtask performance-baseline [--output PATH] [--warmup COUNT] [--samples COUNT]");
     println!("cargo xtask publish [--skip-build] [--output PATH]");
 }
 

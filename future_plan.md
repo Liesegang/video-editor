@@ -56,6 +56,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - clean checkout で `cargo metadata --locked`、workspace build/test、publish が通る。
 
 - [ ] **部分実装：production baseline を記録する。** 復旧 tag と現 main について、project load、first frame、seek、edit-to-preview、連続再生、audio、export、100/1,000/10,000 Clip、同一 Module 多数配置、GPU/CPU/メモリを同じ fixture で計測する。数値、OS、GPU、driver、release profile、fixture hash を `docs/performance/` に保存し、未計測の「速い」を完了条件に使わない。
+  - [x] `cargo xtask performance-baseline` から optimized production path を計測し、Project load、100/1,000/10,000 Item、共有 Module 1,000 Instance、first frame、seek、連続 frame、edit-to-preview、Audio cold/cache、PNG export を schema 検証済み JSON として保存できる。
+  - [x] OS、CPU、Rust/Git/profile、dirty state、fixture/load/audio SHA、warmup/raw sample を記録し、未計測の GPU/driver/full FFmpeg export は値を捏造せず `null + reason` にする。
+  - [ ] 復旧 tag と clean main の同一 machine 比較、GPU Preview、process/GPU memory、完全な動画 export を計測し、CI/定期 perf test の回帰閾値を決める。
 
 - [ ] **部分実装：コード品質の継続ゲートを固定する。** `AGENTS.md` の再利用、共通 surface、DRY、1,000 行制限を CI で検査し、`rg` ベースの境界検査だけでなく Rust dependency graph と source line count も検証する。
   - [x] `scripts/check-source-file-size.sh` を CI の fail-closed quality gate に組み込み、first-party の Rust/Python/shell/JS/TS/C/C++/SkSL を 1,000 行以下に固定した。tracked と non-ignored untracked の両方を NUL-safe に検査する。
