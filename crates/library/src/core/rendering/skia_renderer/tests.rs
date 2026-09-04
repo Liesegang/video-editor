@@ -218,6 +218,88 @@ fn project_surface_composites_half_white_in_linear_light_and_terminals_once() {
 }
 
 #[test]
+fn cross_dissolve_mixes_premultiplied_sources_in_working_linear_space() {
+    let config = "cross-dissolve-linear";
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let mut renderer = SkiaRenderer::new(1, 1, transparent, false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+    let from = RenderOutput::Working(working_pixel(config, [0.5, 0.0, 0.0, 0.5]));
+    let to = RenderOutput::Working(working_pixel(config, [0.0, 0.0, 1.0, 1.0]));
+    renderer.draw_cross_dissolve(&from, &to, 0.25).unwrap();
+    let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
+        panic!("Cross Dissolve must remain in the Project working domain");
+    };
+    assert_pixel_near(output.pixels().pixels()[0], [0.375, 0.0, 0.25, 0.625]);
+}
+
+#[test]
+fn retained_cross_dissolve_consumes_native_layers_without_render_output_round_trip() {
+    let config = "retained-cross-dissolve-linear";
+    let mut renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+    renderer
+        .begin_group(
+            1,
+            1,
+            &Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
+    let from = renderer.end_group_retained().unwrap();
+    renderer
+        .begin_group(
+            1,
+            1,
+            &Color {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 255,
+            },
+        )
+        .unwrap();
+    let to = renderer.end_group_retained().unwrap();
+    assert_eq!(renderer.retained_group_surfaces.len(), 2);
+
+    renderer
+        .draw_cross_dissolve_retained(from, to, 0.25)
+        .unwrap();
+    assert!(renderer.retained_group_surfaces.is_empty());
+    let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
+        panic!("retained Cross Dissolve must remain in Project working space");
+    };
+    assert_pixel_near(output.pixels().pixels()[0], [0.75, 0.0, 0.25, 1.0]);
+}
+
+#[test]
+fn cross_dissolve_rejects_encoded_input_at_the_project_linear_boundary() {
+    let config = "cross-dissolve-boundary";
+    let mut renderer = SkiaRenderer::new(1, 1, Color::black(), false, None, None).unwrap();
+    renderer
+        .use_project_linear_surface(working_contract(config))
+        .unwrap();
+    let encoded = RenderOutput::Image(Image::new(1, 1, vec![255, 0, 0, 255]));
+    let working = RenderOutput::Working(working_pixel(config, [0.0, 0.0, 1.0, 1.0]));
+    let error = renderer
+        .draw_cross_dissolve(&encoded, &working, 0.5)
+        .unwrap_err();
+    assert!(error.to_string().contains("encoded RGBA8"));
+}
+
+#[test]
 fn project_surface_converts_authored_background_once_when_contract_changes() {
     let gray = Color {
         r: 128,

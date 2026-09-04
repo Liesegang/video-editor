@@ -11,7 +11,7 @@ use eframe::egui;
 use library::model::authoring::TimelineId;
 use library::model::authoring::{
     AttachmentId, InstancePath, ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId,
-    ModulePortAddress, TimelineItemId,
+    ModulePortAddress, TimelineItemId, TransitionId,
 };
 use library::model::project::PortDirection;
 use pan_zoom_ui::CanvasState;
@@ -35,6 +35,9 @@ pub struct NodeEditorState {
     /// Authoritative Node Editor camera. The production Snarl surface consumes
     /// this value, but never owns or feeds back a second navigation state.
     pub canvas: CanvasState,
+    /// One-shot request to frame a newly opened Module through the shared
+    /// canvas transform. User navigation is preserved after the first frame.
+    pub fit_requested: bool,
     /// Absolute press-time transform held while a direct-manipulation gesture
     /// owns the primary pointer anywhere on the Node canvas.
     pub direct_gesture_transform: Option<egui::emath::TSTransform>,
@@ -54,6 +57,7 @@ impl Default for NodeEditorState {
             create_menu: None,
             node_drag_offsets: HashMap::new(),
             canvas: CanvasState::uniform(egui::Vec2::ZERO, 1.0),
+            fit_requested: false,
             direct_gesture_transform: None,
         }
     }
@@ -69,6 +73,7 @@ impl NodeEditorState {
             self.create_menu = None;
             self.node_drag_offsets.clear();
             self.canvas = CanvasState::uniform(egui::Vec2::ZERO, 1.0);
+            self.fit_requested = true;
             self.direct_gesture_transform = None;
             self.active_document = Some(document);
         }
@@ -106,6 +111,53 @@ pub enum ModuleEditorHost {
         instance_path: Option<InstancePath>,
         module_instance_id: ModuleInstanceId,
     },
+    /// A finite processor graph explicitly promoted from one Timeline-owned
+    /// Transition. The host owns A/B placement and normalized progress; the
+    /// Module owns only processing topology.
+    Transition {
+        transition_id: TransitionId,
+        instance_path: Option<InstancePath>,
+        module_instance_id: ModuleInstanceId,
+    },
+}
+
+impl ModuleEditorHost {
+    pub(crate) const fn kind_name(&self) -> &'static str {
+        match self {
+            Self::NodeClip { .. } => "node_clip",
+            Self::Attachment { .. } => "attachment",
+            Self::Transition { .. } => "transition",
+        }
+    }
+
+    pub(crate) const fn module_instance_id(&self) -> ModuleInstanceId {
+        match self {
+            Self::NodeClip {
+                module_instance_id, ..
+            }
+            | Self::Attachment {
+                module_instance_id, ..
+            }
+            | Self::Transition {
+                module_instance_id, ..
+            } => *module_instance_id,
+        }
+    }
+
+    pub(crate) fn captured_instance_path(&self) -> Option<&InstancePath> {
+        match self {
+            Self::NodeClip { instance_path, .. }
+            | Self::Attachment { instance_path, .. }
+            | Self::Transition { instance_path, .. } => instance_path.as_ref(),
+        }
+    }
+
+    pub(crate) const fn transition_id(&self) -> Option<TransitionId> {
+        match self {
+            Self::Transition { transition_id, .. } => Some(*transition_id),
+            Self::NodeClip { .. } | Self::Attachment { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -150,6 +202,7 @@ mod tests {
         state.request_document(document.clone());
         assert!(state.selected_nodes.is_empty());
         assert_eq!(state.canvas, CanvasState::uniform(egui::Vec2::ZERO, 1.0));
+        assert!(state.fit_requested);
         assert_eq!(state.direct_gesture_transform, None);
         assert_eq!(state.active_document, Some(document));
         assert!(state.focus_requested);

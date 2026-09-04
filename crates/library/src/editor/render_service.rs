@@ -8,15 +8,16 @@ use crate::core::rendering::media_color_ingress::{
     MediaAssetKind, require_unmanaged_abi_srgb, source_asset_from_assets,
 };
 use crate::core::rendering::renderer::{
-    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest,
-    TextRasterRequest,
+    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
+    ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
-use crate::error::LibraryError;
+use crate::error::{LibraryError, TransitionSourceHandleError};
 use crate::model::asset::Asset;
 use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{
-    FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, ImageSurface,
+    FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, FrameTransition,
+    FrameTransitionKind, FrameTransitionSource, ImageSurface,
 };
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
@@ -26,6 +27,7 @@ use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
 
 mod color_pipeline_cache;
+mod transition;
 use color_pipeline_cache::ProjectColorPipelineCache;
 
 pub struct RenderService<T: Renderer> {
@@ -291,6 +293,9 @@ impl<T: Renderer> RenderService<T> {
                     self.render_object(object, context, current_time, color_authority)?;
                 }
                 FrameItem::Group(group) => self.render_group(group, context, color_authority)?,
+                FrameItem::Transition(transition) => {
+                    self.render_transition(transition, context, color_authority)?;
+                }
             }
         }
         Ok(())
@@ -308,7 +313,6 @@ impl<T: Renderer> RenderService<T> {
         if group.kind == FrameGroupKind::ImageTransform {
             return self.render_image_transform_group(group, parent_context, color_authority);
         }
-
         let child_context = parent_context.with_transform(&group.transform);
         if !group_requires_isolation(group) {
             return self.render_items(

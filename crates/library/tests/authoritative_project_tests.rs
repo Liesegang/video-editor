@@ -103,6 +103,10 @@ fn rendered_position(project: &Project, plugin_manager: &Arc<PluginManager>) -> 
             FrameItem::Group(group) if group.kind == FrameGroupKind::ImageTransform => Some(group),
             FrameItem::Group(group) => first_image_transform(&group.items),
             FrameItem::Object(_) => None,
+            FrameItem::Transition(transition) => {
+                first_image_transform(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| first_image_transform(std::slice::from_ref(&transition.to.item)))
+            }
         })
     }
 

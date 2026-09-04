@@ -101,6 +101,10 @@ fn particle_scenes(items: &[FrameItem]) -> Vec<&ParticleSceneFrame> {
                 }
             }
             FrameItem::Group(group) => scenes.extend(particle_scenes(&group.items)),
+            FrameItem::Transition(transition) => {
+                scenes.extend(particle_scenes(std::slice::from_ref(&transition.from.item)));
+                scenes.extend(particle_scenes(std::slice::from_ref(&transition.to.item)));
+            }
         }
     }
     scenes
@@ -234,11 +238,12 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
         })
         .unwrap();
     let rate = PropertyValue::Number(OrderedFloat(360.0));
-    let gravity = PropertyValue::Vec3(crate::model::property::Vec3 {
+    let expected_gravity = crate::model::property::Vec3 {
         x: OrderedFloat(12.0),
         y: OrderedFloat(240.0),
         z: OrderedFloat(-30.0),
-    });
+    };
+    let gravity = PropertyValue::Vec3(expected_gravity);
     let color = crate::model::frame::color::Color {
         r: 240,
         g: 100,
@@ -249,11 +254,7 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
         .set_module_parameter(created.instance_id, created.parameters.emission_rate, rate)
         .unwrap();
     service
-        .set_module_parameter(
-            created.instance_id,
-            created.parameters.gravity,
-            gravity.clone(),
-        )
+        .set_module_parameter(created.instance_id, created.parameters.gravity, gravity)
         .unwrap();
     service
         .set_module_parameter(
@@ -275,12 +276,6 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
     let scene = scenes[0];
     assert_eq!(scene.target_step, 120);
     assert_eq!(scene.parameters.emission_rate, OrderedFloat(360.0));
-    assert_eq!(
-        scene.parameters.gravity,
-        match gravity {
-            PropertyValue::Vec3(value) => value,
-            _ => unreachable!(),
-        }
-    );
+    assert_eq!(scene.parameters.gravity, expected_gravity);
     assert_eq!(scene.parameters.color, color);
 }

@@ -118,6 +118,10 @@ pub(super) fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(&object.content),
         FrameItem::Group(group) => first_content(&group.items),
+        FrameItem::Transition(transition) => {
+            first_content(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_content(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 
@@ -127,6 +131,10 @@ pub(super) fn first_object(
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(object),
         FrameItem::Group(group) => first_object(&group.items),
+        FrameItem::Transition(transition) => {
+            first_object(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_object(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 
@@ -136,6 +144,10 @@ pub(super) fn group_effect_time(items: &[FrameItem], source_id: Uuid) -> Option<
         FrameItem::Group(group) => (group.source_id == source_id)
             .then(|| group.effect_time.into_inner())
             .or_else(|| group_effect_time(&group.items, source_id)),
+        FrameItem::Transition(transition) => {
+            group_effect_time(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| group_effect_time(std::slice::from_ref(&transition.to.item), source_id))
+        }
     })
 }
 
@@ -181,6 +193,18 @@ pub(super) fn collect_projected_bounds(
                 parent.compose(Affine2D::from(&group.transform)),
                 bounds,
             )?,
+            FrameItem::Transition(transition) => {
+                collect_projected_bounds(
+                    std::slice::from_ref(&transition.from.item),
+                    parent,
+                    bounds,
+                )?;
+                collect_projected_bounds(
+                    std::slice::from_ref(&transition.to.item),
+                    parent,
+                    bounds,
+                )?;
+            }
         }
     }
     Ok(())

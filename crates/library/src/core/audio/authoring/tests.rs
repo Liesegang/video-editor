@@ -6,12 +6,23 @@ use std::path::Path;
 use ordered_float::OrderedFloat;
 
 use super::*;
+use crate::animation::EasingFunction;
 use crate::model::authoring::{
-    CompositionInstance, DurationPolicy, RationalRate, TimeMap, Timeline, TimelineInterval,
-    TimelineTrack, TimelineTrackId,
+    AutomationKeyframe, AutomationTrack, CompositionInstance, DurationPolicy, ModuleConnection,
+    ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing,
+    ModuleInstance, ModuleInstanceId, ModulePortAddress, PublishedMediaInput,
+    PublishedMediaInputId, PublishedParameter, PublishedParameterId, RationalRate, TimeMap,
+    Timeline, TimelineInterval, TimelineTrack, TimelineTrackId, Transition, TransitionAlignment,
+    TransitionId, TransitionMediaType, TransitionProcessor,
 };
 use crate::model::frame::color::Color;
+use crate::model::node::{Node, ValueContent};
 use crate::model::project::property::{Property, PropertyValue};
+use crate::model::project::{
+    MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT,
+    PortDataType, TRANSITION_FROM_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT,
+    TRANSITION_PROGRESS_PROPERTY,
+};
 
 fn frame_time(frame: i64) -> MediaTime {
     MediaTime::new(frame, AUTHORING_AUDIO_SAMPLE_RATE).unwrap()
@@ -118,6 +129,490 @@ fn assert_stereo_near(actual: [f32; 2], expected: [f32; 2]) {
     }
 }
 
+fn add_audio_crossfade(
+    project: &mut AuthoringProject,
+    from: TimelineItemId,
+    to: TimelineItemId,
+    edit_frame: i64,
+    duration_frames: i64,
+) -> TransitionId {
+    let id = TransitionId::new();
+    project.transitions.insert(
+        id,
+        Transition {
+            id,
+            timeline_id: project.root_timeline_id,
+            from_item_id: from,
+            to_item_id: to,
+            edit_point: frame_time(edit_frame),
+            duration: frame_time(duration_frames),
+            alignment: TransitionAlignment::CenteredOnEdit,
+            processor: TransitionProcessor::audio_crossfade(),
+            parameters: HashMap::new(),
+        },
+    );
+    id
+}
+
+fn promote_audio_crossfade_to_module(
+    project: &mut AuthoringProject,
+    transition_id: TransitionId,
+) -> ModuleDefinitionId {
+    let (mut definition, contract) = ModuleDefinition::new_transition(
+        "Editable Audio Crossfade",
+        ModuleDefinitionSharing::Private,
+        TransitionMediaType::Audio,
+    )
+    .unwrap();
+    let progress_node_id = definition
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| parameter.id == contract.progress_parameter_id)
+        .unwrap()
+        .target
+        .node_id;
+    definition
+        .graph
+        .nodes
+        .get_mut(&progress_node_id)
+        .unwrap()
+        .set_property(
+            TRANSITION_PROGRESS_PROPERTY.to_string(),
+            Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+        )
+        .unwrap();
+    let definition_id = definition.id;
+    let instance_id = ModuleInstanceId::new();
+    project.module_definitions.insert(definition_id, definition);
+    project.module_instances.insert(
+        instance_id,
+        ModuleInstance {
+            id: instance_id,
+            definition_id,
+            parameter_overrides: HashMap::new(),
+        },
+    );
+    project
+        .transitions
+        .get_mut(&transition_id)
+        .unwrap()
+        .processor = TransitionProcessor::module(instance_id, TransitionMediaType::Audio);
+    project.validate().unwrap();
+    definition_id
+}
+
+fn square_audio_transition_progress(
+    project: &mut AuthoringProject,
+    definition_id: ModuleDefinitionId,
+) {
+    let definition = project.module_definitions.get_mut(&definition_id).unwrap();
+    let progress_connection = definition
+        .graph
+        .connections
+        .iter()
+        .position(|connection| connection.to.port == TRANSITION_PROGRESS_INPUT_PORT)
+        .unwrap();
+    let progress_connection = definition.graph.connections.remove(progress_connection);
+    let progress_source = progress_connection.from;
+    let mix_target = progress_connection.to;
+    let square = Node::new_value("Square Progress", ValueContent::Multiply);
+    let square_id = square.id;
+    definition.graph.nodes.insert(square_id, square);
+    let address = |node_id, port: &str| ModulePortAddress {
+        node_id,
+        port: port.to_string(),
+    };
+    definition.graph.connections.extend([
+        ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: progress_source.clone(),
+            to: address(square_id, NUMERIC_A_INPUT_PORT),
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        },
+        ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: progress_source,
+            to: address(square_id, NUMERIC_B_INPUT_PORT),
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        },
+        ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: address(square_id, NUMBER_RESULT_OUTPUT_PORT),
+            to: mix_target,
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        },
+    ]);
+    definition.topology_revision += 1;
+    definition.validate().unwrap();
+    project.validate().unwrap();
+}
+
+fn publish_audio_mix_progress(
+    project: &mut AuthoringProject,
+    definition_id: ModuleDefinitionId,
+) -> PublishedParameterId {
+    let definition = project.module_definitions.get_mut(&definition_id).unwrap();
+    let progress_connection = definition
+        .graph
+        .connections
+        .iter()
+        .position(|connection| connection.to.port == TRANSITION_PROGRESS_INPUT_PORT)
+        .map(|index| definition.graph.connections.remove(index))
+        .expect("starter Progress connection");
+    let parameter_id = PublishedParameterId::new();
+    definition.interface.parameters.push(PublishedParameter {
+        id: parameter_id,
+        name: "Mix".to_string(),
+        data_type: PortDataType::Number,
+        default_value: PropertyValue::Number(OrderedFloat(0.0)),
+        target: progress_connection.to,
+    });
+    definition.topology_revision += 1;
+    definition.interface_version += 1;
+    definition.validate().unwrap();
+    parameter_id
+}
+
+fn insert_invalid_extra_audio_input(
+    project: &mut AuthoringProject,
+    definition_id: ModuleDefinitionId,
+) {
+    let definition = project.module_definitions.get_mut(&definition_id).unwrap();
+    let merge = Node::new_sound_merge("Sidechain");
+    let merge_id = merge.id;
+    definition.graph.nodes.insert(merge_id, merge);
+    definition.interface.media_inputs.push(PublishedMediaInput {
+        id: PublishedMediaInputId::new(),
+        name: "Sidechain".to_string(),
+        data_type: PortDataType::Audio,
+        target: ModulePortAddress {
+            node_id: merge_id,
+            port: MERGE_SOUNDS_PORT.to_string(),
+        },
+        required: true,
+        primary: false,
+    });
+    definition.topology_revision += 1;
+    definition.interface_version += 1;
+}
+
+#[test]
+fn adjacent_audio_crossfade_has_deterministic_linear_amplitude_and_half_open_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("from.wav");
+    let to_path = directory.path().join("to.wav");
+    let from_samples = vec![[0.25; 2]; 12];
+    let to_samples = vec![[0.75; 2]; 12];
+    write_stereo_wave(&from_path, &from_samples);
+    write_stereo_wave(&to_path, &to_samples);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, from_samples.len());
+    let to_asset = add_audio_asset(&mut project, &to_path, to_samples.len());
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    add_audio_crossfade(&mut project, from, to, 5, 4);
+    project.validate().unwrap();
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let rendered = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(0, 9)
+        .unwrap();
+    for (index, expected) in [0.25, 0.25, 0.25, 0.25, 0.375, 0.5, 0.625, 0.75, 0.75]
+        .into_iter()
+        .enumerate()
+    {
+        assert_stereo_near(frame(&rendered, index), [expected; 2]);
+    }
+}
+
+#[test]
+fn default_audio_transition_module_uses_timeline_owned_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("module-from.wav");
+    let to_path = directory.path().join("module-to.wav");
+    let from_samples = vec![[0.25; 2]; 12];
+    let to_samples = vec![[0.75; 2]; 12];
+    write_stereo_wave(&from_path, &from_samples);
+    write_stereo_wave(&to_path, &to_samples);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, from_samples.len());
+    let to_asset = add_audio_asset(&mut project, &to_path, to_samples.len());
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    promote_audio_crossfade_to_module(&mut project, transition_id);
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let rendered = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(3, 5)
+        .unwrap();
+    for (index, expected) in [0.25, 0.375, 0.5, 0.625, 0.75].into_iter().enumerate() {
+        assert_stereo_near(frame(&rendered, index), [expected; 2]);
+    }
+}
+
+#[test]
+fn audio_transition_module_evaluates_a_custom_progress_graph() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("curved-from.wav");
+    let to_path = directory.path().join("curved-to.wav");
+    write_stereo_wave(&from_path, &[[0.25; 2]; 12]);
+    write_stereo_wave(&to_path, &[[0.75; 2]; 12]);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, 12);
+    let to_asset = add_audio_asset(&mut project, &to_path, 12);
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    let definition_id = promote_audio_crossfade_to_module(&mut project, transition_id);
+    square_audio_transition_progress(&mut project, definition_id);
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let rendered = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(5, 1)
+        .unwrap();
+    // Timeline Progress is .5, then the authored Multiply Node makes it .25:
+    // .25 * .75 + .75 * .25 = .375.
+    assert_stereo_near(frame(&rendered, 0), [0.375; 2]);
+}
+
+#[test]
+fn audio_transition_module_evaluates_published_parameter_automation() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("automated-from.wav");
+    let to_path = directory.path().join("automated-to.wav");
+    write_stereo_wave(&from_path, &[[0.25; 2]; 12]);
+    write_stereo_wave(&to_path, &[[0.75; 2]; 12]);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, 12);
+    let to_asset = add_audio_asset(&mut project, &to_path, 12);
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    let definition_id = promote_audio_crossfade_to_module(&mut project, transition_id);
+    let parameter_id = publish_audio_mix_progress(&mut project, definition_id);
+    project.validate().unwrap();
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let authored_default = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(5, 1)
+        .unwrap();
+    assert_stereo_near(frame(&authored_default, 0), [0.25; 2]);
+
+    project
+        .transitions
+        .get_mut(&transition_id)
+        .unwrap()
+        .processor
+        .module_processor_mut()
+        .unwrap()
+        .automation_tracks
+        .insert(
+            parameter_id,
+            AutomationTrack {
+                keyframes: vec![AutomationKeyframe::new(
+                    MediaTime::zero(),
+                    PropertyValue::Number(OrderedFloat(1.0)),
+                    EasingFunction::Linear,
+                )],
+            },
+        );
+    project.validate().unwrap();
+    let automated = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(5, 1)
+        .unwrap();
+    assert_stereo_near(frame(&automated, 0), [0.75; 2]);
+}
+
+#[test]
+fn audio_transition_extra_published_media_input_is_rejected_during_authoring() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("bound-from.wav");
+    let to_path = directory.path().join("bound-to.wav");
+    write_stereo_wave(&from_path, &[[0.25; 2]; 12]);
+    write_stereo_wave(&to_path, &[[0.75; 2]; 12]);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, 12);
+    let to_asset = add_audio_asset(&mut project, &to_path, 12);
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    let definition_id = promote_audio_crossfade_to_module(&mut project, transition_id);
+    insert_invalid_extra_audio_input(&mut project, definition_id);
+
+    let error = project
+        .validate()
+        .expect_err("invalid Audio controls must not reach mixer construction");
+    assert!(
+        error.contains("supplies only the host-owned A/B"),
+        "{error}"
+    );
+}
+
+#[test]
+fn edited_audio_transition_topology_is_explicitly_unsupported() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("custom-from.wav");
+    let to_path = directory.path().join("custom-to.wav");
+    write_stereo_wave(&from_path, &[[0.25; 2]; 12]);
+    write_stereo_wave(&to_path, &[[0.75; 2]; 12]);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, 12);
+    let to_asset = add_audio_asset(&mut project, &to_path, 12);
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    let definition_id = promote_audio_crossfade_to_module(&mut project, transition_id);
+    project
+        .module_definitions
+        .get_mut(&definition_id)
+        .unwrap()
+        .graph
+        .connections
+        .retain(|connection| connection.to.port != TRANSITION_FROM_INPUT_PORT);
+    project.validate().unwrap();
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let error = match AuthoringAudioMixer::root(&project, &cache) {
+        Ok(_) => panic!("custom Audio Transition topology must not silently fall back"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        AuthoringAudioError::UnsupportedTransitionProcessor {
+            transition_id: actual,
+            ..
+        } if actual == transition_id.as_uuid()
+    ));
+}
+
+#[test]
+fn intentional_audio_overlap_uses_the_same_crossfade_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("overlap-from.wav");
+    let to_path = directory.path().join("overlap-to.wav");
+    let from_samples = vec![[0.25; 2]; 12];
+    let to_samples = vec![[0.75; 2]; 12];
+    write_stereo_wave(&from_path, &from_samples);
+    write_stereo_wave(&to_path, &to_samples);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, from_samples.len());
+    let to_asset = add_audio_asset(&mut project, &to_path, to_samples.len());
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    // Authored overlap exactly owns the Transition interval [3, 7), so the
+    // ordinary schedule immediately outside it has one source and remains
+    // continuous with progress 0/1.
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 7, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 3, 7, 0);
+    add_audio_crossfade(&mut project, from, to, 5, 4);
+    project.validate().unwrap();
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let rendered = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(2, 6)
+        .unwrap();
+    for (index, expected) in [0.25, 0.25, 0.375, 0.5, 0.625, 0.75]
+        .into_iter()
+        .enumerate()
+    {
+        assert_stereo_near(frame(&rendered, index), [expected; 2]);
+    }
+}
+
+#[test]
+fn missing_audio_head_handle_is_a_typed_runtime_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("missing-from.wav");
+    let to_path = directory.path().join("missing-to.wav");
+    let samples = vec![[0.25; 2]; 12];
+    write_stereo_wave(&from_path, &samples);
+    write_stereo_wave(&to_path, &samples);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, samples.len());
+    let to_asset = add_audio_asset(&mut project, &to_path, samples.len());
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 0);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    project.validate().unwrap();
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let error = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(4, 1)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AuthoringAudioError::TransitionSourceHandleUnavailable(ref detail)
+            if detail.transition_id == transition_id.as_uuid()
+                && detail.item_id == to.as_uuid()
+                && detail.source_time < 0.0
+    ));
+}
+
+#[test]
+fn decoder_eof_during_audio_crossfade_is_not_silently_treated_as_a_handle() {
+    let directory = tempfile::tempdir().unwrap();
+    let from_path = directory.path().join("short-from.wav");
+    let to_path = directory.path().join("long-to.wav");
+    let short_samples = vec![[0.25; 2]; 5];
+    let long_samples = vec![[0.75; 2]; 12];
+    write_stereo_wave(&from_path, &short_samples);
+    write_stereo_wave(&to_path, &long_samples);
+
+    let mut project = project_with_audio_track(12);
+    let from_asset = add_audio_asset(&mut project, &from_path, short_samples.len());
+    let to_asset = add_audio_asset(&mut project, &to_path, long_samples.len());
+    project
+        .assets
+        .iter_mut()
+        .find(|asset| asset.id == from_asset)
+        .unwrap()
+        .duration = None;
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    let from = add_asset_item(&mut project, track_id, from_asset, 0, 5, 0);
+    let to = add_asset_item(&mut project, track_id, to_asset, 5, 5, 2);
+    let transition_id = add_audio_crossfade(&mut project, from, to, 5, 4);
+    project.validate().unwrap();
+
+    let cache = CacheManager::with_audio_chunk_capacity(4);
+    let error = AuthoringAudioMixer::root(&project, &cache)
+        .unwrap()
+        .render_window(5, 1)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AuthoringAudioError::TransitionSourceHandleUnavailable(ref detail)
+            if detail.transition_id == transition_id.as_uuid()
+                && detail.item_id == from.as_uuid()
+                && (detail.source_time - 5.0 / f64::from(AUTHORING_AUDIO_SAMPLE_RATE)).abs()
+                    < f64::EPSILON
+    ));
+}
+
 #[test]
 fn placement_start_and_source_trim_map_to_exact_samples() {
     let directory = tempfile::tempdir().unwrap();
@@ -201,6 +696,7 @@ fn nested_timeline_uses_composition_and_leaf_local_time() {
                 timeline_id: nested_id,
                 duration_policy: DurationPolicy::Fixed,
                 parameter_overrides: HashMap::new(),
+                transition_module_overrides: Vec::new(),
             }),
             interval: TimelineInterval::new(frame_time(2), frame_time(8)).unwrap(),
             time_map: TimeMap::default(),
@@ -324,3 +820,5 @@ fn realtime_device_format_controls_window_shape_and_bound() {
     assert!(matches!(error, AuthoringAudioError::InvalidRequest(_)));
     assert!(AuthoringAudioMixer::new_with_format(&project, &cache, timeline_id, 0, 2).is_err());
 }
+
+mod transition_instance_tests;

@@ -11,7 +11,7 @@ use crate::model::project::property::{KeyframeId, PropertyMap, PropertyValue};
 use super::{
     AuthoringProject, CompositionParameterId, MediaTime, ModuleInstanceId, ModuleOutputId,
     PublishedMediaInputId, PublishedParameterId, RationalRate, TimelineId, TimelineItemId,
-    TimelineTrackId,
+    TimelineTrackId, TransitionModuleInstanceOverrides,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -50,6 +50,19 @@ pub enum TimelineTrackKind {
     AudioVisual,
 }
 
+impl TimelineTrackKind {
+    /// Whether this Track participates in the runtime pipeline for a media
+    /// output. Transition validation and candidate discovery share this
+    /// authority so the UI cannot offer a processor the Track will skip.
+    pub const fn supports_output(self, output: MediaOutputKind) -> bool {
+        matches!(
+            (self, output),
+            (Self::Visual | Self::AudioVisual, MediaOutputKind::Image)
+                | (Self::Audio | Self::AudioVisual, MediaOutputKind::Audio)
+        )
+    }
+}
+
 /// One human-authored placement. It never owns Node topology.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +82,38 @@ pub struct TimelineItem {
     /// clip must never rewrite the reusable Module definition behind it.
     pub blend_mode: BlendMode,
     pub authored_properties: PropertyMap,
+}
+
+/// Non-persisted placement state used by atomic Timeline edit projections.
+///
+/// Source, parenting, authored properties, and Module topology are
+/// intentionally absent because Move and Trim do not own those domains.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TimelineItemPlacementState {
+    pub track_id: TimelineTrackId,
+    pub interval: TimelineInterval,
+    pub time_map: TimeMap,
+    pub layer: i64,
+}
+
+impl From<&TimelineItem> for TimelineItemPlacementState {
+    fn from(item: &TimelineItem) -> Self {
+        Self {
+            track_id: item.track_id,
+            interval: item.interval,
+            time_map: item.time_map,
+            layer: item.layer,
+        }
+    }
+}
+
+impl TimelineItemPlacementState {
+    pub(crate) fn apply_to(self, item: &mut TimelineItem) {
+        item.track_id = self.track_id;
+        item.interval = self.interval;
+        item.time_map = self.time_map;
+        item.layer = self.layer;
+    }
 }
 
 /// Returns one Track's items in the authoritative back-to-front order.
@@ -246,6 +291,9 @@ pub struct CompositionInstance {
     pub timeline_id: TimelineId,
     pub duration_policy: DurationPolicy,
     pub parameter_overrides: HashMap<CompositionParameterId, PropertyValue>,
+    /// Concrete nested-placement differences for Transition Modules below
+    /// this outermost Composition placement.
+    pub transition_module_overrides: Vec<TransitionModuleInstanceOverrides>,
 }
 
 /// One public control owned by a Timeline definition.
@@ -316,7 +364,7 @@ pub enum DurationPolicy {
 
 /// Runtime nesting address. Item IDs, rather than Module-internal IDs, form
 /// the path so repeated nested Timeline placements remain distinguishable.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct InstancePath {
     pub root_timeline_id: TimelineId,

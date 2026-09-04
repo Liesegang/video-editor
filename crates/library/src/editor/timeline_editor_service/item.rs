@@ -8,40 +8,15 @@ impl TimelineEditorService {
         start: MediaTime,
         layer: i64,
     ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let old_timeline_id = timeline_for_item(session.project(), item_id)?;
-        let new_timeline_id = timeline_for_track(session.project(), track_id)?;
-        session
-            .transact(
-                vec![
-                    ProjectInvalidation::TimelineStructure {
-                        timeline_id: old_timeline_id,
-                    },
-                    ProjectInvalidation::TimelineStructure {
-                        timeline_id: new_timeline_id,
-                    },
-                ],
-                |project| {
-                    let old_track_id = project
-                        .items
-                        .get(&item_id)
-                        .ok_or_else(|| format!("Missing Timeline item {item_id}"))?
-                        .track_id;
-                    let item = project
-                        .items
-                        .get_mut(&item_id)
-                        .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
-                    item.track_id = track_id;
-                    item.interval.start = start;
-                    place_item_at_layer(project, item_id, track_id, layer)?;
-                    if old_track_id != track_id {
-                        normalize_track_layers(project, old_track_id)?;
-                    }
-                    Ok(())
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
+        let plan = self
+            .plan_current_timeline_edit(TimelineEditOperation::MoveItem {
+                item_id,
+                track_id,
+                start,
+                layer,
+            })
+            .map_err(LibraryError::from)?;
+        self.commit_edit_plan(&plan).map_err(LibraryError::from)
     }
 
     /// Trims a placement while preserving the local source time at every
@@ -51,24 +26,10 @@ impl TimelineEditorService {
         item_id: TimelineItemId,
         interval: TimelineInterval,
     ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        session
-            .transact(
-                vec![ProjectInvalidation::TimelineStructure { timeline_id }],
-                |project| {
-                    let item = project
-                        .items
-                        .get_mut(&item_id)
-                        .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
-                    let source_start = item.time_map.local_time(item.interval, interval.start)?;
-                    item.interval = interval;
-                    item.time_map.source_start = source_start;
-                    Ok(())
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
+        let plan = self
+            .plan_current_timeline_edit(TimelineEditOperation::TrimItem { item_id, interval })
+            .map_err(LibraryError::from)?;
+        self.commit_edit_plan(&plan).map_err(LibraryError::from)
     }
 
     pub fn split_item(
@@ -156,7 +117,7 @@ impl TimelineEditorService {
     pub fn item_input_dependencies(
         &self,
         item_id: TimelineItemId,
-    ) -> Result<Vec<ModuleInputDependency>, LibraryError> {
+    ) -> Result<Vec<TimelineItemDependency>, LibraryError> {
         let project = self.read_session()?;
         if !project.project().items.contains_key(&item_id) {
             return Err(LibraryError::Validation(format!(
@@ -166,8 +127,8 @@ impl TimelineEditorService {
         Ok(item_input_dependencies(project.project(), item_id))
     }
 
-    /// Explicit destructive cascade. Every Node Clip or Module Attachment
-    /// whose input depends on the removed item/path is removed as well.
+    /// Explicit destructive cascade. Every Node Clip, Module Attachment, or
+    /// Transition whose input depends on the removed item/path is removed too.
     pub fn delete_item_cascade(&self, item_id: TimelineItemId) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
         let timeline_id = timeline_for_item(session.project(), item_id)?;
@@ -406,17 +367,44 @@ fn delete_item_and_dependents(
             "Deletion dependency cycle reaches Timeline item {item_id}"
         ));
     }
+    let mut removed_transitions = std::collections::HashSet::new();
     for dependency in item_input_dependencies(project, item_id) {
-        match dependency.host {
-            ModuleInputHost::Item(dependent_item_id) => {
+        match dependency {
+            TimelineItemDependency::TransitionParticipant { transition_id } => {
+                if removed_transitions.insert(transition_id)
+                    && project.transitions.contains_key(&transition_id)
+                {
+                    super::transition::remove_transition_and_owned_module(project, transition_id)?;
+                }
+            }
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Item(dependent_item_id),
+                ..
+            } => {
                 delete_item_and_dependents(project, dependent_item_id, deleting)?;
             }
-            ModuleInputHost::Attachment(attachment_id) => {
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Attachment(attachment_id),
+                ..
+            } => {
                 if let Some(attachment) = project.attachments.remove(&attachment_id)
                     && let AttachmentProcessor::Module(invocation) = attachment.processor
                 {
                     remove_instance_and_private_definition(project, invocation.instance_id);
                 }
+            }
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Transition(transition_id),
+                ..
+            } => {
+                if removed_transitions.insert(transition_id)
+                    && project.transitions.contains_key(&transition_id)
+                {
+                    super::transition::remove_transition_and_owned_module(project, transition_id)?;
+                }
+            }
+            TimelineItemDependency::TransitionInstancePath { .. } => {
+                project.remove_transition_module_overrides_through_item(item_id);
             }
         }
     }
@@ -428,13 +416,20 @@ fn delete_item_and_dependents(
 fn item_input_dependencies(
     project: &AuthoringProject,
     item_id: TimelineItemId,
-) -> Vec<ModuleInputDependency> {
+) -> Vec<TimelineItemDependency> {
     let mut dependencies = Vec::new();
+    for transition in project.transitions.values() {
+        if transition.from_item_id == item_id || transition.to_item_id == item_id {
+            dependencies.push(TimelineItemDependency::TransitionParticipant {
+                transition_id: transition.id,
+            });
+        }
+    }
     for item in project.items.values() {
         if let SourceRef::Module(invocation) = &item.source {
             for (input_id, binding) in &invocation.input_bindings {
                 if binding_references_item(binding, item_id) {
-                    dependencies.push(ModuleInputDependency {
+                    dependencies.push(TimelineItemDependency::ModuleInput {
                         host: ModuleInputHost::Item(item.id),
                         input_id: *input_id,
                     });
@@ -446,7 +441,7 @@ fn item_input_dependencies(
         if let AttachmentProcessor::Module(invocation) = &attachment.processor {
             for (input_id, binding) in &invocation.input_bindings {
                 if binding_references_item(binding, item_id) {
-                    dependencies.push(ModuleInputDependency {
+                    dependencies.push(TimelineItemDependency::ModuleInput {
                         host: ModuleInputHost::Attachment(attachment.id),
                         input_id: *input_id,
                     });
@@ -454,18 +449,61 @@ fn item_input_dependencies(
             }
         }
     }
+    project.for_each_transition_module_input_binding(|transition_id, input_id, binding| {
+        let dependency = TimelineItemDependency::ModuleInput {
+            host: ModuleInputHost::Transition(transition_id),
+            input_id,
+        };
+        if binding_references_item(binding, item_id) && !dependencies.contains(&dependency) {
+            dependencies.push(dependency);
+        }
+    });
+    for (owner_item_id, controls) in project.transition_module_instance_override_records() {
+        if controls.target.composition_items.contains(&item_id) {
+            let dependency = TimelineItemDependency::TransitionInstancePath {
+                owner_item_id,
+                transition_id: controls.target.transition_id,
+            };
+            if !dependencies.contains(&dependency) {
+                dependencies.push(dependency);
+            }
+        }
+    }
     dependencies
 }
 
-fn dependency_summary(dependencies: &[ModuleInputDependency]) -> String {
+fn dependency_summary(dependencies: &[TimelineItemDependency]) -> String {
     dependencies
         .iter()
-        .map(|dependency| match dependency.host {
-            ModuleInputHost::Item(item_id) => {
-                format!("Node Clip {item_id} input {}", dependency.input_id)
+        .map(|dependency| match dependency {
+            TimelineItemDependency::TransitionParticipant { transition_id } => {
+                format!("Transition {transition_id} participant")
             }
-            ModuleInputHost::Attachment(attachment_id) => {
-                format!("Attachment {attachment_id} input {}", dependency.input_id)
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Item(item_id),
+                input_id,
+            } => {
+                format!("Node Clip {item_id} input {input_id}")
+            }
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Attachment(attachment_id),
+                input_id,
+            } => {
+                format!("Attachment {attachment_id} input {input_id}")
+            }
+            TimelineItemDependency::ModuleInput {
+                host: ModuleInputHost::Transition(transition_id),
+                input_id,
+            } => {
+                format!("Transition {transition_id} input {input_id}")
+            }
+            TimelineItemDependency::TransitionInstancePath {
+                owner_item_id,
+                transition_id,
+            } => {
+                format!(
+                    "Transition {transition_id} instance path owned by Composition {owner_item_id}"
+                )
             }
         })
         .collect::<Vec<_>>()

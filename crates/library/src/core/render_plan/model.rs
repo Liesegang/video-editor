@@ -4,11 +4,11 @@ use std::sync::Arc;
 use crate::model::BlendMode;
 use crate::model::authoring::{
     AttachmentId, AutomatableParameter, AutomationTrack, MediaInputBinding, MediaOutputKind,
-    MediaTime, ModuleConnection, ModuleDefinitionId, ModuleInstanceId, ModuleOutput,
-    ModuleOutputId, ModulePortAddress, PublishedAction, PublishedActionId, PublishedMediaInput,
-    PublishedMediaInputId, PublishedParameter, PublishedParameterId, PublishedSignal,
-    PublishedSignalId, TimeMap, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
-    TransitionId, TransitionProcessor,
+    MediaTime, ModuleConnection, ModuleDefinitionId, ModuleHostContract, ModuleInstanceId,
+    ModuleOutput, ModuleOutputId, ModulePortAddress, PublishedAction, PublishedActionId,
+    PublishedMediaInput, PublishedMediaInputId, PublishedParameter, PublishedParameterId,
+    PublishedSignal, PublishedSignalId, TimeMap, TimelineId, TimelineInterval, TimelineItemId,
+    TimelineTrackId, TransitionId, TransitionModuleInstanceTarget, TransitionProcessor,
 };
 use crate::model::node::NodeContent;
 use crate::model::project::property::PropertyMap;
@@ -23,6 +23,10 @@ pub struct RenderPlan {
     pub timelines: HashMap<TimelineId, Arc<CompiledTimeline>>,
     pub module_definitions: HashMap<ModuleDefinitionId, Arc<CompiledModuleDefinition>>,
     pub module_invocations: Vec<CompiledModuleInvocation>,
+    /// Sparse concrete-placement controls. Processing topology and the base
+    /// Transition invocation remain shared.
+    pub transition_instance_controls:
+        HashMap<TransitionModuleInstanceTarget, CompiledTransitionInstanceControls>,
     pub dependencies: DependencyIndex,
 }
 
@@ -32,6 +36,28 @@ impl RenderPlan {
             .invocation_indices
             .get(&host)
             .and_then(|index| self.module_invocations.get(*index))
+    }
+
+    pub fn effective_transition_invocation(
+        &self,
+        host: ModuleHost,
+        instance_path: &crate::model::authoring::InstancePath,
+    ) -> Option<CompiledModuleInvocation> {
+        let mut invocation = self.invocation(host)?.clone();
+        let target = TransitionModuleInstanceTarget {
+            instance_path: instance_path.clone(),
+            transition_id: match host {
+                ModuleHost::Transition { transition_id, .. } => transition_id,
+                _ => return Some(invocation),
+            },
+            module_instance_id: invocation.instance_id,
+        };
+        if let Some(controls) = self.transition_instance_controls.get(&target) {
+            invocation.parameter_overrides = controls.parameter_overrides.clone();
+            invocation.input_bindings = controls.input_bindings.clone();
+            invocation.automation_tracks = controls.automation_tracks.clone();
+        }
+        Some(invocation)
     }
 }
 
@@ -85,6 +111,7 @@ pub struct CompiledModuleDefinition {
     pub id: ModuleDefinitionId,
     pub topology_revision: u64,
     pub interface_version: u64,
+    pub host_contract: ModuleHostContract,
     pub fingerprint: [u8; 32],
     pub nodes: HashMap<uuid::Uuid, CompiledNode>,
     pub connections: Vec<ModuleConnection>,
@@ -166,9 +193,17 @@ pub struct CompiledTransition {
     pub edit_point: MediaTime,
     pub from: TransitionSourceInvocation,
     pub to: TransitionSourceInvocation,
+    /// The transition replaces both source placements at the `to` item's
+    /// deterministic compositing slot. Unrelated schedule entries retain
+    /// their ordering around that slot.
+    pub output_schedule_index: usize,
     pub progress: NormalizedTransitionProgress,
     pub processor: TransitionProcessor,
     pub parameters: HashMap<String, AutomatableParameter>,
+    /// Public host key for an optional reusable Module invocation. Runtime
+    /// resolves it through `RenderPlan::invocation`; no graph is expanded per
+    /// Transition placement.
+    pub module_host: Option<ModuleHost>,
 }
 
 /// Timeline-time mapping for the normalized transition input consumed by a
@@ -214,6 +249,10 @@ pub enum ModuleHost {
         item_id: TimelineItemId,
     },
     Attachment(AttachmentId),
+    Transition {
+        timeline_id: TimelineId,
+        transition_id: TransitionId,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -222,6 +261,15 @@ pub struct CompiledModuleInvocation {
     pub instance_id: ModuleInstanceId,
     pub definition_id: ModuleDefinitionId,
     pub output_id: ModuleOutputId,
+    pub parameter_overrides: HashMap<PublishedParameterId, crate::model::property::PropertyValue>,
+    pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
+    pub automation_tracks: HashMap<PublishedParameterId, AutomationTrack>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CompiledTransitionInstanceControls {
+    pub target: TransitionModuleInstanceTarget,
+    pub parameter_overrides: HashMap<PublishedParameterId, crate::model::property::PropertyValue>,
     pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
     pub automation_tracks: HashMap<PublishedParameterId, AutomationTrack>,
 }
@@ -233,36 +281,81 @@ pub struct TimelineRangeDependency {
     pub duration: MediaTime,
 }
 
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct TimelineInstanceRangeDependency {
+    pub target: TransitionModuleInstanceTarget,
+    pub timeline_id: TimelineId,
+    pub start: MediaTime,
+    pub duration: MediaTime,
+}
+
 /// Reverse edges used by incremental frame invalidation. These indices refer
 /// to public Module/Timeline identities only, never an internal Node UUID.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct DependencyIndex {
     pub timeline_ranges: HashMap<TimelineItemId, TimelineRangeDependency>,
+    /// Exact authored range for every invocation host that occupies Timeline
+    /// time. Transition Module edits use this instead of invalidating the
+    /// whole Project or silently leaving Preview stale.
+    pub host_ranges: HashMap<ModuleHost, TimelineRangeDependency>,
     pub definition_invocations: HashMap<ModuleDefinitionId, Vec<ModuleHost>>,
     pub instance_invocations: HashMap<ModuleInstanceId, Vec<ModuleHost>>,
     pub media_input_consumers: HashMap<TimelineItemId, Vec<ModuleHost>>,
     pub invocation_indices: HashMap<ModuleHost, usize>,
+    pub transition_instance_ranges:
+        HashMap<TransitionModuleInstanceTarget, TimelineInstanceRangeDependency>,
+    pub definition_transition_instances:
+        HashMap<ModuleDefinitionId, Vec<TransitionModuleInstanceTarget>>,
+    pub instance_transition_instances:
+        HashMap<ModuleInstanceId, Vec<TransitionModuleInstanceTarget>>,
+    pub transition_instance_media_consumers:
+        HashMap<TimelineItemId, Vec<TransitionModuleInstanceTarget>>,
 }
 
 impl DependencyIndex {
     pub fn affected_by_definition(&self, definition_id: ModuleDefinitionId) -> InvalidationSet {
-        self.invalidations_for_hosts(
+        let mut affected = self.invalidations_for_hosts(
             self.definition_invocations
                 .get(&definition_id)
                 .into_iter()
                 .flatten()
                 .copied(),
-        )
+        );
+        self.extend_transition_instances(
+            &mut affected,
+            self.definition_transition_instances
+                .get(&definition_id)
+                .into_iter()
+                .flatten(),
+        );
+        affected
     }
 
     pub fn affected_by_instance(&self, instance_id: ModuleInstanceId) -> InvalidationSet {
-        self.invalidations_for_hosts(
+        let mut affected = self.invalidations_for_hosts(
             self.instance_invocations
                 .get(&instance_id)
                 .into_iter()
                 .flatten()
                 .copied(),
-        )
+        );
+        self.extend_transition_instances(
+            &mut affected,
+            self.instance_transition_instances
+                .get(&instance_id)
+                .into_iter()
+                .flatten(),
+        );
+        affected
+    }
+
+    pub fn affected_by_transition_instance(
+        &self,
+        target: &TransitionModuleInstanceTarget,
+    ) -> InvalidationSet {
+        let mut affected = InvalidationSet::default();
+        self.extend_transition_instances(&mut affected, std::iter::once(target));
+        affected
     }
 
     pub fn affected_by_item(&self, item_id: TimelineItemId) -> InvalidationSet {
@@ -284,10 +377,21 @@ impl DependencyIndex {
                 .flatten()
             {
                 affected.invocations.insert(*host);
+                if let Some(range) = self.host_ranges.get(host) {
+                    affected.timelines.insert(range.timeline_id);
+                    affected.ranges.insert(*range);
+                }
                 if let ModuleHost::TimelineItem { item_id, .. } = host {
                     pending.push(*item_id);
                 }
             }
+            self.extend_transition_instances(
+                &mut affected,
+                self.transition_instance_media_consumers
+                    .get(&item_id)
+                    .into_iter()
+                    .flatten(),
+            );
         }
         affected
     }
@@ -296,6 +400,11 @@ impl DependencyIndex {
         let mut affected = InvalidationSet::default();
         for host in hosts {
             affected.invocations.insert(host);
+            if let Some(range) = self.host_ranges.get(&host) {
+                affected.timelines.insert(range.timeline_id);
+                affected.ranges.insert(*range);
+                continue;
+            }
             if let ModuleHost::TimelineItem {
                 timeline_id,
                 item_id,
@@ -309,6 +418,20 @@ impl DependencyIndex {
         }
         affected
     }
+
+    fn extend_transition_instances<'a>(
+        &self,
+        affected: &mut InvalidationSet,
+        targets: impl Iterator<Item = &'a TransitionModuleInstanceTarget>,
+    ) {
+        for target in targets {
+            affected.transition_instances.insert(target.clone());
+            if let Some(range) = self.transition_instance_ranges.get(target) {
+                affected.timelines.insert(range.timeline_id);
+                affected.instance_ranges.insert(range.clone());
+            }
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -316,6 +439,8 @@ pub struct InvalidationSet {
     pub timelines: BTreeSet<TimelineId>,
     pub ranges: BTreeSet<TimelineRangeDependency>,
     pub invocations: BTreeSet<ModuleHost>,
+    pub instance_ranges: BTreeSet<TimelineInstanceRangeDependency>,
+    pub transition_instances: BTreeSet<TransitionModuleInstanceTarget>,
 }
 
 impl PartialOrd for TimelineRangeDependency {
@@ -327,6 +452,23 @@ impl PartialOrd for TimelineRangeDependency {
 impl Ord for TimelineRangeDependency {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.timeline_id, self.start, self.duration).cmp(&(
+            other.timeline_id,
+            other.start,
+            other.duration,
+        ))
+    }
+}
+
+impl PartialOrd for TimelineInstanceRangeDependency {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TimelineInstanceRangeDependency {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.target, self.timeline_id, self.start, self.duration).cmp(&(
+            &other.target,
             other.timeline_id,
             other.start,
             other.duration,

@@ -81,6 +81,10 @@ fn contains_visible_content(items: &[FrameItem]) -> bool {
     items.iter().any(|item| match item {
         FrameItem::Object(_) => true,
         FrameItem::Group(group) => contains_visible_content(&group.items),
+        FrameItem::Transition(transition) => {
+            contains_visible_content(std::slice::from_ref(&transition.from.item))
+                || contains_visible_content(std::slice::from_ref(&transition.to.item))
+        }
     })
 }
 
@@ -115,6 +119,13 @@ fn first_shape(items: &[FrameItem]) -> Option<ShapeFrameView<'_>> {
             }
             FrameItem::Group(group) => {
                 if let Some(shape) = first_shape(&group.items) {
+                    return Some(shape);
+                }
+            }
+            FrameItem::Transition(transition) => {
+                if let Some(shape) = first_shape(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| first_shape(std::slice::from_ref(&transition.to.item)))
+                {
                     return Some(shape);
                 }
             }
@@ -736,6 +747,7 @@ fn unsupported_source_or_processor_fails_without_any_project_mutation() {
                 timeline_id: composition_id,
                 duration_policy: crate::model::authoring::DurationPolicy::Fixed,
                 parameter_overrides: HashMap::new(),
+                transition_module_overrides: Vec::new(),
             }),
             interval(2),
             0,

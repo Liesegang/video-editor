@@ -317,6 +317,9 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
             match item {
                 FrameItem::Group(group) => Ok((group.source_id, group.blend_mode)),
                 FrameItem::Object(_) => bail!("Merge inputs must be isolated present images"),
+                FrameItem::Transition(_) => {
+                    bail!("Merge inputs must be isolated present images, not Timeline transitions")
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -344,6 +347,9 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
             match item {
                 FrameItem::Group(group) => Ok((group.source_id, group.blend_mode)),
                 FrameItem::Object(_) => bail!("Merge input wrapper unexpectedly disappeared"),
+                FrameItem::Transition(_) => {
+                    bail!("Merge input wrapper unexpectedly became a Timeline transition")
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;

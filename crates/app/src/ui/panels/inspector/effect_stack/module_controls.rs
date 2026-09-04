@@ -111,119 +111,46 @@ pub(super) fn module_effect_controls(
     ui.add_space(2.0);
     ui.weak("Clip inputs");
     for input in additional_inputs {
-        let Some(output_kind) = media_output_kind(input.data_type) else {
-            continue;
-        };
-        let mut candidates = resources
-            .project
-            .items
-            .values()
-            .filter(|candidate| {
-                resources
-                    .project
-                    .tracks
-                    .get(&candidate.track_id)
-                    .is_some_and(|track| track.timeline_id == timeline_id)
-            })
-            .filter(|candidate| {
-                !matches!(
-                    &attachment.owner,
-                    AttachmentOwner::Item { item_id } if *item_id == candidate.id
-                )
-            })
-            .filter(|candidate| item_supports_output(resources.project, candidate, output_kind))
-            .collect::<Vec<_>>();
-        candidates
-            .sort_by_key(|candidate| (candidate.layer, candidate.interval.start, candidate.id));
-
         let current = invocation.input_bindings.get(&input.id);
-        let current_item_id = current.map(|binding| {
-            let MediaInputBinding::TimelineItemOutput { item_id, .. } = binding;
-            *item_id
-        });
-        let current_label = current_item_id
-            .and_then(|item_id| resources.project.items.get(&item_id))
-            .map_or_else(
-                || {
-                    if input.required {
-                        "Choose clip...".to_string()
-                    } else {
-                        "Unbound".to_string()
-                    }
-                },
-                |item| {
-                    if matches!(
-                        current,
-                        Some(MediaInputBinding::TimelineItemOutput {
-                            locator: InstanceLocator::Exact(_),
-                            ..
-                        })
-                    ) {
-                        format!("{} (fixed instance)", item.name)
-                    } else {
-                        item.name.clone()
-                    }
-                },
-            );
-
-        ui.horizontal(|ui| {
-            property_label(
-                ui,
-                &format!("attachment:{}:module_input:{}", attachment.id, input.id),
-                &input.name,
-            );
-            egui::ComboBox::from_id_salt(("attachment-module-input", attachment.id, input.id))
-                .selected_text(current_label)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(current.is_none(), "Unbound").clicked()
-                        && current.is_some()
-                    {
-                        match resources
-                            .service
-                            .unbind_attachment_module_input(attachment.id, input.id)
-                        {
-                            Ok(_) => state.status = format!("Unbound {}", input.name),
-                            Err(error) => state.error = Some(error.to_string()),
-                        }
-                        ui.close();
-                    }
-                    for source in &candidates {
-                        let selected = matches!(
-                            current,
-                            Some(MediaInputBinding::TimelineItemOutput {
-                                locator: InstanceLocator::SameTimeline,
-                                item_id,
-                                ..
-                            }) if *item_id == source.id
-                        );
-                        if ui.selectable_label(selected, &source.name).clicked() {
-                            let binding = MediaInputBinding::TimelineItemOutput {
-                                locator: InstanceLocator::SameTimeline,
-                                item_id: source.id,
-                                output: output_kind,
-                                stage: match output_kind {
-                                    MediaOutputKind::Image => ItemOutputStage::PostTransform,
-                                    MediaOutputKind::Audio => ItemOutputStage::PostEffects,
-                                },
-                            };
-                            match resources.service.bind_attachment_module_input(
-                                attachment.id,
-                                input.id,
-                                binding,
-                            ) {
-                                Ok(_) => {
-                                    state.status =
-                                        format!("Bound {} to {}", source.name, input.name)
-                                }
-                                Err(error) => state.error = Some(error.to_string()),
-                            }
-                            ui.close();
-                        }
-                    }
-                });
-        });
-        if input.required && current.is_none() {
-            ui.colored_label(ui.visuals().warn_fg_color, "A clip input is required");
+        let excluded_items = match &attachment.owner {
+            AttachmentOwner::Item { item_id } => std::slice::from_ref(item_id),
+            AttachmentOwner::Timeline { .. } | AttachmentOwner::Track { .. } => &[],
+        };
+        let control_id = format!("attachment:{}:module_input:{}", attachment.id, input.id);
+        let action = super::super::module_media_input::media_input_picker(
+            ui,
+            super::super::module_media_input::MediaInputPicker {
+                control_id: &control_id,
+                project: resources.project,
+                timeline_id,
+                input,
+                current,
+                excluded_items,
+                can_inherit: false,
+            },
+        );
+        match action {
+            Some(super::super::module_media_input::MediaInputPickerAction::Bind(binding)) => {
+                match resources.service.bind_attachment_module_input(
+                    attachment.id,
+                    input.id,
+                    binding,
+                ) {
+                    Ok(_) => state.status = format!("Bound {}", input.name),
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
+            Some(super::super::module_media_input::MediaInputPickerAction::Unbind) => {
+                match resources
+                    .service
+                    .unbind_attachment_module_input(attachment.id, input.id)
+                {
+                    Ok(_) => state.status = format!("Unbound {}", input.name),
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
+            Some(super::super::module_media_input::MediaInputPickerAction::Inherit) => {}
+            None => {}
         }
     }
     ui.weak("Bindings use published inputs; internal Node IDs remain private.");
@@ -243,55 +170,5 @@ fn attachment_timeline_id(
             .get(item_id)
             .and_then(|item| project.tracks.get(&item.track_id))
             .map(|track| track.timeline_id),
-    }
-}
-
-const fn media_output_kind(data_type: PortDataType) -> Option<MediaOutputKind> {
-    match data_type {
-        PortDataType::Image => Some(MediaOutputKind::Image),
-        PortDataType::Audio => Some(MediaOutputKind::Audio),
-        _ => None,
-    }
-}
-
-fn item_supports_output(
-    project: &AuthoringProject,
-    item: &TimelineItem,
-    output: MediaOutputKind,
-) -> bool {
-    match &item.source {
-        SourceRef::Asset { asset_id } => project
-            .assets
-            .iter()
-            .find(|asset| asset.id == *asset_id)
-            .is_some_and(|asset| match output {
-                MediaOutputKind::Image => {
-                    matches!(asset.kind, AssetKind::Image | AssetKind::Video)
-                }
-                MediaOutputKind::Audio => {
-                    matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
-                }
-            }),
-        SourceRef::Text { .. } | SourceRef::Shape { .. } | SourceRef::Solid { .. } => {
-            output == MediaOutputKind::Image
-        }
-        SourceRef::Composition(instance) => match output {
-            MediaOutputKind::Image => true,
-            MediaOutputKind::Audio => project.tracks.values().any(|track| {
-                track.timeline_id == instance.timeline_id
-                    && track.kind != library::model::authoring::TimelineTrackKind::Visual
-            }),
-        },
-        SourceRef::Module(invocation) => project
-            .module_instances
-            .get(&invocation.instance_id)
-            .and_then(|instance| project.module_definitions.get(&instance.definition_id))
-            .and_then(|definition| definition.output(invocation.output_id))
-            .is_some_and(|candidate| {
-                candidate.supports(match output {
-                    MediaOutputKind::Image => PortDataType::Image,
-                    MediaOutputKind::Audio => PortDataType::Audio,
-                })
-            }),
     }
 }

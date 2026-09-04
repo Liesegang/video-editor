@@ -353,20 +353,21 @@ impl TimelineEditorService {
         size: [f32; 2],
         collapsed: bool,
     ) -> Result<(ModuleDefinitionId, ChangeSet), LibraryError> {
-        self.edit_instance_definition(instance_id, |definition| {
+        self.edit_instance_definition_presentation(instance_id, |definition| {
             set_definition_node_presentation(definition, node_id, position, size, collapsed)
         })
         .map(|(_, definition_id, changes)| (definition_id, changes))
     }
 
-    /// Applies a complete layout operation as one copy-on-write transaction.
-    /// All updates are validated before any Node presentation is changed.
+    /// Applies a complete layout operation as one undoable presentation edit.
+    /// Layout belongs to the Module document and does not detach one reusable
+    /// instance or invalidate executable topology.
     pub fn set_instance_module_node_presentations(
         &self,
         instance_id: ModuleInstanceId,
         updates: Vec<ModuleNodePresentationUpdate>,
     ) -> Result<(ModuleDefinitionId, ChangeSet), LibraryError> {
-        self.edit_instance_definition(instance_id, |definition| {
+        self.edit_instance_definition_presentation(instance_id, |definition| {
             set_definition_node_presentations(definition, &updates)
         })
         .map(|(_, definition_id, changes)| (definition_id, changes))
@@ -461,7 +462,7 @@ impl TimelineEditorService {
         size: [f32; 2],
         collapsed: bool,
     ) -> Result<SharedModuleEdit<()>, LibraryError> {
-        self.edit_shared_definition(definition_id, |definition| {
+        self.edit_shared_definition_presentation(definition_id, |definition| {
             set_definition_node_presentation(definition, node_id, position, size, collapsed)
         })
     }
@@ -497,6 +498,26 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    fn edit_instance_definition_presentation<T>(
+        &self,
+        instance_id: ModuleInstanceId,
+        edit: impl FnOnce(&mut ModuleDefinition) -> Result<T, String>,
+    ) -> Result<(T, ModuleDefinitionId, ChangeSet), LibraryError> {
+        let mut session = self.write_session()?;
+        session
+            .transact(Vec::new(), |project| {
+                let definition_id = project
+                    .module_instances
+                    .get(&instance_id)
+                    .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
+                    .definition_id;
+                let value = edit(module_definition_mut(project, definition_id)?)?;
+                Ok((value, definition_id))
+            })
+            .map(|((value, definition_id), changes)| (value, definition_id, changes))
+            .map_err(LibraryError::Validation)
+    }
+
     pub(super) fn edit_shared_definition<T>(
         &self,
         definition_id: ModuleDefinitionId,
@@ -511,6 +532,27 @@ impl TimelineEditorService {
                 vec![ProjectInvalidation::ModuleDefinition { definition_id }],
                 |project| edit(module_definition_mut(project, definition_id)?),
             )
+            .map_err(LibraryError::Validation)?;
+        Ok(SharedModuleEdit {
+            value,
+            affected_instance_count,
+            changes,
+        })
+    }
+
+    fn edit_shared_definition_presentation<T>(
+        &self,
+        definition_id: ModuleDefinitionId,
+        edit: impl FnOnce(&mut ModuleDefinition) -> Result<T, String>,
+    ) -> Result<SharedModuleEdit<T>, LibraryError> {
+        let mut session = self.write_session()?;
+        let affected_instance_count =
+            reusable_definition_instance_count(session.project(), definition_id)
+                .map_err(LibraryError::Validation)?;
+        let (value, changes) = session
+            .transact(Vec::new(), |project| {
+                edit(module_definition_mut(project, definition_id)?)
+            })
             .map_err(LibraryError::Validation)?;
         Ok(SharedModuleEdit {
             value,
@@ -675,6 +717,9 @@ fn add_node_to_definition(
     node: Node,
 ) -> Result<uuid::Uuid, String> {
     require_insertable_processing_node(&node)?;
+    definition
+        .host_contract
+        .validate_authored_processing_node(&node)?;
     let node_id = node.id;
     if definition.graph.nodes.insert(node_id, node).is_some() {
         return Err(format!("Module Node {node_id} already exists"));
@@ -687,6 +732,7 @@ fn remove_node_from_definition(
     definition: &mut ModuleDefinition,
     node_id: uuid::Uuid,
 ) -> Result<(), String> {
+    require_unprotected_transition_node(definition, node_id)?;
     require_removable_processing_node(definition, node_id)?;
     if definition.graph.nodes.remove(&node_id).is_none() {
         return Err(format!("Missing Module Node {node_id}"));
@@ -716,6 +762,19 @@ fn remove_node_from_definition(
         bump_interface_version(definition)?;
     }
     Ok(())
+}
+
+fn require_unprotected_transition_node(
+    definition: &ModuleDefinition,
+    node_id: uuid::Uuid,
+) -> Result<(), String> {
+    if definition.is_protected_host_boundary_node(node_id) {
+        Err(format!(
+            "Transition Module Node {node_id} is a protected A/B/Progress/Output boundary and cannot be deleted"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn set_definition_node_state(
@@ -794,7 +853,7 @@ fn set_definition_node_presentations(
         node.ui_size = update.size;
         node.ui_collapsed = update.collapsed;
     }
-    bump_topology_revision(definition)
+    Ok(())
 }
 
 fn set_definition_node_property(
@@ -803,6 +862,11 @@ fn set_definition_node_property(
     key: String,
     property: Property,
 ) -> Result<(), String> {
+    if definition.is_protected_host_boundary_node(node_id) {
+        return Err(format!(
+            "Transition Module Node {node_id} is a protected host boundary; its value is supplied by the Timeline"
+        ));
+    }
     definition
         .graph
         .nodes

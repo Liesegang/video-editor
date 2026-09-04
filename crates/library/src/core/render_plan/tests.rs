@@ -154,6 +154,12 @@ fn shape_fill_colors(items: &[FrameItem]) -> Vec<Color> {
                     }
                 }
             }
+            FrameItem::Transition(transition) => {
+                colors.extend(shape_fill_colors(std::slice::from_ref(
+                    &transition.from.item,
+                )));
+                colors.extend(shape_fill_colors(std::slice::from_ref(&transition.to.item)));
+            }
         }
     }
     colors

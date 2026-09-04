@@ -63,6 +63,10 @@ fn objects(items: &[FrameItem]) -> Vec<&FrameObject> {
             match item {
                 FrameItem::Object(object) => output.push(object),
                 FrameItem::Group(group) => collect(&group.items, output),
+                FrameItem::Transition(transition) => {
+                    collect(std::slice::from_ref(&transition.from.item), output);
+                    collect(std::slice::from_ref(&transition.to.item), output);
+                }
             }
         }
     }
@@ -85,6 +89,10 @@ fn poison_legacy_shape_fallbacks(items: &mut [FrameItem]) {
                 }
             }
             FrameItem::Group(group) => poison_legacy_shape_fallbacks(&mut group.items),
+            FrameItem::Transition(transition) => {
+                poison_legacy_shape_fallbacks(std::slice::from_mut(&mut transition.from.item));
+                poison_legacy_shape_fallbacks(std::slice::from_mut(&mut transition.to.item));
+            }
         }
     }
 }

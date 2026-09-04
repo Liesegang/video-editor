@@ -23,6 +23,7 @@ mod legacy_media_color;
 mod list;
 mod path;
 mod sound_analysis;
+mod transition;
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
     native_node_descriptor, native_node_descriptor_for_node,
@@ -44,6 +45,11 @@ pub use legacy_media_color::{
 pub use list::ListContent;
 pub use path::PathOperationContent;
 pub use sound_analysis::SoundAnalysisContent;
+pub use transition::{
+    TRANSITION_AUDIO_INPUT_NODE_ID, TRANSITION_AUDIO_MIX_NODE_ID, TRANSITION_IMAGE_INPUT_NODE_ID,
+    TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID, transition_input_node_id,
+    transition_mix_node_id,
+};
 
 /// Stable authored/catalog identity of the native ordered Sound mixer.
 pub const SOUND_MERGE_OPERATION_KEY: &str = "sound_merge";

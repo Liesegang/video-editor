@@ -32,6 +32,17 @@ half4 main(float2 p) {
 }
 "#;
 
+const CROSS_DISSOLVE_SHADER: &str = r#"
+uniform shader from_image;
+uniform shader to_image;
+uniform float progress;
+
+half4 main(float2 p) {
+    float amount = clamp(progress, 0.0, 1.0);
+    return mix(from_image.eval(p), to_image.eval(p), amount);
+}
+"#;
+
 /// Cached Skia runtime effects owned by one renderer/context.
 ///
 /// Unsupported Photoshop formulas use the W3C source-over blend equation on
@@ -39,6 +50,7 @@ half4 main(float2 p) {
 pub(super) struct BlendRuntime {
     custom_blenders: HashMap<BlendMode, Blender>,
     dissolve_effect: Option<RuntimeEffect>,
+    cross_dissolve_effect: Option<RuntimeEffect>,
 }
 
 pub(super) fn with_restored_canvas<T, E>(
@@ -56,6 +68,7 @@ impl BlendRuntime {
         Self {
             custom_blenders: HashMap::new(),
             dissolve_effect: None,
+            cross_dissolve_effect: None,
         }
     }
 
@@ -140,6 +153,61 @@ impl BlendRuntime {
                     "Failed to instantiate deterministic Dissolve shader (seed {DISSOLVE_SPATIAL_SEED})"
                 ))
             })
+    }
+
+    pub(super) fn draw_cross_dissolve(
+        &mut self,
+        canvas: &Canvas,
+        from: &SkImage,
+        to: &SkImage,
+        progress: f32,
+    ) -> Result<(), LibraryError> {
+        if from.dimensions() != to.dimensions() {
+            return Err(LibraryError::Render(format!(
+                "Cross Dissolve source dimensions differ: {:?} and {:?}",
+                from.dimensions(),
+                to.dimensions()
+            )));
+        }
+        if self.cross_dissolve_effect.is_none() {
+            self.cross_dissolve_effect = Some(
+                RuntimeEffect::make_for_shader(CROSS_DISSOLVE_SHADER, None).map_err(|error| {
+                    LibraryError::Render(format!(
+                        "Failed to compile Cross Dissolve shader: {error}"
+                    ))
+                })?,
+            );
+        }
+        let effect = self.cross_dissolve_effect.as_ref().ok_or_else(|| {
+            LibraryError::Render(
+                "Cross Dissolve runtime cache remained empty after compilation".to_string(),
+            )
+        })?;
+        let sampling = SamplingOptions::default();
+        let from_shader = from.to_shader(None, sampling, None).ok_or_else(|| {
+            LibraryError::Render("Failed to create Cross Dissolve A shader".to_string())
+        })?;
+        let to_shader = to.to_shader(None, sampling, None).ok_or_else(|| {
+            LibraryError::Render("Failed to create Cross Dissolve B shader".to_string())
+        })?;
+        let uniforms = Data::new_copy(&progress.clamp(0.0, 1.0).to_ne_bytes());
+        let shader = effect
+            .make_shader(
+                uniforms,
+                &[ChildPtr::from(from_shader), ChildPtr::from(to_shader)],
+                None,
+            )
+            .ok_or_else(|| {
+                LibraryError::Render("Failed to instantiate Cross Dissolve shader".to_string())
+            })?;
+        let mut paint = Paint::default();
+        paint.set_shader(shader);
+        paint.set_blend_mode(SkBlendMode::SrcOver);
+        canvas.draw_rect(
+            Rect::from_wh(from.width() as f32, from.height() as f32),
+            &paint,
+        );
+        Ok(())
     }
 
     fn custom_blender(&mut self, mode: BlendMode) -> Result<Blender, LibraryError> {

@@ -78,6 +78,10 @@ fn node_effect_graph_can_process_the_implicit_host_before_the_output_terminal() 
                         )
                 }) || contains_nonzero_blur(&group.items)
             }
+            FrameItem::Transition(transition) => {
+                contains_nonzero_blur(std::slice::from_ref(&transition.from.item))
+                    || contains_nonzero_blur(std::slice::from_ref(&transition.to.item))
+            }
             FrameItem::Object(_) => false,
         })
     }

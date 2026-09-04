@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use egui_phosphor::regular as icons;
 use library::editor::{ModuleAttachmentPlacement, TimelineEditorService};
+#[cfg(test)]
+use library::model::authoring::SourceRef;
 use library::model::authoring::{
     Attachment, AttachmentOwner, AttachmentProcessor, AttachmentStage, AuthoringProject,
-    InstanceLocator, ItemOutputStage, MediaInputBinding, MediaOutputKind, ModuleConnection,
-    ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing,
-    ModuleOutputId, ModulePortAddress, PublishedMediaInput, PublishedMediaInputId, SourceRef,
-    TimelineId, TimelineItem,
+    ModuleConnection, ModuleConnectionId, ModuleDefinition, ModuleDefinitionId,
+    ModuleDefinitionSharing, ModuleOutputId, ModulePortAddress, PublishedMediaInput,
+    PublishedMediaInputId, TimelineId,
 };
-use library::model::project::asset::AssetKind;
 use library::model::project::connection::{PortDataType, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
 use library::model::property::PropertyDefinition;
 use library::model::Node;
@@ -809,6 +809,9 @@ fn image_effect_module_definition(name: impl Into<String>) -> (ModuleDefinition,
     let Some(output) = definition.output(output_id) else {
         return (definition, output_id);
     };
+    let Some(output_target) = output.target(PortDataType::Image) else {
+        return (definition, output_id);
+    };
     let Some(output_node) = definition.graph.nodes.get_mut(&output.node_id) else {
         return (definition, output_id);
     };
@@ -821,9 +824,7 @@ fn image_effect_module_definition(name: impl Into<String>) -> (ModuleDefinition,
             node_id: input_node_id,
             port: IMAGE_OUTPUT_PORT.to_string(),
         },
-        to: output
-            .target(PortDataType::Image)
-            .expect("Module Output media contract includes Image"),
+        to: output_target,
         order: 0,
         blend_mode: library::model::BlendMode::Normal,
     });

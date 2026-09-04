@@ -791,5 +791,9 @@ fn find_text_ensemble(items: &[FrameItem]) -> Option<&library::core::ensemble::E
             _ => None,
         },
         FrameItem::Group(group) => find_text_ensemble(&group.items),
+        FrameItem::Transition(transition) => {
+            find_text_ensemble(std::slice::from_ref(&transition.from.item))
+                .or_else(|| find_text_ensemble(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }

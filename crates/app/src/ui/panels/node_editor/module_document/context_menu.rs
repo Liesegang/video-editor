@@ -9,6 +9,7 @@ pub(super) fn show_module_create_menu(
     ui: &mut egui::Ui,
     state: &mut NodeEditorState,
     plugins: &PluginManager,
+    definition: &ModuleDefinition,
     viewport: egui::Rect,
     transform: egui::emath::TSTransform,
     node_rects: &[egui::Rect],
@@ -34,7 +35,7 @@ pub(super) fn show_module_create_menu(
     let mut should_close = false;
     if let Some(context) = state.create_menu.as_ref() {
         let position = context.position;
-        let graph_position = transform.inverse() * position;
+        let graph_position = visible_creation_position(position, viewport, transform);
         let popup =
             searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
         let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
@@ -45,7 +46,8 @@ pub(super) fn show_module_create_menu(
             .constrain(false)
             .show(ui.ctx(), |ui| {
                 show_searchable_popup_frame(ui, popup, |ui| {
-                    let items = super::menu::module_node_menu_items(plugins);
+                    let items =
+                        super::menu::module_node_menu_items(plugins, &definition.host_contract);
                     if let Some(request) = show_searchable_items_with_qa(
                         ui,
                         &menu_id,
@@ -73,6 +75,33 @@ pub(super) fn show_module_create_menu(
         state.create_menu = None;
     }
     selected
+}
+
+/// Place a new Node around the invocation point while keeping its initial
+/// controls reachable. The mature Snarl surface can measure a more precise
+/// size on the next frame; this conservative footprint prevents a context
+/// menu near an edge from creating every output port off-screen.
+fn visible_creation_position(
+    pointer: egui::Pos2,
+    viewport: egui::Rect,
+    transform: egui::emath::TSTransform,
+) -> egui::Pos2 {
+    const SCREEN_MARGIN: f32 = 12.0;
+    const CREATED_NODE_WIDTH: f32 = 420.0;
+    const CREATED_NODE_HEIGHT: f32 = 220.0;
+
+    let scale = transform.scaling.abs().max(f32::EPSILON);
+    let available =
+        (viewport.size() - egui::Vec2::splat(SCREEN_MARGIN * 2.0)).max(egui::Vec2::ZERO);
+    let footprint = (egui::vec2(CREATED_NODE_WIDTH, CREATED_NODE_HEIGHT) * scale).min(available);
+    let minimum = viewport.min + egui::Vec2::splat(SCREEN_MARGIN);
+    let maximum = viewport.max - egui::Vec2::splat(SCREEN_MARGIN) - footprint;
+    let desired = pointer - footprint * 0.5;
+    let screen_position = egui::pos2(
+        desired.x.clamp(minimum.x, maximum.x.max(minimum.x)),
+        desired.y.clamp(minimum.y, maximum.y.max(minimum.y)),
+    );
+    transform.inverse() * screen_position
 }
 
 fn update_for_secondary_click(
@@ -121,5 +150,21 @@ mod tests {
             1.0,
         );
         assert!(state.is_none());
+    }
+
+    #[test]
+    fn creation_near_an_edge_keeps_a_conservative_node_footprint_visible() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(600.0, 400.0));
+        let transform = egui::emath::TSTransform::new(egui::vec2(100.0, 50.0), 0.5);
+
+        let graph_position =
+            visible_creation_position(egui::pos2(695.0, 445.0), viewport, transform);
+        let screen_position = transform * graph_position;
+        let footprint = egui::vec2(420.0, 220.0) * transform.scaling;
+
+        assert!(screen_position.x >= viewport.left() + 12.0);
+        assert!(screen_position.y >= viewport.top() + 12.0);
+        assert!(screen_position.x + footprint.x <= viewport.right() - 12.0 + f32::EPSILON);
+        assert!(screen_position.y + footprint.y <= viewport.bottom() - 12.0 + f32::EPSILON);
     }
 }

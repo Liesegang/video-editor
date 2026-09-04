@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use super::*;
 use crate::editor::{
     AuthoringPropertyOwner, ModuleInterfaceCommand, ModuleInterfaceEditResult, ModuleItemPlacement,
-    ModuleNodePresentationUpdate, ModuleNodeRequest, TimelineEditorService, TimelineSettingsUpdate,
+    ModuleNodeRequest, TimelineEditorService, TimelineSettingsUpdate,
 };
 use crate::model::AssetKind;
 use crate::model::node::{GeneratorContent, Node, NodeContent, ValueContent};
@@ -217,6 +217,7 @@ fn ordinary_and_nested_timeline_items_never_create_module_topology() {
                 timeline_id: nested_timeline_id,
                 duration_policy: DurationPolicy::Fixed,
                 parameter_overrides: HashMap::new(),
+                transition_module_overrides: Vec::new(),
             }),
             interval(2, 3),
             1,
@@ -795,77 +796,6 @@ fn module_requires_a_dedicated_output_and_terminal_has_no_outgoing_port() {
     assert!(
         missing.validate().is_err(),
         "every current Module renders media"
-    );
-}
-
-#[test]
-fn module_layout_batch_is_one_cow_transaction_and_one_undo_step() {
-    let service = TimelineEditorService::create_default("Layout").expect("service");
-    let track_id = root_track(&service);
-    let (definition, _, output_id, _, _) = reusable_image_module(false);
-    let reusable_id = definition.id;
-    let mut node_ids = definition.graph.nodes.keys().copied().collect::<Vec<_>>();
-    node_ids.sort_unstable();
-    service
-        .add_module_definition(definition)
-        .expect("definition");
-    let (_, first_instance, _) = service
-        .place_module_item(reusable_id, placement(track_id, output_id))
-        .expect("first placement");
-    let (_, second_instance, _) = service
-        .place_module_item(reusable_id, placement(track_id, output_id))
-        .expect("second placement");
-    let revision_before = service.revision().expect("revision");
-    let updates = node_ids
-        .iter()
-        .enumerate()
-        .map(|(index, node_id)| ModuleNodePresentationUpdate {
-            node_id: *node_id,
-            position: [index as f32 * 100.0, index as f32 * 50.0],
-            size: [180.0, 120.0],
-            collapsed: index % 2 == 0,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        service
-            .set_instance_module_node_presentations(first_instance, Vec::new())
-            .is_err(),
-        "empty layout batch must not create a private definition"
-    );
-    assert_eq!(service.revision().expect("revision"), revision_before);
-    let duplicate = vec![updates[0].clone(), updates[0].clone()];
-    assert!(
-        service
-            .set_instance_module_node_presentations(first_instance, duplicate)
-            .is_err(),
-        "duplicate Node updates must fail before mutation"
-    );
-    assert_eq!(service.revision().expect("revision"), revision_before);
-
-    let (private_id, changes) = service
-        .set_instance_module_node_presentations(first_instance, updates.clone())
-        .expect("atomic layout");
-    assert_ne!(private_id, reusable_id);
-    assert_eq!(changes.revision.get(), revision_before.get() + 1);
-    let snapshot = service.snapshot().expect("snapshot");
-    assert_eq!(
-        snapshot.module_instances[&second_instance].definition_id,
-        reusable_id
-    );
-    for update in &updates {
-        let node = &snapshot.module_definitions[&private_id].graph.nodes[&update.node_id];
-        assert_eq!(node.ui_position, update.position);
-        assert_eq!(node.ui_size, update.size);
-        assert_eq!(node.ui_collapsed, update.collapsed);
-    }
-    drop(snapshot);
-
-    service.undo().expect("undo").expect("layout change");
-    let undone = service.snapshot().expect("undone snapshot");
-    assert_eq!(
-        undone.module_instances[&first_instance].definition_id, reusable_id,
-        "one undo reverts both layout and copy-on-write"
     );
 }
 

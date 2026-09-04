@@ -16,9 +16,12 @@ pub use node::{
     DataContent, GeneratorContent, LEGACY_MEDIA_COLOR_PROPERTY_KEYS, LegacyMediaColorProperty,
     ListContent, MediaContent, ModuleOutputContent, NativeNodeCatalogDescriptor, NativeNodeFactory,
     NativeNodeRuntimeStatus, NativeOperationContent, Node, NodeContent, PathOperationContent,
-    PluginOperationContent, SOUND_MERGE_OPERATION_KEY, SoundAnalysisContent, Track, ValueContent,
+    PluginOperationContent, SOUND_MERGE_OPERATION_KEY, SoundAnalysisContent,
+    TRANSITION_AUDIO_INPUT_NODE_ID, TRANSITION_AUDIO_MIX_NODE_ID, TRANSITION_IMAGE_INPUT_NODE_ID,
+    TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID, Track, ValueContent,
     active_legacy_media_color_properties, is_legacy_media_color_property, native_node_catalog,
-    native_node_descriptor, native_node_descriptor_for_node,
+    native_node_descriptor, native_node_descriptor_for_node, transition_input_node_id,
+    transition_mix_node_id,
 };
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;

@@ -169,7 +169,10 @@ pub(super) fn paint_item_content(context: ItemContentContext<'_>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Source-specific clip painting needs the authored item and asset plus the shared waveform and media-preview services at one immediate-mode render boundary"
+)]
 fn paint_asset(
     ui: &egui::Ui,
     project: &Arc<AuthoringProject>,
@@ -249,6 +252,10 @@ fn paint_asset(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Video-strip painting keeps clip/source timing, viewport geometry, and the shared asynchronous preview service explicit in the hot UI path"
+)]
 fn paint_video_strip(
     ui: &egui::Ui,
     project: &Arc<AuthoringProject>,

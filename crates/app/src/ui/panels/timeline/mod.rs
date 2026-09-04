@@ -1,9 +1,11 @@
 mod content;
+mod documents;
 mod dope_sheet;
 mod geometry;
 mod interaction;
 mod painting;
 mod rows;
+mod transitions;
 mod viewport;
 
 #[cfg(test)]
@@ -14,7 +16,10 @@ use std::sync::Arc;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
-use library::model::authoring::{AuthoringProject, MediaTime, TimelineItem, TimelineItemId};
+use library::model::authoring::{
+    AuthoringProject, MediaTime, ModuleDefinitionId, TimelineItem, TimelineItemId,
+    TransitionCreationCandidate, TransitionId,
+};
 use library::plugin::PluginManager;
 
 use crate::state::authoring::{
@@ -43,6 +48,14 @@ enum DeferredItemAction {
     Delete(TimelineItemId),
     Open(TimelineItemId),
     ConvertSourceToNodeClip(TimelineItemId),
+    AddTransition(TransitionCreationCandidate),
+    RemoveTransition(TransitionId),
+    EditTransitionLogic(TransitionId),
+    AssignTransitionModule {
+        transition_id: TransitionId,
+        definition_id: ModuleDefinitionId,
+    },
+    AssignBuiltinTransition(TransitionId),
 }
 
 pub fn timeline_panel(
@@ -107,6 +120,7 @@ pub fn timeline_panel(
         timeline.id,
         &state.timeline.expanded_tracks,
         &property_items,
+        state.active_instance_path.as_ref(),
     );
     let row_projection = timeline_row_projection(
         project,
@@ -387,10 +401,17 @@ fn draw_item(
             actions.push(DeferredItemAction::Split(item.id));
             ui.close();
         }
-        if ui.button(format!("{} Duplicate", icons::COPY)).clicked() {
+        let duplicate = ui.button(format!("{} Duplicate", icons::COPY));
+        crate::qa::register_component(
+            format!("timeline.item.duplicate:{}", item.id),
+            "timeline_context_menu_action",
+            duplicate.rect,
+        );
+        if duplicate.clicked() {
             actions.push(DeferredItemAction::Duplicate(item.id));
             ui.close();
         }
+        transitions::add_transition_menu(ui, project, item, actions);
         if !matches!(item.source, library::model::authoring::SourceRef::Module(_)) {
             let convert = ui.button(format!(
                 "{} Convert Source to Node Clip",
@@ -460,6 +481,7 @@ fn draw_item(
             interval,
             clip_rect,
             content_rect,
+            state.active_instance_path.as_ref(),
         ),
     }
     let text_rect = clip_rect.shrink2(Vec2::new(8.0, 0.0));

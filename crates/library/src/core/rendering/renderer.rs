@@ -154,6 +154,14 @@ pub enum RenderOutput {
     Texture(TextureInfo),
 }
 
+/// Opaque ownership token for a renderer-native isolated layer.
+///
+/// The layer remains in its backend storage (including a GPU texture) until a
+/// consuming composite operation or explicit release. It must never be
+/// serialized or exposed as a user-editable resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RetainedRenderLayer(pub(crate) u64);
+
 /// Verified authoring-to-working contract installed for one Project frame.
 ///
 /// Construction is crate-private: only the exact Project color pipeline can
@@ -331,6 +339,48 @@ pub trait Renderer {
         opacity: f64,
         blend_mode: BlendMode,
     ) -> Result<(), LibraryError>;
+
+    /// Mix two already-rasterized Timeline transition sources in the active
+    /// render domain. Project renderers must keep this operation in their
+    /// scene-linear working surface.
+    fn draw_cross_dissolve(
+        &mut self,
+        _from: &RenderOutput,
+        _to: &RenderOutput,
+        _progress: f32,
+    ) -> Result<(), LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not implement Timeline Cross Dissolve".to_string(),
+        ))
+    }
+
+    /// Finish the current group while retaining its native backing store.
+    /// Backends which cannot guarantee native lifetime ownership fail closed;
+    /// callers must not silently fall back through a CPU readback.
+    fn end_group_retained(&mut self) -> Result<RetainedRenderLayer, LibraryError> {
+        let _ = self.end_group()?;
+        Err(LibraryError::Render(
+            "renderer does not support retained Timeline transition layers".to_string(),
+        ))
+    }
+
+    fn release_retained_layer(&mut self, _layer: RetainedRenderLayer) -> Result<(), LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not support retained Timeline transition layers".to_string(),
+        ))
+    }
+
+    /// Consume two retained layers and mix them into the active target.
+    fn draw_cross_dissolve_retained(
+        &mut self,
+        _from: RetainedRenderLayer,
+        _to: RetainedRenderLayer,
+        _progress: f32,
+    ) -> Result<(), LibraryError> {
+        Err(LibraryError::Render(
+            "renderer does not support retained Timeline Cross Dissolve".to_string(),
+        ))
+    }
 
     /// Start an isolated transparent/image group render target.
     fn begin_group(

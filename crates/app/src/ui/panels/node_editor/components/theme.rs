@@ -186,6 +186,9 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
                 Some("Particles") => {
                     NodeEditorIcon::new(icons::SPARKLE, "Particle design placeholder")
                 }
+                Some("Transition") => {
+                    NodeEditorIcon::new(icons::ARROWS_MERGE, "Transition host operation")
+                }
                 _ => NodeEditorIcon::new(icons::WARNING, "Native design placeholder"),
             }
         }

@@ -6,7 +6,7 @@ use super::module::{
 use super::*;
 use crate::model::authoring::{
     ModuleDefinitionSharing, ModulePortAddress, PublishedMediaInput, PublishedParameter,
-    property_value_type,
+    TransitionModuleControlsMut, property_value_type,
 };
 use crate::model::project::{PortDataType, PortDirection};
 
@@ -160,6 +160,7 @@ fn apply_definition_interface_command(
     definition: &mut ModuleDefinition,
     command: ModuleInterfaceCommand,
 ) -> Result<(ModuleInterfaceEditResult, InterfaceCleanup), String> {
+    require_editable_interface_entry(definition, &command)?;
     let result = match command {
         ModuleInterfaceCommand::PublishParameter {
             name,
@@ -218,6 +219,9 @@ fn apply_definition_interface_command(
                 .graph
                 .port_definition(&target, PortDirection::Input)?;
             require_media_type(port.data_type, "Published media input")?;
+            definition
+                .host_contract
+                .validate_additional_media_input(port.data_type)?;
             let input_id = PublishedMediaInputId::new();
             definition.interface.media_inputs.push(PublishedMediaInput {
                 id: input_id,
@@ -322,6 +326,40 @@ fn apply_definition_interface_command(
     Ok(result)
 }
 
+fn require_editable_interface_entry(
+    definition: &ModuleDefinition,
+    command: &ModuleInterfaceCommand,
+) -> Result<(), String> {
+    let protected_parameter = match command {
+        ModuleInterfaceCommand::RenameParameter { parameter_id, .. }
+        | ModuleInterfaceCommand::UnpublishParameter { parameter_id } => {
+            definition.host_contract.protects_parameter(*parameter_id)
+        }
+        _ => false,
+    };
+    if protected_parameter {
+        return Err(
+            "Transition Progress is a protected host input and cannot be renamed or unpublished"
+                .to_string(),
+        );
+    }
+    let protected_media = match command {
+        ModuleInterfaceCommand::RenameMediaInput { input_id, .. }
+        | ModuleInterfaceCommand::RetargetPrimaryMediaInput { input_id, .. }
+        | ModuleInterfaceCommand::UnpublishMediaInput { input_id } => {
+            definition.host_contract.protects_media_input(*input_id)
+        }
+        _ => false,
+    };
+    if protected_media {
+        return Err(
+            "Transition A/B are protected host inputs and cannot be renamed, retargeted, or unpublished"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn cleanup_interface_dependents(
     project: &mut AuthoringProject,
     affected_instances: &[ModuleInstanceId],
@@ -345,6 +383,21 @@ fn cleanup_interface_dependents(
                     usize::from(invocation.automation_tracks.remove(&parameter_id).is_some());
                 Ok(())
             })?;
+            project.for_each_affected_transition_module_controls_mut(&affected, |_, controls| {
+                match controls {
+                    TransitionModuleControlsMut::Definition(module) => {
+                        impact.removed_automation_tracks +=
+                            usize::from(module.automation_tracks.remove(&parameter_id).is_some());
+                    }
+                    TransitionModuleControlsMut::Instance(controls) => {
+                        impact.removed_parameter_overrides += usize::from(
+                            controls.parameter_overrides.remove(&parameter_id).is_some(),
+                        );
+                        impact.removed_automation_tracks +=
+                            usize::from(controls.automation_tracks.remove(&parameter_id).is_some());
+                    }
+                }
+            });
         }
         InterfaceCleanup::MediaInput(input_id) => {
             for_each_affected_invocation_mut(project, &affected, |invocation| {
@@ -352,6 +405,17 @@ fn cleanup_interface_dependents(
                     usize::from(invocation.input_bindings.remove(&input_id).is_some());
                 Ok(())
             })?;
+            project.for_each_affected_transition_module_controls_mut(&affected, |_, controls| {
+                let removed = match controls {
+                    TransitionModuleControlsMut::Definition(module) => {
+                        module.input_bindings.remove(&input_id).is_some()
+                    }
+                    TransitionModuleControlsMut::Instance(controls) => {
+                        controls.input_bindings.remove(&input_id).is_some()
+                    }
+                };
+                impact.removed_media_input_bindings += usize::from(removed);
+            });
         }
     }
     Ok(impact)

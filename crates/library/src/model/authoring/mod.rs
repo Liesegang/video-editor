@@ -13,6 +13,8 @@ mod project;
 mod time;
 mod timeline;
 mod transition;
+mod transition_instance;
+mod transition_module;
 
 pub use attachment::*;
 pub use edit::*;
@@ -23,6 +25,8 @@ pub use project::*;
 pub use time::*;
 pub use timeline::*;
 pub use transition::*;
+pub use transition_instance::*;
+pub use transition_module::*;
 
 #[cfg(test)]
 mod file_import_tests;

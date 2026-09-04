@@ -42,7 +42,8 @@ pub use connection::{
     NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress, PortDataType, PortDefinition,
     PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
     RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, SOUND_INPUT_PORT, SPECTRUM_INPUT_PORT,
-    SPECTRUM_OUTPUT_PORT, TIME_PORT,
+    SPECTRUM_OUTPUT_PORT, TIME_PORT, TRANSITION_FROM_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT,
+    TRANSITION_PROGRESS_PROPERTY, TRANSITION_TO_INPUT_PORT,
 };
 pub use error::ProjectGraphError;
 pub use node_graph_bundle::NodeGraphBundle;

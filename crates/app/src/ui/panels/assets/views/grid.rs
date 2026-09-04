@@ -5,7 +5,10 @@ const GRID_CARD_MAX_WIDTH: f32 = 184.0;
 const GRID_CARD_HEIGHT: f32 = 132.0;
 const GRID_GAP: f32 = 6.0;
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Asset grid painting keeps selection, drag handling, and shared preview services explicit at the immediate-mode UI boundary"
+)]
 pub(super) fn grid_entries(
     ui: &mut egui::Ui,
     entries: &[LibraryEntry<'_>],
@@ -39,7 +42,10 @@ pub(super) fn grid_entries(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "A grid card needs its entry identity, layout, project context, and both shared preview services in one immediate-mode paint call"
+)]
 fn grid_entry(
     ui: &mut egui::Ui,
     entry: LibraryEntry<'_>,

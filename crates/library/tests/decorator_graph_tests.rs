@@ -47,6 +47,10 @@ fn first_object(items: &[FrameItem]) -> Option<&library::model::frame::entity::F
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(object),
         FrameItem::Group(group) => first_object(&group.items),
+        FrameItem::Transition(transition) => {
+            first_object(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_object(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 

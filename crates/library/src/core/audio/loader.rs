@@ -173,6 +173,8 @@ impl AudioLoader {
         }
 
         let mut output = vec![0.0; frame_capacity.saturating_mul(target_channels)];
+        let mut first_valid_frame = frame_capacity;
+        let mut valid_frame_end = 0_usize;
         loop {
             let packet = if let Some(packet) = opened.pending_packet.take() {
                 packet
@@ -225,6 +227,14 @@ impl AudioLoader {
                 ((packet_start_seconds * f64::from(target_rate)).ceil() as u64).max(start_frame);
             let final_target = ((packet_end_seconds * f64::from(target_rate)).ceil() as u64)
                 .min(start_frame.saturating_add(frame_capacity as u64));
+            if final_target > first_target {
+                let first = usize::try_from(first_target - start_frame)
+                    .map_err(|_| anyhow::anyhow!("audio target frame does not fit usize"))?;
+                let end = usize::try_from(final_target - start_frame)
+                    .map_err(|_| anyhow::anyhow!("audio target frame does not fit usize"))?;
+                first_valid_frame = first_valid_frame.min(first);
+                valid_frame_end = valid_frame_end.max(end);
+            }
             for absolute_target in first_target..final_target {
                 let target_seconds = absolute_target as f64 / f64::from(target_rate);
                 let source_position =
@@ -256,7 +266,9 @@ impl AudioLoader {
         }
 
         opened.next_target_frame = Some(start_frame.saturating_add(frame_capacity as u64));
-        AudioChunk::new(key.clone(), output).map_err(anyhow::Error::msg)
+        let valid_frame_range = first_valid_frame.min(valid_frame_end)..valid_frame_end;
+        AudioChunk::new_with_valid_frame_range(key.clone(), output, valid_frame_range)
+            .map_err(anyhow::Error::msg)
     }
 
     fn open_track(

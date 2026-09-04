@@ -755,6 +755,9 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
                 _ => None,
             },
             FrameItem::Group(group) => group.items.iter().find_map(video_request),
+            FrameItem::Transition(transition) => {
+                video_request(&transition.from.item).or_else(|| video_request(&transition.to.item))
+            }
         }
     }
 

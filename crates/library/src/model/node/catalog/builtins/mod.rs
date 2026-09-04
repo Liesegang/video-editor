@@ -10,6 +10,7 @@ mod list;
 mod math;
 mod path;
 mod sound;
+mod transition;
 
 pub(super) fn specs() -> impl Iterator<Item = &'static DescriptorSpec> {
     generators::specs()
@@ -21,4 +22,5 @@ pub(super) fn specs() -> impl Iterator<Item = &'static DescriptorSpec> {
         .chain(path::specs())
         .chain(compositing::specs())
         .chain(sound::specs())
+        .chain(transition::specs())
 }

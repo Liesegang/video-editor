@@ -26,4 +26,6 @@ mod particle_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod transition_module_tests;
+#[cfg(test)]
 mod transition_tests;

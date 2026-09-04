@@ -4,11 +4,13 @@ use crate::model::property::{PropertyMap, PropertyValue};
 
 use super::super::{
     AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter, AutomationTrack,
-    BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaInputBinding, MediaTime,
-    ModuleInvocation, ProcessorParameterContract, PublishedParameter, TextEnsembleOperation,
-    TimelineItem, TimelineItemId, TransitionMediaType, property_value_type,
+    BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaTime,
+    ProcessorParameterContract, PublishedParameter, TextEnsembleOperation, TimelineInterval,
+    TimelineItemId, Transition, TransitionMediaType, property_value_type,
     text_ensemble_direct_contract_is_compatible,
 };
+use super::item_placement::{ItemPlacementOverlay, TimelineItemOrderIndex};
+use super::transition_module::validate_transition_processor;
 
 pub(super) fn validate_text_ensemble_operations(
     operations: &[TextEnsembleOperation],
@@ -254,7 +256,8 @@ pub(super) fn validate_automatable_parameters(
 }
 
 pub(super) fn validate_duration_policy(
-    item: &TimelineItem,
+    item_id: TimelineItemId,
+    interval: TimelineInterval,
     nested_duration: MediaTime,
     policy: &DurationPolicy,
 ) -> Result<(), String> {
@@ -264,14 +267,11 @@ pub(super) fn validate_duration_policy(
     } = policy
     {
         if intro_end.is_negative() || *intro_end > *outro_start || *outro_start > nested_duration {
-            return Err(format!("Item {} has invalid Responsive markers", item.id));
+            return Err(format!("Item {item_id} has invalid Responsive markers"));
         }
         let minimum = intro_end.checked_add(nested_duration.checked_sub(*outro_start)?)?;
-        if item.interval.duration < minimum {
-            return Err(format!(
-                "Item {} is too short for Responsive timing",
-                item.id
-            ));
+        if interval.duration < minimum {
+            return Err(format!("Item {item_id} is too short for Responsive timing"));
         }
     }
     Ok(())
@@ -316,121 +316,196 @@ pub(super) fn validate_builtin_effect(
     )
 }
 
-pub(super) fn validate_transitions(project: &AuthoringProject) -> Result<(), String> {
-    for (transition_id, transition) in &project.transitions {
+pub(super) fn validate_transitions(
+    project: &AuthoringProject,
+    placements: &ItemPlacementOverlay<'_>,
+) -> Result<(), String> {
+    let item_order = TimelineItemOrderIndex::build(project, placements);
+    let mut transitions = project.transitions.iter().collect::<Vec<_>>();
+    transitions.sort_by_key(|(transition_id, _)| **transition_id);
+    let mut image_transitions_by_item = HashMap::<TimelineItemId, Vec<&Transition>>::new();
+    let mut audio_transitions_by_item = HashMap::<TimelineItemId, Vec<&Transition>>::new();
+    for (transition_id, transition) in transitions {
         if *transition_id != transition.id {
             return Err("Transition map key does not match its ID".to_string());
         }
-        let timeline = project
-            .timelines
-            .get(&transition.timeline_id)
-            .ok_or_else(|| format!("Transition {} has no Timeline", transition.id))?;
-        if transition.from_item_id == transition.to_item_id {
-            return Err(format!(
-                "Transition {} must connect two distinct Timeline items",
-                transition.id
-            ));
-        }
-        let from = project
-            .items
-            .get(&transition.from_item_id)
-            .ok_or_else(|| format!("Transition {} has a missing from item", transition.id))?;
-        let to = project
-            .items
-            .get(&transition.to_item_id)
-            .ok_or_else(|| format!("Transition {} has a missing to item", transition.id))?;
-        let from_track = project
-            .tracks
-            .get(&from.track_id)
-            .ok_or_else(|| format!("Transition {} has a missing from Track", transition.id))?;
-        let to_track = project
-            .tracks
-            .get(&to.track_id)
-            .ok_or_else(|| format!("Transition {} has a missing to Track", transition.id))?;
-        if from_track.timeline_id != timeline.id || to_track.timeline_id != timeline.id {
-            return Err(format!(
-                "Transition {} crosses a Timeline boundary",
-                transition.id
-            ));
-        }
-        if from.track_id != to.track_id {
-            return Err(format!(
-                "Transition {} must connect items on one Track",
-                transition.id
-            ));
-        }
-
-        let interval = transition
-            .interval()
-            .map_err(|error| format!("Transition {} has invalid timing: {error}", transition.id))?;
-        if interval.end()? > timeline.duration {
-            return Err(format!(
-                "Transition {} extends beyond its Timeline",
-                transition.id
-            ));
-        }
-        let interval_end = interval.end()?;
-        if from.interval.start > interval.start || from.interval.end()? < transition.edit_point {
-            return Err(format!(
-                "Transition {} from item does not own the visible range through its edit point",
-                transition.id
-            ));
-        }
-        if to.interval.start > transition.edit_point || to.interval.end()? < interval_end {
-            return Err(format!(
-                "Transition {} to item does not own the visible range from its edit point",
-                transition.id
-            ));
-        }
-
-        let operation = &transition.processor.operation;
-        if operation.category != super::super::TRANSITION_CATEGORY
-            || operation.operation != super::super::TRANSITION_APPLY_OPERATION
-            || operation.component_id.trim().is_empty()
-            || operation.version.trim().is_empty()
-        {
-            return Err(format!(
-                "Transition {} has an invalid processor identity",
-                transition.id
-            ));
-        }
-        match operation.component_id.as_str() {
-            super::super::CROSS_DISSOLVE_COMPONENT_ID
-                if transition.processor.contract.media_type != TransitionMediaType::Image
-                    || !transition.processor.contract.parameters.is_empty() =>
-            {
-                return Err(format!(
-                    "Transition {} has an invalid Cross Dissolve contract",
-                    transition.id
-                ));
-            }
-            super::super::AUDIO_CROSSFADE_COMPONENT_ID
-                if transition.processor.contract.media_type != TransitionMediaType::Audio
-                    || !transition.processor.contract.parameters.is_empty() =>
-            {
-                return Err(format!(
-                    "Transition {} has an invalid Audio Crossfade contract",
-                    transition.id
-                ));
-            }
-            _ => {}
-        }
-        let output = transition.processor.contract.media_type.output_kind();
-        if !project.item_supports_output(from, output)?
-            || !project.item_supports_output(to, output)?
-        {
-            return Err(format!(
-                "Transition {} source items do not provide the required media",
-                transition.id
-            ));
-        }
-        validate_automatable_parameters(
-            &transition.parameters,
-            &transition.processor.contract.parameters,
-            &format!("Transition {}", transition.id),
-            Some(transition.duration),
+        validate_transition(
+            project,
+            transition,
+            placements,
+            item_order.participants_have_clear_layer_span(project, placements, transition),
         )?;
+        let transitions_by_item = match transition.processor.contract.media_type {
+            TransitionMediaType::Image => &mut image_transitions_by_item,
+            TransitionMediaType::Audio => &mut audio_transitions_by_item,
+        };
+        for item_id in [transition.from_item_id, transition.to_item_id] {
+            let participants = transitions_by_item.entry(item_id).or_default();
+            for other in participants.iter().copied() {
+                validate_transition_participant_conflict(transition, other)?;
+            }
+            participants.push(transition);
+        }
     }
+    Ok(())
+}
+
+pub(super) fn validate_transition_participant_conflict(
+    transition: &Transition,
+    other: &Transition,
+) -> Result<(), String> {
+    if transition.id == other.id
+        || transition.processor.contract.media_type != other.processor.contract.media_type
+    {
+        return Ok(());
+    }
+    let shared_item = [transition.from_item_id, transition.to_item_id]
+        .into_iter()
+        .find(|item_id| *item_id == other.from_item_id || *item_id == other.to_item_id);
+    let Some(shared_item) = shared_item else {
+        return Ok(());
+    };
+    let interval = transition
+        .interval()
+        .map_err(|error| format!("Transition {} has invalid timing: {error}", transition.id))?;
+    let other_interval = other
+        .interval()
+        .map_err(|error| format!("Transition {} has invalid timing: {error}", other.id))?;
+    if interval.start < other_interval.end()? && other_interval.start < interval.end()? {
+        let (first_id, second_id) = if transition.id < other.id {
+            (transition.id, other.id)
+        } else {
+            (other.id, transition.id)
+        };
+        return Err(format!(
+            "Transitions {} and {} overlap while sharing Timeline item {} for {:?} media",
+            first_id, second_id, shared_item, transition.processor.contract.media_type,
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_transition(
+    project: &AuthoringProject,
+    transition: &Transition,
+    placements: &ItemPlacementOverlay<'_>,
+    participants_have_clear_layer_span: bool,
+) -> Result<(), String> {
+    let timeline = project
+        .timelines
+        .get(&transition.timeline_id)
+        .ok_or_else(|| format!("Transition {} has no Timeline", transition.id))?;
+    if transition.from_item_id == transition.to_item_id {
+        return Err(format!(
+            "Transition {} must connect two distinct Timeline items",
+            transition.id
+        ));
+    }
+    let from = project
+        .items
+        .get(&transition.from_item_id)
+        .ok_or_else(|| format!("Transition {} has a missing from item", transition.id))?;
+    let to = project
+        .items
+        .get(&transition.to_item_id)
+        .ok_or_else(|| format!("Transition {} has a missing to item", transition.id))?;
+    let from_placement = placements.state(from);
+    let to_placement = placements.state(to);
+    let from_track = project
+        .tracks
+        .get(&from_placement.track_id)
+        .ok_or_else(|| format!("Transition {} has a missing from Track", transition.id))?;
+    let to_track = project
+        .tracks
+        .get(&to_placement.track_id)
+        .ok_or_else(|| format!("Transition {} has a missing to Track", transition.id))?;
+    if from_track.timeline_id != timeline.id || to_track.timeline_id != timeline.id {
+        return Err(format!(
+            "Transition {} crosses a Timeline boundary",
+            transition.id
+        ));
+    }
+    if from_placement.track_id != to_placement.track_id {
+        return Err(format!(
+            "Transition {} must connect items on one Track",
+            transition.id
+        ));
+    }
+    let output = transition.processor.contract.media_type.output_kind();
+    if !from_track.kind.supports_output(output) {
+        return Err(format!(
+            "Transition {} produces {output:?} media, which {:?} Track {} does not render",
+            transition.id, from_track.kind, from_track.id
+        ));
+    }
+    if !participants_have_clear_layer_span {
+        return Err(format!(
+            "Transition {} has an active item between its participant layers during the transition interval",
+            transition.id
+        ));
+    }
+
+    let interval = transition
+        .interval()
+        .map_err(|error| format!("Transition {} has invalid timing: {error}", transition.id))?;
+    if interval.end()? > timeline.duration {
+        return Err(format!(
+            "Transition {} extends beyond its Timeline",
+            transition.id
+        ));
+    }
+    let interval_end = interval.end()?;
+    if from_placement.interval.start > interval.start
+        || from_placement.interval.end()? < transition.edit_point
+    {
+        return Err(format!(
+            "Transition {} from item does not own the visible range through its edit point",
+            transition.id
+        ));
+    }
+    if to_placement.interval.start > transition.edit_point
+        || to_placement.interval.end()? < interval_end
+    {
+        return Err(format!(
+            "Transition {} to item does not own the visible range from its edit point",
+            transition.id
+        ));
+    }
+    let from_end = from_placement.interval.end()?;
+    let to_end = to_placement.interval.end()?;
+    let visible_overlap_start = from_placement
+        .interval
+        .start
+        .max(to_placement.interval.start);
+    let visible_overlap_end = from_end.min(to_end);
+    let has_visible_overlap = visible_overlap_start < visible_overlap_end;
+    let placement_shape_is_valid = if has_visible_overlap {
+        visible_overlap_start == interval.start && visible_overlap_end == interval_end
+    } else {
+        from_end == to_placement.interval.start && from_end == transition.edit_point
+    };
+    if !placement_shape_is_valid {
+        return Err(format!(
+            "Transition {} requires an adjacent cut at its edit point or visible overlap exactly equal to its interval",
+            transition.id
+        ));
+    }
+
+    validate_transition_processor(project, transition, placements)?;
+    if !project.item_supports_output(from.id, output)?
+        || !project.item_supports_output(to.id, output)?
+    {
+        return Err(format!(
+            "Transition {} source items do not provide the required media",
+            transition.id
+        ));
+    }
+    validate_automatable_parameters(
+        &transition.parameters,
+        &transition.processor.contract.parameters,
+        &format!("Transition {}", transition.id),
+        Some(transition.duration),
+    )?;
     Ok(())
 }
 
@@ -440,14 +515,4 @@ pub(super) fn attachment_media_type(
     stage.effect_media_type().ok_or_else(|| {
         "ItemTimeMap requires a future Behavior contract, not a media Effect".to_string()
     })
-}
-
-pub(super) fn invocation_input_items(invocation: &ModuleInvocation) -> Vec<TimelineItemId> {
-    invocation
-        .input_bindings
-        .values()
-        .map(|binding| match binding {
-            MediaInputBinding::TimelineItemOutput { item_id, .. } => *item_id,
-        })
-        .collect()
 }

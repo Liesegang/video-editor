@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use ordered_float::OrderedFloat;
 
-use crate::error::LibraryError;
+use crate::error::{LibraryError, TransitionSourceHandleError};
 use crate::model::BlendMode;
 use crate::model::authoring::{
     AttachmentOwner, AttachmentProcessor, AttachmentStage, AuthoringProject, DurationPolicy,
@@ -43,9 +43,13 @@ mod module_shape;
 mod particle;
 mod text_ensemble;
 pub(super) mod time_map;
+mod timeline;
+mod transition_module;
 
 #[cfg(test)]
 mod instance_tests;
+#[cfg(test)]
+mod transition_tests;
 
 use frame_values::{
     planned_source_matches, shape_item, solid_item, stage_key, text_item_from_values, transform_at,
@@ -253,101 +257,6 @@ impl AuthoringFrameEvaluator<'_> {
         result
     }
 
-    fn evaluate_timeline_group_inner(
-        &mut self,
-        timeline_id: TimelineId,
-        timeline_time: MediaTime,
-        instance_path: &InstancePath,
-    ) -> Result<FrameItem, LibraryError> {
-        let timeline = self.project.timelines.get(&timeline_id).ok_or_else(|| {
-            LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
-        })?;
-        let compiled = self.plan.timelines.get(&timeline_id).ok_or_else(|| {
-            LibraryError::Validation(format!("RenderPlan has no Timeline {timeline_id}"))
-        })?;
-        let mut tracks = Vec::new();
-        for track_id in &timeline.track_order {
-            let track = self.project.tracks.get(track_id).ok_or_else(|| {
-                LibraryError::Validation(format!("Timeline {timeline_id} has a missing Track"))
-            })?;
-            if track.kind == TimelineTrackKind::Audio {
-                continue;
-            }
-            let mut children = Vec::new();
-            for schedule_index in compiled.track_schedules.get(track_id).into_iter().flatten() {
-                let scheduled = compiled.schedule.get(*schedule_index).ok_or_else(|| {
-                    LibraryError::Validation(format!(
-                        "Timeline {timeline_id} schedule index is invalid"
-                    ))
-                })?;
-                if !scheduled
-                    .is_active(timeline_time)
-                    .map_err(LibraryError::Validation)?
-                {
-                    continue;
-                }
-                if let Some(item) = self.evaluate_item_stage(
-                    timeline_id,
-                    scheduled.item_id,
-                    timeline_time,
-                    instance_path,
-                    ItemOutputStage::PostTransform,
-                )? {
-                    children.push(item);
-                }
-            }
-            if children.is_empty() {
-                continue;
-            }
-            let track_time = timeline_time.to_seconds_f64();
-            let mut group = FrameItem::Group(FrameGroup {
-                source_id: track.id.as_uuid(),
-                kind: FrameGroupKind::Track,
-                width: timeline.width,
-                height: timeline.height,
-                background_color: transparent(),
-                transform: transform_at(&track.authored_properties, track_time)?,
-                blend_mode: BlendMode::Normal,
-                effect_time: OrderedFloat(track_time),
-                effects: Vec::new(),
-                items: children,
-            });
-            group = self.apply_attachments(
-                group,
-                &AttachmentOwner::Track { track_id: track.id },
-                AttachmentStage::TrackPostComposite,
-                timeline_id,
-                timeline_time,
-                timeline_time,
-                instance_path,
-            )?;
-            tracks.push(group);
-        }
-        let seconds = timeline_time.to_seconds_f64();
-        let mut group = FrameItem::Group(FrameGroup {
-            source_id: timeline.id.as_uuid(),
-            kind: FrameGroupKind::Composition,
-            width: timeline.width,
-            height: timeline.height,
-            background_color: timeline.background_color.clone(),
-            transform: transform_at(&timeline.authored_properties, seconds)?,
-            blend_mode: BlendMode::Normal,
-            effect_time: OrderedFloat(seconds),
-            effects: Vec::new(),
-            items: tracks,
-        });
-        group = self.apply_attachments(
-            group,
-            &AttachmentOwner::Timeline { timeline_id },
-            AttachmentStage::TimelinePostComposite,
-            timeline_id,
-            timeline_time,
-            timeline_time,
-            instance_path,
-        )?;
-        Ok(group)
-    }
-
     fn evaluate_item_stage(
         &mut self,
         timeline_id: TimelineId,
@@ -355,6 +264,44 @@ impl AuthoringFrameEvaluator<'_> {
         timeline_time: MediaTime,
         instance_path: &InstancePath,
         stage: ItemOutputStage,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        self.evaluate_item_stage_scoped(
+            timeline_id,
+            item_id,
+            timeline_time,
+            instance_path,
+            stage,
+            None,
+        )
+    }
+
+    fn evaluate_item_stage_for_transition(
+        &mut self,
+        timeline_id: TimelineId,
+        item_id: TimelineItemId,
+        timeline_time: MediaTime,
+        instance_path: &InstancePath,
+        stage: ItemOutputStage,
+        transition_id: crate::model::authoring::TransitionId,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        self.evaluate_item_stage_scoped(
+            timeline_id,
+            item_id,
+            timeline_time,
+            instance_path,
+            stage,
+            Some(transition_id),
+        )
+    }
+
+    fn evaluate_item_stage_scoped(
+        &mut self,
+        timeline_id: TimelineId,
+        item_id: TimelineItemId,
+        timeline_time: MediaTime,
+        instance_path: &InstancePath,
+        stage: ItemOutputStage,
+        transition_id: Option<crate::model::authoring::TransitionId>,
     ) -> Result<Option<FrameItem>, LibraryError> {
         let key = ItemEvaluationKey {
             instance_path: instance_path.clone(),
@@ -372,6 +319,7 @@ impl AuthoringFrameEvaluator<'_> {
             timeline_time,
             instance_path,
             stage,
+            transition_id,
         );
         self.active_items.remove(&key);
         result
@@ -384,6 +332,7 @@ impl AuthoringFrameEvaluator<'_> {
         timeline_time: MediaTime,
         instance_path: &InstancePath,
         stage: ItemOutputStage,
+        transition_id: Option<crate::model::authoring::TransitionId>,
     ) -> Result<Option<FrameItem>, LibraryError> {
         let timeline = self.project.timelines.get(&timeline_id).ok_or_else(|| {
             LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
@@ -399,10 +348,11 @@ impl AuthoringFrameEvaluator<'_> {
                 "Item {item_id} does not belong to Timeline {timeline_id}"
             )));
         }
-        if !item
-            .interval
-            .contains(timeline_time)
-            .map_err(LibraryError::Validation)?
+        if transition_id.is_none()
+            && !item
+                .interval
+                .contains(timeline_time)
+                .map_err(LibraryError::Validation)?
         {
             return Ok(None);
         }
@@ -433,8 +383,14 @@ impl AuthoringFrameEvaluator<'_> {
         let local_time = scheduled
             .local_time(timeline_time)
             .map_err(LibraryError::Validation)?;
-        let mut output =
-            self.evaluate_item_source(timeline, item, timeline_time, local_time, instance_path)?;
+        let mut output = self.evaluate_item_source(
+            timeline,
+            item,
+            timeline_time,
+            local_time,
+            instance_path,
+            transition_id,
+        )?;
         if stage == ItemOutputStage::Content || output.is_none() {
             return Ok(output);
         }
@@ -489,6 +445,7 @@ impl AuthoringFrameEvaluator<'_> {
         timeline_time: MediaTime,
         local_time: MediaTime,
         instance_path: &InstancePath,
+        transition_id: Option<crate::model::authoring::TransitionId>,
     ) -> Result<Option<FrameItem>, LibraryError> {
         match &item.source {
             SourceRef::Asset { asset_id } => self.asset_item(
@@ -496,6 +453,8 @@ impl AuthoringFrameEvaluator<'_> {
                 *asset_id,
                 local_time,
                 timeline.fps.to_f64(),
+                timeline_time,
+                transition_id,
             ),
             SourceRef::Text {
                 text,
@@ -543,6 +502,18 @@ impl AuthoringFrameEvaluator<'_> {
                 )
                 .map_err(LibraryError::Validation)?
                 else {
+                    if let Some(transition_id) = transition_id {
+                        return Err(TransitionSourceHandleError {
+                            transition_id: transition_id.as_uuid(),
+                            item_id: item.id.as_uuid(),
+                            timeline_time: timeline_time.to_seconds_f64(),
+                            source_time: local_time.to_seconds_f64(),
+                            reason:
+                                "nested Composition duration policy cannot map this hidden handle"
+                                    .to_string(),
+                        }
+                        .into());
+                    }
                     return Ok(None);
                 };
                 let path = instance_path.nested(item.id);
@@ -693,6 +664,8 @@ impl AuthoringFrameEvaluator<'_> {
         asset_id: uuid::Uuid,
         source_time: MediaTime,
         evaluation_fps: f64,
+        timeline_time: MediaTime,
+        transition_id: Option<crate::model::authoring::TransitionId>,
     ) -> Result<Option<FrameItem>, LibraryError> {
         let asset = self
             .project
@@ -709,10 +682,51 @@ impl AuthoringFrameEvaluator<'_> {
             )));
         }
         let seconds = source_time.to_seconds_f64();
+        if asset.kind == AssetKind::Video && seconds < 0.0 {
+            return match transition_id {
+                Some(transition_id) => Err(TransitionSourceHandleError {
+                    transition_id: transition_id.as_uuid(),
+                    item_id: source_id,
+                    timeline_time: timeline_time.to_seconds_f64(),
+                    source_time: seconds,
+                    reason: "source has no media before time zero".to_string(),
+                }
+                .into()),
+                None => Ok(None),
+            };
+        }
+        if asset.kind == AssetKind::Video
+            && asset.duration.is_some_and(|duration| seconds >= duration)
+        {
+            return match transition_id {
+                Some(transition_id) => Err(TransitionSourceHandleError {
+                    transition_id: transition_id.as_uuid(),
+                    item_id: source_id,
+                    timeline_time: timeline_time.to_seconds_f64(),
+                    source_time: seconds,
+                    reason: format!(
+                        "source duration ends at {}s",
+                        asset.duration.unwrap_or_default()
+                    ),
+                }
+                .into()),
+                None => Ok(None),
+            };
+        }
         if let Some(frame) = asset.source_frame_number_at(seconds, evaluation_fps)
             && !asset.contains_source_frame(frame)
         {
-            return Ok(None);
+            return match transition_id {
+                Some(transition_id) => Err(TransitionSourceHandleError {
+                    transition_id: transition_id.as_uuid(),
+                    item_id: source_id,
+                    timeline_time: timeline_time.to_seconds_f64(),
+                    source_time: seconds,
+                    reason: format!("source frame {frame} is outside the decodable frame range"),
+                }
+                .into()),
+                None => Ok(None),
+            };
         }
         let surface = ImageSurface {
             asset_id: Some(asset.id),
@@ -821,45 +835,23 @@ impl AuthoringFrameEvaluator<'_> {
             }
         }
 
-        let mut runtime = ModuleImageRuntime {
-            project: self.project,
+        let timeline = self.project.timelines.get(&timeline_id).ok_or_else(|| {
+            LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
+        })?;
+        let mut runtime = ModuleImageRuntime::new(
+            self.project,
             definition,
             invocation,
             instance_path,
             local_time,
-            width: self
-                .project
-                .timelines
-                .get(&timeline_id)
-                .map(|timeline| timeline.width)
-                .ok_or_else(|| {
-                    LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
-                })?,
-            height: self
-                .project
-                .timelines
-                .get(&timeline_id)
-                .map(|timeline| timeline.height)
-                .ok_or_else(|| {
-                    LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
-                })?,
-            evaluation_fps: self
-                .project
-                .timelines
-                .get(&timeline_id)
-                .map(|timeline| timeline.fps.to_f64())
-                .ok_or_else(|| {
-                    LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
-                })?,
-            plugins: self.plugins,
+            timeline.width,
+            timeline.height,
+            timeline.fps.to_f64(),
+            self.plugins,
             external_images,
-            image_memo: HashMap::new(),
-            image_path: HashSet::new(),
-            shape_memo: HashMap::new(),
-            shape_path: HashSet::new(),
-            value_memo: HashMap::new(),
-            value_path: HashSet::new(),
-        };
+            HashMap::new(),
+            None,
+        );
         runtime.evaluate_terminal(output)
     }
 

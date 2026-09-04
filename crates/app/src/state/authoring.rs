@@ -13,7 +13,7 @@ use library::editor::{
 };
 use library::model::authoring::{
     AttachmentId, InstancePath, MediaTime, ModuleDefinitionId, ProjectRevision, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TransitionId,
 };
 use library::model::frame::transform::Transform;
 use library::model::property::Vec2 as PropertyVec2;
@@ -29,6 +29,7 @@ pub enum AuthoringSelection {
     Timeline(TimelineId),
     Track(TimelineTrackId),
     Item(TimelineItemId),
+    Transition(TransitionId),
     Asset(uuid::Uuid),
     ModuleDefinition(ModuleDefinitionId),
 }
@@ -225,8 +226,10 @@ impl TimelineClipDisplayMode {
 /// The model receives one atomic update when the pointer is released.
 #[derive(Clone, Debug)]
 pub struct TimelineKeyframeGesture {
-    pub item_id: TimelineItemId,
-    pub target: AutomationTarget,
+    /// Clip row used only as the Timeline presentation anchor. Automation
+    /// ownership is carried separately by `lane`.
+    pub anchor_item_id: TimelineItemId,
+    pub lane: AutomationLaneId,
     pub keyframe_id: library::model::property::KeyframeId,
     pub pointer_origin_x: f32,
     pub original_time: MediaTime,
@@ -365,8 +368,7 @@ impl Default for AuthoringPreviewView {
 
 #[derive(Clone, Debug)]
 pub struct CurveKeyDrag {
-    pub item_id: TimelineItemId,
-    pub target: AutomationTarget,
+    pub lane: AutomationLaneId,
     pub component: CurveValueComponent,
     pub keyframe_id: library::model::property::KeyframeId,
     pub original_time: MediaTime,
@@ -394,13 +396,31 @@ pub enum AutomationTarget {
     },
 }
 
+/// Authoritative owner of one automation lane. A Transition definition and a
+/// concrete nested placement deliberately remain different identities.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AutomationOwner {
+    Item(TimelineItemId),
+    TransitionDefinition(TransitionId),
+    TransitionInstance {
+        transition_id: TransitionId,
+        instance_path: InstancePath,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AutomationLaneId {
+    pub owner: AutomationOwner,
+    pub target: AutomationTarget,
+}
+
 #[derive(Clone, Debug)]
 pub struct CurveEditorState {
-    pub target_item: Option<TimelineItemId>,
+    pub target_owner: Option<AutomationOwner>,
     /// One canonical transform shared by curve content, grid, hit testing,
     /// playhead, navigation, and QA geometry.
     pub canvas: pan_zoom_ui::CanvasState,
-    pub visible_targets: HashSet<AutomationTarget>,
+    pub visible_lanes: HashSet<AutomationLaneId>,
     pub drag: Option<CurveKeyDrag>,
 }
 
@@ -474,9 +494,9 @@ impl TransientPropertyEdit {
 impl Default for CurveEditorState {
     fn default() -> Self {
         Self {
-            target_item: None,
+            target_owner: None,
             canvas: pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0),
-            visible_targets: HashSet::new(),
+            visible_lanes: HashSet::new(),
             drag: None,
         }
     }
@@ -528,6 +548,7 @@ impl AuthoringUiState {
             AuthoringSelection::Timeline(id) => project.timelines.contains_key(&id),
             AuthoringSelection::Track(id) => project.tracks.contains_key(&id),
             AuthoringSelection::Item(id) => project.items.contains_key(&id),
+            AuthoringSelection::Transition(id) => project.transitions.contains_key(&id),
             AuthoringSelection::Asset(id) => project.assets.iter().any(|asset| asset.id == id),
             AuthoringSelection::ModuleDefinition(id) => {
                 project.module_definitions.contains_key(&id)
@@ -563,9 +584,20 @@ impl AuthoringUiState {
             .timeline
             .keyframe_gesture
             .as_ref()
-            .is_some_and(|gesture| !project.items.contains_key(&gesture.item_id))
+            .is_some_and(|gesture| {
+                !project.items.contains_key(&gesture.anchor_item_id)
+                    || !automation_owner_exists(project, &gesture.lane.owner)
+            })
         {
             self.timeline.keyframe_gesture = None;
+        }
+        if self
+            .curve_editor
+            .drag
+            .as_ref()
+            .is_some_and(|drag| !automation_owner_exists(project, &drag.lane.owner))
+        {
+            self.curve_editor.drag = None;
         }
         if self
             .preview
@@ -608,6 +640,24 @@ fn resolve_instance_path_timeline(
         .timelines
         .contains_key(&timeline_id)
         .then_some(timeline_id)
+}
+
+fn automation_owner_exists(
+    project: &library::model::authoring::AuthoringProject,
+    owner: &AutomationOwner,
+) -> bool {
+    match owner {
+        AutomationOwner::Item(item_id) => project.items.contains_key(item_id),
+        AutomationOwner::TransitionDefinition(transition_id) => {
+            project.transitions.contains_key(transition_id)
+        }
+        AutomationOwner::TransitionInstance {
+            transition_id,
+            instance_path,
+        } => project
+            .resolve_transition_module_instance_target(instance_path, *transition_id)
+            .is_ok(),
+    }
 }
 
 #[cfg(test)]

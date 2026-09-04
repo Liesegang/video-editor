@@ -103,6 +103,10 @@ fn collect_frame_paths(items: &[FrameItem], paths: &mut BTreeSet<String>) {
                 | FrameContent::ParticleScene { .. } => {}
             },
             FrameItem::Group(group) => collect_frame_paths(&group.items, paths),
+            FrameItem::Transition(transition) => {
+                collect_frame_paths(std::slice::from_ref(&transition.from.item), paths);
+                collect_frame_paths(std::slice::from_ref(&transition.to.item), paths);
+            }
         }
     }
 }

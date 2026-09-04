@@ -113,7 +113,12 @@ pub(super) fn port<'a, NodeId, PortId, WireId, GroupId, Key>(
         .ports
         .iter()
         .rev()
-        .find(|port| port.connectable && port.center.distance(position) <= radius)
+        .filter(|port| port.connectable && port.center.distance(position) <= radius)
+        .min_by(|left, right| {
+            left.center
+                .distance_sq(position)
+                .total_cmp(&right.center.distance_sq(position))
+        })
 }
 
 pub(super) fn wire<'a, NodeId, PortId, WireId, GroupId, Key>(
@@ -183,4 +188,52 @@ where
             && wire(frame, graph_position).is_some_and(|wire| &wire.id == wire_id);
         available.then_some(screen_position)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AuthoritativeSelection, PortDirection, PortOwner, TypeKey};
+
+    fn compatible(source: &u8, target: &u8) -> bool {
+        source == target
+    }
+
+    #[test]
+    fn overlapping_hit_radii_choose_the_nearest_port_not_storage_order() {
+        let ports = [
+            crate::PortDescriptor {
+                id: 1_u8,
+                owner: PortOwner::<u8, u8>::Node(1_u8),
+                label: "Exact",
+                center: egui::pos2(20.0, 20.0),
+                direction: PortDirection::Input,
+                type_key: TypeKey::new(1_u8),
+                connectable: true,
+            },
+            crate::PortDescriptor {
+                id: 2_u8,
+                owner: PortOwner::<u8, u8>::Node(2_u8),
+                label: "Adjacent row",
+                center: egui::pos2(20.0, 27.0),
+                direction: PortDirection::Input,
+                type_key: TypeKey::new(2_u8),
+                connectable: true,
+            },
+        ];
+        let frame: crate::GraphFrame<'_, u8, u8, u8, u8, u8> = crate::GraphFrame {
+            viewport: egui::Rect::EVERYTHING,
+            transform: egui::emath::TSTransform::IDENTITY,
+            nodes: &[],
+            ports: &ports,
+            wires: &[],
+            groups: &[],
+            ports_compatible: compatible,
+            selection_order: &[],
+            selection: AuthoritativeSelection::default(),
+        };
+
+        assert_eq!(port(&frame, ports[0].center).map(|port| port.id), Some(1));
+        assert_eq!(port(&frame, ports[1].center).map(|port| port.id), Some(2));
+    }
 }

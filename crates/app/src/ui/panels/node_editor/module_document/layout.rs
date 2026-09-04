@@ -149,7 +149,7 @@ fn layout_anchor(definition: &ModuleDefinition, targets: &BTreeSet<Uuid>) -> [f3
     ]
 }
 
-fn sanitized_size(size: [f32; 2]) -> [f32; 2] {
+pub(super) fn sanitized_size(size: [f32; 2]) -> [f32; 2] {
     [
         if size[0].is_finite() && size[0] > 0.0 {
             size[0]
@@ -204,6 +204,7 @@ mod tests {
                     connections: vec![connection(ids[0], ids[1]), connection(ids[1], ids[2])],
                 },
                 interface: ModuleInterface::default(),
+                host_contract: library::model::authoring::ModuleHostContract::General,
                 topology_revision: 1,
                 interface_version: 1,
             },

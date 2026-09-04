@@ -71,7 +71,10 @@ pub(super) fn selected_path_is_editable(
         && project_path_contour(path, EDITED_CONTOUR).is_ok()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The path overlay combines the shared canvas transform, rendered frame, authored snapshot, and deferred editor service at one immediate-mode interaction boundary"
+)]
 pub(super) fn path_editor_overlay(
     ui: &egui::Ui,
     response: &egui::Response,

@@ -12,6 +12,10 @@ use crate::ui::widgets::property_mode::{
 };
 use crate::ui::widgets::property_value_editor::property_value_editor;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "A Node Editor property row needs plugin evaluation, authored property metadata, connection state, and frame evaluation context at one immediate-mode UI boundary"
+)]
 pub(super) fn show_property_input(
     ui: &mut egui::Ui,
     plugins: &PluginManager,
@@ -21,6 +25,7 @@ pub(super) fn show_property_input(
     definition: Option<&PropertyDefinition>,
     connected: bool,
     context: ModulePropertyContext,
+    qa_transform: egui::emath::TSTransform,
 ) -> (egui::Response, Option<ModuleEditorAction>) {
     let evaluator_context =
         EvaluationContext::new(node.properties(), context.fps, context.resolution);
@@ -116,11 +121,12 @@ pub(super) fn show_property_input(
         edit.response
     });
 
+    let response = row.inner;
     crate::qa::register_component_with_metadata(
         &qa_id,
         "node_property_control",
-        row.response.rect,
-        row.response.enabled(),
+        qa_transform * response.rect,
+        response.enabled(),
         Some(serde_json::json!({
             "document_kind": "module_definition",
             "node_id": node.id,
@@ -132,7 +138,7 @@ pub(super) fn show_property_input(
             "evaluation_diagnostic": diagnostic,
         })),
     );
-    (row.response, action)
+    (response, action)
 }
 
 pub(super) fn node_property_definition(

@@ -6,6 +6,13 @@ use crate::model::BlendMode;
 pub const IMAGE_OUTPUT_PORT: &str = "image";
 pub const AUDIO_OUTPUT_PORT: &str = "audio";
 pub const IMAGE_INPUT_PORT: &str = "image_in";
+/// Protected A-side media input used by a Transition Module boundary/mixer.
+pub const TRANSITION_FROM_INPUT_PORT: &str = "transition_from";
+/// Protected B-side media input used by a Transition Module boundary/mixer.
+pub const TRANSITION_TO_INPUT_PORT: &str = "transition_to";
+/// Normalized host-owned progress input. A Transition runtime injects 0..=1.
+pub const TRANSITION_PROGRESS_INPUT_PORT: &str = "property:transition_progress";
+pub const TRANSITION_PROGRESS_PROPERTY: &str = "transition_progress";
 pub const MERGE_IMAGES_PORT: &str = "images";
 /// Ordered variadic Sound input used by native Sound Merge Nodes.
 pub const MERGE_SOUNDS_PORT: &str = "sounds";

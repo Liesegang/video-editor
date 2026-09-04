@@ -39,6 +39,24 @@ fn find_path(
                     return Some(found);
                 }
             }
+            FrameItem::Transition(transition) => {
+                if let Some(found) = find_path(
+                    std::slice::from_ref(&transition.from.item),
+                    item_id,
+                    parent,
+                    inside_item,
+                ) {
+                    return Some(found);
+                }
+                if let Some(found) = find_path(
+                    std::slice::from_ref(&transition.to.item),
+                    item_id,
+                    parent,
+                    inside_item,
+                ) {
+                    return Some(found);
+                }
+            }
         }
     }
     None

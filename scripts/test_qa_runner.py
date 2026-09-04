@@ -40,6 +40,7 @@ class QaRunnerTests(unittest.TestCase):
             "assets-timeline",
             "inspector-asset-preview",
             "timeline-edit",
+            "timeline-transition",
             "timeline-content-zoom",
             "preview",
             "path-editor",

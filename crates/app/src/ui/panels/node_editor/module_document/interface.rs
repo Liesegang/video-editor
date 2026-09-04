@@ -11,7 +11,9 @@ pub(super) fn port_interface_actions(
 ) -> Vec<ModuleEditorAction> {
     let mut actions = Vec::new();
     for port in ports {
-        if is_module_output_node(definition, port.id.address.node_id) {
+        if is_module_output_node(definition, port.id.address.node_id)
+            || port.id.direction == PortDirection::Input
+        {
             continue;
         }
         let center = transform * port.center;
@@ -34,10 +36,62 @@ pub(super) fn port_interface_actions(
             )),
             egui::Sense::click(),
         );
+        crate::qa::register_component_with_metadata(
+            interface_port_qa_id(port),
+            "node_editor_interface_port",
+            response.rect,
+            response.enabled(),
+            Some(serde_json::json!({
+                "node_id": port.id.address.node_id,
+                "port": port.id.address.port,
+                "label": port.label,
+                "direction": direction_qa_key(port.id.direction),
+                "data_type": port.data_type,
+            })),
+        );
         response.context_menu(|ui| {
             show_interface_menu(ui, definition, port, &mut actions);
         });
     }
+    actions
+}
+
+pub(super) fn input_port_interface_actions(
+    response: &egui::Response,
+    qa_rect: egui::Rect,
+    definition: &ModuleDefinition,
+    node_id: Uuid,
+    port: &library::model::project::PortDefinition,
+) -> Vec<ModuleEditorAction> {
+    let visual = PortVisual {
+        id: ModuleEditorPortId {
+            address: ModulePortAddress {
+                node_id,
+                port: port.key.clone(),
+            },
+            direction: PortDirection::Input,
+        },
+        label: port.label.clone(),
+        center: egui::Pos2::ZERO,
+        data_type: port.data_type,
+    };
+    crate::qa::register_component_with_metadata(
+        interface_port_qa_id(&visual),
+        "node_editor_interface_port",
+        qa_rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "node_id": node_id,
+            "port": port.key,
+            "label": port.label,
+            "direction": "input",
+            "data_type": port.data_type,
+        })),
+    );
+    let mut actions = Vec::new();
+    response.context_menu(|ui| {
+        show_interface_menu(ui, definition, &visual, &mut actions);
+    });
     actions
 }
 
@@ -57,6 +111,11 @@ fn show_interface_menu(
         .iter()
         .find(|entry| entry.target == port.id.address)
     {
+        if definition.host_contract.protects_parameter(parameter.id) {
+            ui.label(format!("Host parameter: {}", parameter.name));
+            ui.weak("Progress is injected by the Timeline transition and cannot be unpublished.");
+            return;
+        }
         ui.label(format!("Published parameter: {}", parameter.name));
         if ui.button("Unpublish parameter").clicked() {
             actions.push(ModuleEditorAction::EditInterface(
@@ -74,6 +133,11 @@ fn show_interface_menu(
         .iter()
         .find(|entry| entry.target == port.id.address)
     {
+        if definition.host_contract.protects_media_input(input.id) {
+            ui.label(format!("Host input: {}", input.name));
+            ui.weak("A/B are supplied by the Timeline transition and cannot be unpublished.");
+            return;
+        }
         let role = if input.primary {
             "Primary input"
         } else {
@@ -114,13 +178,19 @@ fn show_interface_menu(
                 }
                 Ok(_) => {}
             }
-            if ui
-                .add_enabled(
-                    !connected,
-                    egui::Button::new(format!("{} Publish as additional input", icons::PLUG)),
-                )
-                .clicked()
-            {
+            let additional_capability = definition
+                .host_contract
+                .validate_additional_media_input(port.data_type);
+            let publish = ui.add_enabled(
+                !connected && additional_capability.is_ok(),
+                egui::Button::new(format!("{} Publish as additional input", icons::PLUG)),
+            );
+            let publish_clicked = publish.clicked();
+            if let Err(reason) = additional_capability.as_ref() {
+                publish.on_hover_text(reason);
+                ui.weak(reason);
+            }
+            if publish_clicked {
                 actions.push(ModuleEditorAction::EditInterface(
                     ModuleInterfaceCommand::PublishMediaInput {
                         name: port.label.clone(),
@@ -137,13 +207,24 @@ fn show_interface_menu(
         }
         PortDirection::Input => {
             let default_value = module_port_default(definition, &port.id.address);
-            if ui
-                .add_enabled(
-                    default_value.is_some(),
-                    egui::Button::new("Publish as parameter"),
-                )
-                .clicked()
-            {
+            let publish = ui.add_enabled(
+                default_value.is_some(),
+                egui::Button::new("Publish as parameter"),
+            );
+            crate::qa::register_component_with_metadata(
+                interface_action_qa_id(port, "publish_parameter"),
+                "node_editor_interface_action",
+                publish.rect,
+                publish.enabled(),
+                Some(serde_json::json!({
+                    "action": "publish_parameter",
+                    "node_id": port.id.address.node_id,
+                    "port": port.id.address.port,
+                    "label": port.label,
+                    "data_type": port.data_type,
+                })),
+            );
+            if publish.clicked() {
                 if let Some(default_value) = default_value.clone() {
                     actions.push(ModuleEditorAction::EditInterface(
                         ModuleInterfaceCommand::PublishParameter {
@@ -165,10 +246,21 @@ fn show_interface_menu(
     }
 }
 
-fn primary_media_input_action(
+pub(super) fn primary_media_input_action(
     definition: &ModuleDefinition,
     port: &PortVisual,
 ) -> Result<ModuleInterfaceCommand, String> {
+    if let Some(contract) = definition.host_contract.transition() {
+        return match contract.validate_additional_media_input(port.data_type) {
+            Ok(()) => Err(
+                "Transition Modules receive Timeline-owned A/B inputs; publish this as an additional input instead."
+                    .to_string(),
+            ),
+            Err(reason) => Err(format!(
+                "Transition Modules receive Timeline-owned A/B inputs. {reason}"
+            )),
+        };
+    }
     if port.id.direction != PortDirection::Input
         || !matches!(port.data_type, PortDataType::Image | PortDataType::Audio)
     {
@@ -232,4 +324,91 @@ fn module_port_default(
     let node = definition.graph.nodes.get(&address.node_id)?;
     let key = library::plugin::property_name_from_port(&address.port).unwrap_or(&address.port);
     node.properties().get(key)?.value().cloned()
+}
+
+fn interface_port_qa_id(port: &PortVisual) -> String {
+    format!(
+        "node_editor.interface_port.node:{}.{}:{}",
+        port.id.address.node_id,
+        direction_qa_key(port.id.direction),
+        port.id.address.port
+    )
+}
+
+fn interface_action_qa_id(port: &PortVisual, action: &str) -> String {
+    format!(
+        "node_editor.interface_action.node:{}.{}:{}:{action}",
+        port.id.address.node_id,
+        direction_qa_key(port.id.direction),
+        port.id.address.port
+    )
+}
+
+const fn direction_qa_key(direction: PortDirection) -> &'static str {
+    match direction {
+        PortDirection::Input => "input",
+        PortDirection::Output => "output",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::authoring::{ModuleDefinitionSharing, TransitionMediaType};
+
+    #[test]
+    fn audio_transition_media_port_explains_why_it_cannot_be_published() {
+        let (definition, _) = ModuleDefinition::new_transition(
+            "Audio Transition",
+            ModuleDefinitionSharing::Private,
+            TransitionMediaType::Audio,
+        )
+        .unwrap();
+        let port = PortVisual {
+            id: ModuleEditorPortId {
+                address: ModulePortAddress {
+                    node_id: Uuid::new_v4(),
+                    port: "sidechain".to_string(),
+                },
+                direction: PortDirection::Input,
+            },
+            label: "Sidechain".to_string(),
+            center: egui::Pos2::ZERO,
+            data_type: PortDataType::Audio,
+        };
+
+        let error = primary_media_input_action(&definition, &port)
+            .expect_err("Audio Transition additional inputs are not executable yet");
+        assert!(error.contains("current audio mixer"), "{error}");
+        assert!(error.contains("host-owned A/B"), "{error}");
+    }
+
+    #[test]
+    fn image_transition_audio_port_explains_the_typed_runtime_boundary() {
+        let (definition, _) = ModuleDefinition::new_transition(
+            "Image Transition",
+            ModuleDefinitionSharing::Private,
+            TransitionMediaType::Image,
+        )
+        .unwrap();
+        let port = PortVisual {
+            id: ModuleEditorPortId {
+                address: ModulePortAddress {
+                    node_id: Uuid::new_v4(),
+                    port: "audio".to_string(),
+                },
+                direction: PortDirection::Input,
+            },
+            label: "Audio".to_string(),
+            center: egui::Pos2::ZERO,
+            data_type: PortDataType::Audio,
+        };
+
+        let error = primary_media_input_action(&definition, &port)
+            .expect_err("Image Transition accepts only Published Image inputs");
+        assert!(
+            error.contains("accepts only additional Image inputs"),
+            "{error}"
+        );
+    }
 }

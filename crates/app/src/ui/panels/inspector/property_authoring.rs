@@ -5,7 +5,7 @@
 //! parameters, and Effect parameters cannot drift into different controls.
 
 use egui::{Align2, FontId, Response, Sense, TextStyle, Ui};
-use library::editor::{AuthoringPropertyOwner, TimelineEditorService};
+use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionAutomationOwner};
 use library::model::authoring::{
     AttachmentId, AutomationTrack, MediaTime, ModuleInstanceId, PublishedParameterId,
     TimelineItemId,
@@ -314,6 +314,77 @@ pub(super) fn apply_module_parameter_mode_action(
                 service
                     .upsert_module_parameter_keyframe(
                         item_id,
+                        parameter_id,
+                        local_time,
+                        value,
+                        None,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+}
+
+pub(super) fn commit_transition_parameter_value(
+    service: &TimelineEditorService,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+    automation: Option<&AutomationTrack>,
+    value: PropertyValue,
+    local_time: MediaTime,
+) -> Result<(), String> {
+    if automation.is_some() {
+        service
+            .upsert_transition_parameter_keyframe(owner, parameter_id, local_time, value, None)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    } else {
+        service
+            .set_transition_parameter_constant(owner, parameter_id, value)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub(super) fn apply_transition_parameter_mode_action(
+    service: &TimelineEditorService,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+    automation: Option<&AutomationTrack>,
+    value: PropertyValue,
+    local_time: MediaTime,
+    action: PropertyModeAction,
+) -> Result<(), String> {
+    match action {
+        PropertyModeAction::SetMode(PropertyAuthoringMode::Constant) => service
+            .set_transition_parameter_constant(owner, parameter_id, value)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        PropertyModeAction::SetMode(PropertyAuthoringMode::Keyframe) => service
+            .upsert_transition_parameter_keyframe(owner, parameter_id, local_time, value, None)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        PropertyModeAction::SetMode(PropertyAuthoringMode::Expression) => {
+            Err("Transition parameter expressions belong inside the Node Module".to_string())
+        }
+        PropertyModeAction::ToggleKeyframe => {
+            if let Some(keyframe_id) = keyframe_at(automation, local_time) {
+                if automation.is_some_and(|track| track.keyframes.len() == 1) {
+                    service
+                        .set_transition_parameter_constant(owner, parameter_id, value)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                } else {
+                    service
+                        .remove_transition_parameter_keyframe(owner, parameter_id, keyframe_id)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                }
+            } else {
+                service
+                    .upsert_transition_parameter_keyframe(
+                        owner,
                         parameter_id,
                         local_time,
                         value,

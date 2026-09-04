@@ -156,6 +156,10 @@ fn find_group(
         FrameItem::Object(_) => None,
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => find_group(&group.items, source_id),
+        FrameItem::Transition(transition) => {
+            find_group(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| find_group(std::slice::from_ref(&transition.to.item), source_id))
+        }
     })
 }
 
@@ -198,6 +202,10 @@ fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(&object.content),
         FrameItem::Group(group) => first_content(&group.items),
+        FrameItem::Transition(transition) => {
+            first_content(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_content(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 

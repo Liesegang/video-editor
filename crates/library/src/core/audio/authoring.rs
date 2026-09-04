@@ -18,14 +18,18 @@ use crate::core::cache::CacheManager;
 use crate::core::render_plan::{
     CompiledModuleDefinition, ModuleHost, RenderPlan, RenderPlanCompiler, map_composition_time,
 };
+use crate::error::TransitionSourceHandleError;
 use crate::model::authoring::{
-    AuthoringProject, MediaTime, ModulePortAddress, SourceRef, TimelineId, TimelineItem,
-    TimelineItemId, TimelineTrackKind,
+    AuthoringProject, InstancePath, MediaTime, ModulePortAddress, SourceRef, TimelineId,
+    TimelineItem, TimelineItemId, TimelineTrackKind,
 };
 use crate::model::node::NodeContent;
 use crate::model::project::property::{PropertyMap, TryGetProperty};
 use crate::model::project::{AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT, PortDataType};
 use crate::model::{Asset, AssetKind};
+
+mod transition;
+use transition::{AudioTransitionIndex, build_audio_transition_index};
 
 pub const AUTHORING_AUDIO_SAMPLE_RATE: u32 = 48_000;
 pub const AUTHORING_AUDIO_CHANNELS: u16 = 2;
@@ -39,6 +43,13 @@ pub enum AuthoringAudioError {
     InvalidRequest(String),
     #[error("invalid authoring audio schedule: {0}")]
     InvalidSchedule(String),
+    #[error("unsupported Audio Transition processor {transition_id}: {reason}")]
+    UnsupportedTransitionProcessor { transition_id: Uuid, reason: String },
+    #[error("Audio Transition processor {transition_id} evaluation failed: {message}")]
+    TransitionProcessorEvaluation {
+        transition_id: Uuid,
+        message: String,
+    },
     #[error("cannot evaluate {scope}.gain: {message}")]
     Gain { scope: String, message: String },
     #[error("cannot decode Audio Asset {asset_id} at '{path}': {message}")]
@@ -47,6 +58,8 @@ pub enum AuthoringAudioError {
         path: String,
         message: String,
     },
+    #[error(transparent)]
+    TransitionSourceHandleUnavailable(#[from] TransitionSourceHandleError),
 }
 
 /// A reusable schedule and source cache for one Timeline definition.
@@ -59,6 +72,8 @@ pub struct AuthoringAudioMixer<'a> {
     project: &'a AuthoringProject,
     cache: &'a CacheManager,
     timeline_id: TimelineId,
+    plan: RenderPlan,
+    audio_transition_index: AudioTransitionIndex,
     format: AudioDecodeFormat,
     routes: Vec<AudioRoute>,
     sources: HashMap<Uuid, CachedAudioSource<'a>>,
@@ -110,6 +125,7 @@ impl<'a> AuthoringAudioMixer<'a> {
         let mut timeline_stack = HashSet::new();
         let plan =
             RenderPlanCompiler::compile(project).map_err(AuthoringAudioError::InvalidSchedule)?;
+        let audio_transition_index = build_audio_transition_index(&plan)?;
         collect_routes(
             project,
             &plan,
@@ -125,6 +141,8 @@ impl<'a> AuthoringAudioMixer<'a> {
             project,
             cache,
             timeline_id,
+            plan,
+            audio_transition_index,
             format,
             routes,
             sources: HashMap::new(),
@@ -183,11 +201,21 @@ impl<'a> AuthoringAudioMixer<'a> {
                 };
                 let source = self.source_for(sample.asset_id)?;
                 let base = output_frame * channels;
-                source.mix_sample(
+                let available = source.mix_sample(
                     sample.source_time,
                     sample.gain,
                     &mut output[base..base + channels],
                 )?;
+                if !available && let Some(transition_id) = sample.transition_id {
+                    return Err(TransitionSourceHandleError {
+                        transition_id: transition_id.as_uuid(),
+                        item_id: sample.item_id.as_uuid(),
+                        timeline_time: timeline_time.to_seconds_f64(),
+                        source_time: sample.source_time.to_seconds_f64(),
+                        reason: "decoder has no sample at the requested source time".to_string(),
+                    }
+                    .into());
+                }
             }
         }
         Ok(output)
@@ -200,6 +228,8 @@ impl<'a> AuthoringAudioMixer<'a> {
     ) -> Result<Option<ActiveAudioSample>, AuthoringAudioError> {
         let route = &self.routes[route_index];
         let mut gain = 1.0_f32;
+        let mut instance_path = (self.timeline_id == self.plan.root_timeline_id)
+            .then(|| InstancePath::root(self.plan.root_timeline_id));
         for composition_item_id in &route.composition_items {
             let item = self.item(*composition_item_id)?;
             let timeline_id = self.item_timeline_id(item)?;
@@ -215,10 +245,17 @@ impl<'a> AuthoringAudioMixer<'a> {
                     item.id, item.track_id
                 ))
             })?;
-            if !item
-                .interval
-                .contains(timeline_time)
-                .map_err(schedule_error)?
+            let transition = self.active_audio_transition(
+                timeline_id,
+                item.id,
+                timeline_time,
+                instance_path.as_ref(),
+            )?;
+            if transition.is_none()
+                && !item
+                    .interval
+                    .contains(timeline_time)
+                    .map_err(schedule_error)?
             {
                 return Ok(None);
             }
@@ -246,6 +283,21 @@ impl<'a> AuthoringAudioMixer<'a> {
             )
             .map_err(schedule_error)?
             else {
+                if let Some(transition) = transition {
+                    let source_time = item
+                        .time_map
+                        .local_time(item.interval, timeline_time)
+                        .map_err(schedule_error)?;
+                    return Err(TransitionSourceHandleError {
+                        transition_id: transition.id.as_uuid(),
+                        item_id: item.id.as_uuid(),
+                        timeline_time: timeline_time.to_seconds_f64(),
+                        source_time: source_time.to_seconds_f64(),
+                        reason: "nested Composition duration policy cannot map this hidden handle"
+                            .to_string(),
+                    }
+                    .into());
+                }
                 return Ok(None);
             };
             gain *= gain_at(
@@ -263,6 +315,10 @@ impl<'a> AuthoringAudioMixer<'a> {
                 nested_time,
                 format!("Timeline item {}", item.id),
             )?;
+            gain *= transition.map_or(1.0, |transition| transition.gain);
+            if let Some(path) = &mut instance_path {
+                *path = path.nested(item.id);
+            }
             timeline_time = nested_time;
             if gain == 0.0 {
                 return Ok(None);
@@ -277,10 +333,17 @@ impl<'a> AuthoringAudioMixer<'a> {
         if timeline_time.is_negative() || timeline_time >= timeline.duration {
             return Ok(None);
         }
-        if !leaf
-            .interval
-            .contains(timeline_time)
-            .map_err(schedule_error)?
+        let transition = self.active_audio_transition(
+            timeline_id,
+            leaf.id,
+            timeline_time,
+            instance_path.as_ref(),
+        )?;
+        if transition.is_none()
+            && !leaf
+                .interval
+                .contains(timeline_time)
+                .map_err(schedule_error)?
         {
             return Ok(None);
         }
@@ -295,7 +358,17 @@ impl<'a> AuthoringAudioMixer<'a> {
             .local_time(leaf.interval, timeline_time)
             .map_err(schedule_error)?;
         if source_time.is_negative() {
-            return Ok(None);
+            return match transition {
+                Some(transition) => Err(TransitionSourceHandleError {
+                    transition_id: transition.id.as_uuid(),
+                    item_id: leaf.id.as_uuid(),
+                    timeline_time: timeline_time.to_seconds_f64(),
+                    source_time: source_time.to_seconds_f64(),
+                    reason: "source has no Audio before time zero".to_string(),
+                }
+                .into()),
+                None => Ok(None),
+            };
         }
         let asset = self.asset(route.asset_id)?;
         if let Some(duration) = asset.duration {
@@ -306,7 +379,17 @@ impl<'a> AuthoringAudioMixer<'a> {
                 )));
             }
             if source_time.to_seconds_f64() >= duration {
-                return Ok(None);
+                return match transition {
+                    Some(transition) => Err(TransitionSourceHandleError {
+                        transition_id: transition.id.as_uuid(),
+                        item_id: leaf.id.as_uuid(),
+                        timeline_time: timeline_time.to_seconds_f64(),
+                        source_time: source_time.to_seconds_f64(),
+                        reason: format!("Audio source duration ends at {duration}s"),
+                    }
+                    .into()),
+                    None => Ok(None),
+                };
             }
         }
 
@@ -325,6 +408,7 @@ impl<'a> AuthoringAudioMixer<'a> {
             source_time,
             format!("Timeline item {}", leaf.id),
         )?;
+        gain *= transition.map_or(1.0, |transition| transition.gain);
         if let Some(node_id) = route.module_node_id {
             let SourceRef::Module(invocation) = &leaf.source else {
                 return Err(AuthoringAudioError::InvalidSchedule(format!(
@@ -366,8 +450,10 @@ impl<'a> AuthoringAudioMixer<'a> {
         }
         Ok(Some(ActiveAudioSample {
             asset_id: route.asset_id,
+            item_id: leaf.id,
             source_time,
             gain,
+            transition_id: transition.map(|transition| transition.id),
         }))
     }
 
@@ -439,8 +525,10 @@ struct AudioRoute {
 #[derive(Clone, Copy, Debug)]
 struct ActiveAudioSample {
     asset_id: Uuid,
+    item_id: TimelineItemId,
     source_time: MediaTime,
     gain: f32,
+    transition_id: Option<crate::model::authoring::TransitionId>,
 }
 
 fn collect_routes(
@@ -735,12 +823,12 @@ impl<'a> CachedAudioSource<'a> {
         source_time: MediaTime,
         gain: f32,
         output: &mut [f32],
-    ) -> Result<(), AuthoringAudioError> {
+    ) -> Result<bool, AuthoringAudioError> {
         let numerator = i128::from(source_time.value())
             .checked_mul(i128::from(self.key.format.sample_rate))
             .ok_or_else(|| self.decode_error("source sample position overflowed"))?;
         if numerator < 0 {
-            return Ok(());
+            return Ok(false);
         }
         let denominator = i128::from(source_time.timescale());
         let first_frame = u64::try_from(numerator / denominator)
@@ -748,12 +836,16 @@ impl<'a> CachedAudioSource<'a> {
         let remainder = numerator % denominator;
         let fraction = (remainder as f64 / denominator as f64) as f32;
         let second_frame = first_frame.saturating_add(1);
+        let mut available = false;
         for (channel, output) in output.iter_mut().enumerate() {
-            let first = self.sample_at(first_frame, channel)?.unwrap_or(0.0);
+            let Some(first) = self.sample_at(first_frame, channel)? else {
+                continue;
+            };
+            available = true;
             let second = self.sample_at(second_frame, channel)?.unwrap_or(first);
             *output += (first + (second - first) * fraction) * gain;
         }
-        Ok(())
+        Ok(available)
     }
 
     fn sample_at(

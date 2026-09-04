@@ -183,15 +183,13 @@ fn paint_preview_card(
         return (rect, None);
     }
 
-    if kind == AssetVisualKind::Audio {
-        return (
-            rect,
-            Some(paint_audio_preview_hook(ui, rect, asset, waveform)),
-        );
-    }
-
     let icon_color = match kind {
-        AssetVisualKind::Audio => unreachable!("Audio uses its shared-waveform integration hook"),
+        AssetVisualKind::Audio => {
+            return (
+                rect,
+                Some(paint_audio_preview_hook(ui, rect, asset, waveform)),
+            );
+        }
         AssetVisualKind::Video => egui::Color32::from_rgb(85, 174, 255),
         AssetVisualKind::Image => egui::Color32::from_rgb(196, 135, 255),
         AssetVisualKind::Model3D => egui::Color32::from_rgb(255, 159, 86),

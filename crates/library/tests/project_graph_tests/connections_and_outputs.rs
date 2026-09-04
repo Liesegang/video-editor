@@ -258,6 +258,7 @@ fn clip_does_not_adopt_direct_image_nodes_without_an_explicit_output() -> Result
         match &clip_group.items[0] {
             FrameItem::Group(group) => group.source_id,
             FrameItem::Object(_) => Uuid::nil(),
+            FrameItem::Transition(_) => Uuid::nil(),
         },
         second_id
     );

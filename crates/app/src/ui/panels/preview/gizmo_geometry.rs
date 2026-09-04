@@ -85,20 +85,34 @@ fn collect_render_order(
     output: &mut Vec<TimelineItemId>,
 ) {
     for item in items {
-        let FrameItem::Group(group) = item else {
-            continue;
-        };
-        let candidate = TimelineItemId::from_uuid(group.source_id);
-        if group.kind == FrameGroupKind::Clip && selectable.contains(&candidate) {
-            if !output.contains(&candidate) {
-                output.push(candidate);
+        match item {
+            FrameItem::Object(_) => {}
+            FrameItem::Group(group) => {
+                let candidate = TimelineItemId::from_uuid(group.source_id);
+                if group.kind == FrameGroupKind::Clip && selectable.contains(&candidate) {
+                    if !output.contains(&candidate) {
+                        output.push(candidate);
+                    }
+                    // This Clip is the active Timeline's selectable facade. Children
+                    // belong to its source (possibly a nested Timeline), not to the
+                    // current selection depth.
+                    continue;
+                }
+                collect_render_order(&group.items, selectable, output);
             }
-            // This Clip is the active Timeline's selectable facade. Children
-            // belong to its source (possibly a nested Timeline), not to the
-            // current selection depth.
-            continue;
+            FrameItem::Transition(transition) => {
+                collect_render_order(
+                    std::slice::from_ref(&transition.from.item),
+                    selectable,
+                    output,
+                );
+                collect_render_order(
+                    std::slice::from_ref(&transition.to.item),
+                    selectable,
+                    output,
+                );
+            }
         }
-        collect_render_order(&group.items, selectable, output);
     }
 }
 
@@ -128,8 +142,22 @@ fn find_item_geometry(
     parent: Affine2D,
 ) -> Option<ItemGizmoGeometry> {
     for item in items {
-        let FrameItem::Group(group) = item else {
-            continue;
+        let group = match item {
+            FrameItem::Object(_) => continue,
+            FrameItem::Transition(transition) => {
+                if let Some(found) =
+                    find_item_geometry(std::slice::from_ref(&transition.from.item), item_id, parent)
+                {
+                    return Some(found);
+                }
+                if let Some(found) =
+                    find_item_geometry(std::slice::from_ref(&transition.to.item), item_id, parent)
+                {
+                    return Some(found);
+                }
+                continue;
+            }
+            FrameItem::Group(group) => group,
         };
         let transform = parent.compose(Affine2D::from(&group.transform));
         if group.kind == FrameGroupKind::Clip && group.source_id == item_id.as_uuid() {
@@ -204,6 +232,16 @@ fn collect_outlines(items: &[FrameItem], parent: Affine2D) -> Vec<[egui::Pos2; 4
             FrameItem::Group(group) => {
                 let transform = parent.compose(Affine2D::from(&group.transform));
                 outlines.extend(collect_outlines(&group.items, transform));
+            }
+            FrameItem::Transition(transition) => {
+                outlines.extend(collect_outlines(
+                    std::slice::from_ref(&transition.from.item),
+                    parent,
+                ));
+                outlines.extend(collect_outlines(
+                    std::slice::from_ref(&transition.to.item),
+                    parent,
+                ));
             }
         }
     }
@@ -289,8 +327,8 @@ mod tests {
         }
     }
 
-    fn group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameItem {
-        FrameItem::Group(FrameGroup {
+    fn frame_group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameGroup {
+        FrameGroup {
             source_id,
             kind,
             width: 1920,
@@ -301,7 +339,11 @@ mod tests {
             effect_time: OrderedFloat(0.0),
             effects: Vec::new(),
             items,
-        })
+        }
+    }
+
+    fn group(source_id: Uuid, kind: FrameGroupKind, items: Vec<FrameItem>) -> FrameItem {
+        FrameItem::Group(frame_group(source_id, kind, items))
     }
 
     fn bounded_shape(id: Uuid, width: f32, height: f32) -> FrameItem {
@@ -338,14 +380,11 @@ mod tests {
     #[test]
     fn clip_uses_source_bounds_instead_of_composition_dimensions() {
         let item_id = TimelineItemId::new();
-        let mut clip = match group(
+        let mut clip = frame_group(
             item_id.as_uuid(),
             FrameGroupKind::Clip,
             vec![bounded_shape(item_id.as_uuid(), 100.0, 50.0)],
-        ) {
-            FrameItem::Group(group) => group,
-            _ => unreachable!(),
-        };
+        );
         clip.transform = Transform {
             position: Position { x: 200.0, y: 100.0 },
             scale: Scale { x: 2.0, y: 1.0 },
@@ -430,14 +469,11 @@ mod tests {
     #[test]
     fn rotated_outline_hit_test_is_not_replaced_by_axis_aligned_bounds() {
         let item_id = TimelineItemId::new();
-        let mut clip = match group(
+        let mut clip = frame_group(
             item_id.as_uuid(),
             FrameGroupKind::Clip,
             vec![bounded_shape(item_id.as_uuid(), 100.0, 50.0)],
-        ) {
-            FrameItem::Group(group) => group,
-            _ => unreachable!(),
-        };
+        );
         clip.transform.rotation = 45.0;
         let frame = frame(vec![FrameItem::Group(clip)]);
         let selectable = HashSet::from([item_id]);

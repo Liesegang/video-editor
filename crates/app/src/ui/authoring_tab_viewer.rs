@@ -35,6 +35,10 @@ pub struct AuthoringTabViewer<'a> {
 }
 
 impl<'a> AuthoringTabViewer<'a> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "The dock TabViewer borrows the frame's authoritative editor services and mutable panel runtimes; bundling them would only move these borrow boundaries"
+    )]
     pub fn new(
         project: &'a Arc<AuthoringProject>,
         state: &'a mut AuthoringUiState,

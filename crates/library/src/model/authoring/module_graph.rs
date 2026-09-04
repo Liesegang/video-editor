@@ -12,8 +12,8 @@ use crate::model::project::connection::{
 use crate::model::project::property::PropertyValue;
 
 use super::{
-    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, ModuleOutputId, PublishedActionId,
-    PublishedMediaInputId, PublishedParameterId, PublishedSignalId,
+    ModuleConnectionId, ModuleDefinitionId, ModuleHostContract, ModuleInstanceId, ModuleOutputId,
+    PublishedActionId, PublishedMediaInputId, PublishedParameterId, PublishedSignalId,
 };
 
 /// Reusable media-processing logic. Render boundaries are dedicated Output
@@ -27,8 +27,31 @@ pub struct ModuleDefinition {
     pub sharing: ModuleDefinitionSharing,
     pub graph: ModuleGraph,
     pub interface: ModuleInterface,
+    pub host_contract: ModuleHostContract,
     pub topology_revision: u64,
     pub interface_version: u64,
+}
+
+/// Derived ownership of one Module input port.
+///
+/// An externally-driven input cannot simultaneously accept an authored graph
+/// connection. Module Output terminal inputs are deliberately not part of the
+/// Published Interface, so they remain [`Self::Internal`] and connectable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModuleInputPortOwnership {
+    Internal,
+    Published,
+    HostProtected,
+}
+
+impl ModuleInputPortOwnership {
+    pub const fn is_externally_driven(self) -> bool {
+        !matches!(self, Self::Internal)
+    }
+
+    pub const fn is_host_protected(self) -> bool {
+        matches!(self, Self::HostProtected)
+    }
 }
 
 impl ModuleDefinition {
@@ -54,6 +77,7 @@ impl ModuleDefinition {
                     connections: Vec::new(),
                 },
                 interface: ModuleInterface::default(),
+                host_contract: ModuleHostContract::General,
                 topology_revision: 1,
                 interface_version: 1,
             },
@@ -81,7 +105,11 @@ impl ModuleDefinition {
         self.sharing.validate()?;
         self.graph.validate()?;
         self.validate_outputs()?;
-        self.interface.validate(&self.graph)
+        self.interface.validate(&self.graph)?;
+        if let ModuleHostContract::Transition(contract) = &self.host_contract {
+            contract.validate_definition(self)?;
+        }
+        Ok(())
     }
 
     /// Returns the render terminals derived directly from dedicated Output
@@ -108,6 +136,45 @@ impl ModuleDefinition {
 
     pub fn output(&self, output_id: ModuleOutputId) -> Option<ModuleOutput> {
         self.outputs().find(|output| output.id == output_id)
+    }
+
+    /// One authority for Node Editor connection and inline-control policy.
+    /// Only Published Interface *input targets* are externally driven;
+    /// Published signals and the dedicated Output terminal remain graph ports.
+    pub fn input_port_ownership(&self, address: &ModulePortAddress) -> ModuleInputPortOwnership {
+        if let Some(parameter) = self
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.target == *address)
+        {
+            return if self.host_contract.protects_parameter(parameter.id) {
+                ModuleInputPortOwnership::HostProtected
+            } else {
+                ModuleInputPortOwnership::Published
+            };
+        }
+        if let Some(input) = self
+            .interface
+            .media_inputs
+            .iter()
+            .find(|input| input.target == *address)
+        {
+            return if self.host_contract.protects_media_input(input.id) {
+                ModuleInputPortOwnership::HostProtected
+            } else {
+                ModuleInputPortOwnership::Published
+            };
+        }
+        if self
+            .interface
+            .actions
+            .iter()
+            .any(|action| action.target == *address)
+        {
+            return ModuleInputPortOwnership::Published;
+        }
+        ModuleInputPortOwnership::Internal
     }
 
     fn validate_outputs(&self) -> Result<(), String> {

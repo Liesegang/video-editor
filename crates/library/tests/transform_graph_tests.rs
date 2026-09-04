@@ -113,6 +113,10 @@ fn first_object(items: &[FrameItem]) -> Option<&FrameObject> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(object),
         FrameItem::Group(group) => first_object(&group.items),
+        FrameItem::Transition(transition) => {
+            first_object(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_object(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 
@@ -121,6 +125,10 @@ fn group_by_source(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> 
         FrameItem::Object(_) => None,
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => group_by_source(&group.items, source_id),
+        FrameItem::Transition(transition) => {
+            group_by_source(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| group_by_source(std::slice::from_ref(&transition.to.item), source_id))
+        }
     })
 }
 

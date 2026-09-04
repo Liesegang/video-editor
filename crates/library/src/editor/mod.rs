@@ -51,8 +51,11 @@ pub use project_service::ProjectManager as ProjectService;
 pub use render_service::{RenderDestination, RenderService};
 pub use timeline_editor_service::{
     AuthoringKeyframeUpdate, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
-    AuthoringPropertyValueUpdate, ModuleAttachmentPlacement, ModuleInputDependency,
-    ModuleInputHost, ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult,
-    ModuleItemPlacement, ModuleNodePresentationUpdate, NodeClipConversionResult,
-    PreparedModuleDefinitionEdit, SharedModuleEdit, TimelineEditorService, TimelineSettingsUpdate,
+    AuthoringPropertyValueUpdate, EditPlan, EditPlanValidationScope, EditProjection,
+    ModuleAttachmentPlacement, ModuleInputHost, ModuleInterfaceCommand, ModuleInterfaceEditImpact,
+    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodePresentationUpdate,
+    NodeClipConversionResult, PreparedModuleDefinitionEdit, SharedModuleEdit, TimelineEditError,
+    TimelineEditOperation, TimelineEditPlanningIndex, TimelineEditRequest, TimelineEditorService,
+    TimelineItemDependency, TimelineItemEditState, TimelineSettingsUpdate,
+    TransitionAutomationOwner, TransitionPlacement, plan_timeline_edit, project_edit_plan,
 };

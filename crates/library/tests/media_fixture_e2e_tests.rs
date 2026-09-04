@@ -335,6 +335,10 @@ fn collect_content_kinds(items: &[FrameItem], kinds: &mut HashSet<&'static str>)
                 });
             }
             FrameItem::Group(group) => collect_content_kinds(&group.items, kinds),
+            FrameItem::Transition(transition) => {
+                collect_content_kinds(std::slice::from_ref(&transition.from.item), kinds);
+                collect_content_kinds(std::slice::from_ref(&transition.to.item), kinds);
+            }
         }
     }
 }
@@ -457,6 +461,10 @@ fn collect_video_times(items: &[FrameItem], times: &mut Vec<f64>) {
                 }
             }
             FrameItem::Group(group) => collect_video_times(&group.items, times),
+            FrameItem::Transition(transition) => {
+                collect_video_times(std::slice::from_ref(&transition.from.item), times);
+                collect_video_times(std::slice::from_ref(&transition.to.item), times);
+            }
         }
     }
 }

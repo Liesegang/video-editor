@@ -23,6 +23,10 @@ fn object_count(items: &[FrameItem]) -> usize {
         .map(|item| match item {
             FrameItem::Object(_) => 1,
             FrameItem::Group(group) => object_count(&group.items),
+            FrameItem::Transition(transition) => {
+                object_count(std::slice::from_ref(&transition.from.item))
+                    + object_count(std::slice::from_ref(&transition.to.item))
+            }
         })
         .sum()
 }
@@ -165,6 +169,7 @@ fn repeated_nested_fixture() -> RepeatedNestedFixture {
                     timeline_id: child_timeline_id,
                     duration_policy: DurationPolicy::Fixed,
                     parameter_overrides: HashMap::new(),
+                    transition_module_overrides: Vec::new(),
                 }),
                 interval: TimelineInterval::new(seconds(start), seconds(4)).unwrap(),
                 time_map: TimeMap::default(),
@@ -244,6 +249,13 @@ fn first_text(items: &[FrameItem]) -> Option<&str> {
             }
             FrameItem::Group(group) => {
                 if let Some(text) = first_text(&group.items) {
+                    return Some(text);
+                }
+            }
+            FrameItem::Transition(transition) => {
+                if let Some(text) = first_text(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| first_text(std::slice::from_ref(&transition.to.item)))
+                {
                     return Some(text);
                 }
             }
@@ -340,6 +352,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
                     timeline_id: child_timeline_id,
                     duration_policy: DurationPolicy::Fixed,
                     parameter_overrides: HashMap::new(),
+                    transition_module_overrides: Vec::new(),
                 }),
                 TimelineInterval::new(seconds(start), seconds(4)).unwrap(),
                 i64::try_from(placements.len()).unwrap(),

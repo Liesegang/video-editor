@@ -114,6 +114,13 @@ fn find_text(items: &[FrameItem]) -> Option<(&str, f64)> {
                     return Some(found);
                 }
             }
+            FrameItem::Transition(transition) => {
+                if let Some(found) = find_text(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| find_text(std::slice::from_ref(&transition.to.item)))
+                {
+                    return Some(found);
+                }
+            }
         }
     }
     None

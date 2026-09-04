@@ -87,6 +87,10 @@ fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(&object.content),
         FrameItem::Group(group) => first_content(&group.items),
+        FrameItem::Transition(transition) => {
+            first_content(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_content(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 
@@ -112,6 +116,10 @@ fn draw_styles(
                         .map(|style| style.style.clone()),
                 ),
                 FrameItem::Group(group) => collect(&group.items, styles)?,
+                FrameItem::Transition(transition) => {
+                    collect(std::slice::from_ref(&transition.from.item), styles)?;
+                    collect(std::slice::from_ref(&transition.to.item), styles)?;
+                }
             }
         }
         Ok(())

@@ -350,6 +350,7 @@ pub fn build_authoring_audio_e2e_fixture(
             timeline_id: nested_timeline_id,
             duration_policy: DurationPolicy::Fixed,
             parameter_overrides: HashMap::new(),
+            transition_module_overrides: Vec::new(),
         }),
         interval(8, 3)?,
         8,

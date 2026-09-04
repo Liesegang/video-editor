@@ -7,8 +7,8 @@ use crate::model::frame::entity::SkSLColorDomain;
 use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
-    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest,
-    TextRasterRequest, TextureInfo, WorkingSurfaceContract,
+    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
+    ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo, WorkingSurfaceContract,
 };
 #[cfg(feature = "gl")]
 use crate::rendering::scene_runtime::{SceneRuntime, SceneTextureFormat};
@@ -27,8 +27,10 @@ use skia_safe::{
 };
 
 mod legacy_backplate;
+mod output_compositing;
 mod paint;
 
+use output_compositing::build_transform_matrix;
 use paint::{PaintFactory, StrokeRenderConfig};
 
 const SKSL_STRAIGHT_TO_PREMULTIPLIED: &str = r#"
@@ -47,6 +49,8 @@ pub struct SkiaRenderer {
     surface: Surface,
     surface_contract: SkiaSurfaceContract,
     group_surfaces: Vec<GroupSurface>,
+    retained_group_surfaces: Vec<(RetainedRenderLayer, GroupSurface)>,
+    next_retained_layer_id: u64,
     blend_runtime: BlendRuntime,
     sksl_straight_to_premultiplied: Option<skia_safe::RuntimeEffect>,
     #[cfg(feature = "gl")]
@@ -94,19 +98,6 @@ impl SkiaRenderer {
                 "GPU context not available".to_string(),
             ))
         }
-    }
-
-    fn snapshot_surface(
-        &self,
-        surface: &mut Surface,
-        width: u32,
-        height: u32,
-    ) -> Result<RenderOutput, LibraryError> {
-        // These surfaces are local temporaries. Returning their backend texture
-        // ID would leave a dangling RenderOutput as soon as the Surface drops.
-        // The root surface remains alive and may still be finalized as a GPU
-        // texture for Preview; transient layers cross this boundary as Images.
-        skia_working_surface::snapshot_surface(surface, width, height, &self.surface_contract)
     }
 }
 
@@ -166,6 +157,8 @@ impl SkiaRenderer {
             surface,
             surface_contract,
             group_surfaces: Vec::new(),
+            retained_group_surfaces: Vec::new(),
+            next_retained_layer_id: 0,
             blend_runtime: BlendRuntime::new(),
             sksl_straight_to_premultiplied: None,
             #[cfg(feature = "gl")]
@@ -213,6 +206,7 @@ impl SkiaRenderer {
         self.background_color = background_color;
         self.surface = surface;
         self.group_surfaces.clear();
+        self.retained_group_surfaces.clear();
         Ok(())
     }
 
@@ -285,6 +279,7 @@ impl SkiaRenderer {
         self.surface = surface;
         self.surface_contract = contract;
         self.group_surfaces.clear();
+        self.retained_group_surfaces.clear();
         Ok(())
     }
 
@@ -323,6 +318,7 @@ impl SkiaRenderer {
         self.sharing_handle = sharing_handle;
         self.sharing_hwnd = sharing_hwnd;
         self.group_surfaces.clear();
+        self.retained_group_surfaces.clear();
         Ok(())
     }
 
@@ -436,20 +432,6 @@ impl SkiaRenderer {
     }
 }
 
-fn build_transform_matrix(transform: &Affine2D) -> Matrix {
-    Matrix::new_all(
-        transform.scale_x as f32,
-        transform.skew_x as f32,
-        transform.translate_x as f32,
-        transform.skew_y as f32,
-        transform.scale_y as f32,
-        transform.translate_y as f32,
-        0.0,
-        0.0,
-        1.0,
-    )
-}
-
 impl Renderer for SkiaRenderer {
     fn use_unmanaged_srgba8_surface(&mut self) -> Result<(), LibraryError> {
         self.replace_surface_contract(SkiaSurfaceContract::UnmanagedSrgba8)
@@ -471,45 +453,7 @@ impl Renderer for SkiaRenderer {
     ) -> Result<(), LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::draw_layer");
 
-        let src_image = match layer {
-            RenderOutput::Image(img) => {
-                if self.surface_contract.working().is_some() {
-                    return Err(LibraryError::Render(
-                        "encoded RGBA8 RenderOutput cannot enter a Project linear surface"
-                            .to_string(),
-                    ));
-                }
-                image_to_skia(img)?
-            }
-            RenderOutput::Working(image) => {
-                let contract = self.surface_contract.working().ok_or_else(|| {
-                    LibraryError::Render(
-                        "Project linear RenderOutput cannot enter the unmanaged sRGBA8 surface"
-                            .to_string(),
-                    )
-                })?;
-                skia_working_surface::managed_working_to_skia_image(image, contract)?
-            }
-            RenderOutput::Texture(info) => {
-                if self.surface_contract.working().is_some() {
-                    return Err(LibraryError::Render(
-                        "untyped GPU texture cannot enter a Project linear surface".to_string(),
-                    ));
-                }
-                if let Some(ctx) = self.gpu_context.as_mut() {
-                    create_image_from_texture(
-                        &mut ctx.direct_context,
-                        info.texture_id,
-                        info.width,
-                        info.height,
-                    )?
-                } else {
-                    return Err(LibraryError::Render(
-                        "Cannot render texture without GPU context".to_string(),
-                    ));
-                }
-            }
-        };
+        let src_image = self.output_to_skia_image(layer)?;
 
         let matrix = build_transform_matrix(transform);
         let identity = *transform == Affine2D::IDENTITY;
@@ -538,6 +482,15 @@ impl Renderer for SkiaRenderer {
         })?;
 
         Ok(())
+    }
+
+    fn draw_cross_dissolve(
+        &mut self,
+        from: &RenderOutput,
+        to: &RenderOutput,
+        progress: f32,
+    ) -> Result<(), LibraryError> {
+        self.draw_cross_dissolve_outputs(from, to, progress)
     }
 
     fn begin_group(
@@ -577,6 +530,40 @@ impl Renderer for SkiaRenderer {
         // A texture ID is owned by its Surface. Read the isolated target before
         // dropping it so nested groups cannot leave dangling GPU texture IDs.
         self.snapshot_surface(&mut group.surface, group.width, group.height)
+    }
+
+    fn end_group_retained(&mut self) -> Result<RetainedRenderLayer, LibraryError> {
+        let group = self.group_surfaces.pop().ok_or_else(|| {
+            LibraryError::Render(
+                "end_group_retained called without a matching begin_group".to_string(),
+            )
+        })?;
+        let token = RetainedRenderLayer(self.next_retained_layer_id);
+        self.next_retained_layer_id =
+            self.next_retained_layer_id.checked_add(1).ok_or_else(|| {
+                LibraryError::Render("retained render layer identity overflowed".to_string())
+            })?;
+        self.retained_group_surfaces.push((token, group));
+        Ok(token)
+    }
+
+    fn release_retained_layer(&mut self, layer: RetainedRenderLayer) -> Result<(), LibraryError> {
+        let index = self
+            .retained_group_surfaces
+            .iter()
+            .position(|(candidate, _)| *candidate == layer)
+            .ok_or_else(|| LibraryError::Render("retained render layer is unavailable".into()))?;
+        self.retained_group_surfaces.swap_remove(index);
+        Ok(())
+    }
+
+    fn draw_cross_dissolve_retained(
+        &mut self,
+        from: RetainedRenderLayer,
+        to: RetainedRenderLayer,
+        progress: f32,
+    ) -> Result<(), LibraryError> {
+        self.draw_cross_dissolve_retained_layers(from, to, progress)
     }
 
     fn rasterize_sksl_layer(
@@ -906,6 +893,11 @@ impl Renderer for SkiaRenderer {
                 "Cannot finalize with unfinished frame groups".to_string(),
             ));
         }
+        if !self.retained_group_surfaces.is_empty() {
+            return Err(LibraryError::Render(
+                "Cannot finalize with unconsumed retained render layers".to_string(),
+            ));
+        }
 
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
@@ -941,6 +933,7 @@ impl Renderer for SkiaRenderer {
     fn clear(&mut self) -> Result<(), LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::clear");
         self.group_surfaces.clear();
+        self.retained_group_surfaces.clear();
         skia_working_surface::clear_authored_color(
             &mut self.surface,
             &self.surface_contract,

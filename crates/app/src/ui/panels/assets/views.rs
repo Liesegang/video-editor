@@ -208,12 +208,7 @@ pub(super) fn project_library(
     let mut definitions = project
         .module_definitions
         .values()
-        .filter(|definition| {
-            matches!(
-                &definition.sharing,
-                ModuleDefinitionSharing::ReusableTemplate(_)
-            )
-        })
+        .filter(|definition| is_node_clip_definition(definition))
         .collect::<Vec<_>>();
     definitions.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
     let mut node_clips = vec![LibraryEntry::NewNodeClip];
@@ -251,7 +246,10 @@ pub(super) fn project_library(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Each collapsible asset section forwards the shared selection, drag, waveform, and media-preview state to the selected immediate-mode view"
+)]
 fn render_section(
     ui: &mut egui::Ui,
     id: &'static str,
@@ -295,7 +293,7 @@ fn render_section(
                         AssetBrowserViewMode::Table => {
                             list_table::table_entry(ui, entry, index, state)
                         }
-                        AssetBrowserViewMode::Grid => unreachable!("Grid is rendered above"),
+                        AssetBrowserViewMode::Grid => continue,
                     };
                     handle_entry_response(ui, response, entry, project, state, service, index);
                 }
@@ -523,6 +521,13 @@ fn entry_qa_metadata(
         }
     }
     serde_json::Value::Object(object)
+}
+
+fn is_node_clip_definition(definition: &ModuleDefinition) -> bool {
+    matches!(
+        &definition.sharing,
+        ModuleDefinitionSharing::ReusableTemplate(_)
+    ) && definition.host_contract.transition().is_none()
 }
 
 fn asset_kind_name(kind: &AssetKind) -> &'static str {

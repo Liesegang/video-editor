@@ -1,6 +1,18 @@
 use ffmpeg_next as ffmpeg;
 use thiserror::Error;
 
+#[derive(Error, Debug, Clone, PartialEq)]
+#[error(
+    "transition {transition_id} cannot sample item {item_id} at Timeline time {timeline_time}s (source time {source_time}s): {reason}"
+)]
+pub struct TransitionSourceHandleError {
+    pub transition_id: uuid::Uuid,
+    pub item_id: uuid::Uuid,
+    pub timeline_time: f64,
+    pub source_time: f64,
+    pub reason: String,
+}
+
 #[derive(Error, Debug)]
 pub enum LibraryError {
     #[error("I/O error: {0}")]
@@ -59,6 +71,8 @@ pub enum LibraryError {
     Project(String),
     #[error("Rendering error: {0}")]
     Render(String),
+    #[error(transparent)]
+    TransitionSourceHandleUnavailable(#[from] TransitionSourceHandleError),
     #[error("Invalid composition index: {0}")]
     InvalidCompositionIndex(usize),
     #[error("Runtime error: {0}")]

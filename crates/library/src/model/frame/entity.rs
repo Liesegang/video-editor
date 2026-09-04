@@ -378,6 +378,27 @@ pub struct FrameObject {
 
 /// The kind of isolated image produced by a frame group.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct NormalizedProgress16(u16);
+
+impl NormalizedProgress16 {
+    const MAX: f32 = u16::MAX as f32;
+
+    pub fn new(progress: f32) -> Result<Self, String> {
+        if !progress.is_finite() {
+            return Err("normalized progress must be finite".to_string());
+        }
+        Ok(Self((progress.clamp(0.0, 1.0) * Self::MAX).round() as u16))
+    }
+
+    pub fn as_f32(self) -> f32 {
+        f32::from(self.0) / Self::MAX
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
 pub enum FrameGroupKind {
     Track,
     Clip,
@@ -422,11 +443,47 @@ pub struct FrameGroup {
     pub items: Vec<FrameItem>,
 }
 
+/// A renderer operation derived from a Timeline-owned Transition.
+///
+/// This is deliberately separate from [`FrameGroup`]: transition progress is
+/// neither source-local time nor a unary group effect parameter. Keeping the
+/// two source invocations explicit also prevents a Timeline transition from
+/// being projected into the user-facing processing Node graph.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum FrameTransitionKind {
+    CrossDissolve,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FrameTransitionSource {
+    pub item_id: Uuid,
+    pub source_time: OrderedFloat<f64>,
+    pub item: FrameItem,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FrameTransition {
+    pub transition_id: Uuid,
+    pub timeline_time: OrderedFloat<f64>,
+    pub kind: FrameTransitionKind,
+    pub width: u64,
+    pub height: u64,
+    pub progress: NormalizedProgress16,
+    pub from: FrameTransitionSource,
+    pub to: FrameTransitionSource,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 #[serde(tag = "item_type", content = "item")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "FrameObject stays inline on the render hot path; FrameTransition is boxed and does not increase the established FrameItem layout"
+)]
 pub enum FrameItem {
     Object(FrameObject),
     Group(FrameGroup),
+    Transition(Box<FrameTransition>),
 }
 
 impl FrameItem {
@@ -434,6 +491,9 @@ impl FrameItem {
         match self {
             Self::Object(_) => 1,
             Self::Group(group) => group.items.iter().map(Self::object_count).sum(),
+            Self::Transition(transition) => {
+                transition.from.item.object_count() + transition.to.item.object_count()
+            }
         }
     }
 }
@@ -449,5 +509,37 @@ impl ImageContent for FrameContent {
             FrameContent::Image { surface } => Some(surface),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod transition_progress_tests {
+    use super::*;
+
+    #[test]
+    fn normalized_progress_has_exact_endpoints_and_bounded_midpoint_error() {
+        assert_eq!(NormalizedProgress16::new(0.0).unwrap().as_f32(), 0.0);
+        assert_eq!(NormalizedProgress16::new(1.0).unwrap().as_f32(), 1.0);
+        assert_eq!(NormalizedProgress16::new(-1.0).unwrap().as_f32(), 0.0);
+        assert_eq!(NormalizedProgress16::new(2.0).unwrap().as_f32(), 1.0);
+        let midpoint = NormalizedProgress16::new(0.5).unwrap().as_f32();
+        assert!((midpoint - 0.5).abs() <= 0.5 / f32::from(u16::MAX));
+        assert!(NormalizedProgress16::new(f32::NAN).is_err());
+        assert!(NormalizedProgress16::new(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn transition_runtime_ir_does_not_inflate_existing_frame_items() {
+        assert_eq!(std::mem::size_of::<FrameGroupKind>(), 1);
+        assert_eq!(std::mem::size_of::<FrameGroup>(), 160);
+        assert_eq!(
+            std::mem::size_of::<FrameItem>(),
+            std::mem::size_of::<FrameObject>(),
+            "boxed Transition payload must not grow the existing inline Object layout"
+        );
+        assert_eq!(
+            std::mem::size_of::<Box<FrameTransition>>(),
+            std::mem::size_of::<usize>()
+        );
     }
 }

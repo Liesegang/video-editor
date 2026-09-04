@@ -3395,3 +3395,107 @@ Backplate:
       side: Right
       exposure: Graph
       multiplicity: Single
+
+# --- Transition Module host boundaries ---
+Transition Image Input:
+  category: Transition
+  catalog_status: native
+  catalog_id: native.transition.image_input
+  runtime_status: implemented
+  description: Protected Image input supplied by the Timeline Transition host
+  inputs:
+    - name: image
+      key: image_in
+      label: Image
+      type: Image
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+Transition Audio Input:
+  category: Transition
+  catalog_status: native
+  catalog_id: native.transition.audio_input
+  runtime_status: implemented
+  description: Protected Audio input supplied by the Timeline Transition host
+  inputs:
+    - name: audio
+      key: sound
+      label: Audio
+      type: Audio
+  outputs:
+    - name: audio
+      key: audio
+      label: Audio
+      type: Audio
+Transition Progress:
+  category: Transition
+  catalog_status: native
+  catalog_id: native.transition.progress_input
+  runtime_status: implemented
+  description: Protected normalized progress supplied by the Timeline Transition host
+  inputs:
+    - name: progress
+      key: property:transition_progress
+      label: Progress
+      type: Number
+      property: transition_progress
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.01, suffix: "", min_hard_limit: true, max_hard_limit: true }
+  outputs:
+    - name: progress
+      key: result
+      label: Progress
+      type: Number
+Transition Image Mix:
+  category: Transition
+  catalog_status: native
+  catalog_id: native.transition.image_mix
+  runtime_status: implemented
+  description: Mixes the protected A and B Image inputs using normalized Transition progress
+  inputs:
+    - name: a
+      key: transition_from
+      label: A
+      type: Image
+    - name: b
+      key: transition_to
+      label: B
+      type: Image
+    - name: progress
+      key: property:transition_progress
+      label: Progress
+      type: Number
+      property: transition_progress
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.01, suffix: "", min_hard_limit: true, max_hard_limit: true }
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+Transition Audio Mix:
+  category: Transition
+  catalog_status: native
+  catalog_id: native.transition.audio_mix
+  runtime_status: implemented
+  description: Mixes the protected A and B Audio inputs using normalized Transition progress
+  inputs:
+    - name: a
+      key: transition_from
+      label: A
+      type: Audio
+    - name: b
+      key: transition_to
+      label: B
+      type: Audio
+    - name: progress
+      key: property:transition_progress
+      label: Progress
+      type: Number
+      property: transition_progress
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.01, suffix: "", min_hard_limit: true, max_hard_limit: true }
+  outputs:
+    - name: audio
+      key: audio
+      label: Audio
+      type: Audio

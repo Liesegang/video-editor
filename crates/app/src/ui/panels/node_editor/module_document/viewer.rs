@@ -8,7 +8,6 @@ use egui_snarl::ui::{
     BackgroundPattern, NodeLayout, PinInfo, PinWireInfo, SnarlPin, SnarlStyle, SnarlViewer,
 };
 use egui_snarl::{InPin, OutPin, Snarl};
-use library::model::authoring::ModuleNodePortContract;
 use library::model::project::{PortDefinition, PortDirection};
 use node_editor_ui::{Editor, HeaderGlyph, NodeBodyResponse, NodeHeader, PortLabel};
 
@@ -71,7 +70,7 @@ impl ModuleNodeViewer<'_> {
         index: usize,
     ) -> Option<PortDefinition> {
         let node = self.node(snarl, node_id)?;
-        ModuleNodePortContract::resolve(node)
+        document_port_contract(self.definition, node)
             .ok()?
             .ports
             .into_iter()
@@ -161,8 +160,11 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         };
         let node_id = node.id;
         let is_output = matches!(node.content(), NodeContent::ModuleOutput(_));
+        let is_protected = self.definition.is_protected_host_boundary_node(node_id);
         let icon = node_icon_for_node(Some(&node), |_| None);
-        let status = if node.bypassed {
+        let status = if is_protected {
+            (icons::LOCK, "Protected host boundary")
+        } else if node.bypassed {
             (icons::PAUSE, "Bypassed")
         } else if !node.enabled {
             (icons::EYE_SLASH, "Disabled")
@@ -207,6 +209,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 "node_id": node_id,
                 "selected": self.selected_nodes.contains(&node_id),
                 "module_output": is_output,
+                "host_boundary": is_protected,
                 "production_surface": "egui_snarl",
             })),
         );
@@ -215,6 +218,10 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 "Module Output is a required render terminal and cannot be disabled or bypassed.";
             const OUTPUT_DELETE_REASON: &str =
                 "Module Output is a required render terminal and cannot be deleted.";
+            const HOST_BOUNDARY_STATE_REASON: &str =
+                "Transition A/B/Progress boundaries are supplied by the Timeline and cannot be disabled or bypassed.";
+            const HOST_BOUNDARY_DELETE_REASON: &str =
+                "Transition A/B/Progress boundaries are required by the host contract and cannot be deleted.";
             let mut name = node.name.clone();
             if ui.text_edit_singleline(&mut name).changed() {
                 self.actions.push(ModuleEditorAction::SetNodeState {
@@ -225,8 +232,10 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 });
             }
             let mut enabled = node.enabled;
-            let enabled_response =
-                ui.add_enabled(!is_output, egui::Checkbox::new(&mut enabled, "Enabled"));
+            let enabled_response = ui.add_enabled(
+                !is_output && !is_protected,
+                egui::Checkbox::new(&mut enabled, "Enabled"),
+            );
             if enabled_response.changed() {
                 self.actions.push(ModuleEditorAction::SetNodeState {
                     node_id,
@@ -238,10 +247,18 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             if is_output {
                 register_output_control(node_id, "enabled", &enabled_response, OUTPUT_STATE_REASON);
                 enabled_response.on_hover_text(OUTPUT_STATE_REASON);
+            } else if is_protected {
+                register_host_boundary_control(
+                    node_id,
+                    "enabled",
+                    &enabled_response,
+                    HOST_BOUNDARY_STATE_REASON,
+                );
+                enabled_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
             }
             let mut bypassed = node.bypassed;
             let bypass_response = ui.add_enabled(
-                !is_output && node.supports_bypass(),
+                !is_output && !is_protected && node.supports_bypass(),
                 egui::Checkbox::new(&mut bypassed, "Bypass"),
             );
             if bypass_response.changed() {
@@ -255,10 +272,18 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             if is_output {
                 register_output_control(node_id, "bypass", &bypass_response, OUTPUT_STATE_REASON);
                 bypass_response.on_hover_text(OUTPUT_STATE_REASON);
+            } else if is_protected {
+                register_host_boundary_control(
+                    node_id,
+                    "bypass",
+                    &bypass_response,
+                    HOST_BOUNDARY_STATE_REASON,
+                );
+                bypass_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
             }
             ui.separator();
             let delete_response = ui.add_enabled(
-                !is_output,
+                !is_output && !is_protected,
                 egui::Button::new(format!("{} Delete Node", icons::TRASH)),
             );
             if delete_response.clicked() {
@@ -269,6 +294,14 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             if is_output {
                 register_output_control(node_id, "delete", &delete_response, OUTPUT_DELETE_REASON);
                 delete_response.on_hover_text(OUTPUT_DELETE_REASON);
+            } else if is_protected {
+                register_host_boundary_control(
+                    node_id,
+                    "delete",
+                    &delete_response,
+                    HOST_BOUNDARY_DELETE_REASON,
+                );
+                delete_response.on_hover_text(HOST_BOUNDARY_DELETE_REASON);
             }
         });
     }
@@ -278,7 +311,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             .graph
             .nodes
             .get(node_id)
-            .and_then(|node| ModuleNodePortContract::resolve(node).ok())
+            .and_then(|node| document_port_contract(self.definition, node).ok())
             .map_or(0, |contract| {
                 contract
                     .ports
@@ -293,7 +326,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             .graph
             .nodes
             .get(node_id)
-            .and_then(|node| ModuleNodePortContract::resolve(node).ok())
+            .and_then(|node| document_port_contract(self.definition, node).ok())
             .map_or(0, |contract| {
                 contract
                     .ports
@@ -314,12 +347,27 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         // `self`; the authoritative definition is mutated after this frame.
         let node = self.node(snarl, pin.id.node).cloned();
         let port = self.port(snarl, pin.id.node, PortDirection::Input, pin.id.input);
-        let connected = !pin.remotes.is_empty();
+        let ownership = node.as_ref().zip(port.as_ref()).map_or(
+            ModuleInputPortOwnership::Internal,
+            |(node, port)| {
+                self.definition.input_port_ownership(&ModulePortAddress {
+                    node_id: node.id,
+                    port: port.key.clone(),
+                })
+            },
+        );
+        let graph_connected = !pin.remotes.is_empty();
         if node_editor_details_visible(self.to_global.scaling) {
             if let (Some(node), Some(port)) = (node.as_ref(), port.as_ref()) {
-                let property = authored_property_key_for_port(node, &port.key)
+                let property = input_allows_inline_authoring(ownership)
+                    .then(|| authored_property_key_for_port(node, &port.key))
+                    .flatten()
                     .and_then(|key| node.properties().get(key).map(|value| (key, value)));
-                if let Some((key, property)) = property {
+                let interface_response = if ownership.is_externally_driven() {
+                    let response = show_externally_driven_input(ui, port, ownership);
+                    self.capture_response(&response);
+                    response
+                } else if let Some((key, property)) = property {
                     let definition = property::node_property_definition(self.plugins, node, key);
                     let (response, action) = property::show_property_input(
                         ui,
@@ -328,16 +376,18 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                         key,
                         property,
                         definition.as_ref(),
-                        connected,
+                        graph_connected,
                         self.property_context,
+                        self.canvas_transform,
                     );
                     self.capture_response(&response);
                     if let Some(action) = action {
                         self.actions.push(action);
                     }
+                    response
                 } else {
                     let label_width = measured_label_width(ui, &port.label, PORT_LABEL_WIDTH);
-                    Editor::show_port_label(
+                    let response = Editor::show_port_label(
                         ui,
                         PortLabel {
                             text: &port.label,
@@ -347,20 +397,31 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                             details_visible: true,
                         },
                     );
-                }
+                    self.capture_response(&response);
+                    response
+                };
+                self.actions
+                    .extend(super::interface::input_port_interface_actions(
+                        &interface_response,
+                        self.canvas_transform * interface_response.rect,
+                        self.definition,
+                        node.id,
+                        port,
+                    ));
             }
         } else {
             ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH + 80.0, PORT_ROW_HEIGHT));
         }
-        ModulePin::new(
-            node.as_ref().map(|node| node.id),
+        ModulePin::new(ModulePinRequest {
+            node_id: node.as_ref().map(|node| node.id),
             port,
-            PortDirection::Input,
-            connected,
-            *self.to_global,
-            *self.canvas_clip,
-            Arc::clone(&self.capture),
-        )
+            direction: PortDirection::Input,
+            connected: graph_connected || ownership.is_externally_driven(),
+            ownership,
+            to_global: *self.to_global,
+            canvas_clip: *self.canvas_clip,
+            capture: Arc::clone(&self.capture),
+        })
     }
 
     fn show_output(
@@ -384,15 +445,16 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 },
             );
         }
-        ModulePin::new(
-            node.map(|node| node.id),
+        ModulePin::new(ModulePinRequest {
+            node_id: node.map(|node| node.id),
             port,
-            PortDirection::Output,
-            !pin.remotes.is_empty(),
-            *self.to_global,
-            *self.canvas_clip,
-            Arc::clone(&self.capture),
-        )
+            direction: PortDirection::Output,
+            connected: !pin.remotes.is_empty(),
+            ownership: ModuleInputPortOwnership::Internal,
+            to_global: *self.to_global,
+            canvas_clip: *self.canvas_clip,
+            capture: Arc::clone(&self.capture),
+        })
     }
 
     fn final_node_rect(
@@ -458,6 +520,38 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
     }
 }
 
+pub(super) const fn input_allows_inline_authoring(ownership: ModuleInputPortOwnership) -> bool {
+    !ownership.is_externally_driven()
+}
+
+fn show_externally_driven_input(
+    ui: &mut egui::Ui,
+    port: &PortDefinition,
+    ownership: ModuleInputPortOwnership,
+) -> egui::Response {
+    let reason = if ownership.is_host_protected() {
+        "This input is supplied by the Timeline host and cannot be wired or authored inside the Module"
+    } else {
+        "This Published Interface input is supplied by the Module host; unpublish it before wiring or authoring it"
+    };
+    ui.horizontal(|ui| {
+        let label_width = measured_label_width(ui, &port.label, PORT_LABEL_WIDTH);
+        Editor::show_port_label(
+            ui,
+            PortLabel {
+                text: &port.label,
+                width: label_width,
+                row_height: PORT_ROW_HEIGHT,
+                align: egui::Align::LEFT,
+                details_visible: true,
+            },
+        );
+        ui.weak(icons::LOCK).on_hover_text(reason);
+    })
+    .response
+    .on_hover_text(reason)
+}
+
 fn register_output_control(
     node_id: Uuid,
     action: &str,
@@ -478,27 +572,61 @@ fn register_output_control(
     );
 }
 
+fn register_host_boundary_control(
+    node_id: Uuid,
+    action: &str,
+    response: &egui::Response,
+    disabled_reason: &str,
+) {
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.host_boundary_control:{node_id}:{action}"),
+        "node_editor_host_boundary_control",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "node_id": node_id,
+            "action": action,
+            "host_boundary": true,
+            "disabled_reason": disabled_reason,
+        })),
+    );
+}
+
 struct ModulePin {
     info: PinInfo,
     node_id: Option<Uuid>,
     port: Option<PortDefinition>,
     direction: PortDirection,
     connected: bool,
+    ownership: ModuleInputPortOwnership,
+    to_global: egui::emath::TSTransform,
+    canvas_clip: egui::Rect,
+    capture: Arc<Mutex<ModuleSurfaceCapture>>,
+}
+
+struct ModulePinRequest {
+    node_id: Option<Uuid>,
+    port: Option<PortDefinition>,
+    direction: PortDirection,
+    connected: bool,
+    ownership: ModuleInputPortOwnership,
     to_global: egui::emath::TSTransform,
     canvas_clip: egui::Rect,
     capture: Arc<Mutex<ModuleSurfaceCapture>>,
 }
 
 impl ModulePin {
-    fn new(
-        node_id: Option<Uuid>,
-        port: Option<PortDefinition>,
-        direction: PortDirection,
-        connected: bool,
-        to_global: egui::emath::TSTransform,
-        canvas_clip: egui::Rect,
-        capture: Arc<Mutex<ModuleSurfaceCapture>>,
-    ) -> Self {
+    fn new(request: ModulePinRequest) -> Self {
+        let ModulePinRequest {
+            node_id,
+            port,
+            direction,
+            connected,
+            ownership,
+            to_global,
+            canvas_clip,
+            capture,
+        } = request;
         let data_type = port
             .as_ref()
             .map_or(PortDataType::Any, |port| port.data_type);
@@ -508,6 +636,7 @@ impl ModulePin {
             port,
             direction,
             connected,
+            ownership,
             to_global,
             canvas_clip,
             capture,
@@ -548,7 +677,7 @@ impl SnarlPin for ModulePin {
                 format!("node_editor.port.node:{node_id}.{direction}:{}", port.key),
                 "node_editor_port",
                 qa_rect,
-                true,
+                !self.ownership.is_externally_driven(),
                 Some(serde_json::json!({
                     "document_kind": "module_definition",
                     "node_id": node_id,
@@ -557,6 +686,11 @@ impl SnarlPin for ModulePin {
                     "direction": direction,
                     "data_type": port.data_type,
                     "connected": self.connected,
+                    "input_ownership": match self.ownership {
+                        ModuleInputPortOwnership::Internal => "internal",
+                        ModuleInputPortOwnership::Published => "published",
+                        ModuleInputPortOwnership::HostProtected => "host_protected",
+                    },
                     "production_surface": "egui_snarl",
                 })),
             );

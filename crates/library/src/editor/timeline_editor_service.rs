@@ -8,6 +8,7 @@
 mod attachment;
 mod authoring;
 mod composition;
+mod edit_plan;
 mod interface;
 mod item;
 mod module;
@@ -15,22 +16,40 @@ mod node_clip_conversion;
 mod shape_path;
 mod text_ensemble;
 mod transition;
+mod transition_instance_controls;
+mod transition_module_controls;
+mod transition_parameter_automation;
 
 #[cfg(test)]
 mod attachment_tests;
 #[cfg(test)]
+mod edit_plan_tests;
+#[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod module_presentation_tests;
+#[cfg(test)]
 mod node_clip_conversion_tests;
+#[cfg(test)]
+mod transition_instance_dependency_tests;
+#[cfg(test)]
+mod transition_module_tests;
+#[cfg(test)]
+mod transition_parameter_automation_tests;
 #[cfg(test)]
 mod transition_tests;
 
 use attachment::normalize_all_attachment_orders;
 use module::remove_instance_and_private_definition;
 
+pub use crate::model::authoring::TimelineEditPlanningIndex;
 pub use authoring::{
     AuthoringKeyframeUpdate, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
     AuthoringPropertyValueUpdate, TimelineSettingsUpdate,
+};
+pub use edit_plan::{
+    EditPlan, EditPlanValidationScope, EditProjection, TimelineEditError, TimelineEditOperation,
+    TimelineEditRequest, TimelineItemEditState, plan_timeline_edit, project_edit_plan,
 };
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
 pub use transition::TransitionPlacement;
@@ -46,11 +65,11 @@ use crate::model::authoring::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentProcessor, AttachmentStage,
     AuthoringProject, AuthoringSession, AutomationTrack, BuiltinEffectInstance, ChangeSet,
     CompositionParameter, CompositionParameterId, CompositionParameterTarget, InstanceLocator,
-    MediaInputBinding, MediaTime, ModuleConnectionId, ModuleDefinition, ModuleDefinitionId,
-    ModuleInstance, ModuleInstanceId, ModuleInvocation, ModuleOutputId, ProjectDocument,
-    ProjectFileStore, ProjectInvalidation, ProjectRevision, PublishedMediaInputId,
+    InstancePath, MediaInputBinding, MediaTime, ModuleConnectionId, ModuleDefinition,
+    ModuleDefinitionId, ModuleInstance, ModuleInstanceId, ModuleInvocation, ModuleOutputId,
+    ProjectDocument, ProjectFileStore, ProjectInvalidation, ProjectRevision, PublishedMediaInputId,
     PublishedParameterId, RationalRate, SourceRef, TimeMap, Timeline, TimelineId, TimelineInterval,
-    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
+    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, TransitionId,
     ordered_track_item_ids, track_item_ids_after_placement,
 };
 use crate::model::frame::color::Color;
@@ -106,6 +125,7 @@ fn normalize_track_layers(
 pub struct TimelineEditorService {
     session: Arc<RwLock<AuthoringSession>>,
     project_path: Arc<RwLock<Option<PathBuf>>>,
+    timeline_edit_index: Arc<RwLock<Option<Arc<TimelineEditPlanningIndex>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +133,18 @@ pub struct PreparedModuleDefinitionEdit {
     pub definition_id: ModuleDefinitionId,
     pub cloned: bool,
     pub changes: Option<ChangeSet>,
+}
+
+/// Editor command scope for a Timeline-owned Transition Module parameter.
+/// Definition scope edits every placement; Instance scope persists a sparse
+/// copy-on-write difference on one concrete nested Composition placement.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TransitionAutomationOwner {
+    Definition(TransitionId),
+    Instance {
+        transition_id: TransitionId,
+        instance_path: InstancePath,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -135,12 +167,25 @@ pub struct ModuleNodePresentationUpdate {
 pub enum ModuleInputHost {
     Item(TimelineItemId),
     Attachment(AttachmentId),
+    Transition(TransitionId),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ModuleInputDependency {
-    pub host: ModuleInputHost,
-    pub input_id: PublishedMediaInputId,
+pub enum TimelineItemDependency {
+    /// A first-class Timeline Transition uses this item as its A or B
+    /// participant. The Transition must be removed before the item can be
+    /// deleted; an explicit cascade performs both changes atomically.
+    TransitionParticipant { transition_id: TransitionId },
+    ModuleInput {
+        host: ModuleInputHost,
+        input_id: PublishedMediaInputId,
+    },
+    /// A persisted sparse control record is addressed through this item in
+    /// its concrete nested Composition path.
+    TransitionInstancePath {
+        owner_item_id: TimelineItemId,
+        transition_id: TransitionId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +229,7 @@ impl TimelineEditorService {
                 AuthoringSession::new(project).map_err(LibraryError::Validation)?,
             )),
             project_path: Arc::new(RwLock::new(None)),
+            timeline_edit_index: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -210,6 +256,9 @@ impl TimelineEditorService {
     pub fn replace_project(&self, project: AuthoringProject) -> Result<(), LibraryError> {
         *self.write_session()? =
             AuthoringSession::new(project).map_err(LibraryError::Validation)?;
+        *self.timeline_edit_index.write().map_err(|_| {
+            LibraryError::Runtime("Timeline edit planning index lock poisoned".to_string())
+        })? = None;
         *self.write_path()? = None;
         Ok(())
     }

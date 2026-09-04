@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use egui_snarl::{InPinId, OutPinId, Snarl};
-use library::model::authoring::ModuleNodePortContract;
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, Editor, GraphFrame, InteractionOptions, ItemId,
     NodeDescriptor, PortDescriptor, PortDirection as SurfacePortDirection, PortOwner,
@@ -17,7 +16,7 @@ use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
 use super::*;
 use crate::ui::panels::node_editor::{
     node_editor_details_visible, node_editor_navigation_config, node_editor_snarl_style_for,
-    PORT_ROW_HEIGHT,
+    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE, PORT_ROW_HEIGHT,
 };
 use crate::ui::viewport::{ViewportController, ViewportState};
 
@@ -29,6 +28,29 @@ impl ViewportState for NodeEditorState {
     fn set_canvas_state(&mut self, state: pan_zoom_ui::CanvasState) {
         self.canvas = state;
     }
+}
+
+pub(super) fn fit_module_document_canvas(
+    definition: &ModuleDefinition,
+    viewport: egui::Rect,
+) -> Option<pan_zoom_ui::CanvasState> {
+    let bounds = definition.graph.nodes.values().fold(None, |bounds, node| {
+        let size = super::layout::sanitized_size(node.ui_size);
+        let node_rect = egui::Rect::from_min_size(
+            egui::pos2(node.ui_position[0], node.ui_position[1]),
+            egui::vec2(size[0], size[1]),
+        );
+        Some(bounds.map_or(node_rect, |bounds: egui::Rect| bounds.union(node_rect)))
+    })?;
+    let mut fitted = pan_zoom_ui::fit_canvas(
+        viewport,
+        bounds.size(),
+        egui::Vec2::splat(28.0),
+        NODE_EDITOR_MIN_SCALE,
+        NODE_EDITOR_MAX_SCALE,
+    )?;
+    fitted.state.pan -= bounds.min.to_vec2() * fitted.state.zoom;
+    Some(fitted.state)
 }
 
 pub(super) fn show_module_document(
@@ -127,6 +149,7 @@ pub(super) fn show_module_document(
         ui,
         state,
         plugins,
+        definition,
         viewport,
         transform,
         &projection.node_rects,
@@ -137,7 +160,13 @@ pub(super) fn show_module_document(
         });
     }
 
-    register_canvas_qa(definition, viewport, transform);
+    register_canvas_qa(
+        definition,
+        viewport,
+        transform,
+        projection.pointer_owned,
+        options.connect,
+    );
     actions
 }
 
@@ -292,7 +321,7 @@ pub(super) fn port_index(
     key: &str,
 ) -> Option<usize> {
     let node = definition.graph.nodes.get(&node_id)?;
-    ModuleNodePortContract::resolve(node)
+    document_port_contract(definition, node)
         .ok()?
         .ports
         .iter()
@@ -383,7 +412,7 @@ impl<'a> ModuleSurfaceProjection<'a> {
                     PortDirection::Output => SurfacePortDirection::Output,
                 },
                 type_key: TypeKey::new(port.data_type),
-                connectable: true,
+                connectable: module_port_is_connectable(definition, port),
             })
             .collect::<Vec<_>>();
         let centers = port_visuals
@@ -471,6 +500,15 @@ impl<'a> ModuleSurfaceProjection<'a> {
     }
 }
 
+pub(super) fn module_port_is_connectable(definition: &ModuleDefinition, port: &PortVisual) -> bool {
+    match port.id.direction {
+        PortDirection::Output => true,
+        PortDirection::Input => !definition
+            .input_port_ownership(&port.id.address)
+            .is_externally_driven(),
+    }
+}
+
 const fn direction_rank(direction: PortDirection) -> u8 {
     match direction {
         PortDirection::Input => 0,
@@ -482,6 +520,8 @@ fn register_canvas_qa(
     definition: &ModuleDefinition,
     viewport: egui::Rect,
     transform: egui::emath::TSTransform,
+    pointer_owned_by_node_control: bool,
+    connect_enabled: bool,
 ) {
     crate::qa::register_component_with_metadata(
         "node_editor.canvas",
@@ -505,6 +545,8 @@ fn register_canvas_qa(
             "viewport_controller": "shared",
             "production_surface": "egui_snarl",
             "timeline_graph_expansion": false,
+            "pointer_owned_by_node_control": pointer_owned_by_node_control,
+            "connect_enabled": connect_enabled,
         })),
     );
 }

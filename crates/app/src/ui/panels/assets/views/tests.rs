@@ -59,3 +59,24 @@ fn list_rows_allocate_distinct_vertical_slots() {
     ));
     assert!(rows.windows(2).all(|rows| rows[0].bottom() < rows[1].top()));
 }
+
+#[test]
+fn transition_modules_are_not_presented_as_draggable_node_clips() {
+    use library::model::authoring::{
+        ModuleDefinition, ModuleDefinitionSharing, ModuleTemplateOrigin, TransitionMediaType,
+    };
+
+    let (node_clip, _) = ModuleDefinition::new_project_image("Reusable Node Clip");
+    let (transition, _) = ModuleDefinition::new_transition(
+        "Reusable Transition",
+        ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+        TransitionMediaType::Image,
+    )
+    .unwrap();
+    let (private, _) =
+        ModuleDefinition::new_image("Private Node Clip", ModuleDefinitionSharing::Private);
+
+    assert!(is_node_clip_definition(&node_clip));
+    assert!(!is_node_clip_definition(&transition));
+    assert!(!is_node_clip_definition(&private));
+}

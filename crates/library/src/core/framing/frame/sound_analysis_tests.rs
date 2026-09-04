@@ -123,6 +123,10 @@ fn find_group(items: &[FrameItem], source_id: uuid::Uuid) -> Option<&FrameGroup>
     items.iter().find_map(|item| match item {
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => find_group(&group.items, source_id),
+        FrameItem::Transition(transition) => {
+            find_group(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| find_group(std::slice::from_ref(&transition.to.item), source_id))
+        }
         FrameItem::Object(_) => None,
     })
 }

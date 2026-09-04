@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     AutomatableParameter, MediaOutputKind, MediaTime, OperationRef, ProcessorParameterContract,
     RationalRate, TimelineId, TimelineInterval, TimelineItemId, TransitionId,
+    TransitionModuleProcessor,
 };
 
 pub const TRANSITION_CATEGORY: &str = "transition";
@@ -83,11 +84,30 @@ impl TransitionMediaType {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransitionProcessor {
-    pub operation: OperationRef,
+    pub implementation: TransitionProcessorImplementation,
     pub contract: TransitionContractSnapshot,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TransitionProcessorImplementation {
+    Operation(OperationRef),
+    Module(TransitionModuleProcessor),
+}
+
 impl TransitionProcessor {
+    pub fn from_operation(operation: OperationRef, contract: TransitionContractSnapshot) -> Self {
+        Self {
+            implementation: TransitionProcessorImplementation::Operation(operation),
+            contract,
+        }
+    }
+
     pub fn cross_dissolve() -> Self {
         Self::builtin(CROSS_DISSOLVE_COMPONENT_ID, TransitionMediaType::Image)
     }
@@ -96,19 +116,83 @@ impl TransitionProcessor {
         Self::builtin(AUDIO_CROSSFADE_COMPONENT_ID, TransitionMediaType::Audio)
     }
 
-    fn builtin(component_id: &str, media_type: TransitionMediaType) -> Self {
+    pub fn module(instance_id: super::ModuleInstanceId, media_type: TransitionMediaType) -> Self {
+        Self::module_with_controls(instance_id, media_type, HashMap::new(), HashMap::new())
+    }
+
+    pub fn module_with_controls(
+        instance_id: super::ModuleInstanceId,
+        media_type: TransitionMediaType,
+        input_bindings: HashMap<super::PublishedMediaInputId, super::MediaInputBinding>,
+        automation_tracks: HashMap<super::PublishedParameterId, super::AutomationTrack>,
+    ) -> Self {
         Self {
-            operation: OperationRef {
-                category: TRANSITION_CATEGORY.to_string(),
-                component_id: component_id.to_string(),
-                operation: TRANSITION_APPLY_OPERATION.to_string(),
-                version: BUILTIN_TRANSITION_VERSION.to_string(),
-            },
+            implementation: TransitionProcessorImplementation::Module(TransitionModuleProcessor {
+                instance_id,
+                input_bindings,
+                automation_tracks,
+            }),
             contract: TransitionContractSnapshot {
                 media_type,
                 parameters: Vec::new(),
             },
         }
+    }
+
+    pub const fn operation(&self) -> Option<&OperationRef> {
+        match &self.implementation {
+            TransitionProcessorImplementation::Operation(operation) => Some(operation),
+            TransitionProcessorImplementation::Module(_) => None,
+        }
+    }
+
+    pub const fn module_processor(&self) -> Option<&TransitionModuleProcessor> {
+        match &self.implementation {
+            TransitionProcessorImplementation::Operation(_) => None,
+            TransitionProcessorImplementation::Module(module) => Some(module),
+        }
+    }
+
+    pub fn module_processor_mut(&mut self) -> Option<&mut TransitionModuleProcessor> {
+        match &mut self.implementation {
+            TransitionProcessorImplementation::Operation(_) => None,
+            TransitionProcessorImplementation::Module(module) => Some(module),
+        }
+    }
+
+    fn builtin(component_id: &str, media_type: TransitionMediaType) -> Self {
+        Self {
+            implementation: TransitionProcessorImplementation::Operation(OperationRef {
+                category: TRANSITION_CATEGORY.to_string(),
+                component_id: component_id.to_string(),
+                operation: TRANSITION_APPLY_OPERATION.to_string(),
+                version: BUILTIN_TRANSITION_VERSION.to_string(),
+            }),
+            contract: TransitionContractSnapshot {
+                media_type,
+                parameters: Vec::new(),
+            },
+        }
+    }
+
+    pub fn is_builtin_cross_dissolve(&self) -> bool {
+        self.is_builtin(CROSS_DISSOLVE_COMPONENT_ID, TransitionMediaType::Image)
+    }
+
+    pub fn is_builtin_audio_crossfade(&self) -> bool {
+        self.is_builtin(AUDIO_CROSSFADE_COMPONENT_ID, TransitionMediaType::Audio)
+    }
+
+    fn is_builtin(&self, component_id: &str, media_type: TransitionMediaType) -> bool {
+        let Some(operation) = self.operation() else {
+            return false;
+        };
+        operation.category == TRANSITION_CATEGORY
+            && operation.component_id == component_id
+            && operation.operation == TRANSITION_APPLY_OPERATION
+            && operation.version == BUILTIN_TRANSITION_VERSION
+            && self.contract.media_type == media_type
+            && self.contract.parameters.is_empty()
     }
 }
 
@@ -167,11 +251,21 @@ mod tests {
     #[test]
     fn builtins_publish_distinct_typed_descriptors() {
         let image = TransitionProcessor::cross_dissolve();
-        assert_eq!(image.operation.component_id, CROSS_DISSOLVE_COMPONENT_ID);
+        assert_eq!(
+            image.operation().unwrap().component_id,
+            CROSS_DISSOLVE_COMPONENT_ID
+        );
         assert_eq!(image.contract.media_type, TransitionMediaType::Image);
 
         let audio = TransitionProcessor::audio_crossfade();
-        assert_eq!(audio.operation.component_id, AUDIO_CROSSFADE_COMPONENT_ID);
+        assert_eq!(
+            audio.operation().unwrap().component_id,
+            AUDIO_CROSSFADE_COMPONENT_ID
+        );
         assert_eq!(audio.contract.media_type, TransitionMediaType::Audio);
+        assert!(image.is_builtin_cross_dissolve());
+        assert!(!image.is_builtin_audio_crossfade());
+        assert!(audio.is_builtin_audio_crossfade());
+        assert!(!audio.is_builtin_cross_dissolve());
     }
 }

@@ -4,7 +4,10 @@
 //! type, so a Module menu cannot accidentally recreate the legacy Project
 //! graph hierarchy.
 
-use library::model::{native_node_catalog, GeneratorContent, NativeNodeFactory};
+use library::model::authoring::{ModuleHostContract, TransitionMediaType};
+use library::model::{
+    native_node_catalog, transition_mix_node_id, GeneratorContent, NativeNodeFactory,
+};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
     EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
@@ -43,6 +46,10 @@ fn item(
     item
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Catalog entries intentionally keep plugin lookup identity, presentation metadata, QA identity, and search aliases explicit at this construction boundary"
+)]
 fn operation_item(
     plugins: &PluginManager,
     category: &str,
@@ -96,10 +103,11 @@ fn operation_item(
 
 pub(super) fn module_node_menu_items(
     plugins: &PluginManager,
+    host_contract: &ModuleHostContract,
 ) -> Vec<SearchableItem<ModuleNodeCreateRequest>> {
     let mut items = native_node_catalog()
         .iter()
-        .filter(|descriptor| module_runtime_supports_native(descriptor.factory()))
+        .filter(|descriptor| module_runtime_supports_native_for_host(host_contract, descriptor))
         .map(|descriptor| {
             let mut keywords = descriptor
                 .keywords()
@@ -126,6 +134,10 @@ pub(super) fn module_node_menu_items(
             item
         })
         .collect::<Vec<_>>();
+
+    if host_contract.validate_plugin_node_creation().is_err() {
+        return items;
+    }
 
     if let Some(item) = operation_item(
         plugins,
@@ -270,6 +282,33 @@ pub(super) fn module_node_menu_items(
     items
 }
 
+fn module_runtime_supports_native_for_host(
+    host_contract: &ModuleHostContract,
+    descriptor: &library::model::NativeNodeCatalogDescriptor,
+) -> bool {
+    let Some(transition) = host_contract.transition() else {
+        return module_runtime_supports_native(descriptor.factory());
+    };
+    let transition_mix =
+        transition_mix_node_id(transition.media_type == TransitionMediaType::Audio);
+    let factory_is_supported = module_runtime_supports_native(descriptor.factory())
+        || transition_mix == descriptor.catalog_id();
+    if !factory_is_supported {
+        return false;
+    }
+    if matches!(descriptor.factory(), NativeNodeFactory::Generator(_)) {
+        // Generators deliberately require the canvas-backed production
+        // factory, so `create_detached_node` cannot be used as a capability
+        // probe. They are valid only on the Image host.
+        return transition.media_type == TransitionMediaType::Image;
+    }
+    descriptor.create_detached_node().is_ok_and(|node| {
+        host_contract
+            .validate_authored_processing_node(&node)
+            .is_ok()
+    })
+}
+
 const fn module_runtime_supports_native(factory: NativeNodeFactory) -> bool {
     matches!(
         factory,
@@ -288,10 +327,11 @@ const fn module_runtime_supports_native(factory: NativeNodeFactory) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::model::authoring::{ModuleDefinition, ModuleDefinitionSharing};
 
     #[test]
     fn menu_request_type_has_no_timeline_container_variant() {
-        let items = module_node_menu_items(&PluginManager::default());
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
         assert!(!items.is_empty());
         assert!(items.iter().all(|item| matches!(
             item.value,
@@ -301,7 +341,7 @@ mod tests {
 
     #[test]
     fn menu_exposes_only_native_nodes_supported_by_the_module_runtime() {
-        let items = module_node_menu_items(&PluginManager::default());
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
         for item in items {
             if let ModuleNodeCreateRequest::Native(catalog_id) = item.value {
                 let descriptor = library::model::native_node_descriptor(&catalog_id)
@@ -313,7 +353,7 @@ mod tests {
 
     #[test]
     fn menu_exposes_shape_generators_supported_by_the_module_runtime() {
-        let items = module_node_menu_items(&PluginManager::default());
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
         for (catalog_id, label, qa_id) in [
             ("native.text", "Text", "node_editor.menu.create.text"),
             ("native.shape", "Shape", "node_editor.menu.create.shape"),
@@ -329,7 +369,7 @@ mod tests {
 
     #[test]
     fn menu_exposes_the_sound_merge_supported_by_the_module_runtime() {
-        let items = module_node_menu_items(&PluginManager::default());
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
         let entry = items
             .iter()
             .find(|item| {
@@ -344,8 +384,83 @@ mod tests {
     }
 
     #[test]
+    fn audio_transition_menu_exposes_only_its_finite_runtime_node_set() {
+        let (definition, _) = ModuleDefinition::new_transition(
+            "Audio Transition",
+            ModuleDefinitionSharing::Private,
+            TransitionMediaType::Audio,
+        )
+        .unwrap();
+        let items = module_node_menu_items(&PluginManager::default(), &definition.host_contract);
+        let native_ids = items
+            .iter()
+            .filter_map(|item| match &item.value {
+                ModuleNodeCreateRequest::Native(catalog_id) => Some(catalog_id.as_str()),
+                ModuleNodeCreateRequest::PluginOperation { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(items
+            .iter()
+            .all(|item| matches!(item.value, ModuleNodeCreateRequest::Native(_))));
+        for required in [
+            "native.transition.audio_mix",
+            "native.sound.merge",
+            "native.math.add",
+        ] {
+            assert!(native_ids.contains(&required), "missing {required}");
+        }
+        for unsupported in [
+            "native.text",
+            "native.merge",
+            "native.transition.audio_input",
+            "native.transition.progress_input",
+            "native.transition.image_mix",
+        ] {
+            assert!(
+                !native_ids.contains(&unsupported),
+                "unsupported Audio Transition Node was exposed: {unsupported}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_transition_menu_can_recreate_mix_without_exposing_host_boundaries() {
+        let (definition, _) = ModuleDefinition::new_transition(
+            "Image Transition",
+            ModuleDefinitionSharing::Private,
+            TransitionMediaType::Image,
+        )
+        .unwrap();
+        let items = module_node_menu_items(&PluginManager::default(), &definition.host_contract);
+        let native_ids = items
+            .iter()
+            .filter_map(|item| match &item.value {
+                ModuleNodeCreateRequest::Native(catalog_id) => Some(catalog_id.as_str()),
+                ModuleNodeCreateRequest::PluginOperation { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        for available in ["native.transition.image_mix", "native.text", "native.shape"] {
+            assert!(native_ids.contains(&available), "missing {available}");
+        }
+        for unavailable in [
+            "native.transition.image_input",
+            "native.transition.audio_input",
+            "native.transition.progress_input",
+            "native.transition.audio_mix",
+            "native.sound.merge",
+        ] {
+            assert!(
+                !native_ids.contains(&unavailable),
+                "unavailable Image Transition Node was exposed: {unavailable}"
+            );
+        }
+    }
+
+    #[test]
     fn menu_restores_the_production_shape_operation_catalog() {
-        let items = module_node_menu_items(&PluginManager::default());
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
         for qa_id in [
             "node_editor.menu.create.transform",
             "node_editor.menu.create.fill",

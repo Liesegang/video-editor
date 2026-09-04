@@ -1,5 +1,6 @@
 use super::{
-    AuthoringProject, MediaTime, ModuleDefinitionId, ModuleInstanceId, TimelineId, TimelineItemId,
+    AuthoringProject, InstancePath, MediaTime, ModuleDefinitionId, ModuleInstanceId, TimelineId,
+    TimelineItemId, TransitionId,
 };
 
 const DEFAULT_UNDO_LIMIT: usize = 100;
@@ -32,6 +33,13 @@ pub enum ProjectInvalidation {
     },
     TimelineRange {
         timeline_id: TimelineId,
+        start: MediaTime,
+        duration: MediaTime,
+    },
+    TimelineInstanceRange {
+        instance_path: InstancePath,
+        timeline_id: TimelineId,
+        transition_id: TransitionId,
         start: MediaTime,
         duration: MediaTime,
     },

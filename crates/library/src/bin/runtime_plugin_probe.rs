@@ -695,6 +695,10 @@ fn first_frame_content(items: &[FrameItem]) -> Option<&FrameContent> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(&object.content),
         FrameItem::Group(group) => first_frame_content(&group.items),
+        FrameItem::Transition(transition) => {
+            first_frame_content(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_frame_content(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 

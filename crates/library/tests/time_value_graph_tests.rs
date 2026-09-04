@@ -127,6 +127,10 @@ fn first_video_object(items: &[FrameItem]) -> Option<&FrameObject> {
         }
         FrameItem::Object(_) => None,
         FrameItem::Group(group) => first_video_object(&group.items),
+        FrameItem::Transition(transition) => {
+            first_video_object(std::slice::from_ref(&transition.from.item))
+                .or_else(|| first_video_object(std::slice::from_ref(&transition.to.item)))
+        }
     })
 }
 
@@ -135,6 +139,10 @@ fn find_group(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> {
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => find_group(&group.items, source_id),
         FrameItem::Object(_) => None,
+        FrameItem::Transition(transition) => {
+            find_group(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| find_group(std::slice::from_ref(&transition.to.item), source_id))
+        }
     })
 }
 

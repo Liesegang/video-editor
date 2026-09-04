@@ -5,11 +5,12 @@ use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
 use library::model::authoring::{
-    ordered_track_item_ids, AuthoringProject, TimelineId, TimelineItemId, TimelineTrackId,
+    ordered_track_item_ids, AuthoringProject, InstancePath, TimelineId, TimelineItemId,
+    TimelineTrackId,
 };
 
 use crate::state::authoring::{
-    AuthoringSelection, AuthoringTimelineView, AuthoringUiState, AutomationTarget,
+    AuthoringSelection, AuthoringTimelineView, AuthoringUiState, AutomationLaneId,
     TimelineClipDisplayMode, TimelineGestureKind,
 };
 use crate::ui::automation_lanes;
@@ -34,7 +35,7 @@ pub(super) enum RowKind {
     },
     Property {
         item_id: TimelineItemId,
-        target: AutomationTarget,
+        lane: AutomationLaneId,
     },
 }
 
@@ -67,6 +68,7 @@ pub(super) fn display_rows(
     timeline_id: TimelineId,
     expanded: &HashSet<TimelineTrackId>,
     expanded_items: &HashSet<TimelineItemId>,
+    instance_path: Option<&InstancePath>,
 ) -> Vec<DisplayRow> {
     let Some(timeline) = project.timelines.get(&timeline_id) else {
         return Vec::new();
@@ -96,12 +98,12 @@ pub(super) fn display_rows(
                 });
                 if expanded_items.contains(&item_id) {
                     rows.extend(
-                        automation_lanes::collect_item_keyframed_lanes(project, item_id)
+                        automation_lanes::collect_dope_lanes(project, item_id, instance_path)
                             .into_iter()
                             .map(|lane| DisplayRow {
                                 kind: RowKind::Property {
                                     item_id,
-                                    target: lane.target,
+                                    lane: lane.id,
                                 },
                             }),
                     );
@@ -205,6 +207,16 @@ pub(super) fn draw_rows(
                     media_previews,
                 );
             }
+            super::transitions::paint_track_transitions(
+                ui,
+                project,
+                state,
+                track_id,
+                None,
+                clip_row_rect,
+                content_rect,
+                actions,
+            );
         }
     }
     draw_playhead(ui, project, state, content_rect);
@@ -247,7 +259,11 @@ fn draw_expanded_items(
         let Some(item) = project.items.get(item_id) else {
             continue;
         };
-        let lanes = automation_lanes::collect_item_keyframed_lanes(project, *item_id);
+        let lanes = automation_lanes::collect_dope_lanes(
+            project,
+            *item_id,
+            state.active_instance_path.as_ref(),
+        );
         let display_mode = state.timeline.item_display_mode(item.id, item.track_id);
         let properties_visible = state.timeline.shows_property_rows(item.id, item.track_id);
         if label_rect.intersects(sidebar_rect) {
@@ -275,6 +291,16 @@ fn draw_expanded_items(
                 actions,
                 waveform,
                 media_previews,
+            );
+            super::transitions::paint_track_transitions(
+                ui,
+                project,
+                state,
+                item.track_id,
+                Some(item.id),
+                content_row,
+                content_rect,
+                actions,
             );
         }
         if properties_visible {
@@ -313,8 +339,8 @@ fn draw_item_properties(
     let metrics = TimelineRowMetrics::from_view(&state.timeline);
     for lane in lanes {
         let property_row = row_projection
-            .and_then(|projection| projection.row_for_property(item.id, &lane.target))
-            .or_else(|| canonical_property_row(rows, item.id, &lane.target));
+            .and_then(|projection| projection.row_for_property(item.id, &lane.id))
+            .or_else(|| canonical_property_row(rows, item.id, &lane.id));
         let Some(property_row) = property_row else {
             continue;
         };
@@ -345,6 +371,10 @@ fn draw_item_properties(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Track-header painting owns selection, expansion, display mode, row metadata, and clipped immediate-mode geometry in one UI boundary"
+)]
 fn draw_track_header(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
@@ -610,7 +640,10 @@ fn draw_item_caret(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The reusable display-mode hit target needs stable QA identity, owner metadata, current mode, and clipped immediate-mode geometry"
+)]
 fn display_mode_toggle(
     ui: &mut egui::Ui,
     id_source: impl std::hash::Hash,
@@ -698,15 +731,15 @@ fn canonical_item_row(rows: &[DisplayRow], item_id: TimelineItemId) -> Option<us
 fn canonical_property_row(
     rows: &[DisplayRow],
     item_id: TimelineItemId,
-    target: &AutomationTarget,
+    lane: &AutomationLaneId,
 ) -> Option<usize> {
     rows.iter().position(|row| {
         matches!(
             &row.kind,
             RowKind::Property {
                 item_id: id,
-                target: candidate,
-            } if *id == item_id && candidate == target
+                lane: candidate,
+            } if *id == item_id && candidate == lane
         )
     })
 }

@@ -81,6 +81,10 @@ fn compiler_keeps_transition_hierarchical_with_two_schedule_invocations() {
         from
     );
     assert_eq!(compiled.schedule[transition.to.schedule_index].item_id, to);
+    assert_eq!(
+        transition.output_schedule_index,
+        transition.to.schedule_index
+    );
     assert_eq!(transition.progress.interval().start, seconds(3));
     assert_eq!(transition.progress.sample_at(seconds(2)).unwrap(), 0.0);
     assert_eq!(transition.progress.sample_at(seconds(3)).unwrap(), 0.0);
@@ -108,7 +112,10 @@ fn transition_changes_invalidate_only_its_timeline_schedule_cache() {
     let timeline_id = project.root_timeline_id;
     let track_id = project.timelines[&timeline_id].track_order[0];
     let ids = [TimelineItemId::new(), TimelineItemId::new()];
-    for (layer, item_id) in ids.into_iter().enumerate() {
+    for (layer, item_id, start, duration) in [
+        (0, ids[0], seconds(0), seconds(6)),
+        (1, ids[1], seconds(4), seconds(6)),
+    ] {
         project.items.insert(
             item_id,
             TimelineItem {
@@ -118,9 +125,9 @@ fn transition_changes_invalidate_only_its_timeline_schedule_cache() {
                 source: SourceRef::Solid {
                     color: Color::white(),
                 },
-                interval: TimelineInterval::new(seconds(0), seconds(10)).unwrap(),
+                interval: TimelineInterval::new(start, duration).unwrap(),
                 time_map: TimeMap::default(),
-                layer: layer as i64,
+                layer,
                 parent: None,
                 blend_mode: BlendMode::Normal,
                 authored_properties: PropertyMap::new(),

@@ -13,6 +13,9 @@ the number of normal Timeline items does not increase the number of Nodes. The
 derived hierarchical Render Plan is runtime data and is not editable or stored
 as the Project's source of truth. See
 [`docs/adr/0001-node-islands.md`](docs/adr/0001-node-islands.md).
+Timeline-owned transitions use the same boundary: only their typed processing
+is a bounded Module. See
+[`docs/adr/0009-timeline-transition-modules.md`](docs/adr/0009-timeline-transition-modules.md).
 
 The two advanced editors have distinct names and responsibilities:
 

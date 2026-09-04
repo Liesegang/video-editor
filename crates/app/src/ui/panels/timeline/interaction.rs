@@ -7,16 +7,16 @@ use library::model::asset::AssetKind;
 use library::model::authoring::{
     ordered_track_item_ids, track_item_ids_after_placement, AuthoringProject, CompositionInstance,
     DurationPolicy, MediaTime, ModuleDefinition, ModuleDefinitionSharing, SourceRef, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TransitionProcessor,
 };
 use library::plugin::PluginManager;
 
 use crate::state::authoring::{
-    AuthoringLibraryDrag, AuthoringSelection, AuthoringUiState, AutomationTarget,
+    AuthoringLibraryDrag, AuthoringSelection, AuthoringUiState, AutomationLaneId,
     TimelineGestureKind, TimelineItemGesture,
 };
 use crate::state::node_editor::{ModuleEditorHost, NodeEditorDocument};
-use crate::ui::automation_lanes;
+use crate::ui::panels::node_editor::open_transition_document;
 
 use super::geometry::{next_layer, snap_seconds, TimelineRowMetrics};
 use super::rows::property_row_items;
@@ -31,7 +31,7 @@ pub(super) struct TimelineRowProjection {
     track_rows: HashMap<TimelineTrackId, usize>,
     track_items: HashMap<TimelineTrackId, Vec<TimelineItemId>>,
     item_rows: HashMap<TimelineItemId, usize>,
-    property_rows: HashMap<(TimelineItemId, AutomationTarget), usize>,
+    property_rows: HashMap<(TimelineItemId, AutomationLaneId), usize>,
     visible_row_count: usize,
 }
 
@@ -51,9 +51,9 @@ impl TimelineRowProjection {
     pub(super) fn row_for_property(
         &self,
         item_id: TimelineItemId,
-        target: &AutomationTarget,
+        lane: &AutomationLaneId,
     ) -> Option<usize> {
-        self.property_rows.get(&(item_id, target.clone())).copied()
+        self.property_rows.get(&(item_id, lane.clone())).copied()
     }
 
     pub(super) const fn visible_row_count(&self) -> usize {
@@ -120,10 +120,16 @@ pub(super) fn timeline_row_projection(
                 projection.item_rows.insert(item_id, visible_row);
                 visible_row += 1;
                 if expanded_items.contains(&item_id) {
-                    for lane in automation_lanes::collect_item_lanes(project, item_id) {
+                    for lane in rows.iter().filter_map(|row| match &row.kind {
+                        RowKind::Property {
+                            item_id: owner,
+                            lane,
+                        } if *owner == item_id => Some(lane.clone()),
+                        _ => None,
+                    }) {
                         projection
                             .property_rows
-                            .insert((item_id, lane.target), visible_row);
+                            .insert((item_id, lane), visible_row);
                         visible_row += 1;
                     }
                 }
@@ -225,6 +231,7 @@ fn row_target_at(
         state.active_timeline_id,
         &state.timeline.expanded_tracks,
         &property_items,
+        state.active_instance_path.as_ref(),
     );
     let metrics = TimelineRowMetrics::from_view(&state.timeline);
     let row = metrics
@@ -507,6 +514,7 @@ fn place_payload(
                         timeline_id: nested_id,
                         duration_policy: DurationPolicy::Fixed,
                         parameter_overrides: HashMap::new(),
+                        transition_module_overrides: Vec::new(),
                     }),
                     TimelineInterval::new(start, nested.duration)?,
                     layer,
@@ -617,7 +625,7 @@ pub(super) fn run_item_actions(
             }
             DeferredItemAction::Delete(item_id) => service.delete_item(item_id).map(|_| ()),
             DeferredItemAction::Open(item_id) => {
-                open_item(project, state, item_id);
+                super::documents::open_item(project, state, item_id);
                 Ok(())
             }
             DeferredItemAction::ConvertSourceToNodeClip(item_id) => service
@@ -646,54 +654,53 @@ pub(super) fn run_item_actions(
                         )
                     };
                 }),
+            DeferredItemAction::AddTransition(candidate) => {
+                super::transitions::add_creation_candidate(service, candidate).map(|()| {
+                    state.status = "Added Timeline transition".to_string();
+                })
+            }
+            DeferredItemAction::RemoveTransition(transition_id) => {
+                service.remove_transition(transition_id).map(|_| {
+                    state.status = "Removed Timeline transition".to_string();
+                })
+            }
+            DeferredItemAction::EditTransitionLogic(transition_id) => {
+                open_transition_document(project, state, service, transition_id)
+            }
+            DeferredItemAction::AssignTransitionModule {
+                transition_id,
+                definition_id,
+            } => service
+                .assign_transition_module(transition_id, definition_id)
+                .map(|_| {
+                    state.status = "Applied reusable Transition Module".to_string();
+                }),
+            DeferredItemAction::AssignBuiltinTransition(transition_id) => project
+                .transitions
+                .get(&transition_id)
+                .ok_or_else(|| {
+                    library::LibraryError::Validation(format!(
+                        "Missing Transition {transition_id}"
+                    ))
+                })
+                .and_then(|transition| {
+                    let processor = match transition.processor.contract.media_type {
+                        library::model::authoring::TransitionMediaType::Image => {
+                            TransitionProcessor::cross_dissolve()
+                        }
+                        library::model::authoring::TransitionMediaType::Audio => {
+                            TransitionProcessor::audio_crossfade()
+                        }
+                    };
+                    service.assign_transition_operation(transition_id, processor)
+                })
+                .map(|_| {
+                    state.status = "Applied built-in Transition processor".to_string();
+                }),
         };
         if let Err(error) = result {
             state.error = Some(error.to_string());
         }
-    }
-}
-
-fn open_item(project: &AuthoringProject, state: &mut AuthoringUiState, item_id: TimelineItemId) {
-    let Some(item) = project.items.get(&item_id) else {
-        return;
-    };
-    match &item.source {
-        SourceRef::Composition(instance) => {
-            state.active_instance_path = state
-                .active_instance_path
-                .as_ref()
-                .map(|path| path.nested(item.id));
-            state.active_timeline_id = instance.timeline_id;
-            if let Some(timeline) = project.timelines.get(&instance.timeline_id) {
-                state
-                    .timeline
-                    .expanded_tracks
-                    .extend(timeline.track_order.iter().copied());
-            }
-            state
-                .selection
-                .replace(AuthoringSelection::Timeline(instance.timeline_id));
-            state.timeline.current_frame = 0;
-            state.timeline.set_playing(false);
-            state.preview.auto_fit = true;
-        }
-        SourceRef::Module(invocation) => {
-            let Some(instance) = project.module_instances.get(&invocation.instance_id) else {
-                state.error = Some("Node Clip instance is missing".to_string());
-                return;
-            };
-            state
-                .node_editor
-                .request_document(NodeEditorDocument::ModuleDefinition {
-                    definition_id: instance.definition_id,
-                    host: ModuleEditorHost::NodeClip {
-                        timeline_item_id: item.id,
-                        instance_path: state.active_instance_path.clone(),
-                        module_instance_id: instance.id,
-                    },
-                });
-        }
-        _ => {}
     }
 }
 
@@ -912,6 +919,7 @@ mod tests {
             project.root_timeline_id,
             &state.timeline.expanded_tracks,
             &state.timeline.expanded_items,
+            state.active_instance_path.as_ref(),
         );
         let metrics = TimelineRowMetrics::from_view(&state.timeline);
         let first_row_top = 180.0;

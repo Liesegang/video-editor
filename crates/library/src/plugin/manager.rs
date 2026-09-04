@@ -673,12 +673,9 @@ impl PluginManager {
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        for plugin in plugins {
-            if plugin.supports_kind(kind) {
-                return Some(plugin);
-            }
-        }
-        None
+        plugins
+            .into_iter()
+            .find(|plugin| plugin.supports_kind(kind))
     }
 
     pub fn get_inspector_definitions(&self, _kind: &str) -> Vec<PropertyDefinition> {

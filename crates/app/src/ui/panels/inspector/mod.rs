@@ -2,9 +2,11 @@ mod asset_preview;
 mod audio;
 mod composition_parameters;
 mod effect_stack;
+mod module_media_input;
 mod property_authoring;
 mod text_ensemble;
 mod timing;
+mod transition;
 
 #[cfg(test)]
 mod tests;
@@ -129,6 +131,9 @@ pub fn inspector_panel(
                 if let Some(item) = project.items.get(&id) {
                     item_inspector(ui, project, state, service, plugins, item);
                 }
+            }
+            AuthoringSelection::Transition(id) => {
+                transition::transition_inspector(ui, project, state, service, id);
             }
             AuthoringSelection::Asset(id) => {
                 if let Some(asset) = project.assets.iter().find(|asset| asset.id == id) {
@@ -843,7 +848,9 @@ fn sync_draft(
                 }
             }
         }
-        AuthoringSelection::Asset(_) | AuthoringSelection::ModuleDefinition(_) => {}
+        AuthoringSelection::Transition(_)
+        | AuthoringSelection::Asset(_)
+        | AuthoringSelection::ModuleDefinition(_) => {}
     }
 }
 

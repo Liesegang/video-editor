@@ -142,11 +142,31 @@ pub struct AudioChunk {
     /// Interleaved samples in `key.source.format` beginning at
     /// `key.start_frame()`.
     samples: Vec<f32>,
+    /// Frames backed by decoded source data. The allocation remains a fixed
+    /// one-second window, but padding beyond decoder EOF is not a source
+    /// handle and must be distinguishable from authored digital silence.
+    valid_frame_range: std::ops::Range<usize>,
 }
 
 impl AudioChunk {
     pub fn new(key: AudioChunkKey, samples: Vec<f32>) -> Result<Self, String> {
         let channels = usize::from(key.source.format.channels);
+        if channels == 0 {
+            return Err("audio chunk format must have at least one channel".to_string());
+        }
+        let frame_count = samples.len() / channels;
+        Self::new_with_valid_frame_range(key, samples, 0..frame_count)
+    }
+
+    pub(crate) fn new_with_valid_frame_range(
+        key: AudioChunkKey,
+        samples: Vec<f32>,
+        valid_frame_range: std::ops::Range<usize>,
+    ) -> Result<Self, String> {
+        let channels = usize::from(key.source.format.channels);
+        if channels == 0 {
+            return Err("audio chunk format must have at least one channel".to_string());
+        }
         if !samples.len().is_multiple_of(channels) {
             return Err("audio chunk samples must contain complete interleaved frames".to_string());
         }
@@ -157,7 +177,15 @@ impl AudioChunk {
                 samples.len()
             ));
         }
-        Ok(Self { key, samples })
+        let frame_count = samples.len() / channels;
+        if valid_frame_range.start > valid_frame_range.end || valid_frame_range.end > frame_count {
+            return Err("audio chunk valid source range exceeds its samples".to_string());
+        }
+        Ok(Self {
+            key,
+            samples,
+            valid_frame_range,
+        })
     }
 
     pub fn key(&self) -> &AudioChunkKey {
@@ -175,6 +203,9 @@ impl AudioChunk {
     pub fn sample(&self, absolute_frame: u64, channel: usize) -> Option<f32> {
         let relative_frame = absolute_frame.checked_sub(self.key.start_frame())?;
         let relative_frame = usize::try_from(relative_frame).ok()?;
+        if !self.valid_frame_range.contains(&relative_frame) {
+            return None;
+        }
         let channels = usize::from(self.key.source.format.channels);
         self.samples
             .get(relative_frame.checked_mul(channels)?.checked_add(channel)?)
@@ -207,6 +238,24 @@ mod tests {
         .err()
         .ok_or_else(|| std::io::Error::other("URL became an automatic audio source"))?;
         assert!(error.to_string().contains("URL and URI-scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn decoded_silence_is_distinct_from_padding_beyond_source_eof()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("silence.wav");
+        std::fs::write(&path, b"stable identity only")?;
+        let key = AudioChunkKey {
+            source: AudioSourceKey::read(&path, None, test_format()?)?,
+            chunk_index: 0,
+        };
+        let chunk = AudioChunk::new_with_valid_frame_range(key, vec![0.0; 4], 0..1)?;
+
+        assert_eq!(chunk.sample(0, 0), Some(0.0));
+        assert_eq!(chunk.sample(0, 1), Some(0.0));
+        assert_eq!(chunk.sample(1, 0), None);
         Ok(())
     }
 

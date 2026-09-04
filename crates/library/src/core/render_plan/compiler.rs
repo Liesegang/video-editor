@@ -4,8 +4,9 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 
 use crate::model::authoring::{
-    AttachmentProcessor, AuthoringProject, InstanceLocator, MediaInputBinding, MediaOutputKind,
-    ModuleDefinition, ModuleDefinitionId, SourceRef, TimelineId, TimelineItemId,
+    AttachmentProcessor, AuthoringProject, MediaInputBinding, MediaOutputKind, ModuleDefinition,
+    ModuleDefinitionId, ModuleHostContract, ModuleInvocation, SourceRef, TimelineId,
+    TimelineItemId, Transition,
 };
 use crate::model::project::connection::PortDataType;
 use crate::model::project::connection::PortDirection;
@@ -16,6 +17,9 @@ use super::{
     NormalizedTransitionProgress, PlannedSource, RenderPlan, ScheduledItem,
     TimelineRangeDependency, TransitionHandleRequirement, TransitionSourceInvocation,
 };
+
+mod transition_instances;
+use transition_instances::compile_transition_instance_controls;
 
 pub struct RenderPlanCompiler;
 
@@ -96,6 +100,24 @@ impl RenderPlanCompiler {
                     invocation,
                 )?;
             }
+            for compiled_transition in &timeline.transitions {
+                let transition = project
+                    .transitions
+                    .get(&compiled_transition.id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Compiled Timeline refers to missing Transition {}",
+                            compiled_transition.id
+                        )
+                    })?;
+                register_transition_invocation(
+                    project,
+                    &module_definitions,
+                    &mut invocations,
+                    &mut dependencies,
+                    transition,
+                )?;
+            }
         }
 
         let mut attachments = project.attachments.values().collect::<Vec<_>>();
@@ -113,15 +135,84 @@ impl RenderPlanCompiler {
             }
         }
 
-        validate_media_input_cycles(project, &invocations)?;
+        let transition_instance_controls = compile_transition_instance_controls(
+            project,
+            &module_definitions,
+            &invocations,
+            &mut dependencies,
+        )?;
         Ok(RenderPlan {
             root_timeline_id: project.root_timeline_id,
             timelines,
             module_definitions,
             module_invocations: invocations,
+            transition_instance_controls,
             dependencies,
         })
     }
+}
+
+fn register_transition_invocation(
+    project: &AuthoringProject,
+    definitions: &HashMap<ModuleDefinitionId, Arc<CompiledModuleDefinition>>,
+    invocations: &mut Vec<CompiledModuleInvocation>,
+    dependencies: &mut DependencyIndex,
+    transition: &Transition,
+) -> Result<(), String> {
+    let Some(module) = transition.processor.module_processor() else {
+        return Ok(());
+    };
+    let instance = project
+        .module_instances
+        .get(&module.instance_id)
+        .ok_or_else(|| format!("Missing Module instance {}", module.instance_id))?;
+    let definition = definitions.get(&instance.definition_id).ok_or_else(|| {
+        format!(
+            "Missing compiled Transition Module definition {}",
+            instance.definition_id
+        )
+    })?;
+    let ModuleHostContract::Transition(contract) = &definition.host_contract else {
+        return Err(format!(
+            "Transition {} references a non-Transition Module definition",
+            transition.id
+        ));
+    };
+    let host = ModuleHost::Transition {
+        timeline_id: transition.timeline_id,
+        transition_id: transition.id,
+    };
+    let interval = transition.interval()?;
+    dependencies.host_ranges.insert(
+        host,
+        TimelineRangeDependency {
+            timeline_id: transition.timeline_id,
+            start: interval.start,
+            duration: interval.duration,
+        },
+    );
+    let invocation = ModuleInvocation {
+        instance_id: module.instance_id,
+        output_id: contract.output_id,
+        input_bindings: module.input_bindings.clone(),
+        automation_tracks: module.automation_tracks.clone(),
+    };
+    register_invocation(
+        project,
+        definitions,
+        invocations,
+        dependencies,
+        host,
+        &invocation,
+    )?;
+    for item_id in [transition.from_item_id, transition.to_item_id] {
+        dependencies
+            .media_input_consumers
+            .entry(item_id)
+            .or_default()
+            .push(host);
+    }
+    Ok(())
 }
 
 fn register_invocation(
@@ -151,6 +242,11 @@ fn register_invocation(
     validate_invocation_inputs(host, authored, definition)?;
 
     let index = invocations.len();
+    if let ModuleHost::TimelineItem { item_id, .. } = host
+        && let Some(range) = dependencies.timeline_ranges.get(&item_id).copied()
+    {
+        dependencies.host_ranges.insert(host, range);
+    }
     if dependencies
         .invocation_indices
         .insert(host, index)
@@ -165,6 +261,7 @@ fn register_invocation(
         instance_id: instance.id,
         definition_id: instance.definition_id,
         output_id: authored.output_id,
+        parameter_overrides: instance.parameter_overrides.clone(),
         input_bindings: authored.input_bindings.clone(),
         automation_tracks: authored.automation_tracks.clone(),
     };
@@ -204,9 +301,17 @@ fn validate_invocation_inputs(
     }
     for input in definition.media_inputs.values() {
         let binding = invocation.input_bindings.get(&input.id);
+        let transition_input_is_implicit = matches!(
+            (host, &definition.host_contract),
+            (
+                ModuleHost::Transition { .. },
+                ModuleHostContract::Transition(contract)
+            ) if input.id == contract.from_input_id || input.id == contract.to_input_id
+        );
         if input.required
             && binding.is_none()
             && !(input.primary && matches!(host, ModuleHost::Attachment(_)))
+            && !transition_input_is_implicit
         {
             return Err(format!(
                 "Required published media input {} is unbound",
@@ -337,14 +442,23 @@ pub(super) fn compile_timeline(
                     },
                 })
             };
+            let from = source(transition.from_item_id)?;
+            let to = source(transition.to_item_id)?;
             Ok(CompiledTransition {
                 id: transition.id,
                 edit_point: transition.edit_point,
-                from: source(transition.from_item_id)?,
-                to: source(transition.to_item_id)?,
+                from,
+                to,
+                output_schedule_index: to.schedule_index,
                 progress: NormalizedTransitionProgress::new(interval)?,
                 processor: transition.processor.clone(),
                 parameters: transition.parameters.clone(),
+                module_host: transition.processor.module_processor().map(|_| {
+                    ModuleHost::Transition {
+                        timeline_id: transition.timeline_id,
+                        transition_id: transition.id,
+                    }
+                }),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -458,6 +572,7 @@ pub(super) fn compile_module(
         id: definition.id,
         topology_revision: definition.topology_revision,
         interface_version: definition.interface_version,
+        host_contract: definition.host_contract.clone(),
         fingerprint: definition_fingerprint(definition)?,
         nodes,
         connections,
@@ -684,6 +799,15 @@ pub(super) fn referenced_definitions(
             ids.insert(instance.definition_id);
         }
     }
+    for transition in project.transitions.values() {
+        if let Some(module) = transition.processor.module_processor() {
+            let instance = project
+                .module_instances
+                .get(&module.instance_id)
+                .ok_or_else(|| format!("Missing Module instance {}", module.instance_id))?;
+            ids.insert(instance.definition_id);
+        }
+    }
     Ok(ids)
 }
 
@@ -722,65 +846,6 @@ fn validate_nested_timelines(project: &AuthoringProject) -> Result<(), String> {
     let mut complete = HashSet::new();
     for timeline in project.timelines.keys().copied() {
         visit(timeline, &children, &mut active, &mut complete)?;
-    }
-    Ok(())
-}
-
-fn validate_media_input_cycles(
-    project: &AuthoringProject,
-    invocations: &[CompiledModuleInvocation],
-) -> Result<(), String> {
-    let mut graph: HashMap<TimelineItemId, Vec<TimelineItemId>> = HashMap::new();
-    for invocation in invocations {
-        let ModuleHost::TimelineItem {
-            timeline_id,
-            item_id,
-        } = invocation.host
-        else {
-            continue;
-        };
-        for binding in invocation.input_bindings.values() {
-            let MediaInputBinding::TimelineItemOutput {
-                locator,
-                item_id: source_id,
-                ..
-            } = binding;
-            let source_timeline = timeline_for_item(project, *source_id)?;
-            if matches!(locator, InstanceLocator::SameTimeline) && source_timeline != timeline_id {
-                return Err(format!(
-                    "Module input on item {item_id} uses SameTimeline for item {source_id} in another Timeline"
-                ));
-            }
-            graph.entry(item_id).or_default().push(*source_id);
-        }
-    }
-    fn visit(
-        item: TimelineItemId,
-        graph: &HashMap<TimelineItemId, Vec<TimelineItemId>>,
-        active: &mut HashSet<TimelineItemId>,
-        complete: &mut HashSet<TimelineItemId>,
-    ) -> Result<(), String> {
-        if complete.contains(&item) {
-            return Ok(());
-        }
-        if !active.insert(item) {
-            return Err(format!(
-                "Timeline media-input dependency cycle reaches item {item}"
-            ));
-        }
-        for dependency in graph.get(&item).into_iter().flatten() {
-            if graph.contains_key(dependency) {
-                visit(*dependency, graph, active, complete)?;
-            }
-        }
-        active.remove(&item);
-        complete.insert(item);
-        Ok(())
-    }
-    let mut active = HashSet::new();
-    let mut complete = HashSet::new();
-    for item in graph.keys().copied() {
-        visit(item, &graph, &mut active, &mut complete)?;
     }
     Ok(())
 }

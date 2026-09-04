@@ -90,7 +90,10 @@ pub(super) fn transient_edit_digest(state: &AuthoringUiState) -> Option<u64> {
     Some(hasher.finish())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The text overlay combines the shared canvas transform, rendered frame, authored snapshot, and deferred editor service at one immediate-mode interaction boundary"
+)]
 pub(super) fn text_editor_overlay(
     ui: &mut egui::Ui,
     viewport: egui::Rect,

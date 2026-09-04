@@ -5,18 +5,24 @@
 //! keyframes independently.
 
 use library::animation::EasingFunction;
-use library::editor::{AuthoringKeyframeUpdate, AuthoringPropertyOwner, TimelineEditorService};
+use library::editor::{
+    AuthoringKeyframeUpdate, AuthoringPropertyOwner, TimelineEditorService,
+    TransitionAutomationOwner,
+};
 use library::model::authoring::{
-    AttachmentOwner, AttachmentProcessor, AuthoringProject, MediaTime, SourceRef, TimelineItemId,
+    AttachmentOwner, AttachmentProcessor, AuthoringProject, InstancePath, MediaTime, SourceRef,
+    TimelineItemId, TransitionId,
 };
 use library::model::property::{KeyframeId, PropertyValue};
 
-use crate::state::authoring::{AutomationTarget, CurveValueComponent};
+use crate::state::authoring::{
+    AutomationLaneId, AutomationOwner, AutomationTarget, CurveValueComponent,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AutomationPoint {
     pub id: KeyframeId,
-    /// Local source time owned by the Timeline item.
+    /// Local time owned by the Item or Transition represented by the lane.
     pub time: MediaTime,
     pub value: PropertyValue,
     pub easing: EasingFunction,
@@ -24,7 +30,7 @@ pub(crate) struct AutomationPoint {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AutomationLane {
-    pub target: AutomationTarget,
+    pub id: AutomationLaneId,
     pub label: String,
     /// Type-defining authored/default value, even before a first key exists.
     pub base_value: Option<PropertyValue>,
@@ -42,7 +48,7 @@ pub(crate) struct AutomationChannelPoint {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AutomationChannel {
-    pub target: AutomationTarget,
+    pub id: AutomationLaneId,
     pub component: CurveValueComponent,
     pub label: String,
     pub points: Vec<AutomationChannelPoint>,
@@ -79,7 +85,10 @@ pub(crate) fn collect_item_lanes(
             .collect::<Vec<_>>();
         points.sort_by_key(|point| point.time);
         lanes.push(AutomationLane {
-            target: AutomationTarget::AuthoredProperty(key.clone()),
+            id: AutomationLaneId {
+                owner: AutomationOwner::Item(item_id),
+                target: AutomationTarget::AuthoredProperty(key.clone()),
+            },
             label: humanize_label(key),
             base_value: property.value().cloned(),
             points,
@@ -105,7 +114,10 @@ pub(crate) fn collect_item_lanes(
                     .unwrap_or_default();
                 points.sort_by_key(|point| point.time);
                 lanes.push(AutomationLane {
-                    target: AutomationTarget::ModuleParameter(parameter.id),
+                    id: AutomationLaneId {
+                        owner: AutomationOwner::Item(item_id),
+                        target: AutomationTarget::ModuleParameter(parameter.id),
+                    },
                     label: parameter.name.clone(),
                     base_value: instance
                         .parameter_overrides
@@ -140,12 +152,15 @@ pub(crate) fn collect_item_lanes(
                 .map(|track| automation_points(&track.keyframes))
                 .unwrap_or_default();
             lanes.push(AutomationLane {
-                target: AutomationTarget::AttachmentParameter {
-                    attachment_id: attachment.id,
-                    key: contract.key.clone(),
+                id: AutomationLaneId {
+                    owner: AutomationOwner::Item(item_id),
+                    target: AutomationTarget::AttachmentParameter {
+                        attachment_id: attachment.id,
+                        key: contract.key.clone(),
+                    },
                 },
                 label: format!(
-                    "{} · {}",
+                    "{} \u{b7} {}",
                     humanize_label(&effect.operation.component_id),
                     humanize_label(&contract.key)
                 ),
@@ -153,6 +168,122 @@ pub(crate) fn collect_item_lanes(
                 points,
             });
         }
+    }
+    lanes
+}
+
+pub(crate) fn transition_owner(
+    transition_id: TransitionId,
+    instance_path: Option<&InstancePath>,
+) -> AutomationOwner {
+    match instance_path {
+        Some(path) if !path.composition_items.is_empty() => AutomationOwner::TransitionInstance {
+            transition_id,
+            instance_path: path.clone(),
+        },
+        _ => AutomationOwner::TransitionDefinition(transition_id),
+    }
+}
+
+pub(crate) fn collect_lanes(
+    project: &AuthoringProject,
+    owner: &AutomationOwner,
+) -> Vec<AutomationLane> {
+    match owner {
+        AutomationOwner::Item(item_id) => collect_item_lanes(project, *item_id),
+        AutomationOwner::TransitionDefinition(transition_id)
+        | AutomationOwner::TransitionInstance { transition_id, .. } => {
+            collect_transition_lanes(project, owner, *transition_id)
+        }
+    }
+}
+
+fn collect_transition_lanes(
+    project: &AuthoringProject,
+    owner: &AutomationOwner,
+    transition_id: TransitionId,
+) -> Vec<AutomationLane> {
+    let Some(transition) = project.transitions.get(&transition_id) else {
+        return Vec::new();
+    };
+    let Some(module) = transition.processor.module_processor() else {
+        return Vec::new();
+    };
+    let Some(instance) = project.module_instances.get(&module.instance_id) else {
+        return Vec::new();
+    };
+    let Some(definition) = project.module_definitions.get(&instance.definition_id) else {
+        return Vec::new();
+    };
+    let Some(contract) = definition.host_contract.transition() else {
+        return Vec::new();
+    };
+    let (values, tracks) = match owner {
+        AutomationOwner::TransitionDefinition(_) => (
+            instance.parameter_overrides.clone(),
+            module.automation_tracks.clone(),
+        ),
+        AutomationOwner::TransitionInstance { instance_path, .. } => {
+            let Ok(target) =
+                project.resolve_transition_module_instance_target(instance_path, transition_id)
+            else {
+                return Vec::new();
+            };
+            let Ok(controls) = project.effective_transition_module_controls(&target) else {
+                return Vec::new();
+            };
+            (controls.parameter_overrides, controls.automation_tracks)
+        }
+        AutomationOwner::Item(_) => return Vec::new(),
+    };
+    definition
+        .interface
+        .parameters
+        .iter()
+        .filter(|parameter| parameter.id != contract.progress_parameter_id)
+        .map(|parameter| AutomationLane {
+            id: AutomationLaneId {
+                owner: owner.clone(),
+                target: AutomationTarget::ModuleParameter(parameter.id),
+            },
+            label: parameter.name.clone(),
+            base_value: values
+                .get(&parameter.id)
+                .cloned()
+                .or_else(|| Some(parameter.default_value.clone())),
+            points: tracks
+                .get(&parameter.id)
+                .map(|track| automation_points(&track.keyframes))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Timeline rows remain anchored beneath the Transition's B clip, while the
+/// lane identity retains Transition ownership for edits and Undo.
+pub(crate) fn collect_dope_lanes(
+    project: &AuthoringProject,
+    anchor_item_id: TimelineItemId,
+    instance_path: Option<&InstancePath>,
+) -> Vec<AutomationLane> {
+    let mut lanes = collect_item_keyframed_lanes(project, anchor_item_id);
+    let mut transitions = project
+        .transitions
+        .values()
+        .filter(|transition| transition.to_item_id == anchor_item_id)
+        .collect::<Vec<_>>();
+    transitions.sort_by_key(|transition| transition.id);
+    for transition in transitions {
+        let owner = transition_owner(transition.id, instance_path);
+        lanes.extend(
+            collect_lanes(project, &owner)
+                .into_iter()
+                .filter(|lane| !lane.points.is_empty())
+                .map(|mut lane| {
+                    lane.label = format!("Transition \u{b7} {}", lane.label);
+                    lane
+                }),
+        );
     }
     lanes
 }
@@ -196,7 +327,7 @@ pub(crate) fn numeric_channels(lanes: &[AutomationLane]) -> Vec<AutomationChanne
             .or(lane.base_value.as_ref());
         for component in components_for(type_value) {
             output.push(AutomationChannel {
-                target: lane.target.clone(),
+                id: lane.id.clone(),
                 component: *component,
                 label: if *component == CurveValueComponent::Scalar {
                     lane.label.clone()
@@ -226,56 +357,153 @@ pub(crate) fn numeric_channels(lanes: &[AutomationLane]) -> Vec<AutomationChanne
 
 pub(crate) fn update_keyframe(
     service: &TimelineEditorService,
-    item_id: TimelineItemId,
-    target: &AutomationTarget,
+    lane: &AutomationLaneId,
     keyframe_id: KeyframeId,
     update: AuthoringKeyframeUpdate,
 ) -> Result<(), library::LibraryError> {
-    match target {
-        AutomationTarget::AuthoredProperty(key) => service
+    match (&lane.owner, &lane.target) {
+        (AutomationOwner::Item(item_id), AutomationTarget::AuthoredProperty(key)) => service
             .update_authored_property_keyframe(
-                AuthoringPropertyOwner::Item(item_id),
+                AuthoringPropertyOwner::Item(*item_id),
                 key,
                 keyframe_id,
                 update,
             )
             .map(|_| ()),
-        AutomationTarget::ModuleParameter(parameter_id) => service
-            .update_module_parameter_keyframe(item_id, *parameter_id, keyframe_id, update)
-            .map(|_| ()),
-        AutomationTarget::AttachmentParameter { attachment_id, key } => service
+        (AutomationOwner::Item(item_id), AutomationTarget::ModuleParameter(parameter_id)) => {
+            service
+                .update_module_parameter_keyframe(*item_id, *parameter_id, keyframe_id, update)
+                .map(|_| ())
+        }
+        (
+            AutomationOwner::Item(_),
+            AutomationTarget::AttachmentParameter { attachment_id, key },
+        ) => service
             .update_builtin_effect_parameter_keyframe(*attachment_id, key, keyframe_id, update)
             .map(|_| ()),
+        (
+            AutomationOwner::TransitionDefinition(transition_id),
+            AutomationTarget::ModuleParameter(parameter_id),
+        ) => service
+            .update_transition_parameter_keyframe(
+                &TransitionAutomationOwner::Definition(*transition_id),
+                *parameter_id,
+                keyframe_id,
+                update,
+            )
+            .map(|_| ()),
+        (
+            AutomationOwner::TransitionInstance {
+                transition_id,
+                instance_path,
+            },
+            AutomationTarget::ModuleParameter(parameter_id),
+        ) => service
+            .update_transition_parameter_keyframe(
+                &TransitionAutomationOwner::Instance {
+                    transition_id: *transition_id,
+                    instance_path: instance_path.clone(),
+                },
+                *parameter_id,
+                keyframe_id,
+                update,
+            )
+            .map(|_| ()),
+        (AutomationOwner::TransitionDefinition(transition_id), target)
+        | (AutomationOwner::TransitionInstance { transition_id, .. }, target) => {
+            Err(library::LibraryError::Validation(format!(
+                "Transition {transition_id} automation does not support {target:?}"
+            )))
+        }
+    }
+}
+
+pub(crate) fn transition_service_owner(
+    owner: &AutomationOwner,
+) -> Option<TransitionAutomationOwner> {
+    match owner {
+        AutomationOwner::TransitionDefinition(transition_id) => {
+            Some(TransitionAutomationOwner::Definition(*transition_id))
+        }
+        AutomationOwner::TransitionInstance {
+            transition_id,
+            instance_path,
+        } => Some(TransitionAutomationOwner::Instance {
+            transition_id: *transition_id,
+            instance_path: instance_path.clone(),
+        }),
+        AutomationOwner::Item(_) => None,
     }
 }
 
 /// Convert one local automation time into the host Timeline time.
 pub(crate) fn timeline_time_for_local(
     project: &AuthoringProject,
-    item_id: TimelineItemId,
+    owner: &AutomationOwner,
     local_time: MediaTime,
 ) -> Option<MediaTime> {
-    let item = project.items.get(&item_id)?;
-    let rate = item.time_map.playback_rate.to_f64();
-    if !rate.is_finite() || rate.abs() <= f64::EPSILON {
-        return None;
+    match owner {
+        AutomationOwner::Item(item_id) => {
+            let item = project.items.get(item_id)?;
+            let rate = item.time_map.playback_rate.to_f64();
+            if !rate.is_finite() || rate.abs() <= f64::EPSILON {
+                return None;
+            }
+            let seconds = item.interval.start.to_seconds_f64()
+                + (local_time.to_seconds_f64() - item.time_map.source_start.to_seconds_f64())
+                    / rate;
+            MediaTime::from_seconds_f64(seconds, 1_000_000).ok()
+        }
+        AutomationOwner::TransitionDefinition(transition_id)
+        | AutomationOwner::TransitionInstance { transition_id, .. } => project
+            .transitions
+            .get(transition_id)?
+            .interval()
+            .ok()?
+            .start
+            .checked_add(local_time)
+            .ok(),
     }
-    let seconds = item.interval.start.to_seconds_f64()
-        + (local_time.to_seconds_f64() - item.time_map.source_start.to_seconds_f64()) / rate;
-    MediaTime::from_seconds_f64(seconds, 1_000_000).ok()
 }
 
 /// Convert frame-snapped host Timeline time back to item-local automation
 /// time, clamped to the visible placement.
 pub(crate) fn local_time_for_timeline(
     project: &AuthoringProject,
-    item_id: TimelineItemId,
+    owner: &AutomationOwner,
     timeline_time: MediaTime,
 ) -> Option<MediaTime> {
-    let item = project.items.get(&item_id)?;
-    let end = item.interval.end().ok()?;
-    let timeline_time = timeline_time.clamp(item.interval.start, end);
-    item.time_map.local_time(item.interval, timeline_time).ok()
+    match owner {
+        AutomationOwner::Item(item_id) => {
+            let item = project.items.get(item_id)?;
+            let end = item.interval.end().ok()?;
+            let timeline_time = timeline_time.clamp(item.interval.start, end);
+            item.time_map.local_time(item.interval, timeline_time).ok()
+        }
+        AutomationOwner::TransitionDefinition(transition_id)
+        | AutomationOwner::TransitionInstance { transition_id, .. } => {
+            let interval = project.transitions.get(transition_id)?.interval().ok()?;
+            let end = interval.end().ok()?;
+            timeline_time
+                .clamp(interval.start, end)
+                .checked_sub(interval.start)
+                .ok()
+        }
+    }
+}
+
+pub(crate) fn owner_interval(
+    project: &AuthoringProject,
+    owner: &AutomationOwner,
+) -> Option<library::model::authoring::TimelineInterval> {
+    match owner {
+        AutomationOwner::Item(item_id) => project.items.get(item_id).map(|item| item.interval),
+        AutomationOwner::TransitionDefinition(transition_id)
+        | AutomationOwner::TransitionInstance { transition_id, .. } => project
+            .transitions
+            .get(transition_id)
+            .and_then(|transition| transition.interval().ok()),
+    }
 }
 
 pub(crate) fn component_value(
@@ -349,6 +577,34 @@ pub(crate) fn target_metadata(target: &AutomationTarget) -> serde_json::Value {
     }
 }
 
+pub(crate) fn lane_metadata(lane: &AutomationLaneId) -> serde_json::Value {
+    serde_json::json!({
+        "owner": owner_metadata(&lane.owner),
+        "target": target_metadata(&lane.target),
+    })
+}
+
+pub(crate) fn owner_metadata(owner: &AutomationOwner) -> serde_json::Value {
+    match owner {
+        AutomationOwner::Item(item_id) => serde_json::json!({
+            "kind": "item",
+            "item_id": item_id,
+        }),
+        AutomationOwner::TransitionDefinition(transition_id) => serde_json::json!({
+            "kind": "transition_definition",
+            "transition_id": transition_id,
+        }),
+        AutomationOwner::TransitionInstance {
+            transition_id,
+            instance_path,
+        } => serde_json::json!({
+            "kind": "transition_instance",
+            "transition_id": transition_id,
+            "instance_path": instance_path,
+        }),
+    }
+}
+
 fn components_for(value: Option<&PropertyValue>) -> &'static [CurveValueComponent] {
     match value {
         Some(PropertyValue::Number(_) | PropertyValue::Integer(_)) => {
@@ -388,196 +644,4 @@ fn humanize_label(key: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::path::Path;
-
-    use library::editor::TimelineEditorService;
-    use library::model::authoring::{
-        MediaTime, ModuleDefinition, ModuleDefinitionSharing, ModuleInstance, ModuleInstanceId,
-        ModuleInvocation, PublishedParameterId, SourceRef, TimelineInterval, TimelineItem,
-        TimelineItemId,
-    };
-    use library::model::frame::color::Color;
-    use library::model::property::PropertyValue;
-    use library::plugin::PluginManager;
-
-    use super::*;
-
-    #[test]
-    fn authored_and_empty_published_lanes_share_one_discovery_contract() {
-        let service = TimelineEditorService::create_default("lanes").expect("service");
-        let project = service.snapshot().expect("project");
-        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
-        let (item_id, _) = service
-            .add_item(
-                track_id,
-                "Solid".to_string(),
-                SourceRef::Solid {
-                    color: Color::black(),
-                },
-                TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap()).unwrap(),
-                0,
-            )
-            .unwrap();
-        service
-            .set_authored_property_constant(
-                AuthoringPropertyOwner::Item(item_id),
-                "position".to_string(),
-                PropertyValue::from(2.0),
-            )
-            .unwrap();
-        let project = service.snapshot().unwrap();
-        let authored = collect_item_lanes(&project, item_id);
-        assert_eq!(authored.len(), 1);
-        assert_eq!(authored[0].label, "Position");
-        assert!(authored[0].points.is_empty());
-        assert!(collect_item_keyframed_lanes(&project, item_id).is_empty());
-
-        let (mut definition, output_id) =
-            ModuleDefinition::new_image("Module", ModuleDefinitionSharing::Private);
-        let parameter_id = PublishedParameterId::new();
-        definition
-            .interface
-            .parameters
-            .push(library::model::authoring::PublishedParameter {
-                id: parameter_id,
-                name: "Amount".to_string(),
-                data_type: library::model::project::PortDataType::Number,
-                default_value: PropertyValue::from(1.0),
-                target: library::model::authoring::ModulePortAddress {
-                    node_id: uuid::Uuid::new_v4(),
-                    port: "amount".to_string(),
-                },
-            });
-        let definition_id = definition.id;
-        let instance_id = ModuleInstanceId::new();
-        let module_item = TimelineItemId::new();
-        let mut project = (*service.snapshot().unwrap()).clone();
-        project.module_definitions.insert(definition_id, definition);
-        project.module_instances.insert(
-            instance_id,
-            ModuleInstance {
-                id: instance_id,
-                definition_id,
-                parameter_overrides: HashMap::new(),
-            },
-        );
-        project.items.insert(
-            module_item,
-            TimelineItem {
-                id: module_item,
-                track_id,
-                name: "Module".to_string(),
-                source: SourceRef::Module(ModuleInvocation {
-                    instance_id,
-                    output_id,
-                    input_bindings: HashMap::new(),
-                    automation_tracks: HashMap::new(),
-                }),
-                interval: TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap())
-                    .unwrap(),
-                time_map: Default::default(),
-                layer: 1,
-                parent: None,
-                blend_mode: library::model::BlendMode::Normal,
-                authored_properties: Default::default(),
-            },
-        );
-        let module = collect_item_lanes(&project, module_item);
-        assert_eq!(module.len(), 1);
-        assert_eq!(
-            module[0].target,
-            AutomationTarget::ModuleParameter(parameter_id)
-        );
-        assert!(module[0].points.is_empty());
-        assert!(collect_item_keyframed_lanes(&project, module_item).is_empty());
-    }
-
-    #[test]
-    fn local_and_timeline_time_round_trip_through_item_time_map() {
-        let service = TimelineEditorService::create_default("time").unwrap();
-        let project = service.snapshot().unwrap();
-        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
-        let (item_id, _) = service
-            .add_item(
-                track_id,
-                "Solid".to_string(),
-                SourceRef::Solid {
-                    color: Color::black(),
-                },
-                TimelineInterval::new(MediaTime::new(3, 1).unwrap(), MediaTime::new(5, 1).unwrap())
-                    .unwrap(),
-                0,
-            )
-            .unwrap();
-        let project = service.snapshot().unwrap();
-        let local = MediaTime::new(2, 1).unwrap();
-        let timeline = timeline_time_for_local(&project, item_id, local).unwrap();
-        assert_eq!(timeline, MediaTime::new(5, 1).unwrap());
-        assert_eq!(
-            local_time_for_timeline(&project, item_id, timeline),
-            Some(local)
-        );
-    }
-
-    #[test]
-    fn builtin_effect_keyframes_keep_one_id_across_inspector_timeline_and_curve() {
-        let media = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("test_data")
-            .join("e2e_media");
-        let fixture =
-            library::editor::build_authoring_e2e_fixture(&media, &PluginManager::default())
-                .expect("fixture");
-        let attachment_id = fixture.info.effect_attachment_ids[0];
-        let local_time = MediaTime::new(1, 1).unwrap();
-        let (keyframe_id, _) = fixture
-            .service
-            .upsert_builtin_effect_parameter_keyframe(
-                attachment_id,
-                "sigma_x",
-                local_time,
-                PropertyValue::from(4.0),
-                None,
-            )
-            .expect("Inspector keyframe");
-        let project = fixture.service.snapshot().unwrap();
-        let lanes = collect_item_lanes(&project, fixture.info.text_item_id);
-        let target = AutomationTarget::AttachmentParameter {
-            attachment_id,
-            key: "sigma_x".to_string(),
-        };
-        let lane = lanes
-            .iter()
-            .find(|lane| lane.target == target)
-            .expect("Timeline effect lane");
-        assert_eq!(lane.points[0].id, keyframe_id);
-        let curve = numeric_channels(&lanes)
-            .into_iter()
-            .find(|channel| channel.target == target)
-            .expect("Curve effect channel");
-        assert_eq!(curve.points[0].id, keyframe_id);
-
-        update_keyframe(
-            &fixture.service,
-            fixture.info.text_item_id,
-            &target,
-            keyframe_id,
-            AuthoringKeyframeUpdate {
-                time: Some(MediaTime::new(3, 2).unwrap()),
-                value: None,
-                easing: None,
-            },
-        )
-        .expect("shared update");
-        let project = fixture.service.snapshot().unwrap();
-        let lane = collect_item_lanes(&project, fixture.info.text_item_id)
-            .into_iter()
-            .find(|lane| lane.target == target)
-            .expect("updated lane");
-        assert_eq!(lane.points[0].id, keyframe_id);
-        assert_eq!(lane.points[0].time, MediaTime::new(3, 2).unwrap());
-    }
-}
+mod tests;

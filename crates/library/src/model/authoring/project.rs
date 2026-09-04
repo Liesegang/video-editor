@@ -19,7 +19,18 @@ use super::{
     Transition, TransitionId, property_value_type,
 };
 
+mod item_placement;
+mod media_dependencies;
+mod transition_candidate;
+mod transition_instance;
+mod transition_module;
 mod validation;
+use item_placement::ItemPlacementOverlay;
+pub use item_placement::{TimelineEditPlanningIndex, TimelineEditValidationScope};
+use media_dependencies::validate_media_dependency_cycles;
+pub use transition_candidate::TransitionCreationCandidate;
+pub(crate) use transition_instance::TransitionModuleControlsMut;
+use transition_instance::validate_transition_module_instance_overrides;
 use validation::*;
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -198,20 +209,25 @@ impl AuthoringProject {
         if !self.timelines.contains_key(&self.root_timeline_id) {
             return Err("Project root Timeline does not exist".to_string());
         }
-        self.validate_timelines_and_tracks()?;
+        let placements = ItemPlacementOverlay::empty();
+        self.validate_timelines_and_tracks(&placements)?;
         self.validate_assets()?;
         self.validate_definitions_and_instances()?;
-        self.validate_items()?;
-        validate_transitions(self)?;
-        self.validate_attachments()?;
+        self.validate_items(&placements)?;
+        validate_transitions(self, &placements)?;
+        validate_transition_module_instance_overrides(self, &placements)?;
+        self.validate_attachments(&placements)?;
         self.validate_instance_ownership()?;
         self.validate_parent_cycles()?;
-        self.validate_composition_cycles()?;
-        self.validate_media_input_cycles()?;
+        self.validate_composition_cycles(&placements)?;
+        validate_media_dependency_cycles(self)?;
         Ok(())
     }
 
-    fn validate_timelines_and_tracks(&self) -> Result<(), String> {
+    fn validate_timelines_and_tracks(
+        &self,
+        placements: &ItemPlacementOverlay<'_>,
+    ) -> Result<(), String> {
         let mut ordered_tracks = HashSet::new();
         for (timeline_id, timeline) in &self.timelines {
             if *timeline_id != timeline.id {
@@ -230,7 +246,7 @@ impl AuthoringProject {
                 &timeline.authored_properties,
                 &format!("Timeline {}", timeline.id),
             )?;
-            self.validate_composition_parameters(timeline)?;
+            self.validate_composition_parameters(timeline, placements)?;
             let mut local = HashSet::new();
             for track_id in &timeline.track_order {
                 if !local.insert(*track_id) || !ordered_tracks.insert(*track_id) {
@@ -269,7 +285,11 @@ impl AuthoringProject {
         Ok(())
     }
 
-    fn validate_composition_parameters(&self, timeline: &Timeline) -> Result<(), String> {
+    fn validate_composition_parameters(
+        &self,
+        timeline: &Timeline,
+        placements: &ItemPlacementOverlay<'_>,
+    ) -> Result<(), String> {
         let mut ids = HashSet::new();
         let mut names = HashSet::new();
         let mut targets = HashSet::new();
@@ -294,28 +314,13 @@ impl AuthoringProject {
                 ));
             }
             validate_composition_parameter_value(parameter, &parameter.default_value)?;
+            self.validate_composition_parameter_placement(timeline, parameter, placements)?;
             let target_item = self.items.get(&parameter.target.item_id()).ok_or_else(|| {
                 format!(
                     "Composition parameter {} targets a missing Timeline item",
                     parameter.id
                 )
             })?;
-            let target_timeline_id = self
-                .tracks
-                .get(&target_item.track_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Composition parameter {} targets an item with no Track",
-                        parameter.id
-                    )
-                })?
-                .timeline_id;
-            if target_timeline_id != timeline.id {
-                return Err(format!(
-                    "Composition parameter {} targets another Timeline",
-                    parameter.id
-                ));
-            }
             match &parameter.target {
                 CompositionParameterTarget::TextContent { .. } => {
                     if !matches!(target_item.source, SourceRef::Text { .. })
@@ -404,12 +409,18 @@ impl AuthoringProject {
                         )
                     })?;
                 validate_parameter_value(parameter, value)?;
+                if definition.host_contract.protects_parameter(*parameter_id) {
+                    return Err(format!(
+                        "Module instance {} cannot override a host-owned parameter",
+                        instance.id
+                    ));
+                }
             }
         }
         Ok(())
     }
 
-    fn validate_items(&self) -> Result<(), String> {
+    fn validate_items(&self, placements: &ItemPlacementOverlay<'_>) -> Result<(), String> {
         let asset_ids = self
             .assets
             .iter()
@@ -422,35 +433,11 @@ impl AuthoringProject {
             if item.name.trim().is_empty() {
                 return Err(format!("Timeline item {} has no name", item.id));
             }
-            let track = self
-                .tracks
-                .get(&item.track_id)
-                .ok_or_else(|| format!("Item {} refers to a missing Track", item.id))?;
-            if item.interval.start.is_negative()
-                || item.interval.duration.is_negative()
-                || item.time_map.source_start.is_negative()
-                || item.time_map.playback_rate.numerator() < 0
-            {
-                return Err(format!("Item {} has invalid timing", item.id));
-            }
-            item.interval.end()?;
+            self.validate_item_placement_constraints(item, placements)?;
             validate_authored_properties(
                 &item.authored_properties,
                 &format!("Timeline item {}", item.id),
             )?;
-            if let Some(parent_id) = item.parent {
-                let parent = self
-                    .items
-                    .get(&parent_id)
-                    .ok_or_else(|| format!("Item {} has a missing parent", item.id))?;
-                let parent_track = self
-                    .tracks
-                    .get(&parent.track_id)
-                    .ok_or_else(|| format!("Parent of item {} has a missing Track", item.id))?;
-                if parent.id == item.id || parent_track.timeline_id != track.timeline_id {
-                    return Err(format!("Item {} has an invalid parent", item.id));
-                }
-            }
             match &item.source {
                 SourceRef::Asset { asset_id } if !asset_ids.contains(asset_id) => {
                     return Err(format!("Item {} refers to a missing Asset", item.id));
@@ -465,7 +452,6 @@ impl AuthoringProject {
                     let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {
                         format!("Item {} refers to a missing nested Timeline", item.id)
                     })?;
-                    validate_duration_policy(item, nested.duration, &instance.duration_policy)?;
                     for (parameter_id, value) in &instance.parameter_overrides {
                         let parameter = nested
                             .published_parameters
@@ -480,16 +466,13 @@ impl AuthoringProject {
                         validate_composition_parameter_value(parameter, value)?;
                     }
                 }
-                SourceRef::Module(invocation) => {
-                    self.validate_invocation(invocation, Some(item), track.timeline_id, false)?;
-                }
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn validate_attachments(&self) -> Result<(), String> {
+    fn validate_attachments(&self, placements: &ItemPlacementOverlay<'_>) -> Result<(), String> {
         let mut stack_orders: HashMap<(AttachmentOwner, AttachmentStage), Vec<i64>> =
             HashMap::new();
         for (attachment_id, attachment) in &self.attachments {
@@ -503,6 +486,7 @@ impl AuthoringProject {
                 ));
             }
             validate_attachment_stage(&attachment.owner, attachment.stage)?;
+            self.validate_attachment_placement_constraints(attachment, placements)?;
             stack_orders
                 .entry((attachment.owner.clone(), attachment.stage))
                 .or_default()
@@ -512,12 +496,6 @@ impl AuthoringProject {
                     validate_builtin_effect(effect, attachment.stage)?;
                 }
                 AttachmentProcessor::Module(invocation) => {
-                    self.validate_invocation(
-                        invocation,
-                        None,
-                        self.attachment_owner_timeline(&attachment.owner)?,
-                        true,
-                    )?;
                     self.validate_module_attachment_contract(invocation, attachment.stage)?;
                 }
             }
@@ -551,6 +529,9 @@ impl AuthoringProject {
             .module_definitions
             .get(&instance.definition_id)
             .ok_or_else(|| "Module Attachment has a missing definition".to_string())?;
+        if !matches!(definition.host_contract, super::ModuleHostContract::General) {
+            return Err("A host-specific Module cannot be used as an Attachment".to_string());
+        }
         let output = definition
             .output(invocation.output_id)
             .ok_or_else(|| "Module Attachment has a missing output".to_string())?;
@@ -574,9 +555,10 @@ impl AuthoringProject {
     fn validate_invocation(
         &self,
         invocation: &ModuleInvocation,
-        host_item: Option<&TimelineItem>,
+        host_item_id: Option<TimelineItemId>,
         host_timeline_id: TimelineId,
         primary_input_is_implicit: bool,
+        placements: &ItemPlacementOverlay<'_>,
     ) -> Result<(), String> {
         let instance = self
             .module_instances
@@ -596,6 +578,9 @@ impl AuthoringProject {
                     instance.definition_id
                 )
             })?;
+        if !matches!(definition.host_contract, super::ModuleHostContract::General) {
+            return Err("A host-specific Module cannot be used as a Node Clip".to_string());
+        }
         definition
             .output(invocation.output_id)
             .ok_or_else(|| "Invocation selects an unknown dedicated Module Output".to_string())?;
@@ -620,7 +605,13 @@ impl AuthoringProject {
                 ));
             }
             if let Some(binding) = invocation.input_bindings.get(&input.id) {
-                self.validate_media_binding(host_item, host_timeline_id, input, binding)?;
+                self.validate_media_binding(
+                    host_item_id,
+                    host_timeline_id,
+                    input,
+                    binding,
+                    placements,
+                )?;
             }
         }
         for (parameter_id, track) in &invocation.automation_tracks {
@@ -637,10 +628,11 @@ impl AuthoringProject {
 
     fn validate_media_binding(
         &self,
-        host_item: Option<&TimelineItem>,
+        host_item_id: Option<TimelineItemId>,
         host_timeline_id: TimelineId,
         input: &PublishedMediaInput,
         binding: &MediaInputBinding,
+        placements: &ItemPlacementOverlay<'_>,
     ) -> Result<(), String> {
         let MediaInputBinding::TimelineItemOutput {
             locator,
@@ -652,12 +644,13 @@ impl AuthoringProject {
             .items
             .get(item_id)
             .ok_or_else(|| "Media input binding refers to a missing Timeline item".to_string())?;
-        if host_item.is_some_and(|host| host.id == source.id) {
+        if host_item_id == Some(source.id) {
             return Err("A Node Clip cannot bind its own output as an input".to_string());
         }
+        let source_placement = placements.state(source);
         let source_timeline_id = self
             .tracks
-            .get(&source.track_id)
+            .get(&source_placement.track_id)
             .ok_or_else(|| "Media input source has a missing Track".to_string())?
             .timeline_id;
         if matches!(locator, InstanceLocator::SameTimeline)
@@ -666,7 +659,7 @@ impl AuthoringProject {
             return Err("Same-Timeline media binding crosses a Timeline boundary".to_string());
         }
         if let InstanceLocator::Exact(path) = locator {
-            let path_timeline_id = self.validate_instance_path(path)?;
+            let path_timeline_id = self.validate_instance_path(path, placements)?;
             if path_timeline_id != source_timeline_id {
                 return Err(
                     "Exact media binding source does not belong to its InstancePath".to_string(),
@@ -677,17 +670,24 @@ impl AuthoringProject {
             MediaOutputKind::Image => crate::model::project::PortDataType::Image,
             MediaOutputKind::Audio => crate::model::project::PortDataType::Audio,
         };
-        if input.data_type != output_type || !self.item_supports_output(source, *output)? {
+        if input.data_type != output_type || !self.item_supports_output(source.id, *output)? {
             return Err("Media input binding has an incompatible output type".to_string());
         }
         Ok(())
     }
 
-    fn item_supports_output(
+    /// Reports whether one authored placement exposes the requested media
+    /// output. Timeline tools and Project validation share this authority so
+    /// transition candidates cannot disagree with the compiler.
+    pub fn item_supports_output(
         &self,
-        item: &TimelineItem,
+        item_id: TimelineItemId,
         output: MediaOutputKind,
     ) -> Result<bool, String> {
+        let item = self
+            .items
+            .get(&item_id)
+            .ok_or_else(|| format!("Timeline item {item_id} does not exist"))?;
         Ok(match &item.source {
             SourceRef::Asset { asset_id } => self
                 .assets
@@ -697,9 +697,11 @@ impl AuthoringProject {
                     MediaOutputKind::Image => {
                         matches!(asset.kind, AssetKind::Image | AssetKind::Video)
                     }
-                    MediaOutputKind::Audio => {
-                        matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
-                    }
+                    // The authoring model does not yet persist a selected
+                    // embedded Audio stream for Video assets. Claiming an
+                    // Audio output here would validate a route that the
+                    // production mixer intentionally cannot execute.
+                    MediaOutputKind::Audio => asset.kind == AssetKind::Audio,
                 }),
             SourceRef::Text { .. } | SourceRef::Shape { .. } | SourceRef::Solid { .. } => {
                 output == MediaOutputKind::Image
@@ -744,6 +746,11 @@ impl AuthoringProject {
                 *owners.entry(invocation.instance_id).or_default() += 1;
             }
         }
+        for transition in self.transitions.values() {
+            if let Some(module) = transition.processor.module_processor() {
+                *owners.entry(module.instance_id).or_default() += 1;
+            }
+        }
         for instance_id in self.module_instances.keys() {
             if owners.get(instance_id) != Some(&1) {
                 return Err(format!(
@@ -781,7 +788,11 @@ impl AuthoringProject {
         Ok(())
     }
 
-    fn validate_instance_path(&self, path: &InstancePath) -> Result<TimelineId, String> {
+    fn validate_instance_path(
+        &self,
+        path: &InstancePath,
+        placements: &ItemPlacementOverlay<'_>,
+    ) -> Result<TimelineId, String> {
         if path.root_timeline_id != self.root_timeline_id {
             return Err("InstancePath must start at the Project root Timeline".to_string());
         }
@@ -796,7 +807,7 @@ impl AuthoringProject {
                 .ok_or_else(|| "InstancePath has a missing item".to_string())?;
             let item_timeline_id = self
                 .tracks
-                .get(&item.track_id)
+                .get(&placements.state(item).track_id)
                 .ok_or_else(|| "InstancePath item has a missing Track".to_string())?
                 .timeline_id;
             if item_timeline_id != timeline_id {
@@ -818,7 +829,11 @@ impl AuthoringProject {
         }
     }
 
-    fn attachment_owner_timeline(&self, owner: &AttachmentOwner) -> Result<TimelineId, String> {
+    fn attachment_owner_timeline(
+        &self,
+        owner: &AttachmentOwner,
+        placements: &ItemPlacementOverlay<'_>,
+    ) -> Result<TimelineId, String> {
         match owner {
             AttachmentOwner::Timeline { timeline_id } => self
                 .timelines
@@ -836,7 +851,7 @@ impl AuthoringProject {
                     .get(item_id)
                     .ok_or_else(|| "Attachment owner item does not exist".to_string())?;
                 self.tracks
-                    .get(&item.track_id)
+                    .get(&placements.state(item).track_id)
                     .map(|track| track.timeline_id)
                     .ok_or_else(|| "Attachment owner item has a missing Track".to_string())
             }
@@ -857,9 +872,13 @@ impl AuthoringProject {
         Ok(())
     }
 
-    fn validate_composition_cycles(&self) -> Result<(), String> {
+    fn validate_composition_cycles(
+        &self,
+        placements: &ItemPlacementOverlay<'_>,
+    ) -> Result<(), String> {
         fn visit(
             project: &AuthoringProject,
+            placements: &ItemPlacementOverlay<'_>,
             timeline_id: TimelineId,
             visiting: &mut HashSet<TimelineId>,
             visited: &mut HashSet<TimelineId>,
@@ -873,14 +892,14 @@ impl AuthoringProject {
             for item in project.items.values() {
                 let item_timeline_id = project
                     .tracks
-                    .get(&item.track_id)
+                    .get(&placements.state(item).track_id)
                     .ok_or_else(|| format!("Timeline item {} has a missing Track", item.id))?
                     .timeline_id;
                 if item_timeline_id != timeline_id {
                     continue;
                 }
                 if let SourceRef::Composition(instance) = &item.source {
-                    visit(project, instance.timeline_id, visiting, visited)?;
+                    visit(project, placements, instance.timeline_id, visiting, visited)?;
                 }
             }
             visiting.remove(&timeline_id);
@@ -889,40 +908,13 @@ impl AuthoringProject {
         }
         let mut visited = HashSet::new();
         for timeline_id in self.timelines.keys().copied() {
-            visit(self, timeline_id, &mut HashSet::new(), &mut visited)?;
-        }
-        Ok(())
-    }
-
-    fn validate_media_input_cycles(&self) -> Result<(), String> {
-        let mut edges: HashMap<TimelineItemId, Vec<TimelineItemId>> = HashMap::new();
-        for item in self.items.values() {
-            if let SourceRef::Module(invocation) = &item.source {
-                edges.insert(item.id, invocation_input_items(invocation));
-            }
-        }
-        fn visit(
-            item_id: TimelineItemId,
-            edges: &HashMap<TimelineItemId, Vec<TimelineItemId>>,
-            visiting: &mut HashSet<TimelineItemId>,
-            visited: &mut HashSet<TimelineItemId>,
-        ) -> Result<(), String> {
-            if visited.contains(&item_id) {
-                return Ok(());
-            }
-            if !visiting.insert(item_id) {
-                return Err(format!("Media input cycle reaches Timeline item {item_id}"));
-            }
-            for source in edges.get(&item_id).into_iter().flatten() {
-                visit(*source, edges, visiting, visited)?;
-            }
-            visiting.remove(&item_id);
-            visited.insert(item_id);
-            Ok(())
-        }
-        let mut visited = HashSet::new();
-        for item_id in edges.keys().copied() {
-            visit(item_id, &edges, &mut HashSet::new(), &mut visited)?;
+            visit(
+                self,
+                placements,
+                timeline_id,
+                &mut HashSet::new(),
+                &mut visited,
+            )?;
         }
         Ok(())
     }

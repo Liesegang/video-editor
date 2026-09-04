@@ -139,6 +139,10 @@ fn find_group(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> {
         FrameItem::Group(group) if group.source_id == source_id => Some(group),
         FrameItem::Group(group) => find_group(&group.items, source_id),
         FrameItem::Object(_) => None,
+        FrameItem::Transition(transition) => {
+            find_group(std::slice::from_ref(&transition.from.item), source_id)
+                .or_else(|| find_group(std::slice::from_ref(&transition.to.item), source_id))
+        }
     })
 }
 
@@ -148,6 +152,10 @@ fn object_source_ids(items: &[FrameItem]) -> Vec<Uuid> {
             match item {
                 FrameItem::Object(object) => ids.push(object.source_node_id),
                 FrameItem::Group(group) => collect(&group.items, ids),
+                FrameItem::Transition(transition) => {
+                    collect(std::slice::from_ref(&transition.from.item), ids);
+                    collect(std::slice::from_ref(&transition.to.item), ids);
+                }
             }
         }
     }

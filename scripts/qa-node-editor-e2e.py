@@ -261,15 +261,18 @@ def run_suite(client):
 
     # Add a second compatible processor so both existing-edge handles can be
     # exercised without introducing an invalid intermediate topology.
-    _, second_menu_canvas = client.wait_component_settled(CANVAS_ID)
-    second_canvas_rect = second_menu_canvas["rect_points"]
-    # The upper middle of the short dock is intentionally clear in this
-    # fixture and leaves enough room for all Blur ports. A generic blank-point
-    # search can land on a long Bezier wire because wires have no rectangle.
-    second_menu_point = {
-        "x": second_canvas_rect["center_x"],
-        "y": second_canvas_rect["min_y"] + 24.0,
-    }
+    second_snapshot = client.component_snapshot()
+    second_menu_point = find_clear_canvas_point(
+        second_snapshot,
+        CANVAS_ID,
+        (
+            "node_editor.node:",
+            "node_editor.node_header:",
+            "node_editor.port.",
+            "node_editor.connection:",
+            "node_editor.connection_handle:",
+        ),
+    )
     client.inject(
         "click",
         {**second_menu_point, "button": "secondary", "coordinate_space": "points"},

@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringKeyframeUpdate, TimelineEditorService};
-use library::model::authoring::{AuthoringProject, MediaTime, TimelineItemId};
+use library::model::authoring::{AuthoringProject, MediaTime};
 use library::model::property::KeyframeId;
 use pan_zoom_ui::{
     AxisMask, CanvasState, CanvasTheme, CanvasTransform, GridAxis, GridConfig, GridLineKind,
@@ -9,10 +9,11 @@ use pan_zoom_ui::{
 };
 
 use crate::state::authoring::{
-    AuthoringSelection, AuthoringUiState, AutomationTarget, CurveEditorState, CurveKeyDrag,
+    AuthoringSelection, AuthoringUiState, AutomationLaneId, AutomationOwner, CurveEditorState,
+    CurveKeyDrag,
 };
 use crate::ui::automation_lanes::{
-    self, component_name, component_value, target_metadata, with_component,
+    self, component_name, component_value, lane_metadata, owner_metadata, with_component,
     AutomationChannel as CurveSeries,
 };
 use crate::ui::easing_menus::{easing_summary, show_easing_menu, EasingMenuQaScope};
@@ -36,12 +37,12 @@ pub fn curve_editor_panel(
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
 ) {
-    let Some(AuthoringSelection::Item(item_id)) = state.selection.primary() else {
+    let Some(owner) = selected_owner(state) else {
         ui.centered_and_justified(|ui| ui.label("Select a clip with keyframes"));
         return;
     };
-    let mut series = collect_series(project, item_id);
-    sync_visibility(state, item_id, &series);
+    let mut series = collect_series(project, &owner);
+    sync_visibility(state, &owner, &series);
 
     curve_toolbar(ui, state, !series.is_empty());
     let available = ui.available_rect_before_wrap();
@@ -60,7 +61,7 @@ pub fn curve_editor_panel(
 
     channel_list(ui, state, &series, channel_rect);
     series.retain(|candidate| series_visible(state, candidate));
-    curve_canvas(ui, project, state, service, item_id, &series, curve_rect);
+    curve_canvas(ui, project, state, service, &owner, &series, curve_rect);
 }
 
 fn curve_toolbar(ui: &mut egui::Ui, state: &mut AuthoringUiState, has_curves: bool) {
@@ -104,21 +105,18 @@ fn channel_list(
         }
         let mut handled = std::collections::HashSet::new();
         for candidate in series {
-            if !handled.insert(candidate.target.clone()) {
+            if !handled.insert(candidate.id.clone()) {
                 continue;
             }
-            let mut visible = state
-                .curve_editor
-                .visible_targets
-                .contains(&candidate.target);
+            let mut visible = state.curve_editor.visible_lanes.contains(&candidate.id);
             if ui.checkbox(&mut visible, target_label(candidate)).changed() {
                 if visible {
                     state
                         .curve_editor
-                        .visible_targets
-                        .insert(candidate.target.clone());
+                        .visible_lanes
+                        .insert(candidate.id.clone());
                 } else {
-                    state.curve_editor.visible_targets.remove(&candidate.target);
+                    state.curve_editor.visible_lanes.remove(&candidate.id);
                 }
             }
         }
@@ -134,16 +132,16 @@ fn curve_canvas(
     project: &AuthoringProject,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
-    item_id: TimelineItemId,
+    owner: &AutomationOwner,
     series: &[CurveSeries],
     rect: Rect,
 ) {
     ui.painter()
         .rect_filled(rect, 0.0, CanvasTheme::default().background);
-    let Some(item) = project.items.get(&item_id) else {
+    let Some(interval) = automation_lanes::owner_interval(project, owner) else {
         return;
     };
-    let duration = item.interval.duration.to_seconds_f64().max(1.0 / 30.0);
+    let duration = interval.duration.to_seconds_f64().max(1.0 / 30.0);
     let (value_min, value_max) = value_extent(series);
     let plot_rect = curve_plot_rect(rect);
     if !plot_rect.is_positive() {
@@ -185,7 +183,7 @@ fn curve_canvas(
         transform.rect,
         true,
         Some(serde_json::json!({
-            "item_id": item_id,
+            "owner": owner_metadata(owner),
             "curve_count": series.len(),
             "pan": {"x": transform.canvas.state.pan.x, "y": transform.canvas.state.pan.y},
             "zoom": {"x": transform.canvas.state.zoom.x, "y": transform.canvas.state.zoom.y},
@@ -210,17 +208,9 @@ fn curve_canvas(
     }
 
     for (index, curve) in series.iter().enumerate() {
-        paint_curve(
-            ui,
-            state,
-            service,
-            item_id,
-            curve,
-            curve_color(index),
-            transform,
-        );
+        paint_curve(ui, state, service, curve, curve_color(index), transform);
     }
-    paint_playhead(ui, project, state, item, transform);
+    paint_playhead(ui, project, state, owner, transform);
     finish_key_drag(ui, state, service);
 }
 
@@ -395,7 +385,6 @@ fn paint_curve(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
-    item_id: TimelineItemId,
     curve: &CurveSeries,
     color: Color32,
     transform: CurveTransform,
@@ -427,8 +416,7 @@ fn paint_curve(
 
     for point in &curve.points {
         let projected = state.curve_editor.drag.as_ref().filter(|drag| {
-            drag.item_id == item_id
-                && drag.target == curve.target
+            drag.lane == curve.id
                 && drag.component == curve.component
                 && drag.keyframe_id == point.id
         });
@@ -445,7 +433,7 @@ fn paint_curve(
         let response = ui.interact(
             hit,
             ui.id()
-                .with(("curve-key", item_id, point.id, curve.component)),
+                .with(("curve-key", &curve.id, point.id, curve.component)),
             Sense::click_and_drag(),
         );
         crate::qa::register_component_with_metadata(
@@ -458,8 +446,12 @@ fn paint_curve(
             hit,
             true,
             Some(serde_json::json!({
-                "item_id": item_id,
-                "target": target_metadata(&curve.target),
+                "item_id": match &curve.id.owner {
+                    AutomationOwner::Item(item_id) => Some(*item_id),
+                    _ => None,
+                },
+                "target": automation_lanes::target_metadata(&curve.id.target),
+                "lane": lane_metadata(&curve.id),
                 "keyframe_id": point.id,
                 "time": time.to_seconds_f64(),
                 "value": value,
@@ -468,8 +460,7 @@ fn paint_curve(
         );
         if response.drag_started() {
             state.curve_editor.drag = Some(CurveKeyDrag {
-                item_id,
-                target: curve.target.clone(),
+                lane: curve.id.clone(),
                 component: curve.component,
                 keyframe_id: point.id,
                 original_time: point.time,
@@ -498,14 +489,7 @@ fn paint_curve(
             }
         });
         if let Some(easing) = easing_update {
-            update_curve_easing(
-                state,
-                service,
-                item_id,
-                curve.target.clone(),
-                point.id,
-                easing,
-            );
+            update_curve_easing(state, service, curve.id.clone(), point.id, easing);
         }
         if response.dragged() {
             if let Some(drag) = state.curve_editor.drag.as_mut() {
@@ -545,8 +529,7 @@ fn paint_curve(
 fn update_curve_easing(
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
-    item_id: TimelineItemId,
-    target: AutomationTarget,
+    lane: AutomationLaneId,
     keyframe_id: KeyframeId,
     easing: library::animation::EasingFunction,
 ) {
@@ -555,7 +538,7 @@ fn update_curve_easing(
         value: None,
         easing: Some(easing),
     };
-    let result = automation_lanes::update_keyframe(service, item_id, &target, keyframe_id, update);
+    let result = automation_lanes::update_keyframe(service, &lane, keyframe_id, update);
     match result {
         Ok(_) => state.status = "Updated keyframe interpolation".to_string(),
         Err(error) => state.error = Some(error.to_string()),
@@ -588,13 +571,7 @@ fn finish_key_drag(ui: &egui::Ui, state: &mut AuthoringUiState, service: &Timeli
         value: Some(drag.projected_value),
         easing: None,
     };
-    let result = automation_lanes::update_keyframe(
-        service,
-        drag.item_id,
-        &drag.target,
-        drag.keyframe_id,
-        update,
-    );
+    let result = automation_lanes::update_keyframe(service, &drag.lane, drag.keyframe_id, update);
     if let Err(error) = result {
         state.error = Some(error.to_string());
     }
@@ -604,15 +581,27 @@ fn paint_playhead(
     ui: &egui::Ui,
     project: &AuthoringProject,
     state: &AuthoringUiState,
-    item: &library::model::authoring::TimelineItem,
+    owner: &AutomationOwner,
     transform: CurveTransform,
 ) {
     let Some(timeline) = project.timelines.get(&state.active_timeline_id) else {
         return;
     };
-    let timeline_time = MediaTime::from_frame_index(state.timeline.current_frame, timeline.fps);
-    let local = timeline_time.and_then(|time| item.time_map.local_time(item.interval, time));
-    let Ok(local) = local else {
+    let Ok(timeline_time) = MediaTime::from_frame_index(state.timeline.current_frame, timeline.fps)
+    else {
+        return;
+    };
+    let Some(interval) = automation_lanes::owner_interval(project, owner) else {
+        return;
+    };
+    let Ok(end) = interval.end() else {
+        return;
+    };
+    if timeline_time < interval.start || timeline_time > end {
+        return;
+    }
+    let local = automation_lanes::local_time_for_timeline(project, owner, timeline_time);
+    let Some(local) = local else {
         return;
     };
     let Some(x) = visible_playhead_x(transform, local.to_seconds_f64()) else {
@@ -639,29 +628,40 @@ fn visible_playhead_x(transform: CurveTransform, local_seconds: f64) -> Option<f
     (x >= transform.rect.left() && x <= transform.rect.right()).then_some(x)
 }
 
-fn collect_series(project: &AuthoringProject, item_id: TimelineItemId) -> Vec<CurveSeries> {
-    automation_lanes::numeric_channels(&automation_lanes::collect_item_lanes(project, item_id))
+fn selected_owner(state: &AuthoringUiState) -> Option<AutomationOwner> {
+    match state.selection.primary()? {
+        AuthoringSelection::Item(item_id) => Some(AutomationOwner::Item(item_id)),
+        AuthoringSelection::Transition(transition_id) => Some(automation_lanes::transition_owner(
+            transition_id,
+            state.active_instance_path.as_ref(),
+        )),
+        _ => None,
+    }
 }
 
-fn sync_visibility(state: &mut AuthoringUiState, item_id: TimelineItemId, series: &[CurveSeries]) {
-    let targets = series
+fn collect_series(project: &AuthoringProject, owner: &AutomationOwner) -> Vec<CurveSeries> {
+    automation_lanes::numeric_channels(&automation_lanes::collect_lanes(project, owner))
+}
+
+fn sync_visibility(state: &mut AuthoringUiState, owner: &AutomationOwner, series: &[CurveSeries]) {
+    let lanes = series
         .iter()
-        .map(|curve| curve.target.clone())
+        .map(|curve| curve.id.clone())
         .collect::<std::collections::HashSet<_>>();
-    if state.curve_editor.target_item != Some(item_id) {
-        state.curve_editor.target_item = Some(item_id);
+    if state.curve_editor.target_owner.as_ref() != Some(owner) {
+        state.curve_editor.target_owner = Some(owner.clone());
         state.curve_editor.canvas = CanvasState::uniform(Vec2::ZERO, 1.0);
-        state.curve_editor.visible_targets = targets;
+        state.curve_editor.visible_lanes = lanes;
     } else {
         state
             .curve_editor
-            .visible_targets
-            .retain(|target| targets.contains(target));
+            .visible_lanes
+            .retain(|lane| lanes.contains(lane));
     }
 }
 
 fn series_visible(state: &AuthoringUiState, series: &CurveSeries) -> bool {
-    state.curve_editor.visible_targets.contains(&series.target)
+    state.curve_editor.visible_lanes.contains(&series.id)
 }
 
 fn value_extent(series: &[CurveSeries]) -> (f64, f64) {

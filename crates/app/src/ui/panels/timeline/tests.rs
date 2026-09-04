@@ -73,6 +73,7 @@ fn expanded_track_exposes_each_clip_as_its_own_layer_row() {
         project.root_timeline_id,
         &HashSet::from([track_id]),
         &HashSet::new(),
+        None,
     );
 
     assert_eq!(rows.len(), 4, "one Track row plus its three Clip rows");
@@ -103,6 +104,7 @@ fn collapsed_track_is_one_compact_track_row() {
         project.root_timeline_id,
         &HashSet::new(),
         &HashSet::new(),
+        None,
     );
 
     assert_eq!(rows.len(), 1);
@@ -124,6 +126,7 @@ fn expanded_clip_adds_shared_property_rows_directly_after_its_clip() {
         project.root_timeline_id,
         &HashSet::from([track_id]),
         &HashSet::from([item_ids[2]]),
+        None,
     );
 
     let clip_row = rows
@@ -132,9 +135,9 @@ fn expanded_clip_adds_shared_property_rows_directly_after_its_clip() {
         .expect("expanded clip row");
     assert!(matches!(
         &rows[clip_row + 1].kind,
-        RowKind::Property { item_id, target }
+        RowKind::Property { item_id, lane }
             if *item_id == item_ids[2]
-                && *target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
     ));
 }
 
@@ -163,19 +166,20 @@ fn keyframe_mode_keeps_constant_properties_out_of_the_dope_sheet() {
         project.root_timeline_id,
         &view.expanded_tracks,
         &property_items,
+        None,
     );
 
     assert!(rows.iter().any(|row| matches!(
         &row.kind,
-        RowKind::Property { item_id, target }
+        RowKind::Property { item_id, lane }
             if *item_id == item_ids[2]
-                && *target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
     )));
     assert!(!rows.iter().any(|row| matches!(
         &row.kind,
-        RowKind::Property { item_id, target }
+        RowKind::Property { item_id, lane }
             if *item_id == item_ids[0]
-                && *target == crate::state::authoring::AutomationTarget::AuthoredProperty("opacity".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("opacity".to_string())
     )));
 }
 
@@ -230,6 +234,7 @@ fn live_reorder_projection_displaces_siblings_without_mutating_the_project() {
         project.root_timeline_id,
         &expanded,
         &HashSet::new(),
+        None,
     );
     let projection =
         timeline_row_projection(&project, &rows, &expanded, &HashSet::new(), Some(&gesture))
@@ -279,6 +284,7 @@ fn live_reorder_projection_moves_clip_and_property_rows_as_one_block() {
         project.root_timeline_id,
         &expanded_tracks,
         &expanded_items,
+        None,
     );
     let projection = timeline_row_projection(
         &project,
@@ -288,8 +294,10 @@ fn live_reorder_projection_moves_clip_and_property_rows_as_one_block() {
         Some(&gesture),
     )
     .expect("projection");
-    let target =
-        crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string());
+    let target = crate::state::authoring::AutomationLaneId {
+        owner: crate::state::authoring::AutomationOwner::Item(item_ids[0]),
+        target: crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string()),
+    };
 
     assert_eq!(projection.row_for_item(item_ids[0]), Some(1));
     assert_eq!(projection.row_for_property(item_ids[0], &target), Some(2));

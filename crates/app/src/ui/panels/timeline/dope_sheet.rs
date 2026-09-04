@@ -1,11 +1,13 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringKeyframeUpdate, TimelineEditorService};
-use library::model::authoring::{AuthoringProject, MediaTime, TimelineItem, TimelineItemId};
+use library::model::authoring::{
+    AuthoringProject, InstancePath, MediaTime, TimelineItem, TimelineItemId,
+};
 
 use crate::state::authoring::{AuthoringSelection, AuthoringUiState, TimelineKeyframeGesture};
 use crate::ui::automation_lanes::{
-    self, target_metadata, timeline_time_for_local, AutomationLane, AutomationPoint,
+    self, lane_metadata, timeline_time_for_local, AutomationLane, AutomationPoint,
 };
 
 use super::geometry::frame_for_seconds;
@@ -20,18 +22,18 @@ pub(super) fn paint_clip_keyframe_summary(
     interval: library::model::authoring::TimelineInterval,
     clip_rect: Rect,
     viewport_rect: Rect,
+    instance_path: Option<&InstancePath>,
 ) {
     let visible = clip_rect.intersect(viewport_rect);
     if !visible.is_positive() {
         return;
     }
-    let lanes = automation_lanes::collect_item_keyframed_lanes(project, item.id);
+    let lanes = automation_lanes::collect_dope_lanes(project, item.id, instance_path);
     let keyframe_count = lanes.iter().map(|lane| lane.points.len()).sum::<usize>();
-    let rate = item.time_map.playback_rate.to_f64();
     let duration = interval.duration.to_seconds_f64();
     let inner = clip_rect.shrink2(Vec2::new(6.0, 4.0));
     let painter = ui.painter().with_clip_rect(visible);
-    if rate.is_finite() && rate.abs() > f64::EPSILON && duration > 0.0 {
+    if duration > 0.0 {
         let lane_count = lanes.len().max(1) as f32;
         for (lane_index, lane) in lanes.iter().enumerate() {
             let y = inner.top() + inner.height() * (lane_index as f32 + 0.5) / lane_count;
@@ -40,9 +42,12 @@ pub(super) fn paint_clip_keyframe_summary(
                 Stroke::new(1.0, Color32::from_white_alpha(32)),
             );
             for point in &lane.points {
-                let offset = (point.time.to_seconds_f64()
-                    - item.time_map.source_start.to_seconds_f64())
-                    / rate;
+                let Some(timeline_time) =
+                    timeline_time_for_local(project, &lane.id.owner, point.time)
+                else {
+                    continue;
+                };
+                let offset = timeline_time.to_seconds_f64() - interval.start.to_seconds_f64();
                 let ratio = offset / duration;
                 if !(0.0..=1.0).contains(&ratio) {
                     continue;
@@ -132,15 +137,14 @@ fn draw_property_label(
     let response = ui
         .interact(
             visible,
-            ui.id()
-                .with(("timeline-property-label", item_id, &lane.target)),
+            ui.id().with(("timeline-property-label", item_id, &lane.id)),
             Sense::click(),
         )
         .on_hover_text(format!("{} automation", lane.label));
     if response.clicked() {
-        state.selection.replace(AuthoringSelection::Item(item_id));
+        select_lane_owner(state, &lane.id.owner, item_id);
     }
-    if response.hovered() || state.selection.contains(AuthoringSelection::Item(item_id)) {
+    if response.hovered() || lane_owner_selected(state, &lane.id.owner, item_id) {
         ui.painter().with_clip_rect(sidebar_rect).rect_filled(
             rect,
             0.0,
@@ -173,7 +177,8 @@ fn draw_property_label(
         true,
         Some(serde_json::json!({
             "item_id": item_id,
-            "target": target_metadata(&lane.target),
+            "target": automation_lanes::target_metadata(&lane.id.target),
+            "lane": lane_metadata(&lane.id),
             "label": lane.label,
             "keyframe_count": lane.points.len(),
             "keyframe_ids": lane.points.iter().map(|point| point.id.to_string()).collect::<Vec<_>>(),
@@ -203,8 +208,7 @@ fn draw_property_keys(
     }
     let row_response = ui.interact(
         visible,
-        ui.id()
-            .with(("timeline-property-row", item.id, &lane.target)),
+        ui.id().with(("timeline-property-row", item.id, &lane.id)),
         Sense::click(),
     );
     if row_response.clicked() {
@@ -212,7 +216,7 @@ fn draw_property_keys(
             row_response.interact_pointer_pos(),
             project.timelines.get(&state.active_timeline_id),
         ) {
-            state.selection.replace(AuthoringSelection::Item(item.id));
+            select_lane_owner(state, &lane.id.owner, item.id);
             let seconds = screen_x_to_seconds(pointer.x, content_rect, &state.timeline);
             state
                 .timeline
@@ -220,12 +224,14 @@ fn draw_property_keys(
         }
     }
 
+    let interval =
+        automation_lanes::owner_interval(project, &lane.id.owner).unwrap_or(item.interval);
     let start_x = seconds_to_screen_x(
-        item.interval.start.to_seconds_f64() as f32,
+        interval.start.to_seconds_f64() as f32,
         content_rect,
         &state.timeline,
     );
-    let end_x = item.interval.end().ok().map_or(start_x, |time| {
+    let end_x = interval.end().ok().map_or(start_x, |time| {
         seconds_to_screen_x(time.to_seconds_f64() as f32, content_rect, &state.timeline)
     });
     let painter = ui.painter().with_clip_rect(content_rect);
@@ -271,14 +277,14 @@ fn draw_keyframe(
         .keyframe_gesture
         .as_ref()
         .filter(|gesture| {
-            gesture.item_id == item.id
-                && gesture.target == lane.target
+            gesture.anchor_item_id == item.id
+                && gesture.lane == lane.id
                 && gesture.keyframe_id == point.id
         })
         .map(|gesture| gesture.projected_time);
     let dragging = projected_time.is_some();
     let local_time = projected_time.unwrap_or(point.time);
-    let Some(timeline_time) = timeline_time_for_local(project, item.id, local_time) else {
+    let Some(timeline_time) = timeline_time_for_local(project, &lane.id.owner, local_time) else {
         return;
     };
     let center = Pos2::new(
@@ -303,7 +309,7 @@ fn draw_keyframe(
         .interact(
             hit,
             ui.id()
-                .with(("timeline-property-key", item.id, &lane.target, point.id)),
+                .with(("timeline-property-key", item.id, &lane.id, point.id)),
             Sense::click_and_drag(),
         )
         .on_hover_text(format!(
@@ -312,7 +318,7 @@ fn draw_keyframe(
             timeline_time.to_seconds_f64()
         ));
     if response.clicked() || response.drag_started() {
-        state.selection.replace(AuthoringSelection::Item(item.id));
+        select_lane_owner(state, &lane.id.owner, item.id);
         if let Some(timeline) = project.timelines.get(&state.active_timeline_id) {
             state.timeline.seek_frame(
                 timeline_time
@@ -326,8 +332,8 @@ fn draw_keyframe(
             .input(|input| input.pointer.press_origin())
             .map_or(center.x, |pointer| pointer.x);
         state.timeline.keyframe_gesture = Some(TimelineKeyframeGesture {
-            item_id: item.id,
-            target: lane.target.clone(),
+            anchor_item_id: item.id,
+            lane: lane.id.clone(),
             keyframe_id: point.id,
             pointer_origin_x,
             original_time: point.time,
@@ -359,7 +365,8 @@ fn draw_keyframe(
         true,
         Some(serde_json::json!({
             "item_id": item.id,
-            "target": target_metadata(&lane.target),
+            "target": automation_lanes::target_metadata(&lane.id.target),
+            "lane": lane_metadata(&lane.id),
             "keyframe_id": point.id,
             "local_time": local_time.to_seconds_f64(),
             "timeline_time": timeline_time.to_seconds_f64(),
@@ -378,7 +385,7 @@ pub(super) fn update_key_projection(
         return;
     };
     let Some(original_timeline) =
-        timeline_time_for_local(project, gesture.item_id, gesture.original_time)
+        timeline_time_for_local(project, &gesture.lane.owner, gesture.original_time)
     else {
         return;
     };
@@ -393,7 +400,7 @@ pub(super) fn update_key_projection(
         return;
     };
     let Some(local_time) =
-        automation_lanes::local_time_for_timeline(project, gesture.item_id, timeline_time)
+        automation_lanes::local_time_for_timeline(project, &gesture.lane.owner, timeline_time)
     else {
         return;
     };
@@ -431,8 +438,7 @@ pub(super) fn finish_keyframe_gesture(
     }
     let result = automation_lanes::update_keyframe(
         service,
-        gesture.item_id,
-        &gesture.target,
+        &gesture.lane,
         gesture.keyframe_id,
         AuthoringKeyframeUpdate {
             time: Some(gesture.projected_time),
@@ -447,7 +453,7 @@ pub(super) fn finish_keyframe_gesture(
 }
 
 pub(super) fn property_component_id(item_id: TimelineItemId, lane: &AutomationLane) -> String {
-    let suffix = match &lane.target {
+    let suffix = match &lane.id.target {
         crate::state::authoring::AutomationTarget::AuthoredProperty(key) => {
             format!("property:{key}")
         }
@@ -458,7 +464,42 @@ pub(super) fn property_component_id(item_id: TimelineItemId, lane: &AutomationLa
             format!("attachment:{attachment_id}:{key}")
         }
     };
-    format!("timeline.property:{item_id}:{suffix}")
+    format!("timeline.property:{item_id}:{:?}:{suffix}", lane.id.owner)
+}
+
+fn select_lane_owner(
+    state: &mut AuthoringUiState,
+    owner: &crate::state::authoring::AutomationOwner,
+    anchor_item_id: TimelineItemId,
+) {
+    let selection = match owner {
+        crate::state::authoring::AutomationOwner::Item(_) => {
+            AuthoringSelection::Item(anchor_item_id)
+        }
+        crate::state::authoring::AutomationOwner::TransitionDefinition(transition_id)
+        | crate::state::authoring::AutomationOwner::TransitionInstance { transition_id, .. } => {
+            AuthoringSelection::Transition(*transition_id)
+        }
+    };
+    state.selection.replace(selection);
+}
+
+fn lane_owner_selected(
+    state: &AuthoringUiState,
+    owner: &crate::state::authoring::AutomationOwner,
+    anchor_item_id: TimelineItemId,
+) -> bool {
+    match owner {
+        crate::state::authoring::AutomationOwner::Item(_) => state
+            .selection
+            .contains(AuthoringSelection::Item(anchor_item_id)),
+        crate::state::authoring::AutomationOwner::TransitionDefinition(transition_id)
+        | crate::state::authoring::AutomationOwner::TransitionInstance { transition_id, .. } => {
+            state
+                .selection
+                .contains(AuthoringSelection::Transition(*transition_id))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -503,10 +544,13 @@ mod tests {
         let mut state = AuthoringUiState::new(project.root_timeline_id);
         state.timeline.pixels_per_second = 100.0;
         state.timeline.keyframe_gesture = Some(TimelineKeyframeGesture {
-            item_id,
-            target: crate::state::authoring::AutomationTarget::AuthoredProperty(
-                "position".to_string(),
-            ),
+            anchor_item_id: item_id,
+            lane: crate::state::authoring::AutomationLaneId {
+                owner: crate::state::authoring::AutomationOwner::Item(item_id),
+                target: crate::state::authoring::AutomationTarget::AuthoredProperty(
+                    "position".to_string(),
+                ),
+            },
             keyframe_id: library::model::property::KeyframeId::new(),
             pointer_origin_x: 20.0,
             original_time: MediaTime::zero(),

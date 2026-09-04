@@ -6,7 +6,31 @@ use super::frame_values::{
 };
 use super::*;
 use crate::core::render_plan::CompiledModuleOutput;
+use crate::model::authoring::PublishedParameterId;
+use crate::model::frame::entity::{
+    FrameTransition, FrameTransitionKind, FrameTransitionSource, NormalizedProgress16,
+};
+use crate::model::node::{
+    TRANSITION_IMAGE_INPUT_NODE_ID, TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID,
+};
+use crate::model::project::{
+    TRANSITION_FROM_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT, TRANSITION_TO_INPUT_PORT,
+};
 use crate::plugin::EvaluationContext;
+
+#[derive(Clone, Copy)]
+pub(super) struct TransitionImageSourceContext {
+    pub(super) item_id: uuid::Uuid,
+    pub(super) source_time: OrderedFloat<f64>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TransitionImageContext {
+    pub(super) transition_id: uuid::Uuid,
+    pub(super) timeline_time: OrderedFloat<f64>,
+    pub(super) from: TransitionImageSourceContext,
+    pub(super) to: TransitionImageSourceContext,
+}
 
 pub(super) struct ModuleImageRuntime<'a> {
     pub(super) project: &'a AuthoringProject,
@@ -19,6 +43,11 @@ pub(super) struct ModuleImageRuntime<'a> {
     pub(super) evaluation_fps: f64,
     pub(super) plugins: &'a crate::plugin::PluginManager,
     pub(super) external_images: HashMap<ModulePortAddress, FrameItem>,
+    /// Values owned by the invoking host. Transition Progress is injected
+    /// here so neither instance overrides nor automation can replace the
+    /// Timeline's normalized clock.
+    pub(super) host_parameters: HashMap<PublishedParameterId, PropertyValue>,
+    pub(super) transition_context: Option<TransitionImageContext>,
     pub(super) image_memo: HashMap<(uuid::Uuid, String), Option<FrameItem>>,
     pub(super) image_path: HashSet<(uuid::Uuid, String)>,
     pub(super) shape_memo:
@@ -29,6 +58,46 @@ pub(super) struct ModuleImageRuntime<'a> {
 }
 
 impl ModuleImageRuntime<'_> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one Module invocation keeps its compiled graph, host values, media, and render context explicit"
+    )]
+    pub(super) fn new<'a>(
+        project: &'a AuthoringProject,
+        definition: &'a CompiledModuleDefinition,
+        invocation: &'a CompiledModuleInvocation,
+        instance_path: &'a InstancePath,
+        local_time: MediaTime,
+        width: u64,
+        height: u64,
+        evaluation_fps: f64,
+        plugins: &'a crate::plugin::PluginManager,
+        external_images: HashMap<ModulePortAddress, FrameItem>,
+        host_parameters: HashMap<PublishedParameterId, PropertyValue>,
+        transition_context: Option<TransitionImageContext>,
+    ) -> ModuleImageRuntime<'a> {
+        ModuleImageRuntime {
+            project,
+            definition,
+            invocation,
+            instance_path,
+            local_time,
+            width,
+            height,
+            evaluation_fps,
+            plugins,
+            external_images,
+            host_parameters,
+            transition_context,
+            image_memo: HashMap::new(),
+            image_path: HashSet::new(),
+            shape_memo: HashMap::new(),
+            shape_path: HashSet::new(),
+            value_memo: HashMap::new(),
+            value_path: HashSet::new(),
+        }
+    }
+
     pub(super) fn evaluate_terminal(
         &mut self,
         output: &CompiledModuleOutput,
@@ -122,6 +191,9 @@ impl ModuleImageRuntime<'_> {
             }
             NodeContent::PluginOperation(operation) => {
                 self.plugin_operation_image(&node, operation)
+            }
+            NodeContent::NativeOperation(operation) => {
+                self.native_operation_image(&node, &operation.catalog_id)
             }
             NodeContent::CompositionInstance(_) => Err(LibraryError::Validation(
                 "Composition instances are not permitted inside Module definitions".to_string(),
@@ -349,6 +421,82 @@ impl ModuleImageRuntime<'_> {
         )))
     }
 
+    fn native_operation_image(
+        &mut self,
+        node: &CompiledNode,
+        catalog_id: &str,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        match catalog_id {
+            TRANSITION_IMAGE_INPUT_NODE_ID => self.single_image_input(node.id, IMAGE_INPUT_PORT),
+            TRANSITION_IMAGE_MIX_NODE_ID => self.transition_image_mix(node),
+            _ => Err(LibraryError::Render(format!(
+                "Native Module operation '{catalog_id}' has no stateless Image runtime"
+            ))),
+        }
+    }
+
+    fn transition_image_mix(
+        &mut self,
+        node: &CompiledNode,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        let from = self
+            .single_image_input(node.id, TRANSITION_FROM_INPUT_PORT)?
+            .ok_or_else(|| {
+                LibraryError::Render(format!(
+                    "Transition Image Mix Node {} received no A image",
+                    node.id
+                ))
+            })?;
+        let to = self
+            .single_image_input(node.id, TRANSITION_TO_INPUT_PORT)?
+            .ok_or_else(|| {
+                LibraryError::Render(format!(
+                    "Transition Image Mix Node {} received no B image",
+                    node.id
+                ))
+            })?;
+        let progress = self
+            .value_input(node.id, TRANSITION_PROGRESS_INPUT_PORT)?
+            .ok_or_else(|| {
+                LibraryError::Render(format!(
+                    "Transition Image Mix Node {} received no Progress value",
+                    node.id
+                ))
+            })?;
+        let PropertyValue::Number(progress) = progress else {
+            return Err(LibraryError::Render(format!(
+                "Transition Image Mix Node {} requires numeric Progress",
+                node.id
+            )));
+        };
+        let progress = NormalizedProgress16::new(progress.into_inner() as f32)
+            .map_err(LibraryError::Render)?;
+        let context = self.transition_context.ok_or_else(|| {
+            LibraryError::Render(format!(
+                "Transition Image Mix Node {} can only run in a Timeline Transition host",
+                node.id
+            ))
+        })?;
+        Ok(Some(FrameItem::Transition(Box::new(FrameTransition {
+            transition_id: context.transition_id,
+            timeline_time: context.timeline_time,
+            kind: FrameTransitionKind::CrossDissolve,
+            width: self.width,
+            height: self.height,
+            progress,
+            from: FrameTransitionSource {
+                item_id: context.from.item_id,
+                source_time: context.from.source_time,
+                item: from,
+            },
+            to: FrameTransitionSource {
+                item_id: context.to.item_id,
+                source_time: context.to.source_time,
+                item: to,
+            },
+        }))))
+    }
+
     fn single_image_input(
         &mut self,
         node_id: uuid::Uuid,
@@ -513,26 +661,20 @@ impl ModuleImageRuntime<'_> {
             .ok_or_else(|| {
                 LibraryError::Validation(format!("Compiled Module has no parameter {parameter_id}"))
             })?;
-        let instance = self
-            .project
-            .module_instances
-            .get(&self.invocation.instance_id)
-            .ok_or_else(|| {
-                LibraryError::Validation(format!(
-                    "Module instance {} is missing",
-                    self.invocation.instance_id
-                ))
-            })?;
-        if instance.definition_id != self.definition.id {
+        if let Some(value) = self.host_parameters.get(&parameter_id) {
+            return Ok(value.clone());
+        }
+        if self.invocation.definition_id != self.definition.id {
             return Err(LibraryError::Validation(format!(
                 "Module instance {} changed definition after compilation",
-                instance.id
+                self.invocation.instance_id
             )));
         }
         if let Some(track) = self.invocation.automation_tracks.get(&parameter_id) {
             return track.evaluate_at(self.local_time);
         }
-        Ok(instance
+        Ok(self
+            .invocation
             .parameter_overrides
             .get(&parameter_id)
             .unwrap_or(&parameter.default_value)
@@ -589,6 +731,12 @@ impl ModuleImageRuntime<'_> {
             return self.value_input(node.id, input);
         }
         match node.content {
+            NodeContent::NativeOperation(operation)
+                if operation.catalog_id == TRANSITION_PROGRESS_INPUT_NODE_ID
+                    && source.port == NUMBER_RESULT_OUTPUT_PORT =>
+            {
+                self.value_input(node.id, TRANSITION_PROGRESS_INPUT_PORT)
+            }
             NodeContent::Data(_) if source.port == DATA_VALUE_OUTPUT_PORT => {
                 self.value_input(node.id, DATA_VALUE_PROPERTY)
             }

@@ -8,7 +8,8 @@
 use eframe::egui;
 use library::editor::{ModuleInterfaceCommand, TimelineEditorService};
 use library::model::authoring::{
-    AuthoringProject, ModuleConnectionId, ModuleDefinition, ModuleInstanceId, ModulePortAddress,
+    AuthoringProject, ModuleConnectionId, ModuleDefinition, ModuleInputPortOwnership,
+    ModuleInstanceId, ModuleNodePortContract, ModulePortAddress,
 };
 use library::model::project::{PortDataType, PortDirection};
 use library::model::property::{Property, PropertyDefinition, PropertyValue};
@@ -96,6 +97,25 @@ fn authored_property_key_for_port<'a>(node: &'a Node, port_key: &str) -> Option<
     node.properties()
         .iter()
         .find_map(|(key, _)| (key == property_key).then_some(key.as_str()))
+}
+
+/// Port contract presented by this Module document.
+///
+/// Generic Modules may expose both Image and Audio on one Output terminal.
+/// A Transition host has one explicit media contract, so its protected Output
+/// presents only that type instead of suggesting a second, unusable output.
+fn document_port_contract(
+    definition: &ModuleDefinition,
+    node: &Node,
+) -> Result<ModuleNodePortContract, String> {
+    let mut contract = ModuleNodePortContract::resolve(node)?;
+    if matches!(node.content(), NodeContent::ModuleOutput(_)) {
+        if let Some(transition) = definition.host_contract.transition() {
+            let media_type = transition.media_type.port_data_type();
+            contract.ports.retain(|port| port.data_type == media_type);
+        }
+    }
+    Ok(contract)
 }
 
 fn translate_surface_outputs(
