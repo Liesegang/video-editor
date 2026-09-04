@@ -145,6 +145,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **未実装：Shape Layer の Appearance を Illustrator 相当の第一級スタックにする。** 通常の Shape Clip は現在単一 Fill に限られるため、geometry と分離した Timeline 所有の `AppearanceStack` を導入し、簡単な装飾のために Node Editor を開かせない。
   - 各 `AppearanceEntry` は stable ID、名前、visible/enabled、opacity、blend mode、local transform、対象、operation、parameter/automation を持ち、`Fill`、`Stroke`、`Effect`、`Group` を任意順・任意数で積める。
   - Fill は solid/linear gradient/radial gradient/freeform gradient/pattern、Stroke は width/alignment/join/cap/miter/dash/offset/arrowhead/width profile/brush を段階実装する。Drop Shadow、Inner/Outer Glow、Blur、Offset Path、Roughen、Warp 等は Fill/Stroke/Group/Shape 全体のどこへ適用するかを明示する。
+  - Fill/Stroke の見た目は `Color` へ押し込めず、第一級の `Paint = Solid | Gradient | Pattern` として型付けする。Paint対応スウォッチは既存Color pickerの同じ導線から `Solid / Gradient / Pattern` を切り替え、単色だけを受けるparameterの型契約は勝手に広げない。
+  - `Gradient` は stable ID、Linear/Radial/Conic/Freeform種別、stable stop ID、position、managed color、opacity、midpoint/interpolation、spread、gradient transformを保持する。stop追加・削除・並べ替え、Canvas上の方向/中心/半径編集、Inspector/Curve Editorのautomationを同じ値へ接続する。
+  - 通常のGradient編集はそのAppearance instanceだけを変更する。再利用swatch/presetは明示的な共有 `PaintDefinition` とinstance override/detachを持ち、共有定義を編集するときだけ影響instance数を表示する。補間とcompositeはProject working-linear color spaceで行い、Preview/Exportのterminal変換と混同しない。
   - 対象は `WholeShape | Group(stable_id) | Subpath(stable_id)` とし、Path 編集後も対応を保つ。対象が消えた場合は黙って別要素へ掛けず、orphan/conflict として Inspector に残す。
   - Inspector は既存 Effect Stack の property row、keyframe mode、drag/drop、insertion preview、icon/context menu を共通 primitive として再利用し、entry の複製、group化、enable/bypass、削除、drag reorder を一つの Undo で行う。
   - Timeline/Dope Sheet/Curve Editor が entry parameter の時間を所有する。RenderPlan は Appearance を局所的な Shape branch/style/effect/composite passへ派生 compileし、Appearance数に比例したユーザー向けNodeを自動生成しない。
