@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -217,7 +218,6 @@ class QaClient:
         point = component_center(component)
         self.inject("click", {**point, "button": button, "coordinate_space": "points"})
         return snapshot, component, point
-
     def double_click_component(self, component_id: str):
         snapshot, component = self.wait_component(component_id)
         point = component_center(component)
@@ -295,6 +295,34 @@ class QaClient:
             "key",
             {"key": key.lower(), "pressed": pressed, "modifiers": modifiers},
         )
+
+
+def capture_viewport(
+    client: QaClient, path: pathlib.Path, timeout: float = 15.0
+) -> dict:
+    """Capture the real native viewport and verify the published PNG bytes."""
+
+    queued = client.request("/v1/captures", method="POST")
+    capture_id = queued["capture_id"]
+
+    def ready():
+        status = client.request("/v1/captures/{}".format(capture_id))
+        if status.get("phase") == "failed":
+            raise QaFailure("capture failed: {}".format(status.get("error")))
+        return status if status.get("phase") == "ready" else None
+
+    status = client.wait_until("capture {}".format(capture_id), ready, timeout=timeout)
+    with urllib.request.urlopen(
+        client.base_url + "/v1/captures/{}.png".format(capture_id), timeout=5.0
+    ) as response:
+        png = response.read()
+    if hashlib.sha256(png).hexdigest() != status.get("sha256"):
+        raise QaFailure("capture SHA-256 mismatch")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(png)
+    result = dict(status)
+    result["path"] = str(path.resolve())
+    return result
 
 
 def _interactable(component: dict) -> bool:

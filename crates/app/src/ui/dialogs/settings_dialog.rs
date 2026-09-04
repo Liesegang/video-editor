@@ -1,8 +1,10 @@
 use crate::command::{format_shortcut, Command, CommandId, CommandRegistry};
 use crate::config::AppConfig;
+use crate::ui::dialogs::{dialog_button, DialogButtonRole};
 use crate::{config, model::ui_types::SettingsTab};
 use eframe::egui::{Key, ScrollArea, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
+use egui_phosphor::regular as icons;
 use library::plugin::PluginManager;
 use std::sync::Arc;
 
@@ -136,6 +138,16 @@ impl SettingsDialog {
                 });
 
             if let Some(inner) = inner_response {
+                crate::qa::register_component_with_metadata(
+                    "settings.dialog",
+                    "settings_dialog",
+                    inner.response.rect,
+                    true,
+                    Some(serde_json::json!({
+                        "content_width": dialog_size.x,
+                        "content_height": dialog_size.y,
+                    })),
+                );
                 if let Some((should_close, local_result, listening)) = inner.inner {
                     is_listening_for_shortcut = listening;
                     returned_result = local_result;
@@ -328,22 +340,65 @@ fn settings_panel(
                         });
 
                         strip.cell(|ui| {
-                            super::dialog_footer(ui, |ui| {
-                                if ui.button("Cancel").clicked() {
+                            let footer = super::dialog_footer(ui, |ui| {
+                                let cancel = dialog_button(
+                                    ui,
+                                    "Cancel",
+                                    DialogButtonRole::Secondary,
+                                );
+                                crate::qa::register_component_with_metadata(
+                                    "settings.cancel",
+                                    "settings_dialog_button",
+                                    cancel.rect,
+                                    cancel.enabled(),
+                                    Some(serde_json::json!({"role": "secondary"})),
+                                );
+                                if cancel.clicked() {
                                     result = Some(SettingsResult::Cancel);
                                 }
-                                if ui.button("Save").clicked() {
+
+                                let save = dialog_button(
+                                    ui,
+                                    format!("{} Save", icons::FLOPPY_DISK),
+                                    DialogButtonRole::Primary,
+                                );
+                                crate::qa::register_component_with_metadata(
+                                    "settings.save",
+                                    "settings_dialog_button",
+                                    save.rect,
+                                    save.enabled(),
+                                    Some(serde_json::json!({"role": "primary"})),
+                                );
+                                if save.clicked() {
                                     result = Some(SettingsResult::Save);
                                 }
+
                                 ui.with_layout(
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
-                                        if ui.button("Restore Defaults").clicked() {
+                                        let restore = dialog_button(
+                                            ui,
+                                            format!("{} Restore Defaults", icons::ARROW_COUNTER_CLOCKWISE),
+                                            DialogButtonRole::Secondary,
+                                        );
+                                        crate::qa::register_component_with_metadata(
+                                            "settings.restore_defaults",
+                                            "settings_dialog_button",
+                                            restore.rect,
+                                            restore.enabled(),
+                                            Some(serde_json::json!({"role": "restore"})),
+                                        );
+                                        if restore.clicked() {
                                             result = Some(SettingsResult::RestoreDefaults);
                                         }
                                     },
                                 );
                             });
+                            crate::qa::register_component(
+                                "settings.footer",
+                                "settings_dialog_footer",
+                                footer.response.rect,
+                            );
                         });
                     });
             });

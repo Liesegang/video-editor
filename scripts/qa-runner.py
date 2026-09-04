@@ -15,7 +15,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 import uuid
 
 from qa_support import (
@@ -24,6 +23,7 @@ from qa_support import (
     AUTHORING_PATH_FIXTURE,
     QaClient,
     REPOSITORY_ROOT,
+    capture_viewport,
     process_group_options,
     terminate_process,
 )
@@ -58,6 +58,7 @@ FULL_SUITES = (
         project_file=True,
         expects_exit=True,
     ),
+    SuiteSpec("settings-dialog", "qa-settings-dialog-e2e.py"),
     SuiteSpec("assets-timeline", "qa-assets-timeline-e2e.py"),
     SuiteSpec("inspector-asset-preview", "qa-inspector-asset-preview-e2e.py"),
     SuiteSpec("timeline-edit", "qa-timeline-edit-e2e.py"),
@@ -132,33 +133,6 @@ def wait_for_published_endpoint(
             last_error = error
         time.sleep(0.02)
     raise RuntimeError("QA endpoint publication timeout: {}".format(last_error))
-
-
-def capture_viewport(client: QaClient, path: pathlib.Path, timeout: float = 15.0) -> dict:
-    queued = client.request("/v1/captures", method="POST")
-    capture_id = queued["capture_id"]
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        status = client.request("/v1/captures/{}".format(capture_id))
-        if status.get("phase") == "ready":
-            break
-        if status.get("phase") == "failed":
-            raise RuntimeError("capture failed: {}".format(status.get("error")))
-        time.sleep(0.05)
-    else:
-        raise RuntimeError("capture {} timed out".format(capture_id))
-    with urllib.request.urlopen(
-        client.base_url + "/v1/captures/{}.png".format(capture_id), timeout=5.0
-    ) as response:
-        png = response.read()
-    digest = hashlib.sha256(png).hexdigest()
-    if digest != status.get("sha256"):
-        raise RuntimeError("capture SHA-256 mismatch")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(png)
-    result = dict(status)
-    result["path"] = str(path.resolve())
-    return result
 
 
 def capture_file_matches_metadata(path: pathlib.Path, metadata) -> bool:

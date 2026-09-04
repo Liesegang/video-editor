@@ -36,6 +36,7 @@ class QaRunnerTests(unittest.TestCase):
         expected = [
             "smoke",
             "unsaved-changes",
+            "settings-dialog",
             "assets-timeline",
             "inspector-asset-preview",
             "timeline-edit",

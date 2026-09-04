@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-from qa_support import QaFailure, item_by_name, run_suite_main
+from qa_support import QaFailure, capture_viewport, item_by_name, run_suite_main
 
 
 TARGET_NAME = "QA Overlap"
@@ -158,15 +158,6 @@ def _state_with_target(client):
 
 
 def _capture_dialog(client):
-    queued = client.request("/v1/captures", method="POST")
-    capture_id = queued["capture_id"]
-    status = client.wait_until(
-        "Unsaved Changes screenshot",
-        lambda: value
-        if (value := client.request("/v1/captures/{}".format(capture_id))).get("phase")
-        == "ready"
-        else None,
-    )
     artifact_dir = pathlib.Path(
         os.environ.get(
             "RUVIE_QA_ARTIFACT_DIR",
@@ -175,12 +166,7 @@ def _capture_dialog(client):
     )
     artifact_dir.mkdir(parents=True, exist_ok=True)
     png_path = artifact_dir / "capture.png"
-    with urllib.request.urlopen(
-        client.base_url + "/v1/captures/{}.png".format(capture_id), timeout=5.0
-    ) as response:
-        png_path.write_bytes(response.read())
-    metadata = dict(status)
-    metadata["path"] = str(png_path.resolve())
+    metadata = capture_viewport(client, png_path)
     (artifact_dir / "capture.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
