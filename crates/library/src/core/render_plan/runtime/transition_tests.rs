@@ -520,6 +520,7 @@ fn transition_module_resolves_extra_image_input_by_published_id() {
             a: 255,
         },
     );
+    project.items.get_mut(&source_id).unwrap().blend_mode = BlendMode::Multiply;
     project
         .transitions
         .get_mut(&transition_id)
@@ -539,7 +540,11 @@ fn transition_module_resolves_extra_image_input_by_published_id() {
         );
     project.validate().unwrap();
 
-    assert_eq!(render_pixel(&project, 150), [0, 255, 0, 255]);
+    assert_eq!(
+        render_pixel(&project, 150),
+        [0, 255, 0, 255],
+        "an auxiliary input is isolated media; its Timeline blend must not erase it on transparency"
+    );
 }
 
 #[test]

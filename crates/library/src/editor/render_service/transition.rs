@@ -32,10 +32,12 @@ impl<T: Renderer> RenderService<T> {
             }
         };
         match transition.kind {
-            FrameTransitionKind::CrossDissolve => {
-                self.renderer
-                    .draw_cross_dissolve_retained(from, to, transition.progress.as_f32())
-            }
+            FrameTransitionKind::CrossDissolve => self.renderer.draw_cross_dissolve_retained(
+                from,
+                to,
+                transition.progress.as_f32(),
+                transition.blend_mode,
+            ),
         }
     }
 

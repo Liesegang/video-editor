@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Verify the production Inspector property-authoring control in the native UI."""
 
-from qa_support import QaFailure, component_center, item_by_name, run_suite_main
+from qa_support import (
+    QaFailure,
+    component_center,
+    item_by_name,
+    run_suite_main,
+    seek_timeline_seconds,
+)
 
 
 def _component(snapshot, component_id):
@@ -30,36 +36,6 @@ def _assert_semantic(client, component_id, expected):
         return component if component is not None and _semantic(component) == expected else None
 
     return client.wait_until("{} showing {}".format(component_id, expected), matches)
-
-
-def _seek_seconds(client, seconds):
-    state = client.state()
-    timeline = state["editor"]["timeline"]
-    ruler = _required_component(client, "timeline.ruler")
-    rect = ruler["rect_points"]
-    x = (
-        float(rect["min_x"])
-        + float(seconds) * float(timeline["pixels_per_second"])
-        - float(timeline["horizontal_scroll"])
-    )
-    client.inject(
-        "click",
-        {
-            "x": x,
-            "y": float(rect["center_y"]),
-            "button": "primary",
-            "coordinate_space": "points",
-        },
-    )
-
-    expected_frame = int(round(float(seconds) * 30.0))
-    return client.wait_until(
-        "Timeline seek to {:.3f}s".format(seconds),
-        lambda: current
-        if (current := client.state())["editor"]["timeline"]["current_frame"]
-        == expected_frame
-        else None,
-    )
 
 
 def _assert_row_order(client, item_id, key):
@@ -100,14 +76,14 @@ def run_suite(client):
     anchor_mode = "inspector.property_mode:item:{}:anchor".format(item_id)
 
     # QA Text starts at 1 second and has position keys at local 0 and 2.
-    _seek_seconds(client, 1.0)
+    seek_timeline_seconds(client, 1.0)
     key_here = _assert_semantic(
         client, position_mode, "diamond_filled_keyframe"
     )
     if (key_here.get("metadata") or {}).get("key_at_current_time") is not True:
         raise QaFailure("filled keyframe icon does not report a key at the playhead")
 
-    _seek_seconds(client, 2.0)
+    seek_timeline_seconds(client, 2.0)
     key_away = _assert_semantic(
         client, position_mode, "diamond_outline_keyframe"
     )

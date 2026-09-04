@@ -22,6 +22,7 @@ use crate::state::authoring::AuthoringUiState;
 use crate::state::node_editor::{
     ModuleEditorHost, ModuleEditorPortId, NodeEditorDocument, NodeEditorState,
 };
+mod clock;
 mod context_menu;
 mod host;
 mod interface;

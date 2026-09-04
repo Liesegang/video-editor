@@ -117,20 +117,21 @@ pub(super) fn module_effect_controls(
             AttachmentOwner::Timeline { .. } | AttachmentOwner::Track { .. } => &[],
         };
         let control_id = format!("attachment:{}:module_input:{}", attachment.id, input.id);
-        let action = super::super::module_media_input::media_input_picker(
+        let action = crate::ui::module_media_input::media_input_picker(
             ui,
-            super::super::module_media_input::MediaInputPicker {
+            crate::ui::module_media_input::MediaInputPicker {
                 control_id: &control_id,
                 project: resources.project,
                 timeline_id,
                 input,
                 current,
                 excluded_items,
+                required_coverage: None,
                 can_inherit: false,
             },
         );
         match action {
-            Some(super::super::module_media_input::MediaInputPickerAction::Bind(binding)) => {
+            Some(crate::ui::module_media_input::MediaInputPickerAction::Bind(binding)) => {
                 match resources.service.bind_attachment_module_input(
                     attachment.id,
                     input.id,
@@ -140,7 +141,7 @@ pub(super) fn module_effect_controls(
                     Err(error) => state.error = Some(error.to_string()),
                 }
             }
-            Some(super::super::module_media_input::MediaInputPickerAction::Unbind) => {
+            Some(crate::ui::module_media_input::MediaInputPickerAction::Unbind) => {
                 match resources
                     .service
                     .unbind_attachment_module_input(attachment.id, input.id)
@@ -149,7 +150,7 @@ pub(super) fn module_effect_controls(
                     Err(error) => state.error = Some(error.to_string()),
                 }
             }
-            Some(super::super::module_media_input::MediaInputPickerAction::Inherit) => {}
+            Some(crate::ui::module_media_input::MediaInputPickerAction::Inherit) => {}
             None => {}
         }
     }

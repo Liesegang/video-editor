@@ -462,20 +462,21 @@ fn module_controls(
                     |controls| controls.input_bindings.get(&input.id),
                 );
                 let control_id = format!("transition:{}:module_input:{}", transition.id, input.id);
-                let action = super::module_media_input::media_input_picker(
+                let action = crate::ui::module_media_input::media_input_picker(
                     ui,
-                    super::module_media_input::MediaInputPicker {
+                    crate::ui::module_media_input::MediaInputPicker {
                         control_id: &control_id,
                         project,
                         timeline_id: transition.timeline_id,
                         input,
                         current,
                         excluded_items: &excluded_items,
+                        required_coverage: transition.interval().ok(),
                         can_inherit,
                     },
                 );
                 match action {
-                    Some(super::module_media_input::MediaInputPickerAction::Bind(binding)) => {
+                    Some(crate::ui::module_media_input::MediaInputPickerAction::Bind(binding)) => {
                         let result = if let Some(path) = edit_instance_path {
                             service.bind_transition_module_input_at_instance(
                                 path,
@@ -491,7 +492,7 @@ fn module_controls(
                             Err(error) => state.error = Some(error.to_string()),
                         }
                     }
-                    Some(super::module_media_input::MediaInputPickerAction::Unbind) => {
+                    Some(crate::ui::module_media_input::MediaInputPickerAction::Unbind) => {
                         let result = edit_instance_path.map_or_else(
                             || service.unbind_transition_module_input(transition.id, input.id),
                             |path| {
@@ -507,7 +508,7 @@ fn module_controls(
                             Err(error) => state.error = Some(error.to_string()),
                         }
                     }
-                    Some(super::module_media_input::MediaInputPickerAction::Inherit) => {
+                    Some(crate::ui::module_media_input::MediaInputPickerAction::Inherit) => {
                         let Some(path) = edit_instance_path else {
                             continue;
                         };

@@ -16,12 +16,14 @@ use crate::model::authoring::{
     AttachmentId, AttachmentOwner, AttachmentStage, AuthoringProject, CompositionInstance,
     DurationPolicy, MediaTime, ModuleConnection, ModuleConnectionId, ModuleDefinition,
     ModuleDefinitionId, ModuleDefinitionSharing, ModuleInstanceId, ModuleOutputId,
-    ModulePortAddress, PublishedParameter, PublishedParameterId, RationalRate, ShapeKind,
-    ShapeSource, SourceRef, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
+    ModulePortAddress, ModuleTemplateOrigin, PublishedMediaInput, PublishedMediaInputId,
+    PublishedParameter, PublishedParameterId, RationalRate, ShapeKind, ShapeSource, SourceRef,
+    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TransitionMediaType,
 };
 use crate::model::frame::color::Color;
+use crate::model::node::Node;
 use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
-use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
+use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
 use crate::model::property::{ColorValue, PropertyValue, Vec2};
 use crate::plugin::PluginManager;
 
@@ -51,6 +53,8 @@ pub struct AuthoringE2eFixtureInfo {
     pub module_parameter_id: PublishedParameterId,
     pub module_keyframe_ids: Vec<crate::model::property::KeyframeId>,
     pub effect_attachment_ids: Vec<AttachmentId>,
+    pub required_input_transition_definition_id: ModuleDefinitionId,
+    pub required_input_transition_media_input_id: PublishedMediaInputId,
 }
 
 #[derive(Clone)]
@@ -237,6 +241,11 @@ pub fn build_authoring_e2e_fixture(
         PropertyValue::from(360.0),
     )?;
 
+    let (required_transition, required_transition_input_id) =
+        required_input_transition_definition()?;
+    let required_transition_definition_id = required_transition.id;
+    service.add_module_definition(required_transition)?;
+
     let clean_project = service.snapshot()?;
     let service = TimelineEditorService::new((*clean_project).clone())?;
     let info = AuthoringE2eFixtureInfo {
@@ -253,6 +262,8 @@ pub fn build_authoring_e2e_fixture(
         module_parameter_id: parameter_id,
         module_keyframe_ids: vec![module_key_a, module_key_b],
         effect_attachment_ids: vec![blur_attachment_id, tile_attachment_id],
+        required_input_transition_definition_id: required_transition_definition_id,
+        required_input_transition_media_input_id: required_transition_input_id,
     };
     Ok(AuthoringE2eFixture { service, info })
 }
@@ -482,6 +493,69 @@ fn solid_module_definition(
     Ok((definition, output_id, parameter_id))
 }
 
+/// A reusable Transition fixture whose visible result comes from one required
+/// public Image input. Native UI QA uses it to prove that choosing a template,
+/// resolving the public input and creating the instance is one atomic edit.
+fn required_input_transition_definition()
+-> Result<(ModuleDefinition, PublishedMediaInputId), LibraryError> {
+    let (mut definition, contract) = ModuleDefinition::new_transition(
+        "QA Required Input Transition",
+        ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+        TransitionMediaType::Image,
+    )
+    .map_err(LibraryError::Validation)?;
+    let output_target = definition
+        .output(contract.output_id)
+        .and_then(|output| output.target(PortDataType::Image))
+        .ok_or_else(|| {
+            LibraryError::Validation(
+                "QA Transition Module has no protected Image output".to_string(),
+            )
+        })?;
+    let output_connection = definition
+        .graph
+        .connections
+        .iter()
+        .position(|connection| connection.to == output_target)
+        .map(|index| definition.graph.connections.remove(index))
+        .ok_or_else(|| {
+            LibraryError::Validation(
+                "QA Transition Module has no starter output connection".to_string(),
+            )
+        })?;
+    debug_assert_eq!(output_connection.to.port, IMAGE_INPUT_PORT);
+
+    let input_target = Node::new_merge("Required Image Input");
+    let input_node_id = input_target.id;
+    definition.graph.nodes.insert(input_node_id, input_target);
+    definition.graph.connections.push(ModuleConnection {
+        id: ModuleConnectionId::new(),
+        from: ModulePortAddress {
+            node_id: input_node_id,
+            port: IMAGE_OUTPUT_PORT.to_string(),
+        },
+        to: output_connection.to,
+        order: 0,
+        blend_mode: crate::model::BlendMode::Normal,
+    });
+    let input_id = PublishedMediaInputId::new();
+    definition.interface.media_inputs.push(PublishedMediaInput {
+        id: input_id,
+        name: "External Image".to_string(),
+        data_type: PortDataType::Image,
+        target: ModulePortAddress {
+            node_id: input_node_id,
+            port: MERGE_IMAGES_PORT.to_string(),
+        },
+        required: true,
+        primary: false,
+    });
+    definition.topology_revision += 1;
+    definition.interface_version += 1;
+    definition.validate().map_err(LibraryError::Validation)?;
+    Ok((definition, input_id))
+}
+
 fn media_time(value: i64, timescale: u32) -> Result<MediaTime, LibraryError> {
     MediaTime::new(value, timescale).map_err(LibraryError::Validation)
 }
@@ -640,6 +714,25 @@ mod tests {
                 }
                 && matches!(attachment.processor, AttachmentProcessor::BuiltinEffect(_))
         }));
+
+        let transition_definition = project
+            .module_definitions
+            .get(&fixture.info.required_input_transition_definition_id)
+            .expect("required-input Transition definition");
+        assert!(matches!(
+            transition_definition.sharing,
+            ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project)
+        ));
+        assert!(
+            transition_definition
+                .interface
+                .media_inputs
+                .iter()
+                .any(|input| {
+                    input.id == fixture.info.required_input_transition_media_input_id
+                        && input.required
+                })
+        );
 
         serde_json::to_string(&fixture.info).expect("serializable fixture info");
     }

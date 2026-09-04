@@ -444,12 +444,23 @@ pub(super) fn compile_timeline(
             };
             let from = source(transition.from_item_id)?;
             let to = source(transition.to_item_id)?;
+            let output_blend_mode = project
+                .items
+                .get(&transition.to_item_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Transition {} refers to missing to item {}",
+                        transition.id, transition.to_item_id
+                    )
+                })?
+                .blend_mode;
             Ok(CompiledTransition {
                 id: transition.id,
                 edit_point: transition.edit_point,
                 from,
                 to,
                 output_schedule_index: to.schedule_index,
+                output_blend_mode,
                 progress: NormalizedTransitionProgress::new(interval)?,
                 processor: transition.processor.clone(),
                 parameters: transition.parameters.clone(),
@@ -739,6 +750,7 @@ pub(super) fn timeline_schedule_fingerprint(
                 item.layer,
                 item.interval,
                 item.time_map,
+                item.blend_mode,
                 source,
             )
         })

@@ -176,6 +176,12 @@ impl TimelineInterval {
     pub fn end(self) -> Result<MediaTime, String> {
         self.start.checked_add(self.duration)
     }
+
+    /// Reports whether this placement is active for the complete required
+    /// interval. Both intervals are half-open: `[start, end)`.
+    pub fn covers(self, required: Self) -> Result<bool, String> {
+        Ok(self.start <= required.start && self.end()? >= required.end()?)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

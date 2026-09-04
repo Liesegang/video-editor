@@ -49,6 +49,8 @@ mod transition_module;
 #[cfg(test)]
 mod instance_tests;
 #[cfg(test)]
+mod transition_blend_tests;
+#[cfg(test)]
 mod transition_tests;
 
 use frame_values::{

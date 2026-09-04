@@ -8,7 +8,9 @@ from qa_support import (
     find_clear_canvas_point,
     item_by_name,
     media_seconds,
+    rendered_preview_state,
     run_suite_main,
+    seek_timeline_seconds,
 )
 
 
@@ -204,47 +206,6 @@ def _select_connection(client, connection_id):
     )
 
 
-def _seek_seconds(client, seconds):
-    state = client.state()
-    timeline = state["editor"]["timeline"]
-    _, ruler = client.wait_component_settled("timeline.ruler")
-    rect = ruler["rect_points"]
-    x = (
-        float(rect["min_x"])
-        + float(seconds) * float(timeline["pixels_per_second"])
-        - float(timeline["horizontal_scroll"])
-    )
-    client.inject(
-        "click",
-        {
-            "x": x,
-            "y": float(rect["center_y"]),
-            "button": "primary",
-            "coordinate_space": "points",
-        },
-    )
-    expected_frame = int(round(float(seconds) * 30.0))
-    return client.wait_until(
-        "Timeline seek to {:.3f}s".format(seconds),
-        lambda: current
-        if (current := client.state())["editor"]["timeline"]["current_frame"]
-        == expected_frame
-        else None,
-    )
-
-
-def _rendered_without_error(client, revision):
-    state = client.state()
-    preview = state["editor"]["preview"]
-    if (
-        state["editor"].get("error") is None
-        and preview.get("rendered_revision") == revision
-        and preview.get("nontransparent_pixels", 0) > 0
-    ):
-        return state
-    return None
-
-
 def run_suite(client):
     client.wait_health()
     initial = client.state()
@@ -350,10 +311,10 @@ def run_suite(client):
         media_seconds(target["interval"]["duration"]),
     ):
         raise QaFailure("default transition duration is outside both clip bounds")
-    _seek_seconds(client, edit_point)
+    seek_timeline_seconds(client, edit_point)
     rendered = client.wait_until(
         "Cross Dissolve Preview publication",
-        lambda: _rendered_without_error(client, added["history"]["revision"]),
+        lambda: rendered_preview_state(client, added["history"]["revision"]),
         timeout=30.0,
     )
 
@@ -453,7 +414,7 @@ def run_suite(client):
 
     module_rendered = client.wait_until(
         "Node-authored Transition Preview publication",
-        lambda: _rendered_without_error(client, promoted["history"]["revision"]),
+        lambda: rendered_preview_state(client, promoted["history"]["revision"]),
         timeout=30.0,
     )
 
@@ -586,7 +547,7 @@ def run_suite(client):
             raise QaFailure("Node editing changed Timeline-owned " + field)
     custom_rendered = client.wait_until(
         "custom-node Transition Preview publication",
-        lambda: _rendered_without_error(client, custom_state["history"]["revision"]),
+        lambda: rendered_preview_state(client, custom_state["history"]["revision"]),
         timeout=30.0,
     )
 
@@ -679,7 +640,7 @@ def run_suite(client):
         raise QaFailure("Published parameter targets an internal port other than sigma_x")
 
     activate_dock_tab(client, TIMELINE_TAB_ID, "Timeline", "Transition automation owner")
-    _seek_seconds(client, edit_point)
+    seek_timeline_seconds(client, edit_point)
     client.wait_component_settled(overlay_id)
     client.click_component(overlay_id)
     client.wait_until(

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::frame_values::neutralize_root_blend;
 use super::transition_module::TransitionModuleImageRequest;
 use super::*;
 use crate::core::render_plan::{CompiledTimeline, CompiledTransition};
@@ -207,7 +208,7 @@ impl AuthoringFrameEvaluator<'_> {
                 })?
                 .local_time(timeline_time)
                 .map_err(LibraryError::Validation)?;
-            let item = runtime
+            let mut item = runtime
                 .evaluate_item_stage_for_transition(
                     timeline_id,
                     item_id,
@@ -225,6 +226,10 @@ impl AuthoringFrameEvaluator<'_> {
                         reason: "source evaluator produced no Image".to_string(),
                     })
                 })?;
+            // A/B are isolated processor inputs. Their Timeline blend modes
+            // belong to placement compositing and must not be evaluated
+            // against each input's transparent isolation surface.
+            neutralize_root_blend(&mut item);
             Ok(FrameTransitionSource {
                 item_id: item_id.as_uuid(),
                 source_time: OrderedFloat(source_time.to_seconds_f64()),
@@ -252,6 +257,7 @@ impl AuthoringFrameEvaluator<'_> {
                 kind: FrameTransitionKind::CrossDissolve,
                 width: timeline.width,
                 height: timeline.height,
+                blend_mode: transition.output_blend_mode,
                 progress,
                 from,
                 to,

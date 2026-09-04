@@ -483,6 +483,9 @@ impl ModuleImageRuntime<'_> {
             kind: FrameTransitionKind::CrossDissolve,
             width: self.width,
             height: self.height,
+            // Mix is internal processing. Timeline placement blend is applied
+            // once at the enclosing TransitionOutput boundary.
+            blend_mode: BlendMode::Normal,
             progress,
             from: FrameTransitionSource {
                 item_id: context.from.item_id,

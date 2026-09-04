@@ -269,12 +269,16 @@ fn transition_processor_menu(
     transition: &Transition,
     actions: &mut Vec<DeferredItemAction>,
 ) {
-    let module_choices =
-        transition_module_choices(project, transition.processor.contract.media_type);
+    let module_choices = transition_module_choices(project, transition);
     let compatible_count = module_choices.len();
     let assignable_module_count = module_choices
         .iter()
-        .filter(|choice| choice.assignment_error.is_none())
+        .filter(|choice| {
+            !matches!(
+                choice.availability,
+                ModuleChoiceAvailability::Unavailable(_)
+            )
+        })
         .count();
     let current_definition_id = transition
         .processor
@@ -321,7 +325,14 @@ fn transition_processor_menu(
         for module_choice in module_choices {
             let definition = module_choice.definition;
             let active = current_definition_id == Some(definition.id);
-            let assignable = module_choice.assignment_error.is_none();
+            let assignable = !matches!(
+                module_choice.availability,
+                ModuleChoiceAvailability::Unavailable(_)
+            );
+            let requires_input_assignment = matches!(
+                module_choice.availability,
+                ModuleChoiceAvailability::ConfigureInputs
+            );
             let choice = ui.add_enabled(
                 active || assignable,
                 egui::Button::selectable(
@@ -352,17 +363,25 @@ fn transition_processor_menu(
                     "definition_id": definition.id,
                     "media_type": transition_media_name(transition.processor.contract.media_type),
                     "assignable": assignable,
-                    "assignment_error": module_choice.assignment_error.as_deref(),
+                    "requires_input_assignment": requires_input_assignment,
+                    "assignment_error": module_choice.availability.unavailable_reason(),
                 })),
             );
-            if let Some(reason) = &module_choice.assignment_error {
+            if let Some(reason) = module_choice.availability.unavailable_reason() {
                 choice.clone().on_hover_text(reason);
                 ui.weak(reason);
             }
             if !active && assignable && choice.clicked() {
-                actions.push(DeferredItemAction::AssignTransitionModule {
-                    transition_id: transition.id,
-                    definition_id: definition.id,
+                actions.push(if requires_input_assignment {
+                    DeferredItemAction::ConfigureTransitionModule {
+                        transition_id: transition.id,
+                        definition_id: definition.id,
+                    }
+                } else {
+                    DeferredItemAction::AssignTransitionModule {
+                        transition_id: transition.id,
+                        definition_id: definition.id,
+                    }
                 });
                 ui.close();
             }
@@ -384,16 +403,74 @@ fn transition_processor_menu(
 
 struct TransitionModuleChoice<'a> {
     definition: &'a ModuleDefinition,
-    /// A reusable Transition can be structurally valid yet require another
-    /// Timeline input. It stays visible until the assignment form can bind
-    /// that input atomically, rather than disappearing from the chooser.
-    assignment_error: Option<String>,
+    availability: ModuleChoiceAvailability,
 }
 
-fn transition_module_choices(
+enum ModuleChoiceAvailability {
+    Direct,
+    ConfigureInputs,
+    Unavailable(String),
+}
+
+impl ModuleChoiceAvailability {
+    fn unavailable_reason(&self) -> Option<&str> {
+        match self {
+            Self::Unavailable(reason) => Some(reason),
+            Self::Direct | Self::ConfigureInputs => None,
+        }
+    }
+}
+
+fn module_choice_availability(
     project: &AuthoringProject,
-    media_type: TransitionMediaType,
-) -> Vec<TransitionModuleChoice<'_>> {
+    transition: &Transition,
+    definition: &ModuleDefinition,
+) -> ModuleChoiceAvailability {
+    let Some(contract) = definition.host_contract.transition() else {
+        return ModuleChoiceAvailability::Unavailable(
+            "Selected Module is not a Transition Module".to_string(),
+        );
+    };
+    if let Err(error) = contract.validate_definition(definition) {
+        return ModuleChoiceAvailability::Unavailable(error);
+    }
+    let excluded_items = [transition.from_item_id, transition.to_item_id];
+    let required_coverage = match transition.interval() {
+        Ok(interval) => interval,
+        Err(error) => return ModuleChoiceAvailability::Unavailable(error),
+    };
+    let required_inputs =
+        definition.interface.media_inputs.iter().filter(|input| {
+            input.required && !definition.host_contract.protects_media_input(input.id)
+        });
+    let mut has_required_inputs = false;
+    for input in required_inputs {
+        has_required_inputs = true;
+        if !crate::ui::module_media_input::has_compatible_input_candidate(
+            project,
+            transition.timeline_id,
+            input,
+            &excluded_items,
+            Some(required_coverage),
+        ) {
+            return ModuleChoiceAvailability::Unavailable(format!(
+                "Required input '{}' has no compatible clip covering the full Transition interval",
+                input.name
+            ));
+        }
+    }
+    if has_required_inputs {
+        ModuleChoiceAvailability::ConfigureInputs
+    } else {
+        ModuleChoiceAvailability::Direct
+    }
+}
+
+fn transition_module_choices<'a>(
+    project: &'a AuthoringProject,
+    transition: &Transition,
+) -> Vec<TransitionModuleChoice<'a>> {
+    let media_type = transition.processor.contract.media_type;
     let mut definitions = project
         .module_definitions
         .values()
@@ -407,11 +484,8 @@ fn transition_module_choices(
                 .is_some_and(|contract| contract.media_type == media_type)
         })
         .map(|definition| TransitionModuleChoice {
-            assignment_error: definition
-                .host_contract
-                .transition()
-                .and_then(|contract| contract.validate_atomic_assignment(definition).err()),
             definition,
+            availability: module_choice_availability(project, transition, definition),
         })
         .collect::<Vec<_>>();
     definitions.sort_by(|left, right| {
@@ -459,9 +533,11 @@ fn processor_label(
 mod tests {
     use super::*;
     use library::model::authoring::{
-        MediaTime, ModulePortAddress, ModuleTemplateOrigin, PublishedMediaInput,
-        PublishedMediaInputId, RationalRate,
+        MediaTime, ModuleHostContract, ModulePortAddress, ModuleTemplateOrigin,
+        PublishedMediaInput, PublishedMediaInputId, RationalRate, SourceRef, TimelineInterval,
+        TimelineItem, TimelineItemId, TransitionAlignment, TransitionId,
     };
+    use library::model::frame::color::Color;
     use library::model::node::Node;
     use library::model::project::{PortDataType, MERGE_IMAGES_PORT};
 
@@ -491,6 +567,11 @@ mod tests {
         let image = reusable("B Image", TransitionMediaType::Image);
         let audio = reusable("Audio", TransitionMediaType::Audio);
         let image_first = reusable("A Image", TransitionMediaType::Image);
+        let mut broken = reusable("C Broken", TransitionMediaType::Image);
+        let ModuleHostContract::Transition(broken_contract) = &mut broken.host_contract else {
+            panic!("transition factory returns a Transition host contract");
+        };
+        broken_contract.to_input_id = broken_contract.from_input_id;
         let mut required_input = reusable("Required Matte", TransitionMediaType::Image);
         let matte = Node::new_merge("Required Matte Target");
         required_input
@@ -517,12 +598,31 @@ mod tests {
         )
         .unwrap()
         .0;
-        let expected = [image_first.id, image.id, required_input.id];
-        for definition in [image, audio, image_first, required_input, general, private] {
+        let expected = [image_first.id, image.id, broken.id, required_input.id];
+        for definition in [
+            image,
+            audio,
+            image_first,
+            broken,
+            required_input,
+            general,
+            private,
+        ] {
             project.module_definitions.insert(definition.id, definition);
         }
+        let transition = Transition {
+            id: TransitionId::new(),
+            timeline_id: project.root_timeline_id,
+            from_item_id: TimelineItemId::new(),
+            to_item_id: TimelineItemId::new(),
+            edit_point: seconds(2),
+            duration: seconds(1),
+            alignment: TransitionAlignment::CenteredOnEdit,
+            processor: library::model::authoring::TransitionProcessor::cross_dissolve(),
+            parameters: Default::default(),
+        };
 
-        let choices = transition_module_choices(&project, TransitionMediaType::Image);
+        let choices = transition_module_choices(&project, &transition);
         assert_eq!(
             choices
                 .iter()
@@ -530,11 +630,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
-        assert!(choices[0].assignment_error.is_none());
-        assert!(choices[1].assignment_error.is_none());
-        assert!(choices[2]
-            .assignment_error
-            .as_deref()
-            .is_some_and(|reason| reason.contains("cannot be assigned without controls")));
+        assert!(matches!(
+            choices[0].availability,
+            ModuleChoiceAvailability::Direct
+        ));
+        assert!(matches!(
+            choices[1].availability,
+            ModuleChoiceAvailability::Direct
+        ));
+        assert!(matches!(
+            &choices[2].availability,
+            ModuleChoiceAvailability::Unavailable(reason)
+                if reason.contains("distinct Published input IDs")
+        ));
+        assert!(matches!(
+            &choices[3].availability,
+            ModuleChoiceAvailability::Unavailable(reason)
+                if reason.contains("no compatible clip")
+        ));
+
+        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+        let candidate = TimelineItem {
+            id: TimelineItemId::new(),
+            track_id,
+            name: "Matte source".to_string(),
+            source: SourceRef::Solid {
+                color: Color::white(),
+            },
+            interval: TimelineInterval::new(seconds(0), seconds(5)).unwrap(),
+            time_map: Default::default(),
+            layer: 3,
+            parent: None,
+            blend_mode: Default::default(),
+            authored_properties: Default::default(),
+        };
+        project.items.insert(candidate.id, candidate);
+        let choices = transition_module_choices(&project, &transition);
+        assert!(matches!(
+            choices[3].availability,
+            ModuleChoiceAvailability::ConfigureInputs
+        ));
     }
 }

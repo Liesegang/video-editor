@@ -232,7 +232,9 @@ fn cross_dissolve_mixes_premultiplied_sources_in_working_linear_space() {
         .unwrap();
     let from = RenderOutput::Working(working_pixel(config, [0.5, 0.0, 0.0, 0.5]));
     let to = RenderOutput::Working(working_pixel(config, [0.0, 0.0, 1.0, 1.0]));
-    renderer.draw_cross_dissolve(&from, &to, 0.25).unwrap();
+    renderer
+        .draw_cross_dissolve(&from, &to, 0.25, BlendMode::Normal)
+        .unwrap();
     let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
         panic!("Cross Dissolve must remain in the Project working domain");
     };
@@ -275,7 +277,7 @@ fn retained_cross_dissolve_consumes_native_layers_without_render_output_round_tr
     assert_eq!(renderer.retained_group_surfaces.len(), 2);
 
     renderer
-        .draw_cross_dissolve_retained(from, to, 0.25)
+        .draw_cross_dissolve_retained(from, to, 0.25, BlendMode::Normal)
         .unwrap();
     assert!(renderer.retained_group_surfaces.is_empty());
     let RenderOutput::Working(output) = renderer.finalize().unwrap() else {
@@ -294,7 +296,7 @@ fn cross_dissolve_rejects_encoded_input_at_the_project_linear_boundary() {
     let encoded = RenderOutput::Image(Image::new(1, 1, vec![255, 0, 0, 255]));
     let working = RenderOutput::Working(working_pixel(config, [0.0, 0.0, 1.0, 1.0]));
     let error = renderer
-        .draw_cross_dissolve(&encoded, &working, 0.5)
+        .draw_cross_dissolve(&encoded, &working, 0.5, BlendMode::Normal)
         .unwrap_err();
     assert!(error.to_string().contains("encoded RGBA8"));
 }

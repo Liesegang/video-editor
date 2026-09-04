@@ -12,8 +12,9 @@ use library::editor::{
     AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
 };
 use library::model::authoring::{
-    AttachmentId, InstancePath, MediaTime, ModuleDefinitionId, ProjectRevision, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TransitionId,
+    AttachmentId, InstancePath, MediaInputBinding, MediaTime, ModuleDefinitionId, ProjectRevision,
+    PublishedMediaInputId, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
+    TransitionId,
 };
 use library::model::frame::transform::Transform;
 use library::model::property::Vec2 as PropertyVec2;
@@ -153,6 +154,23 @@ pub enum AuthoringLibraryDrag {
 }
 
 #[derive(Clone, Debug)]
+pub struct TransitionModuleAssignmentDraft {
+    pub transition_id: TransitionId,
+    pub definition_id: ModuleDefinitionId,
+    pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
+}
+
+impl TransitionModuleAssignmentDraft {
+    pub fn new(transition_id: TransitionId, definition_id: ModuleDefinitionId) -> Self {
+        Self {
+            transition_id,
+            definition_id,
+            input_bindings: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AuthoringTimelineView {
     pub current_frame: i64,
     pub is_playing: bool,
@@ -175,6 +193,9 @@ pub struct AuthoringTimelineView {
     pub item_gesture: Option<TimelineItemGesture>,
     pub keyframe_gesture: Option<TimelineKeyframeGesture>,
     pub library_drag: Option<AuthoringLibraryDrag>,
+    /// Pending reusable Transition assignment. Bindings remain transient until
+    /// Apply submits the complete form as one Project transaction.
+    pub transition_module_assignment: Option<TransitionModuleAssignmentDraft>,
     pub playback_anchor: Option<(Instant, i64)>,
 }
 
@@ -194,6 +215,7 @@ impl Default for AuthoringTimelineView {
             item_gesture: None,
             keyframe_gesture: None,
             library_drag: None,
+            transition_module_assignment: None,
             playback_anchor: None,
         }
     }
@@ -536,6 +558,25 @@ impl AuthoringUiState {
     }
 
     pub fn reconcile(&mut self, project: &library::model::authoring::AuthoringProject) {
+        if self
+            .timeline
+            .transition_module_assignment
+            .as_ref()
+            .is_some_and(|draft| {
+                let Some(transition) = project.transitions.get(&draft.transition_id) else {
+                    return true;
+                };
+                project
+                    .module_definitions
+                    .get(&draft.definition_id)
+                    .and_then(|definition| definition.host_contract.transition())
+                    .is_none_or(|contract| {
+                        contract.media_type != transition.processor.contract.media_type
+                    })
+            })
+        {
+            self.timeline.transition_module_assignment = None;
+        }
         let invalid_concrete_path = self.active_instance_path.as_ref().is_some_and(|path| {
             resolve_instance_path_timeline(project, path) != Some(self.active_timeline_id)
         });
@@ -699,9 +740,14 @@ mod tests {
         state
             .selection
             .replace(AuthoringSelection::Item(TimelineItemId::new()));
+        state.timeline.transition_module_assignment = Some(TransitionModuleAssignmentDraft::new(
+            TransitionId::new(),
+            ModuleDefinitionId::new(),
+        ));
         state.timeline.current_frame = 1_000;
         state.reconcile(&project);
         assert_eq!(state.selection.primary(), None);
+        assert!(state.timeline.transition_module_assignment.is_none());
         assert_eq!(state.timeline.current_frame, 300);
     }
 

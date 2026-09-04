@@ -421,6 +421,10 @@ pub enum FrameGroupKind {
     /// A graph Image connection projected into an isolated wrapper while the
     /// source item remains in its original Project containment.
     ConnectedImage,
+    /// Final bounded processing output of a Timeline-owned Transition Module.
+    /// Its blend mode belongs to the `to` placement's schedule slot, outside
+    /// the Module's internal image topology.
+    TransitionOutput,
 }
 
 /// A render-time image container derived directly from the authoritative
@@ -469,6 +473,11 @@ pub struct FrameTransition {
     pub kind: FrameTransitionKind,
     pub width: u64,
     pub height: u64,
+    /// Blend used when this image operation is composited into its immediate
+    /// parent. Built-ins carry the Timeline-owned output blend directly;
+    /// Transition Module operations remain Normal inside their final
+    /// `TransitionOutput` boundary.
+    pub blend_mode: BlendMode,
     pub progress: NormalizedProgress16,
     pub from: FrameTransitionSource,
     pub to: FrameTransitionSource,

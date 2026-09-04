@@ -79,6 +79,7 @@ impl SkiaRenderer {
         from: &RenderOutput,
         to: &RenderOutput,
         progress: f32,
+        blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
         if !progress.is_finite() {
             return Err(LibraryError::Render(
@@ -105,7 +106,7 @@ impl SkiaRenderer {
             self.surface.canvas()
         };
         with_restored_canvas(canvas, |canvas| {
-            blend_runtime.draw_cross_dissolve(canvas, &from, &to, progress)
+            blend_runtime.draw_cross_dissolve(canvas, &from, &to, progress, blend_mode)
         })
     }
 
@@ -114,6 +115,7 @@ impl SkiaRenderer {
         from: RetainedRenderLayer,
         to: RetainedRenderLayer,
         progress: f32,
+        blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
         if !progress.is_finite() {
             return Err(LibraryError::Render(
@@ -165,7 +167,7 @@ impl SkiaRenderer {
             self.surface.canvas()
         };
         with_restored_canvas(canvas, |canvas| {
-            blend_runtime.draw_cross_dissolve(canvas, &from_image, &to_image, progress)
+            blend_runtime.draw_cross_dissolve(canvas, &from_image, &to_image, progress, blend_mode)
         })
     }
 }

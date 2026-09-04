@@ -489,8 +489,9 @@ impl Renderer for SkiaRenderer {
         from: &RenderOutput,
         to: &RenderOutput,
         progress: f32,
+        blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        self.draw_cross_dissolve_outputs(from, to, progress)
+        self.draw_cross_dissolve_outputs(from, to, progress, blend_mode)
     }
 
     fn begin_group(
@@ -562,8 +563,9 @@ impl Renderer for SkiaRenderer {
         from: RetainedRenderLayer,
         to: RetainedRenderLayer,
         progress: f32,
+        blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        self.draw_cross_dissolve_retained_layers(from, to, progress)
+        self.draw_cross_dissolve_retained_layers(from, to, progress, blend_mode)
     }
 
     fn rasterize_sksl_layer(

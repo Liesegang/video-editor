@@ -77,20 +77,13 @@ pub fn node_editor_panel(
         return;
     }
 
-    let timeline = project
-        .timelines
-        .get(&state.active_timeline_id)
-        .or_else(|| project.timelines.get(&project.root_timeline_id));
-    let canvas_size = timeline
-        .map(|timeline| (timeline.width, timeline.height))
-        .unwrap_or((1920, 1080));
-    let property_context = ModulePropertyContext {
-        time: timeline.map_or(0.0, |timeline| {
-            state.timeline.current_frame as f64 / timeline.fps.to_f64()
-        }),
-        fps: timeline.map_or(30.0, |timeline| timeline.fps.to_f64()),
-        resolution: canvas_size,
-    };
+    let property_context = super::clock::module_property_context(
+        project,
+        state.active_timeline_id,
+        state.timeline.current_frame,
+        &host,
+    );
+    let canvas_size = property_context.resolution;
     let actions = show_module_document(
         ui,
         definition,

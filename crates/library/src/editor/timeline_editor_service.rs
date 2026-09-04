@@ -31,6 +31,8 @@ mod module_presentation_tests;
 #[cfg(test)]
 mod node_clip_conversion_tests;
 #[cfg(test)]
+mod transition_input_coverage_tests;
+#[cfg(test)]
 mod transition_instance_dependency_tests;
 #[cfg(test)]
 mod transition_module_tests;

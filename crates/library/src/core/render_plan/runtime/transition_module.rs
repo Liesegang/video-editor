@@ -4,6 +4,7 @@
 //! A/B handles and normalized Progress through the Module's published
 //! interface, while only the reusable processing topology is Node-authored.
 
+use super::frame_values::neutralize_root_blend;
 use super::module_image::{
     ModuleImageRuntime, TransitionImageContext, TransitionImageSourceContext,
 };
@@ -152,9 +153,13 @@ impl AuthoringFrameEvaluator<'_> {
                     input.data_type
                 )));
             }
-            if let Some(frame) =
+            if let Some(mut frame) =
                 self.evaluate_media_binding(binding, timeline_id, timeline_time, instance_path)?
             {
+                // Published media inputs are isolated Module sources. Their
+                // Timeline placement blend belongs to their original schedule
+                // slot and must not be evaluated against transparent here.
+                neutralize_root_blend(&mut frame);
                 external_images.insert(input.target.clone(), frame);
             }
         }
@@ -191,11 +196,23 @@ impl AuthoringFrameEvaluator<'_> {
             host_parameters,
             Some(context),
         );
-        runtime.evaluate_terminal(output)?.ok_or_else(|| {
+        let output = runtime.evaluate_terminal(output)?.ok_or_else(|| {
             LibraryError::Render(format!(
                 "Transition {} Module produced no Image output",
                 transition.id
             ))
-        })
+        })?;
+        Ok(FrameItem::Group(FrameGroup {
+            source_id: transition.id.as_uuid(),
+            kind: FrameGroupKind::TransitionOutput,
+            width: timeline.width,
+            height: timeline.height,
+            background_color: transparent(),
+            transform: Transform::default(),
+            blend_mode: transition.output_blend_mode,
+            effect_time: OrderedFloat(local_time.to_seconds_f64()),
+            effects: Vec::new(),
+            items: vec![output],
+        }))
     }
 }

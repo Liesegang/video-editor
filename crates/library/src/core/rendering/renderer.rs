@@ -348,6 +348,7 @@ pub trait Renderer {
         _from: &RenderOutput,
         _to: &RenderOutput,
         _progress: f32,
+        _blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
         Err(LibraryError::Render(
             "renderer does not implement Timeline Cross Dissolve".to_string(),
@@ -376,6 +377,7 @@ pub trait Renderer {
         _from: RetainedRenderLayer,
         _to: RetainedRenderLayer,
         _progress: f32,
+        _blend_mode: BlendMode,
     ) -> Result<(), LibraryError> {
         Err(LibraryError::Render(
             "renderer does not support retained Timeline Cross Dissolve".to_string(),

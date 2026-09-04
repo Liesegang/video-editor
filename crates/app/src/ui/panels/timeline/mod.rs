@@ -5,6 +5,7 @@ mod geometry;
 mod interaction;
 mod painting;
 mod rows;
+mod transition_assignment;
 mod transitions;
 mod viewport;
 
@@ -52,6 +53,10 @@ enum DeferredItemAction {
     RemoveTransition(TransitionId),
     EditTransitionLogic(TransitionId),
     AssignTransitionModule {
+        transition_id: TransitionId,
+        definition_id: ModuleDefinitionId,
+    },
+    ConfigureTransitionModule {
         transition_id: TransitionId,
         definition_id: ModuleDefinitionId,
     },
@@ -231,6 +236,7 @@ pub fn timeline_panel(
         content_rect,
         visible_row_count,
     );
+    transition_assignment::show(ui.ctx(), project, state, service);
 }
 
 fn timeline_header(

@@ -194,7 +194,7 @@ pub(super) fn node_property_definition(
         .cloned()
 }
 
-fn property_with_edited_value(
+pub(super) fn property_with_edited_value(
     property: &Property,
     value: PropertyValue,
     property_time: f64,

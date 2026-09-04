@@ -119,7 +119,14 @@ pub(super) fn validate_transition_module_instance_overrides(
                 })?;
             contract.validate_additional_media_input(input.data_type)?;
             if let Some(binding) = binding {
-                project.validate_media_binding(None, timeline_id, input, binding, placements)?;
+                project.validate_media_binding(
+                    None,
+                    timeline_id,
+                    input,
+                    binding,
+                    placements,
+                    Some(transition.interval()?),
+                )?;
             }
         }
         for input in &definition.interface.media_inputs {

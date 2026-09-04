@@ -794,6 +794,7 @@ fn transparent_color() -> crate::model::frame::color::Color {
 
 fn group_requires_isolation(group: &FrameGroup) -> bool {
     group.kind == FrameGroupKind::Merge
+        || group.kind == FrameGroupKind::TransitionOutput
         || !group.effects.is_empty()
         || group.blend_mode != crate::model::BlendMode::Normal
         || (group.transform.opacity - 1.0).abs() > f64::EPSILON

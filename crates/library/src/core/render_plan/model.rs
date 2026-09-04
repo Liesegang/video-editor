@@ -197,6 +197,11 @@ pub struct CompiledTransition {
     /// deterministic compositing slot. Unrelated schedule entries retain
     /// their ordering around that slot.
     pub output_schedule_index: usize,
+    /// Blend used when the completed Transition image is composited at its
+    /// schedule slot. The `to` placement owns that slot, so its item blend is
+    /// compiled once rather than applying either participant blend inside the
+    /// isolated A/B processor inputs.
+    pub output_blend_mode: BlendMode,
     pub progress: NormalizedTransitionProgress,
     pub processor: TransitionProcessor,
     pub parameters: HashMap<String, AutomatableParameter>,

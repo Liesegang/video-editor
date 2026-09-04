@@ -15,8 +15,8 @@ use super::{
     CompositionParameterTarget, InstanceLocator, InstancePath, MediaInputBinding, MediaOutputKind,
     MediaTime, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing, ModuleInstance,
     ModuleInstanceId, ModuleInvocation, PublishedMediaInput, RationalRate, SourceRef, Timeline,
-    TimelineId, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
-    Transition, TransitionId, property_value_type,
+    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind, Transition, TransitionId, property_value_type,
 };
 
 mod item_placement;
@@ -611,6 +611,7 @@ impl AuthoringProject {
                     input,
                     binding,
                     placements,
+                    None,
                 )?;
             }
         }
@@ -626,6 +627,31 @@ impl AuthoringProject {
         Ok(())
     }
 
+    /// Validates a Published media binding against persisted placements.
+    ///
+    /// Supplying `required_coverage` adds a host-time availability contract.
+    /// Transition hosts use it for required auxiliary inputs; ordinary Module
+    /// and Effect pickers intentionally omit it. A required covered input must
+    /// use `SameTimeline`: an `Exact` path can have a different clock under a
+    /// nested time map, so raw interval comparison would not be sound.
+    pub fn validate_published_media_binding(
+        &self,
+        host_item_id: Option<TimelineItemId>,
+        host_timeline_id: TimelineId,
+        input: &PublishedMediaInput,
+        binding: &MediaInputBinding,
+        required_coverage: Option<TimelineInterval>,
+    ) -> Result<(), String> {
+        self.validate_media_binding(
+            host_item_id,
+            host_timeline_id,
+            input,
+            binding,
+            &ItemPlacementOverlay::empty(),
+            required_coverage,
+        )
+    }
+
     fn validate_media_binding(
         &self,
         host_item_id: Option<TimelineItemId>,
@@ -633,6 +659,7 @@ impl AuthoringProject {
         input: &PublishedMediaInput,
         binding: &MediaInputBinding,
         placements: &ItemPlacementOverlay<'_>,
+        required_coverage: Option<TimelineInterval>,
     ) -> Result<(), String> {
         let MediaInputBinding::TimelineItemOutput {
             locator,
@@ -672,6 +699,22 @@ impl AuthoringProject {
         };
         if input.data_type != output_type || !self.item_supports_output(source.id, *output)? {
             return Err("Media input binding has an incompatible output type".to_string());
+        }
+        if input.required
+            && let Some(required) = required_coverage
+        {
+            if !matches!(locator, InstanceLocator::SameTimeline) {
+                return Err(
+                    "Required Transition media inputs must use SameTimeline so full interval coverage can be validated"
+                        .to_string(),
+                );
+            }
+            if !source_placement.interval.covers(required)? {
+                return Err(format!(
+                    "Required media input source {} does not cover the full Transition interval",
+                    source.id
+                ));
+            }
         }
         Ok(())
     }

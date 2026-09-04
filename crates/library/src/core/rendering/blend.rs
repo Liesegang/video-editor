@@ -36,10 +36,23 @@ const CROSS_DISSOLVE_SHADER: &str = r#"
 uniform shader from_image;
 uniform shader to_image;
 uniform float progress;
+uniform float dissolve;
 
 half4 main(float2 p) {
     float amount = clamp(progress, 0.0, 1.0);
-    return mix(from_image.eval(p), to_image.eval(p), amount);
+    half4 sampled = mix(from_image.eval(p), to_image.eval(p), amount);
+    if (dissolve > 0.5) {
+        float coverage = clamp(float(sampled.a), 0.0, 1.0);
+        float2 cell = floor(p);
+        float random = fract(52.9829189 * fract(
+            0.06711056 * cell.x + 0.00583715 * cell.y + 0.7548777
+        ));
+        if (sampled.a <= 0.0 || random >= coverage) {
+            return half4(0.0);
+        }
+        return half4(clamp(sampled.rgb / sampled.a, 0.0, 1.0), 1.0);
+    }
+    return sampled;
 }
 "#;
 
@@ -161,6 +174,7 @@ impl BlendRuntime {
         from: &SkImage,
         to: &SkImage,
         progress: f32,
+        mode: BlendMode,
     ) -> Result<(), LibraryError> {
         if from.dimensions() != to.dimensions() {
             return Err(LibraryError::Render(format!(
@@ -190,7 +204,17 @@ impl BlendRuntime {
         let to_shader = to.to_shader(None, sampling, None).ok_or_else(|| {
             LibraryError::Render("Failed to create Cross Dissolve B shader".to_string())
         })?;
-        let uniforms = Data::new_copy(&progress.clamp(0.0, 1.0).to_ne_bytes());
+        let progress = progress.clamp(0.0, 1.0).to_ne_bytes();
+        let dissolve = if mode == BlendMode::Dissolve {
+            1.0_f32
+        } else {
+            0.0_f32
+        }
+        .to_ne_bytes();
+        let mut uniform_bytes = [0_u8; 8];
+        uniform_bytes[..4].copy_from_slice(&progress);
+        uniform_bytes[4..].copy_from_slice(&dissolve);
+        let uniforms = Data::new_copy(&uniform_bytes);
         let shader = effect
             .make_shader(
                 uniforms,
@@ -202,7 +226,11 @@ impl BlendRuntime {
             })?;
         let mut paint = Paint::default();
         paint.set_shader(shader);
-        paint.set_blend_mode(SkBlendMode::SrcOver);
+        if mode == BlendMode::Dissolve {
+            paint.set_blend_mode(SkBlendMode::SrcOver);
+        } else {
+            self.configure_paint(&mut paint, mode)?;
+        }
         canvas.draw_rect(
             Rect::from_wh(from.width() as f32, from.height() as f32),
             &paint,

@@ -119,6 +119,7 @@ pub(super) fn validate_transition_processor(
                         input,
                         binding,
                         placements,
+                        Some(transition.interval()?),
                     )?;
                 }
             }

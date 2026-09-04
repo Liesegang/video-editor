@@ -4,6 +4,7 @@ pub mod command_palette;
 pub mod dialogs;
 pub mod easing_menus;
 pub(crate) mod media_preview;
+pub(crate) mod module_media_input;
 pub mod panels;
 pub mod selection;
 pub mod theme;

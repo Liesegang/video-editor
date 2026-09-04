@@ -675,6 +675,18 @@ pub(super) fn run_item_actions(
                 .map(|_| {
                     state.status = "Applied reusable Transition Module".to_string();
                 }),
+            DeferredItemAction::ConfigureTransitionModule {
+                transition_id,
+                definition_id,
+            } => {
+                state.timeline.transition_module_assignment = Some(
+                    crate::state::authoring::TransitionModuleAssignmentDraft::new(
+                        transition_id,
+                        definition_id,
+                    ),
+                );
+                Ok(())
+            }
             DeferredItemAction::AssignBuiltinTransition(transition_id) => project
                 .transitions
                 .get(&transition_id)

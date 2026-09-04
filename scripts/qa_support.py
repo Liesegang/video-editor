@@ -348,6 +348,49 @@ def component_point(component: dict, fraction_x: float, fraction_y: float) -> di
     }
 
 
+def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
+    """Seek through the production Timeline ruler and wait for its exact frame."""
+    state = client.state()
+    timeline = state["editor"]["timeline"]
+    _, ruler = client.wait_component_settled("timeline.ruler")
+    rect = ruler["rect_points"]
+    x = (
+        float(rect["min_x"])
+        + float(seconds) * float(timeline["pixels_per_second"])
+        - float(timeline["horizontal_scroll"])
+    )
+    client.inject(
+        "click",
+        {
+            "x": x,
+            "y": float(rect["center_y"]),
+            "button": "primary",
+            "coordinate_space": "points",
+        },
+    )
+    expected_frame = int(round(float(seconds) * float(fps)))
+    return client.wait_until(
+        "Timeline seek to {:.3f}s".format(seconds),
+        lambda: current
+        if (current := client.state())["editor"]["timeline"]["current_frame"]
+        == expected_frame
+        else None,
+    )
+
+
+def rendered_preview_state(client: QaClient, revision: int):
+    """Return state once Preview has rendered this revision without an error."""
+    state = client.state()
+    preview = state["editor"]["preview"]
+    if (
+        state["editor"].get("error") is None
+        and preview.get("rendered_revision") == revision
+        and preview.get("nontransparent_pixels", 0) > 0
+    ):
+        return state
+    return None
+
+
 def activate_dock_tab(
     client: QaClient, component_id: str, label: str, description: str | None = None
 ):

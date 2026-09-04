@@ -64,6 +64,10 @@ FULL_SUITES = (
     SuiteSpec("timeline-edit", "qa-timeline-edit-e2e.py"),
     SuiteSpec("timeline-transition", "qa-transition-e2e.py"),
     SuiteSpec(
+        "transition-module-assignment",
+        "qa-transition-module-assignment-e2e.py",
+    ),
+    SuiteSpec(
         "timeline-content-zoom",
         "qa-timeline-content-zoom-e2e.py",
         AUTHORING_AUDIO_FIXTURE,

@@ -38,6 +38,11 @@ Transition Modules currently accept only the host-owned A and B streams because 
 no runtime for additional media inputs. Unsupported media types and processing Nodes are rejected
 while authoring, rather than saved and rejected only during rendering.
 
+Choosing a reusable Transition Module with required auxiliary inputs opens the shared published
+media-input picker. Its draft is UI-only: A/B participants are excluded, Apply creates the Module
+instance and every required binding in one transaction, and Cancel or Escape creates no Project or
+history change. Persisted bindings contain public input IDs and Timeline item outputs only.
+
 `RenderPlan` compiles each Module Definition once and stores lightweight Transition invocations.
 The plan remains hierarchical; it does not flatten source clips or duplicate processing topology
 for each transition.
@@ -53,6 +58,15 @@ built-in transition to a private starter Module containing finite A, B, Progress
 Nodes. Timeline Items are not expanded. Published parameters are edited through the normal
 Inspector, Dope Sheet, and Curve Editor automation path in transition-local time.
 
+An Image Transition replaces both participants with one processed image at the B (`to`) item's
+schedule slot. A and B are rendered as isolated processor inputs with `Normal` blend; their item
+blend modes are not applied against the transparent input surfaces. The completed Transition image
+uses the B item's blend mode when composited over earlier Timeline layers. This makes the existing
+B slot the single placement/blend owner and keeps Module topology independent from Timeline
+compositing. If A and B use different blend modes, A's mode applies before the transition interval,
+B's mode applies throughout the transition and after it; blend modes themselves are not
+interpolated.
+
 ## Invariants
 
 1. Moving, trimming, or changing the duration of a Transition cannot change Module topology.
@@ -66,6 +80,11 @@ Inspector, Dope Sheet, and Curve Editor automation path in transition-local time
 6. One compiled Module Definition may serve any number of Transition invocations.
 7. The derived RenderPlan is neither serialized nor user-editable.
 8. The pre-v1 project format has no compatibility reader, writer, or bidirectional legacy model.
+9. Every Image Transition input, including auxiliary published inputs, is blend-neutral; the
+   completed output uses the `to` placement's blend mode at the `to` schedule slot.
+10. A required auxiliary Transition input uses `SameTimeline` and its source placement covers the
+    complete half-open Transition interval. This same rule gates UI candidates, persisted Project
+    validation, and later placement edits; `Exact` remains available only to optional inputs.
 
 ## Consequences
 
@@ -74,6 +93,6 @@ processing island that needs Nodes, including auxiliary published Image inputs a
 published parameters. Nested instances remain independently controllable without multiplying Node
 graphs or creating a second owner for Timeline state.
 
-Reusable Transition template management, assignment of required auxiliary inputs, and additional
-audio/plugin runtimes may extend this contract. They must preserve the same typed published
-boundary and may not expose Timeline structure as Nodes.
+Reusable Transition template creation/management and additional audio/plugin runtimes may extend
+this contract. They must preserve the same typed published boundary and may not expose Timeline
+structure as Nodes.

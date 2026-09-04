@@ -482,7 +482,7 @@ fn keyframe_at(
     })
 }
 
-pub(super) fn property_label(ui: &mut Ui, control_id: &str, text: &str) -> Response {
+pub(crate) fn property_label(ui: &mut Ui, control_id: &str, text: &str) -> Response {
     let desired_size = egui::vec2(PROPERTY_LABEL_WIDTH, ui.spacing().interact_size.y.max(20.0));
     let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
     let font_id: FontId = TextStyle::Body.resolve(ui.style());
