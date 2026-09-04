@@ -142,6 +142,16 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Blur の大きい sigma で UI を固めず、Tile は centered origin と Offset X/Y を持つ。`mosaic`、`diagonal_clip` 等は Project linear RGBAF32 と宣言した color boundary を正しく変換する。
   - Text Ensemble の既存機能、target、X/Y translate/scale、rotation、stagger/easing を復旧し、Timeline/Node Clip の同じ値へ反映する。
 
+- [ ] **未実装：Shape Layer の Appearance を Illustrator 相当の第一級スタックにする。** 通常の Shape Clip は現在単一 Fill に限られるため、geometry と分離した Timeline 所有の `AppearanceStack` を導入し、簡単な装飾のために Node Editor を開かせない。
+  - 各 `AppearanceEntry` は stable ID、名前、visible/enabled、opacity、blend mode、local transform、対象、operation、parameter/automation を持ち、`Fill`、`Stroke`、`Effect`、`Group` を任意順・任意数で積める。
+  - Fill は solid/linear gradient/radial gradient/freeform gradient/pattern、Stroke は width/alignment/join/cap/miter/dash/offset/arrowhead/width profile/brush を段階実装する。Drop Shadow、Inner/Outer Glow、Blur、Offset Path、Roughen、Warp 等は Fill/Stroke/Group/Shape 全体のどこへ適用するかを明示する。
+  - 対象は `WholeShape | Group(stable_id) | Subpath(stable_id)` とし、Path 編集後も対応を保つ。対象が消えた場合は黙って別要素へ掛けず、orphan/conflict として Inspector に残す。
+  - Inspector は既存 Effect Stack の property row、keyframe mode、drag/drop、insertion preview、icon/context menu を共通 primitive として再利用し、entry の複製、group化、enable/bypass、削除、drag reorder を一つの Undo で行う。
+  - Timeline/Dope Sheet/Curve Editor が entry parameter の時間を所有する。RenderPlan は Appearance を局所的な Shape branch/style/effect/composite passへ派生 compileし、Appearance数に比例したユーザー向けNodeを自動生成しない。
+  - 明示的に Shape Clip を Node Clip へ昇格した場合だけ、Appearance の順序、stable identity、properties、automation、blend を有限の Shape branch + Style/Effect + Merge へ等価変換する。変換前後の image golden と一回 Undo を必須にする。
+  - Appearance preset と共有 Definition の適用はinstance値と定義編集を区別し、通常の色・線幅変更はその Shape instanceだけへ反映する。共有変更時だけ影響instance数を明示する。
+  - 既存 `DrawStyle`、Fill/Stroke descriptor、semantic Style stack の順序・identity保持テスト、Effect Stack UIを移植元として使い、旧Project graphをadapterで並行接続しない。
+
 - [ ] **部分実装：panel/window UX を production parity へ戻す。** View menu から任意 panel を開閉でき、dock/float/reorder/resize を保存できる。Beginner/Edit/Motion/Audio/Data/Logic/Diagnostics は機能モードではなく初期 panel layout preset とし、preset 適用後も自由に並べ替えられる。
 
 - [ ] **部分実装：dialog を共通 primitive へ統一する。** Settings、Unsaved Changes、Export、Plugin trust 等は共通 modal、body constraint、footer/action layout を使う。内容に応じて毎 frame サイズが伸びず、Discard/Cancel/Save/close が main thread を freeze せず、1 action が一度だけ dispatch される。
