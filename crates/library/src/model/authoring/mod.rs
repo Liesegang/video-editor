@@ -12,6 +12,7 @@ mod module_graph;
 mod project;
 mod time;
 mod timeline;
+mod transition;
 
 pub use attachment::*;
 pub use edit::*;
@@ -21,6 +22,7 @@ pub use module_graph::*;
 pub use project::*;
 pub use time::*;
 pub use timeline::*;
+pub use transition::*;
 
 #[cfg(test)]
 mod file_import_tests;

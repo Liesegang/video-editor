@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use crate::model::BlendMode;
 use crate::model::authoring::{
-    AttachmentId, AutomationTrack, MediaInputBinding, MediaTime, ModuleConnection,
-    ModuleDefinitionId, ModuleInstanceId, ModuleOutput, ModuleOutputId, ModulePortAddress,
-    PublishedAction, PublishedActionId, PublishedMediaInput, PublishedMediaInputId,
-    PublishedParameter, PublishedParameterId, PublishedSignal, PublishedSignalId, TimeMap,
-    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
+    AttachmentId, AutomatableParameter, AutomationTrack, MediaInputBinding, MediaOutputKind,
+    MediaTime, ModuleConnection, ModuleDefinitionId, ModuleInstanceId, ModuleOutput,
+    ModuleOutputId, ModulePortAddress, PublishedAction, PublishedActionId, PublishedMediaInput,
+    PublishedMediaInputId, PublishedParameter, PublishedParameterId, PublishedSignal,
+    PublishedSignalId, TimeMap, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
+    TransitionId, TransitionProcessor,
 };
 use crate::model::node::NodeContent;
 use crate::model::project::property::PropertyMap;
@@ -41,6 +42,7 @@ pub struct CompiledTimeline {
     pub fingerprint: [u8; 32],
     pub schedule: Vec<ScheduledItem>,
     pub track_schedules: HashMap<TimelineTrackId, Vec<usize>>,
+    pub transitions: Vec<CompiledTransition>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -131,6 +133,67 @@ pub struct CompiledModuleOutput {
     /// Stable topological order containing only Nodes that can reach this
     /// Output terminal. Dead editor branches never expand an invocation.
     pub evaluation_order: Vec<uuid::Uuid>,
+}
+
+/// Lightweight references to the two ordinary schedule entries evaluated by
+/// one transition. Neither source is expanded into a processing Node graph.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TransitionSourceInvocation {
+    pub item_id: TimelineItemId,
+    pub schedule_index: usize,
+    pub output: MediaOutputKind,
+    /// Extra source media needed outside this placement's visible interval.
+    /// Runtime and UI must validate the backing source and report a missing
+    /// handle; they must not require both Timeline placements to overlap.
+    pub required_hidden_handle: TransitionHandleRequirement,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TransitionHandleRequirement {
+    pub before: MediaTime,
+    pub after: MediaTime,
+}
+
+impl TransitionHandleRequirement {
+    pub const fn is_empty(self) -> bool {
+        self.before.value() == 0 && self.after.value() == 0
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CompiledTransition {
+    pub id: TransitionId,
+    pub edit_point: MediaTime,
+    pub from: TransitionSourceInvocation,
+    pub to: TransitionSourceInvocation,
+    pub progress: NormalizedTransitionProgress,
+    pub processor: TransitionProcessor,
+    pub parameters: HashMap<String, AutomatableParameter>,
+}
+
+/// Timeline-time mapping for the normalized transition input consumed by a
+/// processor. Runtime sampling is deterministic and clamped to `0..=1`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NormalizedTransitionProgress {
+    interval: TimelineInterval,
+}
+
+impl NormalizedTransitionProgress {
+    pub fn new(interval: TimelineInterval) -> Result<Self, String> {
+        if interval.duration <= MediaTime::zero() {
+            return Err("Transition progress duration must be greater than zero".to_string());
+        }
+        Ok(Self { interval })
+    }
+
+    pub const fn interval(self) -> TimelineInterval {
+        self.interval
+    }
+
+    pub fn sample_at(self, timeline_time: MediaTime) -> Result<f64, String> {
+        let elapsed = timeline_time.checked_sub(self.interval.start)?;
+        Ok((elapsed.to_seconds_f64() / self.interval.duration.to_seconds_f64()).clamp(0.0, 1.0))
+    }
 }
 
 impl CompiledModuleOutput {

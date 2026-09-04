@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use crate::error::LibraryError;
 use crate::model::authoring::{
-    BuiltinEffectInstance, BuiltinEffectParameter, EffectContractSnapshot, EffectParameterContract,
-    OperationRef, TextEnsembleOperation, text_ensemble_direct_contract_is_compatible,
+    AutomatableParameter, BuiltinEffectInstance, EffectContractSnapshot, OperationRef,
+    ProcessorParameterContract, TextEnsembleOperation, text_ensemble_direct_contract_is_compatible,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::{GeneratorContent, MediaContent, NativeNodeFactory, Node};
@@ -359,14 +359,14 @@ impl BuiltinEffectFactory {
                     ))
                 })?;
             let default_value = definition.default_value().clone();
-            parameter_contracts.push(EffectParameterContract {
+            parameter_contracts.push(ProcessorParameterContract {
                 key: definition.name().to_string(),
                 data_type: port.data_type,
                 default_value: default_value.clone(),
             });
             parameters.insert(
                 definition.name().to_string(),
-                BuiltinEffectParameter {
+                AutomatableParameter {
                     value: default_value,
                     automation: None,
                 },

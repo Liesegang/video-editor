@@ -103,13 +103,13 @@ pub struct BuiltinEffectInstance {
     pub operation: OperationRef,
     /// Persisted so a Project remains inspectable when an operation is absent.
     pub contract: EffectContractSnapshot,
-    pub parameters: std::collections::HashMap<String, BuiltinEffectParameter>,
+    pub parameters: std::collections::HashMap<String, AutomatableParameter>,
     pub blend_mode: BlendMode,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct BuiltinEffectParameter {
+pub struct AutomatableParameter {
     pub value: PropertyValue,
     pub automation: Option<AutomationTrack>,
 }
@@ -128,12 +128,12 @@ pub struct OperationRef {
 pub struct EffectContractSnapshot {
     pub input_type: PortDataType,
     pub output_type: PortDataType,
-    pub parameters: Vec<EffectParameterContract>,
+    pub parameters: Vec<ProcessorParameterContract>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct EffectParameterContract {
+pub struct ProcessorParameterContract {
     pub key: String,
     pub data_type: PortDataType,
     pub default_value: PropertyValue,

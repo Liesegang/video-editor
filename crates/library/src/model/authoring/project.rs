@@ -16,7 +16,7 @@ use super::{
     MediaTime, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing, ModuleInstance,
     ModuleInstanceId, ModuleInvocation, PublishedMediaInput, RationalRate, SourceRef, Timeline,
     TimelineId, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
-    property_value_type,
+    Transition, TransitionId, property_value_type,
 };
 
 mod validation;
@@ -74,6 +74,7 @@ pub struct AuthoringProject {
     pub timelines: HashMap<TimelineId, Timeline>,
     pub tracks: HashMap<TimelineTrackId, TimelineTrack>,
     pub items: HashMap<TimelineItemId, TimelineItem>,
+    pub transitions: HashMap<TransitionId, Transition>,
     pub module_definitions: HashMap<ModuleDefinitionId, ModuleDefinition>,
     pub module_instances: HashMap<ModuleInstanceId, ModuleInstance>,
     pub attachments: HashMap<AttachmentId, Attachment>,
@@ -131,6 +132,7 @@ impl AuthoringProject {
                 },
             )]),
             items: HashMap::new(),
+            transitions: HashMap::new(),
             module_definitions: HashMap::new(),
             module_instances: HashMap::new(),
             attachments: HashMap::new(),
@@ -200,6 +202,7 @@ impl AuthoringProject {
         self.validate_assets()?;
         self.validate_definitions_and_instances()?;
         self.validate_items()?;
+        validate_transitions(self)?;
         self.validate_attachments()?;
         self.validate_instance_ownership()?;
         self.validate_parent_cycles()?;

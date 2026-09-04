@@ -547,7 +547,7 @@ fn builtin_effect_parameter_mut<'a>(
     project: &'a mut AuthoringProject,
     attachment_id: AttachmentId,
     key: &str,
-) -> Result<&'a mut crate::model::authoring::BuiltinEffectParameter, String> {
+) -> Result<&'a mut crate::model::authoring::AutomatableParameter, String> {
     let attachment = project
         .attachments
         .get_mut(&attachment_id)

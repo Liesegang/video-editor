@@ -152,7 +152,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - linked Audio/Video と sync lock を尊重し、無関係な上段 Clip を動かさない。
   - J/K/L、frame step、jump-to-edit、in/out、loop と keyboard-only trim を native QA する。
 
-- [ ] **未実装：Transition を Timeline の第一級モデルとして実装する。** 現在は authoring model、UI、runtime に利用可能な Transition がなく、`transition` という内部状態名を機能実装と数えない。
+- [ ] **部分実装：Transition を Timeline の第一級モデルとして実装する。** Timeline 所有の型付き authoring model、atomic edit API、validation、局所 invalidation、階層型 RenderPlan contract は実装済み。UI、実レンダリング、source handle 診断、編集 tool 連携、golden/native QA が未完了であり、まだ利用可能な完成機能とは数えない。
   - Transition は `from_item`、`to_item`、edit point/interval、duration/alignment、processor reference、parameters/automation を Timeline が所有する。
   - 使い方は Transition preset を二 Clip の edit point へ drag/drop、または edit point の右クリック `Add Transition` とする。Timeline 上の handle で duration/alignment、Inspector/Curve Editor で値/easing を編集する。場当たり的な上部ボタンは追加しない。
   - Cross Dissolve、Dip to Color、Wipe、Audio Crossfade を built-in baseline とし、同じ typed transition contract を plugin から追加できる。

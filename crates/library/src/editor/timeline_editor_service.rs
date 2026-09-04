@@ -14,6 +14,7 @@ mod module;
 mod node_clip_conversion;
 mod shape_path;
 mod text_ensemble;
+mod transition;
 
 #[cfg(test)]
 mod attachment_tests;
@@ -21,6 +22,8 @@ mod attachment_tests;
 mod item_tests;
 #[cfg(test)]
 mod node_clip_conversion_tests;
+#[cfg(test)]
+mod transition_tests;
 
 use attachment::normalize_all_attachment_orders;
 use module::remove_instance_and_private_definition;
@@ -30,6 +33,7 @@ pub use authoring::{
     AuthoringPropertyValueUpdate, TimelineSettingsUpdate,
 };
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
+pub use transition::TransitionPlacement;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

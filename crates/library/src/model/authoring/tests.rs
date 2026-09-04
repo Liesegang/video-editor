@@ -600,7 +600,7 @@ fn builtin_effect_is_a_lightweight_attachment_and_undo_redo_are_project_atomic()
         contract: EffectContractSnapshot {
             input_type: PortDataType::Image,
             output_type: PortDataType::Image,
-            parameters: vec![EffectParameterContract {
+            parameters: vec![ProcessorParameterContract {
                 key: "radius".to_string(),
                 data_type: PortDataType::Number,
                 default_value: PropertyValue::Number(OrderedFloat(0.0)),
@@ -608,7 +608,7 @@ fn builtin_effect_is_a_lightweight_attachment_and_undo_redo_are_project_atomic()
         },
         parameters: HashMap::from([(
             "radius".to_string(),
-            BuiltinEffectParameter {
+            AutomatableParameter {
                 value: PropertyValue::Number(OrderedFloat(4.0)),
                 automation: None,
             },

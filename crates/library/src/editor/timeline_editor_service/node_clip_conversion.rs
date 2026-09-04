@@ -564,7 +564,7 @@ impl GraphBuilder<'_> {
         &mut self,
         node: &Node,
         key: &str,
-        parameter: &crate::model::authoring::BuiltinEffectParameter,
+        parameter: &crate::model::authoring::AutomatableParameter,
     ) -> Result<(), LibraryError> {
         let target = format!("{PROPERTY_PORT_PREFIX}{key}");
         let default = node

@@ -12,8 +12,9 @@ use crate::model::project::connection::PortDirection;
 
 use super::{
     CompiledModuleDefinition, CompiledModuleInvocation, CompiledModuleOutput, CompiledNode,
-    CompiledTimeline, DependencyIndex, ModuleHost, PlannedSource, RenderPlan, ScheduledItem,
-    TimelineRangeDependency,
+    CompiledTimeline, CompiledTransition, DependencyIndex, ModuleHost,
+    NormalizedTransitionProgress, PlannedSource, RenderPlan, ScheduledItem,
+    TimelineRangeDependency, TransitionHandleRequirement, TransitionSourceInvocation,
 };
 
 pub struct RenderPlanCompiler;
@@ -291,12 +292,70 @@ pub(super) fn compile_timeline(
             .or_default()
             .push(index);
     }
+    let schedule_indices = schedule
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.item_id, index))
+        .collect::<HashMap<_, _>>();
+    let mut transitions = project
+        .transitions
+        .values()
+        .filter(|transition| transition.timeline_id == timeline_id)
+        .map(|transition| {
+            let output = transition.processor.contract.media_type.output_kind();
+            let interval = transition.interval()?;
+            let interval_end = interval.end()?;
+            let source = |item_id| -> Result<TransitionSourceInvocation, String> {
+                let schedule_index = *schedule_indices.get(&item_id).ok_or_else(|| {
+                    format!(
+                        "Transition {} refers to an unscheduled item {item_id}",
+                        transition.id
+                    )
+                })?;
+                let item_interval = schedule
+                    .get(schedule_index)
+                    .ok_or_else(|| {
+                        format!("Transition {} source schedule is invalid", transition.id)
+                    })?
+                    .interval;
+                let item_end = item_interval.end()?;
+                Ok(TransitionSourceInvocation {
+                    item_id,
+                    schedule_index,
+                    output,
+                    required_hidden_handle: TransitionHandleRequirement {
+                        before: if item_interval.start > interval.start {
+                            item_interval.start.checked_sub(interval.start)?
+                        } else {
+                            crate::model::authoring::MediaTime::zero()
+                        },
+                        after: if item_end < interval_end {
+                            interval_end.checked_sub(item_end)?
+                        } else {
+                            crate::model::authoring::MediaTime::zero()
+                        },
+                    },
+                })
+            };
+            Ok(CompiledTransition {
+                id: transition.id,
+                edit_point: transition.edit_point,
+                from: source(transition.from_item_id)?,
+                to: source(transition.to_item_id)?,
+                progress: NormalizedTransitionProgress::new(interval)?,
+                processor: transition.processor.clone(),
+                parameters: transition.parameters.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    transitions.sort_by_key(|transition| (transition.progress.interval().start, transition.id));
     let fingerprint = timeline_schedule_fingerprint(project, timeline_id)?;
     Ok(CompiledTimeline {
         id: timeline_id,
         fingerprint,
         schedule,
         track_schedules,
+        transitions,
     })
 }
 
@@ -570,10 +629,17 @@ pub(super) fn timeline_schedule_fingerprint(
         })
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.0);
+    let mut transitions = project
+        .transitions
+        .values()
+        .filter(|transition| transition.timeline_id == timeline_id)
+        .collect::<Vec<_>>();
+    transitions.sort_by_key(|transition| transition.id);
     let value = serde_json::json!({
         "timeline_id": timeline.id,
         "track_order": timeline.track_order,
         "items": items,
+        "transitions": transitions,
     });
     let encoded = serde_json::to_vec(&canonical_json(value))
         .map_err(|error| format!("Cannot encode Timeline fingerprint: {error}"))?;

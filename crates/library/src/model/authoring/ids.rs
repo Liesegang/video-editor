@@ -40,6 +40,7 @@ macro_rules! define_id {
 define_id!(TimelineId);
 define_id!(TimelineTrackId);
 define_id!(TimelineItemId);
+define_id!(TransitionId);
 define_id!(CompositionParameterId);
 define_id!(ModuleDefinitionId);
 define_id!(ModuleInstanceId);

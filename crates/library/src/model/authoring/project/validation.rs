@@ -1,12 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::property::{PropertyMap, PropertyValue};
 
 use super::super::{
-    AttachmentOwner, AttachmentStage, AutomationTrack, BuiltinEffectInstance, CompositionParameter,
-    DurationPolicy, MediaInputBinding, MediaTime, ModuleInvocation, ModulePortAddress,
-    PublishedParameter, PublishedParameterId, TextEnsembleOperation, TimelineItem, TimelineItemId,
-    property_value_type, text_ensemble_direct_contract_is_compatible,
+    AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter, AutomationTrack,
+    BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaInputBinding, MediaTime,
+    ModuleInvocation, ProcessorParameterContract, PublishedParameter, TextEnsembleOperation,
+    TimelineItem, TimelineItemId, TransitionMediaType, property_value_type,
+    text_ensemble_direct_contract_is_compatible,
 };
 
 pub(super) fn validate_text_ensemble_operations(
@@ -168,23 +169,86 @@ pub(super) fn validate_automation(
     track: &AutomationTrack,
     parameter: &PublishedParameter,
 ) -> Result<(), String> {
+    validate_typed_automation(
+        track,
+        parameter.data_type,
+        &format!("Automation for {}", parameter.id),
+        None,
+    )
+}
+
+pub(super) fn validate_typed_automation(
+    track: &AutomationTrack,
+    data_type: crate::model::project::PortDataType,
+    owner: &str,
+    maximum_time: Option<MediaTime>,
+) -> Result<(), String> {
     if track.keyframes.is_empty() {
-        return Err(format!("Automation for {} has no Keyframes", parameter.id));
+        return Err(format!("{owner} has no Keyframes"));
     }
     let mut ids = HashSet::new();
     let mut previous = None;
     for keyframe in &track.keyframes {
         if keyframe.time.is_negative()
+            || maximum_time.is_some_and(|maximum| keyframe.time > maximum)
             || !ids.insert(keyframe.id)
             || previous.is_some_and(|time| time >= keyframe.time)
         {
+            return Err(format!("{owner} has invalid Keyframes"));
+        }
+        if !data_type.accepts(property_value_type(&keyframe.value)) {
+            return Err(format!("{owner} has an incompatible Keyframe value"));
+        }
+        previous = Some(keyframe.time);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_automatable_parameters(
+    parameters: &HashMap<String, AutomatableParameter>,
+    contracts: &[ProcessorParameterContract],
+    owner: &str,
+    maximum_automation_time: Option<MediaTime>,
+) -> Result<(), String> {
+    let mut keys = HashSet::new();
+    for contract in contracts {
+        if contract.key.trim().is_empty() || !keys.insert(contract.key.as_str()) {
+            return Err(format!("{owner} contract has duplicate parameter keys"));
+        }
+        if !contract
+            .data_type
+            .accepts(property_value_type(&contract.default_value))
+        {
             return Err(format!(
-                "Automation for {} has invalid Keyframes",
-                parameter.id
+                "{owner} parameter '{}' has an invalid default",
+                contract.key
             ));
         }
-        validate_parameter_value(parameter, &keyframe.value)?;
-        previous = Some(keyframe.time);
+        let parameter = parameters
+            .get(&contract.key)
+            .ok_or_else(|| format!("{owner} is missing parameter '{}'", contract.key))?;
+        if !contract
+            .data_type
+            .accepts(property_value_type(&parameter.value))
+        {
+            return Err(format!(
+                "{owner} parameter '{}' has an invalid value",
+                contract.key
+            ));
+        }
+        if let Some(automation) = &parameter.automation {
+            validate_typed_automation(
+                automation,
+                contract.data_type,
+                &format!("{owner} parameter '{}' automation", contract.key),
+                maximum_automation_time,
+            )?;
+        }
+    }
+    if parameters.len() != contracts.len() {
+        return Err(format!(
+            "{owner} has parameters outside its persisted contract"
+        ));
     }
     Ok(())
 }
@@ -244,49 +308,128 @@ pub(super) fn validate_builtin_effect(
     if effect.contract.input_type != attachment_media_type(stage)? {
         return Err("Built-in Effect media type is incompatible with its Stage".to_string());
     }
-    let mut keys = HashSet::new();
-    for contract in &effect.contract.parameters {
-        if contract.key.trim().is_empty() || !keys.insert(contract.key.as_str()) {
-            return Err("Built-in Effect contract has duplicate parameter keys".to_string());
+    validate_automatable_parameters(
+        &effect.parameters,
+        &effect.contract.parameters,
+        "Built-in Effect",
+        None,
+    )
+}
+
+pub(super) fn validate_transitions(project: &AuthoringProject) -> Result<(), String> {
+    for (transition_id, transition) in &project.transitions {
+        if *transition_id != transition.id {
+            return Err("Transition map key does not match its ID".to_string());
         }
-        if !contract
-            .data_type
-            .accepts(property_value_type(&contract.default_value))
-        {
+        let timeline = project
+            .timelines
+            .get(&transition.timeline_id)
+            .ok_or_else(|| format!("Transition {} has no Timeline", transition.id))?;
+        if transition.from_item_id == transition.to_item_id {
             return Err(format!(
-                "Built-in Effect parameter '{}' has an invalid default",
-                contract.key
+                "Transition {} must connect two distinct Timeline items",
+                transition.id
             ));
         }
-        let parameter = effect
-            .parameters
-            .get(&contract.key)
-            .ok_or_else(|| format!("Built-in Effect is missing parameter '{}'", contract.key))?;
-        if !contract
-            .data_type
-            .accepts(property_value_type(&parameter.value))
-        {
+        let from = project
+            .items
+            .get(&transition.from_item_id)
+            .ok_or_else(|| format!("Transition {} has a missing from item", transition.id))?;
+        let to = project
+            .items
+            .get(&transition.to_item_id)
+            .ok_or_else(|| format!("Transition {} has a missing to item", transition.id))?;
+        let from_track = project
+            .tracks
+            .get(&from.track_id)
+            .ok_or_else(|| format!("Transition {} has a missing from Track", transition.id))?;
+        let to_track = project
+            .tracks
+            .get(&to.track_id)
+            .ok_or_else(|| format!("Transition {} has a missing to Track", transition.id))?;
+        if from_track.timeline_id != timeline.id || to_track.timeline_id != timeline.id {
             return Err(format!(
-                "Built-in Effect parameter '{}' has an invalid value",
-                contract.key
+                "Transition {} crosses a Timeline boundary",
+                transition.id
             ));
         }
-        if let Some(automation) = &parameter.automation {
-            let published = PublishedParameter {
-                id: PublishedParameterId::new(),
-                name: contract.key.clone(),
-                data_type: contract.data_type,
-                default_value: contract.default_value.clone(),
-                target: ModulePortAddress {
-                    node_id: uuid::Uuid::nil(),
-                    port: contract.key.clone(),
-                },
-            };
-            validate_automation(automation, &published)?;
+        if from.track_id != to.track_id {
+            return Err(format!(
+                "Transition {} must connect items on one Track",
+                transition.id
+            ));
         }
-    }
-    if effect.parameters.len() != effect.contract.parameters.len() {
-        return Err("Built-in Effect has parameters outside its persisted contract".to_string());
+
+        let interval = transition
+            .interval()
+            .map_err(|error| format!("Transition {} has invalid timing: {error}", transition.id))?;
+        if interval.end()? > timeline.duration {
+            return Err(format!(
+                "Transition {} extends beyond its Timeline",
+                transition.id
+            ));
+        }
+        let interval_end = interval.end()?;
+        if from.interval.start > interval.start || from.interval.end()? < transition.edit_point {
+            return Err(format!(
+                "Transition {} from item does not own the visible range through its edit point",
+                transition.id
+            ));
+        }
+        if to.interval.start > transition.edit_point || to.interval.end()? < interval_end {
+            return Err(format!(
+                "Transition {} to item does not own the visible range from its edit point",
+                transition.id
+            ));
+        }
+
+        let operation = &transition.processor.operation;
+        if operation.category != super::super::TRANSITION_CATEGORY
+            || operation.operation != super::super::TRANSITION_APPLY_OPERATION
+            || operation.component_id.trim().is_empty()
+            || operation.version.trim().is_empty()
+        {
+            return Err(format!(
+                "Transition {} has an invalid processor identity",
+                transition.id
+            ));
+        }
+        match operation.component_id.as_str() {
+            super::super::CROSS_DISSOLVE_COMPONENT_ID
+                if transition.processor.contract.media_type != TransitionMediaType::Image
+                    || !transition.processor.contract.parameters.is_empty() =>
+            {
+                return Err(format!(
+                    "Transition {} has an invalid Cross Dissolve contract",
+                    transition.id
+                ));
+            }
+            super::super::AUDIO_CROSSFADE_COMPONENT_ID
+                if transition.processor.contract.media_type != TransitionMediaType::Audio
+                    || !transition.processor.contract.parameters.is_empty() =>
+            {
+                return Err(format!(
+                    "Transition {} has an invalid Audio Crossfade contract",
+                    transition.id
+                ));
+            }
+            _ => {}
+        }
+        let output = transition.processor.contract.media_type.output_kind();
+        if !project.item_supports_output(from, output)?
+            || !project.item_supports_output(to, output)?
+        {
+            return Err(format!(
+                "Transition {} source items do not provide the required media",
+                transition.id
+            ));
+        }
+        validate_automatable_parameters(
+            &transition.parameters,
+            &transition.processor.contract.parameters,
+            &format!("Transition {}", transition.id),
+            Some(transition.duration),
+        )?;
     }
     Ok(())
 }
