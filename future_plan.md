@@ -145,7 +145,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 ## M3: カット編集と第一級 Transition
 
-- [ ] **未実装：Timeline edit transaction と tool contract を ADR 化する。** selection、linked AV、sync lock、track lock、target track、snap、ripple scope、overlap policy、one-undo boundary を定義する。preview projection と commit が同じ pure edit plan を使い、drag preview と確定結果をずらさない。依存: M1、M2。
+- [x] **完了：Timeline edit transaction と tool contract を ADR 化する。** `docs/adr/0007-timeline-edit-transactions.md` で selection、linked AV、sync lock、track lock、target track、snap、ripple scope、overlap policy、sparse preview projection、stale revision、one-undo boundary、Marker/Transition追従を固定した。実コードは後続項目として段階実装する。依存: M1、M2。
 
 - [ ] **未実装：高速カット編集 tool set を実装する。** Select/Move、Razor/Split、Ripple Trim、Ripple Delete、Roll、Slip、Slide、Rate Stretch、Insert、Overwrite、Lift/Extract を icon、keyboard shortcut、context menu で提供する。
   - Ripple は対象 edit point より後の scoped Clip/Marker/Transition を一つの transaction で詰め/送る。
