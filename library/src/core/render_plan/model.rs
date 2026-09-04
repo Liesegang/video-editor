@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::model::BlendMode;
 use crate::model::authoring::{
     AttachmentId, AutomationTrack, MediaInputBinding, MediaTime, ModuleConnection,
-    ModuleDefinitionId, ModuleInstanceId, ModulePortAddress, PublishedAction, PublishedActionId,
-    PublishedMediaInput, PublishedMediaInputId, PublishedMediaOutput, PublishedMediaOutputId,
+    ModuleDefinitionId, ModuleInstanceId, ModuleOutput, ModuleOutputId, ModulePortAddress,
+    PublishedAction, PublishedActionId, PublishedMediaInput, PublishedMediaInputId,
     PublishedParameter, PublishedParameterId, PublishedSignal, PublishedSignalId, TimeMap,
     TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
 };
@@ -88,11 +88,26 @@ pub struct CompiledModuleDefinition {
     pub connections: Vec<ModuleConnection>,
     pub parameters: HashMap<PublishedParameterId, PublishedParameter>,
     pub media_inputs: HashMap<PublishedMediaInputId, PublishedMediaInput>,
-    pub media_outputs: HashMap<PublishedMediaOutputId, CompiledModuleOutput>,
+    pub outputs: HashMap<ModuleOutputId, CompiledModuleOutput>,
+    /// GPU particle executables keyed by their existing Module Output. The
+    /// topology is compiled once per definition and never expanded per item.
+    pub particle_outputs: HashMap<ModuleOutputId, CompiledParticleDefinition>,
     /// Retained at the compiled boundary for the future stateful/event runtime;
     /// the first stateless Image slice does not evaluate these interfaces.
     pub signals: HashMap<PublishedSignalId, PublishedSignal>,
     pub actions: HashMap<PublishedActionId, PublishedAction>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CompiledParticleDefinition {
+    pub emitter_node_id: uuid::Uuid,
+    pub initialize_node_id: uuid::Uuid,
+    pub gravity_node_id: uuid::Uuid,
+    pub drag_node_id: uuid::Uuid,
+    pub renderer_node_id: uuid::Uuid,
+    /// Stable Module-owned mutable state slot. Runtime keys combine it with
+    /// InstancePath and ModuleInstanceId before allocating any buffer.
+    pub state_slot_id: uuid::Uuid,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -108,15 +123,22 @@ pub struct CompiledNode {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct CompiledModuleOutput {
-    pub interface: PublishedMediaOutput,
+    pub terminal: ModuleOutput,
+    /// Connected graph source for each media input on the single Output
+    /// terminal. An unconnected input is valid and evaluates to no media; a
+    /// Published media input may also target either terminal input.
+    pub sources: HashMap<crate::model::project::PortDataType, ModulePortAddress>,
     /// Stable topological order containing only Nodes that can reach this
-    /// published output. Dead editor branches never expand an invocation.
+    /// Output terminal. Dead editor branches never expand an invocation.
     pub evaluation_order: Vec<uuid::Uuid>,
 }
 
 impl CompiledModuleOutput {
-    pub fn source(&self) -> &ModulePortAddress {
-        &self.interface.source
+    pub fn source(
+        &self,
+        data_type: crate::model::project::PortDataType,
+    ) -> Option<&ModulePortAddress> {
+        self.sources.get(&data_type)
     }
 }
 
@@ -136,7 +158,7 @@ pub struct CompiledModuleInvocation {
     pub host: ModuleHost,
     pub instance_id: ModuleInstanceId,
     pub definition_id: ModuleDefinitionId,
-    pub output_id: PublishedMediaOutputId,
+    pub output_id: ModuleOutputId,
     pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
     pub automation_tracks: HashMap<PublishedParameterId, AutomationTrack>,
 }

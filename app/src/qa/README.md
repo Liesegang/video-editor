@@ -22,28 +22,30 @@ logical points and physical pixels, visibility, enabled state, and frame ID.
 Only a complete frame is published, so an HTTP client never sees a partially
 rebuilt registry.
 
-Initial stable ID families are:
+Stable production-authoring ID families include:
 
-- `node_editor.container.*`, `node_editor.node:*`, `node_editor.port.*`
-- `timeline.track:*`, `timeline.clip:*`
-- `inspector.property.*`, `inspector.keyframe.*`
-- `graph.canvas`, `graph.ruler`, `graph.keyframe.*`
-- `keyframe_dialog.*`
-- `preview.canvas`, `preview.content`
+- `node_editor.canvas`, `node_editor.node:*`, `node_editor.port.*`
+- `timeline.track:*`, `timeline.item:*`
+- `assets.asset:*`, `assets.module:*`, `assets.node_clip_source`
+- `inspector.effect:*`, `inspector.property:*`
+- `curve_editor.canvas`, `curve_editor.key:*`, `curve_editor.keyframe_menu.easing.*`
+- `preview.canvas`, `preview.content`, `preview.position_gizmo`, `preview.*` controls
+- `preview.path.editor`, `preview.vector.point:*`, `preview.vector.handle_*:*`,
+  `preview.vector.mode.*`
 
-`node_editor.canvas` is re-registered after Snarl finishes drawing. Its final
-metadata is therefore authoritative for that completed UI frame:
+`node_editor.canvas` is registered after the production Module Snarl finishes
+drawing. Its metadata is authoritative for that completed UI frame:
 
 ```json
 {
-  "composition_id": "...",
-  "scale": 0.0065,
+  "document_kind": "module_definition",
+  "module_definition_id": "...",
+  "module_node_count": 2,
+  "module_connection_count": 1,
+  "scale": 1.0,
   "translation": {"x": 640.0, "y": 360.0},
-  "min_scale": 0.0065,
-  "max_scale": 1.25,
-  "detail_enabled": false,
-  "port_interaction_enabled": false,
-  "resize_interaction_enabled": false
+  "production_surface": "egui_snarl",
+  "timeline_graph_expansion": false
 }
 ```
 
@@ -93,6 +95,14 @@ curl -s -X POST http://127.0.0.1:39091/v1/input/scroll \
 
 This is the normal egui mouse-wheel path used by the Node Editor zoom test;
 there is no QA command for setting the canvas transform directly.
+
+Inject a real root viewport close request with `/v1/input/close-request` and
+an empty JSON object. The application still decides whether to emit
+`CancelClose` or accept the request:
+
+```sh
+curl -s -X POST http://127.0.0.1:39091/v1/input/close-request -d '{}'
+```
 
 Inject a native cursor-centered pinch factor with `/v1/input/pinch`:
 
@@ -149,100 +159,38 @@ status records are retained, a capture is bounded to 128 MiB of RGBA input and
 
 ## Coordinate E2E suites
 
-Run the keyframe editing suite against a fresh deterministic fixture:
+The native app accepts deterministic `authoring_e2e`, `authoring_audio_e2e`,
+and `authoring_path_e2e` fixtures. Each is built through
+`TimelineEditorService`, so it exercises the same Project model as the shipping
+UI. There is no legacy Project/container fixture compatibility path.
+
+Build once, start an isolated native process per suite, capture every final
+viewport, and retain all evidence under `target/qa-runs`:
 
 ```sh
-python3 scripts/qa-keyframe-e2e.py --spawn
+python3 scripts/qa-runner.py --mode smoke
+python3 scripts/qa-runner.py --mode full
 ```
 
-It adds, updates, and removes Inspector keyframes across Direct, Effect,
-Style, Effector, and Decorator targets; performs a multi-point Graph Editor
-drag; opens the keyframe dialog; and compares the authoritative Project,
-Inspector metadata, Preview pixels, and one-entry-per-gesture history.
+The full run covers these production-reachable workflows:
 
-Run the focused 100x Node Editor navigation suite with:
+- imported Asset rows remain distinct and drag into Timeline without a button;
+- a clip moves and trims independently of overlapping sibling clips;
+- Preview renders, plays, pans and zooms with its grid and source-sized gizmo;
+- canonical Path clips edit through visible vertices, coupled Bezier handles,
+  point modes, Escape cancel, one-step Undo, and a freshly rendered Preview;
+- Inspector displays both Effects and edits through the shared numeric control;
+- Curve Editor points, interpolation menu, pan, and independent zoom work;
+- an explicit Node Clip opens the production Node Editor, where a Node can be
+  created, connected, and stress-zoomed without expanding the Timeline.
+
+Each focused script also supports `--spawn`, for example:
 
 ```sh
+python3 scripts/qa-curve-editor-e2e.py --spawn
+python3 scripts/qa-assets-timeline-e2e.py --spawn
 python3 scripts/qa-node-editor-e2e.py --spawn
 ```
 
-It resolves the latest `node_editor.canvas` center, injects a real
-command-wheel zoom to the `0.0065` clamp, re-queries geometry, then performs a
-real primary-coordinate drag. It requires scale and all LOD gates to remain
-unchanged during pan, verifies the translation delta, and confirms that the
-authoritative Project and undo history did not change. The suite is also part
-of `python3 scripts/qa-runner.py --mode full`.
-
-Run the focused Preview fit and hand-tool suite with:
-
-```sh
-python3 scripts/qa-preview-e2e.py --spawn
-```
-
-`preview.content` publishes the current composition's fitted screen rectangle
-and camera metadata. The suite verifies that a fresh composition is centered,
-then holds Space through a real coordinate press and pointer move. It releases
-Space before the final coordinate release to prove that Preview retains gesture
-ownership without selecting or moving content. Pan must equal the pointer
-delta; zoom, Project, selection, Timeline state, and undo history remain
-unchanged, `auto_fit` becomes false, and the owner returns to `Idle`. This suite
-is also part of `python3 scripts/qa-runner.py --mode full`.
-
-Run the focused Preview trackpad suite with:
-
-```sh
-python3 scripts/qa-preview-trackpad-e2e.py --spawn
-```
-
-It re-queries `preview.canvas` before each action, injects a real two-axis
-scroll and native cursor-coordinate pinch, and verifies both camera geometry
-and the cursor's invariant world point. Project, selection, Timeline, undo
-history, content drags, gizmos, and the primary gesture owner must remain
-unchanged. This suite is also part of `python3 scripts/qa-runner.py --mode full`.
-
-Run the focused wire-selection lifecycle suite with:
-
-```sh
-python3 scripts/qa-wire-selection-e2e.py --spawn
-```
-
-It clicks a freshly published Bezier hit point with the primary button, then
-re-queries the canvas and clicks an unobstructed coordinate. The suite requires
-the wire selection to clear without changing the Project, undo history, or
-semantic entity selection. It is also part of the full QA runner.
-
-Run the focused inherited-Time presentation suite with:
-
-```sh
-python3 scripts/qa-implicit-time-e2e.py --spawn
-```
-
-It selects an implicitly timed Node through a real screen-coordinate click,
-then holds `T` through the keyboard endpoint and verifies that every inherited
-Time relationship appears as a dashed, non-interactive context wire. Releasing
-`T` must hide the overlay immediately; holding it while the pointer is over a
-different panel must not reveal anything. The suite also verifies the Node
-badge without Project or history changes, then creates an explicit Time wire
-by coordinate drag and removes it through the physical wire menu. Undo and
-disconnect must both restore the hold-to-reveal inherited presentation.
-The suite re-queries component rectangles after every layout-changing tab or
-canvas transition and is also part of the full QA runner. A physical wire
-topology edit can invoke the existing Snarl Clip-layout canonicalization; the
-suite records that `ui_position`/`ui_size` delta separately and still requires
-every semantic Project field to return byte-for-byte. The focused Rust render
-test additionally requires inherited and explicit Time rows to keep identical
-Node geometry.
-
-Run the focused Transform/Preview facade suite with:
-
-```sh
-python3 scripts/qa-transform-preview-e2e.py --spawn
-```
-
-It coordinate-clicks a rendered Text visual while keeping Clip/Inspector
-ownership, selects a Clip from Timeline and drags its canonical Transform
-gizmo, verifies that a Clip with two independent spatial roots exposes an
-advanced ambiguity instead of mutating either branch, preserves direct Node
-selection in Node Editor, and proves a queued Node edit advances the Preview
-render revision. Per-action rectangles and injection evidence are written to
-`target/qa-transform-preview-e2e-evidence.json`.
+All suites use `scripts/qa_support.py` for HTTP input, process lifecycle, and
+Windows-safe cleanup. They never mutate the Project through a QA-only command.

@@ -32,7 +32,10 @@ half4 main(float2 p) {
     sample_pos = inv_rot * (sample_pos - center) + center;
 
     half4 color = content.eval(sample_pos);
-    float luma = dot(color.rgb, half3(0.299, 0.587, 0.114));
+    float3 straight = color.a > 0.0
+        ? float3(color.rgb) / float(color.a)
+        : float3(0.0);
+    float luma = dot(straight, float3(0.2126, 0.7152, 0.0722));
 
     // 4. Draw circle
     // Radius depends on luma.
@@ -48,7 +51,10 @@ half4 main(float2 p) {
     float dist = distance(cell_uv, float2(0.5));
 
     // Smoothstep for circle edge
-    float mask = smoothstep(radius, radius - softness/density, dist);
+    float edge_width = softness / density;
+    float mask = edge_width <= 0.0
+        ? (dist <= radius ? 1.0 : 0.0)
+        : 1.0 - smoothstep(max(0.0, radius - edge_width), radius, dist);
 
     // Output: Black dots on White?
     // Or colored dots?

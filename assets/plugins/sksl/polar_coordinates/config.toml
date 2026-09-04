@@ -1,6 +1,7 @@
 id = "polar_coordinates"
 name = "Polar Coordinates"
 category = "Distortion"
+color_domain = "project_linear"
 
 [[properties]]
 name = "center"

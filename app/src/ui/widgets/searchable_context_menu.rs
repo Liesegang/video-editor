@@ -207,7 +207,6 @@ pub enum SearchNavigation {
 /// turns an inline category accordion click into a menu dismissal. Searchable
 /// menus close explicitly when a leaf is chosen, so their popup only needs to
 /// close automatically when the user clicks outside it.
-#[cfg(test)]
 pub fn searchable_menu_button<R>(
     ui: &mut Ui,
     label: impl Into<String>,

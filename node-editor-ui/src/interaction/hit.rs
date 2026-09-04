@@ -1,9 +1,12 @@
 use egui::{Pos2, Rect};
 
-use crate::{GraphFrame, GroupDescriptor, ItemId, PortDescriptor, WireDescriptor};
+use crate::{
+    GraphFrame, GroupDescriptor, ItemId, PortDescriptor, ReconnectEndpoint, WireDescriptor,
+};
+
+const WIRE_SELECTION_SAMPLES: u16 = 48;
 
 const PORT_HIT_RADIUS: f32 = 9.0;
-const WIRE_HIT_RADIUS: f32 = 8.0;
 const GROUP_RESIZE_HIT_WIDTH: f32 = 7.0;
 
 pub(super) fn selectable<NodeId, PortId, WireId, GroupId, Key>(
@@ -118,10 +121,66 @@ pub(super) fn wire<'a, NodeId, PortId, WireId, GroupId, Key>(
     position: Pos2,
 ) -> Option<&'a WireDescriptor<PortId, WireId>> {
     let scale = frame.transform.scaling.abs().max(f32::EPSILON);
-    let radius = WIRE_HIT_RADIUS / scale;
-    frame
+    frame.wires.iter().rev().find(|wire| {
+        let geometry = wire.curve.interaction_geometry(scale);
+        wire.curve.distance_to(position) <= geometry.body_hit_radius()
+    })
+}
+
+pub(super) fn reconnect_handle<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    position: Pos2,
+) -> Option<(WireId, ReconnectEndpoint)>
+where
+    WireId: Clone + Eq,
+{
+    let scale = frame.transform.scaling.abs().max(f32::EPSILON);
+    let selected_wire = match frame.selection.primary.as_ref() {
+        Some(ItemId::Wire(wire)) => Some(wire),
+        _ => frame.selection.items.iter().find_map(|item| match item {
+            ItemId::Wire(wire) => Some(wire),
+            ItemId::Node(_) | ItemId::Group(_) => None,
+        }),
+    }?;
+    let wire = frame
         .wires
         .iter()
-        .rev()
-        .find(|wire| wire.curve.distance_to(position) <= radius)
+        .find(|wire| wire.editable && wire.id == *selected_wire)?;
+    let geometry = wire.curve.interaction_geometry(scale);
+    [ReconnectEndpoint::Source, ReconnectEndpoint::Target]
+        .into_iter()
+        .find(|endpoint| {
+            geometry.reconnect_handle(*endpoint).distance(position)
+                <= geometry.reconnect_handle_hit_radius()
+        })
+        .map(|endpoint| (wire.id.clone(), endpoint))
+}
+
+/// Finds a point on the rendered curve that the production interaction order
+/// will attribute to `wire_id`, excluding Nodes, ports, resize edges, another
+/// topmost wire, and a selected wire's reconnect handles.
+pub(crate) fn wire_selection_target<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    wire_id: &WireId,
+) -> Option<Pos2>
+where
+    NodeId: Clone + Eq,
+    WireId: Clone + Eq,
+    GroupId: Clone + Eq,
+{
+    let curve = frame.wires.iter().find(|wire| &wire.id == wire_id)?.curve;
+    let midpoint = WIRE_SELECTION_SAMPLES / 2;
+    let mut samples = (1..WIRE_SELECTION_SAMPLES).collect::<Vec<_>>();
+    samples.sort_by_key(|sample| sample.abs_diff(midpoint));
+    samples.into_iter().find_map(|sample| {
+        let graph_position = curve.point(f32::from(sample) / f32::from(WIRE_SELECTION_SAMPLES));
+        let screen_position = frame.screen_position(graph_position);
+        let available = frame.viewport.contains(screen_position)
+            && reconnect_handle(frame, graph_position).is_none()
+            && port(frame, graph_position).is_none()
+            && group_resize(frame, graph_position).is_none()
+            && selectable(frame, graph_position).is_none()
+            && wire(frame, graph_position).is_some_and(|wire| &wire.id == wire_id);
+        available.then_some(screen_position)
+    })
 }

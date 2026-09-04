@@ -66,4 +66,10 @@ If those parts get used the GPL applies to all of FFmpeg.
 ### image
 
 - **ライセンス**: MIT License
-- **リポジトリ**: https://github.com/image-rs/image 
+- **リポジトリ**: https://github.com/image-rs/image
+
+### ufbx
+
+- **ライセンス**: MIT License または Public Domain Dedication and License 1.0
+- **リポジトリ**: https://github.com/ufbx/ufbx-rust
+- **上流ライブラリ**: https://github.com/ufbx/ufbx

@@ -192,6 +192,44 @@ impl AppConfig {
     }
 }
 
+pub fn resolved_plugin_paths(paths: &[String]) -> Vec<String> {
+    let executable_directory = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from));
+    let working_directory = std::env::current_dir().ok();
+    resolve_plugin_paths_from(
+        paths,
+        executable_directory.as_deref(),
+        working_directory.as_deref(),
+    )
+}
+
+fn resolve_plugin_paths_from(
+    paths: &[String],
+    executable_directory: Option<&std::path::Path>,
+    working_directory: Option<&std::path::Path>,
+) -> Vec<String> {
+    paths
+        .iter()
+        .map(|configured| {
+            let path = std::path::Path::new(configured);
+            if path.is_absolute() {
+                return configured.clone();
+            }
+            executable_directory
+                .map(|directory| directory.join(path))
+                .filter(|candidate| candidate.exists())
+                .or_else(|| {
+                    working_directory
+                        .map(|directory| directory.join(path))
+                        .filter(|candidate| candidate.exists())
+                })
+                .map(|resolved| resolved.to_string_lossy().into_owned())
+                .unwrap_or_else(|| configured.clone())
+        })
+        .collect()
+}
+
 mod tuple_vec_map {
     use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -289,4 +327,33 @@ pub fn load_config() -> AppConfig {
         }
     }
     default_config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_plugin_path_precedes_the_working_directory() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temporary = tempfile::tempdir()?;
+        let executable_directory = temporary.path().join("bundle");
+        let working_directory = temporary.path().join("checkout");
+        let relative = "assets/plugins/sksl";
+        fs::create_dir_all(executable_directory.join(relative))?;
+        fs::create_dir_all(working_directory.join(relative))?;
+
+        assert_eq!(
+            resolve_plugin_paths_from(
+                &[relative.to_owned()],
+                Some(&executable_directory),
+                Some(&working_directory),
+            ),
+            vec![executable_directory
+                .join(relative)
+                .to_string_lossy()
+                .into_owned()]
+        );
+        Ok(())
+    }
 }

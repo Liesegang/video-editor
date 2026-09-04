@@ -6,9 +6,10 @@
 
 use crate::error::LibraryError;
 use crate::model::frame::draw_type::{PathEffect, TrimPathUnits};
-use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
-use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::plugin::{
+    EvaluatedOperation, OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory,
+};
 
 pub const DASH_PATH_EFFECT_COMPONENT_ID: &str = "dash";
 pub const CORNER_PATH_EFFECT_COMPONENT_ID: &str = "corner";
@@ -26,12 +27,8 @@ pub trait PathEffectPlugin: Plugin {
     }
 
     /// Build one effect from descriptor-validated, fully materialized values.
-    fn evaluate_source(
-        &self,
-        context: &FrameEvaluationContext,
-        properties: &PropertyMap,
-        eval_time: f64,
-    ) -> Result<PathEffect, LibraryError>;
+    fn evaluate_source(&self, context: &EvaluatedOperation<'_>)
+    -> Result<PathEffect, LibraryError>;
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::PathEffect
@@ -64,16 +61,19 @@ fn float_property(
     )
 }
 
-fn required_number(properties: &PropertyMap, key: &str) -> Result<f64, LibraryError> {
-    properties.get_f64(key).ok_or_else(|| {
+fn required_number(context: &EvaluatedOperation<'_>, key: &str) -> Result<f64, LibraryError> {
+    context.number(key).ok_or_else(|| {
         LibraryError::Validation(format!(
             "Path Effect property {key:?} was not materialized as a number"
         ))
     })
 }
 
-fn required_finite_number(properties: &PropertyMap, key: &str) -> Result<f64, LibraryError> {
-    let value = required_number(properties, key)?;
+fn required_finite_number(
+    context: &EvaluatedOperation<'_>,
+    key: &str,
+) -> Result<f64, LibraryError> {
+    let value = required_number(context, key)?;
     if value.is_finite() {
         Ok(value)
     } else {
@@ -83,12 +83,16 @@ fn required_finite_number(properties: &PropertyMap, key: &str) -> Result<f64, Li
     }
 }
 
-fn required_integer(properties: &PropertyMap, key: &str) -> Result<i64, LibraryError> {
-    properties.get_i64(key).ok_or_else(|| {
-        LibraryError::Validation(format!(
-            "Path Effect property {key:?} was not materialized as an integer"
-        ))
-    })
+fn required_integer(context: &EvaluatedOperation<'_>, key: &str) -> Result<i64, LibraryError> {
+    context
+        .properties()
+        .get(key)
+        .and_then(PropertyValue::get_as::<i64>)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Path Effect property {key:?} was not materialized as an integer"
+            ))
+        })
 }
 
 fn parse_dash_intervals(value: &str) -> Result<Vec<f64>, LibraryError> {
@@ -165,18 +169,16 @@ impl PathEffectPlugin for DashPathEffectPlugin {
 
     fn evaluate_source(
         &self,
-        _context: &FrameEvaluationContext,
-        properties: &PropertyMap,
-        _eval_time: f64,
+        context: &EvaluatedOperation<'_>,
     ) -> Result<PathEffect, LibraryError> {
-        let value = properties.get_string("intervals").ok_or_else(|| {
+        let value = context.string("intervals").ok_or_else(|| {
             LibraryError::Validation(
                 "Dash Path Effect intervals were not materialized as text".to_string(),
             )
         })?;
         Ok(PathEffect::Dash {
             intervals: parse_dash_intervals(&value)?,
-            phase: required_number(properties, "phase")?,
+            phase: required_number(context, "phase")?,
         })
     }
 }
@@ -216,12 +218,10 @@ impl PathEffectPlugin for CornerPathEffectPlugin {
 
     fn evaluate_source(
         &self,
-        _context: &FrameEvaluationContext,
-        properties: &PropertyMap,
-        _eval_time: f64,
+        context: &EvaluatedOperation<'_>,
     ) -> Result<PathEffect, LibraryError> {
         Ok(PathEffect::Corner {
-            radius: required_number(properties, "radius")?,
+            radius: required_number(context, "radius")?,
         })
     }
 }
@@ -284,14 +284,12 @@ impl PathEffectPlugin for DiscretePathEffectPlugin {
 
     fn evaluate_source(
         &self,
-        _context: &FrameEvaluationContext,
-        properties: &PropertyMap,
-        _eval_time: f64,
+        context: &EvaluatedOperation<'_>,
     ) -> Result<PathEffect, LibraryError> {
         Ok(PathEffect::Discrete {
-            seg_length: required_number(properties, "segment_length")?,
-            deviation: required_number(properties, "deviation")?,
-            seed: required_integer(properties, "seed")? as u64,
+            seg_length: required_number(context, "segment_length")?,
+            deviation: required_number(context, "deviation")?,
+            seed: required_integer(context, "seed")? as u64,
         })
     }
 }
@@ -362,11 +360,9 @@ impl PathEffectPlugin for TrimPathEffectPlugin {
 
     fn evaluate_source(
         &self,
-        _context: &FrameEvaluationContext,
-        properties: &PropertyMap,
-        _eval_time: f64,
+        context: &EvaluatedOperation<'_>,
     ) -> Result<PathEffect, LibraryError> {
-        let mode = properties.get_string("mode").ok_or_else(|| {
+        let mode = context.string("mode").ok_or_else(|| {
             LibraryError::Validation(
                 "Trim Path Effect mode was not materialized as text".to_string(),
             )
@@ -381,9 +377,9 @@ impl PathEffectPlugin for TrimPathEffectPlugin {
             }
         };
         Ok(PathEffect::Trim {
-            start: required_finite_number(properties, "start")?,
-            end: required_finite_number(properties, "end")?,
-            offset: required_finite_number(properties, "offset")?,
+            start: required_finite_number(context, "start")?,
+            end: required_finite_number(context, "end")?,
+            offset: required_finite_number(context, "offset")?,
             units,
         })
     }

@@ -3,16 +3,44 @@
 ## Authoring architecture
 
 RuViE is a timeline editor with explicitly authored, bounded Node Modules. A
-normal video, audio, text, or nested-Timeline clip is never expanded into a
-user-facing graph. A **Node Clip** is the deliberate Timeline placement of a
+normal video, audio, text, or nested-Timeline clip is never expanded into Nodes
+in the Node Editor. A **Node Clip** is the deliberate Timeline placement of a
 reusable Module; its placement and animation belong to the Timeline while its
-processing topology belongs to the Module Definition.
+processing connections belong to the Module Definition.
 
 This keeps ordinary editing usable without the Node Editor and guarantees that
 the number of normal Timeline items does not increase the number of Nodes. The
 derived hierarchical Render Plan is runtime data and is not editable or stored
 as the Project's source of truth. See
 [`docs/adr/0001-node-islands.md`](docs/adr/0001-node-islands.md).
+
+The two advanced editors have distinct names and responsibilities:
+
+- **Curve Editor** edits keyframes, interpolation, and value-over-time curves.
+- **Node Editor** edits processing Nodes and their connections inside one bounded Module.
+
+### Windows development build
+
+Run the Rust bootstrap task once. After that, ordinary Cargo builds and tests
+reuse the existing managed runtime; they do not install Python again:
+
+```powershell
+cargo run -p xtask -- bootstrap
+cargo build --release
+.\target\release\app.exe
+```
+
+Create the reusable Windows distribution directory with the Rust publish task:
+
+```powershell
+cargo xtask publish
+```
+
+The executable does not use a system Python installation, and publishing does
+not produce an archive implicitly. The ready-to-run directory is written to
+`target/publish/windows-x86_64/RuViE`. See
+[`docs/windows-publishing.md`](docs/windows-publishing.md) for the release flow
+and [`docs/python-easing.md`](docs/python-easing.md) for the runtime contract.
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Liesegang/video-editor)
 

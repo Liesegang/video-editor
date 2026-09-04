@@ -85,12 +85,16 @@ impl SettingsDialog {
         if self.is_open {
             let mut still_open = true;
             let mut close_confirmed = false;
+            let screen = ctx.input(|input| input.content_rect().size());
+            let dialog_size = egui::vec2(
+                (screen.x - 48.0).clamp(480.0, 760.0),
+                (screen.y - 48.0).clamp(320.0, 540.0),
+            );
 
             let inner_response = crate::ui::widgets::modal::Modal::new("Settings")
                 .open(&mut still_open)
-                .min_width(600.0)
-                .min_height(400.0)
-                .resizable(true)
+                .fixed_size(dialog_size)
+                .resizable(false)
                 .show(ctx, |ui| {
                     let mut should_close = false;
                     let mut local_result: Option<SettingsResult> = None;
@@ -299,7 +303,7 @@ fn settings_panel(
                 // Vertical strip for Content vs Footer
                 StripBuilder::new(ui)
                     .size(Size::remainder()) // Main tab content
-                    .size(Size::exact(40.0)) // Footer buttons
+                    .size(Size::exact(56.0)) // Shared dialog footer
                     .vertical(|mut strip| {
                         strip.cell(|ui| {
                             match &state.active_tab {
@@ -325,11 +329,11 @@ fn settings_panel(
 
                         strip.cell(|ui| {
                             super::dialog_footer(ui, |ui| {
-                                if ui.button("Save").clicked() {
-                                    result = Some(SettingsResult::Save);
-                                }
                                 if ui.button("Cancel").clicked() {
                                     result = Some(SettingsResult::Cancel);
+                                }
+                                if ui.button("Save").clicked() {
+                                    result = Some(SettingsResult::Save);
                                 }
                                 ui.with_layout(
                                     egui::Layout::left_to_right(egui::Align::Center),

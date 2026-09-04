@@ -1,6 +1,7 @@
 id = "halftone"
 name = "Halftone"
 category = "Stylize"
+color_domain = "project_linear"
 
 [[properties]]
 name = "density"

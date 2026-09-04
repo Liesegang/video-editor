@@ -1,18 +1,26 @@
-use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioSourceKey};
+use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::waveform::AudioWaveformChunk;
+use crate::core::model_resource::{
+    MeshScene, ModelDecodeLimits, ModelResourceError, ModelResourceKey,
+};
 use crate::model::frame::Image;
 use lru::LruCache;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 const DEFAULT_IMAGE_CACHE_SIZE: usize = 64;
 const DEFAULT_VIDEO_CACHE_SIZE: usize = 128;
 const DEFAULT_AUDIO_CHUNK_CACHE_SIZE: usize = 32;
+const DEFAULT_MODEL_SCENE_CACHE_SIZE: usize = 32;
+const DEFAULT_MODEL_SCENE_CACHE_BYTES: usize = 512 * 1024 * 1024;
 // 16,384 one-second summaries retain about 4.5 hours while bounding the peak
 // payload to 8 MiB (16,384 * 128 * sizeof(f32)), plus LRU/key overhead. Range
 // reads below address requested chunk keys directly and never scan this cache.
 const DEFAULT_AUDIO_WAVEFORM_CHUNK_CACHE_SIZE: usize = 16_384;
+pub(crate) const MAX_CONCURRENT_AUTHORING_WAVEFORM_DECODES: usize = 2;
+const MAX_AUTHORING_WAVEFORM_SOURCE_FAILURES: usize = 256;
 
 pub type SharedCacheManager = Arc<CacheManager>;
 
@@ -23,6 +31,144 @@ fn lock_cache<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     })
 }
 
+type WaveformSourceFailure = (String, Option<usize>, AudioDecodeFormat);
+
+struct ModelSceneCache {
+    entries: LruCache<ModelResourceKey, Arc<MeshScene>>,
+    resident_bytes: usize,
+    max_resident_bytes: usize,
+}
+
+type ModelSceneFlightKey = (ModelResourceKey, ModelDecodeLimits);
+
+struct ModelSceneFlight {
+    result: Mutex<Option<Result<Arc<MeshScene>, ModelResourceError>>>,
+    ready: Condvar,
+}
+
+impl ModelSceneFlight {
+    fn new() -> Self {
+        Self {
+            result: Mutex::new(None),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn wait(&self) -> Result<Arc<MeshScene>, ModelResourceError> {
+        let mut result = lock_cache(&self.result);
+        loop {
+            if let Some(result) = result.as_ref() {
+                return result.clone();
+            }
+            result = self.ready.wait(result).unwrap_or_else(|poisoned| {
+                log::error!("model decode flight lock was poisoned; recovering its result");
+                poisoned.into_inner()
+            });
+        }
+    }
+
+    fn finish(&self, result: Result<Arc<MeshScene>, ModelResourceError>) {
+        *lock_cache(&self.result) = Some(result);
+        self.ready.notify_all();
+    }
+}
+
+impl ModelSceneCache {
+    fn new() -> Self {
+        Self {
+            entries: LruCache::new(
+                NonZeroUsize::new(DEFAULT_MODEL_SCENE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
+            ),
+            resident_bytes: 0,
+            max_resident_bytes: DEFAULT_MODEL_SCENE_CACHE_BYTES,
+        }
+    }
+
+    fn get(&mut self, key: &ModelResourceKey) -> Option<Arc<MeshScene>> {
+        self.entries.get(key).cloned()
+    }
+
+    fn put(&mut self, key: ModelResourceKey, scene: Arc<MeshScene>) {
+        let scene_bytes = scene.estimated_resident_bytes();
+        if scene_bytes > self.max_resident_bytes {
+            return;
+        }
+        if let Some((_, replaced)) = self.entries.push(key, scene) {
+            self.resident_bytes = self
+                .resident_bytes
+                .saturating_sub(replaced.estimated_resident_bytes());
+        }
+        self.resident_bytes = self.resident_bytes.saturating_add(scene_bytes);
+        while self.resident_bytes > self.max_resident_bytes {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.resident_bytes = self
+                .resident_bytes
+                .saturating_sub(evicted.estimated_resident_bytes());
+        }
+    }
+}
+
+/// Work coordination owned by the shared cache, not by an editor surface.
+/// Timeline and Inspector requests therefore deduplicate the same decode and
+/// cannot establish competing background worker pools.
+pub(crate) struct AuthoringWaveformJobs {
+    pending: Mutex<HashSet<AudioChunkKey>>,
+    source_failures: Mutex<LruCache<WaveformSourceFailure, ()>>,
+}
+
+impl AuthoringWaveformJobs {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(HashSet::new()),
+            source_failures: Mutex::new(LruCache::new(
+                NonZeroUsize::new(MAX_AUTHORING_WAVEFORM_SOURCE_FAILURES)
+                    .unwrap_or(NonZeroUsize::MIN),
+            )),
+        }
+    }
+
+    pub(crate) fn reserve(&self, key: AudioChunkKey) -> bool {
+        let mut pending = lock_cache(&self.pending);
+        if pending.len() >= MAX_CONCURRENT_AUTHORING_WAVEFORM_DECODES {
+            return false;
+        }
+        pending.insert(key)
+    }
+
+    pub(crate) fn finish(&self, key: &AudioChunkKey) {
+        lock_cache(&self.pending).remove(key);
+    }
+
+    pub(crate) fn is_pending(&self, key: &AudioChunkKey) -> bool {
+        lock_cache(&self.pending).contains(key)
+    }
+
+    pub(crate) fn has_pending_work(&self) -> bool {
+        !lock_cache(&self.pending).is_empty()
+    }
+
+    pub(crate) fn remember_source_failure(
+        &self,
+        path: &str,
+        stream_index: Option<usize>,
+        format: AudioDecodeFormat,
+    ) -> bool {
+        let key = (path.to_string(), stream_index, format);
+        let mut failures = lock_cache(&self.source_failures);
+        if failures.contains(&key) {
+            return false;
+        }
+        failures.put(key, ());
+        true
+    }
+
+    pub(crate) fn clear_failures(&self) {
+        lock_cache(&self.source_failures).clear();
+    }
+}
+
 pub struct CacheManager {
     image_cache: Mutex<LruCache<String, Image>>,
     video_cache: Mutex<LruCache<String, Image>>,
@@ -30,6 +176,10 @@ pub struct CacheManager {
     audio_waveform_cache: Mutex<LruCache<AudioChunkKey, Arc<AudioWaveformChunk>>>,
     audio_failures: Mutex<LruCache<AudioChunkKey, ()>>,
     audio_waveform_failures: Mutex<LruCache<AudioChunkKey, ()>>,
+    authoring_waveform_jobs: Arc<AuthoringWaveformJobs>,
+    model_scene_cache: Mutex<ModelSceneCache>,
+    model_scene_flights: Mutex<HashMap<ModelSceneFlightKey, Arc<ModelSceneFlight>>>,
+    model_scene_decode_count: AtomicUsize,
 }
 
 impl Default for CacheManager {
@@ -62,6 +212,10 @@ impl CacheManager {
             // Keep their failures independent so a UI preview cannot mute or
             // flush authoritative playback.
             audio_waveform_failures: Mutex::new(LruCache::new(waveform_capacity)),
+            authoring_waveform_jobs: Arc::new(AuthoringWaveformJobs::new()),
+            model_scene_cache: Mutex::new(ModelSceneCache::new()),
+            model_scene_flights: Mutex::new(HashMap::new()),
+            model_scene_decode_count: AtomicUsize::new(0),
         }
     }
 
@@ -186,6 +340,94 @@ impl CacheManager {
     pub fn clear_audio_failures(&self) {
         lock_cache(&self.audio_failures).clear();
         lock_cache(&self.audio_waveform_failures).clear();
+        self.authoring_waveform_jobs.clear_failures();
+    }
+
+    pub(crate) fn get_model_scene(&self, key: &ModelResourceKey) -> Option<Arc<MeshScene>> {
+        lock_cache(&self.model_scene_cache).get(key)
+    }
+
+    pub(crate) fn put_model_scene(&self, key: ModelResourceKey, scene: Arc<MeshScene>) {
+        lock_cache(&self.model_scene_cache).put(key, scene);
+    }
+
+    pub(crate) fn get_or_decode_model_scene<F>(
+        &self,
+        key: ModelResourceKey,
+        limits: ModelDecodeLimits,
+        decode: F,
+    ) -> Result<Arc<MeshScene>, ModelResourceError>
+    where
+        F: FnOnce() -> Result<Arc<MeshScene>, ModelResourceError>,
+    {
+        if let Some(scene) = self.get_model_scene(&key) {
+            return Ok(scene);
+        }
+
+        let flight_key = (key.clone(), limits);
+        let (flight, is_leader) = {
+            let mut flights = lock_cache(&self.model_scene_flights);
+            if let Some(flight) = flights.get(&flight_key) {
+                (Arc::clone(flight), false)
+            } else {
+                let flight = Arc::new(ModelSceneFlight::new());
+                flights.insert(flight_key.clone(), Arc::clone(&flight));
+                (flight, true)
+            }
+        };
+        if !is_leader {
+            return flight.wait();
+        }
+
+        // Close the miss/flight-registration race before invoking a decoder.
+        let result = if let Some(scene) = self.get_model_scene(&key) {
+            Ok(scene)
+        } else {
+            self.model_scene_decode_count
+                .fetch_add(1, Ordering::Relaxed);
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
+                Ok(result) => result,
+                Err(_) => {
+                    log::error!("model resource decoder panicked; publishing a failed flight");
+                    Err(ModelResourceError::Decode {
+                        detail: "model resource decoder panicked".to_string(),
+                    })
+                }
+            }
+        };
+        if let Ok(scene) = &result {
+            self.put_model_scene(key, Arc::clone(scene));
+        }
+        flight.finish(result.clone());
+        {
+            let mut flights = lock_cache(&self.model_scene_flights);
+            if flights
+                .get(&flight_key)
+                .is_some_and(|active| Arc::ptr_eq(active, &flight))
+            {
+                flights.remove(&flight_key);
+            }
+        }
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn model_scene_cache_len(&self) -> usize {
+        lock_cache(&self.model_scene_cache).entries.len()
+    }
+
+    #[doc(hidden)]
+    pub fn model_scene_cache_resident_bytes(&self) -> usize {
+        lock_cache(&self.model_scene_cache).resident_bytes
+    }
+
+    #[doc(hidden)]
+    pub fn model_scene_decode_count(&self) -> usize {
+        self.model_scene_decode_count.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn authoring_waveform_jobs(&self) -> Arc<AuthoringWaveformJobs> {
+        Arc::clone(&self.authoring_waveform_jobs)
     }
 
     #[doc(hidden)]

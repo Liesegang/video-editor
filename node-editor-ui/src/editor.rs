@@ -233,6 +233,21 @@ impl Editor {
     {
         interaction::layout_swipe_wants_pointer(ui, frame, state, options, pointer_blocked)
     }
+
+    /// Returns a visible point on an authored wire that the production hit
+    /// order resolves back to that wire. Hosts can expose the same real target
+    /// to accessibility and native QA without reconstructing Bezier geometry.
+    pub fn wire_selection_target<NodeId, PortId, WireId, GroupId, Key>(
+        frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+        wire_id: &WireId,
+    ) -> Option<Pos2>
+    where
+        NodeId: Clone + Eq,
+        WireId: Clone + Eq,
+        GroupId: Clone + Eq,
+    {
+        interaction::wire_selection_target(frame, wire_id)
+    }
 }
 
 fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(

@@ -1,6 +1,7 @@
 id = "speed_lines"
 name = "Speed Lines"
 category = "Stylize"
+color_domain = "project_linear"
 
 [[properties]]
 name = "center"

@@ -1,381 +1,786 @@
-use crate::model::ui_types::GizmoHandle;
-use crate::state::context::EditorContext;
-use crate::ui::panels::preview::{
-    action::PreviewAction, clip::PreviewClip, routing::exact_visual_for_edit_target,
-};
+//! Production Preview transform gizmo adapted to Timeline-owned properties.
+//!
+//! The interaction retains the original eight resize handles, rotation
+//! handle, Shift aspect lock, Alt centre scaling, parent-space inversion, and
+//! one history commit on pointer release. Unlike the former Node-owned path,
+//! the gesture samples and atomically updates the selected Timeline Item's
+//! authored Position, Scale, and Rotation properties.
+
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
-use library::model::property::{PropertyValue, Vec2 as PropVec2};
+use library::editor::{
+    AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
+    TimelineEditorService,
+};
+use library::model::authoring::{
+    AuthoringProject, MediaTime, ProjectRevision, TimelineItem, TimelineItemId,
+};
+use library::model::frame::frame::FrameInfo;
+use library::model::property::{PropertyValue, Vec2 as PropertyVec2};
 use library::rendering::renderer::Affine2D;
 use ordered_float::OrderedFloat;
+use pan_zoom_ui::CanvasTransform;
 
-pub fn handle_gizmo_interaction(
-    ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    gui_clips: &[PreviewClip],
-    pointer_pos: Option<Pos2>,
-    to_world: impl Fn(Pos2) -> Pos2,
-    pending_actions: &mut Vec<PreviewAction>,
-) -> bool {
-    let Some(edit_target) = editor_context
-        .interaction
-        .preview_edit_target
+use crate::model::ui_types::GizmoHandle;
+use crate::state::authoring::{
+    AuthoringSelection, AuthoringUiState, PreviewTool, PreviewTransformGesture,
+};
+
+use super::gizmo_geometry::{item_gizmo_geometry, ItemGizmoGeometry};
+
+const HANDLE_HIT_SIZE: f32 = 15.0;
+const HANDLE_RADIUS: f32 = 5.0;
+const ROTATION_HANDLE_DISTANCE: f32 = 28.0;
+const GIZMO_COLOR: egui::Color32 = egui::Color32::from_rgb(0, 200, 255);
+
+#[derive(Clone, Copy)]
+struct HandlePlacement {
+    position: Pos2,
+    handle: GizmoHandle,
+    cursor: CursorIcon,
+}
+
+/// Applies the projected gesture to an immutable render snapshot so the
+/// selected object itself follows the gizmo before the single release commit.
+/// RenderPlan topology remains valid because only authored values change.
+pub(super) fn transient_render_project(
+    project: &Arc<AuthoringProject>,
+    state: &AuthoringUiState,
+) -> (Arc<AuthoringProject>, Option<u64>) {
+    let Some(gesture) = state.preview.transform_gesture.as_ref() else {
+        return (Arc::clone(project), None);
+    };
+    let updates = gesture_updates(gesture);
+    if updates.is_empty() {
+        return (Arc::clone(project), Some(transform_digest(gesture)));
+    }
+    match TimelineEditorService::project_authored_property_values(
+        project,
+        AuthoringPropertyOwner::Item(gesture.item_id),
+        updates,
+    ) {
+        Ok(projected) => (Arc::new(projected), Some(transform_digest(gesture))),
+        Err(_) => (Arc::clone(project), None),
+    }
+}
+
+pub(super) fn transient_edit_digest(state: &AuthoringUiState) -> Option<u64> {
+    state
+        .preview
+        .transform_gesture
         .as_ref()
-        .filter(|target| editor_context.selection.primary() == Some(target.owner))
-        .cloned()
-    else {
-        editor_context.interaction.gizmo_state = None;
-        return false;
-    };
-    let Some(state) = editor_context.interaction.gizmo_state.as_ref().cloned() else {
-        return false;
-    };
-    let (
-        start_mouse_pos,
-        active_handle,
-        orig_pos,
-        orig_sx,
-        orig_sy,
-        orig_rot,
-        visual_pos,
-        visual_sx,
-        visual_sy,
-        visual_rot,
-        base_w,
-        base_h,
-    ) = (
-        state.start_mouse_pos,
-        state.active_handle,
-        state.original_position,
-        state.original_scale_x,
-        state.original_scale_y,
-        state.original_rotation,
-        state.original_visual_position,
-        state.original_visual_scale_x,
-        state.original_visual_scale_y,
-        state.original_visual_rotation,
-        state.original_width,
-        state.original_height,
-    );
+        .map(transform_digest)
+}
 
-    let Some(spatial_edit_id) = edit_target.spatial_node_id else {
-        editor_context.interaction.gizmo_state = None;
+fn transform_digest(gesture: &PreviewTransformGesture) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    gesture.item_id.hash(&mut hasher);
+    gesture.handle.hash(&mut hasher);
+    gesture.local_time.hash(&mut hasher);
+    gesture.position_keyframed.hash(&mut hasher);
+    gesture.scale_keyframed.hash(&mut hasher);
+    gesture.rotation_keyframed.hash(&mut hasher);
+    gesture.projected_position.hash(&mut hasher);
+    gesture.projected_scale.hash(&mut hasher);
+    OrderedFloat(gesture.projected_rotation).hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn selected_item_id(
+    project: &AuthoringProject,
+    state: &AuthoringUiState,
+) -> Option<TimelineItemId> {
+    let AuthoringSelection::Item(item_id) = state.selection.primary()? else {
+        return None;
+    };
+    let item = project.items.get(&item_id)?;
+    project
+        .tracks
+        .get(&item.track_id)
+        .is_some_and(|track| track.timeline_id == state.active_timeline_id)
+        .then_some(item_id)
+}
+
+/// Owns an already-started body, resize, or rotation drag. Returns true while
+/// Preview pointer handling must not begin another selection gesture.
+pub(super) fn handle_active_gesture(
+    ui: &Ui,
+    revision: ProjectRevision,
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+) -> bool {
+    let Some(active) = state.preview.transform_gesture.as_ref() else {
         return false;
     };
-    let Some(visual) = exact_visual_for_edit_target(gui_clips, &edit_target) else {
-        editor_context.interaction.gizmo_state = None;
-        return true;
-    };
-    let Some(spatial_layer) = visual.spatial_layer(spatial_edit_id) else {
-        editor_context.interaction.gizmo_state = None;
-        return true;
-    };
-    if !is_invertible(spatial_layer.parent_transform) {
-        editor_context.interaction.gizmo_state = None;
+    let (primary_down, primary_released, escape) = ui.input(|input| {
+        (
+            input.pointer.primary_down(),
+            input.pointer.primary_released(),
+            input.key_pressed(egui::Key::Escape),
+        )
+    });
+    let stale = selected_item_id(project, state) != Some(active.item_id)
+        || active.project_revision != revision
+        || state.preview.active_tool != PreviewTool::Select;
+    if escape || stale || (!primary_down && !primary_released) {
+        state.preview.transform_gesture = None;
         return true;
     }
 
-    if ui.input(|input| input.pointer.any_released()) {
-        editor_context.interaction.gizmo_state = None;
-        if state.has_changed {
-            pending_actions.push(PreviewAction::CommitHistory);
-        }
-        return true;
-    }
-
-    let Some(mouse_pos) = pointer_pos else {
-        return true;
-    };
-
-    let start_world = to_world(start_mouse_pos);
-    let current_world = to_world(mouse_pos);
-    let world_delta = current_world - start_world;
-    let Some(delta) = inverse_map_vector(spatial_layer.parent_transform, world_delta) else {
-        editor_context.interaction.gizmo_state = None;
-        return true;
-    };
-    let modifiers = ui.input(|input| input.modifiers);
-    let keep_aspect_ratio = modifiers.shift;
-    let center_scale = modifiers.alt;
-
-    let mut new_scale_x = orig_sx;
-    let mut new_scale_y = orig_sy;
-    let mut new_pos_x = orig_pos[0];
-    let mut new_pos_y = orig_pos[1];
-    let mut new_rotation = orig_rot;
-
-    if active_handle == GizmoHandle::Rotation {
-        let (center_x, center_y) = spatial_layer
-            .parent_transform
-            .map_point(f64::from(visual_pos[0]), f64::from(visual_pos[1]));
-        let center = egui::pos2(center_x as f32, center_y as f32);
-        let start = start_world - center;
-        let current = current_world - center;
-        new_rotation =
-            orig_rot + (current.y.atan2(current.x) - start.y.atan2(start.x)).to_degrees();
-    } else {
-        let radians = visual_rot.to_radians();
-        let (sin, cos) = radians.sin_cos();
-        let dx = delta.x * cos + delta.y * sin;
-        let dy = -delta.x * sin + delta.y * cos;
-        let current_w = base_w * visual_sx / 100.0;
-        let current_h = base_h * visual_sy / 100.0;
-        let (sign_x, sign_y) = handle_sign(active_handle);
-        let scale_factor = if center_scale { 2.0 } else { 1.0 };
-        let raw_width_delta = dx * sign_x * scale_factor;
-        let raw_height_delta = dy * sign_y * scale_factor;
-        let mut next_w = current_w + raw_width_delta;
-        let mut next_h = current_h + raw_height_delta;
-
-        if keep_aspect_ratio {
-            let ratio = if current_h.abs() > f32::EPSILON {
-                current_w / current_h
-            } else {
-                1.0
-            };
-            if sign_x != 0.0 && sign_y != 0.0 {
-                if raw_width_delta.abs() > raw_height_delta.abs() {
-                    next_h = next_w / ratio;
-                } else {
-                    next_w = next_h * ratio;
-                }
-            } else if sign_x != 0.0 {
-                next_h = next_w / ratio;
-            } else if sign_y != 0.0 {
-                next_w = next_h * ratio;
+    if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+        let modifiers = ui.input(|input| input.modifiers);
+        if let Some(gesture) = state.preview.transform_gesture.as_mut() {
+            if let Err(error) = project_gesture(gesture, pointer, modifiers) {
+                state.preview.transform_gesture = None;
+                state.error = Some(error);
+                return true;
             }
-        }
-
-        let final_width_delta = next_w - current_w;
-        let final_height_delta = next_h - current_h;
-        if current_w.abs() > f32::EPSILON {
-            new_scale_x = orig_sx * next_w / current_w;
-        }
-        if current_h.abs() > f32::EPSILON {
-            new_scale_y = orig_sy * next_h / current_h;
-        }
-        if !center_scale {
-            let shift = rotate_vec(
-                egui::vec2(
-                    sign_x * final_width_delta / 2.0,
-                    sign_y * final_height_delta / 2.0,
-                ),
-                visual_rot,
-            );
-            new_pos_x += shift.x;
-            new_pos_y += shift.y;
+            ui.ctx().set_cursor_icon(cursor_for_gesture(gesture.handle));
         }
     }
 
-    let current_time = editor_context.timeline.current_time as f64;
-    let mut changed = false;
-    if new_scale_x != orig_sx || new_scale_y != orig_sy {
-        pending_actions.push(PreviewAction::UpdateProperty {
-            edit_target: edit_target.clone(),
-            node_id: spatial_edit_id,
-            prop_name: "scale".to_string(),
-            time: current_time,
-            value: PropertyValue::Vec2(PropVec2 {
-                x: OrderedFloat(new_scale_x as f64),
-                y: OrderedFloat(new_scale_y as f64),
-            }),
-        });
-        changed = true;
-    }
-    if new_pos_x != orig_pos[0] || new_pos_y != orig_pos[1] {
-        pending_actions.push(PreviewAction::UpdateProperty {
-            edit_target: edit_target.clone(),
-            node_id: spatial_edit_id,
-            prop_name: "position".to_string(),
-            time: current_time,
-            value: PropertyValue::Vec2(PropVec2 {
-                x: OrderedFloat(new_pos_x as f64),
-                y: OrderedFloat(new_pos_y as f64),
-            }),
-        });
-        changed = true;
-    }
-    if new_rotation != orig_rot {
-        pending_actions.push(PreviewAction::UpdateProperty {
-            edit_target: edit_target.clone(),
-            node_id: spatial_edit_id,
-            prop_name: "rotation".to_string(),
-            time: current_time,
-            value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
-        });
-        changed = true;
-    }
-    if changed {
-        if let Some(state) = &mut editor_context.interaction.gizmo_state {
-            state.has_changed = true;
+    if primary_released {
+        if let Some(gesture) = state.preview.transform_gesture.take() {
+            commit_gesture(state, service, gesture);
         }
     }
     true
 }
 
-pub fn draw_gizmo(
-    ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    gui_clips: &[PreviewClip],
-    to_screen: impl Fn(Pos2) -> Pos2,
-    interaction_enabled: bool,
+/// Registers the original production gizmo handle hit regions and starts a
+/// transform gesture before the Preview's body-drag selection path can claim
+/// the pointer.
+pub(super) fn interact_handles(
+    ui: &Ui,
+    viewport: Rect,
+    canvas: CanvasTransform,
+    frame: Option<&FrameInfo>,
+    revision: ProjectRevision,
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
+) -> bool {
+    if state.preview.active_tool != PreviewTool::Select {
+        return false;
+    }
+    let Some(item_id) = selected_item_id(project, state) else {
+        return false;
+    };
+    let Some(geometry) = frame.and_then(|frame| item_gizmo_geometry(frame, item_id)) else {
+        return false;
+    };
+    let screen_outline = geometry
+        .control_outline
+        .map(|point| canvas.world_to_screen(point));
+    let Some(placements) = handle_placements(screen_outline) else {
+        return false;
+    };
+    let enabled = geometry.parent_transform.inverse().is_some();
+    for placement in placements {
+        let hit_rect = Rect::from_center_size(placement.position, Vec2::splat(HANDLE_HIT_SIZE));
+        if !viewport.intersects(hit_rect) {
+            continue;
+        }
+        let response = ui.interact(
+            hit_rect,
+            ui.make_persistent_id(("preview.gizmo.handle", item_id, placement.handle)),
+            Sense::drag(),
+        );
+        if response.hovered() && enabled {
+            ui.ctx().set_cursor_icon(placement.cursor);
+        }
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            if !enabled {
+                state.error = Some(
+                    "Cannot edit this transform because its parent transform is singular"
+                        .to_string(),
+                );
+                return true;
+            }
+            let pointer = response
+                .interact_pointer_pos()
+                .or_else(|| ui.ctx().pointer_latest_pos())
+                .unwrap_or(placement.position);
+            begin_gesture(
+                item_id,
+                Some(placement.handle),
+                pointer,
+                canvas,
+                geometry,
+                revision,
+                project,
+                state,
+            );
+            return true;
+        }
+    }
+    false
+}
+
+pub(super) fn begin_body_gesture(
+    item_id: TimelineItemId,
+    pointer: Pos2,
+    canvas: CanvasTransform,
+    frame: Option<&FrameInfo>,
+    revision: ProjectRevision,
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
 ) {
-    let primary = editor_context.selection.primary();
-    for target in editor_context.selection.targets() {
-        if Some(*target) == primary {
-            continue;
+    let Some(geometry) = frame.and_then(|frame| item_gizmo_geometry(frame, item_id)) else {
+        state.error = Some("The selected item's rendered bounds are unavailable".to_string());
+        return;
+    };
+    begin_gesture(
+        item_id, None, pointer, canvas, geometry, revision, project, state,
+    );
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "gesture capture keeps item, pointer, viewport, frame, revision, and Project identity explicit"
+)]
+fn begin_gesture(
+    item_id: TimelineItemId,
+    handle: Option<GizmoHandle>,
+    pointer: Pos2,
+    canvas: CanvasTransform,
+    geometry: ItemGizmoGeometry,
+    revision: ProjectRevision,
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
+) {
+    let Some(item) = project.items.get(&item_id) else {
+        return;
+    };
+    let local_time = match item_local_time(project, state, item) {
+        Ok(time) => time,
+        Err(error) => {
+            state.error = Some(error);
+            return;
         }
-        for visual in gui_clips
-            .iter()
-            .filter(|visual| visual.owner_target == *target)
-        {
-            let _ = draw_clip_box(
-                ui,
-                visual,
-                &to_screen,
-                egui::Color32::from_rgb(0, 200, 255).linear_multiply(0.5),
-                1.0,
-            );
+    };
+    let edits_scale = handle.is_some_and(|handle| handle != GizmoHandle::Rotation);
+    let edits_rotation = handle == Some(GizmoHandle::Rotation);
+    let edits_position = handle.is_none() || edits_scale;
+
+    let (position, position_keyframed) = match authored_vec2(
+        item,
+        "position",
+        local_time,
+        property_vec2(
+            geometry.item_transform.position.x,
+            geometry.item_transform.position.y,
+        ),
+        edits_position,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            state.error = Some(error);
+            return;
+        }
+    };
+    let (scale, scale_keyframed) = match authored_vec2(
+        item,
+        "scale",
+        local_time,
+        property_vec2(
+            geometry.item_transform.scale.x,
+            geometry.item_transform.scale.y,
+        ),
+        edits_scale,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            state.error = Some(error);
+            return;
+        }
+    };
+    let (rotation, rotation_keyframed) = match authored_number(
+        item,
+        "rotation",
+        local_time,
+        geometry.item_transform.rotation,
+        edits_rotation,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            state.error = Some(error);
+            return;
+        }
+    };
+
+    state.error = None;
+    state.preview.transform_gesture = Some(PreviewTransformGesture {
+        item_id,
+        handle,
+        pointer_origin: pointer,
+        canvas_origin: canvas,
+        original_position: position,
+        projected_position: position,
+        original_scale: scale,
+        projected_scale: scale,
+        original_rotation: rotation,
+        projected_rotation: rotation,
+        original_visual_transform: geometry.item_transform.clone(),
+        projected_visual_transform: geometry.item_transform,
+        parent_transform: geometry.parent_transform,
+        local_bounds: geometry.local_bounds,
+        local_time,
+        position_keyframed,
+        scale_keyframed,
+        rotation_keyframed,
+        project_revision: revision,
+    });
+}
+
+fn project_gesture(
+    gesture: &mut PreviewTransformGesture,
+    pointer: Pos2,
+    modifiers: egui::Modifiers,
+) -> Result<(), String> {
+    gesture.projected_position = gesture.original_position;
+    gesture.projected_scale = gesture.original_scale;
+    gesture.projected_rotation = gesture.original_rotation;
+    gesture.projected_visual_transform = gesture.original_visual_transform.clone();
+
+    let start_world = gesture
+        .canvas_origin
+        .screen_to_world(gesture.pointer_origin)
+        .ok_or_else(|| "Preview canvas transform is not invertible".to_string())?;
+    let current_world = gesture
+        .canvas_origin
+        .screen_to_world(pointer)
+        .ok_or_else(|| "Preview canvas transform is not invertible".to_string())?;
+    let world_delta = current_world - start_world;
+    let parent_delta = inverse_map_vector(gesture.parent_transform, world_delta)
+        .ok_or_else(|| "Parent transform is not invertible".to_string())?;
+
+    match gesture.handle {
+        None => project_translation(gesture, parent_delta),
+        Some(GizmoHandle::Rotation) => {
+            project_rotation(gesture, start_world, current_world)?;
+        }
+        Some(handle) => project_scale(gesture, handle, parent_delta, modifiers),
+    }
+    Ok(())
+}
+
+fn project_translation(gesture: &mut PreviewTransformGesture, delta: Vec2) {
+    gesture.projected_position = property_vec2(
+        gesture.original_position.x.into_inner() + f64::from(delta.x),
+        gesture.original_position.y.into_inner() + f64::from(delta.y),
+    );
+    gesture.projected_visual_transform.position.x =
+        gesture.original_visual_transform.position.x + f64::from(delta.x);
+    gesture.projected_visual_transform.position.y =
+        gesture.original_visual_transform.position.y + f64::from(delta.y);
+}
+
+fn project_rotation(
+    gesture: &mut PreviewTransformGesture,
+    start_world: Pos2,
+    current_world: Pos2,
+) -> Result<(), String> {
+    let (center_x, center_y) = gesture.parent_transform.map_point(
+        gesture.original_visual_transform.position.x,
+        gesture.original_visual_transform.position.y,
+    );
+    let center = Pos2::new(center_x as f32, center_y as f32);
+    if !center.is_finite() {
+        return Err("Rotation centre is not finite".to_string());
+    }
+    let start = start_world - center;
+    let current = current_world - center;
+    if start.length_sq() <= f32::EPSILON || current.length_sq() <= f32::EPSILON {
+        return Ok(());
+    }
+    let delta = f64::from((current.y.atan2(current.x) - start.y.atan2(start.x)).to_degrees());
+    gesture.projected_rotation = gesture.original_rotation + delta;
+    gesture.projected_visual_transform.rotation =
+        gesture.original_visual_transform.rotation + delta;
+    Ok(())
+}
+
+fn project_scale(
+    gesture: &mut PreviewTransformGesture,
+    handle: GizmoHandle,
+    parent_delta: Vec2,
+    modifiers: egui::Modifiers,
+) {
+    let visual_rotation = gesture.original_visual_transform.rotation as f32;
+    let local_delta = rotate_vec(parent_delta, -visual_rotation);
+    let current_width =
+        gesture.local_bounds.width() * gesture.original_visual_transform.scale.x as f32;
+    let current_height =
+        gesture.local_bounds.height() * gesture.original_visual_transform.scale.y as f32;
+    let (sign_x, sign_y) = handle_sign(handle);
+    let multiplier = if modifiers.alt { 2.0 } else { 1.0 };
+    let width_delta = local_delta.x * sign_x * multiplier;
+    let height_delta = local_delta.y * sign_y * multiplier;
+    let mut next_width = current_width + width_delta;
+    let mut next_height = current_height + height_delta;
+
+    if modifiers.shift {
+        let ratio = if current_height.abs() > f32::EPSILON {
+            current_width / current_height
+        } else {
+            1.0
+        };
+        if sign_x != 0.0 && sign_y != 0.0 {
+            if width_delta.abs() > height_delta.abs() {
+                next_height = next_width / ratio;
+            } else {
+                next_width = next_height * ratio;
+            }
+        } else if sign_x != 0.0 {
+            next_height = next_width / ratio;
+        } else if sign_y != 0.0 {
+            next_width = next_height * ratio;
         }
     }
 
-    let Some(edit_target) = editor_context
-        .interaction
-        .preview_edit_target
-        .as_ref()
-        .filter(|target| primary == Some(target.owner))
-        .cloned()
-    else {
-        return;
+    let scale_ratio_x = if current_width.abs() > f32::EPSILON {
+        next_width / current_width
+    } else {
+        1.0
     };
-    let Some(visual) = exact_visual_for_edit_target(gui_clips, &edit_target) else {
-        return;
+    let scale_ratio_y = if current_height.abs() > f32::EPSILON {
+        next_height / current_height
+    } else {
+        1.0
     };
+    gesture.projected_scale = property_vec2(
+        gesture.original_scale.x.into_inner() * f64::from(scale_ratio_x),
+        gesture.original_scale.y.into_inner() * f64::from(scale_ratio_y),
+    );
+    gesture.projected_visual_transform.scale.x =
+        gesture.original_visual_transform.scale.x * f64::from(scale_ratio_x);
+    gesture.projected_visual_transform.scale.y =
+        gesture.original_visual_transform.scale.y * f64::from(scale_ratio_y);
 
-    let color = egui::Color32::from_rgb(0, 200, 255);
-    let Some((corners, rotation, top)) = draw_clip_box(ui, visual, &to_screen, color, 2.0) else {
-        return;
+    // Preserve the opposite handle (normal resize) or the visual bounds centre
+    // (Alt resize) for arbitrary Anchor values. For a centred Anchor this is
+    // exactly the production gizmo's half-delta position shift.
+    let bounds = gesture.local_bounds;
+    let pivot = if modifiers.alt {
+        bounds.center()
+    } else {
+        Pos2::new(
+            if sign_x > 0.0 {
+                bounds.left()
+            } else if sign_x < 0.0 {
+                bounds.right()
+            } else {
+                gesture.original_visual_transform.anchor.x as f32
+            },
+            if sign_y > 0.0 {
+                bounds.top()
+            } else if sign_y < 0.0 {
+                bounds.bottom()
+            } else {
+                gesture.original_visual_transform.anchor.y as f32
+            },
+        )
     };
-    let Some(spatial_id) = edit_target.spatial_node_id else {
+    let anchor = egui::pos2(
+        gesture.original_visual_transform.anchor.x as f32,
+        gesture.original_visual_transform.anchor.y as f32,
+    );
+    let from_anchor = pivot - anchor;
+    let old_pivot_offset = egui::vec2(
+        from_anchor.x * gesture.original_visual_transform.scale.x as f32,
+        from_anchor.y * gesture.original_visual_transform.scale.y as f32,
+    );
+    let new_pivot_offset = egui::vec2(
+        from_anchor.x * gesture.projected_visual_transform.scale.x as f32,
+        from_anchor.y * gesture.projected_visual_transform.scale.y as f32,
+    );
+    let position_delta = rotate_vec(old_pivot_offset - new_pivot_offset, visual_rotation);
+    gesture.projected_position = property_vec2(
+        gesture.original_position.x.into_inner() + f64::from(position_delta.x),
+        gesture.original_position.y.into_inner() + f64::from(position_delta.y),
+    );
+    gesture.projected_visual_transform.position.x =
+        gesture.original_visual_transform.position.x + f64::from(position_delta.x);
+    gesture.projected_visual_transform.position.y =
+        gesture.original_visual_transform.position.y + f64::from(position_delta.y);
+}
+
+fn commit_gesture(
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+    gesture: PreviewTransformGesture,
+) {
+    let updates = gesture_updates(&gesture);
+    if updates.is_empty() {
         return;
-    };
-    let Some(spatial_layer) = visual.spatial_layer(spatial_id) else {
-        return;
-    };
-    let spatial_interaction_enabled =
-        interaction_enabled && is_invertible(spatial_layer.parent_transform);
-    if crate::qa::is_enabled() {
-        crate::qa::register_component_with_metadata(
-            "preview.gizmo.bounds",
-            "preview_gizmo",
-            Rect::from_points(&corners),
-            false,
-            Some(serde_json::json!({
-                "owner": edit_target.owner,
-                "content_node_id": edit_target.content_node_id,
-                "spatial_node_id": spatial_id,
-                "instance_path": &edit_target.instance_path,
-                "action": "observe_selected_preview_bounds",
-                "handles_enabled": spatial_interaction_enabled,
-            })),
-        );
     }
-    let rotation_distance = 10.0 / editor_context.view.zoom;
-    let rotation_pos = top
-        + egui::vec2(
-            rotation.sin() * rotation_distance,
-            -rotation.cos() * rotation_distance,
-        );
-    ui.painter()
-        .line_segment([top, rotation_pos], egui::Stroke::new(2.0, color));
-    ui.painter().circle_filled(rotation_pos, 5.0, color);
-
-    let bottom = corners[2].lerp(corners[3], 0.5);
-    let left = corners[0].lerp(corners[3], 0.5);
-    let right = corners[1].lerp(corners[2], 0.5);
-    let handles = [
-        (corners[0], GizmoHandle::TopLeft, CursorIcon::ResizeNwSe),
-        (corners[1], GizmoHandle::TopRight, CursorIcon::ResizeNeSw),
-        (corners[3], GizmoHandle::BottomLeft, CursorIcon::ResizeNeSw),
-        (corners[2], GizmoHandle::BottomRight, CursorIcon::ResizeNwSe),
-        (top, GizmoHandle::Top, CursorIcon::ResizeVertical),
-        (bottom, GizmoHandle::Bottom, CursorIcon::ResizeVertical),
-        (left, GizmoHandle::Left, CursorIcon::ResizeHorizontal),
-        (right, GizmoHandle::Right, CursorIcon::ResizeHorizontal),
-        (rotation_pos, GizmoHandle::Rotation, CursorIcon::Grab),
-    ];
-
-    for (position, handle, cursor) in handles {
-        ui.painter().circle_filled(position, 5.0, color);
-        let handle_rect = Rect::from_center_size(position, Vec2::splat(15.0));
-        if crate::qa::is_enabled() {
-            let handle_name = gizmo_handle_name(handle);
-            crate::qa::register_component_with_metadata(
-                format!("preview.gizmo.handle:{handle_name}"),
-                "preview_gizmo_handle",
-                handle_rect,
-                spatial_interaction_enabled,
-                Some(serde_json::json!({
-                    "owner": edit_target.owner,
-                    "content_node_id": edit_target.content_node_id,
-                    "spatial_node_id": spatial_id,
-                    "instance_path": &edit_target.instance_path,
-                    "handle": handle_name,
-                    "action": "drag_preview_gizmo_handle",
-                })),
-            );
+    match service
+        .apply_authored_property_values(AuthoringPropertyOwner::Item(gesture.item_id), updates)
+    {
+        Ok(_) => {
+            state.inspector.invalidate();
+            state.error = None;
+            state.status = match gesture.handle {
+                None => "Moved clip",
+                Some(GizmoHandle::Rotation) => "Rotated clip",
+                Some(_) => "Resized clip",
+            }
+            .to_string();
         }
-        if !spatial_interaction_enabled {
-            continue;
-        }
-        let response = ui.interact(handle_rect, ui.id().with(handle), Sense::drag());
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(cursor);
-        }
-        if response.drag_started() {
-            let Some((_, _, width, height)) = visual.content_bounds else {
-                continue;
-            };
-            let Some(inverse_parent) = inverse_affine(spatial_layer.parent_transform) else {
-                continue;
-            };
-            let relative_visual = inverse_parent.compose(visual.world_transform);
-            let visual_scale_x =
-                relative_visual.scale_x.hypot(relative_visual.skew_y) as f32 * 100.0;
-            let visual_scale_y =
-                relative_visual.skew_x.hypot(relative_visual.scale_y) as f32 * 100.0;
-            let visual_rotation = relative_visual
-                .skew_y
-                .atan2(relative_visual.scale_x)
-                .to_degrees() as f32;
-            editor_context.interaction.gizmo_state =
-                Some(crate::state::context_types::GizmoState {
-                    start_mouse_pos: response.hover_pos().unwrap_or(position),
-                    active_handle: handle,
-                    original_position: [
-                        spatial_layer.transform.position.x as f32,
-                        spatial_layer.transform.position.y as f32,
-                    ],
-                    original_scale_x: spatial_layer.transform.scale.x as f32 * 100.0,
-                    original_scale_y: spatial_layer.transform.scale.y as f32 * 100.0,
-                    original_rotation: spatial_layer.transform.rotation as f32,
-                    original_visual_position: [
-                        spatial_layer.transform.position.x as f32,
-                        spatial_layer.transform.position.y as f32,
-                    ],
-                    original_visual_scale_x: visual_scale_x,
-                    original_visual_scale_y: visual_scale_y,
-                    original_visual_rotation: visual_rotation,
-                    original_anchor_x: spatial_layer.transform.anchor.x as f32,
-                    original_anchor_y: spatial_layer.transform.anchor.y as f32,
-                    original_width: width,
-                    original_height: height,
-                    has_changed: false,
-                });
-        }
+        Err(error) => state.error = Some(error.to_string()),
     }
 }
 
-const fn gizmo_handle_name(handle: GizmoHandle) -> &'static str {
+fn gesture_updates(gesture: &PreviewTransformGesture) -> Vec<AuthoringPropertyValueUpdate> {
+    let mut updates = Vec::with_capacity(2);
+    if gesture.projected_position != gesture.original_position {
+        updates.push(AuthoringPropertyValueUpdate {
+            key: "position".to_string(),
+            value: PropertyValue::Vec2(gesture.projected_position),
+            target: property_target(gesture.position_keyframed, gesture.local_time),
+        });
+    }
+    if gesture.projected_scale != gesture.original_scale {
+        updates.push(AuthoringPropertyValueUpdate {
+            key: "scale".to_string(),
+            value: PropertyValue::Vec2(gesture.projected_scale),
+            target: property_target(gesture.scale_keyframed, gesture.local_time),
+        });
+    }
+    if OrderedFloat(gesture.projected_rotation) != OrderedFloat(gesture.original_rotation) {
+        updates.push(AuthoringPropertyValueUpdate {
+            key: "rotation".to_string(),
+            value: PropertyValue::Number(OrderedFloat(gesture.projected_rotation)),
+            target: property_target(gesture.rotation_keyframed, gesture.local_time),
+        });
+    }
+    updates
+}
+
+fn property_target(keyframed: bool, local_time: MediaTime) -> AuthoringPropertyValueTarget {
+    if keyframed {
+        AuthoringPropertyValueTarget::Keyframe { local_time }
+    } else {
+        AuthoringPropertyValueTarget::Constant
+    }
+}
+
+pub(super) fn paint_gizmo(
+    ui: &Ui,
+    viewport: Rect,
+    canvas: CanvasTransform,
+    frame: Option<&FrameInfo>,
+    project: &AuthoringProject,
+    state: &AuthoringUiState,
+) {
+    if state.preview.active_tool != PreviewTool::Select {
+        return;
+    }
+    let Some(frame) = frame else {
+        return;
+    };
+    let primary = selected_item_id(project, state);
+    let painter = ui.painter().with_clip_rect(viewport);
+
+    for selection in state.selection.iter() {
+        let AuthoringSelection::Item(item_id) = selection else {
+            continue;
+        };
+        if Some(item_id) == primary {
+            continue;
+        }
+        let Some(geometry) = item_gizmo_geometry(frame, item_id) else {
+            continue;
+        };
+        paint_outlines(
+            &painter,
+            &geometry.outlines,
+            canvas,
+            GIZMO_COLOR.linear_multiply(0.5),
+            1.0,
+        );
+    }
+
+    let Some(item_id) = primary else {
+        return;
+    };
+    let Some(geometry) = item_gizmo_geometry(frame, item_id) else {
+        return;
+    };
+    let projected = state
+        .preview
+        .transform_gesture
+        .as_ref()
+        .filter(|gesture| gesture.item_id == item_id)
+        .and_then(|gesture| geometry.projected(&gesture.projected_visual_transform));
+    let (outlines, control_outline, anchor, dragging) = match projected {
+        Some(projected) => (
+            projected.outlines,
+            projected.control_outline,
+            projected.anchor,
+            true,
+        ),
+        None => (
+            geometry.outlines.clone(),
+            geometry.control_outline,
+            geometry.anchor,
+            false,
+        ),
+    };
+    paint_outlines(&painter, &outlines, canvas, GIZMO_COLOR, 1.25);
+    let screen_outline = control_outline.map(|point| canvas.world_to_screen(point));
+    paint_screen_outline(&painter, screen_outline, GIZMO_COLOR, 2.0);
+    let Some(placements) = handle_placements(screen_outline) else {
+        return;
+    };
+    let top = screen_outline[0].lerp(screen_outline[1], 0.5);
+    let rotation = placements
+        .iter()
+        .find(|placement| placement.handle == GizmoHandle::Rotation)
+        .map(|placement| placement.position)
+        .unwrap_or(top);
+    painter.line_segment([top, rotation], egui::Stroke::new(2.0, GIZMO_COLOR));
+    for placement in placements {
+        painter.circle_filled(placement.position, HANDLE_RADIUS, GIZMO_COLOR);
+        let handle_rect = Rect::from_center_size(placement.position, Vec2::splat(HANDLE_HIT_SIZE));
+        let name = handle_name(placement.handle);
+        crate::qa::register_component_with_metadata(
+            format!("preview.gizmo.handle:{name}"),
+            "preview_gizmo_handle",
+            handle_rect.intersect(viewport),
+            geometry.parent_transform.inverse().is_some(),
+            Some(serde_json::json!({
+                "item_id": item_id,
+                "handle": name,
+                "action": "drag_preview_gizmo_handle",
+            })),
+        );
+    }
+
+    let screen_anchor = canvas.world_to_screen(anchor);
+    if viewport.expand(8.0).contains(screen_anchor) {
+        painter.circle_filled(screen_anchor, 4.0, GIZMO_COLOR);
+        painter.line_segment(
+            [
+                screen_anchor - egui::vec2(8.0, 0.0),
+                screen_anchor + egui::vec2(8.0, 0.0),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::WHITE),
+        );
+        painter.line_segment(
+            [
+                screen_anchor - egui::vec2(0.0, 8.0),
+                screen_anchor + egui::vec2(0.0, 8.0),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::WHITE),
+        );
+    }
+    let screen_bounds = Rect::from_points(&screen_outline);
+    let qa_bounds = screen_bounds.intersect(viewport);
+    let item = project.items.get(&item_id);
+    let metadata = serde_json::json!({
+        "item_id": item_id,
+        "dragging": dragging,
+        "source_kind": item.map(|item| source_kind(&item.source)),
+        "outline_count": outlines.len(),
+        "screen_bounds": {
+            "min": {"x": screen_bounds.min.x, "y": screen_bounds.min.y},
+            "max": {"x": screen_bounds.max.x, "y": screen_bounds.max.y},
+        },
+        "canvas_transform": {
+            "pan": {"x": canvas.state.pan.x, "y": canvas.state.pan.y},
+            "zoom": {"x": canvas.state.zoom.x, "y": canvas.state.zoom.y},
+        },
+    });
+    crate::qa::register_component_with_metadata(
+        "preview.gizmo.bounds",
+        "preview_gizmo",
+        qa_bounds,
+        false,
+        Some(metadata.clone()),
+    );
+    // Stable compatibility ID used by the existing native authoring QA. It
+    // describes the same production gizmo; it is not another implementation.
+    crate::qa::register_component_with_metadata(
+        "preview.position_gizmo",
+        "preview_position_gizmo",
+        qa_bounds,
+        true,
+        Some(metadata),
+    );
+}
+
+fn paint_outlines(
+    painter: &egui::Painter,
+    outlines: &[[Pos2; 4]],
+    canvas: CanvasTransform,
+    color: egui::Color32,
+    thickness: f32,
+) {
+    for outline in outlines {
+        paint_screen_outline(
+            painter,
+            outline.map(|point| canvas.world_to_screen(point)),
+            color,
+            thickness,
+        );
+    }
+}
+
+fn paint_screen_outline(
+    painter: &egui::Painter,
+    corners: [Pos2; 4],
+    color: egui::Color32,
+    thickness: f32,
+) {
+    let stroke = egui::Stroke::new(thickness, color);
+    for index in 0..corners.len() {
+        painter.line_segment(
+            [corners[index], corners[(index + 1) % corners.len()]],
+            stroke,
+        );
+    }
+}
+
+fn handle_placements(corners: [Pos2; 4]) -> Option<[HandlePlacement; 9]> {
+    if corners.iter().any(|corner| !corner.is_finite()) {
+        return None;
+    }
+    let top = corners[0].lerp(corners[1], 0.5);
+    let bottom = corners[2].lerp(corners[3], 0.5);
+    let left = corners[0].lerp(corners[3], 0.5);
+    let right = corners[1].lerp(corners[2], 0.5);
+    let top_edge = corners[1] - corners[0];
+    if top_edge.length_sq() <= f32::EPSILON {
+        return None;
+    }
+    let outward = egui::vec2(top_edge.y, -top_edge.x).normalized();
+    let rotation = top + outward * ROTATION_HANDLE_DISTANCE;
+    Some([
+        placement(corners[0], GizmoHandle::TopLeft, CursorIcon::ResizeNwSe),
+        placement(top, GizmoHandle::Top, CursorIcon::ResizeVertical),
+        placement(corners[1], GizmoHandle::TopRight, CursorIcon::ResizeNeSw),
+        placement(left, GizmoHandle::Left, CursorIcon::ResizeHorizontal),
+        placement(right, GizmoHandle::Right, CursorIcon::ResizeHorizontal),
+        placement(corners[3], GizmoHandle::BottomLeft, CursorIcon::ResizeNeSw),
+        placement(bottom, GizmoHandle::Bottom, CursorIcon::ResizeVertical),
+        placement(corners[2], GizmoHandle::BottomRight, CursorIcon::ResizeNwSe),
+        placement(rotation, GizmoHandle::Rotation, CursorIcon::Grab),
+    ])
+}
+
+const fn placement(position: Pos2, handle: GizmoHandle, cursor: CursorIcon) -> HandlePlacement {
+    HandlePlacement {
+        position,
+        handle,
+        cursor,
+    }
+}
+
+const fn handle_name(handle: GizmoHandle) -> &'static str {
     match handle {
         GizmoHandle::TopLeft => "top_left",
         GizmoHandle::Top => "top",
@@ -389,92 +794,15 @@ const fn gizmo_handle_name(handle: GizmoHandle) -> &'static str {
     }
 }
 
-fn draw_clip_box(
-    ui: &Ui,
-    visual: &PreviewClip,
-    to_screen: impl Fn(Pos2) -> Pos2,
-    color: egui::Color32,
-    thickness: f32,
-) -> Option<([Pos2; 4], f32, Pos2)> {
-    let (x, y, width, height) = visual.content_bounds?;
-    let point = |local_x: f32, local_y: f32| {
-        let (world_x, world_y) = visual
-            .world_transform
-            .map_point(f64::from(local_x), f64::from(local_y));
-        to_screen(egui::pos2(world_x as f32, world_y as f32))
-    };
-    let corners = [
-        point(x, y),
-        point(x + width, y),
-        point(x + width, y + height),
-        point(x, y + height),
-    ];
-    let stroke = egui::Stroke::new(thickness, color);
-    for index in 0..corners.len() {
-        ui.painter().line_segment(
-            [corners[index], corners[(index + 1) % corners.len()]],
-            stroke,
-        );
+fn cursor_for_gesture(handle: Option<GizmoHandle>) -> CursorIcon {
+    match handle {
+        None => CursorIcon::Grabbing,
+        Some(GizmoHandle::Rotation) => CursorIcon::Grabbing,
+        Some(GizmoHandle::TopLeft | GizmoHandle::BottomRight) => CursorIcon::ResizeNwSe,
+        Some(GizmoHandle::TopRight | GizmoHandle::BottomLeft) => CursorIcon::ResizeNeSw,
+        Some(GizmoHandle::Top | GizmoHandle::Bottom) => CursorIcon::ResizeVertical,
+        Some(GizmoHandle::Left | GizmoHandle::Right) => CursorIcon::ResizeHorizontal,
     }
-    let top = corners[0].lerp(corners[1], 0.5);
-    let top_edge = corners[1] - corners[0];
-    Some((corners, top_edge.y.atan2(top_edge.x), top))
-}
-
-fn inverse_map_vector(transform: Affine2D, vector: Vec2) -> Option<Vec2> {
-    let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
-    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
-        return None;
-    }
-    let mapped = egui::vec2(
-        ((transform.scale_y * f64::from(vector.x) - transform.skew_x * f64::from(vector.y))
-            / determinant) as f32,
-        ((-transform.skew_y * f64::from(vector.x) + transform.scale_x * f64::from(vector.y))
-            / determinant) as f32,
-    );
-    mapped.is_finite().then_some(mapped)
-}
-
-fn inverse_affine(transform: Affine2D) -> Option<Affine2D> {
-    let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
-    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
-        return None;
-    }
-    let scale_x = transform.scale_y / determinant;
-    let skew_x = -transform.skew_x / determinant;
-    let skew_y = -transform.skew_y / determinant;
-    let scale_y = transform.scale_x / determinant;
-    let inverse = Affine2D {
-        scale_x,
-        skew_x,
-        translate_x: -(scale_x * transform.translate_x + skew_x * transform.translate_y),
-        skew_y,
-        scale_y,
-        translate_y: -(skew_y * transform.translate_x + scale_y * transform.translate_y),
-    };
-    [
-        inverse.scale_x,
-        inverse.skew_x,
-        inverse.translate_x,
-        inverse.skew_y,
-        inverse.scale_y,
-        inverse.translate_y,
-    ]
-    .into_iter()
-    .all(f64::is_finite)
-    .then_some(inverse)
-}
-
-fn is_invertible(transform: Affine2D) -> bool {
-    inverse_affine(transform).is_some()
-}
-
-fn rotate_vec(vector: Vec2, angle_degrees: f32) -> Vec2 {
-    let (sin, cos) = angle_degrees.to_radians().sin_cos();
-    egui::vec2(
-        vector.x * cos - vector.y * sin,
-        vector.x * sin + vector.y * cos,
-    )
 }
 
 fn handle_sign(handle: GizmoHandle) -> (f32, f32) {
@@ -491,188 +819,124 @@ fn handle_sign(handle: GizmoHandle) -> (f32, f32) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::handle_gizmo_interaction;
-    use crate::model::ui_types::GizmoHandle;
-    use crate::state::context::EditorContext;
-    use crate::state::context_types::{GizmoState, SelectionTarget};
-    use crate::ui::panels::preview::clip::{PreviewClip, PreviewSpatialKind, PreviewSpatialLayer};
-    use library::model::Node;
-    use library::model::frame::transform::Transform;
-    use library::rendering::renderer::Affine2D;
-    use uuid::Uuid;
+fn rotate_vec(vector: Vec2, angle_degrees: f32) -> Vec2 {
+    let (sin, cos) = angle_degrees.to_radians().sin_cos();
+    egui::vec2(
+        vector.x * cos - vector.y * sin,
+        vector.x * sin + vector.y * cos,
+    )
+}
 
-    fn transform_visual(parent_transform: Affine2D) -> PreviewClip {
-        let owner = SelectionTarget::Clip(Uuid::new_v4());
-        let content = library::plugin::PluginManager::default()
-            .create_image_transform_operation_node()
-            .expect("native Transform operation");
-        let spatial = library::plugin::PluginManager::default()
-            .create_image_transform_operation_node()
-            .expect("native Transform operation");
-        PreviewClip {
-            instance_path: vec![Uuid::new_v4(), content.id, spatial.id],
-            content_node: content,
-            spatial_layers: vec![PreviewSpatialLayer {
-                node: spatial,
-                kind: PreviewSpatialKind::ImageTransform,
-                transform: Transform::default(),
-                parent_transform,
-            }],
-            owner_target: owner,
-            transform: Transform::default(),
-            world_transform: Affine2D::IDENTITY,
-            content_bounds: Some((0.0, 0.0, 100.0, 100.0)),
-        }
+fn inverse_map_vector(transform: Affine2D, vector: Vec2) -> Option<Vec2> {
+    let inverse = transform.inverse()?;
+    let mapped = egui::vec2(
+        (inverse.scale_x * f64::from(vector.x) + inverse.skew_x * f64::from(vector.y)) as f32,
+        (inverse.skew_y * f64::from(vector.x) + inverse.scale_y * f64::from(vector.y)) as f32,
+    );
+    mapped.is_finite().then_some(mapped)
+}
+
+fn item_local_time(
+    project: &AuthoringProject,
+    state: &AuthoringUiState,
+    item: &TimelineItem,
+) -> Result<MediaTime, String> {
+    let timeline = project
+        .timelines
+        .get(&state.active_timeline_id)
+        .ok_or_else(|| "Active Timeline is missing".to_string())?;
+    let timeline_time = MediaTime::from_frame_index(state.timeline.current_frame, timeline.fps)?;
+    if !item.interval.contains(timeline_time)? {
+        return Err("Move the playhead over the selected clip before editing it".to_string());
     }
+    item.time_map.local_time(item.interval, timeline_time)
+}
 
-    fn armed_editor(visual: &PreviewClip) -> EditorContext {
-        let mut editor_context = EditorContext::new(Uuid::new_v4());
-        editor_context.select_target(visual.owner_target);
-        editor_context.interaction.preview_edit_target = Some(visual.edit_target());
-        editor_context.interaction.gizmo_state = Some(GizmoState {
-            start_mouse_pos: egui::pos2(10.0, 10.0),
-            active_handle: GizmoHandle::Right,
-            original_position: [0.0, 0.0],
-            original_scale_x: 100.0,
-            original_scale_y: 100.0,
-            original_rotation: 0.0,
-            original_visual_position: [0.0, 0.0],
-            original_visual_scale_x: 100.0,
-            original_visual_scale_y: 100.0,
-            original_visual_rotation: 0.0,
-            original_anchor_x: 0.0,
-            original_anchor_y: 0.0,
-            original_width: 100.0,
-            original_height: 100.0,
-            has_changed: false,
-        });
-        editor_context
-    }
+fn authored_vec2(
+    item: &TimelineItem,
+    key: &str,
+    local_time: MediaTime,
+    fallback: PropertyVec2,
+    required: bool,
+) -> Result<(PropertyVec2, bool), String> {
+    let Some(property) = item.authored_properties.get(key) else {
+        return Ok((fallback, false));
+    };
+    let keyframed = match property.evaluator.as_str() {
+        "constant" => false,
+        "keyframe" => true,
+        _evaluator if !required => return Ok((fallback, false)),
+        evaluator => return Err(controlled_property_error(key, evaluator)),
+    };
+    let value = property
+        .evaluate_at(local_time.to_seconds_f64())
+        .map_err(|error| format!("Cannot sample {}: {error}", display_property(key)))?;
+    let PropertyValue::Vec2(value) = value else {
+        return Err(format!("{} is not a 2D value", display_property(key)));
+    };
+    Ok((value, keyframed))
+}
 
-    fn run_gizmo(
-        editor_context: &mut EditorContext,
-        visuals: &[PreviewClip],
-    ) -> (bool, Vec<crate::ui::panels::preview::action::PreviewAction>) {
-        let context = egui::Context::default();
-        let mut pending_actions = Vec::new();
-        let mut handled = false;
-        drop(context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| {
-                handled = handle_gizmo_interaction(
-                    ui,
-                    editor_context,
-                    visuals,
-                    Some(egui::pos2(20.0, 10.0)),
-                    |position| position,
-                    &mut pending_actions,
-                );
-            });
-        }));
-        (handled, pending_actions)
-    }
+fn authored_number(
+    item: &TimelineItem,
+    key: &str,
+    local_time: MediaTime,
+    fallback: f64,
+    required: bool,
+) -> Result<(f64, bool), String> {
+    let Some(property) = item.authored_properties.get(key) else {
+        return Ok((fallback, false));
+    };
+    let keyframed = match property.evaluator.as_str() {
+        "constant" => false,
+        "keyframe" => true,
+        _evaluator if !required => return Ok((fallback, false)),
+        evaluator => return Err(controlled_property_error(key, evaluator)),
+    };
+    let value = property
+        .evaluate_at(local_time.to_seconds_f64())
+        .map_err(|error| format!("Cannot sample {}: {error}", display_property(key)))?;
+    let PropertyValue::Number(value) = value else {
+        return Err(format!("{} is not a Number", display_property(key)));
+    };
+    Ok((value.into_inner(), keyframed))
+}
 
-    #[test]
-    fn clip_target_with_same_uuid_cannot_drive_node_gizmo() {
-        let shared_id = Uuid::new_v4();
-        let mut node = Node::new_merge("same UUID visual");
-        node.id = shared_id;
-        let visual = PreviewClip {
-            content_node: node.clone(),
-            spatial_layers: vec![PreviewSpatialLayer {
-                node,
-                kind: PreviewSpatialKind::Content,
-                transform: Transform::default(),
-                parent_transform: Affine2D::IDENTITY,
-            }],
-            owner_target: SelectionTarget::Clip(shared_id),
-            transform: Transform::default(),
-            world_transform: Affine2D::IDENTITY,
-            content_bounds: Some((0.0, 0.0, 100.0, 100.0)),
-            instance_path: vec![shared_id],
-        };
-        let mut editor_context = EditorContext::new(Uuid::new_v4());
-        editor_context.select_target(SelectionTarget::Clip(shared_id));
-        editor_context.interaction.gizmo_state = Some(GizmoState {
-            start_mouse_pos: egui::pos2(10.0, 10.0),
-            active_handle: GizmoHandle::Right,
-            original_position: [0.0, 0.0],
-            original_scale_x: 100.0,
-            original_scale_y: 100.0,
-            original_rotation: 0.0,
-            original_visual_position: [0.0, 0.0],
-            original_visual_scale_x: 100.0,
-            original_visual_scale_y: 100.0,
-            original_visual_rotation: 0.0,
-            original_anchor_x: 0.0,
-            original_anchor_y: 0.0,
-            original_width: 100.0,
-            original_height: 100.0,
-            has_changed: false,
-        });
+fn controlled_property_error(key: &str, evaluator: &str) -> String {
+    format!(
+        "{} is controlled by '{evaluator}'. The gizmo was not applied because it would disconnect that control.",
+        display_property(key)
+    )
+}
 
-        let context = egui::Context::default();
-        let mut pending_actions = Vec::new();
-        let mut handled = true;
-        drop(context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| {
-                handled = handle_gizmo_interaction(
-                    ui,
-                    &mut editor_context,
-                    std::slice::from_ref(&visual),
-                    Some(egui::pos2(20.0, 10.0)),
-                    |position| position,
-                    &mut pending_actions,
-                );
-            });
-        }));
-
-        assert!(!handled);
-        assert!(pending_actions.is_empty());
-        assert!(editor_context.interaction.gizmo_state.is_none());
-        assert_eq!(
-            editor_context.selection.primary(),
-            Some(SelectionTarget::Clip(shared_id))
-        );
-    }
-
-    #[test]
-    fn singular_parent_cancels_gizmo_without_update_or_history() {
-        let visual = transform_visual(Affine2D {
-            scale_x: 0.0,
-            skew_x: 0.0,
-            translate_x: 0.0,
-            skew_y: 0.0,
-            scale_y: 1.0,
-            translate_y: 0.0,
-        });
-        let mut editor_context = armed_editor(&visual);
-
-        let (handled, pending_actions) =
-            run_gizmo(&mut editor_context, std::slice::from_ref(&visual));
-
-        assert!(handled);
-        assert!(pending_actions.is_empty());
-        assert!(editor_context.interaction.gizmo_state.is_none());
-    }
-
-    #[test]
-    fn stale_exact_gizmo_path_cannot_mutate_reused_node_id() {
-        let visual = transform_visual(Affine2D::IDENTITY);
-        let mut editor_context = armed_editor(&visual);
-        editor_context
-            .interaction
-            .preview_edit_target
-            .as_mut()
-            .expect("armed exact target")
-            .instance_path[0] = Uuid::new_v4();
-
-        let (handled, pending_actions) =
-            run_gizmo(&mut editor_context, std::slice::from_ref(&visual));
-
-        assert!(handled);
-        assert!(pending_actions.is_empty());
-        assert!(editor_context.interaction.gizmo_state.is_none());
+fn display_property(key: &str) -> &'static str {
+    match key {
+        "position" => "Position",
+        "scale" => "Scale",
+        "rotation" => "Rotation",
+        _ => "Property",
     }
 }
+
+fn property_vec2(x: f64, y: f64) -> PropertyVec2 {
+    PropertyVec2 {
+        x: OrderedFloat(x),
+        y: OrderedFloat(y),
+    }
+}
+
+fn source_kind(source: &library::model::authoring::SourceRef) -> &'static str {
+    use library::model::authoring::SourceRef;
+    match source {
+        SourceRef::Asset { .. } => "asset",
+        SourceRef::Text { .. } => "text",
+        SourceRef::Shape { .. } => "shape",
+        SourceRef::Solid { .. } => "solid",
+        SourceRef::Composition(_) => "composition",
+        SourceRef::Module(_) => "module",
+    }
+}
+
+#[cfg(test)]
+#[path = "gizmo_tests.rs"]
+mod tests;

@@ -31,6 +31,46 @@ fn qa_option(easing: &EasingFunction) -> Option<&'static str> {
     }
 }
 
+/// Compact label shared by controls that summarize the current interpolation.
+pub fn easing_summary(easing: &EasingFunction) -> &'static str {
+    match easing {
+        EasingFunction::Linear => "Linear",
+        EasingFunction::Constant => "Hold",
+        EasingFunction::EaseInSine
+        | EasingFunction::EaseInQuad
+        | EasingFunction::EaseInCubic
+        | EasingFunction::EaseInQuart
+        | EasingFunction::EaseInQuint
+        | EasingFunction::EaseInExpo
+        | EasingFunction::EaseInCirc
+        | EasingFunction::EaseInBack { .. }
+        | EasingFunction::EaseInElastic { .. }
+        | EasingFunction::EaseInBounce { .. } => "Ease In",
+        EasingFunction::EaseOutSine
+        | EasingFunction::EaseOutQuad
+        | EasingFunction::EaseOutCubic
+        | EasingFunction::EaseOutQuart
+        | EasingFunction::EaseOutQuint
+        | EasingFunction::EaseOutExpo
+        | EasingFunction::EaseOutCirc
+        | EasingFunction::EaseOutBack { .. }
+        | EasingFunction::EaseOutElastic { .. }
+        | EasingFunction::EaseOutBounce { .. } => "Ease Out",
+        EasingFunction::EaseInOutSine
+        | EasingFunction::EaseInOutQuad
+        | EasingFunction::EaseInOutCubic
+        | EasingFunction::EaseInOutQuart
+        | EasingFunction::EaseInOutQuint
+        | EasingFunction::EaseInOutExpo
+        | EasingFunction::EaseInOutCirc
+        | EasingFunction::EaseInOutBack { .. }
+        | EasingFunction::EaseInOutElastic { .. }
+        | EasingFunction::EaseInOutBounce { .. } => "Ease In / Out",
+        EasingFunction::SimpleBezier { .. } | EasingFunction::Bezier { .. } => "Custom Bezier",
+        EasingFunction::Expression { .. } => "Expression",
+    }
+}
+
 pub fn show_easing_menu(
     ui: &mut Ui,
     current_easing: Option<&EasingFunction>,

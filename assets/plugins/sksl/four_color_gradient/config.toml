@@ -1,6 +1,7 @@
 id = "four_color_gradient"
 name = "4-Color Gradient"
 category = "Generator"
+color_domain = "project_linear"
 
 [[properties]]
 name = "colTL"

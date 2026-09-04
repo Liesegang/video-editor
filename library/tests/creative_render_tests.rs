@@ -11,12 +11,14 @@ use library::cache::CacheManager;
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::{EffectorConfig, EnsembleData};
 use library::editor::project_service::GeneratorNodeRequest;
+use library::editor::{ExportService, ProjectModel, ProjectService};
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::{DrawStyle, PathEffect};
 use library::model::frame::entity::{FrameContent, FrameItem, SkSLColorDomain, StyleConfig};
 use library::model::frame::frame::FrameInfo;
+use library::model::path::parse_legacy_svg_path_data;
 use library::model::project::{
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner,
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
@@ -25,9 +27,7 @@ use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
 use library::plugin::{ExportSettings, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager};
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, TextRasterRequest};
-use library::{
-    ExportService, ProjectModel, ProjectService, RenderDestination, RenderService, SkiaRenderer,
-};
+use library::{RenderDestination, RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -473,6 +473,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::Shape {
         path: converted_path,
+        canonical_path: Some(converted_canonical_path),
         styles,
         path_effects,
         transform,
@@ -481,7 +482,11 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     else {
         bail!("shape converter did not produce FrameContent::Shape");
     };
-    assert_eq!(converted_path, path);
+    assert_eq!(
+        parse_legacy_svg_path_data(converted_path)?,
+        parse_legacy_svg_path_data(path)?
+    );
+    assert_eq!(converted_canonical_path, &parse_legacy_svg_path_data(path)?);
     assert_eq!(styles.len(), 1);
     assert_eq!(path_effects, &[PathEffect::Corner { radius: 5.0 }]);
     assert_eq!((transform.position.x, transform.position.y), (22.0, 18.0));

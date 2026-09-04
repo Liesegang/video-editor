@@ -610,6 +610,8 @@ mod tests {
         include_str!("../../../../assets/plugins/sksl/silhouette/config.toml");
     const SILHOUETTE_SHADER: &str =
         include_str!("../../../../assets/plugins/sksl/silhouette/shader.sksl");
+    const MOSAIC_CONFIG: &str = include_str!("../../../../assets/plugins/sksl/mosaic/config.toml");
+    const MOSAIC_SHADER: &str = include_str!("../../../../assets/plugins/sksl/mosaic/shader.sksl");
 
     fn managed_pixel(pixel: [f32; 4]) -> RenderOutput {
         let backend = BuiltinColorTransform;
@@ -700,4 +702,38 @@ properties = []
         );
         assert!(plugin.project_linear_color_parameters().is_empty());
     }
+
+    #[test]
+    fn mosaic_preserves_the_project_linear_frame_contract() {
+        let manager = PluginManager::new();
+        let plugin = SkslEffectPlugin::new(MOSAIC_CONFIG, MOSAIC_SHADER).unwrap();
+        assert_eq!(
+            plugin.color_domain(),
+            EffectColorDomain::ProjectLinearPreserving
+        );
+        manager.register_effect(Arc::new(plugin));
+
+        let input = managed_pixel([0.25, 0.5, 1.5, 1.0]);
+        let RenderOutput::Working(input_working) = &input else {
+            panic!("managed_pixel must return a working image");
+        };
+        let expected_identity = input_working.identity().clone();
+        let output = manager
+            .apply_effect(
+                "mosaic",
+                &input,
+                &HashMap::from([("pixel_size".to_string(), PropertyValue::from(1.0))]),
+                None,
+            )
+            .expect("Mosaic should run directly on Project-linear RGBAF32");
+        let RenderOutput::Working(output) = output else {
+            panic!("Mosaic dropped the managed working contract");
+        };
+        assert_eq!(output.identity(), &expected_identity);
+        assert_pixel_near(output.pixels().pixels()[0], [0.25, 0.5, 1.5, 1.0]);
+    }
 }
+
+#[cfg(test)]
+#[path = "sksl_plugin/bundled_tests.rs"]
+mod bundled_tests;

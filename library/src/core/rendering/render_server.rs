@@ -1,8 +1,6 @@
 use log::error;
 use std::sync::Arc;
-use std::sync::mpsc::{
-    Receiver, Sender, SyncSender, TryRecvError, TrySendError, channel, sync_channel,
-};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, channel, sync_channel};
 use std::thread;
 
 use crate::RenderDestination;
@@ -17,14 +15,16 @@ use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::rendering::skia_renderer::SkiaRenderer;
 
 mod export;
+mod preview_mailbox;
 
 use export::{
     AuthoringExportRequest, AuthoringPngExportRequest, AuthoringVideoExportRequest,
     run_authoring_export_worker,
 };
+use preview_mailbox::{PreviewMailbox, PreviewSubmission, PreviewWorkerMessage};
 
 pub struct RenderServer {
-    tx: Sender<RenderRequest>,
+    preview_mailbox: Arc<PreviewMailbox<AuthoringRenderRequest>>,
     rx_authoring_result: Receiver<RenderResult>,
     tx_authoring_export: SyncSender<AuthoringExportRequest>,
     rx_authoring_export_result: Receiver<AuthoringExportResult>,
@@ -32,19 +32,15 @@ pub struct RenderServer {
     export_handle: Option<thread::JoinHandle<()>>,
 }
 
-enum RenderRequest {
-    RenderAuthoring {
-        request_id: RenderRequestId,
-        project: Arc<AuthoringProject>,
-        plan: Arc<RenderPlan>,
-        timeline_id: TimelineId,
-        instance_path: Option<InstancePath>,
-        frame_number: i64,
-        render_scale: f64,
-        region: Option<Region>,
-    },
-    SetSharingContext(usize, Option<isize>),
-    Shutdown,
+struct AuthoringRenderRequest {
+    request_id: RenderRequestId,
+    project: Arc<AuthoringProject>,
+    plan: Arc<RenderPlan>,
+    timeline_id: TimelineId,
+    instance_path: Option<InstancePath>,
+    frame_number: i64,
+    render_scale: f64,
+    region: Option<Region>,
 }
 
 /// Opaque identity assigned by the caller to one asynchronous render request.
@@ -74,7 +70,7 @@ pub struct RenderResult {
     pub frame_info: FrameInfo,
 }
 
-/// Result of a full-frame Timeline-first export request.
+/// Result of a full-frame authoring export request.
 ///
 /// Export has a dedicated queue and worker so Preview coalescing can neither
 /// discard an export request nor consume its completion.
@@ -129,7 +125,8 @@ fn authoring_error_frame_info(
 
 impl RenderServer {
     pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
-        let (tx, rx) = channel::<RenderRequest>();
+        let preview_mailbox = Arc::new(PreviewMailbox::new());
+        let worker_mailbox = Arc::clone(&preview_mailbox);
         let (tx_authoring_result, rx_authoring_result) = channel::<RenderResult>();
         let (tx_authoring_export, rx_authoring_export) = sync_channel::<AuthoringExportRequest>(1);
         let (tx_authoring_export_result, rx_authoring_export_result) =
@@ -146,6 +143,7 @@ impl RenderServer {
         });
 
         let handle = thread::spawn(move || {
+            let frame_plugin_manager = Arc::clone(&plugin_manager);
             let mut current_background_color = crate::model::frame::color::Color {
                 r: 0,
                 g: 0,
@@ -172,90 +170,68 @@ impl RenderServer {
             let mut current_width = 1920;
             let mut current_height = 1080;
 
-            'server: while let Ok(first_request) = rx.recv() {
-                let mut pending_render = None;
-
-                for request in std::iter::once(first_request).chain(rx.try_iter()) {
-                    match request {
-                        RenderRequest::RenderAuthoring {
-                            request_id,
-                            project,
-                            plan,
+            'server: loop {
+                let mut pending_render = match worker_mailbox.recv() {
+                    PreviewWorkerMessage::Render(request) => request,
+                    PreviewWorkerMessage::SetSharingContext(handle, hwnd) => {
+                        if let Some(render_service) = render_service.as_mut()
+                            && let Err(error) =
+                                render_service.renderer.set_sharing_context(handle, hwnd)
+                        {
+                            error!("Failed to set render sharing context: {error}");
+                        }
+                        continue;
+                    }
+                    PreviewWorkerMessage::Shutdown => break,
+                };
+                // A newer scrub/playback request may have arrived between the
+                // wake-up and evaluation. Drop that stale snapshot before any
+                // frame or raster work begins.
+                if let Some(newer) = worker_mailbox.take_newer_render() {
+                    pending_render = newer;
+                }
+                let AuthoringRenderRequest {
+                    request_id,
+                    project,
+                    plan,
+                    timeline_id,
+                    instance_path,
+                    frame_number,
+                    render_scale,
+                    region,
+                } = pending_render;
+                let frame_info = match evaluate_timeline_render_plan_frame_at_instance(
+                    project.as_ref(),
+                    plan.as_ref(),
+                    frame_plugin_manager.as_ref(),
+                    timeline_id,
+                    frame_number,
+                    render_scale,
+                    region,
+                    instance_path.as_ref(),
+                ) {
+                    Ok(frame_info) => frame_info,
+                    Err(error) => {
+                        let frame_info = authoring_error_frame_info(
+                            project.as_ref(),
                             timeline_id,
-                            instance_path,
                             frame_number,
                             render_scale,
                             region,
-                        } => {
-                            pending_render = Some(RenderRequest::RenderAuthoring {
+                        );
+                        if tx_authoring_result
+                            .send(RenderResult {
                                 request_id,
-                                project,
-                                plan,
-                                timeline_id,
-                                instance_path,
-                                frame_number,
-                                render_scale,
-                                region,
-                            });
+                                frame_hash: 0,
+                                output: Err(error),
+                                frame_info,
+                            })
+                            .is_err()
+                        {
+                            break 'server;
                         }
-                        RenderRequest::SetSharingContext(handle, hwnd) => {
-                            if let Some(render_service) = render_service.as_mut()
-                                && let Err(error) =
-                                    render_service.renderer.set_sharing_context(handle, hwnd)
-                            {
-                                error!("Failed to set render sharing context: {error}");
-                            }
-                        }
-                        RenderRequest::Shutdown => break 'server,
+                        continue 'server;
                     }
-                }
-
-                let Some(pending_render) = pending_render else {
-                    continue;
-                };
-                let (request_id, project, frame_info) = match pending_render {
-                    RenderRequest::RenderAuthoring {
-                        request_id,
-                        project,
-                        plan,
-                        timeline_id,
-                        instance_path,
-                        frame_number,
-                        render_scale,
-                        region,
-                    } => match evaluate_timeline_render_plan_frame_at_instance(
-                        project.as_ref(),
-                        plan.as_ref(),
-                        timeline_id,
-                        frame_number,
-                        render_scale,
-                        region,
-                        instance_path.as_ref(),
-                    ) {
-                        Ok(frame_info) => (request_id, project, frame_info),
-                        Err(error) => {
-                            let frame_info = authoring_error_frame_info(
-                                project.as_ref(),
-                                timeline_id,
-                                frame_number,
-                                render_scale,
-                                region,
-                            );
-                            if tx_authoring_result
-                                .send(RenderResult {
-                                    request_id,
-                                    frame_hash: 0,
-                                    output: Err(error),
-                                    frame_info,
-                                })
-                                .is_err()
-                            {
-                                break 'server;
-                            }
-                            continue 'server;
-                        }
-                    },
-                    RenderRequest::SetSharingContext(_, _) | RenderRequest::Shutdown => continue,
                 };
                 let Some(render_service) = render_service.as_mut() else {
                     let error =
@@ -343,7 +319,7 @@ impl RenderServer {
         });
 
         Self {
-            tx,
+            preview_mailbox,
             rx_authoring_result,
             tx_authoring_export,
             rx_authoring_export_result,
@@ -352,9 +328,11 @@ impl RenderServer {
         }
     }
 
-    /// Queue a Timeline-first render. Evaluation and rasterization both happen
-    /// on the render worker; Project ownership stays in `AuthoringProject` and
-    /// the immutable derived plan is shared across requests.
+    /// Publish the latest desired authoring Preview frame. Evaluation and
+    /// rasterization both happen on the render worker; Project ownership stays
+    /// in `AuthoringProject` and the immutable derived plan is shared across
+    /// requests. A successful submission may replace a pending older request;
+    /// superseded Preview requests intentionally produce no completion.
     #[expect(
         clippy::too_many_arguments,
         reason = "the asynchronous boundary keeps exact frame, scale, and region explicit"
@@ -381,7 +359,7 @@ impl RenderServer {
         )
     }
 
-    /// Queue a Timeline-first render in a concrete nested placement context.
+    /// Queue an authoring render in a concrete nested placement context.
     #[expect(
         clippy::too_many_arguments,
         reason = "the asynchronous boundary keeps exact frame, viewport, and instance context explicit"
@@ -397,7 +375,7 @@ impl RenderServer {
         render_scale: f64,
         region: Option<Region>,
     ) -> bool {
-        if let Err(error) = self.tx.send(RenderRequest::RenderAuthoring {
+        let submission = self.preview_mailbox.submit_render(AuthoringRenderRequest {
             request_id,
             project,
             plan,
@@ -406,14 +384,16 @@ impl RenderServer {
             frame_number,
             render_scale,
             region,
-        }) {
-            log::debug!("Render server is unavailable: {error}");
-            return false;
+        });
+        if submission == PreviewSubmission::Closed {
+            log::debug!("Render server is unavailable");
+            false
+        } else {
+            true
         }
-        true
     }
 
-    /// Queue one full-resolution Timeline-first frame for PNG export.
+    /// Queue one full-resolution authoring frame for PNG export.
     ///
     /// The bounded dedicated worker is intentionally independent from Preview
     /// request coalescing. `false` means the single pending export slot is busy
@@ -476,7 +456,7 @@ impl RenderServer {
         }
     }
 
-    /// Queue a full-duration Timeline-first video export.
+    /// Queue a full-duration authoring video export.
     ///
     /// Frames are rendered from the immutable Project/RenderPlan snapshot and
     /// streamed to the FFmpeg exporter on the dedicated export worker. Audio
@@ -533,41 +513,46 @@ impl RenderServer {
         }
     }
 
-    /// Poll a Timeline-first Preview completion.
+    /// Poll an authoring Preview completion.
     pub fn poll_authoring_result(&self) -> Result<RenderResult, TryRecvError> {
         self.rx_authoring_result.try_recv()
     }
 
-    /// Poll only Timeline-first export completions. Preview never observes or
+    /// Poll only authoring export completions. Preview never observes or
     /// discards values from this receiver.
     pub fn poll_authoring_export_result(&self) -> Result<AuthoringExportResult, TryRecvError> {
         self.rx_authoring_export_result.try_recv()
     }
 
     pub fn set_sharing_context(&self, handle: usize, hwnd: Option<isize>) {
-        if let Err(error) = self.tx.send(RenderRequest::SetSharingContext(handle, hwnd)) {
-            log::debug!("Render server is unavailable: {error}");
+        if !self.preview_mailbox.set_sharing_context(handle, hwnd) {
+            log::debug!("Render server is unavailable");
         }
     }
 }
 
 impl Drop for RenderServer {
     fn drop(&mut self) {
-        drop(self.tx.send(RenderRequest::Shutdown));
-        drop(
-            self.tx_authoring_export
-                .send(AuthoringExportRequest::Shutdown),
-        );
-        if let Some(handle) = self.handle.take()
-            && handle.join().is_err()
+        self.preview_mailbox.shutdown();
+        match self
+            .tx_authoring_export
+            .try_send(AuthoringExportRequest::Shutdown)
         {
-            error!("Render server thread panicked during shutdown");
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Full(_)) => {
+                // Dropping the last sender after this method returns closes
+                // the channel once the already queued export is received.
+                log::debug!("Authoring export shutdown follows its queued request");
+            }
         }
-        if let Some(handle) = self.export_handle.take()
-            && handle.join().is_err()
-        {
-            error!("Authoring export thread panicked during shutdown");
+        let mut workers = Vec::with_capacity(2);
+        if let Some(handle) = self.handle.take() {
+            workers.push(("Render server thread", handle));
         }
+        if let Some(handle) = self.export_handle.take() {
+            workers.push(("Authoring export thread", handle));
+        }
+        crate::util::thread::join_in_background("render-shutdown-reaper", workers);
     }
 }
 

@@ -1,11 +1,17 @@
 use super::super::{
-    ColorContent, DataContent, GeneratorContent, ListContent, NativeOperationContent, Node,
-    NodeContent, PathOperationContent, SoundAnalysisContent, ValueContent,
+    ColorContent, DataContent, GeneratorContent, ListContent, Node, PathOperationContent,
+    SoundAnalysisContent, ValueContent,
 };
 use crate::model::project::{
     PortDataType, PortDefinition, PortExposure, PortMultiplicity, PortSide,
 };
-use crate::model::property::PropertyMap;
+use crate::model::property::PropertyDefinition;
+
+type PropertyDefinitions = fn() -> Vec<PropertyDefinition>;
+
+fn no_property_definitions() -> Vec<PropertyDefinition> {
+    Vec::new()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeNodeRuntimeStatus {
@@ -46,6 +52,7 @@ pub struct NativeNodeCatalogDescriptor {
     runtime_status: NativeNodeRuntimeStatus,
     factory: NativeNodeFactory,
     ports: Vec<PortDefinition>,
+    property_definitions: PropertyDefinitions,
 }
 
 impl NativeNodeCatalogDescriptor {
@@ -85,6 +92,10 @@ impl NativeNodeCatalogDescriptor {
         &self.ports
     }
 
+    pub fn property_definitions(&self) -> Vec<PropertyDefinition> {
+        (self.property_definitions)()
+    }
+
     pub fn runtime_diagnostic(&self) -> Option<String> {
         (self.runtime_status == NativeNodeRuntimeStatus::DesignNeeded).then(|| {
             format!(
@@ -112,13 +123,11 @@ impl NativeNodeCatalogDescriptor {
             NativeNodeFactory::SoundAnalysis(analysis) => {
                 Ok(Node::new_sound_analysis(self.label, analysis))
             }
-            NativeNodeFactory::TypedPlaceholder => Ok(Node::with_properties(
+            NativeNodeFactory::TypedPlaceholder => Node::new_native_operation(
                 self.label,
-                NodeContent::NativeOperation(NativeOperationContent {
-                    catalog_id: self.catalog_id.to_string(),
-                }),
-                PropertyMap::new(),
-            )),
+                self.catalog_id,
+                &(self.property_definitions)(),
+            ),
         }
     }
 }
@@ -215,6 +224,7 @@ pub(super) struct DescriptorSpec {
     factory: NativeNodeFactory,
     inputs: &'static [PortSpec],
     outputs: &'static [PortSpec],
+    property_definitions: PropertyDefinitions,
 }
 
 impl DescriptorSpec {
@@ -234,6 +244,27 @@ impl DescriptorSpec {
             factory,
             inputs,
             outputs,
+            property_definitions: no_property_definitions,
+        }
+    }
+
+    pub(super) const fn implemented_native(
+        identity: DescriptorIdentity,
+        inputs: &'static [PortSpec],
+        outputs: &'static [PortSpec],
+        property_definitions: PropertyDefinitions,
+    ) -> Self {
+        Self {
+            catalog_id: identity.catalog_id,
+            label: identity.label,
+            category: identity.category,
+            qa_id: identity.qa_id,
+            keywords: identity.keywords,
+            runtime_status: NativeNodeRuntimeStatus::Implemented,
+            factory: NativeNodeFactory::TypedPlaceholder,
+            inputs,
+            outputs,
+            property_definitions,
         }
     }
 
@@ -254,6 +285,7 @@ impl DescriptorSpec {
             factory: NativeNodeFactory::TypedPlaceholder,
             inputs,
             outputs,
+            property_definitions: no_property_definitions,
         }
     }
 
@@ -277,6 +309,7 @@ impl DescriptorSpec {
             runtime_status: self.runtime_status,
             factory: self.factory,
             ports,
+            property_definitions: self.property_definitions,
         }
     }
 }

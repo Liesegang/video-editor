@@ -7,9 +7,11 @@ use crate::model::frame::entity::SkSLColorDomain;
 use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
-    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
-    TextureInfo, WorkingSurfaceContract,
+    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest,
+    TextRasterRequest, TextureInfo, WorkingSurfaceContract,
 };
+#[cfg(feature = "gl")]
+use crate::rendering::scene_runtime::{SceneRuntime, SceneTextureFormat};
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, image_to_skia,
@@ -47,6 +49,8 @@ pub struct SkiaRenderer {
     group_surfaces: Vec<GroupSurface>,
     blend_runtime: BlendRuntime,
     sksl_straight_to_premultiplied: Option<skia_safe::RuntimeEffect>,
+    #[cfg(feature = "gl")]
+    scene_runtime: Option<SceneRuntime>,
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
@@ -151,6 +155,10 @@ impl SkiaRenderer {
             ))
         })?;
 
+        #[cfg(feature = "gl")]
+        let scene_runtime = gpu_context
+            .as_ref()
+            .map(|context| SceneRuntime::new(context.create_glow_context()));
         let mut renderer = SkiaRenderer {
             width,
             height,
@@ -160,6 +168,8 @@ impl SkiaRenderer {
             group_surfaces: Vec::new(),
             blend_runtime: BlendRuntime::new(),
             sksl_straight_to_premultiplied: None,
+            #[cfg(feature = "gl")]
+            scene_runtime,
             gpu_context,
             sharing_handle: None,
             sharing_hwnd: None,
@@ -303,6 +313,12 @@ impl SkiaRenderer {
             &self.background_color,
         )?;
         self.surface = surface;
+        #[cfg(feature = "gl")]
+        {
+            self.scene_runtime = gpu_context
+                .as_ref()
+                .map(|context| SceneRuntime::new(context.create_glow_context()));
+        }
         self.gpu_context = gpu_context;
         self.sharing_handle = sharing_handle;
         self.sharing_hwnd = sharing_hwnd;
@@ -636,6 +652,76 @@ impl Renderer for SkiaRenderer {
         self.snapshot_surface(&mut layer, target_width, target_height)
     }
 
+    fn rasterize_particle_layer(
+        &mut self,
+        request: ParticleRasterRequest<'_>,
+    ) -> Result<RenderOutput, LibraryError> {
+        #[cfg(not(feature = "gl"))]
+        {
+            let _ = request;
+            Err(LibraryError::Render(
+                "GPU Particle unavailable: library was built without the OpenGL backend"
+                    .to_string(),
+            ))
+        }
+        #[cfg(feature = "gl")]
+        {
+            let (target_width, target_height) = self.current_target_dimensions();
+            let format = if self.surface_contract.working().is_some() {
+                SceneTextureFormat::LinearRgbaF32
+            } else {
+                SceneTextureFormat::Srgba8
+            };
+            let premultiplied_color = skia_working_surface::authored_premultiplied_rgba(
+                &self.surface_contract,
+                &request.scene.parameters.color,
+            )?;
+            let scene_texture = {
+                let gpu_context = self.gpu_context.as_mut().ok_or_else(|| {
+                    LibraryError::Render(
+                        "GPU Particle unavailable: SkiaRenderer has no active GPU context"
+                            .to_string(),
+                    )
+                })?;
+                let scene_runtime = self.scene_runtime.as_mut().ok_or_else(|| {
+                    LibraryError::Render(
+                        "GPU Particle unavailable: SceneRuntime was not created for the active GPU context"
+                            .to_string(),
+                    )
+                })?;
+                gpu_context.direct_context.flush_and_submit();
+                let result = scene_runtime.render_particle(
+                    request.scene,
+                    request.transform,
+                    target_width,
+                    target_height,
+                    format,
+                    premultiplied_color,
+                );
+                // Raw GL invalidates Ganesh's cached assumptions regardless of
+                // whether SceneRuntime returned success.
+                gpu_context.direct_context.reset(None);
+                result?
+            };
+            let scene_image = {
+                let gpu_context = self.gpu_context.as_mut().ok_or_else(|| {
+                    LibraryError::Render(
+                        "GPU Particle lost its GPU context before Ganesh ingestion".to_string(),
+                    )
+                })?;
+                skia_working_surface::scene_texture_to_skia_image(
+                    &mut gpu_context.direct_context,
+                    scene_texture,
+                    &self.surface_contract,
+                )?
+            };
+            let mut layer = self.create_layer_surface()?;
+            layer.canvas().clear(skia_safe::Color::TRANSPARENT);
+            layer.canvas().draw_image(&scene_image, (0, 0), None);
+            self.snapshot_surface(&mut layer, target_width, target_height)
+        }
+    }
+
     fn rasterize_text_layer(
         &mut self,
         request: TextRasterRequest<'_>,
@@ -880,6 +966,13 @@ impl Renderer for SkiaRenderer {
             handle,
             hwnd
         );
+        #[cfg(feature = "gl")]
+        {
+            // SceneRuntime resources belong to the old, currently active GL
+            // context. Destroy them before glutin switches to the new shared
+            // context below.
+            self.scene_runtime = None;
+        }
         let mut context = create_gpu_context(Some(handle), hwnd).ok_or_else(|| {
             LibraryError::Render(format!(
                 "Cannot create shared GPU context for handle {handle}"

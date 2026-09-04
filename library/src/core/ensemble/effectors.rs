@@ -14,7 +14,10 @@ pub struct EffectorElementContext {
     pub line_char_index: usize,
     pub total_chars: usize,
     pub line_char_count: usize,
+    pub line_count: usize,
     pub char_center: Point,
+    pub line_center: Point,
+    pub block_center: Point,
 }
 
 /// Evaluates serialized effector configuration for one laid-out character.
@@ -32,18 +35,20 @@ pub fn evaluate_configured_transform(
             | EffectorConfig::Opacity { target, .. }
             | EffectorConfig::Randomize { target, .. } => *target,
         };
-        let (index, total, random_identity) = match target {
-            EffectorTarget::Block => (
+        let (index, total, random_identity, target_center) = match target {
+            EffectorTarget::Block => (0, 1, element.block_group_id, element.block_center),
+            EffectorTarget::Line => (
+                element.line_index,
+                element.line_count,
+                element.line_group_id,
+                element.line_center,
+            ),
+            EffectorTarget::Char => (
                 element.global_index,
                 element.total_chars,
-                element.global_index as u64,
+                element.stable_id,
+                element.char_center,
             ),
-            EffectorTarget::Line => (
-                element.line_char_index,
-                element.line_char_count,
-                element.line_char_index as u64,
-            ),
-            EffectorTarget::Char => (0, 1, element.stable_id),
             EffectorTarget::Parts => {
                 return Err(LibraryError::Render(
                     "Ensemble EffectorTarget::Parts is not supported".to_string(),
@@ -67,13 +72,13 @@ pub fn evaluate_configured_transform(
                 rotate,
                 scale,
                 ..
-            } => TransformEffector::new(TransformData {
-                translate: *translate,
-                rotate: *rotate,
-                scale: *scale,
-                opacity: 1.0,
-                color_override: None,
-            })
+            } => TransformEffector::new(transform_about_target(
+                *translate,
+                *rotate,
+                *scale,
+                target_center,
+                element.char_center,
+            ))
             .apply(&context, &mut transform),
             EffectorConfig::StepDelay {
                 delay_per_element,
@@ -112,6 +117,40 @@ pub fn evaluate_configured_transform(
         }
     }
     Ok(transform)
+}
+
+/// Convert a group-pivot transform into the equivalent translation for the
+/// per-element drawing boundary. The renderer deliberately owns one glyph
+/// draw at a time; compensating its character-center pivot here lets Block,
+/// Line, and Char retain their authored grouping semantics without a second
+/// Ensemble renderer.
+fn transform_about_target(
+    translate: (f32, f32),
+    rotate_degrees: f32,
+    scale: (f32, f32),
+    target_center: Point,
+    char_center: Point,
+) -> TransformData {
+    let delta = Point::new(
+        target_center.x - char_center.x,
+        target_center.y - char_center.y,
+    );
+    let radians = rotate_degrees.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let scaled_x = delta.x * scale.0;
+    let scaled_y = delta.y * scale.1;
+    let mapped_x = scaled_x * cos - scaled_y * sin;
+    let mapped_y = scaled_x * sin + scaled_y * cos;
+    TransformData {
+        translate: (
+            translate.0 + delta.x - mapped_x,
+            translate.1 + delta.y - mapped_y,
+        ),
+        rotate: rotate_degrees,
+        scale,
+        opacity: 1.0,
+        color_override: None,
+    }
 }
 
 /// Effector（集団制御モディファイア）のトレイト
@@ -355,7 +394,10 @@ mod tests {
             line_char_index,
             total_chars: 6,
             line_char_count: 3,
+            line_count: 2,
             char_center: Point::new(5.0, 5.0),
+            line_center: Point::new(15.0, 10.0),
+            block_center: Point::new(30.0, 20.0),
         }
     }
 
@@ -458,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_step_delay_uses_time_and_target_index_scope() {
+    fn configured_step_delay_uses_block_line_and_character_groups() {
         let config = |target| EffectorConfig::StepDelay {
             delay_per_element: 0.25,
             duration: 1.0,
@@ -470,7 +512,7 @@ mod tests {
             evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.0, element(3, 0))
                 .unwrap();
         let block_middle =
-            evaluate_configured_transform(&[config(EffectorTarget::Block)], 1.25, element(3, 0))
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.5, element(3, 0))
                 .unwrap();
         let block_end =
             evaluate_configured_transform(&[config(EffectorTarget::Block)], 2.0, element(3, 0))
@@ -483,10 +525,44 @@ mod tests {
             evaluate_configured_transform(&[config(EffectorTarget::Line)], 0.5, element(3, 0))
                 .unwrap();
         let character =
-            evaluate_configured_transform(&[config(EffectorTarget::Char)], 0.5, element(3, 2))
+            evaluate_configured_transform(&[config(EffectorTarget::Char)], 1.25, element(3, 2))
                 .unwrap();
-        assert_eq!(line.opacity, 0.5);
+        assert_eq!(line.opacity, 0.25);
         assert_eq!(character.opacity, 0.5);
+    }
+
+    #[test]
+    fn transform_target_uses_group_pivot_and_independent_axes() {
+        let evaluate = |target, translate, scale, rotate| {
+            evaluate_configured_transform(
+                &[EffectorConfig::Transform {
+                    translate,
+                    rotate,
+                    scale,
+                    target,
+                }],
+                0.0,
+                element(0, 0),
+            )
+            .unwrap()
+        };
+
+        let block = evaluate(EffectorTarget::Block, (3.0, 7.0), (2.0, 1.0), 0.0);
+        let line = evaluate(EffectorTarget::Line, (3.0, 7.0), (2.0, 1.0), 0.0);
+        let character = evaluate(EffectorTarget::Char, (3.0, 7.0), (2.0, 1.0), 0.0);
+        assert_eq!(block.translate, (-22.0, 7.0));
+        assert_eq!(line.translate, (-7.0, 7.0));
+        assert_eq!(character.translate, (3.0, 7.0));
+        assert_eq!(block.scale, (2.0, 1.0));
+
+        let vertical = evaluate(EffectorTarget::Block, (3.0, 7.0), (1.0, 2.0), 0.0);
+        assert_eq!(vertical.translate, (3.0, -8.0));
+        assert_eq!(vertical.scale, (1.0, 2.0));
+
+        let rotated = evaluate(EffectorTarget::Block, (0.0, 0.0), (1.0, 1.0), 90.0);
+        assert!((rotated.translate.0 - 40.0).abs() < 0.001);
+        assert!((rotated.translate.1 + 10.0).abs() < 0.001);
+        assert_eq!(rotated.rotate, 90.0);
     }
 
     #[test]
@@ -515,8 +591,8 @@ mod tests {
             rotate_range: 45.0,
             scale_range: (0.5, 0.25),
             seed,
-            // Char deliberately gives every animation context index=0. Randomize
-            // must still use the character's stable element identity.
+            // Char uses both the character's stable identity and its sequence
+            // index, independently of transient draw order.
             target: EffectorTarget::Char,
         };
 
@@ -605,7 +681,10 @@ mod tests {
                 line_char_index,
                 total_chars: 4,
                 line_char_count: 2,
+                line_count: 2,
                 char_center: Point::new(5.0, 5.0),
+                line_center: Point::new(10.0, 5.0 + line_index as f32 * 20.0),
+                block_center: Point::new(10.0, 15.0),
             };
         let elements = [
             scoped_element(0, 0, 0, 0x1000),
@@ -623,14 +702,12 @@ mod tests {
         };
 
         let block = transforms(EffectorTarget::Block);
-        for (index, transform) in block.iter().enumerate() {
-            assert!(block.iter().skip(index + 1).all(|other| other != transform));
-        }
+        assert!(block.iter().all(|transform| transform == &block[0]));
 
         let line = transforms(EffectorTarget::Line);
-        assert_eq!(line[0], line[2]);
-        assert_eq!(line[1], line[3]);
-        assert_ne!(line[0], line[1]);
+        assert_eq!(line[0], line[1]);
+        assert_eq!(line[2], line[3]);
+        assert_ne!(line[0], line[2]);
 
         let character = transforms(EffectorTarget::Char);
         for (index, transform) in character.iter().enumerate() {
@@ -644,7 +721,7 @@ mod tests {
         }
         assert_eq!(character, transforms(EffectorTarget::Char));
 
-        assert_ne!(block[2], line[2]);
+        assert_ne!(block[0], line[0]);
         assert_ne!(line[0], character[0]);
         assert_ne!(block[0], character[0]);
     }

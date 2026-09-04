@@ -4,6 +4,7 @@ pub mod audio;
 pub mod cache;
 pub mod ensemble;
 pub mod framing;
+pub mod model_resource;
 // pub mod graph_compiler;
 pub mod render_plan;
 pub mod rendering;

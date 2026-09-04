@@ -31,12 +31,14 @@ pub(crate) struct WindowsFileIdentity {
 impl DirectRegularFile {
     pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
+        // Classify locators before Windows' colon/ADS validation so a URL is
+        // rejected for the same reason on every platform.
+        reject_uri_scheme(path)?;
         #[cfg(windows)]
         {
             reject_unsafe_windows_prefix(path)?;
             reject_windows_reserved_components(path)?;
         }
-        reject_uri_scheme(path)?;
 
         let before = std::fs::symlink_metadata(path)?;
         require_regular_nonsymlink(path, &before)?;

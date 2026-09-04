@@ -73,58 +73,9 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
     ) -> Option<RuntimeShape> {
         let props = node.properties();
         let path_value = evaluator.require_path_value(props, "path", time, "shape")?;
-        let parsed = crate::core::rendering::path_geometry::to_skia_path(&path_value)
-            .inspect_err(|error| {
-                log::error!(
-                    "Shape Node {} cannot cross the Skia path boundary: {error}",
-                    node.id
-                );
-            })
-            .ok()?;
-        if parsed.is_empty() {
-            return None;
-        }
-        let path = crate::model::path::encode_svg_path(&path_value)
-            .inspect_err(|error| {
-                log::error!(
-                    "Shape Node {} cannot create its SVG fallback: {error}",
-                    node.id
-                );
-            })
+        runtime_path_shape(node.id, path_value)
+            .inspect_err(|error| log::error!("{error}"))
             .ok()?
-            .into_path_data();
-        let bounds = parsed.compute_tight_bounds();
-        let runtime_bounds =
-            RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
-        let stable_id = node.id.as_u128() as u64;
-        Some(RuntimeShape {
-            source_id: node.id,
-            geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
-                path: path.clone(),
-                canonical_path: Some(path_value.clone()),
-                bounds: runtime_bounds,
-                // Authored path effects live only on explicit Shape -> Shape
-                // Path Effect operations. This Vec is render-only state.
-                path_effects: Vec::new(),
-                parts: vec![RuntimePathPart {
-                    path,
-                    canonical_path: Some(path_value),
-                    bounds: runtime_bounds,
-                    stable_id,
-                    block_group_id: stable_id,
-                    line_group_id: stable_id,
-                    line_index: 0,
-                    opacity: 1.0,
-                }],
-            }),
-            spatial_transform_node_id: None,
-            spatial_transform: Default::default(),
-            modulation_transform: Default::default(),
-            transform: Default::default(),
-            effects: Vec::new(),
-            effector_configs: Vec::new(),
-            decorator_configs: Vec::new(),
-        })
     }
 
     fn get_bounds(
@@ -147,4 +98,57 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         let bounds = path.compute_tight_bounds();
         Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
     }
+}
+
+/// Creates the canonical transient Path Shape from an already evaluated
+/// canonical path. It is shared by both production graph runtimes.
+pub(crate) fn runtime_path_shape(
+    source_id: uuid::Uuid,
+    path_value: crate::model::path::PathValue,
+) -> Result<Option<RuntimeShape>, crate::error::LibraryError> {
+    let parsed =
+        crate::core::rendering::path_geometry::to_skia_path(&path_value).map_err(|error| {
+            crate::error::LibraryError::Render(format!(
+                "Shape Node {source_id} cannot cross the Skia path boundary: {error}"
+            ))
+        })?;
+    if parsed.is_empty() {
+        return Ok(None);
+    }
+    let path = crate::model::path::encode_svg_path(&path_value)
+        .map_err(|error| {
+            crate::error::LibraryError::Render(format!(
+                "Shape Node {source_id} cannot create its SVG fallback: {error}"
+            ))
+        })?
+        .into_path_data();
+    let bounds = parsed.compute_tight_bounds();
+    let runtime_bounds = RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom);
+    let stable_id = source_id.as_u128() as u64;
+    Ok(Some(RuntimeShape {
+        source_id,
+        geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
+            path: path.clone(),
+            canonical_path: Some(path_value.clone()),
+            bounds: runtime_bounds,
+            path_effects: Vec::new(),
+            parts: vec![RuntimePathPart {
+                path,
+                canonical_path: Some(path_value),
+                bounds: runtime_bounds,
+                stable_id,
+                block_group_id: stable_id,
+                line_group_id: stable_id,
+                line_index: 0,
+                opacity: 1.0,
+            }],
+        }),
+        spatial_transform_node_id: None,
+        spatial_transform: Default::default(),
+        modulation_transform: Default::default(),
+        transform: Default::default(),
+        effects: Vec::new(),
+        effector_configs: Vec::new(),
+        decorator_configs: Vec::new(),
+    }))
 }

@@ -1,6 +1,7 @@
 id = "pixelate"
 name = "Pixelate"
 category = "Stylize"
+color_domain = "project_linear"
 
 [[properties]]
 name = "cellSize"

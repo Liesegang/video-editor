@@ -1,6 +1,7 @@
 id = "edge_detection"
 name = "Edge Detection"
 category = "Stylize"
+color_domain = "project_linear"
 
 [[properties]]
 name = "threshold"

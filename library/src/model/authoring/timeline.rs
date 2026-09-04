@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::EasingFunction;
+use crate::model::BlendMode;
 use crate::model::frame::color::Color;
 use crate::model::project::PortDataType;
 use crate::model::project::property::{KeyframeId, PropertyMap, PropertyValue};
 
 use super::{
-    CompositionParameterId, MediaTime, ModuleInstanceId, PublishedMediaInputId,
-    PublishedMediaOutputId, PublishedParameterId, RationalRate, TimelineId, TimelineItemId,
+    AuthoringProject, CompositionParameterId, MediaTime, ModuleInstanceId, ModuleOutputId,
+    PublishedMediaInputId, PublishedParameterId, RationalRate, TimelineId, TimelineItemId,
     TimelineTrackId,
 };
 
@@ -62,7 +63,47 @@ pub struct TimelineItem {
     pub time_map: TimeMap,
     pub layer: i64,
     pub parent: Option<TimelineItemId>,
+    /// Authored compositing mode for this placement in its Track.
+    ///
+    /// Blend is placement state, not Module topology: duplicating or moving a
+    /// clip must never rewrite the reusable Module definition behind it.
+    pub blend_mode: BlendMode,
     pub authored_properties: PropertyMap,
+}
+
+/// Returns one Track's items in the authoritative back-to-front order.
+///
+/// Layer is the primary authored order. Start time and stable ID resolve old
+/// or imported projects that have duplicate layer values, so mutation and UI
+/// preview never disagree about the resulting order.
+pub fn ordered_track_item_ids(
+    project: &AuthoringProject,
+    track_id: TimelineTrackId,
+    excluded_item_id: Option<TimelineItemId>,
+) -> Vec<TimelineItemId> {
+    let mut ordered = project
+        .items
+        .values()
+        .filter(|item| item.track_id == track_id && Some(item.id) != excluded_item_id)
+        .map(|item| (item.layer, item.interval.start, item.id))
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|entry| *entry);
+    ordered.into_iter().map(|(_, _, item_id)| item_id).collect()
+}
+
+/// Projects the exact canonical order produced by placing an item at a layer.
+pub fn track_item_ids_after_placement(
+    project: &AuthoringProject,
+    track_id: TimelineTrackId,
+    item_id: TimelineItemId,
+    requested_layer: i64,
+) -> Vec<TimelineItemId> {
+    let mut item_ids = ordered_track_item_ids(project, track_id, Some(item_id));
+    let index = usize::try_from(requested_layer.max(0))
+        .unwrap_or(usize::MAX)
+        .min(item_ids.len());
+    item_ids.insert(index, item_id);
+    item_ids
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -105,6 +146,11 @@ pub enum SourceRef {
     },
     Text {
         text: String,
+        /// Ordered descriptor-backed operations applied to the transient text
+        /// Shape before rasterization. The operation identity and authored
+        /// properties are the same contract used by production Node graphs;
+        /// no evaluated Ensemble output is persisted here.
+        ensemble_operations: Vec<TextEnsembleOperation>,
     },
     Shape {
         shape: ShapeSource,
@@ -115,6 +161,67 @@ pub enum SourceRef {
     Composition(CompositionInstance),
     /// A user-visible Node Clip. Only the referenced Module owns topology.
     Module(ModuleInvocation),
+}
+
+/// One authored Effector or Decorator in a Text source's Ensemble stack.
+///
+/// The stable operation reference keeps an unavailable/newer plugin
+/// round-trippable, while [`PropertyMap`] remains the single authored value
+/// representation shared with descriptor-backed Node operations. Entries are
+/// stored in production execution phases: all Effectors first, followed by all
+/// Decorators; ordering is meaningful only within one phase.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TextEnsembleOperation {
+    pub id: uuid::Uuid,
+    pub operation: super::OperationRef,
+    /// Frozen descriptor port contract. This is the same execution snapshot
+    /// persisted by a plugin operation Node and lets a Project reject direct
+    /// Text operations that require another authored media input even when
+    /// the matching plugin is unavailable.
+    pub declared_ports: Vec<crate::model::project::PortDefinition>,
+    pub properties: PropertyMap,
+}
+
+/// Whether a descriptor can run as an inline Text Ensemble operation.
+///
+/// The Text source supplies exactly one implicit Shape target. Time and
+/// descriptor properties come from the authoring evaluator. Any second media
+/// input (for example the geometry-only Backplate background Shape) requires
+/// real graph topology and therefore remains a Node Editor operation.
+pub fn text_ensemble_direct_contract_is_compatible(
+    ports: &[crate::model::project::PortDefinition],
+) -> bool {
+    use std::collections::HashSet;
+
+    use crate::model::project::{
+        PortDataType, PortDirection, PortMultiplicity, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+        TIME_PORT,
+    };
+
+    let mut target_inputs = 0;
+    let mut shape_outputs = 0;
+    let mut keys = HashSet::new();
+    for port in ports {
+        if !keys.insert(port.key.as_str()) || port.multiplicity != PortMultiplicity::Single {
+            return false;
+        }
+        match (port.direction, port.key.as_str()) {
+            (PortDirection::Input, SHAPE_INPUT_PORT) if port.data_type == PortDataType::Shape => {
+                target_inputs += 1;
+            }
+            (PortDirection::Input, TIME_PORT) if port.data_type == PortDataType::Number => {}
+            (PortDirection::Input, key)
+                if key
+                    .strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX)
+                    .is_some_and(|name| !name.is_empty()) => {}
+            (PortDirection::Output, SHAPE_OUTPUT_PORT) if port.data_type == PortDataType::Shape => {
+                shape_outputs += 1;
+            }
+            _ => return false,
+        }
+    }
+    target_inputs == 1 && shape_outputs == 1
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -238,7 +345,7 @@ impl InstancePath {
 #[serde(deny_unknown_fields)]
 pub struct ModuleInvocation {
     pub instance_id: ModuleInstanceId,
-    pub output_id: PublishedMediaOutputId,
+    pub output_id: ModuleOutputId,
     pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
     /// Keyframes remain owned by the Timeline host, never the Module graph.
     pub automation_tracks: HashMap<PublishedParameterId, AutomationTrack>,
@@ -361,6 +468,56 @@ impl AutomationTrack {
         self.keyframes.retain(|keyframe| keyframe.id != keyframe_id);
         self.keyframes.len() != before
     }
+
+    /// Samples the effective Timeline-owned value using the same interpolation
+    /// for rendering, Inspector fields, and any future automation consumer.
+    pub fn evaluate_at(
+        &self,
+        time: MediaTime,
+    ) -> Result<PropertyValue, crate::error::LibraryError> {
+        let first = self.keyframes.first().ok_or_else(|| {
+            crate::error::LibraryError::Validation("Automation Track has no Keyframes".to_string())
+        })?;
+        if time <= first.time {
+            return Ok(first.value.clone());
+        }
+        let last = self.keyframes.last().ok_or_else(|| {
+            crate::error::LibraryError::Validation(
+                "Automation Track has no last Keyframe".to_string(),
+            )
+        })?;
+        if time >= last.time {
+            return Ok(last.value.clone());
+        }
+        for window in self.keyframes.windows(2) {
+            let Some(start) = window.first() else {
+                continue;
+            };
+            let Some(end) = window.get(1) else {
+                continue;
+            };
+            if time < start.time || time >= end.time {
+                continue;
+            }
+            let elapsed = time
+                .checked_sub(start.time)
+                .map_err(crate::error::LibraryError::Validation)?
+                .to_seconds_f64();
+            let duration = end
+                .time
+                .checked_sub(start.time)
+                .map_err(crate::error::LibraryError::Validation)?
+                .to_seconds_f64();
+            if duration <= f64::EPSILON {
+                return Ok(start.value.clone());
+            }
+            let amount = start.easing.try_apply(elapsed / duration)?;
+            return Ok(PropertyValue::interpolate(&start.value, &end.value, amount));
+        }
+        Err(crate::error::LibraryError::Render(
+            "Automation time did not resolve to a Keyframe segment".to_string(),
+        ))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -380,5 +537,36 @@ impl AutomationKeyframe {
             value,
             easing,
         }
+    }
+}
+
+#[cfg(test)]
+mod automation_tests {
+    use super::*;
+    use ordered_float::OrderedFloat;
+
+    #[test]
+    fn automation_midpoint_uses_the_authoritative_interpolation() {
+        let track = AutomationTrack {
+            keyframes: vec![
+                AutomationKeyframe::new(
+                    MediaTime::zero(),
+                    PropertyValue::Number(OrderedFloat(10.0)),
+                    EasingFunction::Linear,
+                ),
+                AutomationKeyframe::new(
+                    MediaTime::new(2, 1).expect("end time"),
+                    PropertyValue::Number(OrderedFloat(30.0)),
+                    EasingFunction::Linear,
+                ),
+            ],
+        };
+
+        assert_eq!(
+            track
+                .evaluate_at(MediaTime::new(1, 1).expect("sample time"))
+                .expect("sample"),
+            PropertyValue::Number(OrderedFloat(20.0))
+        );
     }
 }

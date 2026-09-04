@@ -350,6 +350,7 @@ fn add_audio_item(project: &mut AuthoringProject, path: &std::path::Path, source
             time_map: TimeMap::default(),
             layer: 0,
             parent: None,
+            blend_mode: crate::model::BlendMode::Normal,
             authored_properties: PropertyMap::new(),
         },
     );

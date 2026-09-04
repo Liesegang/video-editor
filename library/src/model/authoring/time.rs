@@ -32,11 +32,17 @@ impl MediaTime {
             .map(|(value, timescale)| Self { value, timescale })
     }
 
-    pub const fn zero() -> Self {
+    /// Constructs an exact integral number of seconds without a fallible
+    /// rational-normalization round trip.
+    pub const fn from_whole_seconds(value: i64) -> Self {
         Self {
-            value: 0,
+            value,
             timescale: 1,
         }
+    }
+
+    pub const fn zero() -> Self {
+        Self::from_whole_seconds(0)
     }
 
     pub const fn value(self) -> i64 {

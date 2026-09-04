@@ -1,4 +1,4 @@
-name: Build and Package Rust App for Windows
+name: Build and Publish Rust App for Windows
 
 on:
   workflow_dispatch:
@@ -10,19 +10,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up the pinned MSVC Rust toolchain
-        shell: pwsh
-        run: .\scripts\bootstrap-windows.ps1
-
       - name: Install pinned uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.9"
           enable-cache: true
 
-      - name: Install pinned managed CPython
+      - name: Set up pinned Rust and managed CPython
         shell: pwsh
-        run: uv python install 3.13.14
+        run: cargo run -p xtask -- bootstrap
 
       - name: Setup Visual Studio
         uses: microsoft/setup-msbuild@v1.3.1
@@ -31,10 +27,11 @@ jobs:
         shell: pwsh
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
+          git -C vcpkg checkout b27651341123a59f7187b42ef2bc476284afb310
           Set-Location vcpkg
           .\bootstrap-vcpkg.bat
           .\vcpkg integrate install
-          .\vcpkg install ffmpeg:x64-windows
+          .\vcpkg install "ffmpeg[ffmpeg,x264]:x64-windows"
 
       - name: Set up environment variables
         shell: pwsh
@@ -56,21 +53,12 @@ jobs:
       # The moving vcpkg checkout does not provide an exact OpenColorIO
       # runtime contract. Keep app/opencolorio disabled until a pinned runtime
       # and its DLLs are packaged and tested with the installer.
-      - name: Build Release (built-in color backend; no OpenColorIO runtime)
+      - name: Publish Release (built-in color backend; no OpenColorIO runtime)
         shell: pwsh
-        run: |
-          $env:PYO3_PYTHON = uv python find --no-project 3.13.14
-          $env:RUVIE_PYTHON_HOME = & $env:PYO3_PYTHON -c "import sys; print(sys.base_prefix)"
-          cargo build -p app --release --no-default-features --locked
+        run: cargo run -p xtask -- publish
 
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path installer
-          Compress-Archive -Path target\release\*.exe -DestinationPath installer\app.zip
-
-      - name: Upload Installer Artifact
+      - name: Upload Published Application
         uses: actions/upload-artifact@v4
         with:
-          name: installer-windows
-          path: installer/
+          name: ruvie-windows-x86_64
+          path: target/publish/windows-x86_64/RuViE/

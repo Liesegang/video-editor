@@ -82,7 +82,7 @@ pub(super) fn probe_assets_for_import(
                 )
             };
         if kind == AssetKind::Other {
-            kind = extension_asset_kind(&canonical_path);
+            kind = AssetKind::from_path(&canonical_path);
         }
         let mut asset = Asset::new(&base_name, &path_string, kind);
         asset.duration = duration;
@@ -97,19 +97,4 @@ pub(super) fn probe_assets_for_import(
         assets.push(asset);
     }
     Ok(assets)
-}
-
-fn extension_asset_kind(path: &Path) -> AssetKind {
-    let extension = path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_ascii_lowercase();
-    match extension.as_str() {
-        "mp4" | "mov" | "avi" | "mkv" | "webm" => AssetKind::Video,
-        "png" | "jpg" | "jpeg" | "bmp" | "webp" => AssetKind::Image,
-        "mp3" | "wav" | "ogg" | "aac" | "flac" => AssetKind::Audio,
-        "obj" | "gltf" | "glb" => AssetKind::Model3D,
-        _ => AssetKind::Other,
-    }
 }

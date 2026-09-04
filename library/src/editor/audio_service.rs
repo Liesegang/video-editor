@@ -6,7 +6,9 @@ use crate::core::audio::loader::AudioLoader;
 use crate::core::audio::mixer::{
     audio_window_requests_for_composition, mix_samples, render_samples,
 };
+use crate::core::audio::waveform::AudioWaveformWindow;
 use crate::core::cache::CacheManager;
+use crate::editor::AuthoringWaveformService;
 use crate::model::project::Project;
 use crate::plugin::PluginManager;
 use std::collections::HashSet;
@@ -14,10 +16,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
-
-mod waveform;
-
-use waveform::WaveformJobs;
 
 const SCRUB_PREVIEW_SECONDS: f64 = 0.05;
 const MAX_MIX_SECONDS_PER_PUMP: usize = 1;
@@ -49,7 +47,7 @@ pub struct AudioService {
     active_composition_id: Mutex<Option<Uuid>>,
     generation: Arc<AtomicU64>,
     pending: Arc<Mutex<HashSet<PendingAudioLoad>>>,
-    waveform_jobs: WaveformJobs,
+    waveform_service: AuthoringWaveformService,
     source_failures: Arc<Mutex<HashSet<SourceFailure>>>,
     next_write_sample: Arc<AtomicU64>,
     is_playing: AtomicBool,
@@ -62,8 +60,20 @@ impl AudioService {
         audio_engine: Rc<AudioEngine>,
         cache_manager: Arc<CacheManager>,
         plugin_manager: Arc<PluginManager>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, crate::error::LibraryError> {
+        let waveform_service = AuthoringWaveformService::with_format(
+            Arc::clone(&cache_manager),
+            audio_engine.get_sample_rate(),
+            audio_engine.get_channels(),
+        )
+        .ok_or_else(|| {
+            crate::error::LibraryError::Runtime(format!(
+                "AudioEngine exposed an invalid output format: {} Hz, {} channels",
+                audio_engine.get_sample_rate(),
+                audio_engine.get_channels()
+            ))
+        })?;
+        Ok(Self {
             project,
             audio_engine,
             cache_manager,
@@ -73,12 +83,12 @@ impl AudioService {
             active_composition_id: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             pending: Arc::new(Mutex::new(HashSet::new())),
-            waveform_jobs: WaveformJobs::default(),
+            waveform_service,
             source_failures: Arc::new(Mutex::new(HashSet::new())),
             next_write_sample: Arc::new(AtomicU64::new(0)),
             is_playing: AtomicBool::new(false),
             pending_scrub: Mutex::new(None),
-        }
+        })
     }
 
     pub fn get_audio_engine(&self) -> Rc<AudioEngine> {
@@ -158,7 +168,6 @@ impl AudioService {
         if let Ok(mut pending) = self.pending.lock() {
             pending.clear();
         }
-        self.waveform_jobs.clear();
         if let Ok(mut failures) = self.source_failures.lock() {
             failures.clear();
         }
@@ -532,6 +541,23 @@ impl AudioService {
         Arc::clone(&self.cache_manager)
     }
 
+    /// Shared waveform entry point for graph audio callers. Authoring
+    /// surfaces use the same cache-owned service directly.
+    pub fn request_waveform_window(
+        &self,
+        path: &str,
+        stream_index: Option<usize>,
+        first_source_frame: u64,
+        final_source_frame: u64,
+    ) -> Option<AudioWaveformWindow> {
+        self.waveform_service.request_window(
+            path,
+            stream_index,
+            first_source_frame,
+            final_source_frame,
+        )
+    }
+
     #[doc(hidden)]
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
@@ -541,7 +567,7 @@ impl AudioService {
         self.audio_engine.flush_pending()
             || self.pending_scrub.lock().is_ok_and(|scrub| scrub.is_some())
             || self.pending.lock().is_ok_and(|pending| !pending.is_empty())
-            || self.waveform_jobs.has_pending_work()
+            || self.waveform_service.has_pending_work()
     }
 }
 

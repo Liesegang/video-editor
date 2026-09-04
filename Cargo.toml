@@ -8,6 +8,7 @@ members = [
     "pan-zoom-ui",
     "node-editor-ui",
     "app",
+    "xtask",
 ]
 default-members = ["app"]
 

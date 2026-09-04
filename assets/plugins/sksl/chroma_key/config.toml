@@ -1,12 +1,13 @@
 id = "chroma_key"
 name = "Chroma Key"
 category = "Compositing"
+color_domain = "project_linear"
 
 [[properties]]
 name = "keyColor"
 label = "Key Color"
-type = "Vec3"
-default = [0.0, 1.0, 0.0]
+type = "Color"
+default = [0.0, 1.0, 0.0, 1.0]
 
 [[properties]]
 name = "similarity"

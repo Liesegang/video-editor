@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
+use crate::model::authoring::ModuleOutputId;
+
 mod catalog;
 mod color;
 mod containers;
@@ -269,6 +271,17 @@ pub struct Node {
 }
 
 impl Node {
+    /// Creates an input-only render terminal for a Module graph. Output
+    /// terminals are not catalog operations and cannot be inserted as an
+    /// ordinary processing Node.
+    pub(crate) fn new_module_output(name: &str, output_id: ModuleOutputId) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::ModuleOutput(ModuleOutputContent { id: output_id }),
+            PropertyMap::new(),
+        )
+    }
+
     /// Creates an ordered variadic image compositor.
     pub fn new_merge(name: &str) -> Self {
         Self::with_properties(name, NodeContent::Merge, PropertyMap::new())
@@ -644,6 +657,23 @@ impl Node {
         descriptor.create_detached_node()
     }
 
+    /// Completion point for descriptor-backed native operations. The catalog
+    /// remains the sole owner of both port and authored-property contracts.
+    pub(crate) fn new_native_operation(
+        name: &str,
+        catalog_id: &str,
+        definitions: &[PropertyDefinition],
+    ) -> Result<Self, String> {
+        let properties = Self::default_properties("Native operation", definitions, true)?;
+        Ok(Self::with_properties(
+            name,
+            NodeContent::NativeOperation(NativeOperationContent {
+                catalog_id: catalog_id.to_string(),
+            }),
+            properties,
+        ))
+    }
+
     pub fn update_property_or_keyframe(
         &mut self,
         property_key: &str,
@@ -728,6 +758,10 @@ impl Node {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum NodeContent {
+    /// Input-only render boundary of a Module graph. This is separate from
+    /// Published Interface entries: it selects what a Module invocation
+    /// renders and exposes no outgoing graph port.
+    ModuleOutput(ModuleOutputContent),
     Media(MediaContent),
     Generator(GeneratorContent),
     CompositionInstance(CompositionInstanceContent),
@@ -765,6 +799,12 @@ pub enum NodeContent {
     /// Native frame-time Sound analysis. PCM and Spectrum values are
     /// transient evaluation data and never become a persisted side model.
     SoundAnalysis(SoundAnalysisContent),
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleOutputContent {
+    pub id: ModuleOutputId,
 }
 
 impl NodeContent {

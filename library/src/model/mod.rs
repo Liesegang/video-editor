@@ -14,7 +14,7 @@ pub use node::{
     COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
     COLOR_TARGET_SPACE_PORT, COLOR_VALUE_PORT, Clip, ColorContent, CompositionInstanceContent,
     DataContent, GeneratorContent, LEGACY_MEDIA_COLOR_PROPERTY_KEYS, LegacyMediaColorProperty,
-    ListContent, MediaContent, NativeNodeCatalogDescriptor, NativeNodeFactory,
+    ListContent, MediaContent, ModuleOutputContent, NativeNodeCatalogDescriptor, NativeNodeFactory,
     NativeNodeRuntimeStatus, NativeOperationContent, Node, NodeContent, PathOperationContent,
     PluginOperationContent, SOUND_MERGE_OPERATION_KEY, SoundAnalysisContent, Track, ValueContent,
     active_legacy_media_color_properties, is_legacy_media_color_property, native_node_catalog,

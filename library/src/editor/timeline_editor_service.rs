@@ -1,4 +1,4 @@
-//! Application-facing API for the Timeline-first authoring Project.
+//! Application-facing API for the authoritative Timeline editing model.
 //!
 //! The service owns the sole mutable [`AuthoringProject`] through an
 //! [`AuthoringSession`]. UI code receives immutable snapshots and submits
@@ -11,14 +11,24 @@ mod composition;
 mod interface;
 mod item;
 mod module;
+mod node_clip_conversion;
+mod shape_path;
+mod text_ensemble;
 
 #[cfg(test)]
+mod attachment_tests;
+#[cfg(test)]
 mod item_tests;
+#[cfg(test)]
+mod node_clip_conversion_tests;
 
 use attachment::normalize_all_attachment_orders;
 use module::remove_instance_and_private_definition;
 
-pub use authoring::{AuthoringKeyframeUpdate, AuthoringPropertyOwner, TimelineSettingsUpdate};
+pub use authoring::{
+    AuthoringKeyframeUpdate, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
+    AuthoringPropertyValueUpdate, TimelineSettingsUpdate,
+};
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
 
 use std::collections::HashMap;
@@ -27,16 +37,17 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::animation::EasingFunction;
 use crate::error::LibraryError;
+use crate::model::BlendMode;
 use crate::model::authoring::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentProcessor, AttachmentStage,
     AuthoringProject, AuthoringSession, AutomationTrack, BuiltinEffectInstance, ChangeSet,
     CompositionParameter, CompositionParameterId, CompositionParameterTarget, InstanceLocator,
-    MediaInputBinding, MediaTime, ModuleConnection, ModuleConnectionId, ModuleDefinition,
-    ModuleDefinitionId, ModuleInstance, ModuleInstanceId, ModuleInvocation, ProjectDocument,
+    MediaInputBinding, MediaTime, ModuleConnectionId, ModuleDefinition, ModuleDefinitionId,
+    ModuleInstance, ModuleInstanceId, ModuleInvocation, ModuleOutputId, ProjectDocument,
     ProjectFileStore, ProjectInvalidation, ProjectRevision, PublishedMediaInputId,
-    PublishedMediaOutputId, PublishedParameterId, RationalRate, SourceRef, TimeMap, Timeline,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind,
+    PublishedParameterId, RationalRate, SourceRef, TimeMap, Timeline, TimelineId, TimelineInterval,
+    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind,
+    ordered_track_item_ids, track_item_ids_after_placement,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::Node;
@@ -59,21 +70,7 @@ fn place_item_at_layer(
     if !project.items.contains_key(&item_id) {
         return Err(format!("Missing Timeline item {item_id}"));
     }
-    let mut ordered = project
-        .items
-        .values()
-        .filter(|item| item.track_id == track_id && item.id != item_id)
-        .map(|item| (item.layer, item.interval.start, item.id))
-        .collect::<Vec<_>>();
-    ordered.sort_by_key(|entry| *entry);
-    let index = usize::try_from(requested_layer.max(0))
-        .unwrap_or(usize::MAX)
-        .min(ordered.len());
-    let mut item_ids = ordered
-        .into_iter()
-        .map(|(_, _, item_id)| item_id)
-        .collect::<Vec<_>>();
-    item_ids.insert(index, item_id);
+    let item_ids = track_item_ids_after_placement(project, track_id, item_id, requested_layer);
     for (layer, ordered_item_id) in item_ids.into_iter().enumerate() {
         project
             .items
@@ -88,14 +85,10 @@ fn normalize_track_layers(
     project: &mut AuthoringProject,
     track_id: TimelineTrackId,
 ) -> Result<(), String> {
-    let mut ordered = project
-        .items
-        .values()
-        .filter(|item| item.track_id == track_id)
-        .map(|item| (item.layer, item.interval.start, item.id))
-        .collect::<Vec<_>>();
-    ordered.sort_by_key(|entry| *entry);
-    for (layer, (_, _, item_id)) in ordered.into_iter().enumerate() {
+    for (layer, item_id) in ordered_track_item_ids(project, track_id, None)
+        .into_iter()
+        .enumerate()
+    {
         project
             .items
             .get_mut(&item_id)
@@ -150,7 +143,7 @@ pub struct ModuleInputDependency {
 pub struct ModuleItemPlacement {
     pub track_id: TimelineTrackId,
     pub name: String,
-    pub output_id: PublishedMediaOutputId,
+    pub output_id: ModuleOutputId,
     pub interval: TimelineInterval,
     pub layer: i64,
     pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
@@ -162,9 +155,22 @@ pub struct ModuleAttachmentPlacement {
     pub owner: AttachmentOwner,
     pub stage: AttachmentStage,
     pub definition_id: ModuleDefinitionId,
-    pub output_id: PublishedMediaOutputId,
+    pub output_id: ModuleOutputId,
     pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
     pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
+}
+
+/// Result of one explicit source-island conversion. Presentation code uses
+/// these stable identities to open the existing production Node Editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeClipConversionResult {
+    pub item_id: TimelineItemId,
+    pub definition_id: ModuleDefinitionId,
+    pub instance_id: ModuleInstanceId,
+    pub output_id: ModuleOutputId,
+    pub moved_pre_transform_effects: usize,
+    pub retained_post_transform_effects: usize,
+    pub changes: ChangeSet,
 }
 
 impl TimelineEditorService {
@@ -470,6 +476,7 @@ impl TimelineEditorService {
                             time_map: TimeMap::default(),
                             layer,
                             parent: None,
+                            blend_mode: BlendMode::Normal,
                             authored_properties: PropertyMap::new(),
                         },
                     );

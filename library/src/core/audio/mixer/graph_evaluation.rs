@@ -429,7 +429,8 @@ fn collect_audio_routes<'a>(
                             operation.catalog_id
                         );
                     }
-                    NodeContent::Generator(_)
+                    NodeContent::ModuleOutput(_)
+                    | NodeContent::Generator(_)
                     | NodeContent::Value(_)
                     | NodeContent::Color(_)
                     | NodeContent::Data(_)

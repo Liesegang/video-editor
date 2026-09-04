@@ -102,6 +102,15 @@ pub enum FrameContent {
         #[serde(flatten)]
         transform: Transform,
     },
+    /// Compact command for the stateful GPU SceneRuntime. Particle buffers
+    /// remain derived renderer state and are never embedded in FrameInfo.
+    ParticleScene {
+        scene: crate::model::frame::particle::ParticleSceneFrame,
+        #[serde(default)]
+        effects: Vec<ImageEffect>,
+        #[serde(flatten)]
+        transform: Transform,
+    },
 }
 
 impl FrameContent {
@@ -110,7 +119,8 @@ impl FrameContent {
             Self::Video { surface, .. } | Self::Image { surface } => &surface.transform,
             Self::Text { transform, .. }
             | Self::Shape { transform, .. }
-            | Self::SkSL { transform, .. } => transform,
+            | Self::SkSL { transform, .. }
+            | Self::ParticleScene { transform, .. } => transform,
         }
     }
 
@@ -119,7 +129,8 @@ impl FrameContent {
             Self::Video { surface, .. } | Self::Image { surface } => &mut surface.transform,
             Self::Text { transform, .. }
             | Self::Shape { transform, .. }
-            | Self::SkSL { transform, .. } => transform,
+            | Self::SkSL { transform, .. }
+            | Self::ParticleScene { transform, .. } => transform,
         }
     }
 }
@@ -185,6 +196,15 @@ impl Hash for FrameContent {
                 OrderedFloat(resolution.0).hash(state);
                 OrderedFloat(resolution.1).hash(state);
                 color_domain.hash(state);
+                effects.hash(state);
+                transform.hash(state);
+            }
+            FrameContent::ParticleScene {
+                scene,
+                effects,
+                transform,
+            } => {
+                scene.hash(state);
                 effects.hash(state);
                 transform.hash(state);
             }
@@ -287,6 +307,18 @@ impl PartialEq for FrameContent {
                     && e1 == e2
                     && tr1 == tr2
             }
+            (
+                FrameContent::ParticleScene {
+                    scene: s1,
+                    effects: e1,
+                    transform: tr1,
+                },
+                FrameContent::ParticleScene {
+                    scene: s2,
+                    effects: e2,
+                    transform: tr2,
+                },
+            ) => s1 == s2 && e1 == e2 && tr1 == tr2,
             _ => false,
         }
     }

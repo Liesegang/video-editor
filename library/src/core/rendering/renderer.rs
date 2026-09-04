@@ -76,6 +76,38 @@ impl Affine2D {
             self.skew_y * x + self.scale_y * y + self.translate_y,
         )
     }
+
+    /// Return the exact inverse mapping when the affine basis is finite and
+    /// non-singular.
+    pub fn inverse(self) -> Option<Self> {
+        let determinant = self.scale_x * self.scale_y - self.skew_x * self.skew_y;
+        if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
+            return None;
+        }
+        let scale_x = self.scale_y / determinant;
+        let skew_x = -self.skew_x / determinant;
+        let skew_y = -self.skew_y / determinant;
+        let scale_y = self.scale_x / determinant;
+        let inverse = Self {
+            scale_x,
+            skew_x,
+            translate_x: -scale_x * self.translate_x - skew_x * self.translate_y,
+            skew_y,
+            scale_y,
+            translate_y: -skew_y * self.translate_x - scale_y * self.translate_y,
+        };
+        [
+            inverse.scale_x,
+            inverse.skew_x,
+            inverse.translate_x,
+            inverse.skew_y,
+            inverse.scale_y,
+            inverse.translate_y,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+        .then_some(inverse)
+    }
 }
 
 impl Default for Affine2D {
@@ -244,6 +276,12 @@ pub struct SkSLRasterRequest<'a> {
     pub color_domain: SkSLColorDomain,
 }
 
+#[derive(Clone, Copy)]
+pub struct ParticleRasterRequest<'a> {
+    pub scene: &'a crate::model::frame::particle::ParticleSceneFrame,
+    pub transform: &'a Affine2D,
+}
+
 pub trait Renderer {
     /// Select the Project-free encoded-sRGBA8 compatibility contract.
     /// Implementations which have only one legacy surface may keep the
@@ -320,6 +358,18 @@ pub trait Renderer {
         &mut self,
         request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError>;
+
+    /// Stateful GPU scene boundary. Non-GPU renderers fail closed instead of
+    /// substituting a CPU implementation with different behavior.
+    fn rasterize_particle_layer(
+        &mut self,
+        _request: ParticleRasterRequest<'_>,
+    ) -> Result<RenderOutput, LibraryError> {
+        Err(LibraryError::Render(
+            "GPU Particle requires an OpenGL 4.3 SceneRuntime; this renderer has no compatible GPU boundary"
+                .to_string(),
+        ))
+    }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;
 

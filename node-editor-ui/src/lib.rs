@@ -27,4 +27,4 @@ pub use graph::{
 pub use interaction::{EditorOutput, InteractionOptions, InteractionState, MoveEndOutcome};
 pub use layout_swipe::{LayoutSwipeAxis, LayoutSwipeHitArea, LayoutSwipeIntent, LayoutSwipePhase};
 pub use selection::{after_click, after_marquee, topmost_hit};
-pub use wire::{CubicBezier, HitRegion};
+pub use wire::{CubicBezier, HitRegion, ReconnectEndpoint, WireInteractionGeometry};

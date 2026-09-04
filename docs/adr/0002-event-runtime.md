@@ -53,4 +53,4 @@ non-destructive override must ask the user whether to replace the binding.
 Audio and MIDI can drive either smooth motion or discrete playback without conflating the two.
 Repeated nested Composition placements remain independently addressable. Implementing the event
 runtime requires bounded queues, cancellation rules, and resource limits for `Overlap`; those are a
-separate vertical slice and do not block Timeline-first editing or Node Clips.
+separate vertical slice and do not block direct Timeline editing or Node Clips.

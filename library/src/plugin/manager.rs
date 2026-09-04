@@ -1,37 +1,34 @@
 //! Plugin manager for registering, loading, and accessing plugins.
 
 mod bundled;
+mod dynamic_loading;
 mod effects;
+mod ensemble_operations;
 mod registration;
+mod runtime_plugins;
+mod shape_operations;
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-use libloading::{Library, Symbol};
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::model::asset::AssetKind;
-use crate::model::property::PropertyDefinition;
+use crate::model::property::{ColorValue, PropertyDefinition, PropertyUiType, PropertyValue};
 use crate::plugin::EntityConverterPlugin;
 use crate::util::local_file::DirectRegularFile;
 
 use crate::plugin::PluginCategory;
 use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
-use crate::plugin::exporters::{ExportPlugin, ExportSettings};
+use crate::plugin::exporters::ExportSettings;
 use crate::plugin::loaders::{
-    AssetMetadata, LoadPlugin, LoadPluginError, LoadRepository, LoadRequest, LoadResponse,
+    AssetMetadata, LoadPluginError, LoadRepository, LoadRequest, LoadResponse,
 };
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
-use crate::plugin::runtime_native::{
-    RuntimeBundleClaim, RuntimeBundleState, RuntimePluginDescriptor, RuntimePluginRegistry,
-    RuntimePluginScanReport, RuntimeRegistrationTargets, discover_manifests, open_bundle,
-    resolve_bundle, resolve_manifest_identity,
-};
+use crate::plugin::runtime_native::RuntimePluginRegistry;
 
-use crate::plugin::traits::Plugin;
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
@@ -69,6 +66,65 @@ fn materialize_validated_operation_properties(
         );
     }
     Some(materialized)
+}
+
+/// Validate values that have already been sampled by an authoring/runtime
+/// boundary. Graph evaluation and compiled Module evaluation both enter
+/// operation implementations through this one typed contract.
+fn validated_operation_values(
+    definitions: &[PropertyDefinition],
+    values: &HashMap<String, PropertyValue>,
+    operation_label: &str,
+) -> Option<HashMap<String, PropertyValue>> {
+    if definitions.len() != values.len() {
+        log::warn!("{operation_label} received undeclared evaluated properties");
+        return None;
+    }
+    let mut validated = HashMap::with_capacity(definitions.len());
+    for definition in definitions {
+        let Some(value) = values.get(definition.name()) else {
+            log::warn!(
+                "{operation_label} property {} is missing from evaluated inputs",
+                definition.name()
+            );
+            return None;
+        };
+        let value = if matches!(definition.ui_type(), PropertyUiType::ColorValue)
+            && let PropertyValue::Color(color) = value
+        {
+            PropertyValue::ColorValue(ColorValue::from_straight_srgba8(color))
+        } else {
+            value.clone()
+        };
+        if let Err(error) = definition.validate_value(&value) {
+            log::warn!(
+                "{operation_label} property {} has an invalid evaluated value: {error}",
+                definition.name()
+            );
+            return None;
+        }
+        validated.insert(definition.name().to_string(), value);
+    }
+    Some(validated)
+}
+
+fn evaluated_operation<'a>(
+    values: &'a HashMap<String, PropertyValue>,
+    eval_time: f64,
+    fps: f64,
+    resolution: (u64, u64),
+) -> Option<crate::plugin::EvaluatedOperation<'a>> {
+    if !eval_time.is_finite()
+        || !fps.is_finite()
+        || fps <= 0.0
+        || resolution.0 == 0
+        || resolution.1 == 0
+    {
+        return None;
+    }
+    Some(crate::plugin::EvaluatedOperation::new(
+        values, eval_time, fps, resolution,
+    ))
 }
 
 /// Main plugin manager.
@@ -394,164 +450,6 @@ impl PluginManager {
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
 
-    /// Evaluates one standalone Effector producer only after all descriptor
-    /// properties have resolved to valid authored/keyframed/scalar values.
-    pub fn evaluate_effector_operation(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        component_id: &str,
-        source_id: uuid::Uuid,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
-    ) -> crate::model::project::EvalOutput<crate::core::ensemble::types::EffectorConfig> {
-        let Some(plugin) = self.get_effector_plugin(component_id) else {
-            log::warn!("Effector plugin {component_id} is unavailable; producing NoOutput");
-            return crate::model::project::EvalOutput::NoOutput;
-        };
-        let descriptor = match self.operation_descriptor(
-            EFFECTOR_CATEGORY,
-            component_id,
-            EFFECTOR_APPLY_OPERATION,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Effector plugin {component_id} has no valid operation descriptor: {error}; producing NoOutput"
-                );
-                return crate::model::project::EvalOutput::NoOutput;
-            }
-        };
-        let Some(properties) = materialize_validated_operation_properties(
-            context,
-            descriptor.properties(),
-            properties,
-            eval_time,
-            &format!("Effector {component_id}"),
-        ) else {
-            return crate::model::project::EvalOutput::NoOutput;
-        };
-        plugin
-            .evaluate_source(context, source_id, &properties, eval_time)
-            .map(crate::model::project::EvalOutput::Produced)
-            .unwrap_or(crate::model::project::EvalOutput::NoOutput)
-    }
-
-    /// Evaluates the native whole-Shape absolute placement. This stays on the
-    /// same descriptor/port/property contract as runtime plugin operations,
-    /// while avoiding an ABI call in the render hot path.
-    pub fn evaluate_transform_operation(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        component_id: &str,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
-    ) -> crate::model::project::EvalOutput<crate::model::frame::transform::Transform> {
-        let descriptor = match self.operation_descriptor(
-            TRANSFORM_CATEGORY,
-            component_id,
-            TRANSFORM_APPLY_OPERATION,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Transform operation {component_id} is unavailable: {error}; producing NoOutput"
-                );
-                return crate::model::project::EvalOutput::NoOutput;
-            }
-        };
-        crate::plugin::transforms::evaluate_source(
-            context,
-            descriptor.properties(),
-            properties,
-            eval_time,
-        )
-        .map(crate::model::project::EvalOutput::Produced)
-        .unwrap_or(crate::model::project::EvalOutput::NoOutput)
-    }
-
-    /// Evaluates one standalone Decorator producer only after every
-    /// descriptor property has resolved to a valid value.
-    pub fn evaluate_decorator_operation(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        component_id: &str,
-        source_id: uuid::Uuid,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
-    ) -> crate::model::project::EvalOutput<crate::core::ensemble::types::DecoratorConfig> {
-        let Some(plugin) = self.get_decorator_plugin(component_id) else {
-            log::warn!("Decorator plugin {component_id} is unavailable; producing NoOutput");
-            return crate::model::project::EvalOutput::NoOutput;
-        };
-        let descriptor = match self.operation_descriptor(
-            DECORATOR_CATEGORY,
-            component_id,
-            DECORATOR_APPLY_OPERATION,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Decorator plugin {component_id} has no valid operation descriptor: {error}; producing NoOutput"
-                );
-                return crate::model::project::EvalOutput::NoOutput;
-            }
-        };
-        let Some(properties) = materialize_validated_operation_properties(
-            context,
-            descriptor.properties(),
-            properties,
-            eval_time,
-            &format!("Decorator {component_id}"),
-        ) else {
-            return crate::model::project::EvalOutput::NoOutput;
-        };
-        plugin
-            .evaluate_source(context, source_id, &properties, eval_time)
-            .map(crate::model::project::EvalOutput::Produced)
-            .unwrap_or(crate::model::project::EvalOutput::NoOutput)
-    }
-
-    /// Evaluates exactly one explicit Shape Path Effect operation. The
-    /// returned config is transient and is appended by the Shape evaluator in
-    /// wire order; no effect instance is embedded in the source Generator.
-    pub fn evaluate_path_effect_operation(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        component_id: &str,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
-    ) -> crate::model::project::EvalResult<crate::model::frame::draw_type::PathEffect> {
-        let Some(plugin) = self.get_path_effect_plugin(component_id) else {
-            log::warn!("Path Effect plugin {component_id} is unavailable; producing NoOutput");
-            return Ok(crate::model::project::EvalOutput::NoOutput);
-        };
-        let descriptor = match self.operation_descriptor(
-            PATH_EFFECT_CATEGORY,
-            component_id,
-            PATH_EFFECT_APPLY_OPERATION,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Path Effect plugin {component_id} has no valid operation descriptor: {error}; producing NoOutput"
-                );
-                return Ok(crate::model::project::EvalOutput::NoOutput);
-            }
-        };
-        let Some(properties) = materialize_validated_operation_properties(
-            context,
-            descriptor.properties(),
-            properties,
-            eval_time,
-            &format!("Path Effect {component_id}"),
-        ) else {
-            return Ok(crate::model::project::EvalOutput::NoOutput);
-        };
-        plugin
-            .evaluate_source(context, &properties, eval_time)
-            .map(crate::model::project::EvalOutput::Produced)
-    }
-
     pub fn get_available_effectors(&self) -> Vec<String> {
         let inner = self.read_registry();
         inner
@@ -610,184 +508,6 @@ impl PluginManager {
         self.operation_descriptor(PATH_EFFECT_CATEGORY, id, PATH_EFFECT_APPLY_OPERATION)
             .map(|descriptor| descriptor.properties().to_vec())
             .unwrap_or_default()
-    }
-
-    /// Returns descriptors reported by successfully loaded ABI-v1 bundles.
-    pub fn get_runtime_plugin_descriptors(&self) -> Vec<RuntimePluginDescriptor> {
-        self.read_registry().runtime_plugins.descriptors()
-    }
-
-    /// Creates a runtime property evaluator instance with every descriptor
-    /// default materialized. Unknown evaluator IDs remain ordinary Project
-    /// data, but cannot be created through this definition-backed factory.
-    pub fn create_property_instance(
-        &self,
-        evaluator_id: &str,
-    ) -> Result<crate::model::property::Property, LibraryError> {
-        self.read_registry()
-            .runtime_plugins
-            .create_property(evaluator_id)
-    }
-
-    /// Invokes a descriptor-declared low-bandwidth operation through the
-    /// generic JSON control plane. Effectors, property evaluators, and
-    /// config-only Style/Decorator evaluators have ABI-v1 host adapters.
-    /// Frame/resource-heavy categories require a separately versioned typed
-    /// extension table and host-owned handles.
-    pub fn invoke_runtime_plugin(
-        &self,
-        category: &str,
-        component_id: &str,
-        operation: &str,
-        payload: serde_json::Value,
-    ) -> Result<serde_json::Value, LibraryError> {
-        let component = {
-            let inner = self.read_registry();
-            inner.runtime_plugins.component(category, component_id)?
-        };
-        component.invoke(operation, payload)
-    }
-
-    /// Discovers `ruvie-plugin.toml` bundles in configured runtime directories
-    /// and registers bundles that were added since startup.
-    pub fn rescan_runtime_plugins<I, P>(&self, paths: I) -> RuntimePluginScanReport
-    where
-        I: IntoIterator<Item = P>,
-        P: AsRef<Path>,
-    {
-        let mut report = RuntimePluginScanReport::default();
-        let mut manifests = Vec::new();
-        for path in paths {
-            let configured_path = path.as_ref();
-            match discover_manifests(configured_path) {
-                Ok(mut discovered) => manifests.append(&mut discovered),
-                Err(error) => report
-                    .failures
-                    .push((configured_path.to_path_buf(), error.to_string())),
-            }
-        }
-        manifests.sort();
-        manifests.dedup();
-        report.discovered_manifests = manifests.len();
-
-        for discovered_manifest in manifests {
-            let manifest_path = match resolve_manifest_identity(&discovered_manifest) {
-                Ok(manifest_path) => manifest_path,
-                Err(error) => {
-                    report
-                        .failures
-                        .push((discovered_manifest, error.to_string()));
-                    continue;
-                }
-            };
-
-            match self
-                .read_registry()
-                .runtime_plugins
-                .manifest_state(&manifest_path)
-            {
-                RuntimeBundleState::Loaded => {
-                    report.already_loaded_bundles.push(manifest_path);
-                    continue;
-                }
-                RuntimeBundleState::InFlight => {
-                    report.in_flight_bundles.push(manifest_path);
-                    continue;
-                }
-                RuntimeBundleState::Unseen => {}
-            }
-
-            let resolved = match resolve_bundle(&manifest_path) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    // A concurrent scan can finish while this scan is resolving
-                    // disk state. Prefer the committed/in-flight identity over
-                    // a transient file error and never call plugin callbacks.
-                    match self
-                        .read_registry()
-                        .runtime_plugins
-                        .manifest_state(&manifest_path)
-                    {
-                        RuntimeBundleState::Loaded => {
-                            report.already_loaded_bundles.push(manifest_path)
-                        }
-                        RuntimeBundleState::InFlight => {
-                            report.in_flight_bundles.push(manifest_path)
-                        }
-                        RuntimeBundleState::Unseen => {
-                            report.failures.push((manifest_path, error.to_string()))
-                        }
-                    }
-                    continue;
-                }
-            };
-
-            let claim = self
-                .write_registry()
-                .runtime_plugins
-                .claim_bundle(&resolved);
-            match claim {
-                RuntimeBundleClaim::AlreadyLoaded => {
-                    report.already_loaded_bundles.push(manifest_path);
-                    continue;
-                }
-                RuntimeBundleClaim::InFlight => {
-                    report.in_flight_bundles.push(manifest_path);
-                    continue;
-                }
-                RuntimeBundleClaim::Claimed => {}
-            }
-
-            let pending = match open_bundle(&resolved) {
-                Ok(pending) => pending,
-                Err(error) => {
-                    self.write_registry()
-                        .runtime_plugins
-                        .cancel_bundle_load(&resolved);
-                    report.failures.push((manifest_path, error.to_string()));
-                    continue;
-                }
-            };
-
-            let mut inner = self.write_registry();
-            let PluginRegistry {
-                runtime_plugins,
-                effect_plugins,
-                load_plugins,
-                effector_plugins,
-                decorator_plugins,
-                style_plugins,
-                property_evaluators,
-                ..
-            } = &mut *inner;
-            match runtime_plugins.register_bundle(
-                pending,
-                RuntimeRegistrationTargets {
-                    effect_plugins,
-                    load_plugins,
-                    effector_plugins,
-                    decorator_plugins,
-                    style_plugins,
-                    property_evaluators,
-                },
-            ) {
-                Ok(registered) => {
-                    self.bump_render_revision();
-                    report.loaded_bundles.push(manifest_path);
-                    report.registered_components.extend(registered);
-                }
-                Err(error) => {
-                    runtime_plugins.cancel_bundle_load(&resolved);
-                    report.failures.push((manifest_path, error.to_string()));
-                }
-            }
-        }
-        report
-    }
-
-    /// Convenience form for loading or rescanning one bundle/directory.
-    pub fn rescan_runtime_plugin_path<P: AsRef<Path>>(&self, path: P) -> RuntimePluginScanReport {
-        self.rescan_runtime_plugins([PathBuf::from(path.as_ref())])
     }
 
     /// Set the priority order for loader plugins.
@@ -960,202 +680,6 @@ impl PluginManager {
             "Exporter '{}' not found",
             exporter_id
         )))
-    }
-
-    /// Loads a Rust-ABI plugin constructor and keeps its library loaded.
-    ///
-    /// # Safety
-    ///
-    /// `path` must identify a trusted plugin built with the same Rust toolchain
-    /// and the exact trait definition represented by `T`. `symbol` must return
-    /// a non-null pointer produced by `Box::into_raw(Box<T>)` and transfer its
-    /// sole ownership to this function.
-    unsafe fn load_plugin_generic<T: ?Sized + 'static>(
-        &self,
-        path: &Path,
-        symbol: &[u8],
-        register: impl FnOnce(&mut PluginRegistry, Arc<T>) -> Option<Arc<T>>,
-    ) -> Result<(), LibraryError> {
-        // SAFETY: The caller guarantees that this is a trusted native plugin;
-        // loading it may execute platform-specific initializers.
-        let library = unsafe { Library::new(path)? };
-        // SAFETY: The caller guarantees the symbol has this exact Rust trait
-        // object ABI and was compiled against the same plugin API.
-        let constructor: Symbol<unsafe extern "C" fn() -> *mut T> = unsafe { library.get(symbol)? };
-        // SAFETY: The constructor contract described above permits one call and
-        // transfers ownership of its returned allocation.
-        let raw = unsafe { constructor() };
-        if raw.is_null() {
-            return Err(LibraryError::Plugin(format!(
-                "Plugin constructor {} returned null",
-                String::from_utf8_lossy(symbol)
-            )));
-        }
-        // SAFETY: The null check and caller contract guarantee `raw` came from
-        // Box::into_raw exactly once. Arc takes ownership of the reconstructed Box.
-        let plugin = unsafe { Arc::from(Box::from_raw(raw)) };
-
-        let replaced = {
-            let mut inner = self.write_registry();
-            let replaced = register(&mut inner, plugin);
-            inner.dynamic_libraries.push(library);
-            replaced
-        };
-        self.bump_render_revision();
-        drop(replaced);
-        Ok(())
-    }
-
-    pub fn load_effect_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
-        // load_plugin_generic validates the pointer and retains the library.
-        unsafe {
-            self.load_plugin_generic::<dyn EffectPlugin>(
-                path.as_ref(),
-                b"create_effect_plugin",
-                |inner, plugin| inner.effect_plugins.register(plugin),
-            )
-        }
-    }
-
-    pub fn load_load_plugin_from_file<P: AsRef<Path>>(&self, path: P) -> Result<(), LibraryError> {
-        // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
-        // load_plugin_generic validates the pointer and retains the library.
-        unsafe {
-            self.load_plugin_generic::<dyn LoadPlugin>(
-                path.as_ref(),
-                b"create_load_plugin",
-                |inner, plugin| inner.load_plugins.register(plugin),
-            )
-        }
-    }
-
-    pub fn load_export_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        // The v2 symbol is intentionally different from the former bare-Image
-        // ABI. An old exporter must fail to load instead of receiving typed
-        // ExportFrame bytes under an incompatible Rust trait-object vtable.
-        // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
-        // load_plugin_generic validates the pointer and retains the library.
-        unsafe {
-            self.load_plugin_generic::<dyn ExportPlugin>(
-                path.as_ref(),
-                b"create_export_plugin_v2",
-                |inner, plugin| inner.export_plugins.register(plugin),
-            )
-        }
-    }
-
-    pub fn load_entity_converter_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
-        // load_plugin_generic validates the pointer and retains the library.
-        unsafe {
-            self.load_plugin_generic::<dyn EntityConverterPlugin>(
-                path.as_ref(),
-                b"create_entity_converter_plugin",
-                |inner, plugin| inner.entity_converter_plugins.register(plugin),
-            )
-        }
-    }
-
-    pub fn load_plugins_from_directory<P: AsRef<Path>>(
-        &self,
-        dir_path: P,
-    ) -> Result<(), LibraryError> {
-        let dir = dir_path.as_ref();
-        if !dir.is_dir() {
-            log::warn!("Plugin directory not found: {}", dir.display());
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let extension = path.extension().and_then(|s| s.to_str());
-                if matches!(extension, Some("dll") | Some("so")) {
-                    log::info!("Attempting to load plugin from: {}", path.display());
-                    if let Err(e) = self.load_effect_plugin_from_file(&path) {
-                        log::debug!("Not an effect plugin: {}", e);
-                    } else {
-                        continue;
-                    }
-                    if let Err(e) = self.load_load_plugin_from_file(&path) {
-                        log::debug!("Not a load plugin: {}", e);
-                    } else {
-                        continue;
-                    }
-                    if let Err(e) = self.load_export_plugin_from_file(&path) {
-                        log::debug!("Not an export plugin: {}", e);
-                    } else {
-                        continue;
-                    }
-                    if let Err(e) = self.load_entity_converter_plugin_from_file(&path) {
-                        log::debug!("Not an entity converter plugin: {}", e);
-                    } else {
-                        continue;
-                    }
-
-                    log::warn!("File is not a recognized plugin type: {}", path.display());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn load_sksl_plugins_from_directory<P: AsRef<Path>>(
-        &self,
-        dir_path: P,
-    ) -> Result<(), LibraryError> {
-        let dir = dir_path.as_ref();
-        if !dir.exists() {
-            log::warn!("SkSL plugin directory not found: {}", dir.display());
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                let config_path = path.join("config.toml");
-                let shader_path = path.join("shader.sksl");
-
-                if config_path.exists() && shader_path.exists() {
-                    log::info!("Loading SkSL plugin from: {}", path.display());
-                    let toml_content =
-                        std::fs::read_to_string(&config_path).map_err(LibraryError::Io)?;
-                    let sksl_content =
-                        std::fs::read_to_string(&shader_path).map_err(LibraryError::Io)?;
-
-                    match crate::plugin::effects::SkslEffectPlugin::new(
-                        &toml_content,
-                        &sksl_content,
-                    ) {
-                        Ok(plugin) => {
-                            log::info!("Successfully registered SkSL plugin: {}", plugin.id());
-                            self.register_effect(Arc::new(plugin));
-                        }
-                        Err(e) => {
-                            log::error!("Failed to load SkSL plugin at {}: {}", path.display(), e);
-                        }
-                    }
-                } else {
-                    log::warn!(
-                        "Skipping directory {}, missing config.toml or shader.sksl",
-                        path.display()
-                    );
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn get_property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {

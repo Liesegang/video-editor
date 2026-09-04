@@ -12,9 +12,9 @@ use library::model::project::{
     BACKGROUND_SHAPE_INPUT_PORT, Composition, NodeContainer, NodeGraphBundle, PortAddress,
     PortOwner, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{PropertyDefinition, PropertyMap};
+use library::model::property::PropertyDefinition;
 use library::plugin::{
-    DecoratorPlugin, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin,
+    DecoratorPlugin, EvaluatedOperation, OperationDescriptor, OperationDescriptorError, Plugin,
     PluginManager,
 };
 use uuid::Uuid;
@@ -62,10 +62,8 @@ impl DecoratorPlugin for CountingDecoratorPlugin {
 
     fn evaluate_source(
         &self,
-        _context: &FrameEvaluationContext,
+        _context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        _properties: &PropertyMap,
-        _eval_time: f64,
     ) -> Option<DecoratorConfig> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.legacy {

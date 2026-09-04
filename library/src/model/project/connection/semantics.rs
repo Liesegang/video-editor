@@ -120,6 +120,7 @@ impl Project {
             PortOwner::Node(node_id) => {
                 if let Some(node) = self.get_node(node_id) {
                     match node.content() {
+                        NodeContent::ModuleOutput(_) => None,
                         NodeContent::Media(_)
                         | NodeContent::Generator(_)
                         | NodeContent::CompositionInstance(_) => Some(owner),

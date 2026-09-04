@@ -39,16 +39,20 @@ use super::{
 mod composition_parameters;
 mod frame_values;
 mod module_image;
+mod module_shape;
+mod particle;
+mod text_ensemble;
 pub(super) mod time_map;
 
 #[cfg(test)]
 mod instance_tests;
 
 use frame_values::{
-    planned_source_matches, sample_automation, shape_item, solid_item, stage_key,
-    text_item_from_values, transform_at, transform_from_values, transparent,
+    planned_source_matches, shape_item, solid_item, stage_key, text_item_from_values, transform_at,
+    transform_from_values, transparent,
 };
 use module_image::ModuleImageRuntime;
+use text_ensemble::evaluate_text_ensemble;
 use time_map::{map_composition_time, unmap_composition_time};
 
 /// Evaluate the root Timeline at an exact frame boundary into the existing
@@ -57,6 +61,7 @@ use time_map::{map_composition_time, unmap_composition_time};
 pub fn evaluate_render_plan_frame(
     project: &AuthoringProject,
     plan: &RenderPlan,
+    plugins: &crate::plugin::PluginManager,
     frame_number: u64,
     render_scale: f64,
     region: Option<Region>,
@@ -67,6 +72,7 @@ pub fn evaluate_render_plan_frame(
     evaluate_timeline_render_plan_frame(
         project,
         plan,
+        plugins,
         plan.root_timeline_id,
         frame_number,
         render_scale,
@@ -79,6 +85,7 @@ pub fn evaluate_render_plan_frame(
 pub fn evaluate_timeline_render_plan_frame(
     project: &AuthoringProject,
     plan: &RenderPlan,
+    plugins: &crate::plugin::PluginManager,
     timeline_id: TimelineId,
     frame_number: i64,
     render_scale: f64,
@@ -87,6 +94,7 @@ pub fn evaluate_timeline_render_plan_frame(
     evaluate_timeline_render_plan_frame_at_instance(
         project,
         plan,
+        plugins,
         timeline_id,
         frame_number,
         render_scale,
@@ -105,6 +113,7 @@ pub fn evaluate_timeline_render_plan_frame(
 pub fn evaluate_timeline_render_plan_frame_at_instance(
     project: &AuthoringProject,
     plan: &RenderPlan,
+    plugins: &crate::plugin::PluginManager,
     timeline_id: TimelineId,
     frame_number: i64,
     render_scale: f64,
@@ -142,6 +151,7 @@ pub fn evaluate_timeline_render_plan_frame_at_instance(
     let mut evaluator = AuthoringFrameEvaluator {
         project,
         plan,
+        plugins,
         evaluation_root_id,
         evaluation_root_time,
         active_timelines: HashSet::new(),
@@ -219,6 +229,7 @@ struct ItemEvaluationKey {
 struct AuthoringFrameEvaluator<'a> {
     project: &'a AuthoringProject,
     plan: &'a RenderPlan,
+    plugins: &'a crate::plugin::PluginManager,
     evaluation_root_id: TimelineId,
     evaluation_root_time: MediaTime,
     active_timelines: HashSet<TimelineId>,
@@ -453,7 +464,7 @@ impl AuthoringFrameEvaluator<'_> {
             height: timeline.height,
             background_color: transparent(),
             transform: transform_from_values(&transform_values)?,
-            blend_mode: BlendMode::Normal,
+            blend_mode: item.blend_mode,
             effect_time: OrderedFloat(local_time.to_seconds_f64()),
             effects: Vec::new(),
             items: vec![frame],
@@ -486,11 +497,24 @@ impl AuthoringFrameEvaluator<'_> {
                 local_time,
                 timeline.fps.to_f64(),
             ),
-            SourceRef::Text { text } => {
+            SourceRef::Text {
+                text,
+                ensemble_operations,
+            } => {
                 let text = self.effective_text(timeline, item.id, text, instance_path)?;
                 let values =
                     self.effective_item_property_values(timeline, item, local_time, instance_path)?;
-                text_item_from_values(item.id.as_uuid(), &text, &values).map(Some)
+                let ensemble = match evaluate_text_ensemble(
+                    self.plugins,
+                    ensemble_operations,
+                    local_time.to_seconds_f64(),
+                    timeline.fps.to_f64(),
+                    (timeline.width, timeline.height),
+                )? {
+                    crate::model::project::EvalOutput::Produced(ensemble) => ensemble,
+                    crate::model::project::EvalOutput::NoOutput => return Ok(None),
+                };
+                text_item_from_values(item.id.as_uuid(), &text, &values, ensemble).map(Some)
             }
             SourceRef::Shape { shape } => shape_item(item.id.as_uuid(), shape).map(Some),
             SourceRef::Solid { color } => Ok(Some(solid_item(
@@ -621,7 +645,7 @@ impl AuthoringFrameEvaluator<'_> {
                         .iter()
                         .map(|(key, parameter)| {
                             let value = match &parameter.automation {
-                                Some(track) => sample_automation(track, local_time)?,
+                                Some(track) => track.evaluate_at(local_time)?,
                                 None => parameter.value.clone(),
                             };
                             Ok((key.clone(), value))
@@ -748,7 +772,7 @@ impl AuthoringFrameEvaluator<'_> {
                 ))
             })?;
         let output = definition
-            .media_outputs
+            .outputs
             .get(&invocation.output_id)
             .ok_or_else(|| {
                 LibraryError::Validation(format!(
@@ -756,13 +780,6 @@ impl AuthoringFrameEvaluator<'_> {
                     invocation.output_id
                 ))
             })?;
-        if output.interface.data_type != PortDataType::Image {
-            return Err(LibraryError::Render(format!(
-                "Image runtime cannot evaluate {:?} Module output {}",
-                output.interface.data_type, output.interface.id
-            )));
-        }
-
         let mut external_images = HashMap::new();
         for (input_id, binding) in &invocation.input_bindings {
             let input = definition.media_inputs.get(input_id).ok_or_else(|| {
@@ -808,6 +825,7 @@ impl AuthoringFrameEvaluator<'_> {
             project: self.project,
             definition,
             invocation,
+            instance_path,
             local_time,
             width: self
                 .project
@@ -833,13 +851,16 @@ impl AuthoringFrameEvaluator<'_> {
                 .ok_or_else(|| {
                     LibraryError::Validation(format!("Timeline {timeline_id} does not exist"))
                 })?,
+            plugins: self.plugins,
             external_images,
             image_memo: HashMap::new(),
             image_path: HashSet::new(),
+            shape_memo: HashMap::new(),
+            shape_path: HashSet::new(),
             value_memo: HashMap::new(),
             value_path: HashSet::new(),
         };
-        runtime.evaluate_image_output(output.source())
+        runtime.evaluate_terminal(output)
     }
 
     fn evaluate_media_binding(

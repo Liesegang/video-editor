@@ -1,6 +1,7 @@
 id = "tiling"
 name = "Tiling"
 category = "Geometry"
+color_domain = "project_linear"
 
 [[properties]]
 name = "scale"

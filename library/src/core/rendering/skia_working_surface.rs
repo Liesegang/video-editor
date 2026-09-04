@@ -15,6 +15,8 @@ use skia_safe::{
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
 use crate::rendering::renderer::{RenderOutput, WorkingSurfaceContract};
+#[cfg(feature = "gl")]
+use crate::rendering::scene_runtime::{SceneTexture, SceneTextureFormat};
 use crate::rendering::skia_utils;
 
 const F32_COMPONENT_BYTES: usize = std::mem::size_of::<f32>();
@@ -157,6 +159,78 @@ pub(super) fn authored_color4f(
             ))
         }
     }
+}
+
+#[cfg(feature = "gl")]
+pub(super) fn authored_premultiplied_rgba(
+    contract: &SkiaSurfaceContract,
+    color: &Color,
+) -> Result<[f32; 4], LibraryError> {
+    let (color, _) = authored_color4f(contract, color, 1.0)?;
+    Ok([
+        color.r * color.a,
+        color.g * color.a,
+        color.b * color.a,
+        color.a,
+    ])
+}
+
+/// Borrow SceneRuntime's GL texture into Ganesh under the exact surface
+/// storage/color contract. The runtime retains ownership of the GL name.
+#[cfg(feature = "gl")]
+pub(super) fn scene_texture_to_skia_image(
+    context: &mut skia_safe::gpu::DirectContext,
+    texture: SceneTexture,
+    contract: &SkiaSurfaceContract,
+) -> Result<Image, LibraryError> {
+    let (expected_format, gl_format, color_type, color_space) = match contract {
+        SkiaSurfaceContract::UnmanagedSrgba8 => (
+            SceneTextureFormat::Srgba8,
+            glow::RGBA8,
+            ColorType::RGBA8888,
+            None,
+        ),
+        SkiaSurfaceContract::ProjectLinear(_) => (
+            SceneTextureFormat::LinearRgbaF32,
+            glow::RGBA32F,
+            ColorType::RGBAF32,
+            Some(working_color_space()),
+        ),
+    };
+    if texture.format != expected_format {
+        return Err(LibraryError::Render(format!(
+            "GPU Particle texture {:?} is incompatible with the active Skia surface contract",
+            texture.format
+        )));
+    }
+    let texture_info = skia_safe::gpu::gl::TextureInfo {
+        target: glow::TEXTURE_2D,
+        id: texture.texture_id,
+        format: gl_format,
+        protected: skia_safe::gpu::Protected::No,
+    };
+    // SAFETY: SceneRuntime created this live GL texture on `context`'s exact
+    // current glutin context. The descriptor matches its immutable storage;
+    // Skia borrows the texture and never owns/deletes it.
+    let backend = unsafe {
+        skia_safe::gpu::backend_textures::make_gl(
+            (texture.width as i32, texture.height as i32),
+            skia_safe::gpu::Mipmapped::No,
+            texture_info,
+            "GPU Particle Scene",
+        )
+    };
+    Image::from_texture(
+        context,
+        &backend,
+        skia_safe::gpu::SurfaceOrigin::BottomLeft,
+        color_type,
+        AlphaType::Premul,
+        color_space,
+    )
+    .ok_or_else(|| {
+        LibraryError::Render("Ganesh could not borrow the GPU Particle scene texture".to_string())
+    })
 }
 
 pub(super) fn set_paint_authored_color(

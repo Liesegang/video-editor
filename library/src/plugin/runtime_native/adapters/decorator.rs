@@ -1,5 +1,7 @@
 //! Version-negotiated runtime Decorator adapter.
 
+use std::collections::BTreeMap;
+
 use ruvie_plugin_api::{
     BackplateFitV2, BackplateOffsetV2, BackplateShapeV1, ComponentDescriptorV1,
     DECORATOR_EVALUATE_V1, DECORATOR_EVALUATE_V2, DecoratorEvaluateRequestV1,
@@ -7,13 +9,12 @@ use ruvie_plugin_api::{
     DecoratorTargetV2, InsetsV1, InsetsV2,
 };
 
-use super::{parse_semver_triplet, resolved_config_properties};
+use super::parse_semver_triplet;
 use crate::error::LibraryError;
 use crate::model::property::PropertyDefinition;
-use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::runtime_native::abi::RuntimeComponent;
-use crate::plugin::runtime_native::property_wire::color_from_wire;
-use crate::plugin::{DecoratorPlugin, Plugin};
+use crate::plugin::runtime_native::property_wire::{color_from_wire, property_value_to_wire};
+use crate::plugin::{DecoratorPlugin, EvaluatedOperation, Plugin};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::plugin::runtime_native) enum RuntimeDecoratorProtocol {
@@ -95,28 +96,37 @@ impl DecoratorPlugin for RuntimeDecoratorPlugin {
 
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         _source_id: uuid::Uuid,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
     ) -> Option<crate::core::ensemble::types::DecoratorConfig> {
         let label = format!("Runtime Decorator '{}'", self.id());
-        let properties =
-            resolved_config_properties(context, &self.definitions, properties, eval_time, &label)?;
+        let mut properties = BTreeMap::new();
+        for definition in &self.definitions {
+            let value = context.properties().get(definition.name())?;
+            let value = property_value_to_wire(value)
+                .map_err(|error| {
+                    log::error!(
+                        "{label} property '{}' cannot cross ABI v1: {error}",
+                        definition.name()
+                    );
+                })
+                .ok()?;
+            properties.insert(definition.name().to_string(), value);
+        }
         let (operation, payload) = match self.protocol {
             RuntimeDecoratorProtocol::V1 => (
                 DECORATOR_EVALUATE_V1,
                 serde_json::to_value(DecoratorEvaluateRequestV1 {
-                    time: eval_time,
-                    fps: context.evaluation_fps(),
+                    time: context.time(),
+                    fps: context.fps(),
                     properties,
                 }),
             ),
             RuntimeDecoratorProtocol::V2 => (
                 DECORATOR_EVALUATE_V2,
                 serde_json::to_value(DecoratorEvaluateRequestV2 {
-                    time: eval_time,
-                    fps: context.evaluation_fps(),
+                    time: context.time(),
+                    fps: context.fps(),
                     properties,
                 }),
             ),

@@ -170,7 +170,8 @@ pub(crate) fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> egu
         ui.add_sized(
             [header.title_width, header.row_height],
             egui::Label::new(title).selectable(false).truncate(),
-        );
+        )
+        .on_hover_text(header.title);
         if let Some(status) = header.trailing {
             ui.add(
                 egui::Label::new(egui::RichText::new(status.glyph).color(header.accent))
@@ -196,6 +197,7 @@ pub(crate) fn show_port_label(ui: &mut egui::Ui, label: PortLabel<'_>) -> egui::
             .truncate()
             .halign(label.align),
     )
+    .on_hover_text(label.text)
 }
 
 pub(crate) fn port_visual_style(color: Color32, connected: bool) -> PortVisualStyle {

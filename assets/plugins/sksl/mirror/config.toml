@@ -1,6 +1,7 @@
 id = "mirror"
 name = "Mirror"
 category = "Geometry"
+color_domain = "project_linear"
 
 [[properties]]
 name = "axis"

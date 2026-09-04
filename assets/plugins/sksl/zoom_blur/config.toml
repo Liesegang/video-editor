@@ -1,6 +1,7 @@
 id = "zoom_blur"
 name = "Zoom Blur"
 category = "Distortion"
+color_domain = "project_linear"
 
 [[properties]]
 name = "center"

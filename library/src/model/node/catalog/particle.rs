@@ -1,7 +1,14 @@
-//! Typed Particle node contracts whose runtime and renderer are still design-needed.
+//! Typed Particle node contracts.
+//!
+//! Only the bounded Emitter -> Initialize -> Gravity -> Drag -> Sprite slice
+//! has a native runtime. Every other descriptor remains explicitly disabled.
 
-use super::descriptor::{DescriptorSpec, PortSpec};
+use ordered_float::OrderedFloat;
+
+use super::descriptor::{DescriptorIdentity, DescriptorSpec, PortSpec};
+use crate::model::frame::color::Color;
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec3};
 
 const PARTICLE: PortSpec = PortSpec::single("particles", "Particles", PortDataType::ParticleSystem);
 const PARTICLE_OUTPUT: &[PortSpec] = &[PARTICLE];
@@ -13,11 +20,9 @@ const IMAGE_OUTPUT: &[PortSpec] = &[PortSpec::single(
 
 const PARTICLE_EMITTER_INPUTS: &[PortSpec] = &[
     PortSpec::single("capacity", "Capacity", PortDataType::Integer),
-    PortSpec::single("simulation_space", "Simulation Space", PortDataType::Enum),
     PortSpec::single("rate", "Rate", PortDataType::Number),
     PortSpec::single("lifetime", "Lifetime", PortDataType::Number),
-    PortSpec::single("loop", "Loop", PortDataType::Boolean),
-    PortSpec::single("duration", "Duration", PortDataType::Number),
+    PortSpec::single("seed", "Seed", PortDataType::Integer),
 ];
 const SPAWN_BURST_INPUTS: &[PortSpec] = &[
     PARTICLE,
@@ -99,10 +104,7 @@ const COLLISION_DEPTH_INPUTS: &[PortSpec] = &[
 ];
 const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
-    PortSpec::single("texture", "Texture", PortDataType::Image),
     PortSpec::single("color", "Color", PortDataType::Color),
-    PortSpec::single("blend_mode", "Blend Mode", PortDataType::Enum),
-    PortSpec::single("alignment", "Alignment", PortDataType::Enum),
 ];
 const MESH_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
@@ -117,12 +119,17 @@ const RIBBON_RENDERER_INPUTS: &[PortSpec] = &[
 ];
 
 const SPECS: &[DescriptorSpec] = &[
-    DescriptorSpec::placeholder(
-        "native.particle.emitter",
-        "Particle Emitter",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            "native.particle.emitter",
+            "Particle Emitter",
+            "Particles",
+            "node_editor.menu.create.particle_emitter",
+            &["particle", "emitter", "gpu", "rate", "seed"],
+        ),
         PARTICLE_EMITTER_INPUTS,
         PARTICLE_OUTPUT,
+        emitter_properties,
     ),
     DescriptorSpec::placeholder(
         "native.particle.spawn-burst",
@@ -138,12 +145,17 @@ const SPECS: &[DescriptorSpec] = &[
         SHAPE_LOCATION_INPUTS,
         PARTICLE_OUTPUT,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.initialize",
-        "Initialize Particle",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            "native.particle.initialize",
+            "Initialize Particle",
+            "Particles",
+            "node_editor.menu.create.particle_initialize",
+            &["particle", "initialize", "velocity", "size"],
+        ),
         INITIALIZE_PARTICLE_INPUTS,
         PARTICLE_OUTPUT,
+        initialize_properties,
     ),
     DescriptorSpec::placeholder(
         "native.particle.set-attribute",
@@ -152,19 +164,29 @@ const SPECS: &[DescriptorSpec] = &[
         SET_ATTRIBUTE_INPUTS,
         PARTICLE_OUTPUT,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.gravity-force",
-        "Gravity Force",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            "native.particle.gravity-force",
+            "Gravity Force",
+            "Particles",
+            "node_editor.menu.create.particle_gravity",
+            &["particle", "gravity", "force", "gpu"],
+        ),
         GRAVITY_INPUTS,
         PARTICLE_OUTPUT,
+        gravity_properties,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.drag-force",
-        "Drag Force",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            "native.particle.drag-force",
+            "Drag Force",
+            "Particles",
+            "node_editor.menu.create.particle_drag",
+            &["particle", "drag", "force", "gpu"],
+        ),
         DRAG_INPUTS,
         PARTICLE_OUTPUT,
+        drag_properties,
     ),
     DescriptorSpec::placeholder(
         "native.particle.point-force",
@@ -222,12 +244,17 @@ const SPECS: &[DescriptorSpec] = &[
         COLLISION_DEPTH_INPUTS,
         PARTICLE_OUTPUT,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.sprite-renderer",
-        "Sprite Renderer",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            "native.particle.sprite-renderer",
+            "Sprite Renderer",
+            "Particles",
+            "node_editor.menu.create.particle_sprite_renderer",
+            &["particle", "sprite", "render", "gpu"],
+        ),
         SPRITE_RENDERER_INPUTS,
         IMAGE_OUTPUT,
+        sprite_properties,
     ),
     DescriptorSpec::placeholder(
         "native.particle.mesh-renderer",
@@ -247,4 +274,118 @@ const SPECS: &[DescriptorSpec] = &[
 
 pub(super) const fn specs() -> &'static [DescriptorSpec] {
     SPECS
+}
+
+fn emitter_properties() -> Vec<PropertyDefinition> {
+    vec![
+        integer_property("capacity", "Capacity", 1, 100_000, 8_192),
+        number_property("rate", "Rate", 0.0, 100_000.0, 120.0, " /s"),
+        number_property("lifetime", "Lifetime", 1.0 / 120.0, 120.0, 4.0, " s"),
+        integer_property("seed", "Seed", 0, i64::from(u32::MAX), 1),
+    ]
+}
+
+fn initialize_properties() -> Vec<PropertyDefinition> {
+    vec![
+        vec3_property(
+            "velocity_min",
+            "Velocity Min",
+            [-120.0, -260.0, -40.0],
+            " px/s",
+        ),
+        vec3_property(
+            "velocity_max",
+            "Velocity Max",
+            [120.0, -140.0, 40.0],
+            " px/s",
+        ),
+        number_property("size_min", "Size Min", 0.25, 512.0, 6.0, " px"),
+        number_property("size_max", "Size Max", 0.25, 512.0, 18.0, " px"),
+    ]
+}
+
+fn gravity_properties() -> Vec<PropertyDefinition> {
+    vec![vec3_property("force", "Force", [0.0, 180.0, 0.0], " px/s²")]
+}
+
+fn drag_properties() -> Vec<PropertyDefinition> {
+    vec![number_property(
+        "coefficient",
+        "Coefficient",
+        0.0,
+        100.0,
+        0.15,
+        "",
+    )]
+}
+
+fn sprite_properties() -> Vec<PropertyDefinition> {
+    vec![PropertyDefinition::new(
+        "color",
+        PropertyUiType::Color,
+        "Color",
+        PropertyValue::Color(Color {
+            r: 115,
+            g: 205,
+            b: 255,
+            a: 220,
+        }),
+    )]
+}
+
+fn integer_property(
+    name: &str,
+    label: &str,
+    min: i64,
+    max: i64,
+    default: i64,
+) -> PropertyDefinition {
+    PropertyDefinition::new(
+        name,
+        PropertyUiType::Integer {
+            min,
+            max,
+            suffix: String::new(),
+            min_hard_limit: true,
+            max_hard_limit: true,
+        },
+        label,
+        PropertyValue::Integer(default),
+    )
+}
+
+fn number_property(
+    name: &str,
+    label: &str,
+    min: f64,
+    max: f64,
+    default: f64,
+    suffix: &str,
+) -> PropertyDefinition {
+    PropertyDefinition::new(
+        name,
+        PropertyUiType::Float {
+            min,
+            max,
+            step: 0.1,
+            suffix: suffix.to_string(),
+            min_hard_limit: true,
+            max_hard_limit: true,
+        },
+        label,
+        PropertyValue::Number(OrderedFloat(default)),
+    )
+}
+
+fn vec3_property(name: &str, label: &str, value: [f64; 3], suffix: &str) -> PropertyDefinition {
+    PropertyDefinition::new(
+        name,
+        PropertyUiType::vec3_with_range(-1_000_000.0, 1_000_000.0, 0.1, suffix, true, true),
+        label,
+        PropertyValue::Vec3(Vec3 {
+            x: OrderedFloat(value[0]),
+            y: OrderedFloat(value[1]),
+            z: OrderedFloat(value[2]),
+        }),
+    )
 }

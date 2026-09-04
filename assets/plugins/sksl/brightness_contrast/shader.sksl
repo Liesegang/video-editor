@@ -3,13 +3,14 @@ uniform float brightness;
 uniform float contrast;
 
 half4 main(float2 p) {
-    half4 color = content.eval(p);
+    half4 source = content.eval(p);
+    if (source.a <= 0.0) {
+        return half4(0.0);
+    }
 
-    // Contrast relative to 0.5
-    color.rgb = (color.rgb - 0.5) * contrast + 0.5;
-
-    // Add brightness
-    color.rgb += brightness;
-
-    return color;
+    // Skia child shaders return premultiplied pixels. Brightness and contrast
+    // are defined on straight Project-working RGB, then premultiplied once.
+    float3 straight = float3(source.rgb) / float(source.a);
+    straight = (straight - 0.5) * contrast + 0.5 + brightness;
+    return half4(half3(straight * float(source.a)), source.a);
 }

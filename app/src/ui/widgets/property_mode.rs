@@ -46,6 +46,83 @@ pub(crate) enum PropertyModeAction {
     ToggleKeyframe,
 }
 
+/// Evaluator state presented by the shared compact authoring control.
+///
+/// Timeline properties, Module parameter automation, and Effect parameter
+/// automation have different storage shapes, but the editor must present the
+/// same four visual states without manufacturing a second persisted model.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PropertyModeState {
+    mode: Option<PropertyAuthoringMode>,
+    key_at_current_time: bool,
+    keyframe_count: usize,
+    current_time: f64,
+}
+
+impl PropertyModeState {
+    pub(crate) const fn constant(current_time: f64) -> Self {
+        Self {
+            mode: Some(PropertyAuthoringMode::Constant),
+            key_at_current_time: false,
+            keyframe_count: 0,
+            current_time,
+        }
+    }
+
+    pub(crate) fn from_property(
+        property: Option<&Property>,
+        current_time: f64,
+        missing_is_constant: bool,
+    ) -> Self {
+        let mode = property
+            .and_then(|property| PropertyAuthoringMode::from_evaluator(&property.evaluator))
+            .or(missing_is_constant.then_some(PropertyAuthoringMode::Constant));
+        let keyframes = property
+            .filter(|property| property.evaluator == "keyframe")
+            .map(Property::keyframes)
+            .unwrap_or_default();
+        Self {
+            mode,
+            key_at_current_time: keyframes
+                .iter()
+                .any(|key| (key.time.into_inner() - current_time).abs() < KEYFRAME_TOLERANCE),
+            keyframe_count: keyframes.len(),
+            current_time,
+        }
+    }
+
+    pub(crate) fn from_keyframe_times(
+        current_time: f64,
+        keyframe_times: impl IntoIterator<Item = f64>,
+    ) -> Self {
+        let mut key_at_current_time = false;
+        let mut keyframe_count = 0;
+        for time in keyframe_times {
+            keyframe_count += 1;
+            key_at_current_time |= (time - current_time).abs() < KEYFRAME_TOLERANCE;
+        }
+        if keyframe_count == 0 {
+            return Self::constant(current_time);
+        }
+        Self {
+            mode: Some(PropertyAuthoringMode::Keyframe),
+            key_at_current_time,
+            keyframe_count,
+            current_time,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn mode(self) -> Option<PropertyAuthoringMode> {
+        self.mode
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn key_at_current_time(self) -> bool {
+        self.key_at_current_time
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ModePresentation {
     mode: Option<PropertyAuthoringMode>,
@@ -56,12 +133,9 @@ struct ModePresentation {
     color: Color32,
 }
 
-fn mode_presentation(property: Option<&Property>, current_time: f64) -> ModePresentation {
-    let mode = property
-        .and_then(|property| PropertyAuthoringMode::from_evaluator(property.evaluator.as_str()));
-    let key_at_current_time = mode == Some(PropertyAuthoringMode::Keyframe)
-        && property
-            .is_some_and(|property| property.has_keyframe_at(current_time, KEYFRAME_TOLERANCE));
+fn mode_presentation(state: PropertyModeState) -> ModePresentation {
+    let mode = state.mode;
+    let key_at_current_time = state.key_at_current_time;
     match (mode, key_at_current_time) {
         (Some(PropertyAuthoringMode::Constant), _) => ModePresentation {
             mode,
@@ -109,14 +183,14 @@ fn mode_presentation(property: Option<&Property>, current_time: f64) -> ModePres
 /// Shared icon-only authoring-mode control used by the Inspector and inline
 /// Node body. Text labels live in its menu and accessibility metadata, never
 /// in the compact property row itself.
-pub(crate) fn property_mode_control(
+pub(crate) fn property_mode_control_for_state(
     ui: &mut Ui,
     qa_id: &str,
-    property: Option<&Property>,
-    current_time: f64,
+    state: PropertyModeState,
+    allow_keyframe: bool,
     allow_expression: bool,
 ) -> (Option<PropertyModeAction>, egui::Response) {
-    let presentation = mode_presentation(property, current_time);
+    let presentation = mode_presentation(state);
     let button = ui
         .push_id(qa_id, |ui| {
             ui.add_sized(
@@ -151,13 +225,13 @@ pub(crate) fn property_mode_control(
                 "library": "egui_phosphor",
                 "semantic": presentation.icon_semantic,
             },
-            "current_time": current_time,
-            "evaluator": property.map(|property| property.evaluator.as_str()),
+            "current_time": state.current_time,
+            "keyframe_count": state.keyframe_count,
+            "evaluator": state.mode.map(PropertyAuthoringMode::qa_key),
+            "allow_keyframe": allow_keyframe,
+            "allow_expression": allow_expression,
         })),
     );
-    #[cfg(test)]
-    capture_test_rect("mode", button.rect);
-
     let mut action = None;
     egui::Popup::menu(&button).show(|ui| {
         ui.set_min_width(170.0);
@@ -167,8 +241,11 @@ pub(crate) fn property_mode_control(
             PropertyAuthoringMode::Expression,
         ]
         .into_iter()
-        .filter(|mode| *mode != PropertyAuthoringMode::Expression || allow_expression)
-        {
+        .filter(|mode| match mode {
+            PropertyAuthoringMode::Constant => true,
+            PropertyAuthoringMode::Keyframe => allow_keyframe,
+            PropertyAuthoringMode::Expression => allow_expression,
+        }) {
             let (icon, semantic) = match mode {
                 PropertyAuthoringMode::Constant => (regular::TIMER, "timer_constant"),
                 PropertyAuthoringMode::Keyframe => (regular::DIAMOND, "diamond_outline_keyframe"),
@@ -191,15 +268,13 @@ pub(crate) fn property_mode_control(
                     "icon": {"library": "egui_phosphor", "semantic": semantic},
                 })),
             );
-            #[cfg(test)]
-            capture_test_rect(&format!("option.{}", mode.label()), option.rect);
             if option.clicked() && presentation.mode != Some(mode) {
                 action = Some(PropertyModeAction::SetMode(mode));
                 ui.close();
             }
         }
 
-        if presentation.mode == Some(PropertyAuthoringMode::Keyframe) {
+        if allow_keyframe && presentation.mode == Some(PropertyAuthoringMode::Keyframe) {
             ui.separator();
             let (icon, label, semantic) = if presentation.key_at_current_time {
                 (
@@ -223,12 +298,10 @@ pub(crate) fn property_mode_control(
                 Some(serde_json::json!({
                     "action": if presentation.key_at_current_time {"remove"} else {"add"},
                     "key_at_current_time": presentation.key_at_current_time,
-                    "current_time": current_time,
+                    "current_time": state.current_time,
                     "icon": {"library": "egui_phosphor", "semantic": semantic},
                 })),
             );
-            #[cfg(test)]
-            capture_test_rect("toggle_keyframe", toggle.rect);
             if toggle.clicked() {
                 action = Some(PropertyModeAction::ToggleKeyframe);
                 ui.close();
@@ -272,6 +345,8 @@ pub(crate) fn property_for_mode(
     })
 }
 
+/// Add or remove the key at `current_time` without changing any other
+/// authored keyframe identity, value, or interpolation.
 pub(crate) fn toggled_keyframe_property(
     property: &Property,
     current_value: PropertyValue,
@@ -293,29 +368,6 @@ pub(crate) fn toggled_keyframe_property(
 }
 
 #[cfg(test)]
-thread_local! {
-    static PROPERTY_MODE_TEST_RECTS: std::cell::RefCell<std::collections::HashMap<String, egui::Rect>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-#[cfg(test)]
-fn capture_test_rect(id: &str, rect: egui::Rect) {
-    PROPERTY_MODE_TEST_RECTS.with(|rects| {
-        rects.borrow_mut().insert(id.to_string(), rect);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_property_mode_test_rects() {
-    PROPERTY_MODE_TEST_RECTS.with(|rects| rects.borrow_mut().clear());
-}
-
-#[cfg(test)]
-pub(crate) fn property_mode_test_rect(id: &str) -> Option<egui::Rect> {
-    PROPERTY_MODE_TEST_RECTS.with(|rects| rects.borrow().get(id).copied())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use ordered_float::OrderedFloat;
@@ -334,61 +386,74 @@ mod tests {
         )]);
         let expression = Property::expression("value + time".to_string(), number(4.0));
 
-        let constant_state = mode_presentation(Some(&constant), 2.0);
+        let constant_state = mode_presentation(PropertyModeState::from_property(
+            Some(&constant),
+            2.0,
+            false,
+        ));
         assert_eq!(constant_state.icon_semantic, "timer_constant");
-        let key_away = mode_presentation(Some(&keyframe), 1.0);
+        let key_away = mode_presentation(PropertyModeState::from_property(
+            Some(&keyframe),
+            1.0,
+            false,
+        ));
         assert_eq!(key_away.icon_semantic, "diamond_outline_keyframe");
         assert!(!key_away.key_at_current_time);
-        let key_here = mode_presentation(Some(&keyframe), 2.0);
+        let key_here = mode_presentation(PropertyModeState::from_property(
+            Some(&keyframe),
+            2.0,
+            false,
+        ));
         assert_eq!(key_here.icon_semantic, "diamond_filled_keyframe");
         assert!(key_here.key_at_current_time);
-        let expression_state = mode_presentation(Some(&expression), 2.0);
+        let expression_state = mode_presentation(PropertyModeState::from_property(
+            Some(&expression),
+            2.0,
+            false,
+        ));
         assert_eq!(expression_state.icon_semantic, "function_expression");
     }
 
     #[test]
-    fn keyframe_toggle_preserves_mode_until_the_final_key_is_removed() -> Result<(), &'static str> {
-        let property = Property::keyframe(vec![
-            Keyframe::new(1.0, number(1.0), EasingFunction::Linear),
-            Keyframe::new(3.0, number(3.0), EasingFunction::Linear),
-        ]);
-        let with_middle = toggled_keyframe_property(&property, number(2.0), 2.0)
-            .ok_or("could not add middle keyframe")?;
-        assert_eq!(with_middle.evaluator, "keyframe");
-        assert!(with_middle.has_keyframe_at(2.0, KEYFRAME_TOLERANCE));
-        let without_middle = toggled_keyframe_property(&with_middle, number(2.0), 2.0)
-            .ok_or("could not remove middle keyframe")?;
-        assert_eq!(without_middle.evaluator, "keyframe");
-        assert!(!without_middle.has_keyframe_at(2.0, KEYFRAME_TOLERANCE));
-        Ok(())
+    fn missing_transform_property_is_presented_as_timer_not_as_a_keyframe() {
+        let state = PropertyModeState::from_property(None, 4.0, true);
+        let presentation = mode_presentation(state);
+        assert_eq!(state.mode(), Some(PropertyAuthoringMode::Constant));
+        assert_eq!(presentation.icon_semantic, "timer_constant");
+        assert!(!state.key_at_current_time());
     }
 
     #[test]
-    fn expression_mode_rejects_structured_values_until_the_runtime_supports_them()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn automation_state_distinguishes_between_keyframe_mode_and_key_at_playhead() {
+        let away = PropertyModeState::from_keyframe_times(2.0, [0.0, 4.0]);
+        assert_eq!(away.mode(), Some(PropertyAuthoringMode::Keyframe));
+        assert!(!away.key_at_current_time());
+        let here = PropertyModeState::from_keyframe_times(4.0, [0.0, 4.0]);
+        assert!(here.key_at_current_time());
+    }
+
+    #[test]
+    fn expression_mode_rejects_structured_values_until_the_runtime_supports_them(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let color = library::model::property::ColorValue::new(
             library::model::property::ColorSpaceRef::srgb(),
             [0.5, 0.25, 1.0, 1.0],
         )?;
-        assert!(
-            property_for_mode(
-                None,
-                PropertyAuthoringMode::Expression,
-                PropertyValue::ColorValue(color),
-                0.0,
-            )
-            .is_err()
-        );
+        assert!(property_for_mode(
+            None,
+            PropertyAuthoringMode::Expression,
+            PropertyValue::ColorValue(color),
+            0.0,
+        )
+        .is_err());
         let path = library::model::path::PathValue::empty(library::model::path::FillRule::NonZero);
-        assert!(
-            property_for_mode(
-                None,
-                PropertyAuthoringMode::Expression,
-                PropertyValue::Path(path),
-                0.0,
-            )
-            .is_err()
-        );
+        assert!(property_for_mode(
+            None,
+            PropertyAuthoringMode::Expression,
+            PropertyValue::Path(path),
+            0.0,
+        )
+        .is_err());
         Ok(())
     }
 }

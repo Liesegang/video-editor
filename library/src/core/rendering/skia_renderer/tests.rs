@@ -1,14 +1,26 @@
 use super::{RenderOutput, Renderer, SkiaRenderer};
 use crate::error::LibraryError;
 use crate::model::BlendMode;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::model::authoring::{InstancePath, ModuleInstanceId, ModuleOutputId, TimelineId};
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::{SkSLColorDomain, StyleConfig};
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::model::frame::particle::{
+    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+};
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::model::property::Vec3;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::rendering::renderer::ParticleRasterRequest;
 use crate::rendering::renderer::{
     Affine2D, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo,
     WorkingSurfaceContract,
 };
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use ordered_float::OrderedFloat;
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
     LINEAR_SRGB_SPACE_ID, LinearWorkingImage, ManagedLinearWorkingImage, SRGB_SPACE_ID,
@@ -526,4 +538,106 @@ fn project_text_and_transformed_shape_rasterizers_keep_the_working_contract() {
         return;
     };
     assert_eq!(text.identity(), &working_identity(config));
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn particle_vec3(x: f64, y: f64, z: f64) -> Vec3 {
+    Vec3 {
+        x: OrderedFloat(x),
+        y: OrderedFloat(y),
+        z: OrderedFloat(z),
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn particle_scene(target_step: u64) -> ParticleSceneFrame {
+    ParticleSceneFrame {
+        invocation: SceneInvocationKey {
+            instance_path: InstancePath::root(TimelineId::from_uuid(Uuid::from_u128(1))),
+            module_instance_id: ModuleInstanceId::from_uuid(Uuid::from_u128(2)),
+            state_slot_id: Uuid::from_u128(3),
+            output_id: ModuleOutputId::from_uuid(Uuid::from_u128(4)),
+        },
+        executable_hash: [17; 32],
+        target_step,
+        logical_width: 256,
+        logical_height: 144,
+        parameters: ParticleSceneParameters {
+            capacity: 1_024,
+            emission_rate: OrderedFloat(120.0),
+            lifetime_seconds: OrderedFloat(4.0),
+            seed: 42,
+            velocity_min: particle_vec3(-40.0, -120.0, -20.0),
+            velocity_max: particle_vec3(40.0, -80.0, 20.0),
+            gravity: particle_vec3(0.0, 100.0, 0.0),
+            drag: OrderedFloat(0.1),
+            size_min: OrderedFloat(4.0),
+            size_max: OrderedFloat(10.0),
+            color: Color {
+                r: 100,
+                g: 190,
+                b: 255,
+                a: 230,
+            },
+        },
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn render_particle_test_scene(
+    renderer: &mut SkiaRenderer,
+    scene: &ParticleSceneFrame,
+) -> Result<Image, String> {
+    let output = renderer
+        .rasterize_particle_layer(ParticleRasterRequest {
+            scene,
+            transform: &Affine2D::IDENTITY,
+        })
+        .map_err(|error| error.to_string())?;
+    match output {
+        RenderOutput::Image(image) => Ok(image),
+        other => Err(format!("unexpected Particle output {other:?}")),
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+fn cpu_renderer_fails_closed_for_gpu_particle_scene() {
+    let mut renderer = SkiaRenderer::new(256, 144, Color::black(), false, None, None).unwrap();
+    let error = render_particle_test_scene(&mut renderer, &particle_scene(1)).unwrap_err();
+    assert!(error.contains("no active GPU context"));
+}
+
+/// This exercises a real OpenGL compute/SSBO/FBO path. Keep it opt-in so CI
+/// without a GPU and interactive sessions sharing the user's GPU stay safe.
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let mut preview = SkiaRenderer::new(256, 144, transparent.clone(), true, None, None).unwrap();
+    let at_checkpoint = particle_scene(240);
+    let first = match render_particle_test_scene(&mut preview, &at_checkpoint) {
+        Ok(image) => image,
+        Err(diagnostic) if diagnostic.contains("GPU Particle unavailable") => {
+            eprintln!("skipping unsupported device: {diagnostic}");
+            return;
+        }
+        Err(error) => panic!("GPU Particle render failed: {error}"),
+    };
+    assert!(first.data.iter().any(|component| *component != 0));
+    render_particle_test_scene(&mut preview, &particle_scene(480)).expect("forward simulation");
+    let replayed =
+        render_particle_test_scene(&mut preview, &at_checkpoint).expect("checkpoint restore");
+    assert_eq!(first.data, replayed.data);
+
+    let mut export = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
+    let independent = render_particle_test_scene(&mut export, &at_checkpoint)
+        .expect("independent export session");
+    assert_eq!(first.data, independent.data);
 }

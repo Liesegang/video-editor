@@ -413,7 +413,7 @@ fn inspector_mutation_immediately_reaches_timeline_preview_save_and_export_snaps
     drop(initial_project);
 
     manager.update_property_or_keyframe(
-        library::PropertyOwner::Node(node_id),
+        library::editor::PropertyOwner::Node(node_id),
         "position",
         0.0,
         PropertyValue::Vec2(Vec2 {

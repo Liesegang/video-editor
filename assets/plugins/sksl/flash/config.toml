@@ -1,6 +1,7 @@
 id = "flash"
 name = "Flash"
 category = "Color"
+color_domain = "project_linear"
 
 [[properties]]
 name = "intensity"

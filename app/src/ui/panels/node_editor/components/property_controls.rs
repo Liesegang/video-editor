@@ -1,69 +1,58 @@
-use eframe::egui::{self, Color32};
+use eframe::egui;
 
-use crate::ui::panels::node_editor::{
-    GraphItem, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, PROPERTY_LABEL_WIDTH,
-};
+use crate::ui::panels::node_editor::{PORT_ROW_HEIGHT, PROPERTY_LABEL_WIDTH};
 
-pub(in crate::ui::panels::node_editor) fn continuous_response_finished(
-    ui: &egui::Ui,
-    response: &egui::Response,
-) -> bool {
-    response.drag_stopped()
-        || response.lost_focus()
-        || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-}
-
-pub(in crate::ui::panels::node_editor) fn continuous_color_edit_button(
-    ui: &mut egui::Ui,
-    color: &mut Color32,
-) -> (egui::Response, bool) {
-    // `color_edit_button_srgba` derives its popup id from the current auto id
-    // with the same salt. Observe that public popup state so closing the
-    // picker becomes the history commit boundary, even on a frame where the
-    // color itself no longer changes.
-    let popup_id = ui.auto_id_with("popup");
-    let was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-    let response = ui.color_edit_button_srgba(color);
-    let closed = was_open && !egui::Popup::is_id_open(ui.ctx(), popup_id);
-    (response, closed)
-}
-
-pub(in crate::ui::panels::node_editor) fn non_selectable_label(
-    ui: &mut egui::Ui,
-    text: impl Into<egui::WidgetText>,
-) -> egui::Response {
-    ui.add(egui::Label::new(text).selectable(false))
-}
-
+/// The bounded, non-selectable label used by the production Node input rows.
 pub(in crate::ui::panels::node_editor) fn property_label(
     ui: &mut egui::Ui,
     text: impl Into<String>,
 ) -> egui::Response {
-    bounded_non_selectable_label(ui, text, PROPERTY_LABEL_WIDTH, egui::Align::LEFT)
-}
-
-pub(in crate::ui::panels::node_editor) fn bounded_non_selectable_label(
-    ui: &mut egui::Ui,
-    text: impl Into<String>,
-    width: f32,
-    align: egui::Align,
-) -> egui::Response {
+    let text = text.into();
+    let width = measured_label_width(ui, &text, PROPERTY_LABEL_WIDTH);
     ui.add_sized(
         [width, PORT_ROW_HEIGHT],
-        egui::Label::new(text.into())
+        egui::Label::new(text)
             .selectable(false)
-            .truncate()
-            .halign(align),
+            .halign(egui::Align::LEFT),
     )
 }
 
-pub(in crate::ui::panels::node_editor) fn port_label_width(_item: Option<GraphItem>) -> f32 {
-    PORT_LABEL_WIDTH
+/// Width required to show a production Node label without truncation.
+/// Header, port and property rows share the same font measurement and padding.
+pub(in crate::ui::panels::node_editor) fn measured_label_width(
+    ui: &egui::Ui,
+    text: &str,
+    minimum: f32,
+) -> f32 {
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(
+            text.to_string(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x;
+    minimum.max(text_width + 8.0)
 }
 
-pub(in crate::ui::panels::node_editor) fn strong_non_selectable_label(
-    ui: &mut egui::Ui,
-    text: impl Into<String>,
-) -> egui::Response {
-    ui.add(egui::Label::new(egui::RichText::new(text.into()).strong()).selectable(false))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_node_labels_expand_beyond_the_old_fixed_width() {
+        let context = egui::Context::default();
+        let mut measured = 0.0;
+        drop(context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                measured = measured_label_width(
+                    ui,
+                    "A very long production property label that must remain readable",
+                    PROPERTY_LABEL_WIDTH,
+                );
+            });
+        }));
+        assert!(measured > PROPERTY_LABEL_WIDTH * 2.0);
+    }
 }

@@ -13,6 +13,7 @@ use pyo3::types::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::runtime_home::resolve_python_home;
 use crate::{
     Diagnostic, DiagnosticKind, EvaluationContext, OutputType, Phase, PythonValue, SourceSpan,
 };
@@ -32,8 +33,9 @@ enum CodeMode {
 #[derive(Clone, Debug)]
 pub struct PythonHostConfig {
     pub cache_capacity: usize,
-    /// CPython prefix containing `lib/python3.13`. If absent, the runtime
-    /// requires `RUVIE_PYTHON_HOME`; it never searches the system PATH.
+    /// Explicit CPython prefix. If absent, a runtime bundled beside the host
+    /// executable is preferred, followed by the development-only
+    /// `RUVIE_PYTHON_HOME` override.
     pub python_home: Option<PathBuf>,
     pub extra_site_package_paths: Vec<PathBuf>,
 }
@@ -111,19 +113,7 @@ pub fn global_host() -> Result<&'static PythonHost, Diagnostic> {
 impl PythonHost {
     /// Explicitly initializes CPython once, then constructs a host cache.
     pub fn new(config: PythonHostConfig) -> Result<Self, Diagnostic> {
-        let python_home = config.python_home.clone().or_else(|| {
-            std::env::var_os("RUVIE_PYTHON_HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        });
-        let python_home = python_home.ok_or_else(|| {
-            Diagnostic::compile(
-                DiagnosticKind::InvalidContext,
-                "RUVIE_PYTHON_HOME is required; run through scripts/with-managed-python.sh",
-                None,
-                None,
-            )
-        })?;
+        let python_home = resolve_python_home(config.python_home.clone())?;
         initialize_cpython(&python_home)?;
         let capacity = NonZeroUsize::new(config.cache_capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
         let helper_globals = Python::attach(build_helper_globals)?;

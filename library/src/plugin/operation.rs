@@ -11,9 +11,70 @@ use crate::model::project::{
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyUiType};
+use crate::model::property::{PropertyValue, Vec2};
 use crate::model::{Node, PluginOperationContent};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
+
+/// Descriptor-validated values supplied to an operation executor.
+///
+/// Node graphs and Timeline authoring both enter plugin execution through this
+/// value-only boundary after their own authoritative property evaluator has
+/// sampled the operation. Plugins therefore never need a compatibility
+/// Project merely to read already evaluated inputs.
+pub struct EvaluatedOperation<'a> {
+    properties: &'a HashMap<String, PropertyValue>,
+    time: f64,
+    fps: f64,
+    resolution: (u64, u64),
+}
+
+impl<'a> EvaluatedOperation<'a> {
+    pub(crate) fn new(
+        properties: &'a HashMap<String, PropertyValue>,
+        time: f64,
+        fps: f64,
+        resolution: (u64, u64),
+    ) -> Self {
+        Self {
+            properties,
+            time,
+            fps,
+            resolution,
+        }
+    }
+
+    pub fn properties(&self) -> &HashMap<String, PropertyValue> {
+        self.properties
+    }
+
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    pub fn fps(&self) -> f64 {
+        self.fps
+    }
+
+    pub fn resolution(&self) -> (u64, u64) {
+        self.resolution
+    }
+
+    pub fn number(&self, key: &str) -> Option<f64> {
+        self.properties.get(key).and_then(PropertyValue::get_as)
+    }
+
+    pub fn string(&self, key: &str) -> Option<String> {
+        self.properties.get(key).and_then(PropertyValue::get_as)
+    }
+
+    pub fn vec2(&self, key: &str) -> Option<[f64; 2]> {
+        self.properties
+            .get(key)
+            .and_then(PropertyValue::get_as::<Vec2>)
+            .map(|value| [value.x.into_inner(), value.y.into_inner()])
+    }
+}
 
 pub const STYLE_CATEGORY: &str = "style";
 pub const STYLE_APPLY_OPERATION: &str = "style.apply.v1";

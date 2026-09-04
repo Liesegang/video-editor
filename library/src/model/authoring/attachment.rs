@@ -30,6 +30,29 @@ pub enum AttachmentOwner {
     Item { item_id: TimelineItemId },
 }
 
+impl AttachmentOwner {
+    pub const fn supports_stage(&self, stage: AttachmentStage) -> bool {
+        match self {
+            Self::Item { .. } => matches!(
+                stage,
+                AttachmentStage::ItemTimeMap
+                    | AttachmentStage::ItemPreTransform
+                    | AttachmentStage::ItemPostTransform
+                    | AttachmentStage::AudioPreFader
+                    | AttachmentStage::AudioPostFader
+            ),
+            Self::Track { .. } => matches!(
+                stage,
+                AttachmentStage::TrackPostComposite | AttachmentStage::TrackPostMix
+            ),
+            Self::Timeline { .. } => matches!(
+                stage,
+                AttachmentStage::TimelinePostComposite | AttachmentStage::TimelinePostMix
+            ),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum AttachmentStage {
@@ -42,6 +65,24 @@ pub enum AttachmentStage {
     AudioPostFader,
     TrackPostMix,
     TimelinePostMix,
+}
+
+impl AttachmentStage {
+    /// Media flowing through an Effect evaluation stage. Time Map is reserved
+    /// for a Behavior contract and therefore has no Effect media type.
+    pub const fn effect_media_type(self) -> Option<PortDataType> {
+        match self {
+            Self::ItemPreTransform
+            | Self::ItemPostTransform
+            | Self::TrackPostComposite
+            | Self::TimelinePostComposite => Some(PortDataType::Image),
+            Self::AudioPreFader
+            | Self::AudioPostFader
+            | Self::TrackPostMix
+            | Self::TimelinePostMix => Some(PortDataType::Audio),
+            Self::ItemTimeMap => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

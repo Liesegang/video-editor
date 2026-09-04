@@ -140,6 +140,13 @@ pub struct GraphFrame<'a, NodeId, PortId, WireId, GroupId, Key> {
     pub ports: &'a [PortDescriptor<'a, NodeId, PortId, GroupId, Key>],
     pub wires: &'a [WireDescriptor<PortId, WireId>],
     pub groups: &'a [GroupDescriptor<'a, GroupId>],
+    /// Host-owned directional type compatibility (`source`, then `target`).
+    ///
+    /// Equality alone is insufficient for hosts with safe widening or dynamic
+    /// ports (for example Integer -> Number or a typed value -> Any). Keeping
+    /// this policy on the borrowed frame lets the editor reject invalid drops
+    /// without interpreting a domain type enum.
+    pub ports_compatible: fn(&Key, &Key) -> bool,
     /// Back-to-front order for Node and Group selection surfaces.
     ///
     /// This is a single cross-kind order so overlapping Nodes and Group

@@ -461,14 +461,16 @@ impl ExportService {
             return format!("{path}_{frame:03}.{extension}");
         }
 
-        let path = Path::new(path);
-        let stem = path
+        // Preserve the separator spelling from the user-authored template.
+        // `Path::with_file_name` rewrites `/` to `\` on Windows, which makes
+        // otherwise identical export plans platform-dependent.
+        let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        let prefix = path.strip_suffix(file_name).unwrap_or_default();
+        let stem = Path::new(file_name)
             .file_stem()
             .map(|value| value.to_string_lossy())
             .unwrap_or_default();
-        path.with_file_name(format!("{stem}_{frame:03}.{extension}"))
-            .to_string_lossy()
-            .into_owned()
+        format!("{prefix}{stem}_{frame:03}.{extension}")
     }
 
     fn video_output_path(path: &str, container: &str) -> Result<String, LibraryError> {

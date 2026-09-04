@@ -1,6 +1,7 @@
 id = "hsv_adjust"
 name = "HSV Adjust"
 category = "Color & Tone"
+color_domain = "project_linear"
 
 [[properties]]
 name = "hue"

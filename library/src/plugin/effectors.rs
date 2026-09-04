@@ -1,9 +1,10 @@
 use crate::core::ensemble::effectors::OpacityMode;
 use crate::core::ensemble::target::EffectorTarget;
 use crate::core::ensemble::types::EffectorConfig;
-use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
-use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::plugin::{
+    EvaluatedOperation, OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory,
+};
 use uuid::Uuid;
 
 fn target_property() -> PropertyDefinition {
@@ -17,15 +18,8 @@ fn target_property() -> PropertyDefinition {
     )
 }
 
-fn evaluate_target(
-    context: &FrameEvaluationContext,
-    properties: &PropertyMap,
-    eval_time: f64,
-) -> EffectorTarget {
-    match context
-        .optional_string(properties, "target", eval_time)
-        .as_deref()
-    {
+fn evaluate_target(context: &EvaluatedOperation<'_>) -> EffectorTarget {
+    match context.string("target").as_deref() {
         Some("Line") => EffectorTarget::Line,
         Some("Char") => EffectorTarget::Char,
         _ => EffectorTarget::Block,
@@ -47,10 +41,8 @@ pub trait EffectorPlugin: Plugin {
     /// properties. No embedded instance model exists.
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<EffectorConfig>;
 
     fn plugin_type(&self) -> PluginCategory {
@@ -149,22 +141,20 @@ impl EffectorPlugin for TransformEffectorPlugin {
 
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let tx = context.evaluate_number(properties, "tx", eval_time, 0.0) as f32;
-        let ty = context.evaluate_number(properties, "ty", eval_time, 0.0) as f32;
-        let r = context.evaluate_number(properties, "rotation", eval_time, 0.0) as f32;
-        let sx = context.evaluate_number(properties, "scale_x", eval_time, 1.0) as f32;
-        let sy = context.evaluate_number(properties, "scale_y", eval_time, 1.0) as f32;
+        let tx = context.number("tx").unwrap_or(0.0) as f32;
+        let ty = context.number("ty").unwrap_or(0.0) as f32;
+        let r = context.number("rotation").unwrap_or(0.0) as f32;
+        let sx = context.number("scale_x").unwrap_or(1.0) as f32;
+        let sy = context.number("scale_y").unwrap_or(1.0) as f32;
 
         Some(EffectorConfig::Transform {
             translate: (tx, ty),
             rotate: r,
             scale: (sx, sy),
-            target: evaluate_target(context, properties, eval_time),
+            target: evaluate_target(context),
         })
     }
 }
@@ -246,23 +236,20 @@ impl EffectorPlugin for StepDelayEffectorPlugin {
 
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let delay = context.evaluate_number(properties, "delay", eval_time, 0.05) as f32;
-        let duration = context.evaluate_number(properties, "duration", eval_time, 0.2) as f32;
-        let from_opacity =
-            context.evaluate_number(properties, "from_opacity", eval_time, 0.0) as f32;
-        let to_opacity = context.evaluate_number(properties, "to_opacity", eval_time, 100.0) as f32;
+        let delay = context.number("delay").unwrap_or(0.05) as f32;
+        let duration = context.number("duration").unwrap_or(0.2) as f32;
+        let from_opacity = context.number("from_opacity").unwrap_or(0.0) as f32;
+        let to_opacity = context.number("to_opacity").unwrap_or(100.0) as f32;
 
         Some(EffectorConfig::StepDelay {
             delay_per_element: delay,
             duration,
             from_opacity,
             to_opacity,
-            target: evaluate_target(context, properties, eval_time),
+            target: evaluate_target(context),
         })
     }
 }
@@ -357,23 +344,21 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
 
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let seed = context.evaluate_number(properties, "seed", eval_time, 0.0) as u64;
-        let amount = context.evaluate_number(properties, "amount", eval_time, 1.0) as f32;
-        let tr_val = context.evaluate_number(properties, "translate_range", eval_time, 50.0) as f32;
-        let rr_val = context.evaluate_number(properties, "rotate_range", eval_time, 15.0) as f32;
-        let sr_val = context.evaluate_number(properties, "scale_range", eval_time, 0.5) as f32;
+        let seed = context.number("seed").unwrap_or(0.0) as u64;
+        let amount = context.number("amount").unwrap_or(1.0) as f32;
+        let tr_val = context.number("translate_range").unwrap_or(50.0) as f32;
+        let rr_val = context.number("rotate_range").unwrap_or(15.0) as f32;
+        let sr_val = context.number("scale_range").unwrap_or(0.5) as f32;
 
         Some(EffectorConfig::Randomize {
             translate_range: (tr_val * amount, tr_val * amount),
             rotate_range: rr_val * amount,
             scale_range: (sr_val * amount, sr_val * amount),
             seed,
-            target: evaluate_target(context, properties, eval_time),
+            target: evaluate_target(context),
         })
     }
 }
@@ -424,16 +409,11 @@ impl EffectorPlugin for OpacityEffectorPlugin {
 
     fn evaluate_source(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let target_opacity =
-            context.evaluate_number(properties, "opacity", eval_time, 100.0) as f32;
-        let mode_str = context
-            .require_string(properties, "mode", eval_time, "Set")
-            .unwrap_or("Set".to_string());
+        let target_opacity = context.number("opacity").unwrap_or(100.0) as f32;
+        let mode_str = context.string("mode").unwrap_or_else(|| "Set".to_string());
 
         let mode = match mode_str.as_str() {
             "Add" => OpacityMode::Add,
@@ -444,7 +424,63 @@ impl EffectorPlugin for OpacityEffectorPlugin {
         Some(EffectorConfig::Opacity {
             target_opacity,
             mode,
-            target: evaluate_target(context, properties, eval_time),
+            target: evaluate_target(context),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn transform_effector_keeps_translate_scale_and_target_independent() {
+        let values = HashMap::from([
+            ("tx".to_string(), PropertyValue::from(13.0)),
+            ("ty".to_string(), PropertyValue::from(-29.0)),
+            ("rotation".to_string(), PropertyValue::from(17.0)),
+            ("scale_x".to_string(), PropertyValue::from(0.5)),
+            ("scale_y".to_string(), PropertyValue::from(1.75)),
+            (
+                "target".to_string(),
+                PropertyValue::String("Line".to_string()),
+            ),
+        ]);
+        let context = EvaluatedOperation::new(&values, 0.0, 30.0, (1920, 1080));
+        let config = TransformEffectorPlugin
+            .evaluate_source(&context, Uuid::new_v4())
+            .expect("Transform config");
+
+        let EffectorConfig::Transform {
+            translate,
+            rotate,
+            scale,
+            target,
+        } = config
+        else {
+            panic!("wrong Effector config");
+        };
+        assert_eq!(translate, (13.0, -29.0));
+        assert_eq!(rotate, 17.0);
+        assert_eq!(scale, (0.5, 1.75));
+        assert_eq!(target, EffectorTarget::Line);
+    }
+
+    #[test]
+    fn target_property_selects_each_ensemble_scope() {
+        for (authored, expected) in [
+            ("Block", EffectorTarget::Block),
+            ("Line", EffectorTarget::Line),
+            ("Char", EffectorTarget::Char),
+        ] {
+            let values = HashMap::from([(
+                "target".to_string(),
+                PropertyValue::String(authored.to_string()),
+            )]);
+            let context = EvaluatedOperation::new(&values, 0.0, 30.0, (1920, 1080));
+            assert_eq!(evaluate_target(&context), expected);
+        }
     }
 }

@@ -1,6 +1,7 @@
 id = "split_screen"
 name = "Split Screen"
 category = "Geometry"
+color_domain = "project_linear"
 
 [[properties]]
 name = "count"

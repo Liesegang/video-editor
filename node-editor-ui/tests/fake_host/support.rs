@@ -14,6 +14,12 @@ pub(super) type State = InteractionState<u8, u8, u8, u8>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DataKind {
     Image,
+    Number,
+    Integer,
+}
+
+fn ports_compatible(source: &DataKind, target: &DataKind) -> bool {
+    source == target || (*source == DataKind::Integer && *target == DataKind::Number)
 }
 
 pub(super) struct FakeGraph {
@@ -120,6 +126,7 @@ impl FakeGraph {
             ports: &self.ports,
             wires: &self.wires,
             groups: &self.groups,
+            ports_compatible,
             selection_order: &self.selection_order,
             selection: AuthoritativeSelection {
                 items: selected,

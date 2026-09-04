@@ -16,10 +16,10 @@ each branch still has explicit integration blockers below.
   - `38a1579 fix(node-editor): clear wire selection`
   - `117d384 refactor(node-editor): isolate canvas policy`
   - `aa3a402 test(quality): add Rust file size policy checker`
-- The focused wire test selects a real Bezier hit point, clicks a fresh blank
-  canvas coordinate, and requires `selected_connection_id == null` without
-  changing Project/history/entity selection:
-  `python3 scripts/qa-wire-selection-e2e.py --spawn --timeout 45`.
+- The legacy Project-graph wire suite described by this historical handoff was
+  retired with that editing model. Current native UI coverage is listed in
+  `app/src/qa/README.md` and runs through
+  `python3 scripts/qa-runner.py --mode full`.
 
 All branches in the next table are pushed, have an upstream, and were clean at
 handoff time.
@@ -298,7 +298,7 @@ conflicting author inputs. Frame is derived from time and FPS.
   ordinary Fmod/math Nodes, and implicit read-only FPS context.
 - Preserve dynamic plugin ABI behavior for Transform, Opacity Effector, Style,
   Decorator, Effect, and Loader operations.
-- Reproduce before changing already-touched bugs: keyframe/Graph Editor edits,
+- Reproduce before changing already-touched bugs: keyframe/Curve Editor edits,
   Timeline Clip move/trim/reorder, Track reorder, Node/wire delete, vector input
   editing, menu scroll/height, header drag, container resize/reparent, and
   real-time Preview invalidation.
@@ -330,7 +330,7 @@ separate later frame. Keep evidence under `target/`; do not treat a stale
 evidence hash as proof for a rebased HEAD.
 
 Required E2E coverage includes Node to Timeline/Preview reflection, Timeline to
-Node reflection, Clip/Track reorder, Graph Editor keyframes, Inspector edits,
+Node reflection, Clip/Track reorder, Curve Editor keyframes, Inspector edits,
 Text/Shape/ensemble rendering, media fixtures/checksums, wire lifecycle,
 containers/reparent, menus, transform gizmo, and Undo/Redo. A final interaction
 must be a real on-screen coordinate event.

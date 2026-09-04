@@ -73,7 +73,8 @@ pub fn native_node_descriptor_for_node(
             )
         }),
         NodeContent::NativeOperation(operation) => native_node_descriptor(&operation.catalog_id),
-        NodeContent::Media(_)
+        NodeContent::ModuleOutput(_)
+        | NodeContent::Media(_)
         | NodeContent::CompositionInstance(_)
         | NodeContent::PluginOperation(_) => None,
     }

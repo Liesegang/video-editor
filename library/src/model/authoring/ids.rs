@@ -46,7 +46,9 @@ define_id!(ModuleInstanceId);
 define_id!(ModuleConnectionId);
 define_id!(PublishedParameterId);
 define_id!(PublishedMediaInputId);
-define_id!(PublishedMediaOutputId);
+// Stable identity of a dedicated Module graph output terminal. This is not a
+// Published Interface identity: render outputs are graph boundaries.
+define_id!(ModuleOutputId);
 define_id!(PublishedSignalId);
 define_id!(PublishedActionId);
 define_id!(AttachmentId);

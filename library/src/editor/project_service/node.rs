@@ -8,7 +8,7 @@ use crate::model::project::{
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use crate::model::property::{Property, PropertyMap, PropertyValue};
-use crate::model::{GeneratorContent, MediaContent, Node};
+use crate::model::{GeneratorContent, Node};
 use crate::plugin::entity_converter::measure_text_size;
 use uuid::Uuid;
 
@@ -165,66 +165,15 @@ impl ProjectManager {
         media_width: u64,
         media_height: u64,
     ) -> Result<Node, LibraryError> {
-        let (converter_kind, converter_required, content, file_path) = match request {
-            MediaNodeRequest::Audio {
-                asset_id,
-                file_path,
-                audio_stream_index,
-            } => (
-                "audio",
-                false,
-                MediaContent {
-                    asset_id,
-                    stream_index: None,
-                    audio_stream_index,
-                },
-                file_path,
-            ),
-            MediaNodeRequest::Video {
-                asset_id,
-                file_path,
-                stream_index,
-                audio_stream_index,
-            } => (
-                "video",
-                true,
-                MediaContent {
-                    asset_id,
-                    stream_index,
-                    audio_stream_index,
-                },
-                file_path,
-            ),
-            MediaNodeRequest::Image {
-                asset_id,
-                file_path,
-            } => (
-                "image",
-                true,
-                MediaContent {
-                    asset_id,
-                    stream_index: None,
-                    audio_stream_index: None,
-                },
-                file_path,
-            ),
-        };
-        let definitions = match self.plugin_manager.get_entity_converter(converter_kind) {
-            Some(converter) => converter.get_property_definitions(
-                canvas_width,
-                canvas_height,
-                media_width,
-                media_height,
-            ),
-            None if converter_required => {
-                return Err(LibraryError::Plugin(format!(
-                    "{converter_kind} converter plugin not found"
-                )));
-            }
-            None => Vec::new(),
-        };
-        Node::from_media_converter(name, content, &definitions, file_path)
-            .map_err(LibraryError::Validation)
+        crate::editor::AuthoringNodeFactory::create_media(
+            self.plugin_manager.as_ref(),
+            name,
+            request,
+            canvas_width,
+            canvas_height,
+            media_width,
+            media_height,
+        )
     }
 
     fn create_positioned_transform_node(

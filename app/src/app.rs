@@ -1,24 +1,27 @@
-//! Timeline-first application shell.
+//! Application shell for the authoritative Timeline editing model.
 //!
 //! The GUI owns exactly one `TimelineEditorService`. Every panel reads the
 //! same immutable snapshot and sends commands back to that service; the old
 //! graph-backed Project is intentionally absent from this entry point.
 
+mod audio_playback;
+pub(crate) mod guarded_action;
+mod startup;
+mod timeline_runtime;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
 use egui_phosphor::regular as icons;
-use library::editor::{TimelineEditorService, TIMELINE_FIRST_E2E_FIXTURE};
-use library::model::authoring::{AuthoringProject, ProjectRevision, TimelineId};
+use library::editor::TimelineEditorService;
+use library::model::authoring::{AuthoringProject, ProjectRevision};
 use library::plugin::PluginManager;
 use library::RenderRequestId;
 use library::{LibraryError, RenderServer};
 use log::warn;
-#[cfg(target_os = "windows")]
-use raw_window_handle::HasWindowHandle;
 
 use crate::command::{CommandContext, CommandId, CommandRegistry, CommandScope};
 use crate::config;
@@ -27,17 +30,25 @@ use crate::state::authoring::{AuthoringSelection, AuthoringUiState};
 use crate::ui::authoring_tab_viewer::AuthoringTabViewer;
 use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::settings_dialog::{SettingsDialog, SettingsResult};
-use crate::ui::dialogs::unsaved_changes::{GuardedProjectAction, UnsavedChoice};
-use crate::ui::timeline_first::AuthoringPreviewRuntime;
+use crate::ui::media_preview::AuthoringMediaPreviewService;
+use crate::ui::panels::preview::AuthoringPreviewRuntime;
 
-const QA_FIXTURE_ENV: &str = "RUVIE_QA_FIXTURE";
+use self::audio_playback::{PlaybackClock, TimelineAudioRuntime};
+use self::guarded_action::{GuardedActionState, GuardedProjectAction, UnsavedChoice};
+use self::startup::{qa_project_path, startup_service};
+use self::timeline_runtime::{
+    finish_playback_at_timeline_end, initialize_timeline_view, timeline_end_frame,
+};
 
 pub struct RuViEApp {
     pub service: TimelineEditorService,
     pub state: AuthoringUiState,
     pub dock_state: DockState<Tab>,
     plugins: Arc<PluginManager>,
+    cache_manager: Arc<library::cache::CacheManager>,
     render_server: RenderServer,
+    audio: TimelineAudioRuntime,
+    media_previews: AuthoringMediaPreviewService,
     preview_runtime: AuthoringPreviewRuntime,
     export_runtime: AuthoringExportRuntime,
     command_registry: CommandRegistry,
@@ -45,9 +56,7 @@ pub struct RuViEApp {
     settings_dialog: SettingsDialog,
     app_config: config::AppConfig,
     saved_revision: Option<ProjectRevision>,
-    deferred_guarded_action: Option<GuardedProjectAction>,
-    unsaved_action: Option<GuardedProjectAction>,
-    close_without_prompt: bool,
+    guarded_action: GuardedActionState,
     qa_runtime: Option<crate::qa::QaRuntime>,
 }
 
@@ -91,8 +100,13 @@ impl RuViEApp {
         initialize_timeline_view(&project, &mut state);
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
-        let render_server = RenderServer::new(Arc::clone(&plugins), cache_manager);
-        setup_gpu_sharing(&render_server, cc);
+        let audio = TimelineAudioRuntime::new(Arc::clone(&cache_manager));
+        let media_previews =
+            AuthoringMediaPreviewService::new(Arc::clone(&plugins), Arc::clone(&cache_manager));
+        // Authoring Preview consumes owned, color-managed Images. Do not graft
+        // the eframe context onto this worker: a future low-latency presenter
+        // needs an explicit owned shared-texture/fence contract instead.
+        let render_server = RenderServer::new(Arc::clone(&plugins), Arc::clone(&cache_manager));
 
         let qa_runtime = match crate::qa::QaRuntime::from_env(&cc.egui_ctx) {
             Ok(runtime) => runtime,
@@ -115,7 +129,10 @@ impl RuViEApp {
             state,
             dock_state: create_workspace(WorkspacePreset::Edit),
             plugins,
+            cache_manager,
             render_server,
+            audio,
+            media_previews,
             preview_runtime: AuthoringPreviewRuntime::default(),
             export_runtime: AuthoringExportRuntime {
                 next_request: 1_u64 << 62,
@@ -126,9 +143,7 @@ impl RuViEApp {
             settings_dialog,
             app_config,
             saved_revision,
-            deferred_guarded_action: None,
-            unsaved_action: None,
-            close_without_prompt: false,
+            guarded_action: GuardedActionState::default(),
             qa_runtime,
         })
     }
@@ -230,7 +245,7 @@ impl RuViEApp {
     }
 
     fn defer_guarded_action(&mut self, context: &egui::Context, action: GuardedProjectAction) {
-        if self.deferred_guarded_action.is_some() || self.unsaved_action.is_some() {
+        if !self.guarded_action.request(action) {
             return;
         }
         context.memory_mut(|memory| {
@@ -238,7 +253,6 @@ impl RuViEApp {
                 memory.surrender_focus(id);
             }
         });
-        self.deferred_guarded_action = Some(action);
         context.request_repaint();
     }
 
@@ -259,7 +273,6 @@ impl RuViEApp {
             GuardedProjectAction::NewProject => self.new_project(),
             GuardedProjectAction::OpenProject => self.open_project(),
             GuardedProjectAction::Quit => {
-                self.close_without_prompt = true;
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
                 Ok(())
             }
@@ -267,15 +280,20 @@ impl RuViEApp {
     }
 
     fn process_guarded_action(&mut self, context: &egui::Context) {
-        if let Some(action) = self.deferred_guarded_action.take() {
-            if self.has_unsaved_changes() {
-                self.unsaved_action = Some(action);
-            } else if let Err(error) = self.execute_guarded_action(context, action) {
+        if let Some(action) = self.guarded_action.take_ready_action() {
+            if let Err(error) = self.execute_guarded_action(context, action) {
                 self.state.error = Some(error.to_string());
             }
+            return;
         }
 
-        let Some(action) = self.unsaved_action else {
+        let has_unsaved_changes = self.has_unsaved_changes();
+        if self.guarded_action.resolve_request(has_unsaved_changes) {
+            context.request_repaint();
+            return;
+        }
+
+        let Some(action) = self.guarded_action.prompt_action() else {
             return;
         };
         let project_name = self.service.snapshot().map_or_else(
@@ -287,24 +305,19 @@ impl RuViEApp {
         else {
             return;
         };
-        match choice {
-            UnsavedChoice::Save => match self.save_project() {
-                Ok(()) if !self.has_unsaved_changes() => {
-                    self.unsaved_action = None;
-                    if let Err(error) = self.execute_guarded_action(context, action) {
-                        self.state.error = Some(error.to_string());
+        if self.guarded_action.choose(choice) {
+            match self.save_project() {
+                Ok(()) => {
+                    let saved = !self.has_unsaved_changes();
+                    self.guarded_action.finish_save(saved);
+                    if saved {
+                        context.request_repaint();
                     }
                 }
-                Ok(()) => {}
                 Err(error) => self.state.error = Some(error.to_string()),
-            },
-            UnsavedChoice::Discard => {
-                self.unsaved_action = None;
-                if let Err(error) = self.execute_guarded_action(context, action) {
-                    self.state.error = Some(error.to_string());
-                }
             }
-            UnsavedChoice::Cancel => self.unsaved_action = None,
+        } else if choice == UnsavedChoice::Discard {
+            context.request_repaint();
         }
     }
 
@@ -314,11 +327,17 @@ impl RuViEApp {
     }
 
     fn open_project(&mut self) -> Result<(), LibraryError> {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("RuViE Project", &["ruvie", "json"])
-            .pick_file()
-        else {
-            return Ok(());
+        let path = match qa_project_path()? {
+            Some(path) => path,
+            None => {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("RuViE Project", &["ruvie", "json"])
+                    .pick_file()
+                else {
+                    return Ok(());
+                };
+                path
+            }
         };
         let service = TimelineEditorService::open(&path)?;
         self.install_service(service, Some(path))
@@ -333,6 +352,7 @@ impl RuViEApp {
         self.service = service;
         self.state = AuthoringUiState::new(project.root_timeline_id);
         initialize_timeline_view(&project, &mut self.state);
+        self.audio.stop().map_err(LibraryError::Runtime)?;
         self.preview_runtime = AuthoringPreviewRuntime::default();
         self.export_runtime = AuthoringExportRuntime {
             next_request: 1_u64 << 62,
@@ -479,29 +499,51 @@ impl RuViEApp {
         Ok(())
     }
 
-    fn update_playback(&mut self, project: &AuthoringProject) {
-        if !self.state.timeline.is_playing {
-            return;
-        }
+    fn update_playback(&mut self, project: Arc<AuthoringProject>, revision: ProjectRevision) {
         let Some(timeline) = project.timelines.get(&self.state.active_timeline_id) else {
             self.state.timeline.set_playing(false);
             return;
         };
+        let fps = timeline.fps.to_f64();
+        let transport_time = self.state.timeline.current_frame.max(0) as f64 / fps;
+        let clock = self.audio.synchronize(
+            Arc::clone(&project),
+            revision,
+            self.state.active_timeline_id,
+            transport_time,
+            self.state.timeline.is_playing,
+        );
+        match clock {
+            Ok(PlaybackClock::Audio(time)) => {
+                self.state.timeline.current_frame =
+                    (time * fps).floor().clamp(0.0, i64::MAX as f64) as i64;
+                finish_playback_at_timeline_end(&mut self.state.timeline, timeline);
+                return;
+            }
+            Ok(PlaybackClock::AwaitingAudio) => return,
+            Ok(PlaybackClock::Wall) => {}
+            Err(error) => {
+                self.state.timeline.set_playing(false);
+                self.state.error = Some(format!("Audio playback failed: {error}"));
+                return;
+            }
+        }
+        if !self.state.timeline.is_playing {
+            return;
+        }
         let Some((started, anchor_frame)) = self.state.timeline.playback_anchor else {
             self.state.timeline.playback_anchor =
                 Some((std::time::Instant::now(), self.state.timeline.current_frame));
             return;
         };
-        let elapsed_frames = (started.elapsed().as_secs_f64() * timeline.fps.to_f64()).floor();
+        let elapsed_frames = (started.elapsed().as_secs_f64() * fps).floor();
         let elapsed_frames = if elapsed_frames.is_finite() && elapsed_frames >= 0.0 {
             elapsed_frames.min(i64::MAX as f64) as i64
         } else {
             0
         };
         let frame = anchor_frame.saturating_add(elapsed_frames);
-        let end_frame = (timeline.duration.to_seconds_f64() * timeline.fps.to_f64())
-            .ceil()
-            .clamp(0.0, i64::MAX as f64) as i64;
+        let end_frame = timeline_end_frame(timeline);
         if frame >= end_frame {
             self.state.timeline.seek_frame(end_frame.saturating_sub(1));
             self.state.timeline.set_playing(false);
@@ -569,18 +611,22 @@ impl eframe::App for RuViEApp {
             runtime.issue_capture_for_frame(context);
         }
 
-        if context.input(|input| input.viewport().close_requested()) && !self.close_without_prompt {
+        if context.input(|input| input.viewport().close_requested())
+            && !self.guarded_action.allows_window_close()
+        {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.defer_guarded_action(context, GuardedProjectAction::Quit);
         }
 
-        if self.unsaved_action.is_none() {
+        if !self.guarded_action.blocks_commands() {
             if let Some(action) = self.keyboard_action(context) {
                 self.handle_action(context, action);
             }
         }
-        if let Some(command) = self.command_palette.show(context, &self.command_registry) {
-            self.handle_action(context, AppAction::Command(command));
+        if !self.guarded_action.blocks_commands() {
+            if let Some(command) = self.command_palette.show(context, &self.command_registry) {
+                self.handle_action(context, AppAction::Command(command));
+            }
         }
         self.show_settings(context);
         self.poll_export(context);
@@ -598,14 +644,16 @@ impl eframe::App for RuViEApp {
                 )
             })
             .inner;
-        if let Some(action) = menu_action {
-            self.handle_action(context, action);
+        if !self.guarded_action.blocks_commands() {
+            if let Some(action) = menu_action {
+                self.handle_action(context, action);
+            }
         }
 
-        match self.service.snapshot() {
-            Ok(project) => {
+        match self.service.snapshot_with_revision() {
+            Ok((project, revision)) => {
                 self.state.reconcile(&project);
-                self.update_playback(&project);
+                self.update_playback(Arc::clone(&project), revision);
                 egui::TopBottomPanel::bottom("status_bar")
                     .exact_height(24.0)
                     .show(context, |ui| status_bar(ui, &project, self));
@@ -614,7 +662,9 @@ impl eframe::App for RuViEApp {
                         &project,
                         &mut self.state,
                         &self.service,
-                        self.plugins.as_ref(),
+                        &self.plugins,
+                        &self.cache_manager,
+                        &mut self.media_previews,
                         &self.render_server,
                         &mut self.preview_runtime,
                     );
@@ -768,6 +818,39 @@ fn status_bar(ui: &mut egui::Ui, project: &AuthoringProject, app: &RuViEApp) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(format!("Frame {}", app.state.timeline.current_frame));
+            let status = app.audio.status();
+            let (icon, tooltip) = if let Some(error) = app.audio.startup_error() {
+                (
+                    icons::SPEAKER_SLASH,
+                    format!("Audio output unavailable: {error}"),
+                )
+            } else if status.is_some_and(|status| status.output_active) {
+                (icons::SPEAKER_HIGH, "Timeline audio is playing".to_string())
+            } else {
+                (
+                    icons::SPEAKER_LOW,
+                    "Timeline audio output is ready".to_string(),
+                )
+            };
+            let audio = ui.label(icon).on_hover_text(tooltip);
+            crate::qa::register_component_with_metadata(
+                "transport.audio_output",
+                "audio_output_status",
+                audio.rect,
+                app.audio.startup_error().is_none(),
+                Some(serde_json::json!({
+                    "available": app.audio.startup_error().is_none(),
+                    "error": app.audio.startup_error(),
+                    "has_audio_routes": status.map(|status| status.has_audio_routes),
+                    "output_active": status.map(|status| status.output_active),
+                    "current_time": status.map(|status| status.current_time),
+                    "queued_frames": status.map(|status| status.queued_frames),
+                    "underrun_callbacks": status.map(|status| status.underrun_callbacks),
+                    "rendered_non_silent_frames": status.map(|status| status.rendered_non_silent_frames),
+                    "sample_rate": status.map(|status| status.sample_rate),
+                    "channels": status.map(|status| status.channels),
+                })),
+            );
         });
     });
 }
@@ -780,9 +863,9 @@ fn create_workspace(preset: WorkspacePreset) -> DockState<Tab> {
         WorkspacePreset::Edit | WorkspacePreset::Motion => vec![Tab::Preview],
     };
     let bottom_tabs = match preset {
-        WorkspacePreset::Motion => vec![Tab::Timeline, Tab::GraphEditor],
-        WorkspacePreset::Logic => vec![Tab::Timeline, Tab::GraphEditor],
-        WorkspacePreset::Diagnostics => vec![Tab::Timeline, Tab::GraphEditor],
+        WorkspacePreset::Motion => vec![Tab::Timeline, Tab::CurveEditor],
+        WorkspacePreset::Logic => vec![Tab::Timeline, Tab::CurveEditor],
+        WorkspacePreset::Diagnostics => vec![Tab::Timeline, Tab::CurveEditor],
         WorkspacePreset::Edit | WorkspacePreset::Data => vec![Tab::Timeline],
     };
     let mut dock = DockState::new(center_tabs);
@@ -820,7 +903,7 @@ fn focus_or_open_tab(dock: &mut DockState<Tab>, tab: Tab) {
 
 fn panel_name(tab: Tab) -> &'static str {
     match tab {
-        Tab::GraphEditor => "Curve Editor",
+        Tab::CurveEditor => "Curve Editor",
         _ => tab.name(),
     }
 }
@@ -832,53 +915,6 @@ const fn workspace_name(preset: WorkspacePreset) -> &'static str {
         WorkspacePreset::Data => "Data",
         WorkspacePreset::Logic => "Logic",
         WorkspacePreset::Diagnostics => "Diagnostics",
-    }
-}
-
-fn startup_service(
-    plugins: &PluginManager,
-) -> Result<(TimelineEditorService, Option<TimelineId>), LibraryError> {
-    match std::env::var(QA_FIXTURE_ENV) {
-        Ok(name) if name == TIMELINE_FIRST_E2E_FIXTURE => {
-            let media = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("test_data")
-                .join("e2e_media");
-            let fixture = library::editor::build_timeline_first_e2e_fixture(&media, plugins)?;
-            Ok((fixture.service, Some(fixture.info.timeline_id)))
-        }
-        Ok(name) => Err(LibraryError::Validation(format!(
-            "Unknown Timeline-first QA fixture '{name}'"
-        ))),
-        Err(std::env::VarError::NotUnicode(_)) => Err(LibraryError::Validation(format!(
-            "{QA_FIXTURE_ENV} is not valid Unicode"
-        ))),
-        Err(std::env::VarError::NotPresent) => {
-            TimelineEditorService::create_default("Untitled Project").map(|service| (service, None))
-        }
-    }
-}
-
-fn initialize_timeline_view(project: &AuthoringProject, state: &mut AuthoringUiState) {
-    if let Some(timeline) = project.timelines.get(&state.active_timeline_id) {
-        state
-            .timeline
-            .expanded_tracks
-            .extend(timeline.track_order.iter().copied());
-    }
-    if let Some(item_id) = project
-        .items
-        .values()
-        .filter(|item| {
-            project
-                .tracks
-                .get(&item.track_id)
-                .is_some_and(|track| track.timeline_id == state.active_timeline_id)
-        })
-        .min_by_key(|item| (item.interval.start, item.layer, item.id))
-        .map(|item| item.id)
-    {
-        state.selection.replace(AuthoringSelection::Item(item_id));
     }
 }
 
@@ -919,11 +955,12 @@ fn setup_fonts(context: &egui::Context) {
 
 fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<PluginManager> {
     let plugins = Arc::new(PluginManager::default());
-    let report = plugins.rescan_runtime_plugins(&app_config.plugins.paths);
+    let plugin_paths = config::resolved_plugin_paths(&app_config.plugins.paths);
+    let report = plugins.rescan_runtime_plugins(&plugin_paths);
     for (path, error) in report.failures {
         log::error!("Failed to load runtime plugin {}: {error}", path.display());
     }
-    for path in &app_config.plugins.paths {
+    for path in &plugin_paths {
         if let Err(error) = plugins.load_sksl_plugins_from_directory(path) {
             log::error!("Failed to load SkSL plugins from {path}: {error}");
         }
@@ -932,24 +969,6 @@ fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<PluginManager> {
         plugins.set_loader_priority(app_config.plugins.loader_priority.clone());
     }
     plugins
-}
-
-fn setup_gpu_sharing(render_server: &RenderServer, _cc: &eframe::CreationContext<'_>) {
-    let Some(handle) = library::rendering::skia_utils::get_current_context_handle() else {
-        log::warn!("Preview GPU sharing is unavailable; renderer will use CPU readback");
-        return;
-    };
-    #[cfg(target_os = "windows")]
-    let hwnd = _cc
-        .window_handle()
-        .ok()
-        .and_then(|window_handle| match window_handle.as_raw() {
-            raw_window_handle::RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
-            _ => None,
-        });
-    #[cfg(not(target_os = "windows"))]
-    let hwnd: Option<isize> = None;
-    render_server.set_sharing_context(handle, hwnd);
 }
 
 #[cfg(test)]

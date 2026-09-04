@@ -66,9 +66,11 @@ pub struct AudioEngine {
     _stream: cpal::Stream, // Keep stream alive
     producer: Arc<Mutex<rtrb::Producer<QueuedSample>>>,
     playback_clock: Arc<AtomicU64>,
+    output_signal_clock: Arc<AtomicU64>,
     playback_active: Arc<AtomicBool>,
     underrun_callbacks: Arc<AtomicU64>,
     flush_state: Arc<AudioFlushState>,
+    buffer_capacity_samples: usize,
     sample_rate: u32,
     channels: u16,
 }
@@ -77,12 +79,14 @@ pub struct AudioEngine {
 pub(crate) struct AudioFlushHandle {
     state: Arc<AudioFlushState>,
     playback_clock: Arc<AtomicU64>,
+    output_signal_clock: Arc<AtomicU64>,
 }
 
 impl AudioFlushHandle {
     pub(crate) fn request(&self) {
         let generation = self.state.request();
         rebase_clock(&self.playback_clock, generation, None);
+        rebase_clock(&self.output_signal_clock, generation, Some(0));
     }
 
     #[cfg(test)]
@@ -90,6 +94,7 @@ impl AudioFlushHandle {
         Self {
             state: Arc::new(AudioFlushState::default()),
             playback_clock: Arc::new(AtomicU64::new(0)),
+            output_signal_clock: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -135,6 +140,7 @@ impl AudioFlushState {
 struct CallbackWriteResult {
     consumed_frames: u64,
     discarded_stale_frames: u64,
+    non_silent_frames: u64,
     starved: bool,
 }
 
@@ -268,6 +274,9 @@ impl OutputCallbackState {
                 self.fade_out_remaining = self.fade_out_remaining.saturating_sub(1);
                 result.starved = true;
             }
+            if frame.iter().any(|sample| sample.abs() > 1.0e-6) {
+                result.non_silent_frames = result.non_silent_frames.saturating_add(1);
+            }
         }
         frames.into_remainder().fill(0.0);
         result
@@ -324,6 +333,8 @@ impl AudioEngine {
 
         let playback_clock = Arc::new(AtomicU64::new(packed_clock(0, 0)));
         let callback_clock = Arc::clone(&playback_clock);
+        let output_signal_clock = Arc::new(AtomicU64::new(packed_clock(0, 0)));
+        let callback_output_signal_clock = Arc::clone(&output_signal_clock);
         let playback_active = Arc::new(AtomicBool::new(false));
         let callback_playback_active = Arc::clone(&playback_active);
         let underrun_callbacks = Arc::new(AtomicU64::new(0));
@@ -348,6 +359,11 @@ impl AudioEngine {
                     callback_flush_state.acknowledge(global_gen);
                 }
                 let result = output_state.write(data, &mut consumer, local_generation);
+                advance_clock(
+                    &callback_output_signal_clock,
+                    local_generation,
+                    result.non_silent_frames,
+                );
                 record_callback_result(
                     callback_playback_active.load(Ordering::Acquire),
                     &callback_clock,
@@ -366,9 +382,11 @@ impl AudioEngine {
             _stream: stream,
             producer: Arc::new(Mutex::new(producer)),
             playback_clock,
+            output_signal_clock,
             playback_active,
             underrun_callbacks,
             flush_state,
+            buffer_capacity_samples: buffer_size,
             sample_rate,
             channels,
         })
@@ -433,6 +451,26 @@ impl AudioEngine {
         self.underrun_callbacks.load(Ordering::Acquire)
     }
 
+    /// Number of device frames in the current output generation that contained
+    /// a real non-silent sample. Seeks/flushes reset this independently from
+    /// the playback clock so stale audio cannot satisfy current-session QA.
+    pub fn non_silent_output_frames(&self) -> u64 {
+        let state = self.output_signal_clock.load(Ordering::Acquire);
+        let generation = self.flush_state.requested() as u64 & CLOCK_GENERATION_MASK;
+        if clock_generation(state) == generation {
+            clock_sample(state)
+        } else {
+            0
+        }
+    }
+
+    pub fn queued_frames(&self) -> u64 {
+        let queued_samples = self
+            .buffer_capacity_samples
+            .saturating_sub(self.available_slots());
+        u64::try_from(queued_samples / usize::from(self.channels).max(1)).unwrap_or(u64::MAX)
+    }
+
     // Playback control
     pub fn play(&self) -> Result<(), anyhow::Error> {
         // Stream remains active for scrubbing
@@ -454,11 +492,13 @@ impl AudioEngine {
         // prevents a callback from adding old-generation frames after a seek.
         let generation = self.flush_state.request();
         rebase_clock(&self.playback_clock, generation, Some(samples));
+        rebase_clock(&self.output_signal_clock, generation, Some(0));
     }
 
     pub fn flush(&self) {
         let generation = self.flush_state.request();
         rebase_clock(&self.playback_clock, generation, None);
+        rebase_clock(&self.output_signal_clock, generation, Some(0));
     }
 
     pub fn flush_pending(&self) -> bool {
@@ -469,6 +509,7 @@ impl AudioEngine {
         AudioFlushHandle {
             state: Arc::clone(&self.flush_state),
             playback_clock: Arc::clone(&self.playback_clock),
+            output_signal_clock: Arc::clone(&self.output_signal_clock),
         }
     }
 
@@ -650,12 +691,15 @@ mod tests {
         let clock = AtomicU64::new(packed_clock(generation.0, 100));
         let underruns = AtomicU64::new(0);
         let mut output = [0.0; 8];
+        let mut non_silent_frames = 0;
         for block in output.chunks_exact_mut(4) {
             let result = state.write(block, &mut consumer, generation.0);
             assert!(!result.starved);
+            non_silent_frames += result.non_silent_frames;
             record_callback_result(true, &clock, generation.0, &underruns, result);
         }
         assert_eq!(output, source);
+        assert_eq!(non_silent_frames, 4);
         assert_eq!(clock_sample(clock.load(Ordering::Acquire)), 104);
         assert_eq!(underruns.load(Ordering::Acquire), 0);
     }

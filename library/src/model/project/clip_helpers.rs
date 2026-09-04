@@ -22,6 +22,7 @@ impl Node {
     /// Returns the display color for the leaf Node's content kind.
     pub fn display_color(&self) -> (u8, u8, u8) {
         match self.content() {
+            NodeContent::ModuleOutput(_) => (225, 95, 95),
             NodeContent::Media(_) => (100, 150, 255),
             NodeContent::Generator(generator) => match generator {
                 GeneratorContent::Text => (255, 200, 100),

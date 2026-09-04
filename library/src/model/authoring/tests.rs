@@ -10,8 +10,8 @@ use crate::editor::{
 use crate::model::AssetKind;
 use crate::model::node::{GeneratorContent, Node, NodeContent, ValueContent};
 use crate::model::project::{
-    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
-    NUMERIC_B_INPUT_PORT, PortDataType,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortDataType, PortDirection,
 };
 use crate::model::property::{PropertyValue, Vec2};
 use crate::plugin::PluginManager;
@@ -34,70 +34,73 @@ fn reusable_image_module(
 ) -> (
     ModuleDefinition,
     PublishedParameterId,
-    PublishedMediaOutputId,
+    ModuleOutputId,
     Option<PublishedMediaInputId>,
     uuid::Uuid,
 ) {
     let numeric = Node::new_value("Control", ValueContent::Add);
     let numeric_id = numeric.id;
-    let merge = Node::new_merge("Image Output");
+    let merge = Node::new_merge("Merge");
     let merge_id = merge.id;
     let parameter_id = PublishedParameterId::new();
-    let output_id = PublishedMediaOutputId::new();
     let input_id = with_media_input.then(PublishedMediaInputId::new);
-    let definition = ModuleDefinition {
-        id: ModuleDefinitionId::new(),
-        name: "Reusable Lower Third".to_string(),
-        sharing: ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
-        graph: ModuleGraph {
-            nodes: HashMap::from([(numeric_id, numeric), (merge_id, merge)]),
-            connections: Vec::new(),
+    let (mut definition, output_id) = ModuleDefinition::new_image(
+        "Reusable Lower Third",
+        ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+    );
+    let output_target = definition
+        .output(output_id)
+        .unwrap()
+        .target(PortDataType::Image)
+        .unwrap();
+    definition
+        .graph
+        .nodes
+        .extend([(numeric_id, numeric), (merge_id, merge)]);
+    definition.graph.connections.push(ModuleConnection {
+        id: ModuleConnectionId::new(),
+        from: ModulePortAddress {
+            node_id: merge_id,
+            port: IMAGE_OUTPUT_PORT.to_string(),
         },
-        interface: ModuleInterface {
-            parameters: vec![PublishedParameter {
-                id: parameter_id,
-                name: "Amount".to_string(),
-                data_type: PortDataType::Number,
-                default_value: PropertyValue::Number(OrderedFloat(1.0)),
-                target: ModulePortAddress {
-                    node_id: numeric_id,
-                    port: NUMERIC_A_INPUT_PORT.to_string(),
-                },
-            }],
-            media_inputs: input_id
-                .map(|id| {
-                    vec![PublishedMediaInput {
-                        id,
-                        name: "Image".to_string(),
-                        data_type: PortDataType::Image,
-                        target: ModulePortAddress {
-                            node_id: merge_id,
-                            port: MERGE_IMAGES_PORT.to_string(),
-                        },
-                        required: true,
-                        primary: true,
-                    }]
-                })
-                .unwrap_or_default(),
-            media_outputs: vec![PublishedMediaOutput {
-                id: output_id,
-                name: "Image".to_string(),
-                data_type: PortDataType::Image,
-                source: ModulePortAddress {
-                    node_id: merge_id,
-                    port: IMAGE_OUTPUT_PORT.to_string(),
-                },
-            }],
-            signals: Vec::new(),
-            actions: Vec::new(),
-        },
-        topology_revision: 1,
-        interface_version: 1,
+        to: output_target,
+        order: 0,
+        blend_mode: crate::model::BlendMode::Normal,
+    });
+    definition.interface = ModuleInterface {
+        parameters: vec![PublishedParameter {
+            id: parameter_id,
+            name: "Amount".to_string(),
+            data_type: PortDataType::Number,
+            default_value: PropertyValue::Number(OrderedFloat(1.0)),
+            target: ModulePortAddress {
+                node_id: numeric_id,
+                port: NUMERIC_A_INPUT_PORT.to_string(),
+            },
+        }],
+        media_inputs: input_id
+            .map(|id| {
+                vec![PublishedMediaInput {
+                    id,
+                    name: "Image".to_string(),
+                    data_type: PortDataType::Image,
+                    target: ModulePortAddress {
+                        node_id: merge_id,
+                        port: MERGE_IMAGES_PORT.to_string(),
+                    },
+                    required: true,
+                    primary: true,
+                }]
+            })
+            .unwrap_or_default(),
+        signals: Vec::new(),
+        actions: Vec::new(),
     };
+    definition.topology_revision = 2;
     (definition, parameter_id, output_id, input_id, numeric_id)
 }
 
-fn placement(track_id: TimelineTrackId, output_id: PublishedMediaOutputId) -> ModuleItemPlacement {
+fn placement(track_id: TimelineTrackId, output_id: ModuleOutputId) -> ModuleItemPlacement {
     ModuleItemPlacement {
         track_id,
         name: "Node Clip".to_string(),
@@ -200,6 +203,7 @@ fn ordinary_and_nested_timeline_items_never_create_module_topology() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Timeline-owned".to_string(),
+                ensemble_operations: Vec::new(),
             },
             interval(0, 2),
             0,
@@ -241,6 +245,7 @@ fn hostile_missing_track_document_returns_error_without_panicking() {
             "Text".to_string(),
             SourceRef::Text {
                 text: "hello".to_string(),
+                ensemble_operations: Vec::new(),
             },
             interval(0, 1),
             0,
@@ -278,6 +283,7 @@ fn module_graph_validation_is_fail_closed_and_typed() {
                 port: NUMERIC_A_INPUT_PORT.to_string(),
             },
             order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
         }],
     };
     assert!(graph.validate().is_err(), "Image must not feed Numeric");
@@ -288,6 +294,115 @@ fn module_graph_validation_is_fail_closed_and_typed() {
         port: NUMERIC_A_INPUT_PORT.to_string(),
     };
     assert!(wrong_direction.validate().is_err(), "source must be Output");
+}
+
+#[test]
+fn module_connection_blend_is_per_image_merge_edge() {
+    let source = Node::new_merge("Source");
+    let target = Node::new_merge("Target");
+    let transform = PluginManager::default()
+        .create_image_transform_operation_node()
+        .expect("image transform");
+    let source_id = source.id;
+    let target_id = target.id;
+    let transform_id = transform.id;
+    let mut graph = ModuleGraph {
+        nodes: HashMap::from([
+            (source_id, source),
+            (target_id, target),
+            (transform_id, transform),
+        ]),
+        connections: vec![ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: source_id,
+                port: IMAGE_OUTPUT_PORT.to_string(),
+            },
+            to: ModulePortAddress {
+                node_id: target_id,
+                port: MERGE_IMAGES_PORT.to_string(),
+            },
+            order: 0,
+            blend_mode: crate::model::BlendMode::Screen,
+        }],
+    };
+    graph.validate().expect("Image Merge edge accepts Blend");
+
+    graph.connections[0].to = ModulePortAddress {
+        node_id: transform_id,
+        port: IMAGE_INPUT_PORT.to_string(),
+    };
+    assert!(
+        graph.validate().is_err(),
+        "an ordinary typed Image input cannot smuggle per-edge compositing"
+    );
+}
+
+#[test]
+fn a_dedicated_output_node_cannot_be_deleted_and_the_rejected_edit_is_atomic() {
+    let service = TimelineEditorService::create_default("Required Output").unwrap();
+    let track_id = root_track(&service);
+    let (definition, _, output_id, _, _) = reusable_image_module(false);
+    let definition_id = definition.id;
+    let output_node_id = definition.output(output_id).unwrap().node_id;
+    service.add_module_definition(definition).unwrap();
+    let (_, instance_id, _) = service
+        .place_module_item(definition_id, placement(track_id, output_id))
+        .unwrap();
+    let before = service.snapshot().unwrap();
+
+    let error = service
+        .remove_instance_module_node(instance_id, output_node_id)
+        .expect_err("the visible Output boundary is mandatory");
+
+    assert!(error.to_string().contains("required render terminal"));
+    assert_eq!(service.snapshot().unwrap().as_ref(), before.as_ref());
+}
+
+#[test]
+fn output_node_state_and_unknown_invocation_output_fail_atomically() {
+    let service = TimelineEditorService::create_default("Output guards").unwrap();
+    let track_id = root_track(&service);
+    let (definition, _, output_id, _, _) = reusable_image_module(false);
+    let definition_id = definition.id;
+    let output_node_id = definition.output(output_id).unwrap().node_id;
+    service.add_module_definition(definition).unwrap();
+    let (_, instance_id, _) = service
+        .place_module_item(definition_id, placement(track_id, output_id))
+        .unwrap();
+    let before = service.snapshot().unwrap();
+    let revision = service.revision().unwrap();
+
+    assert!(
+        service
+            .set_instance_module_node_state(
+                instance_id,
+                output_node_id,
+                "Output".to_string(),
+                false,
+                false,
+            )
+            .is_err()
+    );
+    assert_eq!(service.snapshot().unwrap().as_ref(), before.as_ref());
+    assert_eq!(service.revision().unwrap(), revision);
+
+    let mut invalid = placement(track_id, ModuleOutputId::new());
+    invalid.layer = 1;
+    assert!(service.place_module_item(definition_id, invalid).is_err());
+    assert_eq!(service.snapshot().unwrap().as_ref(), before.as_ref());
+    assert_eq!(service.revision().unwrap(), revision);
+}
+
+#[test]
+fn output_terminal_is_the_only_persisted_render_boundary() {
+    let (definition, _, output_id, _, _) = reusable_image_module(false);
+    let json = serde_json::to_string(&definition).expect("serialize Module");
+
+    assert!(json.contains("ModuleOutput"));
+    assert!(json.contains(&output_id.to_string()));
+    assert!(!json.contains("media_outputs"));
+    assert!(!json.contains("PublishedMediaOutput"));
 }
 
 #[test]
@@ -469,6 +584,7 @@ fn builtin_effect_is_a_lightweight_attachment_and_undo_redo_are_project_atomic()
             "Text".to_string(),
             SourceRef::Text {
                 text: "Title".to_string(),
+                ensemble_operations: Vec::new(),
             },
             interval(0, 2),
             0,
@@ -547,30 +663,21 @@ fn project_file_store_round_trips_only_the_authoring_document() {
 fn published_interface_rejects_output_used_as_parameter_target() {
     let output = Node::new_value("Value", ValueContent::Add);
     let node_id = output.id;
-    let definition = ModuleDefinition {
-        id: ModuleDefinitionId::new(),
-        name: "Invalid Interface".to_string(),
-        sharing: ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
-        graph: ModuleGraph {
-            nodes: HashMap::from([(node_id, output)]),
-            connections: Vec::new(),
+    let (mut definition, _) = ModuleDefinition::new_image(
+        "Invalid Interface",
+        ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+    );
+    definition.graph.nodes.insert(node_id, output);
+    definition.interface.parameters.push(PublishedParameter {
+        id: PublishedParameterId::new(),
+        name: "Wrong".to_string(),
+        data_type: PortDataType::Number,
+        default_value: PropertyValue::Number(OrderedFloat(0.0)),
+        target: ModulePortAddress {
+            node_id,
+            port: NUMBER_RESULT_OUTPUT_PORT.to_string(),
         },
-        interface: ModuleInterface {
-            parameters: vec![PublishedParameter {
-                id: PublishedParameterId::new(),
-                name: "Wrong".to_string(),
-                data_type: PortDataType::Number,
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                target: ModulePortAddress {
-                    node_id,
-                    port: NUMBER_RESULT_OUTPUT_PORT.to_string(),
-                },
-            }],
-            ..ModuleInterface::default()
-        },
-        topology_revision: 1,
-        interface_version: 1,
-    };
+    });
     assert!(definition.validate().is_err());
 }
 
@@ -654,64 +761,41 @@ fn published_interface_edit_is_cow_and_cleans_instance_state_atomically() {
 }
 
 #[test]
-fn media_output_removal_requires_atomic_invocation_remap() {
-    let service = TimelineEditorService::create_default("Outputs").expect("service");
-    let track_id = root_track(&service);
+fn module_requires_a_dedicated_output_and_terminal_has_no_outgoing_port() {
     let (definition, _, output_id, _, _) = reusable_image_module(false);
-    let definition_id = definition.id;
-    service
-        .add_module_definition(definition)
-        .expect("definition");
-    let (_, instance_id, _) = service
-        .place_module_item(definition_id, placement(track_id, output_id))
-        .expect("placement");
-    let source = service.snapshot().expect("snapshot").module_definitions[&definition_id]
-        .interface
-        .media_outputs[0]
-        .source
-        .clone();
-    let (published, _, _) = service
-        .edit_instance_module_interface(
-            instance_id,
-            ModuleInterfaceCommand::PublishMediaOutput {
-                name: "Alternate".to_string(),
-                source,
-            },
-        )
-        .expect("publish output");
-    let ModuleInterfaceEditResult::PublishedMediaOutput(alternate_id) = published else {
-        panic!("published output result");
-    };
+    let output = definition.output(output_id).expect("Output terminal");
+    for data_type in [PortDataType::Image, PortDataType::Audio] {
+        let target = output.target(data_type).expect("media target");
+        assert!(
+            definition
+                .graph
+                .port_definition(&target, PortDirection::Input)
+                .is_ok()
+        );
+    }
     assert!(
-        service
-            .edit_instance_module_interface(
-                instance_id,
-                ModuleInterfaceCommand::UnpublishMediaOutput {
-                    output_id,
-                    replacement: None,
+        definition
+            .graph
+            .port_definition(
+                &ModulePortAddress {
+                    node_id: output.node_id,
+                    port: IMAGE_OUTPUT_PORT.to_string(),
                 },
+                PortDirection::Output,
             )
             .is_err(),
-        "selected output must not disappear silently"
+        "a terminal cannot be used as a processing source"
     );
-    let (removed, _, _) = service
-        .edit_instance_module_interface(
-            instance_id,
-            ModuleInterfaceCommand::UnpublishMediaOutput {
-                output_id,
-                replacement: Some(alternate_id),
-            },
-        )
-        .expect("atomic remap");
-    let ModuleInterfaceEditResult::Unpublished(impact) = removed else {
-        panic!("unpublish impact");
-    };
-    assert_eq!(impact.remapped_media_output_invocations, 1);
-    service
-        .snapshot()
-        .expect("snapshot")
-        .validate()
-        .expect("valid remap");
+
+    let mut missing = definition;
+    missing
+        .graph
+        .nodes
+        .retain(|_, node| !matches!(node.content(), NodeContent::ModuleOutput(_)));
+    assert!(
+        missing.validate().is_err(),
+        "every current Module renders media"
+    );
 }
 
 #[test]
@@ -833,6 +917,7 @@ fn timeline_authoring_commands_and_effect_reorder_are_single_undo_steps() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Before".to_string(),
+                ensemble_operations: Vec::new(),
             },
             interval(0, 2),
             0,
@@ -911,23 +996,4 @@ fn timeline_authoring_commands_and_effect_reorder_are_single_undo_steps() {
     let original = service.snapshot().expect("original order");
     assert_eq!(original.attachments[&first].order, 0);
     assert_eq!(original.attachments[&second].order, 1);
-}
-
-#[test]
-fn file_import_is_authoring_only_and_rejects_duplicate_path() {
-    let directory = tempfile::tempdir().expect("directory");
-    let path = directory.path().join("payload.unknown");
-    std::fs::write(&path, b"authoring asset").expect("fixture");
-    let plugins = PluginManager::default();
-    let service = TimelineEditorService::create_default("Import").expect("service");
-
-    let (ids, _) = service.import_file(&path, &plugins).expect("import");
-    assert_eq!(ids.len(), 1);
-    assert!(service.has_asset_with_path(&path).expect("path lookup"));
-    assert!(service.import_file(&path, &plugins).is_err());
-    service
-        .snapshot()
-        .expect("snapshot")
-        .validate()
-        .expect("valid imported project");
 }

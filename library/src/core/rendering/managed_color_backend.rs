@@ -1,6 +1,8 @@
 //! Exact Project color-config resolution and verified processor construction.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
@@ -24,7 +26,7 @@ use crate::rendering::renderer::WorkingSurfaceContract;
 
 const MAX_MEDIA_INGRESS_TRANSIENT_BYTES: u64 = 768 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ManagedRenderDestination {
     Preview,
     Export,
@@ -37,6 +39,14 @@ pub(crate) struct ProjectColorPipeline {
     working: WorkingColorIdentity,
     authoring_srgb: VerifiedSourceSpace,
     terminal: ProjectTerminal,
+    working_surface: WorkingSurfaceContract,
+    source_processors: Mutex<HashMap<VerifiedSourceSpace, Arc<dyn CpuColorProcessor>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ProjectColorPipelineCacheKey {
+    config_identity: String,
+    destination: ManagedRenderDestination,
 }
 
 enum ProjectTerminal {
@@ -53,7 +63,14 @@ impl ProjectColorPipeline {
         Self::for_intent(&project.assets, intent, destination)
     }
 
-    /// Build the color authority directly from the Timeline-first authoring
+    pub(crate) fn cache_key_for_project(
+        project: &Project,
+        destination: ManagedRenderDestination,
+    ) -> Result<ProjectColorPipelineCacheKey, LibraryError> {
+        cache_key(&resolved_intent(project)?, destination)
+    }
+
+    /// Build the color authority directly from the Timeline authoring
     /// Project. This deliberately does not manufacture a legacy `Project`.
     pub(crate) fn for_authoring_project(
         project: &AuthoringProject,
@@ -61,6 +78,13 @@ impl ProjectColorPipeline {
     ) -> Result<Self, LibraryError> {
         let intent = resolved_authoring_intent(project)?;
         Self::for_intent(&project.assets, intent, destination)
+    }
+
+    pub(crate) fn cache_key_for_authoring_project(
+        project: &AuthoringProject,
+        destination: ManagedRenderDestination,
+    ) -> Result<ProjectColorPipelineCacheKey, LibraryError> {
+        cache_key(&resolved_authoring_intent(project)?, destination)
     }
 
     fn for_intent(
@@ -97,6 +121,19 @@ impl ProjectColorPipeline {
             &srgb_surface_space,
             &context,
         )?;
+        let working_surface = WorkingSurfaceContract::new(
+            working.clone(),
+            authoring_srgb.clone(),
+            backend
+                .create_cpu_processor(
+                    &ColorTransformRequest::source_to_working(
+                        authoring_srgb.color_space_id(),
+                        working.working_space(),
+                    )
+                    .with_context(context.clone()),
+                )
+                .map_err(color_error)?,
+        )?;
         Ok(Self {
             backend,
             intent,
@@ -104,6 +141,8 @@ impl ProjectColorPipeline {
             working,
             authoring_srgb,
             terminal,
+            working_surface,
+            source_processors: Mutex::new(HashMap::new()),
         })
     }
 
@@ -175,12 +214,8 @@ impl ProjectColorPipeline {
         ))
     }
 
-    pub(crate) fn working_surface_contract(&self) -> Result<WorkingSurfaceContract, LibraryError> {
-        WorkingSurfaceContract::new(
-            self.working.clone(),
-            self.authoring_srgb.clone(),
-            self.source_processor(&self.authoring_srgb)?,
-        )
+    pub(crate) fn working_surface_contract(&self) -> WorkingSurfaceContract {
+        self.working_surface.clone()
     }
 
     /// Convert a graph-authored straight color into this Project's exact
@@ -249,17 +284,46 @@ impl ProjectColorPipeline {
     fn source_processor(
         &self,
         source: &VerifiedSourceSpace,
-    ) -> Result<Box<dyn CpuColorProcessor>, LibraryError> {
-        self.backend
-            .create_cpu_processor(
-                &ColorTransformRequest::source_to_working(
-                    source.color_space_id(),
-                    self.working.working_space(),
+    ) -> Result<Arc<dyn CpuColorProcessor>, LibraryError> {
+        let mut processors = self.lock_source_processors();
+        if let Some(processor) = processors.get(source) {
+            return Ok(Arc::clone(processor));
+        }
+        let processor: Arc<dyn CpuColorProcessor> = Arc::from(
+            self.backend
+                .create_cpu_processor(
+                    &ColorTransformRequest::source_to_working(
+                        source.color_space_id(),
+                        self.working.working_space(),
+                    )
+                    .with_context(self.context.clone()),
                 )
-                .with_context(self.context.clone()),
-            )
-            .map_err(color_error)
+                .map_err(color_error)?,
+        );
+        processors.insert(source.clone(), Arc::clone(&processor));
+        Ok(processor)
     }
+
+    fn lock_source_processors(
+        &self,
+    ) -> MutexGuard<'_, HashMap<VerifiedSourceSpace, Arc<dyn CpuColorProcessor>>> {
+        self.source_processors
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn cache_key(
+    intent: &ModelValidatedColorManagementConfig,
+    destination: ManagedRenderDestination,
+) -> Result<ProjectColorPipelineCacheKey, LibraryError> {
+    // Validate the destination before cache lookup so an invalid Project is
+    // rejected even if it happens to carry a previously seen config identity.
+    validate_terminal_storage(intent, destination)?;
+    Ok(ProjectColorPipelineCacheKey {
+        config_identity: intent.cache_identity().to_string(),
+        destination,
+    })
 }
 
 fn validate_media_ingress_budget(pixels: &DecodedPixelBuffer) -> Result<(), LibraryError> {
@@ -601,6 +665,7 @@ fn linear_working_error(error: ruvie_color_management::LinearWorkingImageError) 
 mod tests {
     use super::*;
     use ruvie_color_management::TransformPurpose;
+    use std::sync::Arc;
 
     #[test]
     fn preview_and_export_build_distinct_terminal_purposes() {
@@ -629,5 +694,19 @@ mod tests {
             .purpose(),
             TransformPurpose::WorkingToOutput
         );
+    }
+
+    #[test]
+    fn repeated_source_conversion_reuses_the_compiled_processor() {
+        let project = Project::new("source processor cache");
+        let pipeline =
+            ProjectColorPipeline::for_project(&project, ManagedRenderDestination::Preview).unwrap();
+        let source = pipeline.authoring_srgb.clone();
+
+        let first = pipeline.source_processor(&source).unwrap();
+        let second = pipeline.source_processor(&source).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(pipeline.lock_source_processors().len(), 1);
     }
 }

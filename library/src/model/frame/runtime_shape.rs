@@ -232,6 +232,11 @@ pub fn evaluate_text_element_transforms(
                 .get(element.line_index)
                 .map(|line| line.element_range.len())
                 .unwrap_or_default();
+            let line_center = text
+                .lines
+                .get(element.line_index)
+                .map(|line| bounds_center(line.bounds))
+                .unwrap_or(center);
             let mut transform = evaluate_configured_transform(
                 &ensemble.effector_configs,
                 current_time,
@@ -244,7 +249,10 @@ pub fn evaluate_text_element_transforms(
                     line_char_index: element.line_element_index,
                     total_chars: text.elements.len(),
                     line_char_count: line_element_count,
+                    line_count: text.lines.len(),
                     char_center: center,
+                    line_center,
+                    block_center: bounds_center(text.block_bounds),
                 },
             )?;
             if let Some(patch) = ensemble.patches.get(&element.block_element_index) {
@@ -259,6 +267,13 @@ fn text_element_center(element: &RuntimeTextElement) -> skia_safe::Point {
     skia_safe::Point::new(
         element.bounds.left + element.advance / 2.0,
         (element.bounds.top + element.bounds.bottom) / 2.0,
+    )
+}
+
+fn bounds_center(bounds: RuntimeBounds) -> skia_safe::Point {
+    skia_safe::Point::new(
+        (bounds.left + bounds.right) * 0.5,
+        (bounds.top + bounds.bottom) * 0.5,
     )
 }
 
@@ -522,7 +537,16 @@ impl RuntimeShape {
                         line_char_index: 0,
                         total_chars: 1,
                         line_char_count: 1,
+                        line_count: 1,
                         char_center: skia_safe::Point::new(
+                            (path.bounds.left + path.bounds.right) * 0.5,
+                            (path.bounds.top + path.bounds.bottom) * 0.5,
+                        ),
+                        line_center: skia_safe::Point::new(
+                            (path.bounds.left + path.bounds.right) * 0.5,
+                            (path.bounds.top + path.bounds.bottom) * 0.5,
+                        ),
+                        block_center: skia_safe::Point::new(
                             (path.bounds.left + path.bounds.right) * 0.5,
                             (path.bounds.top + path.bounds.bottom) * 0.5,
                         ),
@@ -708,9 +732,74 @@ fn style_with_opacity(style: &StyleConfig, opacity: f32) -> StyleConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ensemble::target::EffectorTarget;
+    use crate::core::ensemble::types::{EffectorConfig, EnsembleData};
     use crate::core::rendering::path_geometry::to_skia_path;
     use crate::model::frame::color::Color;
     use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
+
+    #[test]
+    fn text_ensemble_transform_target_uses_block_line_and_character_pivots() {
+        let text =
+            crate::core::rendering::text_layout::layout_runtime_text_shape("AB\nCD", "Arial", 42.0);
+        assert_eq!(text.lines.len(), 2);
+        assert_eq!(text.elements.len(), 4);
+        let transforms = |target| {
+            evaluate_text_element_transforms(
+                &text,
+                &EnsembleData {
+                    enabled: true,
+                    effector_configs: vec![EffectorConfig::Transform {
+                        translate: (13.0, -7.0),
+                        rotate: 0.0,
+                        scale: (2.0, 0.5),
+                        target,
+                    }],
+                    decorator_configs: Vec::new(),
+                    patches: Default::default(),
+                },
+                0.0,
+            )
+            .unwrap()
+        };
+
+        let block = transforms(EffectorTarget::Block);
+        let line = transforms(EffectorTarget::Line);
+        let character = transforms(EffectorTarget::Char);
+        assert_ne!(block, line);
+        assert_ne!(line, character);
+        for transform in &character {
+            assert_eq!(transform.translate, (13.0, -7.0));
+            assert_eq!(transform.scale, (2.0, 0.5));
+        }
+        for runtime_line in &text.lines {
+            let mapped_line = runtime_line
+                .element_range
+                .clone()
+                .map(|index| transformed_text_element_bounds(&text.elements[index], &line[index]))
+                .reduce(RuntimeBounds::union)
+                .expect("line has visible elements");
+            let mapped_center = bounds_center(mapped_line);
+            let original_center = bounds_center(runtime_line.bounds);
+            assert!((mapped_center.x - (original_center.x + 13.0)).abs() < 0.01);
+            assert!((mapped_center.y - (original_center.y - 7.0)).abs() < 0.01);
+        }
+
+        let first_center = text_element_center(&text.elements[0]);
+        let mapped = transformed_text_element_bounds(&text.elements[0], &block[0]);
+        let mapped_center = bounds_center(mapped);
+        let block_center = bounds_center(text.block_bounds);
+        assert!(
+            (mapped_center.x - (block_center.x + 13.0 + (first_center.x - block_center.x) * 2.0))
+                .abs()
+                < 0.01
+        );
+        assert!(
+            (mapped_center.y - (block_center.y - 7.0 + (first_center.y - block_center.y) * 0.5))
+                .abs()
+                < 0.01
+        );
+    }
 
     #[test]
     fn canonical_conic_bounds_do_not_use_the_quadratic_svg_fallback() -> Result<(), LibraryError> {

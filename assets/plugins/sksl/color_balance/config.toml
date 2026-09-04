@@ -1,6 +1,7 @@
 id = "color_balance"
 name = "Color Balance"
 category = "Color & Tone"
+color_domain = "project_linear"
 
 [[properties]]
 name = "shadows"

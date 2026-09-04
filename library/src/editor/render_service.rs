@@ -8,7 +8,8 @@ use crate::core::rendering::media_color_ingress::{
     MediaAssetKind, require_unmanaged_abi_srgb, source_asset_from_assets,
 };
 use crate::core::rendering::renderer::{
-    Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
+    Affine2D, ParticleRasterRequest, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest,
+    TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
@@ -24,10 +25,14 @@ use crate::plugin::{ExportFrame, LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
 
+mod color_pipeline_cache;
+use color_pipeline_cache::ProjectColorPipelineCache;
+
 pub struct RenderService<T: Renderer> {
     pub renderer: T,
     cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
+    color_pipeline_cache: ProjectColorPipelineCache,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +122,7 @@ impl<T: Renderer> RenderService<T> {
             renderer,
             plugin_manager,
             cache_manager,
+            color_pipeline_cache: ProjectColorPipelineCache::new(),
         }
     }
 
@@ -149,7 +155,7 @@ impl<T: Renderer> RenderService<T> {
         ExportFrame::from_project_render(project_model.project().as_ref(), image)
     }
 
-    /// Render a Timeline-first frame for an exporter and retain the exact
+    /// Render an authoring Timeline frame for an exporter and retain the exact
     /// authoring Project color authority with the terminal pixels.
     pub fn render_authoring_export_frame(
         &mut self,
@@ -186,14 +192,16 @@ impl<T: Renderer> RenderService<T> {
             RenderDestination::Preview => ManagedRenderDestination::Preview,
             RenderDestination::Export => ManagedRenderDestination::Export,
         };
-        let pipeline = ProjectColorPipeline::for_project(project, managed_destination)?;
+        let pipeline = self
+            .color_pipeline_cache
+            .for_project(project, managed_destination)?;
         self.renderer
-            .use_project_linear_surface(pipeline.working_surface_contract()?)?;
+            .use_project_linear_surface(pipeline.working_surface_contract())?;
         let output = self.render_with_authority(
             frame_info,
             &RenderColorAuthority::Managed {
                 assets: &project.assets,
-                pipeline: &pipeline,
+                pipeline: pipeline.as_ref(),
             },
         )?;
         let RenderOutput::Working(working) = output else {
@@ -204,7 +212,7 @@ impl<T: Renderer> RenderService<T> {
         pipeline.terminal_image(&working).map(RenderOutput::Image)
     }
 
-    /// Rasterize a Timeline-first authoring frame under the authoring
+    /// Rasterize an authoring Timeline frame under the project
     /// Project's exact color and Asset authority. Frame evaluation remains a
     /// separate RenderPlan step so asynchronous workers can return the same
     /// `FrameInfo` they actually rendered.
@@ -218,14 +226,16 @@ impl<T: Renderer> RenderService<T> {
             RenderDestination::Preview => ManagedRenderDestination::Preview,
             RenderDestination::Export => ManagedRenderDestination::Export,
         };
-        let pipeline = ProjectColorPipeline::for_authoring_project(project, managed_destination)?;
+        let pipeline = self
+            .color_pipeline_cache
+            .for_authoring_project(project, managed_destination)?;
         self.renderer
-            .use_project_linear_surface(pipeline.working_surface_contract()?)?;
+            .use_project_linear_surface(pipeline.working_surface_contract())?;
         let output = self.render_with_authority(
             frame_info,
             &RenderColorAuthority::Managed {
                 assets: &project.assets,
-                pipeline: &pipeline,
+                pipeline: pipeline.as_ref(),
             },
         )?;
         let RenderOutput::Working(working) = output else {
@@ -558,6 +568,30 @@ impl<T: Renderer> RenderService<T> {
                 let final_image =
                     self.apply_effects(sksl_layer, effects, current_time, color_authority)?;
                 measure_debug("Composite SkSL", || {
+                    self.renderer.draw_layer_affine_with_blend(
+                        &final_image,
+                        &Affine2D::IDENTITY,
+                        transform.opacity,
+                        crate::model::BlendMode::Normal,
+                    )
+                })
+            }
+            FrameContent::ParticleScene {
+                scene,
+                effects,
+                transform,
+            } => {
+                let render_transform = context.transform(transform);
+                let particle_layer = measure_debug("Rasterize GPU Particle scene", || {
+                    self.renderer
+                        .rasterize_particle_layer(ParticleRasterRequest {
+                            scene,
+                            transform: &render_transform,
+                        })
+                })?;
+                let final_image =
+                    self.apply_effects(particle_layer, effects, current_time, color_authority)?;
+                measure_debug("Composite GPU Particle scene", || {
                     self.renderer.draw_layer_affine_with_blend(
                         &final_image,
                         &Affine2D::IDENTITY,

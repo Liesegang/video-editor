@@ -1,8 +1,12 @@
 pub mod authoring_tab_viewer;
+pub(crate) mod automation_lanes;
 pub mod command_palette;
 pub mod dialogs;
-pub mod module_node_editor;
+pub mod easing_menus;
+pub(crate) mod media_preview;
+pub mod panels;
+pub mod selection;
 pub mod theme;
-pub mod timeline_first;
 pub mod viewport;
+pub(crate) mod waveform;
 pub mod widgets;

@@ -106,21 +106,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             );
             return None;
         }
-        Some(RuntimeShape {
-            source_id: node.id,
-            geometry: RuntimeShapeGeometry::Text(layout_runtime_text_shape(
-                &text,
-                &font,
-                size as f32,
-            )),
-            spatial_transform_node_id: None,
-            spatial_transform: Default::default(),
-            modulation_transform: Default::default(),
-            transform: Default::default(),
-            effects: Vec::new(),
-            effector_configs: Vec::new(),
-            decorator_configs: Vec::new(),
-        })
+        runtime_text_shape(node.id, &text, &font, size)
     }
 
     fn get_bounds(
@@ -151,6 +137,33 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             metrics.height + outset * 2.0,
         ))
     }
+}
+
+/// Creates the canonical transient Text Shape after an authoring runtime has
+/// resolved the source properties. Both graph evaluators enter here, keeping
+/// glyph grouping and Ensemble behavior identical without constructing a
+/// compatibility Project.
+pub(crate) fn runtime_text_shape(
+    source_id: uuid::Uuid,
+    text: &str,
+    font: &str,
+    size: f64,
+) -> Option<RuntimeShape> {
+    if !size.is_finite() || size <= 0.0 {
+        log::warn!("Text Node {source_id} has invalid size {size}; producing NoOutput");
+        return None;
+    }
+    Some(RuntimeShape {
+        source_id,
+        geometry: RuntimeShapeGeometry::Text(layout_runtime_text_shape(text, font, size as f32)),
+        spatial_transform_node_id: None,
+        spatial_transform: Default::default(),
+        modulation_transform: Default::default(),
+        transform: Default::default(),
+        effects: Vec::new(),
+        effector_configs: Vec::new(),
+        decorator_configs: Vec::new(),
+    })
 }
 
 pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32, f32) {

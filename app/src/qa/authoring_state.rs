@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::model::ui_types::Tab;
 use crate::state::authoring::{AuthoringSelection, AuthoringUiState};
-use crate::state::module_node_editor::{ModuleEditorHost, ModuleNodeEditorDocument};
+use crate::state::node_editor::{ModuleEditorHost, NodeEditorDocument};
 
 pub fn snapshot(
     frame: u64,
@@ -33,7 +33,7 @@ pub fn snapshot(
         .active_document
         .as_ref()
         .map(|document| match document {
-            ModuleNodeEditorDocument::ModuleDefinition {
+            NodeEditorDocument::ModuleDefinition {
                 definition_id,
                 host,
             } => {
@@ -74,16 +74,30 @@ pub fn snapshot(
                 "definition_scope": editor.active_instance_path.is_none(),
             },
             "selection": {"primary": selection},
+            "assets": {
+                "view_mode": editor.assets.view_mode.qa_name(),
+            },
             "timeline": {
                 "current_frame": editor.timeline.current_frame,
                 "is_playing": editor.timeline.is_playing,
                 "pixels_per_second": editor.timeline.pixels_per_second,
+                "vertical_zoom": editor.timeline.vertical_zoom,
+                "horizontal_scroll": editor.timeline.horizontal_scroll,
+                "vertical_scroll": editor.timeline.vertical_scroll,
                 "item_gesture_active": editor.timeline.item_gesture.is_some(),
+                "keyframe_gesture_active": editor.timeline.keyframe_gesture.is_some(),
                 "library_drag_active": editor.timeline.library_drag.is_some(),
+                "expanded_items": editor.timeline.expanded_items,
+                "track_display_modes": editor.timeline.track_display_modes.iter().map(|(id, mode)| {
+                    (id.to_string(), mode.qa_name())
+                }).collect::<std::collections::HashMap<_, _>>(),
+                "item_display_modes": editor.timeline.item_display_modes.iter().map(|(id, mode)| {
+                    (id.to_string(), mode.qa_name())
+                }).collect::<std::collections::HashMap<_, _>>(),
             },
             "preview": {
-                "pan": {"x": editor.preview.pan.x, "y": editor.preview.pan.y},
-                "zoom": editor.preview.zoom,
+                "pan": {"x": editor.preview.canvas.pan.x, "y": editor.preview.canvas.pan.y},
+                "zoom": editor.preview.canvas.zoom.x,
                 "show_grid": editor.preview.show_grid,
                 "auto_fit": editor.preview.auto_fit,
                 "rendered_revision": editor.preview.rendered_revision,
@@ -92,13 +106,40 @@ pub fn snapshot(
                 "texture_height": editor.preview.texture_height,
                 "nontransparent_pixels": editor.preview.nontransparent_pixels,
                 "pixel_hash": editor.preview.pixel_hash,
+                "active_tool": match editor.preview.active_tool {
+                    crate::state::authoring::PreviewTool::Select => "select",
+                    crate::state::authoring::PreviewTool::Text => "text",
+                    crate::state::authoring::PreviewTool::Path => "path",
+                    crate::state::authoring::PreviewTool::Pan => "pan",
+                    crate::state::authoring::PreviewTool::Zoom => "zoom",
+                },
+                "text_editor": {
+                    "target_item_id": editor.preview.text_editor.target_item,
+                    "editing": editor.preview.text_editor.editing,
+                    "changed": editor.preview.text_editor.changed(),
+                },
+                "path_editor": {
+                    "target_item_id": editor.preview.path_editor.target_item,
+                    "selected_point_indices": editor.preview.path_editor.selected_point_indices,
+                    "drag_active": editor.preview.path_editor.drag.is_some(),
+                },
             },
             "node_editor": {
                 "document": document,
                 "selected_node_count": editor.node_editor.selected_nodes.len(),
                 "selected_connection": editor.node_editor.selected_connection,
+                "pan": {
+                    "x": editor.node_editor.canvas.pan.x,
+                    "y": editor.node_editor.canvas.pan.y,
+                },
+                "zoom": editor.node_editor.canvas.zoom.x,
+                "surface": "egui_snarl",
             },
-            "curve": {"drag_active": editor.curve.drag.is_some()},
+            "curve_editor": {
+                "pan": {"x": editor.curve_editor.canvas.pan.x, "y": editor.curve_editor.canvas.pan.y},
+                "zoom": {"x": editor.curve_editor.canvas.zoom.x, "y": editor.curve_editor.canvas.zoom.y},
+                "drag_active": editor.curve_editor.drag.is_some(),
+            },
             "status": editor.status,
             "error": editor.error,
         },

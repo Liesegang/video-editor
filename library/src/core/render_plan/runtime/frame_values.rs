@@ -47,53 +47,6 @@ pub(super) fn evaluate_property_map(
         .collect()
 }
 
-pub(super) fn sample_automation(
-    track: &crate::model::authoring::AutomationTrack,
-    time: MediaTime,
-) -> Result<PropertyValue, LibraryError> {
-    let first = track
-        .keyframes
-        .first()
-        .ok_or_else(|| LibraryError::Validation("Automation Track has no Keyframes".to_string()))?;
-    if time <= first.time {
-        return Ok(first.value.clone());
-    }
-    let last = track.keyframes.last().ok_or_else(|| {
-        LibraryError::Validation("Automation Track has no last Keyframe".to_string())
-    })?;
-    if time >= last.time {
-        return Ok(last.value.clone());
-    }
-    for window in track.keyframes.windows(2) {
-        let Some(start) = window.first() else {
-            continue;
-        };
-        let Some(end) = window.get(1) else {
-            continue;
-        };
-        if time < start.time || time >= end.time {
-            continue;
-        }
-        let elapsed = time
-            .checked_sub(start.time)
-            .map_err(LibraryError::Validation)?
-            .to_seconds_f64();
-        let duration = end
-            .time
-            .checked_sub(start.time)
-            .map_err(LibraryError::Validation)?
-            .to_seconds_f64();
-        if duration <= f64::EPSILON {
-            return Ok(start.value.clone());
-        }
-        let amount = start.easing.try_apply(elapsed / duration)?;
-        return Ok(PropertyValue::interpolate(&start.value, &end.value, amount));
-    }
-    Err(LibraryError::Render(
-        "Automation time did not resolve to a Keyframe segment".to_string(),
-    ))
-}
-
 pub(super) fn transform_at(properties: &PropertyMap, time: f64) -> Result<Transform, LibraryError> {
     transform_from_values(&evaluate_property_map(properties, time, "Timeline")?)
 }
@@ -136,6 +89,7 @@ pub(super) fn text_item_from_values(
     source_id: uuid::Uuid,
     text: &str,
     values: &HashMap<String, PropertyValue>,
+    ensemble: Option<crate::core::ensemble::EnsembleData>,
 ) -> Result<FrameItem, LibraryError> {
     let font = values
         .get("font_family")
@@ -150,22 +104,24 @@ pub(super) fn text_item_from_values(
         .or_else(|| values.get("font_size"))
         .map(|_| {
             if values.contains_key("size") {
-                required_number(&values, "size", "Text item")
+                required_number(values, "size", "Text item")
             } else {
-                required_number(&values, "font_size", "Text item")
+                required_number(values, "font_size", "Text item")
             }
         })
         .transpose()?
         .unwrap_or(48.0);
     let color = match values.get("color") {
-        Some(_) => required_color(&values, "color", "Text item")?,
+        Some(_) => required_color(values, "color", "Text item")?,
         None => crate::model::frame::color::Color::white(),
     };
+    let (content_width, content_height) =
+        crate::plugin::entity_converter::measure_text_size(text, &font, size as f32);
     Ok(FrameItem::Object(FrameObject {
         source_node_id: source_id,
         spatial_transform_node_id: None,
         spatial_transform: Box::default(),
-        content_bounds: None,
+        content_bounds: Some(FrameBounds::new(0.0, 0.0, content_width, content_height)),
         content: FrameContent::Text {
             text: text.to_string(),
             font,
@@ -175,7 +131,7 @@ pub(super) fn text_item_from_values(
                 style: DrawStyle::Fill { color, offset: 0.0 },
             }],
             effects: Vec::new(),
-            ensemble: None,
+            ensemble,
             transform: Transform::default(),
         },
     }))
@@ -196,25 +152,35 @@ pub(super) fn shape_item(
         Some(_) => return Err(type_error("Shape color", "Color")),
         None => crate::model::frame::color::Color::white(),
     };
-    let (path, canonical_path) = match shape.shape_kind {
-        crate::model::authoring::ShapeKind::Rectangle => {
-            (format!("M 0 0 H {width} V {height} H 0 Z"), None)
-        }
+    let (path, canonical_path, declared_bounds) = match shape.shape_kind {
+        crate::model::authoring::ShapeKind::Rectangle => (
+            format!("M 0 0 H {width} V {height} H 0 Z"),
+            None,
+            Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
+        ),
         crate::model::authoring::ShapeKind::Ellipse => (
             format!(
-                "M {width} 0 A {} {} 0 1 1 0 0 A {} {} 0 1 1 {width} 0 Z",
-                width / 2.0,
+                "M {width} {} A {} {} 0 1 1 0 {} A {} {} 0 1 1 {width} {} Z",
                 height / 2.0,
                 width / 2.0,
+                height / 2.0,
+                height / 2.0,
+                width / 2.0,
+                height / 2.0,
                 height / 2.0
             ),
             None,
+            Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
         ),
         crate::model::authoring::ShapeKind::Path => match shape.parameters.get("path") {
             Some(PropertyValue::Path(path)) => (
                 crate::model::path::write_legacy_svg_path_data(path)
                     .map_err(|error| LibraryError::Render(error.to_string()))?,
                 Some(path.clone()),
+                // A free Path need not start at (0, 0), and its authored
+                // width/height parameters are not its painted bounds. Let the
+                // shared Shape measurement calculate the actual local rect.
+                None,
             ),
             _ => return Err(type_error("Shape path", "Path")),
         },
@@ -224,7 +190,7 @@ pub(super) fn shape_item(
         path,
         canonical_path,
         color,
-        Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
+        declared_bounds,
     ))
 }
 
@@ -262,6 +228,14 @@ pub(super) fn shape_object(
     color: crate::model::frame::color::Color,
     content_bounds: Option<FrameBounds>,
 ) -> FrameItem {
+    let styles = vec![StyleConfig {
+        id: source_id,
+        style: DrawStyle::Fill { color, offset: 0.0 },
+    }];
+    let content_bounds = content_bounds.or_else(|| {
+        crate::model::frame::runtime_shape::measure_shape_visual_bounds(&path, &styles, &[])
+            .map(|(x, y, width, height)| FrameBounds::new(x, y, width, height))
+    });
     FrameItem::Object(FrameObject {
         source_node_id: source_id,
         spatial_transform_node_id: None,
@@ -270,10 +244,7 @@ pub(super) fn shape_object(
         content: FrameContent::Shape {
             path,
             canonical_path,
-            styles: vec![StyleConfig {
-                id: source_id,
-                style: DrawStyle::Fill { color, offset: 0.0 },
-            }],
+            styles,
             path_effects: Vec::new(),
             effects: Vec::new(),
             ensemble: None,
@@ -344,5 +315,85 @@ pub(super) fn transparent() -> crate::model::frame::color::Color {
         g: 0,
         b: 0,
         a: 0,
+    }
+}
+
+#[cfg(test)]
+mod shape_bounds_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::model::authoring::{ShapeKind, ShapeSource};
+    use crate::model::frame::entity::FrameItem;
+    use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
+
+    #[test]
+    fn free_path_frame_bounds_keep_the_authored_local_origin() {
+        let path = PathValue::new(
+            FillRule::NonZero,
+            vec![PathContour::new(
+                PathPoint::new(120.0, 80.0),
+                vec![
+                    PathSegment::line(PathPoint::new(280.0, 80.0)),
+                    PathSegment::line(PathPoint::new(280.0, 170.0)),
+                    PathSegment::line(PathPoint::new(120.0, 170.0)),
+                ],
+                true,
+            )],
+        )
+        .expect("Path");
+        let shape = ShapeSource {
+            shape_kind: ShapeKind::Path,
+            // Deliberately conflicting presentation hints: Path geometry is
+            // authoritative for its actual painted local bounds.
+            parameters: HashMap::from([
+                ("path".to_string(), PropertyValue::Path(path)),
+                ("width".to_string(), PropertyValue::from(10.0)),
+                ("height".to_string(), PropertyValue::from(20.0)),
+            ]),
+        };
+
+        let FrameItem::Object(object) = shape_item(uuid::Uuid::new_v4(), &shape).unwrap() else {
+            panic!("Shape object");
+        };
+        let bounds = object.content_bounds.expect("measured Path bounds");
+        assert_eq!(bounds.as_tuple(), (120.0, 80.0, 160.0, 90.0));
+    }
+
+    #[test]
+    fn ellipse_path_and_declared_gizmo_bounds_share_the_same_origin() {
+        let shape = ShapeSource {
+            shape_kind: ShapeKind::Ellipse,
+            parameters: HashMap::from([
+                ("width".to_string(), PropertyValue::from(160.0)),
+                ("height".to_string(), PropertyValue::from(80.0)),
+            ]),
+        };
+        let FrameItem::Object(object) = shape_item(uuid::Uuid::new_v4(), &shape).unwrap() else {
+            panic!("Shape object");
+        };
+        let FrameContent::Shape {
+            path,
+            styles,
+            path_effects,
+            ..
+        } = &object.content
+        else {
+            panic!("Ellipse content");
+        };
+        let painted = crate::model::frame::runtime_shape::measure_shape_visual_bounds(
+            path,
+            styles,
+            path_effects,
+        )
+        .expect("painted ellipse bounds");
+        let declared = object.content_bounds.expect("declared ellipse bounds");
+        let declared = declared.as_tuple();
+        for (actual, expected) in [painted.0, painted.1, painted.2, painted.3]
+            .into_iter()
+            .zip([declared.0, declared.1, declared.2, declared.3])
+        {
+            assert!((actual - expected).abs() <= 0.01, "{actual} != {expected}");
+        }
     }
 }

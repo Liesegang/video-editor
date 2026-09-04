@@ -12,6 +12,7 @@ mod lifecycle;
 mod selection;
 mod transient;
 
+pub(crate) use hit::wire_selection_target;
 pub(crate) use layout_swipe_preflight::layout_swipe_wants_pointer;
 pub(crate) use lifecycle::interact;
 
@@ -44,6 +45,16 @@ pub enum EditorOutput<NodeId, PortId, WireId, GroupId> {
     /// A non-mutating directional-layout gesture for the host to interpret.
     LayoutSwipe(LayoutSwipeIntent<NodeId>),
     Connect {
+        from: PortId,
+        to: PortId,
+    },
+    /// Atomically moves one endpoint of an existing authored wire.
+    ///
+    /// Unlike a `Disconnect` followed by `Connect`, this intent keeps the
+    /// host's wire identity and edge metadata intact and never exposes an
+    /// invalid intermediate graph to validation or rendering.
+    Reconnect {
+        wire: WireId,
         from: PortId,
         to: PortId,
     },
@@ -168,7 +179,7 @@ pub(super) enum Movable<NodeId, GroupId> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Gesture<NodeId, PortId, GroupId> {
+pub(super) enum Gesture<NodeId, PortId, WireId, GroupId> {
     /// Claims an otherwise-unowned Node body press without promoting it into
     /// movement. An interactive host widget preempts this through
     /// `pointer_blocked` and keeps its own click or drag lifecycle.
@@ -195,6 +206,12 @@ pub(super) enum Gesture<NodeId, PortId, GroupId> {
         current: Pos2,
         transform: egui::emath::TSTransform,
     },
+    Reconnect {
+        wire: WireId,
+        endpoint: crate::wire::ReconnectEndpoint,
+        current: Pos2,
+        transform: egui::emath::TSTransform,
+    },
     Resize {
         group: GroupId,
         initial_rect: Rect,
@@ -205,13 +222,14 @@ pub(super) enum Gesture<NodeId, PortId, GroupId> {
     LayoutSwipe(LayoutSwipeState<NodeId>),
 }
 
-impl<NodeId, PortId, GroupId> Gesture<NodeId, PortId, GroupId> {
+impl<NodeId, PortId, WireId, GroupId> Gesture<NodeId, PortId, WireId, GroupId> {
     const fn transform(&self) -> egui::emath::TSTransform {
         match self {
             Self::Hold { transform }
             | Self::Marquee { transform, .. }
             | Self::Move { transform, .. }
             | Self::Connect { transform, .. }
+            | Self::Reconnect { transform, .. }
             | Self::Resize { transform, .. } => *transform,
             Self::LayoutSwipe(gesture) => gesture.transform(),
         }
@@ -223,18 +241,14 @@ impl<NodeId, PortId, GroupId> Gesture<NodeId, PortId, GroupId> {
 /// render cache.
 #[derive(Clone, Debug)]
 pub struct InteractionState<NodeId, PortId, WireId, GroupId> {
-    pub(super) gesture: Option<Gesture<NodeId, PortId, GroupId>>,
-    wire_marker: std::marker::PhantomData<WireId>,
+    pub(super) gesture: Option<Gesture<NodeId, PortId, WireId, GroupId>>,
 }
 
 impl<NodeId, PortId, WireId, GroupId> Default
     for InteractionState<NodeId, PortId, WireId, GroupId>
 {
     fn default() -> Self {
-        Self {
-            gesture: None,
-            wire_marker: std::marker::PhantomData,
-        }
+        Self { gesture: None }
     }
 }
 

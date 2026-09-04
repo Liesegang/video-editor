@@ -19,7 +19,9 @@ half4 main(float2 p) {
     float d = distance(uv, float2(0.5));
 
     // Vignette mask
-    float vignette = smoothstep(radius, radius - softness, d);
+    float vignette = softness <= 0.0
+        ? (d <= radius ? 1.0 : 0.0)
+        : 1.0 - smoothstep(max(0.0, radius - softness), radius, d);
 
     // Dithering
     // Add noise to the vignette factor to break up banding

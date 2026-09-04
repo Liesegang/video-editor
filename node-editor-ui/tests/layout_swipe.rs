@@ -101,6 +101,7 @@ impl FakeGraph {
             ports: &self.ports,
             wires: &self.wires,
             groups: &self.groups,
+            ports_compatible: |source, target| source == target,
             selection_order: &self.order,
             selection: AuthoritativeSelection::default(),
         }

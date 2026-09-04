@@ -2,20 +2,23 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::BlendMode;
 use crate::model::node::{Node, NodeContent, native_node_descriptor_for_node};
 use crate::model::project::connection::{
-    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortDirection,
-    PortExposure, PortMultiplicity, PortSide, TIME_PORT,
+    AUDIO_OUTPUT_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType,
+    PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortSide, SOUND_INPUT_PORT,
+    TIME_PORT,
 };
 use crate::model::project::property::PropertyValue;
 
 use super::{
-    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, PublishedActionId,
-    PublishedMediaInputId, PublishedMediaOutputId, PublishedParameterId, PublishedSignalId,
+    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, ModuleOutputId, PublishedActionId,
+    PublishedMediaInputId, PublishedParameterId, PublishedSignalId,
 };
 
-/// Reusable logic. Host capability is derived from the published interface;
-/// definitions deliberately have no mutually-exclusive Generator/Effect role.
+/// Reusable media-processing logic. Render boundaries are dedicated Output
+/// Nodes in `graph`; `interface` contains only externally supplied controls
+/// and host inputs, never a second output-routing source of truth.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleDefinition {
@@ -29,6 +32,42 @@ pub struct ModuleDefinition {
 }
 
 impl ModuleDefinition {
+    /// Creates the smallest valid media-processing Module: one stable Output
+    /// boundary with Image and Sound inputs and no authored processing Nodes.
+    /// UI surfaces and importers use this model constructor so the starter
+    /// topology has one authority.
+    pub fn new_image(
+        name: impl Into<String>,
+        sharing: ModuleDefinitionSharing,
+    ) -> (Self, ModuleOutputId) {
+        let output_id = ModuleOutputId::new();
+        let mut output = Node::new_module_output("Output", output_id);
+        output.ui_position = [360.0, 120.0];
+        let output_node_id = output.id;
+        (
+            Self {
+                id: ModuleDefinitionId::new(),
+                name: name.into(),
+                sharing,
+                graph: ModuleGraph {
+                    nodes: HashMap::from([(output_node_id, output)]),
+                    connections: Vec::new(),
+                },
+                interface: ModuleInterface::default(),
+                topology_revision: 1,
+                interface_version: 1,
+            },
+            output_id,
+        )
+    }
+
+    pub fn new_project_image(name: impl Into<String>) -> (Self, ModuleOutputId) {
+        Self::new_image(
+            name,
+            ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+        )
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err(format!("Module definition {} has no name", self.id));
@@ -41,8 +80,130 @@ impl ModuleDefinition {
         }
         self.sharing.validate()?;
         self.graph.validate()?;
+        self.validate_outputs()?;
         self.interface.validate(&self.graph)
     }
+
+    /// Returns the render terminals derived directly from dedicated Output
+    /// Nodes. There is no second persisted list to synchronize with topology.
+    pub fn outputs(&self) -> impl Iterator<Item = ModuleOutput> + '_ {
+        let mut outputs = self
+            .graph
+            .nodes
+            .values()
+            .filter_map(|node| {
+                let NodeContent::ModuleOutput(output) = node.content() else {
+                    return None;
+                };
+                Some(ModuleOutput {
+                    id: output.id,
+                    node_id: node.id,
+                    name: node.name.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        outputs.sort_by_key(|output| output.id);
+        outputs.into_iter()
+    }
+
+    pub fn output(&self, output_id: ModuleOutputId) -> Option<ModuleOutput> {
+        self.outputs().find(|output| output.id == output_id)
+    }
+
+    fn validate_outputs(&self) -> Result<(), String> {
+        let outputs = self.outputs().collect::<Vec<_>>();
+        if outputs.is_empty() {
+            return Err(format!(
+                "Module definition {} requires at least one dedicated Output Node",
+                self.id
+            ));
+        }
+        let mut ids = HashSet::with_capacity(outputs.len());
+        for output in outputs {
+            if !ids.insert(output.id) {
+                return Err(format!("Module repeats Output identity {}", output.id));
+            }
+            require_interface_name(&output.name, "Module Output")?;
+            let node = self
+                .graph
+                .nodes
+                .get(&output.node_id)
+                .ok_or_else(|| format!("Module Output {} has no Node", output.id))?;
+            if !node.enabled || node.bypassed || node.blend_mode != BlendMode::Normal {
+                return Err(format!(
+                    "Module Output Node {} cannot be disabled, bypassed, or blended",
+                    node.id
+                ));
+            }
+            if node.properties().iter().next().is_some() {
+                return Err(format!(
+                    "Module Output Node {} cannot own authored properties",
+                    node.id
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Derived description of an input-only Module render terminal.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModuleOutput {
+    pub id: ModuleOutputId,
+    pub node_id: uuid::Uuid,
+    pub name: String,
+}
+
+impl ModuleOutput {
+    pub fn target(&self, data_type: PortDataType) -> Option<ModulePortAddress> {
+        module_output_port(data_type).map(|port| ModulePortAddress {
+            node_id: self.node_id,
+            port: port.key.to_string(),
+        })
+    }
+
+    pub fn supports(&self, data_type: PortDataType) -> bool {
+        module_output_port(data_type).is_some()
+    }
+
+    pub fn targets(&self) -> impl Iterator<Item = (PortDataType, ModulePortAddress)> + '_ {
+        MODULE_OUTPUT_PORTS.iter().map(|port| {
+            (
+                port.data_type,
+                ModulePortAddress {
+                    node_id: self.node_id,
+                    port: port.key.to_string(),
+                },
+            )
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ModuleOutputPort {
+    key: &'static str,
+    label: &'static str,
+    data_type: PortDataType,
+}
+
+const MODULE_OUTPUT_PORTS: [ModuleOutputPort; 2] = [
+    ModuleOutputPort {
+        key: IMAGE_INPUT_PORT,
+        label: "Image",
+        data_type: PortDataType::Image,
+    },
+    ModuleOutputPort {
+        key: SOUND_INPUT_PORT,
+        label: "Audio",
+        data_type: PortDataType::Audio,
+    },
+];
+
+fn module_output_port(data_type: PortDataType) -> Option<ModuleOutputPort> {
+    MODULE_OUTPUT_PORTS
+        .iter()
+        .find(|port| port.data_type == data_type)
+        .copied()
 }
 
 /// Persisted edit-sharing policy. A private definition belongs to exactly one
@@ -160,6 +321,19 @@ impl ModuleGraph {
                     connection.id, source.data_type, target.data_type
                 ));
             }
+            if connection.blend_mode != BlendMode::Normal
+                && (source.data_type != PortDataType::Image
+                    || connection.to.port != MERGE_IMAGES_PORT
+                    || !matches!(
+                        self.nodes.get(&connection.to.node_id).map(Node::content),
+                        Some(NodeContent::Merge)
+                    ))
+            {
+                return Err(format!(
+                    "Module connection {} can use a non-Normal Blend only on an Image Merge input",
+                    connection.id
+                ));
+            }
             target_orders
                 .entry(connection.to.clone())
                 .or_default()
@@ -254,6 +428,10 @@ pub struct ModuleNodePortContract {
 impl ModuleNodePortContract {
     pub fn resolve(node: &Node) -> Result<Self, String> {
         let ports = match node.content() {
+            NodeContent::ModuleOutput(_) => MODULE_OUTPUT_PORTS
+                .iter()
+                .map(|port| PortDefinition::input(port.key, port.label, port.data_type))
+                .collect(),
             NodeContent::PluginOperation(operation) => operation.declared_ports.clone(),
             NodeContent::Media(_) => vec![
                 PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
@@ -326,6 +504,9 @@ pub struct ModuleConnection {
     pub from: ModulePortAddress,
     pub to: ModulePortAddress,
     pub order: i64,
+    /// Per-edge compositing is part of Module topology. This permits one
+    /// source to feed different Merge inputs with independent modes.
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
@@ -340,7 +521,6 @@ pub struct ModulePortAddress {
 pub struct ModuleInterface {
     pub parameters: Vec<PublishedParameter>,
     pub media_inputs: Vec<PublishedMediaInput>,
-    pub media_outputs: Vec<PublishedMediaOutput>,
     pub signals: Vec<PublishedSignal>,
     pub actions: Vec<PublishedAction>,
 }
@@ -389,20 +569,6 @@ impl ModuleInterface {
         }
         if primary_media_inputs > 1 {
             return Err("A Module may publish at most one primary media input".to_string());
-        }
-        for output in &self.media_outputs {
-            require_interface_id(&mut ids, output.id.as_uuid())?;
-            require_interface_name(&output.name, "Published media output")?;
-            let source = graph.port_definition(&output.source, PortDirection::Output)?;
-            if !is_media_type(output.data_type) {
-                return Err(format!("Published media output {} is not media", output.id));
-            }
-            if !output.data_type.accepts(source.data_type) {
-                return Err(format!(
-                    "Published media output {} type does not match its source",
-                    output.id
-                ));
-            }
         }
         for signal in &self.signals {
             require_interface_id(&mut ids, signal.id.as_uuid())?;
@@ -504,15 +670,6 @@ pub struct PublishedMediaInput {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct PublishedMediaOutput {
-    pub id: PublishedMediaOutputId,
-    pub name: String,
-    pub data_type: PortDataType,
-    pub source: ModulePortAddress,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct PublishedSignal {
     pub id: PublishedSignalId,
     pub name: String,
@@ -534,4 +691,30 @@ pub struct ModuleInstance {
     pub id: ModuleInstanceId,
     pub definition_id: ModuleDefinitionId,
     pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_module_constructor_has_one_stable_terminal_with_image_and_sound_inputs() {
+        let (definition, output_id) =
+            ModuleDefinition::new_image("Image Module", ModuleDefinitionSharing::Private);
+
+        definition.validate().expect("valid image Module");
+        let outputs = definition.outputs().collect::<Vec<_>>();
+        assert_eq!(definition.graph.nodes.len(), 1);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].id, output_id);
+        assert_eq!(
+            outputs[0].target(PortDataType::Image).unwrap().port,
+            IMAGE_INPUT_PORT
+        );
+        assert_eq!(
+            outputs[0].target(PortDataType::Audio).unwrap().port,
+            SOUND_INPUT_PORT
+        );
+        assert!(definition.interface.signals.is_empty());
+    }
 }

@@ -379,6 +379,11 @@ fn valid_ffmpeg_content_with_an_unknown_extension_is_claimed_by_magic_probe()
     )?;
     assert!(loaded.pixels().width() > 0);
     assert!(loaded.pixels().height() > 0);
+    // The loader intentionally caches a live FFmpeg reader. Drop that cache
+    // before deleting its source; Windows denies deletion while the demuxer
+    // still owns the file handle.
+    drop(loaded);
+    drop(loader);
     std::fs::remove_file(path)?;
     Ok(())
 }

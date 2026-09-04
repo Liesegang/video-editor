@@ -1,4 +1,4 @@
-//! Project-independent factories used by Timeline-first authoring UI.
+//! Project-independent factories used by authoring UI and services.
 //!
 //! These constructors deliberately need no legacy `ProjectManager`: the
 //! plugin registry supplies canonical operation/converter contracts and the
@@ -9,14 +9,73 @@ use std::collections::HashMap;
 use crate::error::LibraryError;
 use crate::model::authoring::{
     BuiltinEffectInstance, BuiltinEffectParameter, EffectContractSnapshot, EffectParameterContract,
-    OperationRef,
+    OperationRef, TextEnsembleOperation, text_ensemble_direct_contract_is_compatible,
 };
 use crate::model::frame::color::Color;
-use crate::model::node::{GeneratorContent, NativeNodeFactory, Node};
+use crate::model::node::{GeneratorContent, MediaContent, NativeNodeFactory, Node};
 use crate::model::project::{PortDataType, PortDirection};
 use crate::model::property::{ColorValue, Property, PropertyMap, PropertyValue};
 use crate::plugin::entity_converter::measure_text_size;
 use crate::plugin::{EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, PROPERTY_PORT_PREFIX, PluginManager};
+
+/// Text Ensemble operation family accepted by the source-level stack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextEnsembleOperationKind {
+    Effector,
+    Decorator,
+}
+
+/// Builds a Text Ensemble entry through the same descriptor-backed Node
+/// construction boundary used by the production Node Editor.
+pub struct TextEnsembleOperationFactory;
+
+impl TextEnsembleOperationFactory {
+    pub fn create(
+        plugins: &PluginManager,
+        kind: TextEnsembleOperationKind,
+        component_id: &str,
+    ) -> Result<TextEnsembleOperation, LibraryError> {
+        let (category, version) = match kind {
+            TextEnsembleOperationKind::Effector => {
+                let plugin = plugins.get_effector_plugin(component_id).ok_or_else(|| {
+                    LibraryError::Plugin(format!("Effector plugin '{component_id}' is unavailable"))
+                })?;
+                (crate::plugin::EFFECTOR_CATEGORY, plugin.version())
+            }
+            TextEnsembleOperationKind::Decorator => {
+                let plugin = plugins.get_decorator_plugin(component_id).ok_or_else(|| {
+                    LibraryError::Plugin(format!(
+                        "Decorator plugin '{component_id}' is unavailable"
+                    ))
+                })?;
+                (crate::plugin::DECORATOR_CATEGORY, plugin.version())
+            }
+        };
+        let node = plugins.create_text_ensemble_operation_node(category, component_id)?;
+        let crate::model::node::NodeContent::PluginOperation(operation) = node.content() else {
+            return Err(LibraryError::Validation(
+                "Text Ensemble factory did not create a plugin operation".to_string(),
+            ));
+        };
+        if !text_ensemble_direct_contract_is_compatible(&operation.declared_ports) {
+            return Err(LibraryError::Validation(format!(
+                "Operation {}/{}/{} requires Node Editor media inputs and cannot run inline on Text",
+                operation.category, operation.component_id, operation.operation
+            )));
+        }
+        Ok(TextEnsembleOperation {
+            id: node.id,
+            operation: OperationRef {
+                category: operation.category.clone(),
+                component_id: operation.component_id.clone(),
+                operation: operation.operation.clone(),
+                version: format!("{}.{}.{}", version.0, version.1, version.2),
+            },
+            declared_ports: operation.declared_ports.clone(),
+            properties: node.properties().clone(),
+        })
+    }
+}
 
 /// Authoring payload for a detached Module Node. Canvas dimensions are a
 /// separate argument because they are context, not persisted Node identity.
@@ -51,6 +110,82 @@ pub enum ModuleNodeRequest {
 pub struct AuthoringNodeFactory;
 
 impl AuthoringNodeFactory {
+    /// Builds the authoritative detached Media Node used by both authoring
+    /// models. Source identity and converter defaults are materialized in one
+    /// step, so callers cannot construct a half-initialized Media Node.
+    pub fn create_media(
+        plugins: &PluginManager,
+        name: &str,
+        request: super::project_service::MediaNodeRequest,
+        canvas_width: u64,
+        canvas_height: u64,
+        media_width: u64,
+        media_height: u64,
+    ) -> Result<Node, LibraryError> {
+        use super::project_service::MediaNodeRequest;
+
+        let (converter_kind, converter_required, content, file_path) = match request {
+            MediaNodeRequest::Audio {
+                asset_id,
+                file_path,
+                audio_stream_index,
+            } => (
+                "audio",
+                false,
+                MediaContent {
+                    asset_id,
+                    stream_index: None,
+                    audio_stream_index,
+                },
+                file_path,
+            ),
+            MediaNodeRequest::Video {
+                asset_id,
+                file_path,
+                stream_index,
+                audio_stream_index,
+            } => (
+                "video",
+                true,
+                MediaContent {
+                    asset_id,
+                    stream_index,
+                    audio_stream_index,
+                },
+                file_path,
+            ),
+            MediaNodeRequest::Image {
+                asset_id,
+                file_path,
+            } => (
+                "image",
+                true,
+                MediaContent {
+                    asset_id,
+                    stream_index: None,
+                    audio_stream_index: None,
+                },
+                file_path,
+            ),
+        };
+        let definitions = match plugins.get_entity_converter(converter_kind) {
+            Some(converter) => converter.get_property_definitions(
+                canvas_width,
+                canvas_height,
+                media_width,
+                media_height,
+            ),
+            None if converter_required => {
+                return Err(LibraryError::Plugin(format!(
+                    "{converter_kind} converter plugin not found"
+                )));
+            }
+            None => Vec::new(),
+        };
+        Node::from_media_converter(name, content, &definitions, file_path)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn create(
         plugins: &PluginManager,
         request: ModuleNodeRequest,

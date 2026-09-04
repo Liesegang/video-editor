@@ -1,6 +1,7 @@
 use crate::model::frame::color::Color;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use uuid::Uuid;
 
 mod color_metadata;
@@ -56,6 +57,26 @@ pub enum AssetKind {
     Image,
     Model3D,
     Other,
+}
+
+impl AssetKind {
+    /// Case-insensitive fallback classification used by every import service
+    /// when no decoder/plugin supplied a more authoritative stream kind.
+    pub fn from_path(path: impl AsRef<Path>) -> Self {
+        let extension = path
+            .as_ref()
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "mp4" | "mov" | "avi" | "mkv" | "webm" => Self::Video,
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" => Self::Image,
+            "mp3" | "wav" | "ogg" | "aac" | "flac" => Self::Audio,
+            "obj" | "gltf" | "glb" | "fbx" => Self::Model3D,
+            _ => Self::Other,
+        }
+    }
 }
 
 impl Asset {
@@ -165,5 +186,12 @@ mod tests {
         let json = serde_json::to_string(&asset).unwrap();
         let restored: Asset = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, asset);
+    }
+
+    #[test]
+    fn model_path_classification_is_case_insensitive_and_includes_fbx() {
+        assert_eq!(AssetKind::from_path("scene.FBX"), AssetKind::Model3D);
+        assert_eq!(AssetKind::from_path("scene.gLb"), AssetKind::Model3D);
+        assert_eq!(AssetKind::from_path("scene.unknown"), AssetKind::Other);
     }
 }

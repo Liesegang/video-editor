@@ -99,7 +99,8 @@ fn collect_frame_paths(items: &[FrameItem], paths: &mut BTreeSet<String>) {
                 }
                 FrameContent::Text { .. }
                 | FrameContent::Shape { .. }
-                | FrameContent::SkSL { .. } => {}
+                | FrameContent::SkSL { .. }
+                | FrameContent::ParticleScene { .. } => {}
             },
             FrameItem::Group(group) => collect_frame_paths(&group.items, paths),
         }

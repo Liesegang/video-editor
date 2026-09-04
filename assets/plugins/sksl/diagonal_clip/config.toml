@@ -1,6 +1,7 @@
 id = "diagonal_clip"
 name = "Diagonal Clip"
 category = "Geometry"
+color_domain = "project_linear"
 
 [[properties]]
 name = "angle"

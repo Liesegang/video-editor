@@ -1,845 +1,873 @@
-use egui::Ui;
-use egui_phosphor::regular as icons;
-use std::sync::{Arc, RwLock};
+//! Preview surface for the authoring Timeline model.
+//!
+//! The panel submits the sole authoring Project and its derived hierarchical
+//! RenderPlan directly to the render worker. It never reconstructs the retired
+//! graph-backed Project model or exposes ordinary Timeline structure as Nodes.
 
-use library::EditorService;
-use library::RenderServer;
-use library::model::project::Project;
-
-use crate::command::{CommandId, CommandRegistry};
-#[cfg(test)]
-use crate::state::context_types::PreviewViewportRuntimeState;
-#[cfg(test)]
-use crate::state::context_types::SelectionTarget;
-use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
-use crate::state::preview_render::PreviewPresentationKey;
-use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ZoomPolicy};
-use crate::{action::HistoryManager, state::context::EditorContext};
-use pan_zoom_ui::{AxisMask, NavigationConfig};
-
-mod action;
-pub mod clip;
+mod direct_edit;
 mod gizmo;
-mod interaction;
-mod qa;
-mod routing;
-mod support;
-pub mod vector_editor;
+mod gizmo_geometry;
+mod path_editor;
+mod text_editor;
+mod view;
 
-#[cfg(test)]
-use action::PreviewAction;
-use qa::*;
-use support::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
-fn preview_grid_config() -> pan_zoom_ui::GridConfig {
-    pan_zoom_ui::GridConfig::default()
+use library::core::render_plan::{RenderPlan, RenderPlanCache};
+use library::editor::TimelineEditorService;
+use library::model::authoring::{AuthoringProject, InstancePath, ProjectRevision, TimelineId};
+use library::model::frame::frame::Region;
+use library::rendering::renderer::RenderOutput;
+use library::{RenderRequestId, RenderResult, RenderServer};
+use ordered_float::OrderedFloat;
+use pan_zoom_ui::CanvasTransform;
+
+use crate::state::authoring::AuthoringUiState;
+
+use direct_edit::handle_direct_edit;
+use view::{
+    navigate, paint_empty_preview, paint_preview_background, preview_canvas_transform,
+    preview_content_rect, toolbar, update_fit, visible_region,
+};
+
+const TOP_BAR_HEIGHT: f32 = 34.0;
+const BOTTOM_BAR_HEIGHT: f32 = 24.0;
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1_u64 << 63);
+
+#[derive(Clone, Debug, PartialEq)]
+struct PreviewRequestKey {
+    revision: ProjectRevision,
+    timeline_id: TimelineId,
+    instance_path: Option<InstancePath>,
+    frame_number: i64,
+    render_scale: OrderedFloat<f64>,
+    region: Option<Region>,
+    /// Hash of an ephemeral direct-edit buffer. It invalidates only Preview
+    /// requests and is never persisted as Project state.
+    transient_edit: Option<u64>,
 }
 
-fn preview_canvas_theme() -> pan_zoom_ui::CanvasTheme {
-    pan_zoom_ui::CanvasTheme::default()
-}
-
-fn preview_navigation_config() -> NavigationConfig {
-    NavigationConfig {
-        input_policy: ViewportInputPolicy::Trackpad,
-        zoom_policy: ZoomPolicy::Uniform,
-        pan_axes: AxisMask::BOTH,
-        zoom_axes: AxisMask::BOTH,
-        min_zoom: egui::Vec2::splat(PREVIEW_MIN_ZOOM),
-        max_zoom: egui::Vec2::splat(PREVIEW_MAX_ZOOM),
-        ..Default::default()
+impl PreviewRequestKey {
+    /// Whether two requests differ only by their Timeline frame.
+    ///
+    /// A late frame may be presented during uninterrupted forward playback,
+    /// but never after the Project, Timeline instance, scale, or ROI changed.
+    fn has_same_presentation_as(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.timeline_id == other.timeline_id
+            && self.instance_path == other.instance_path
+            && self.render_scale == other.render_scale
+            && self.region == other.region
+            && self.transient_edit == other.transient_edit
     }
 }
 
-/// Clone the authoritative Project while holding the read lock briefly. Frame
-/// evaluation (including trusted CPython Expressions) must happen on this
-/// snapshot after the lock has been released so Python cannot block writers.
-fn snapshot_project_for_preview(project: &Arc<RwLock<Project>>) -> Option<Project> {
-    project.read().ok().map(|project| project.clone())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlaybackSequence {
+    started: Instant,
+    anchor_frame: i64,
 }
 
-pub fn preview_panel(
-    ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut EditorService,
-    project: &Arc<RwLock<Project>>,
-    render_server: &RenderServer,
-    registry: &CommandRegistry,
-) {
-    let bottom_bar_height = 24.0;
-    let top_bar_height = 32.0; // Added top bar
-    let available_rect = ui.available_rect_before_wrap();
+#[derive(Clone, Debug, PartialEq)]
+struct PreviewIntent {
+    key: PreviewRequestKey,
+    playback: Option<PlaybackSequence>,
+}
 
-    // Top Bar area
-    let top_bar_rect = egui::Rect::from_min_size(
-        available_rect.min,
-        egui::vec2(available_rect.width(), top_bar_height),
-    );
+struct DesiredRender {
+    intent: PreviewIntent,
+    project: Arc<AuthoringProject>,
+    plan: Arc<RenderPlan>,
+}
 
-    let preview_rect = egui::Rect::from_min_size(
-        egui::pos2(available_rect.min.x, available_rect.min.y + top_bar_height),
-        egui::vec2(
-            available_rect.width().max(0.0),
-            (available_rect.height() - bottom_bar_height - top_bar_height).max(0.0),
-        ),
-    );
-    let bottom_bar_rect = egui::Rect::from_min_max(
-        egui::pos2(available_rect.min.x, preview_rect.max.y),
-        available_rect.max,
-    );
-    let rect = preview_rect;
+struct InFlightRender {
+    request_id: RenderRequestId,
+    intent: PreviewIntent,
+}
 
-    // Draw Top Bar
-    ui.scope_builder(egui::UiBuilder::new().max_rect(top_bar_rect), |ui| {
-        ui.horizontal(|ui| {
-            ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 0.0);
+struct PublishableRender {
+    intent: PreviewIntent,
+    result: RenderResult,
+}
 
-            let select_btn = ui.add(
-                egui::Button::new(egui::RichText::new(icons::CURSOR).size(18.0))
-                    .selected(editor_context.view.active_tool == PreviewTool::Select),
-            );
-            register_preview_tool_component(
-                "preview.tool.select",
-                "select",
-                &select_btn,
-                editor_context.view.active_tool == PreviewTool::Select,
-            );
-            if select_btn.clicked() {
-                editor_context.view.active_tool = PreviewTool::Select;
-            }
-            select_btn.on_hover_text("Select Tool");
+struct TransientProjectProjection {
+    revision: ProjectRevision,
+    upstream_edit: Option<u64>,
+    edit: u64,
+    project: Arc<AuthoringProject>,
+}
 
-            let pan_btn = ui.add(
-                egui::Button::new(egui::RichText::new(icons::HAND).size(18.0))
-                    .selected(editor_context.view.active_tool == PreviewTool::Pan),
-            );
-            register_preview_tool_component(
-                "preview.tool.pan",
-                "pan",
-                &pan_btn,
-                editor_context.view.active_tool == PreviewTool::Pan,
-            );
-            if pan_btn.clicked() {
-                editor_context.view.active_tool = PreviewTool::Pan;
-            }
-            pan_btn.on_hover_text("Pan Tool");
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TransientProjectionStage {
+    Text,
+    InspectorProperty,
+    Transform,
+}
 
-            let zoom_btn = ui.add(
-                egui::Button::new(egui::RichText::new(icons::MAGNIFYING_GLASS).size(18.0))
-                    .selected(editor_context.view.active_tool == PreviewTool::Zoom),
-            );
-            register_preview_tool_component(
-                "preview.tool.zoom",
-                "zoom",
-                &zoom_btn,
-                editor_context.view.active_tool == PreviewTool::Zoom,
-            );
-            if zoom_btn.clicked() {
-                editor_context.view.active_tool = PreviewTool::Zoom;
-            }
-            zoom_btn.on_hover_text("Zoom Tool");
+#[derive(Default)]
+struct TransientProjectionCache {
+    entries: HashMap<TransientProjectionStage, TransientProjectProjection>,
+}
 
-            let text_btn = ui.add(
-                egui::Button::new(egui::RichText::new(icons::TEXT_T).size(18.0))
-                    .selected(editor_context.view.active_tool == PreviewTool::Text),
-            );
-            register_preview_tool_component(
-                "preview.tool.text",
-                "text",
-                &text_btn,
-                editor_context.view.active_tool == PreviewTool::Text,
-            );
-            if text_btn.clicked() {
-                editor_context.view.active_tool = PreviewTool::Text;
-            }
-            text_btn.on_hover_text("Text Tool");
-
-            let shape_btn = ui.add(
-                egui::Button::new(egui::RichText::new(icons::SQUARE).size(18.0))
-                    .selected(editor_context.view.active_tool == PreviewTool::Shape),
-            );
-            register_preview_tool_component(
-                "preview.tool.shape",
-                "shape",
-                &shape_btn,
-                editor_context.view.active_tool == PreviewTool::Shape,
-            );
-            if shape_btn.clicked() {
-                editor_context.view.active_tool = PreviewTool::Shape;
-            }
-            shape_btn.on_hover_text("Shape Tool");
-        });
-    });
-
-    let current_composition_view = project.read().ok().and_then(|project| {
-        editor_context
-            .get_current_composition(&project)
-            .map(|composition| (composition.id, composition.width, composition.height))
-    });
-
-    // A new/changed composition always gets a default fit. While that default
-    // view remains untouched, keep it centered through dock and DPI-driven
-    // logical-size changes. Once the user pans or zooms, resizing preserves
-    // their chosen camera.
-    update_preview_fit(
-        &mut editor_context.interaction.preview_viewport,
-        &mut editor_context.view.pan,
-        &mut editor_context.view.zoom,
-        current_composition_view,
-        preview_rect,
-    );
-
-    // Viewport Controller Integration
-    let hand_tool_key = registry
-        .commands
-        .iter()
-        .find(|c| c.id == CommandId::HandTool)
-        .and_then(|c| c.shortcut)
-        .map(|(_, key)| key);
-
-    // Read the momentary hand key directly: pointer gesture ownership must not
-    // depend on which inspector/text widget happened to retain keyboard focus.
-    let hand_tool_key_down = hand_tool_key.is_some_and(|key| ui.input(|input| input.key_down(key)));
-    let pan_requested = hand_tool_key_down || editor_context.view.active_tool == PreviewTool::Pan;
-    let gesture_input = ui.input(|input| PreviewGestureInput {
-        primary_pressed: input.pointer.button_pressed(egui::PointerButton::Primary),
-        primary_down: input.pointer.button_down(egui::PointerButton::Primary),
-        primary_released: input.pointer.button_released(egui::PointerButton::Primary),
-        primary_dragging: input.pointer.is_decidedly_dragging(),
-        press_started_in_viewport: input
-            .pointer
-            .press_origin()
-            .is_some_and(|position| preview_rect.contains(position)),
-        pan_requested,
-    });
-    let gesture_decision = arbitrate_primary_gesture(
-        &mut editor_context.interaction.preview_viewport.primary_gesture,
-        gesture_input,
-    );
-
-    let pointer_delta = ui.input(|input| input.pointer.delta());
-    let (mut viewport_changed, response) = {
-        let mut state = PreviewViewportState {
-            pan: &mut editor_context.view.pan,
-            zoom: &mut editor_context.view.zoom,
+impl TransientProjectionCache {
+    fn project(
+        &mut self,
+        stage: TransientProjectionStage,
+        revision: ProjectRevision,
+        upstream_edit: Option<u64>,
+        edit: Option<u64>,
+        source: &Arc<AuthoringProject>,
+        apply: impl FnOnce(&Arc<AuthoringProject>) -> (Arc<AuthoringProject>, Option<u64>),
+    ) -> (Arc<AuthoringProject>, Option<u64>) {
+        let Some(edit) = edit else {
+            self.entries.remove(&stage);
+            return (Arc::clone(source), None);
         };
-        let controller_id = ui.make_persistent_id("unique_preview_viewport_controller_id");
-        let mut controller = ViewportController::new(ui, controller_id, None)
-            .with_config(preview_navigation_config())
-            // A latched primary pan uses the raw per-frame pointer delta below
-            // instead of asking Response to re-arbitrate gesture ownership.
-            .with_pan_tool_active(!gesture_input.primary_down && pan_requested)
-            .with_zoom_tool_active(
-                editor_context.view.active_tool == PreviewTool::Zoom && !gesture_decision.pan_owned,
-            );
+        if let Some(cached) = self.entries.get(&stage).filter(|cached| {
+            cached.revision == revision
+                && cached.upstream_edit == upstream_edit
+                && cached.edit == edit
+        }) {
+            return (Arc::clone(&cached.project), Some(edit));
+        }
 
-        controller.interact_with_rect(
-            preview_rect,
-            &mut state,
-            &mut editor_context.interaction.handled_hand_tool_drag,
-        )
-    };
-    viewport_changed |= apply_owned_primary_pan(
-        gesture_decision.pan_owned,
-        gesture_input.primary_pressed,
-        gesture_input.primary_down,
-        gesture_input.primary_released,
-        pointer_delta,
-        &mut editor_context.view.pan,
-        &mut editor_context.interaction.handled_hand_tool_drag,
-    );
-    if gesture_decision.pan_owned {
-        ui.output_mut(|output| {
-            output.cursor_icon = if gesture_input.primary_down {
-                egui::CursorIcon::Grabbing
-            } else {
-                egui::CursorIcon::Grab
-            };
+        let (projected, applied_edit) = apply(source);
+        if applied_edit == Some(edit) {
+            self.entries.insert(
+                stage,
+                TransientProjectProjection {
+                    revision,
+                    upstream_edit,
+                    edit,
+                    project: Arc::clone(&projected),
+                },
+            );
+        } else {
+            self.entries.remove(&stage);
+        }
+        (projected, applied_edit)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthoringPreviewDiagnostics {
+    pub in_flight_request: Option<u64>,
+    pub desired_pending: bool,
+    pub submitted: u64,
+    pub published: u64,
+    pub discarded: u64,
+    pub coalesced: u64,
+}
+
+/// Non-persisted compiler and request state owned by one Preview panel.
+///
+/// Keeping this state separate from [`AuthoringUiState`] makes the panel easy
+/// to embed without putting RenderPlan/cache internals into the editing model.
+#[derive(Default)]
+pub struct AuthoringPreviewRuntime {
+    plan_cache: RenderPlanCache,
+    project_revision: Option<ProjectRevision>,
+    project: Option<Arc<AuthoringProject>>,
+    plan: Option<Arc<RenderPlan>>,
+    plan_error: Option<(ProjectRevision, String)>,
+    /// Immutable direct-edit projections shared by Text, Inspector values,
+    /// and the transform gizmo. An unchanged edit reuses its Arc instead of
+    /// cloning a large Project again on every repaint.
+    transient_projections: TransientProjectionCache,
+    latest: Option<PreviewIntent>,
+    desired: Option<DesiredRender>,
+    in_flight: Option<InFlightRender>,
+    settled: Option<PreviewRequestKey>,
+    displayed: Option<PreviewIntent>,
+    /// Exact evaluated geometry that produced the displayed pixels.
+    displayed_frame_info: Option<library::model::frame::frame::FrameInfo>,
+    reported_error: Option<String>,
+    submitted: u64,
+    published: u64,
+    discarded: u64,
+    coalesced: u64,
+}
+
+impl AuthoringPreviewRuntime {
+    pub fn diagnostics(&self) -> AuthoringPreviewDiagnostics {
+        AuthoringPreviewDiagnostics {
+            in_flight_request: self
+                .in_flight
+                .as_ref()
+                .map(|request| request.request_id.get()),
+            desired_pending: self.desired.is_some(),
+            submitted: self.submitted,
+            published: self.published,
+            discarded: self.discarded,
+            coalesced: self.coalesced,
+        }
+    }
+
+    /// Atomically snapshot the sole authoring Project and incrementally derive
+    /// the matching RenderPlan. Menu actions such as current-frame export may
+    /// reuse this boundary instead of compiling a second plan.
+    pub fn snapshot_and_plan(
+        &mut self,
+        service: &TimelineEditorService,
+    ) -> Result<(ProjectRevision, Arc<AuthoringProject>, Arc<RenderPlan>), String> {
+        let observed_revision = service.revision().map_err(|error| error.to_string())?;
+        if self.project_revision == Some(observed_revision) {
+            if let Some((_, error)) = self
+                .plan_error
+                .as_ref()
+                .filter(|(revision, _)| *revision == observed_revision)
+            {
+                return Err(error.clone());
+            }
+            if let (Some(project), Some(plan)) = (&self.project, &self.plan) {
+                return Ok((observed_revision, Arc::clone(project), Arc::clone(plan)));
+            }
+        }
+
+        let (project, revision) = service
+            .snapshot_with_revision()
+            .map_err(|error| error.to_string())?;
+        match self.plan_cache.compile(project.as_ref()) {
+            Ok((plan, _)) => {
+                let plan = Arc::new(plan);
+                self.project_revision = Some(revision);
+                self.project = Some(Arc::clone(&project));
+                self.plan = Some(Arc::clone(&plan));
+                self.plan_error = None;
+                Ok((revision, project, plan))
+            }
+            Err(error) => {
+                self.project_revision = Some(revision);
+                self.project = Some(project);
+                self.plan = None;
+                self.plan_error = Some((revision, error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    fn request(
+        &mut self,
+        key: PreviewRequestKey,
+        playback: Option<PlaybackSequence>,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+    ) {
+        let intent = PreviewIntent { key, playback };
+        self.latest = Some(intent.clone());
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|request| request.intent.key == intent.key)
+            || self.settled.as_ref() == Some(&intent.key)
+            || self
+                .desired
+                .as_ref()
+                .is_some_and(|request| request.intent == intent)
+        {
+            return;
+        }
+        if self.desired.is_some() {
+            self.coalesced = self.coalesced.wrapping_add(1);
+        }
+        self.desired = Some(DesiredRender {
+            intent,
+            project,
+            plan,
         });
     }
 
-    if viewport_changed {
-        editor_context.interaction.preview_viewport.auto_fit = false;
+    fn project_transient_edit(
+        &mut self,
+        stage: TransientProjectionStage,
+        revision: ProjectRevision,
+        upstream_edit: Option<u64>,
+        edit: Option<u64>,
+        project: &Arc<AuthoringProject>,
+        apply: impl FnOnce(&Arc<AuthoringProject>) -> (Arc<AuthoringProject>, Option<u64>),
+    ) -> (Arc<AuthoringProject>, Option<u64>) {
+        self.transient_projections
+            .project(stage, revision, upstream_edit, edit, project, apply)
     }
 
-    // Legacy logic (removed lines 36-64)
+    fn suspend(&mut self) {
+        self.latest = None;
+        self.desired = None;
+    }
 
-    let view_offset = rect.min + editor_context.view.pan;
-    let view_zoom = editor_context.view.zoom;
+    fn poll(&mut self, render_server: &RenderServer) -> Option<PublishableRender> {
+        let mut publishable = None;
+        while let Ok(result) = render_server.poll_authoring_result() {
+            let Some(in_flight) = self
+                .in_flight
+                .as_ref()
+                .filter(|request| request.request_id == result.request_id)
+            else {
+                continue;
+            };
+            let intent = in_flight.intent.clone();
+            self.in_flight = None;
+            let rendered_image = matches!(&result.output, Ok(RenderOutput::Image(_)));
+            if completion_is_publishable(
+                &intent,
+                self.latest.as_ref(),
+                self.displayed.as_ref(),
+                rendered_image,
+            ) {
+                self.settled = Some(intent.key.clone());
+                self.published = self.published.wrapping_add(1);
+                publishable = Some(PublishableRender { intent, result });
+            } else {
+                self.discarded = self.discarded.wrapping_add(1);
+            }
+        }
+        publishable
+    }
 
-    let to_screen = |pos: egui::Pos2| -> egui::Pos2 { view_offset + (pos.to_vec2() * view_zoom) };
-    let to_world = |pos: egui::Pos2| -> egui::Pos2 {
-        let vec = pos - view_offset;
-        egui::pos2(vec.x / view_zoom, vec.y / view_zoom)
+    fn submit(&mut self, render_server: &RenderServer) -> bool {
+        if self.in_flight.is_some() {
+            return true;
+        }
+        let Some(desired) = self.desired.take() else {
+            return true;
+        };
+        let request_id = next_request_id();
+        if !render_server.send_authoring_request_at_instance(
+            request_id,
+            Arc::clone(&desired.project),
+            Arc::clone(&desired.plan),
+            desired.intent.key.timeline_id,
+            desired.intent.key.instance_path.clone(),
+            desired.intent.key.frame_number,
+            desired.intent.key.render_scale.into_inner(),
+            desired.intent.key.region,
+        ) {
+            self.settled = Some(desired.intent.key);
+            self.discarded = self.discarded.wrapping_add(1);
+            return false;
+        }
+        self.submitted = self.submitted.wrapping_add(1);
+        self.in_flight = Some(InFlightRender {
+            request_id,
+            intent: desired.intent,
+        });
+        true
+    }
+
+    fn is_busy(&self) -> bool {
+        self.in_flight.is_some() || self.desired.is_some()
+    }
+
+    fn report_error(&mut self, state: &mut AuthoringUiState, error: String) {
+        self.reported_error = Some(error.clone());
+        state.error = Some(error);
+    }
+
+    fn clear_reported_error(&mut self, state: &mut AuthoringUiState) {
+        if state.error.as_ref() == self.reported_error.as_ref() {
+            state.error = None;
+        }
+        self.reported_error = None;
+    }
+}
+
+/// Decide whether a completed request may replace the currently displayed
+/// pixels. Exact requests are always authoritative. During one uninterrupted
+/// playback sequence, a successful older image is also useful as long as it
+/// moves presentation forward and every non-time rendering input still
+/// matches. This prevents the Preview from remaining frozen merely because
+/// rendering takes longer than one Timeline frame.
+fn completion_is_publishable(
+    completed: &PreviewIntent,
+    latest: Option<&PreviewIntent>,
+    displayed: Option<&PreviewIntent>,
+    rendered_image: bool,
+) -> bool {
+    let Some(latest) = latest else {
+        return false;
+    };
+    if completed.key == latest.key {
+        return true;
+    }
+    if !rendered_image
+        || completed.playback.is_none()
+        || completed.playback != latest.playback
+        || !completed.key.has_same_presentation_as(&latest.key)
+        || completed.key.frame_number > latest.key.frame_number
+    {
+        return false;
+    }
+    displayed.is_none_or(|displayed| {
+        displayed.playback != completed.playback
+            || !displayed.key.has_same_presentation_as(&completed.key)
+            || displayed.key.frame_number <= completed.key.frame_number
+    })
+}
+
+/// Draw and drive the Preview.
+///
+/// The function is independent from the graph-backed `EditorContext` model. A
+/// caller owns one [`AuthoringPreviewRuntime`] beside its transient
+/// [`AuthoringUiState`].
+pub fn preview_panel(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+    render_server: &RenderServer,
+    runtime: &mut AuthoringPreviewRuntime,
+) {
+    let available = ui.available_rect_before_wrap();
+    let _panel_response = ui.allocate_rect(available, egui::Sense::hover());
+    let top_bar = egui::Rect::from_min_size(
+        available.min,
+        egui::vec2(available.width(), TOP_BAR_HEIGHT.min(available.height())),
+    );
+    let bottom_height = BOTTOM_BAR_HEIGHT.min((available.height() - top_bar.height()).max(0.0));
+    let viewport = egui::Rect::from_min_max(
+        egui::pos2(available.min.x, top_bar.max.y),
+        egui::pos2(available.max.x, available.max.y - bottom_height),
+    );
+    let bottom_bar =
+        egui::Rect::from_min_max(egui::pos2(available.min.x, viewport.max.y), available.max);
+
+    let snapshot = runtime.snapshot_and_plan(service);
+    let path_tool_enabled = snapshot
+        .as_ref()
+        .is_ok_and(|(_, project, _)| path_editor::selected_path_is_editable(project, state));
+    let text_tool_enabled = snapshot
+        .as_ref()
+        .is_ok_and(|(_, project, _)| text_editor::selected_text_is_editable(project, state));
+    toolbar(ui, top_bar, state, text_tool_enabled, path_tool_enabled);
+    let (revision, project, plan, timeline) = match snapshot {
+        Ok((revision, project, plan)) => {
+            let timeline = project.timelines.get(&state.active_timeline_id).cloned();
+            (revision, project, plan, timeline)
+        }
+        Err(error) => {
+            runtime.suspend();
+            runtime.report_error(state, format!("Preview plan: {error}"));
+            paint_empty_preview(ui, viewport, state);
+            bottom_status(ui, bottom_bar, state, runtime);
+            register_qa(viewport, None, state, runtime, None);
+            return;
+        }
+    };
+    let Some(timeline) = timeline else {
+        runtime.suspend();
+        runtime.report_error(state, "Preview Timeline no longer exists".to_string());
+        paint_empty_preview(ui, viewport, state);
+        bottom_status(ui, bottom_bar, state, runtime);
+        register_qa(viewport, None, state, runtime, Some(revision));
+        return;
     };
 
-    let painter = ui.painter().with_clip_rect(rect);
-
-    pan_zoom_ui::paint_canvas(
-        &painter,
-        rect,
-        rect.min,
-        pan_zoom_ui::CanvasState::uniform(editor_context.view.pan, editor_context.view.zoom),
-        preview_grid_config(),
-        preview_canvas_theme(),
+    update_fit(&mut state.preview, &timeline, viewport);
+    let viewport_response = navigate(ui, viewport, &mut state.preview);
+    let canvas_transform = preview_canvas_transform(viewport, &state.preview);
+    let canvas_size = egui::vec2(timeline.width as f32, timeline.height as f32);
+    let content_rect = preview_content_rect(canvas_transform, canvas_size);
+    let interaction_frame = runtime
+        .displayed
+        .as_ref()
+        .filter(|displayed| {
+            displayed.key.revision == revision
+                && displayed.key.timeline_id == timeline.id
+                && displayed.key.frame_number == state.timeline.current_frame
+        })
+        .and(runtime.displayed_frame_info.as_ref());
+    handle_direct_edit(
+        ui,
+        &viewport_response,
+        viewport,
+        content_rect,
+        canvas_transform,
+        interaction_frame,
+        revision,
+        project.as_ref(),
+        state,
+        service,
+    );
+    paint_preview_background(
+        ui,
+        viewport,
+        content_rect,
+        canvas_transform,
+        state.preview.show_grid,
     );
 
-    // Snapshot once; all synchronous frame evaluation below is deliberately
-    // outside the authoritative Project lock because it can execute Python.
-    let mut pending_actions = Vec::new();
-    let mut current_interaction_visuals = Vec::new();
-    let mut requested_frame_info = None;
-    let project_snapshot = snapshot_project_for_preview(project);
-    if let Some(proj_read) = project_snapshot.as_ref() {
-        let (comp_width, comp_height) =
-            if let Some(comp) = editor_context.get_current_composition(proj_read) {
-                (comp.width, comp.height)
-            } else {
-                (1920, 1080)
-            };
-
-        let frame_rect = egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(comp_width as f32, comp_height as f32),
+    if let Some(region) = visible_region(viewport, canvas_transform, canvas_size) {
+        let render_scale =
+            f64::from((state.preview.canvas.zoom.x * ui.ctx().pixels_per_point()).clamp(0.01, 1.0));
+        let playback = if state.timeline.is_playing {
+            state
+                .timeline
+                .playback_anchor
+                .map(|(started, anchor_frame)| PlaybackSequence {
+                    started,
+                    anchor_frame,
+                })
+        } else {
+            None
+        };
+        let text_digest = text_editor::transient_edit_digest(state);
+        let (render_project, text_edit) = runtime.project_transient_edit(
+            TransientProjectionStage::Text,
+            revision,
+            None,
+            text_digest,
+            &project,
+            |source| text_editor::transient_render_project(source, state),
         );
-        let screen_frame_min = to_screen(frame_rect.min);
-        let screen_frame_max = to_screen(frame_rect.max);
-
-        // Draw Frame Border
-        painter.rect_stroke(
-            egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
-            0.0,
-            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(50)), // Faint white border
-            egui::StrokeKind::Middle,
+        let inspector_digest = inspector_transient_edit_digest(revision, state);
+        let (render_project, inspector_edit) = runtime.project_transient_edit(
+            TransientProjectionStage::InspectorProperty,
+            revision,
+            text_edit,
+            inspector_digest,
+            &render_project,
+            |source| project_inspector_transient_edit(source, revision, state),
         );
-
-        // Calculate current frame and Request Render
-        if let Some(comp) = editor_context.get_current_composition(proj_read) {
-            let current_frame =
-                (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
-
-            if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
-                let plugin_manager = project_service.get_plugin_manager();
-                let property_evaluators = plugin_manager.get_property_evaluators();
-
-                let render_scale = ((editor_context.view.zoom
-                    * ui.ctx().pixels_per_point()
-                    * editor_context.view.preview_resolution)
-                    as f64)
-                    .clamp(0.01, 1.0);
-
-                // ROI Calculation
-                let visible_min_world = to_world(rect.min);
-                let visible_max_world = to_world(rect.max);
-
-                // Intersection with composition bounds
-                let comp_width = comp.width as f32;
-                let comp_height = comp.height as f32;
-
-                let region_x = visible_min_world.x.max(0.0).min(comp_width);
-                let region_y = visible_min_world.y.max(0.0).min(comp_height);
-                let region_right = visible_max_world.x.max(0.0).min(comp_width);
-                let region_bottom = visible_max_world.y.max(0.0).min(comp_height);
-
-                let region = if region_right > region_x && region_bottom > region_y {
-                    Some(library::model::frame::frame::Region {
-                        x: region_x as f64,
-                        y: region_y as f64,
-                        width: (region_right - region_x) as f64,
-                        height: (region_bottom - region_y) as f64,
-                    })
-                } else {
-                    // Nothing visible
-                    None
-                };
-
-                if let Some(valid_region) = region {
-                    let frame_info = library::framing::get_frame_from_project(
-                        proj_read,
-                        comp_idx,
-                        current_frame,
-                        render_scale,
-                        Some(valid_region),
-                        &property_evaluators,
-                        &plugin_manager,
-                    );
-
-                    let mut evaluated_frame = None;
-                    dispatch_preview_frame(frame_info, editor_context, |frame_info| {
-                        evaluated_frame = Some(frame_info);
-                    });
-                    if let Some(frame_info) = evaluated_frame {
-                        requested_frame_info = Some(frame_info.clone());
-                        let presentation = PreviewPresentationKey::from_frame(comp.id, &frame_info);
-                        let render_authority = library::RenderFrameAuthority::capture(
-                            proj_read,
-                            &frame_info,
-                            plugin_manager.render_revision(),
-                        );
-                        editor_context.preview_render_scheduler.update_desired(
-                            proj_read,
-                            presentation,
-                            frame_info,
-                            editor_context.timeline.is_playing,
-                            editor_context.timeline.transport_seek_revision,
-                            render_authority,
-                        );
-                    }
-                }
-            }
-        }
-
-        if requested_frame_info.is_none() {
-            editor_context.preview_render_scheduler.suspend();
-        }
-
-        // 2. Poll for results and update texture
-        let mut latest_publishable_result = None;
-        while let Ok(result) = render_server.poll_result() {
-            if let Some(result) =
-                publishable_preview_result(&mut editor_context.preview_render_scheduler, result)
-            {
-                latest_publishable_result = Some(result);
-            }
-        }
-
-        // A result may trail the audio clock during uninterrupted playback.
-        // The scheduler accepts that latest completed frame, but rejects every
-        // result from an older Project/seek/composition/ROI/scale generation.
-        if let Some(result) = latest_publishable_result {
-            match result.output {
-                Ok(output) => {
-                    clear_preview_render_error(editor_context);
-                    editor_context.preview_region = result.frame_info.region;
-                    match output {
-                        library::rendering::renderer::RenderOutput::Image(image) => {
-                            if crate::qa::is_enabled() {
-                                let (nontransparent_pixels, pixel_hash) =
-                                    rgba_image_probe(&image.data);
-                                editor_context.preview_nontransparent_pixels =
-                                    Some(nontransparent_pixels);
-                                editor_context.preview_pixel_hash = Some(pixel_hash);
-                            } else {
-                                editor_context.preview_nontransparent_pixels = None;
-                                editor_context.preview_pixel_hash = None;
-                            }
-                            let size = [image.width as usize, image.height as usize];
-                            let color_image =
-                                egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
-
-                            if let Some(texture) = &mut editor_context.preview_texture {
-                                texture.set(color_image, Default::default());
-                            } else {
-                                editor_context.preview_texture = Some(ui.ctx().load_texture(
-                                    "preview_texture",
-                                    color_image,
-                                    Default::default(),
-                                ));
-                            }
-                            editor_context.preview_texture_id = None;
-                            editor_context.preview_texture_width = image.width;
-                            editor_context.preview_texture_height = image.height;
-                        }
-                        library::rendering::renderer::RenderOutput::Working(image) => {
-                            log::error!(
-                                "Preview received unterminated Project working pixels {:?}",
-                                image.identity()
-                            );
-                            editor_context.preview_texture_id = None;
-                            editor_context.preview_texture = None;
-                            editor_context.preview_texture_width = 0;
-                            editor_context.preview_texture_height = 0;
-                            editor_context.preview_nontransparent_pixels = None;
-                            editor_context.preview_pixel_hash = None;
-                        }
-                        library::rendering::renderer::RenderOutput::Texture(info) => {
-                            editor_context.preview_texture_id = Some(info.texture_id);
-                            editor_context.preview_texture = None;
-                            editor_context.preview_texture_width = info.width;
-                            editor_context.preview_texture_height = info.height;
-                            editor_context.preview_nontransparent_pixels = None;
-                            editor_context.preview_pixel_hash = None;
-                        }
-                    }
-                    editor_context.preview_render_revision =
-                        editor_context.preview_render_revision.wrapping_add(1);
-                    editor_context.preview_frame_info = Some(result.frame_info);
-                }
-                Err(error) => {
-                    report_preview_render_error(&error, editor_context);
-                }
-            }
-        }
-
-        if let Some(submission) = editor_context.preview_render_scheduler.take_submission() {
-            let request_id = submission.request_id;
-            if !render_server.send_request(request_id, submission.project, submission.frame) {
-                editor_context
-                    .preview_render_scheduler
-                    .submission_failed(request_id);
-            }
-        }
-        if editor_context.preview_render_scheduler.requires_repaint() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(16));
-        }
-
-        // 3. Draw Texture
-        if let Some(texture) = &editor_context.preview_texture {
-            // Draw CPU Texture
-            let mut draw_rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
-
-            if let Some(region) = &editor_context.preview_region {
-                let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
-                let p_max = to_screen(egui::pos2(
-                    (region.x + region.width) as f32,
-                    (region.y + region.height) as f32,
-                ));
-                draw_rect = egui::Rect::from_min_max(p_min, p_max);
-            }
-
-            painter.image(
-                texture.id(),
-                draw_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        } else if let Some(texture_id) = editor_context.preview_texture_id {
-            // Zero-copy path (GPU)
-            let mut draw_rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
-
-            if let Some(region) = &editor_context.preview_region {
-                let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
-                let p_max = to_screen(egui::pos2(
-                    (region.x + region.width) as f32,
-                    (region.y + region.height) as f32,
-                ));
-                draw_rect = egui::Rect::from_min_max(p_min, p_max);
-            }
-
-            let width = editor_context.preview_texture_width;
-            let height = editor_context.preview_texture_height;
-
-            let callback = egui::PaintCallback {
-                rect: draw_rect,
-                callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
-                    move |_info, painter| {
-                        use eframe::glow::HasContext;
-                        let gl = painter.gl();
-                        let Some(texture) = ValidGlPreviewTexture::new(texture_id, width, height)
-                        else {
-                            log::error!(
-                                "Cannot draw invalid shared GL texture: id={texture_id}, size={width}x{height}"
-                            );
-                            return;
-                        };
-
-                        if let Some(interface) = skia_safe::gpu::gl::Interface::new_native() {
-                            if let Some(mut context) =
-                                skia_safe::gpu::direct_contexts::make_gl(interface, None)
-                            {
-                                // SAFETY: `texture` validates a non-zero GL name and positive
-                                // i32 dimensions. The render server created this GL_TEXTURE_2D
-                                // in the context shared with eframe, and the paint callback keeps
-                                // that context current while Skia borrows (but does not own) it.
-                                let backend_texture = unsafe {
-                                    skia_safe::gpu::backend_textures::make_gl(
-                                        (texture.width, texture.height),
-                                        skia_safe::gpu::Mipmapped::No,
-                                        skia_safe::gpu::gl::TextureInfo {
-                                            target: eframe::glow::TEXTURE_2D,
-                                            id: texture.id.get(),
-                                            format: 0x8058, // GL_RGBA8
-                                            protected: skia_safe::gpu::Protected::No,
-                                        },
-                                        "Texture",
-                                    )
-                                };
-
-                                // SAFETY: eframe invokes this callback with its GL context current;
-                                // DRAW_FRAMEBUFFER_BINDING is a valid scalar query in that context.
-                                let raw_fbo_id = unsafe {
-                                    gl.get_parameter_i32(eframe::glow::DRAW_FRAMEBUFFER_BINDING)
-                                };
-                                let Ok(fbo_id) = u32::try_from(raw_fbo_id) else {
-                                    log::error!(
-                                        "GL returned an invalid draw framebuffer binding: {raw_fbo_id}"
-                                    );
-                                    return;
-                                };
-
-                                let backend_render_target =
-                                    skia_safe::gpu::backend_render_targets::make_gl(
-                                        (texture.width, texture.height),
-                                        0, // sample count
-                                        0, // stencil bits
-                                        skia_safe::gpu::gl::FramebufferInfo {
-                                            fboid: fbo_id,
-                                            format: 0x8058, // GL_RGBA8
-                                            protected: skia_safe::gpu::Protected::No,
-                                        },
-                                    );
-
-                                let frame_surface =
-                                    skia_safe::gpu::surfaces::wrap_backend_render_target(
-                                        &mut context,
-                                        &backend_render_target,
-                                        skia_safe::gpu::SurfaceOrigin::BottomLeft,
-                                        skia_safe::ColorType::RGBA8888,
-                                        None,
-                                        None,
-                                    );
-
-                                if let Some(mut surface) = frame_surface {
-                                    let canvas = surface.canvas();
-                                    if let Some(mut texture_surface) =
-                                        skia_safe::gpu::surfaces::wrap_backend_texture(
-                                            &mut context,
-                                            &backend_texture,
-                                            skia_safe::gpu::SurfaceOrigin::TopLeft,
-                                            1,
-                                            skia_safe::ColorType::RGBA8888,
-                                            None,
-                                            None,
-                                        )
-                                    {
-                                        let img = texture_surface.image_snapshot();
-                                        canvas.draw_image(
-                                            &img,
-                                            (0, 0),
-                                            Some(&skia_safe::Paint::default()),
-                                        );
-                                    }
-                                    context.flush_and_submit();
-                                }
-                            }
-                        }
-                    },
-                )),
-            };
-
-            ui.painter().add(callback);
-        }
-
-        // Interaction geometry comes from the synchronous evaluation of the
-        // current Project request, never from a previously rendered frame.
-        // Pixels may finish asynchronously, but stale graph provenance must
-        // not be projected onto current Nodes for hit testing or mutation.
-        let gui_clips = preview_frame_for_interaction(
-            requested_frame_info.as_ref(),
-            editor_context.preview_frame_info.as_ref(),
-        )
-        .map(|frame| clip::from_evaluated_frame(proj_read, frame))
-        .unwrap_or_default();
-        let mut ambiguous_facade_candidates = None;
-        if let Some(primary) = editor_context.selection.primary() {
-            let has_matching_explicit_target = editor_context
-                .interaction
-                .preview_edit_target
-                .as_ref()
-                .is_some_and(|target| {
-                    target.owner == primary
-                        && routing::exact_visual_for_edit_target(&gui_clips, target).is_some()
-                });
-            if !has_matching_explicit_target {
-                match routing::resolve_primary_edit_target(proj_read, &gui_clips, primary) {
-                    clip::OwnerEditTargetResolution::Resolved(target) => {
-                        editor_context.interaction.preview_edit_target = Some(target);
-                    }
-                    clip::OwnerEditTargetResolution::Ambiguous { candidate_node_ids } => {
-                        editor_context.interaction.preview_edit_target = None;
-                        ambiguous_facade_candidates = Some(candidate_node_ids);
-                    }
-                    clip::OwnerEditTargetResolution::Unavailable => {
-                        editor_context.interaction.preview_edit_target = None;
-                    }
-                }
-            }
-        }
-        register_preview_visual_qa_components(&gui_clips, rect, &to_screen);
-        if let Some(candidate_node_ids) = ambiguous_facade_candidates {
-            let badge_rect = egui::Rect::from_min_size(
-                rect.right_top() + egui::vec2(-260.0, 8.0),
-                egui::vec2(252.0, 24.0),
-            );
-            ui.painter()
-                .rect_filled(badge_rect, 4.0, egui::Color32::from_black_alpha(180));
-            ui.painter().text(
-                badge_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Advanced graph · click a visual to edit",
-                egui::FontId::proportional(12.0),
-                egui::Color32::LIGHT_GRAY,
-            );
-            crate::qa::register_component_with_metadata(
-                "preview.facade.ambiguous",
-                "preview_facade_status",
-                badge_rect,
-                false,
-                Some(serde_json::json!({
-                    "reason": "multiple independent spatial transforms",
-                    "candidate_node_ids": candidate_node_ids,
-                })),
-            );
-        }
-
-        // Interactions
-        {
-            let mut interactions = interaction::PreviewInteractions::new(
-                ui,
-                editor_context,
-                &gui_clips,
-                to_screen,
-                to_world,
-            );
-            interactions.handle(
-                &response,
-                rect,
-                gesture_decision.pan_owned,
-                &mut pending_actions,
-            );
-            if !gesture_decision.pan_owned {
-                interactions.draw_text_overlay(&mut pending_actions);
-            }
-        }
-
-        // Draw Gizmo
-        if editor_context.view.active_tool == PreviewTool::Select {
-            gizmo::draw_gizmo(
-                ui,
-                editor_context,
-                &gui_clips,
-                to_screen,
-                !gesture_decision.pan_owned,
-            );
-        } else if editor_context.view.active_tool == PreviewTool::Shape {
-            if let Some(state) = &editor_context.interaction.vector_editor_state {
-                if let Some(edit_target) = editor_context
-                    .interaction
-                    .preview_edit_target
-                    .as_ref()
-                    .filter(|target| editor_context.selection.primary() == Some(target.owner))
-                {
-                    if let Some(gc) = routing::exact_visual_for_edit_target(&gui_clips, edit_target)
-                    {
-                        if let Some(path) = gc.content_node.properties().get_string("path") {
-                            match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
-                                Ok(path) => {
-                                    let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
-                                        state,
-                                        path: &path,
-                                        transform: gc.world_transform,
-                                        to_screen: Box::new(to_screen),
-                                    };
-                                    renderer.draw(ui.painter());
-                                }
-                                Err(error) => {
-                                    log::warn!("Cannot draw invalid shape path: {error}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        current_interaction_visuals = gui_clips;
+        let upstream_edit = combine_transient_edits(text_edit, inspector_edit);
+        let transform_digest = gizmo::transient_edit_digest(state);
+        let (render_project, transform_edit) = runtime.project_transient_edit(
+            TransientProjectionStage::Transform,
+            revision,
+            upstream_edit,
+            transform_digest,
+            &render_project,
+            |source| gizmo::transient_render_project(source, state),
+        );
+        let transient_edit = combine_transient_edits(upstream_edit, transform_edit);
+        runtime.request(
+            PreviewRequestKey {
+                revision,
+                timeline_id: timeline.id,
+                instance_path: state.active_instance_path.clone(),
+                frame_number: state.timeline.current_frame,
+                render_scale: OrderedFloat(render_scale),
+                region: Some(region),
+                transient_edit,
+            },
+            playback,
+            render_project,
+            plan,
+        );
     } else {
-        // A poisoned/unavailable Project snapshot is an invalidation boundary
-        // too. Drain any worker completion so a dead request cannot reappear
-        // after Project recovery.
-        editor_context.preview_render_scheduler.suspend();
-        while let Ok(result) = render_server.poll_result() {
-            drop(publishable_preview_result(
-                &mut editor_context.preview_render_scheduler,
-                result,
-            ));
-        }
-        if editor_context.preview_render_scheduler.requires_repaint() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(16));
-        }
-    } // End of owned Project snapshot scope
-
-    // Nested gizmo/path widgets can be the first widgets to recognize a drag.
-    // Record that ownership before a later Space press can claim it.
-    if editor_context.interaction.preview_viewport.primary_gesture == PreviewPrimaryGesture::Pending
-        && gesture_input.primary_down
-        && (editor_context.interaction.gizmo_state.is_some()
-            || editor_context.interaction.body_drag_state.is_some()
-            || editor_context
-                .interaction
-                .preview_selection_drag_start
-                .is_some()
-            || editor_context
-                .interaction
-                .vector_editor_state
-                .as_ref()
-                .is_some_and(|state| state.selected_handle.is_some()))
-    {
-        editor_context.interaction.preview_viewport.primary_gesture =
-            PreviewPrimaryGesture::Content;
+        runtime.suspend();
     }
 
-    if gesture_decision.finish_after_frame {
-        editor_context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Idle;
-        // If Space was released before the pointer, shortcut dispatch already
-        // consumed that release. Do not leave the shared suppression latch set
-        // until the next unrelated Space tap.
-        if !hand_tool_key_down {
-            editor_context.interaction.handled_hand_tool_drag = false;
-        }
+    if let Some(completed) = runtime.poll(render_server) {
+        apply_result(ui.ctx(), completed, state, runtime);
+    }
+    if !runtime.submit(render_server) {
+        runtime.report_error(state, "Preview render worker is unavailable".to_string());
     }
 
-    // Publish the completed frame after gesture cleanup so component metadata
-    // and `/v1/state` describe the same camera and owner. The helper exits
-    // before allocating JSON in normal, QA-disabled builds.
-    register_preview_qa_components(preview_rect, current_composition_view, editor_context);
-
-    if apply_preview_actions(
-        pending_actions,
-        &current_interaction_visuals,
-        project_service,
-        project,
-        history_manager,
-    ) {
-        ui.ctx().request_repaint();
-    }
-
-    // Info text
-    let info_text = format!(
-        "Time: {:.2}\nZoom: {:.0}%",
-        editor_context.timeline.current_time,
-        editor_context.view.zoom * 100.0
+    paint_texture(
+        ui,
+        viewport,
+        content_rect,
+        canvas_transform,
+        timeline.id,
+        state,
+        runtime,
     );
-    painter.text(
-        rect.left_top() + egui::vec2(10.0, 10.0),
-        egui::Align2::LEFT_TOP,
-        info_text,
-        egui::FontId::monospace(14.0),
+    let displayed_edit_frame = runtime
+        .displayed
+        .as_ref()
+        .filter(|displayed| {
+            displayed.key.revision == revision
+                && displayed.key.timeline_id == timeline.id
+                && displayed.key.frame_number == state.timeline.current_frame
+        })
+        .and(runtime.displayed_frame_info.as_ref());
+    gizmo::paint_gizmo(
+        ui,
+        viewport,
+        canvas_transform,
+        displayed_edit_frame,
+        project.as_ref(),
+        state,
+    );
+    text_editor::text_editor_overlay(
+        ui,
+        viewport,
+        canvas_transform,
+        revision,
+        displayed_edit_frame,
+        project.as_ref(),
+        state,
+        service,
+    );
+    path_editor::path_editor_overlay(
+        ui,
+        &viewport_response,
+        viewport,
+        canvas_transform,
+        revision,
+        displayed_edit_frame,
+        project.as_ref(),
+        state,
+        service,
+    );
+    ui.painter().rect_stroke(
+        content_rect,
+        0.0,
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+        egui::StrokeKind::Middle,
+    );
+    bottom_status(ui, bottom_bar, state, runtime);
+    register_qa(
+        viewport,
+        Some((timeline.id, timeline.width, timeline.height, content_rect)),
+        state,
+        runtime,
+        Some(revision),
+    );
+
+    if runtime.is_busy() || state.timeline.is_playing {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+fn apply_result(
+    context: &egui::Context,
+    completed: PublishableRender,
+    state: &mut AuthoringUiState,
+    runtime: &mut AuthoringPreviewRuntime,
+) {
+    let PublishableRender { intent, result } = completed;
+    let RenderResult {
+        output, frame_info, ..
+    } = result;
+    match output {
+        Ok(RenderOutput::Image(image)) => {
+            let size = [image.width as usize, image.height as usize];
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
+            if let Some(texture) = &mut state.preview.texture {
+                texture.set(color_image, egui::TextureOptions::LINEAR);
+            } else {
+                state.preview.texture = Some(context.load_texture(
+                    "preview.texture",
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+            state.preview.texture_width = image.width;
+            state.preview.texture_height = image.height;
+            state.preview.rendered_revision = Some(intent.key.revision.get());
+            state.preview.rendered_frame = Some(intent.key.frame_number);
+            if crate::qa::is_enabled() {
+                let (nontransparent, hash) = rgba_probe(&image.data);
+                state.preview.nontransparent_pixels = Some(nontransparent);
+                state.preview.pixel_hash = Some(hash);
+            } else {
+                state.preview.nontransparent_pixels = None;
+                state.preview.pixel_hash = None;
+            }
+            runtime.displayed = Some(intent);
+            runtime.displayed_frame_info = Some(frame_info);
+            runtime.clear_reported_error(state);
+        }
+        Ok(RenderOutput::Working(_)) => runtime.report_error(
+            state,
+            "Preview received unterminated working-color pixels".to_string(),
+        ),
+        Ok(RenderOutput::Texture(_)) => runtime.report_error(
+            state,
+            "Authoring Preview received an unsupported unowned GPU texture".to_string(),
+        ),
+        Err(error) => runtime.report_error(state, format!("Preview render: {error}")),
+    }
+}
+
+fn paint_texture(
+    ui: &egui::Ui,
+    viewport: egui::Rect,
+    content: egui::Rect,
+    transform: CanvasTransform,
+    timeline_id: TimelineId,
+    state: &AuthoringUiState,
+    runtime: &AuthoringPreviewRuntime,
+) {
+    let (Some(texture), Some(displayed)) = (&state.preview.texture, &runtime.displayed) else {
+        return;
+    };
+    if displayed.key.timeline_id != timeline_id {
+        return;
+    }
+    let draw_rect = match displayed.key.region {
+        Some(region) => transform
+            .world_rect_to_screen(egui::Rect::from_min_size(
+                egui::pos2(region.x as f32, region.y as f32),
+                egui::vec2(region.width as f32, region.height as f32),
+            ))
+            .unwrap_or(egui::Rect::NOTHING),
+        None => content,
+    };
+    ui.painter().with_clip_rect(viewport).image(
+        texture.id(),
+        draw_rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+}
 
-    // Draw Bottom Bar
-    ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_bar_rect), |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Resolution:");
-            egui::ComboBox::from_id_salt("preview_resolution")
-                .selected_text(format!(
-                    "{}%",
-                    (editor_context.view.preview_resolution * 100.0) as i32
-                ))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut editor_context.view.preview_resolution, 1.0, "Full");
-                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.75, "3/4");
-                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.5, "1/2");
-                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.25, "1/4");
-                });
+fn bottom_status(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &AuthoringUiState,
+    runtime: &AuthoringPreviewRuntime,
+) {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal_centered(|ui| {
+            ui.weak(format!("Frame {}", state.timeline.current_frame));
+            ui.separator();
+            if runtime.is_busy() {
+                ui.spinner();
+                ui.weak("Rendering");
+            } else if let Some(error) = runtime.reported_error.as_deref() {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            } else {
+                ui.weak(&state.status);
+            }
         });
     });
 }
 
+fn register_button_qa(id: &str, action: &str, response: &egui::Response, selected: bool) {
+    crate::qa::register_component_with_metadata(
+        id,
+        "preview_control",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "action": action,
+            "selected": selected,
+        })),
+    );
+}
+
+fn register_qa(
+    viewport: egui::Rect,
+    content: Option<(TimelineId, u64, u64, egui::Rect)>,
+    state: &AuthoringUiState,
+    runtime: &AuthoringPreviewRuntime,
+    revision: Option<ProjectRevision>,
+) {
+    let diagnostics = runtime.diagnostics();
+    crate::qa::register_component_with_metadata(
+        "preview.canvas",
+        "preview_canvas",
+        viewport,
+        true,
+        Some(serde_json::json!({
+            "timeline_id": content.map(|value| value.0),
+            "project_revision": revision.map(ProjectRevision::get),
+            "frame": state.timeline.current_frame,
+            "screen_origin": {"x": viewport.min.x, "y": viewport.min.y},
+            "pan": {"x": state.preview.canvas.pan.x, "y": state.preview.canvas.pan.y},
+            "zoom": state.preview.canvas.zoom.x,
+            "auto_fit": state.preview.auto_fit,
+            "show_grid": state.preview.show_grid,
+            "rendered_revision": state.preview.rendered_revision,
+            "rendered_frame": state.preview.rendered_frame,
+            "texture_width": state.preview.texture_width,
+            "texture_height": state.preview.texture_height,
+            "nontransparent_pixels": state.preview.nontransparent_pixels,
+            "pixel_hash": state.preview.pixel_hash,
+            "render_in_flight_request": diagnostics.in_flight_request,
+            "render_desired_pending": diagnostics.desired_pending,
+            "render_submitted": diagnostics.submitted,
+            "render_published": diagnostics.published,
+            "render_discarded": diagnostics.discarded,
+            "render_coalesced": diagnostics.coalesced,
+        })),
+    );
+    if let Some((timeline_id, width, height, rect)) = content {
+        crate::qa::register_component_with_metadata(
+            "preview.content",
+            "preview_content",
+            rect.intersect(viewport),
+            true,
+            Some(serde_json::json!({
+                "timeline_id": timeline_id,
+                "canvas_width": width,
+                "canvas_height": height,
+                "screen_origin": {"x": viewport.min.x, "y": viewport.min.y},
+                "pan": {"x": state.preview.canvas.pan.x, "y": state.preview.canvas.pan.y},
+                "zoom": state.preview.canvas.zoom.x,
+                "auto_fit": state.preview.auto_fit,
+                "show_grid": state.preview.show_grid,
+            })),
+        );
+    }
+}
+
+fn rgba_probe(data: &[u8]) -> (u64, u64) {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    let nontransparent = data.chunks_exact(4).filter(|pixel| pixel[3] != 0).count() as u64;
+    (nontransparent, hash)
+}
+
+fn next_request_id() -> RenderRequestId {
+    let value = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    RenderRequestId::new(if value == 0 { 1 } else { value })
+}
+
+fn combine_transient_edits(first: Option<u64>, second: Option<u64>) -> Option<u64> {
+    match (first, second) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(first), Some(second)) => Some(first.rotate_left(17) ^ second.rotate_right(11)),
+    }
+}
+
+fn inspector_transient_edit_digest(
+    revision: ProjectRevision,
+    state: &AuthoringUiState,
+) -> Option<u64> {
+    state
+        .inspector
+        .transient_property_edit
+        .as_ref()
+        .filter(|edit| edit.source_revision == revision)
+        .map(crate::state::authoring::TransientPropertyEdit::digest)
+}
+
+fn project_inspector_transient_edit(
+    project: &Arc<AuthoringProject>,
+    revision: ProjectRevision,
+    state: &AuthoringUiState,
+) -> (Arc<AuthoringProject>, Option<u64>) {
+    let Some(edit) = state
+        .inspector
+        .transient_property_edit
+        .as_ref()
+        .filter(|edit| edit.source_revision == revision)
+    else {
+        return (Arc::clone(project), None);
+    };
+    let digest = edit.digest();
+    match TimelineEditorService::project_authored_property_values(
+        project,
+        edit.owner,
+        vec![edit.update.clone()],
+    ) {
+        Ok(projected) => (Arc::new(projected), Some(digest)),
+        Err(_) => (Arc::clone(project), None),
+    }
+}
+
 #[cfg(test)]
-include!("tests.rs");
-#[cfg(test)]
-include!("tests_render.rs");
+mod tests;

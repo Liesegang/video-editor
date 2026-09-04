@@ -90,6 +90,9 @@ fn node_ports(
     };
     let mut include_property_inputs = true;
     match node.content() {
+        NodeContent::ModuleOutput(_) => {
+            include_property_inputs = false;
+        }
         NodeContent::Generator(_)
         | NodeContent::Value(_)
         | NodeContent::Color(_)

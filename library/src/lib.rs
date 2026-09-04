@@ -32,12 +32,13 @@ pub use core::audio;
 pub use core::cache;
 pub use core::ensemble;
 pub use core::framing;
+pub use core::model_resource;
 pub use core::rendering;
 
 pub use crate::model::frame::Image;
 pub use crate::plugin::{ExportColorAuthority, ExportFrame, ExportSettings};
 
-// Timeline-first Preview/export boundary used by the app.
+// Authoring Preview/export boundary used by the app.
 pub use core::rendering::render_server::{
     AuthoringExportResult, RenderRequestId, RenderResult, RenderServer,
 };

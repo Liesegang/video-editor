@@ -8,14 +8,16 @@ use ruvie_plugin_api::{
     DECORATOR_EVALUATE_V2,
 };
 
-use super::{
-    dropdown_property, finite_f32, has_exact_properties, invalid_request, property_string,
-    valid_config_metadata, BACKPLATE_COMPONENT_ID,
+use crate::component_request::{
+    finite_f32, has_exact_properties, invalid_request, property_string, valid_config_metadata,
 };
+use crate::descriptors::dropdown_property;
+
+pub(super) const COMPONENT_ID: &str = "runtime_backplate_decorator";
 
 pub(super) fn descriptor() -> ComponentDescriptorV1 {
     ComponentDescriptorV1 {
-        id: BACKPLATE_COMPONENT_ID.to_string(),
+        id: COMPONENT_ID.to_string(),
         name: "Runtime Backplate".to_string(),
         category: DECORATOR_CATEGORY.to_string(),
         group: "Decorator".to_string(),

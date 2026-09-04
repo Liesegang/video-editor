@@ -1,9 +1,16 @@
+use std::collections::HashSet;
+
+use library::editor::ModuleNodeRequest;
+use library::model::authoring::{AttachmentProcessor, ModuleInvocation, SourceRef};
+use library::model::frame::color::Color;
+use library::model::{native_node_descriptor, GeneratorContent, NativeNodeFactory};
+
 use super::*;
 
 /// Render the explicitly opened Module document in the existing docked Node
 /// Editor. Timeline containers and ordinary items are intentionally never
 /// inferred as documents.
-pub fn module_node_editor_panel(
+pub fn node_editor_panel(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
     state: &mut AuthoringUiState,
@@ -47,6 +54,19 @@ pub fn module_node_editor_panel(
         render_unavailable_document(ui, state, "The Module definition is no longer available.");
         return;
     };
+    let Some(_invocation) = module_invocation(project, &host)
+        .filter(|invocation| invocation.instance_id == instance_id)
+    else {
+        render_unavailable_document(
+            ui,
+            state,
+            "The Module placement for this Node document is no longer available.",
+        );
+        return;
+    };
+    if apply_pending_layout(ui, definition, instance_id, state, service) {
+        return;
+    }
 
     let timeline = project
         .timelines
@@ -55,15 +75,19 @@ pub fn module_node_editor_panel(
     let canvas_size = timeline
         .map(|timeline| (timeline.width, timeline.height))
         .unwrap_or((1920, 1080));
-    let property_time = timeline.map_or(0.0, |timeline| {
-        state.timeline.current_frame as f64 / timeline.fps.to_f64()
-    });
+    let property_context = ModulePropertyContext {
+        time: timeline.map_or(0.0, |timeline| {
+            state.timeline.current_frame as f64 / timeline.fps.to_f64()
+        }),
+        fps: timeline.map_or(30.0, |timeline| timeline.fps.to_f64()),
+        resolution: canvas_size,
+    };
     let actions = show_module_document(
         ui,
         definition,
         &mut state.node_editor,
         plugins,
-        property_time,
+        property_context,
     );
     apply_module_actions(
         actions,
@@ -74,6 +98,48 @@ pub fn module_node_editor_panel(
         service,
         plugins,
     );
+}
+
+fn apply_pending_layout(
+    ui: &egui::Ui,
+    definition: &ModuleDefinition,
+    instance_id: ModuleInstanceId,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+) -> bool {
+    let Some(command) = state.node_editor.pending_layout_command.take() else {
+        return false;
+    };
+    if !command.is_node_editor_layout() {
+        state.error = Some("The requested command is not a Module layout command".to_string());
+        return false;
+    }
+    let updates =
+        layout::module_layout_updates(definition, command, &state.node_editor.selected_nodes);
+    if updates.is_empty() {
+        state.status = if command == crate::command::CommandId::NodeEditorCleanLayoutSelection
+            && state.node_editor.selected_nodes.is_empty()
+        {
+            "Select one or more Module nodes to clean their layout".to_string()
+        } else {
+            "Module layout is already clean".to_string()
+        };
+        return false;
+    }
+
+    match service.set_instance_module_node_presentations(instance_id, updates) {
+        Ok((definition_id, _)) => {
+            set_active_definition(&mut state.node_editor, definition_id);
+            state.node_editor.node_drag_offsets.clear();
+            state.status = "Cleaned Module node layout".to_string();
+            ui.ctx().request_repaint();
+            true
+        }
+        Err(error) => {
+            state.error = Some(error.to_string());
+            false
+        }
+    }
 }
 
 fn render_unavailable_document(ui: &mut egui::Ui, state: &mut AuthoringUiState, message: &str) {
@@ -100,6 +166,31 @@ const fn module_instance_id(host: &ModuleEditorHost) -> ModuleInstanceId {
         | ModuleEditorHost::Attachment {
             module_instance_id, ..
         } => *module_instance_id,
+    }
+}
+
+fn module_invocation<'a>(
+    project: &'a AuthoringProject,
+    host: &ModuleEditorHost,
+) -> Option<&'a ModuleInvocation> {
+    match host {
+        ModuleEditorHost::NodeClip {
+            timeline_item_id, ..
+        } => project.items.get(timeline_item_id).and_then(|item| {
+            let SourceRef::Module(invocation) = &item.source else {
+                return None;
+            };
+            Some(invocation)
+        }),
+        ModuleEditorHost::Attachment { attachment_id, .. } => project
+            .attachments
+            .get(attachment_id)
+            .and_then(|attachment| {
+                let AttachmentProcessor::Module(invocation) = &attachment.processor else {
+                    return None;
+                };
+                Some(invocation)
+            }),
     }
 }
 
@@ -131,13 +222,13 @@ fn apply_module_actions(
                 for node_id in node_ids {
                     *state
                         .node_editor
-                        .module_node_drag_offsets
+                        .node_drag_offsets
                         .entry(node_id)
                         .or_insert(egui::Vec2::ZERO) += delta;
                 }
             }
             ModuleEditorAction::FinishMove { outcome: _ } => {
-                let offsets = std::mem::take(&mut state.node_editor.module_node_drag_offsets);
+                let offsets = std::mem::take(&mut state.node_editor.node_drag_offsets);
                 for (node_id, offset) in offsets {
                     let Some(node) = definition.graph.nodes.get(&node_id) else {
                         continue;
@@ -173,6 +264,23 @@ fn apply_module_actions(
                     Err(error) => state.error = Some(error.to_string()),
                 }
             }
+            ModuleEditorAction::Reconnect {
+                connection_id,
+                from,
+                to,
+            } => {
+                match service.reconnect_instance_module_connection(
+                    instance_id,
+                    connection_id,
+                    from,
+                    to,
+                ) {
+                    Ok((definition_id, _)) => {
+                        set_active_definition(&mut state.node_editor, definition_id);
+                    }
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
             ModuleEditorAction::Disconnect(connection_id) => {
                 match service.disconnect_instance_module_connection(instance_id, connection_id) {
                     Ok((definition_id, _)) => {
@@ -186,9 +294,9 @@ fn apply_module_actions(
                     match service.remove_instance_module_node(instance_id, node_id) {
                         Ok((definition_id, _)) => {
                             set_active_definition(&mut state.node_editor, definition_id);
-                            state.node_editor.module_selected_nodes.remove(&node_id);
-                            if state.node_editor.module_primary_node == Some(node_id) {
-                                state.node_editor.module_primary_node = None;
+                            state.node_editor.selected_nodes.remove(&node_id);
+                            if state.node_editor.primary_node == Some(node_id) {
+                                state.node_editor.primary_node = None;
                             }
                         }
                         Err(error) => state.error = Some(error.to_string()),
@@ -201,8 +309,8 @@ fn apply_module_actions(
                     {
                         Ok((definition_id, _)) => {
                             set_active_definition(&mut state.node_editor, definition_id);
-                            if state.node_editor.module_selected_connection == Some(connection_id) {
-                                state.node_editor.module_selected_connection = None;
+                            if state.node_editor.selected_connection == Some(connection_id) {
+                                state.node_editor.selected_connection = None;
                             }
                         }
                         Err(error) => state.error = Some(error.to_string()),
@@ -252,12 +360,21 @@ fn apply_module_actions(
                         match service.add_instance_module_node(instance_id, node) {
                             Ok((node_id, definition_id, _)) => {
                                 set_active_definition(&mut state.node_editor, definition_id);
-                                state.node_editor.module_selected_nodes = HashSet::from([node_id]);
-                                state.node_editor.module_primary_node = Some(node_id);
-                                state.node_editor.module_selected_connection = None;
+                                state.node_editor.selected_nodes = HashSet::from([node_id]);
+                                state.node_editor.primary_node = Some(node_id);
+                                state.node_editor.selected_connection = None;
                             }
                             Err(error) => state.error = Some(error.to_string()),
                         }
+                    }
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
+            ModuleEditorAction::EditInterface(command) => {
+                match service.edit_instance_module_interface(instance_id, command) {
+                    Ok((_, definition_id, _)) => {
+                        set_active_definition(&mut state.node_editor, definition_id);
+                        state.status = "Updated the Node Clip interface".to_string();
                     }
                     Err(error) => state.error = Some(error.to_string()),
                 }
@@ -266,9 +383,9 @@ fn apply_module_actions(
     }
 }
 
-fn authoring_node_request(request: NodeCreateRequest) -> Option<ModuleNodeRequest> {
+fn authoring_node_request(request: ModuleNodeCreateRequest) -> Option<ModuleNodeRequest> {
     match request {
-        NodeCreateRequest::Native(catalog_id) => {
+        ModuleNodeCreateRequest::Native(catalog_id) => {
             let descriptor = native_node_descriptor(&catalog_id)?;
             Some(match descriptor.factory() {
                 NativeNodeFactory::Generator(GeneratorContent::Text) => ModuleNodeRequest::Text {
@@ -294,42 +411,15 @@ fn authoring_node_request(request: NodeCreateRequest) -> Option<ModuleNodeReques
                 _ => ModuleNodeRequest::NativeCatalog { catalog_id },
             })
         }
-        NodeCreateRequest::ShapeTransform => Some(ModuleNodeRequest::PluginOperation {
-            category: TRANSFORM_CATEGORY.to_string(),
-            component_id: SHAPE_TRANSFORM_COMPONENT_ID.to_string(),
-            operation: TRANSFORM_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::ImageTransform => Some(ModuleNodeRequest::PluginOperation {
-            category: TRANSFORM_CATEGORY.to_string(),
-            component_id: IMAGE_TRANSFORM_COMPONENT_ID.to_string(),
-            operation: TRANSFORM_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::Style(component_id) => Some(ModuleNodeRequest::PluginOperation {
-            category: STYLE_CATEGORY.to_string(),
+        ModuleNodeCreateRequest::PluginOperation {
+            category,
             component_id,
-            operation: STYLE_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::Effector(component_id) => Some(ModuleNodeRequest::PluginOperation {
-            category: EFFECTOR_CATEGORY.to_string(),
+            operation,
+        } => Some(ModuleNodeRequest::PluginOperation {
+            category,
             component_id,
-            operation: EFFECTOR_APPLY_OPERATION.to_string(),
+            operation,
         }),
-        NodeCreateRequest::PathEffect(component_id) => Some(ModuleNodeRequest::PluginOperation {
-            category: PATH_EFFECT_CATEGORY.to_string(),
-            component_id,
-            operation: PATH_EFFECT_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::Decorator(component_id) => Some(ModuleNodeRequest::PluginOperation {
-            category: DECORATOR_CATEGORY.to_string(),
-            component_id,
-            operation: DECORATOR_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::Effect(component_id) => Some(ModuleNodeRequest::PluginOperation {
-            category: EFFECT_CATEGORY.to_string(),
-            component_id,
-            operation: EFFECT_APPLY_OPERATION.to_string(),
-        }),
-        NodeCreateRequest::Clip | NodeCreateRequest::Track | NodeCreateRequest::Composition => None,
     }
 }
 
@@ -338,28 +428,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn module_menu_never_turns_timeline_containers_into_nodes() {
-        assert!(authoring_node_request(NodeCreateRequest::Clip).is_none());
-        assert!(authoring_node_request(NodeCreateRequest::Track).is_none());
-        assert!(authoring_node_request(NodeCreateRequest::Composition).is_none());
+    fn plugin_request_keeps_its_operation_identity() {
+        let request = ModuleNodeCreateRequest::PluginOperation {
+            category: "effect".to_string(),
+            component_id: "blur".to_string(),
+            operation: "effect.apply.v1".to_string(),
+        };
+        assert!(matches!(
+            authoring_node_request(request),
+            Some(ModuleNodeRequest::PluginOperation { category, component_id, operation })
+                if category == "effect"
+                    && component_id == "blur"
+                    && operation == "effect.apply.v1"
+        ));
     }
 
     #[test]
     fn generator_catalog_entries_use_the_project_independent_factory_requests() {
         assert!(matches!(
-            authoring_node_request(NodeCreateRequest::Native("native.text".to_string())),
+            authoring_node_request(ModuleNodeCreateRequest::Native("native.text".to_string())),
             Some(ModuleNodeRequest::Text { .. })
         ));
         assert!(matches!(
-            authoring_node_request(NodeCreateRequest::Native("native.solid-color".to_string())),
+            authoring_node_request(ModuleNodeCreateRequest::Native(
+                "native.solid-color".to_string()
+            )),
             Some(ModuleNodeRequest::Solid { .. })
         ));
         assert!(matches!(
-            authoring_node_request(NodeCreateRequest::Native("native.shape".to_string())),
+            authoring_node_request(ModuleNodeCreateRequest::Native("native.shape".to_string())),
             Some(ModuleNodeRequest::Shape { .. })
         ));
         assert!(matches!(
-            authoring_node_request(NodeCreateRequest::Native("native.sksl-shader".to_string())),
+            authoring_node_request(ModuleNodeCreateRequest::Native(
+                "native.sksl-shader".to_string()
+            )),
             Some(ModuleNodeRequest::SkSL { .. })
         ));
     }

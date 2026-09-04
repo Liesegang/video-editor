@@ -1,6 +1,6 @@
 use egui::{Painter, Pos2, Rect, Vec2};
 
-use crate::{CanvasState, CanvasTheme, GridStroke};
+use crate::{CanvasTheme, CanvasTransform, GridStroke};
 
 /// World axis represented by a grid line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,29 +58,20 @@ impl Default for GridConfig {
 
 /// Generate vertical lines first, then horizontal lines, each in ascending
 /// screen order. Identical inputs always produce identical vector order.
-pub fn grid_lines(
-    viewport: Rect,
-    screen_origin: Pos2,
-    state: CanvasState,
-    config: GridConfig,
-) -> Vec<GridLine> {
-    if !viewport.is_finite()
-        || !screen_origin.is_finite()
-        || !state.pan.is_finite()
-        || !state.zoom.is_finite()
-        || state.zoom.x == 0.0
-        || state.zoom.y == 0.0
-    {
+pub fn grid_lines(viewport: Rect, transform: CanvasTransform, config: GridConfig) -> Vec<GridLine> {
+    if !viewport.is_finite() || transform.screen_rect_to_world(viewport).is_none() {
         return Vec::new();
     }
+
+    let origin_screen = transform.world_to_screen(config.origin);
 
     let mut lines = Vec::new();
     append_axis_lines(
         &mut lines,
         GridAxis::X,
         viewport.x_range(),
-        screen_origin.x + state.pan.x,
-        state.zoom.x,
+        origin_screen.x,
+        transform.state.zoom.x,
         config.origin.x,
         config.minor_spacing.x,
         config.major_spacing.x,
@@ -90,8 +81,8 @@ pub fn grid_lines(
         &mut lines,
         GridAxis::Y,
         viewport.y_range(),
-        screen_origin.y + state.pan.y,
-        state.zoom.y,
+        origin_screen.y,
+        transform.state.zoom.y,
         config.origin.y,
         config.minor_spacing.y,
         config.major_spacing.y,
@@ -145,7 +136,7 @@ fn append_axis_lines(
         return;
     }
 
-    let origin_screen = screen_translation + world_origin * zoom;
+    let origin_screen = screen_translation;
     let mut bounds = visible_indices(visible, origin_screen, screen_step);
     for _ in 0..16 {
         let Some((first, last)) = bounds else {
@@ -256,13 +247,12 @@ fn finite_positive(value: f32, fallback: f32) -> f32 {
 pub fn paint_canvas(
     painter: &Painter,
     viewport: Rect,
-    screen_origin: Pos2,
-    state: CanvasState,
+    transform: CanvasTransform,
     grid: GridConfig,
     theme: CanvasTheme,
 ) {
     painter.rect_filled(viewport, 0.0, theme.background);
-    for line in grid_lines(viewport, screen_origin, state, grid) {
+    for line in grid_lines(viewport, transform, grid) {
         let stroke = stroke_for_kind(line.kind, theme);
         match line.axis {
             GridAxis::X => painter.line_segment(
@@ -306,8 +296,10 @@ mod tests {
         };
         let lines = grid_lines(
             viewport,
-            Pos2::ZERO,
-            CanvasState::uniform(egui::vec2(20.0, 10.0), 1.0),
+            CanvasTransform::new(
+                Pos2::ZERO,
+                crate::CanvasState::uniform(egui::vec2(20.0, 10.0), 1.0),
+            ),
             config,
         );
 
@@ -329,7 +321,7 @@ mod tests {
     #[test]
     fn grid_generation_is_deterministic_under_negative_pan_and_xy_zoom() {
         let viewport = Rect::from_min_max(egui::pos2(5.0, 7.0), egui::pos2(321.0, 198.0));
-        let state = CanvasState::new(egui::vec2(-113.25, 47.5), egui::vec2(3.5, -0.75));
+        let state = crate::CanvasState::new(egui::vec2(-113.25, 47.5), egui::vec2(3.5, -0.75));
         let config = GridConfig {
             origin: egui::pos2(2.0, -4.0),
             minor_spacing: egui::vec2(0.5, 2.0),
@@ -337,8 +329,9 @@ mod tests {
             ..GridConfig::default()
         };
 
-        let first = grid_lines(viewport, egui::pos2(11.0, 23.0), state, config);
-        let second = grid_lines(viewport, egui::pos2(11.0, 23.0), state, config);
+        let transform = CanvasTransform::new(egui::pos2(11.0, 23.0), state);
+        let first = grid_lines(viewport, transform, config);
+        let second = grid_lines(viewport, transform, config);
 
         assert_eq!(first, second);
         assert!(!first.is_empty());
@@ -356,8 +349,10 @@ mod tests {
         };
         let lines = grid_lines(
             viewport,
-            Pos2::ZERO,
-            CanvasState::new(Vec2::ZERO, egui::vec2(1.0e-8, 1.0e8)),
+            CanvasTransform::new(
+                Pos2::ZERO,
+                crate::CanvasState::new(Vec2::ZERO, egui::vec2(1.0e-8, 1.0e8)),
+            ),
             config,
         );
 

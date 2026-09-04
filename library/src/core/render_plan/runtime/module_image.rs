@@ -1,27 +1,61 @@
 //! Stateless evaluation of one compiled Image Module invocation.
 
 use super::frame_values::{
-    evaluate_property_map, neutralize_root_blend, required_color, required_number, required_string,
-    sample_automation, solid_item, transform_from_values, transparent,
+    neutralize_root_blend, required_color, required_number, required_string, solid_item,
+    transparent,
 };
 use super::*;
+use crate::core::render_plan::CompiledModuleOutput;
+use crate::plugin::EvaluationContext;
 
 pub(super) struct ModuleImageRuntime<'a> {
     pub(super) project: &'a AuthoringProject,
     pub(super) definition: &'a CompiledModuleDefinition,
     pub(super) invocation: &'a CompiledModuleInvocation,
+    pub(super) instance_path: &'a InstancePath,
     pub(super) local_time: MediaTime,
     pub(super) width: u64,
     pub(super) height: u64,
     pub(super) evaluation_fps: f64,
+    pub(super) plugins: &'a crate::plugin::PluginManager,
     pub(super) external_images: HashMap<ModulePortAddress, FrameItem>,
     pub(super) image_memo: HashMap<(uuid::Uuid, String), Option<FrameItem>>,
     pub(super) image_path: HashSet<(uuid::Uuid, String)>,
+    pub(super) shape_memo:
+        HashMap<(uuid::Uuid, String), Option<crate::model::frame::runtime_shape::RuntimeShape>>,
+    pub(super) shape_path: HashSet<(uuid::Uuid, String)>,
     pub(super) value_memo: HashMap<(uuid::Uuid, String), Option<PropertyValue>>,
     pub(super) value_path: HashSet<(uuid::Uuid, String)>,
 }
 
 impl ModuleImageRuntime<'_> {
+    pub(super) fn evaluate_terminal(
+        &mut self,
+        output: &CompiledModuleOutput,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        if let Some(particle) = self.definition.particle_outputs.get(&output.terminal.id) {
+            return self
+                .evaluate_particle_terminal(output.terminal.id, particle)
+                .map(Some);
+        }
+        let image_target = output
+            .terminal
+            .target(crate::model::project::PortDataType::Image)
+            .ok_or_else(|| {
+                LibraryError::Validation(format!(
+                    "Module Output {} has no Image input",
+                    output.terminal.id
+                ))
+            })?;
+        if let Some(external) = self.external_images.get(&image_target) {
+            return Ok(Some(external.clone()));
+        }
+        let Some(source) = output.source(crate::model::project::PortDataType::Image) else {
+            return Ok(None);
+        };
+        self.evaluate_image_output(source)
+    }
+
     pub(super) fn evaluate_image_output(
         &mut self,
         source: &ModulePortAddress,
@@ -72,9 +106,20 @@ impl ModuleImageRuntime<'_> {
             return self.single_image_input(node.id, input);
         }
         match &node.content {
+            NodeContent::ModuleOutput(_) => Err(LibraryError::Validation(format!(
+                "Module Output Node {} reached the executable Node evaluator",
+                node.id
+            ))),
             NodeContent::Generator(generator) => self.generator_image(&node, *generator),
             NodeContent::Media(media) => self.module_media_image(&node, media),
             NodeContent::Merge => self.merge_image(&node),
+            NodeContent::PluginOperation(operation)
+                if operation.category == STYLE_CATEGORY
+                    && operation.operation == STYLE_APPLY_OPERATION
+                    && operation.component_id != IMAGE_OPACITY_STYLE_COMPONENT_ID =>
+            {
+                self.style_shape_image(&node, operation)
+            }
             NodeContent::PluginOperation(operation) => {
                 self.plugin_operation_image(&node, operation)
             }
@@ -263,7 +308,14 @@ impl ModuleImageRuntime<'_> {
                 width: self.width,
                 height: self.height,
                 background_color: transparent(),
-                transform: transform_from_values(&values)?,
+                transform: crate::plugin::transforms::transform_from_values(&values).ok_or_else(
+                    || {
+                        LibraryError::Render(format!(
+                            "Image Transform Module Node {} has invalid resolved properties",
+                            node.id
+                        ))
+                    },
+                )?,
                 blend_mode: node.blend_mode,
                 effect_time: OrderedFloat(seconds),
                 effects: Vec::new(),
@@ -328,24 +380,49 @@ impl ModuleImageRuntime<'_> {
             .connections
             .iter()
             .filter(|connection| connection.to == target)
-            .map(|connection| (connection.order, connection.id, connection.from.clone()))
+            .map(|connection| {
+                (
+                    connection.order,
+                    connection.id,
+                    connection.blend_mode,
+                    connection.from.clone(),
+                )
+            })
             .collect::<Vec<_>>();
-        sources.sort_by_key(|(order, id, _)| (*order, *id));
+        sources.sort_by_key(|(order, id, _, _)| (*order, *id));
         let mut result = Vec::new();
-        for (_, _, source) in sources {
-            if let Some(image) = self.evaluate_image_output(&source)? {
-                result.push(image);
+        for (_, connection_id, blend_mode, source) in sources {
+            if let Some(mut image) = self.evaluate_image_output(&source)? {
+                neutralize_root_blend(&mut image);
+                result.push(FrameItem::Group(FrameGroup {
+                    source_id: connection_id.as_uuid(),
+                    kind: FrameGroupKind::ConnectedImage,
+                    width: self.width,
+                    height: self.height,
+                    background_color: transparent(),
+                    transform: Transform::default(),
+                    blend_mode: blend_mode.effective_over_empty_backdrop(result.is_empty()),
+                    effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
+                    effects: Vec::new(),
+                    items: vec![image],
+                }));
             }
         }
         Ok(result)
     }
 
-    fn node_values(
+    pub(super) fn node_values(
         &mut self,
         node: &CompiledNode,
     ) -> Result<HashMap<String, PropertyValue>, LibraryError> {
-        let seconds = self.local_time.to_seconds_f64();
-        let mut values = evaluate_property_map(&node.properties, seconds, "Module Node")?;
+        let mut values = node
+            .properties
+            .iter()
+            .map(|(key, property)| {
+                self.evaluate_node_property(node, key, property)
+                    .map(|value| (key.clone(), value))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
 
         let parameters = self
             .definition
@@ -391,6 +468,40 @@ impl ModuleImageRuntime<'_> {
         Ok(values)
     }
 
+    fn evaluate_node_property(
+        &self,
+        node: &CompiledNode,
+        key: &str,
+        property: &crate::model::property::Property,
+    ) -> Result<PropertyValue, LibraryError> {
+        let seconds = self.local_time.to_seconds_f64();
+        let context = EvaluationContext::new(
+            &node.properties,
+            self.evaluation_fps,
+            (self.width, self.height),
+        );
+        self.plugins
+            .get_property_evaluators()
+            .evaluate_with_diagnostics(property, seconds, &context)
+            .map(|outcome| {
+                if let Some(diagnostic) = outcome.diagnostic() {
+                    log::warn!(
+                        "Recovered Module Node {} property {key:?} through {} fallback: {}",
+                        node.id,
+                        diagnostic.evaluator(),
+                        diagnostic.message(),
+                    );
+                }
+                outcome.into_value()
+            })
+            .map_err(|error| {
+                LibraryError::Render(format!(
+                    "Cannot evaluate Module Node {} property {key:?}: {error}",
+                    node.id
+                ))
+            })
+    }
+
     fn effective_parameter(
         &self,
         parameter_id: crate::model::authoring::PublishedParameterId,
@@ -419,7 +530,7 @@ impl ModuleImageRuntime<'_> {
             )));
         }
         if let Some(track) = self.invocation.automation_tracks.get(&parameter_id) {
-            return sample_automation(track, self.local_time);
+            return track.evaluate_at(self.local_time);
         }
         Ok(instance
             .parameter_overrides
@@ -551,14 +662,8 @@ impl ModuleImageRuntime<'_> {
         node.properties
             .get(property_name)
             .map(|property| {
-                property
-                    .evaluate_at(self.local_time.to_seconds_f64())
+                self.evaluate_node_property(node, property_name, property)
                     .map(Some)
-                    .map_err(|error| {
-                        LibraryError::Render(format!(
-                            "Cannot evaluate Module property '{property_name}': {error}"
-                        ))
-                    })
             })
             .unwrap_or(Ok(None))
     }

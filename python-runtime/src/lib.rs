@@ -7,6 +7,7 @@
 mod context;
 mod diagnostic;
 mod host;
+mod runtime_home;
 mod value;
 
 pub use context::EvaluationContext;

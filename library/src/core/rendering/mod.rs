@@ -9,6 +9,8 @@ pub(crate) mod path_geometry;
 mod render_authority;
 pub mod render_server;
 pub mod renderer;
+#[cfg(feature = "gl")]
+pub(crate) mod scene_runtime;
 pub mod shader_utils;
 pub mod skia_renderer;
 pub mod skia_utils;

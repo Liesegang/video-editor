@@ -1,498 +1,468 @@
 #!/usr/bin/env python3
-"""Fast coordinate E2E for the Node Editor's 100x overview zoom.
+"""Exercise one explicit Module in the production Node Editor surface."""
 
-The suite uses only the public loopback QA bridge. Zoom is a real command-
-modified mouse-wheel event at the latest canvas center, and pan is a real
-primary-button drag from a freshly queried unobstructed screen coordinate.
-No test-only transform command or mirrored Project model is involved.
-"""
-
-import argparse
-import importlib.util
-import json
 import math
-import os
-import signal
-import subprocess
-import sys
 
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_PATH = os.path.join(SCRIPT_DIR, "qa-e2e.py")
-SPEC = importlib.util.spec_from_file_location("ruvie_qa_e2e_base", BASE_PATH)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("cannot load scripts/qa-e2e.py")
-BASE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BASE)
-
-QaClient = BASE.QaClient
-QaFailure = BASE.QaFailure
-free_port = BASE.free_port
-
-CANVAS_ID = "node_editor.canvas"
-NODE_EDITOR_TAB_ID = "dock.tab:node_editor"
-NODE_EDITOR_TAB_LABEL = "Node Editor"
-TRANSFORM_STATIC_FIELDS = (
-    "scale",
-    "min_scale",
-    "max_scale",
-    "detail_enabled",
-    "port_interaction_enabled",
-    "resize_interaction_enabled",
+from qa_support import (
+    QaFailure,
+    component_center,
+    find_clear_canvas_point,
+    item_by_name,
+    run_suite_main,
 )
 
 
-def finite_number(value, field):
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise QaFailure("{} is not numeric: {!r}".format(field, value))
-    value = float(value)
-    if not math.isfinite(value):
-        raise QaFailure("{} is not finite: {!r}".format(field, value))
-    return value
+CANVAS_ID = "node_editor.canvas"
 
 
-def canvas_transform(component):
-    """Read and validate the final Snarl transform published for one frame."""
-    metadata = component.get("metadata")
-    if not isinstance(metadata, dict):
-        raise QaFailure("{} has no transform metadata".format(CANVAS_ID))
-    translation = metadata.get("translation")
-    if not isinstance(translation, dict):
-        raise QaFailure("{} metadata has no translation".format(CANVAS_ID))
-    transform = {
-        "scale": finite_number(metadata.get("scale"), "scale"),
-        "translation": {
-            "x": finite_number(translation.get("x"), "translation.x"),
-            "y": finite_number(translation.get("y"), "translation.y"),
-        },
-        "min_scale": finite_number(metadata.get("min_scale"), "min_scale"),
-        "max_scale": finite_number(metadata.get("max_scale"), "max_scale"),
-    }
-    for field in (
-        "detail_enabled",
-        "port_interaction_enabled",
-        "resize_interaction_enabled",
-    ):
-        value = metadata.get(field)
-        if not isinstance(value, bool):
-            raise QaFailure("{} is not boolean: {!r}".format(field, value))
-        transform[field] = value
-    if not 0.0 < transform["min_scale"] <= transform["max_scale"]:
-        raise QaFailure("invalid Node Editor scale bounds: {!r}".format(transform))
-    if not transform["min_scale"] <= transform["scale"] <= transform["max_scale"]:
-        raise QaFailure("Node Editor scale escaped its bounds: {!r}".format(transform))
-    return transform
+def _active_definition(state):
+    document = state["editor"]["node_editor"]["document"]
+    if not document or document.get("kind") != "module_definition":
+        raise QaFailure("Node Editor did not open an explicit Module document")
+    definition_id = document["definition_id"]
+    return definition_id, state["project"]["module_definitions"][definition_id]
 
 
-def point_in_rect(point, rect, padding=0.0):
-    return (
-        rect["min_x"] - padding <= point["x"] <= rect["max_x"] + padding
-        and rect["min_y"] - padding <= point["y"] <= rect["max_y"] + padding
-    )
-
-
-def find_primary_pan_gesture(snapshot, dx=112.0, dy=64.0):
-    """Choose a real canvas coordinate that is not owned by Node chrome."""
-    components = {component["id"]: component for component in snapshot["components"]}
-    canvas = components.get(CANVAS_ID)
-    if canvas is None:
-        raise QaFailure("{} is absent in frame {}".format(CANVAS_ID, snapshot["frame"]))
-    rect = canvas["rect_points"]
-    margin = 12.0
-    obstacles = []
-    obstacle_prefixes = (
-        "node_editor.node:",
-        "node_editor.node_header:",
-        "node_editor.port.",
-        "node_editor.container_header.",
-        "node_editor.container_port.",
-        "node_editor.resize_edge.",
-    )
+def _ports(snapshot, direction, node_id=None):
+    result = []
     for component in snapshot["components"]:
-        item_rect = component.get("rect_points", {})
-        if (
-            component.get("visible", False)
-            and item_rect.get("width", 0.0) > 0.0
-            and item_rect.get("height", 0.0) > 0.0
-            and component["id"].startswith(obstacle_prefixes)
-        ):
-            obstacles.append(item_rect)
-
-    for x_fraction, y_fraction in (
-        (0.22, 0.24),
-        (0.22, 0.72),
-        (0.48, 0.24),
-        (0.70, 0.72),
-        (0.50, 0.50),
-    ):
-        start = {
-            "x": rect["min_x"] + rect["width"] * x_fraction,
-            "y": rect["min_y"] + rect["height"] * y_fraction,
-        }
-        end = {"x": start["x"] + dx, "y": start["y"] + dy}
-        if not (
-            rect["min_x"] + margin <= start["x"] <= rect["max_x"] - margin
-            and rect["min_y"] + margin <= start["y"] <= rect["max_y"] - margin
-            and rect["min_x"] + margin <= end["x"] <= rect["max_x"] - margin
-            and rect["min_y"] + margin <= end["y"] <= rect["max_y"] - margin
-        ):
+        if component.get("type") != "node_editor_port" or not component.get("visible"):
             continue
-        if all(not point_in_rect(start, obstacle, 6.0) for obstacle in obstacles):
-            return start, end
-    raise QaFailure("no unobstructed primary-pan origin in Node Editor canvas")
+        metadata = component.get("metadata") or {}
+        if metadata.get("direction") != direction:
+            continue
+        if node_id is not None and metadata.get("node_id") != node_id:
+            continue
+        result.append(component)
+    return result
 
 
-def assert_header_interaction_metadata(snapshot, expected_move_enabled):
-    """Selection stays available when header movement is gated by LOD."""
-    header_prefixes = (
-        "node_editor.node_header:",
-        "node_editor.container_header.",
+def _node_content_type(node):
+    content = node.get("content") or {}
+    return str(content.get("type", "")).replace("_", "").lower()
+
+
+def _image_port(snapshot, direction, node_id):
+    return next(
+        (
+            port
+            for port in _ports(snapshot, direction, node_id)
+            if str((port.get("metadata") or {}).get("data_type", "")).lower()
+            == "image"
+        ),
+        None,
     )
-    headers = [
-        component
-        for component in snapshot["components"]
-        if component["id"].startswith(header_prefixes)
-        and component.get("visible", False)
-    ]
-    if not headers:
-        raise QaFailure(
-            "frame {} has no visible Node/Group header metadata".format(snapshot["frame"])
-        )
-    for component in headers:
-        metadata = component.get("metadata") or {}
-        if metadata.get("selection_enabled") is not True:
-            raise QaFailure("{} disabled semantic selection".format(component["id"]))
-        if metadata.get("move_enabled") is not expected_move_enabled:
-            raise QaFailure(
-                "{} move_enabled={!r}, expected {!r}".format(
-                    component["id"],
-                    metadata.get("move_enabled"),
-                    expected_move_enabled,
-                )
-            )
-
-    move_components = [
-        component
-        for component in snapshot["components"]
-        if component["id"].startswith("node_editor.container_move_header.")
-        and component.get("visible", False)
-    ]
-    if not move_components:
-        raise QaFailure(
-            "frame {} has no visible Group move component".format(snapshot["frame"])
-        )
-    for component in move_components:
-        metadata = component.get("metadata") or {}
-        if component.get("enabled") is not expected_move_enabled:
-            raise QaFailure(
-                "{} component enabled={!r}, expected {!r}".format(
-                    component["id"], component.get("enabled"), expected_move_enabled
-                )
-            )
-        if metadata.get("selection_enabled") is not True:
-            raise QaFailure("{} omitted selection_enabled".format(component["id"]))
-        if metadata.get("move_enabled") is not expected_move_enabled:
-            raise QaFailure("{} metadata disagrees with component gate".format(component["id"]))
-    return {
-        "header_ids": [component["id"] for component in headers],
-        "move_component_ids": [component["id"] for component in move_components],
-        "move_enabled": expected_move_enabled,
-    }
 
 
-def assert_minimum_zoom(before, zoomed, tolerance=1.0e-5):
-    if not zoomed["scale"] < before["scale"]:
-        raise QaFailure(
-            "command-wheel did not reduce scale: {} -> {}".format(
-                before["scale"], zoomed["scale"]
-            )
-        )
-    if abs(zoomed["scale"] - zoomed["min_scale"]) > tolerance:
-        raise QaFailure(
-            "100x zoom did not clamp at min_scale: {!r}".format(zoomed)
-        )
-    for field in (
-        "detail_enabled",
-        "port_interaction_enabled",
-        "resize_interaction_enabled",
-    ):
-        if zoomed[field]:
-            raise QaFailure("{} remained enabled at overview scale".format(field))
+def _connection(definition, from_node, to_node):
+    return next(
+        (
+            connection
+            for connection in definition["graph"]["connections"]
+            if connection["from"]["node_id"] == from_node
+            and connection["to"]["node_id"] == to_node
+        ),
+        None,
+    )
 
 
-def assert_only_translation_changed(before, after, expected_delta, tolerance=2.5):
-    for field in TRANSFORM_STATIC_FIELDS:
-        if before[field] != after[field]:
-            raise QaFailure(
-                "primary pan unexpectedly changed {}: {!r} -> {!r}".format(
-                    field, before[field], after[field]
-                )
-            )
-    actual = {
-        "x": after["translation"]["x"] - before["translation"]["x"],
-        "y": after["translation"]["y"] - before["translation"]["y"],
-    }
-    if abs(actual["x"] - expected_delta["x"]) > tolerance or abs(
-        actual["y"] - expected_delta["y"]
-    ) > tolerance:
-        raise QaFailure(
-            "primary pan translation mismatch: actual={!r}, expected={!r}".format(
-                actual, expected_delta
-            )
-        )
-    return actual
+def _connection_component_id(connection_id):
+    return "node_editor.connection:" + connection_id
 
 
-def assert_navigation_state_unchanged(initial_state, final_state):
-    if final_state["project"] != initial_state["project"]:
-        raise QaFailure("Node Editor navigation mutated the authoritative Project")
-    if final_state["history"] != initial_state["history"]:
-        raise QaFailure("Node Editor navigation created an undo history entry")
-    if final_state["editor"]["selection"] != initial_state["editor"]["selection"]:
-        raise QaFailure("overview pan selected or deselected a Node or Clip")
-    if (
-        final_state["editor"]["node_editor"]
-        != initial_state["editor"]["node_editor"]
-    ):
-        raise QaFailure("overview navigation changed Node Editor modal/navigation state")
+def _connection_handle_component_id(connection_id, endpoint):
+    return "node_editor.connection_handle:{}:{}".format(connection_id, endpoint)
 
 
-def wait_canvas(client, description, predicate=None, after_frame=-1):
-    def ready():
-        try:
-            snapshot, component = client.component(CANVAS_ID)
-            transform = canvas_transform(component)
-        except QaFailure:
-            return None
-        if snapshot["frame"] <= after_frame:
-            return None
-        if predicate is not None and not predicate(transform):
-            return None
-        return snapshot, component, transform
+def _select_connection(client, connection_id):
+    component_id = _connection_component_id(connection_id)
+    _, component = client.wait_component_settled(component_id)
+    metadata = component.get("metadata") or {}
+    if metadata.get("connection_id") != connection_id:
+        raise QaFailure("Node Editor wire QA target has the wrong connection identity")
+    if metadata.get("interaction_geometry") != "node-editor-ui":
+        raise QaFailure("Node Editor wire QA target did not use shared geometry")
+    client.click_component(component_id)
 
-    return client.wait_until(description, ready)
-
-
-def activate_node_editor_tab(client):
-    """Activate the Node Editor through the latest rendered dock-tab rect."""
-    client.wait_component_settled(NODE_EDITOR_TAB_ID)
-    point = client.click_component(NODE_EDITOR_TAB_ID)
-
-    def active():
+    def selected():
         state = client.state()
-        return state if NODE_EDITOR_TAB_LABEL in state["dock"]["active_tabs"] else None
+        return (
+            state
+            if state["editor"]["node_editor"]["selected_connection"]
+            == connection_id
+            else None
+        )
 
-    state = client.wait_until("Node Editor dock activation", active)
-    if not client.evidence:
-        raise QaFailure("Node Editor tab click produced no coordinate evidence")
-    action = client.evidence[-1]
-    if action.get("endpoint") != "click" or action.get("component_id") != NODE_EDITOR_TAB_ID:
-        raise QaFailure("Node Editor tab activation did not use its rendered rectangle")
-    return (
-        {
-            "component_id": NODE_EDITOR_TAB_ID,
-            "point": point,
-            "action_id": action["action_id"],
-            "component_frame": action["component_frame"],
-            "component_rect_points": action["component_rect_points"],
-            "active_frame": state["frame"],
-        },
-        state,
-    )
-
-
-def command_scroll_at_canvas_center(client, delta_y, purpose):
-    snapshot, component = client.component(CANVAS_ID)
-    point = client.point(component["rect_points"])
-    client.inject(
-        "scroll",
-        {
-            "x": point["x"],
-            "y": point["y"],
-            "delta_x": 0.0,
-            "delta_y": delta_y,
-            "coordinate_space": "points",
-            "modifiers": {"command": True},
-        },
-        {
-            "component_id": CANVAS_ID,
-            "component_frame": snapshot["frame"],
-            "component_rect_points": component["rect_points"],
-            "coordinate_reason": purpose,
-        },
-    )
-    return snapshot["frame"], point
+    client.wait_until("Module connection selection", selected)
 
 
 def run_suite(client):
-    health = client.wait_health()
-    BASE.wait_fresh_fixture(client)
-    tab_click, initial_state = activate_node_editor_tab(client)
-    initial_snapshot, _, initial = wait_canvas(client, "final Node Editor canvas metadata")
-    detail_header_evidence = None
-    if initial["detail_enabled"]:
-        detail_header_evidence = assert_header_interaction_metadata(
-            client.component_snapshot(), True
-        )
+    client.wait_health()
+    initial = client.state()
+    node_clip = item_by_name(initial["project"], "QA Node Clip")
+    client.double_click_component("timeline.item:" + node_clip["id"])
+    client.wait_component("dock.tab:node_editor")
+    client.click_component("dock.tab:node_editor")
+    _, canvas = client.wait_component_settled(CANVAS_ID)
+    canvas_metadata = canvas.get("metadata") or {}
+    if canvas_metadata.get("production_surface") != "egui_snarl":
+        raise QaFailure("Module document did not use the production Node Editor")
+    if canvas_metadata.get("timeline_graph_expansion") is not False:
+        raise QaFailure("Node Editor expanded Timeline structure into Nodes")
 
-    # A manually reused app may already be at the lower clamp. Recover only
-    # through the same public wheel path so the subsequent decrease remains
-    # observable without any transform-setting shortcut.
-    before = initial
-    before_frame = initial_snapshot["frame"]
-    if before["scale"] <= before["min_scale"] + 1.0e-5:
-        frame, _ = command_scroll_at_canvas_center(
-            client, 900.0, "real command-wheel setup above the minimum"
-        )
-        _, _, before = wait_canvas(
-            client,
-            "Node Editor zoom-in setup",
-            lambda value: value["scale"] > value["min_scale"] * 2.0,
-            after_frame=frame,
-        )
-        before_frame = frame
+    opened = client.state()
+    definition_id, definition = _active_definition(opened)
+    original_nodes = set(definition["graph"]["nodes"])
+    output_nodes = {
+        node_id
+        for node_id, node in definition["graph"]["nodes"].items()
+        if _node_content_type(node) == "moduleoutput"
+    }
+    if len(original_nodes) != 2 or len(output_nodes) != 1:
+        raise QaFailure("fixture Module should start with one source and one Output terminal")
+    output_node_id = next(iter(output_nodes))
+    source_node_id = next(iter(original_nodes - output_nodes))
+    if len(definition["graph"]["connections"]) != 1 or not _connection(
+        definition, source_node_id, output_node_id
+    ):
+        raise QaFailure("fixture Module should initially route its source to Output")
 
-    scroll_frame, zoom_point = command_scroll_at_canvas_center(
-        client, -10_000.0, "real command-wheel 100x overview zoom at canvas center"
-    )
-    zoom_snapshot, _, zoomed = wait_canvas(
-        client,
-        "Node Editor minimum zoom clamp",
-        lambda value: value["scale"] < before["scale"]
-        and abs(value["scale"] - value["min_scale"]) <= 1.0e-5,
-        after_frame=scroll_frame,
-    )
-    assert_minimum_zoom(before, zoomed)
-    overview_header_evidence = assert_header_interaction_metadata(
-        client.component_snapshot(), False
-    )
+    _, output_header = client.wait_component("node_editor.node_header:" + output_node_id)
+    if (output_header.get("metadata") or {}).get("module_output") is not True:
+        raise QaFailure("dedicated Output node was not identified by the production surface")
 
-    # Re-query all rectangles after zoom. The drag origin is selected from the
-    # completed overview frame and sent as a normal primary-button lifecycle.
-    pan_snapshot = client.component_snapshot()
-    start, end = find_primary_pan_gesture(pan_snapshot)
-    expected_delta = {"x": end["x"] - start["x"], "y": end["y"] - start["y"]}
+    snapshot = client.component_snapshot()
+    menu_point = find_clear_canvas_point(
+        snapshot,
+        CANVAS_ID,
+        ("node_editor.node:", "node_editor.node_header:", "node_editor.port."),
+    )
     client.inject(
-        "drag",
+        "click",
+        {**menu_point, "button": "secondary", "coordinate_space": "points"},
+    )
+    client.wait_component("node_editor.menu.search")
+    client.click_component("node_editor.menu.search")
+    client.inject("text", {"text": "blur"})
+    client.wait_component_settled("node_editor.menu.create.effect:blur")
+    client.click_component("node_editor.menu.create.effect:blur")
+
+    def created():
+        state = client.state()
+        _, current = _active_definition(state)
+        return state if len(current["graph"]["nodes"]) == 3 else None
+
+    after_create = client.wait_until("a second Module Node", created)
+    current_definition_id, current = _active_definition(after_create)
+    new_nodes = set(current["graph"]["nodes"]) - original_nodes
+    if len(new_nodes) != 1:
+        raise QaFailure("Node creation did not add exactly one Module Node")
+    effect_node_id = next(iter(new_nodes))
+    if current_definition_id == definition_id and current == definition:
+        raise QaFailure("Node creation did not update the Module definition")
+
+    def connection_targets():
+        snapshot = client.component_snapshot()
+        source = _image_port(snapshot, "output", source_node_id)
+        target = _image_port(snapshot, "input", effect_node_id)
+        return (source, target) if source and target else None
+
+    source, target = client.wait_until("connectable Module ports", connection_targets)
+    _, source_header = client.wait_component("node_editor.node_header:" + source_node_id)
+    header_point = component_center(source_header)
+    _, before_wire_canvas = client.wait_component_settled(CANVAS_ID)
+    gesture_scale = float((before_wire_canvas.get("metadata") or {})["scale"])
+    client.inject(
+        "press",
+        {**header_point, "button": "primary", "coordinate_space": "points"},
+    )
+    # A wheel/pinch arriving while a Node owns the pointer must not change the
+    # press-time transform. The same lock is consumed by port/wire gestures.
+    client.inject(
+        "scroll",
         {
-            "from": start,
-            "to": end,
+            **header_point,
+            "delta_x": 0.0,
+            "delta_y": -600.0,
             "coordinate_space": "points",
-            "button": "primary",
-            "steps": 8,
-        },
-        {
-            "component_id": CANVAS_ID,
-            "component_frame": pan_snapshot["frame"],
-            "component_rect_points": next(
-                component["rect_points"]
-                for component in pan_snapshot["components"]
-                if component["id"] == CANVAS_ID
-            ),
-            "coordinate_reason": "real primary drag from unobstructed overview canvas",
+            "modifiers": {"command": True},
         },
     )
-    final_snapshot, _, panned = wait_canvas(
-        client,
-        "Node Editor primary pan translation",
-        lambda value: value["scale"] == zoomed["scale"]
-        and value["translation"] != zoomed["translation"],
-        after_frame=pan_snapshot["frame"],
+    _, during_wire_canvas = client.wait_component_settled(CANVAS_ID)
+    during_wire_scale = float((during_wire_canvas.get("metadata") or {})["scale"])
+    if abs(during_wire_scale - gesture_scale) > 1.0e-6:
+        raise QaFailure("Node Editor transform changed during a Node gesture")
+    client.inject(
+        "release",
+        {**header_point, "button": "primary", "coordinate_space": "points"},
     )
-    actual_delta = assert_only_translation_changed(zoomed, panned, expected_delta)
 
-    final_state = client.state()
-    assert_navigation_state_unchanged(initial_state, final_state)
+    def original_wire_ports():
+        snapshot = client.component_snapshot()
+        source_port = _image_port(snapshot, "output", source_node_id)
+        output_port = _image_port(snapshot, "input", output_node_id)
+        return (source_port, output_port) if source_port and output_port else None
 
+    client.wait_until(
+        "original source-to-Output ports", original_wire_ports
+    )
+    original_connection_id = definition["graph"]["connections"][0]["id"]
+    _select_connection(client, original_connection_id)
+    client.key("backspace", True)
+    client.key("backspace", False)
+
+    def disconnected():
+        state = client.state()
+        _, current = _active_definition(state)
+        return state if not current["graph"]["connections"] else None
+
+    client.wait_until("source-to-Output disconnect", disconnected)
+    source, target = client.wait_until("ports after frozen gesture", connection_targets)
+    client.drag(component_center(source), component_center(target), steps=12)
+
+    def source_connected_to_effect():
+        state = client.state()
+        _, candidate = _active_definition(state)
+        return state if _connection(candidate, source_node_id, effect_node_id) else None
+
+    client.wait_until("source connected to effect", source_connected_to_effect)
+
+    def effect_output_targets():
+        snapshot = client.component_snapshot()
+        effect_output = _image_port(snapshot, "output", effect_node_id)
+        module_output = _image_port(snapshot, "input", output_node_id)
+        return (effect_output, module_output) if effect_output and module_output else None
+
+    effect_output, module_output = client.wait_until(
+        "effect-to-Output ports", effect_output_targets
+    )
+    client.drag(component_center(effect_output), component_center(module_output), steps=12)
+
+    def completed_module_route():
+        state = client.state()
+        _, candidate = _active_definition(state)
+        complete = (
+            len(candidate["graph"]["connections"]) == 2
+            and _connection(candidate, source_node_id, effect_node_id)
+            and _connection(candidate, effect_node_id, output_node_id)
+        )
+        return state if complete else None
+
+    after_connect = client.wait_until("source-effect-Output route", completed_module_route)
+    _, routed = _active_definition(after_connect)
+    source_effect = _connection(routed, source_node_id, effect_node_id)
+    effect_output_connection = _connection(routed, effect_node_id, output_node_id)
+    source_effect_metadata = {
+        key: source_effect[key] for key in ("id", "order", "blend_mode")
+    }
+    output_metadata = {
+        key: effect_output_connection[key] for key in ("id", "order", "blend_mode")
+    }
+
+    # Add a second compatible processor so both existing-edge handles can be
+    # exercised without introducing an invalid intermediate topology.
+    _, second_menu_canvas = client.wait_component_settled(CANVAS_ID)
+    second_canvas_rect = second_menu_canvas["rect_points"]
+    # The upper middle of the short dock is intentionally clear in this
+    # fixture and leaves enough room for all Blur ports. A generic blank-point
+    # search can land on a long Bezier wire because wires have no rectangle.
+    second_menu_point = {
+        "x": second_canvas_rect["center_x"],
+        "y": second_canvas_rect["min_y"] + 24.0,
+    }
+    client.inject(
+        "click",
+        {**second_menu_point, "button": "secondary", "coordinate_space": "points"},
+    )
+    client.wait_component("node_editor.menu.search")
+    client.click_component("node_editor.menu.search")
+    client.inject("text", {"text": "blur"})
+    client.wait_component_settled("node_editor.menu.create.effect:blur")
+    client.click_component("node_editor.menu.create.effect:blur")
+
+    def second_effect_created():
+        state = client.state()
+        _, candidate = _active_definition(state)
+        return state if len(candidate["graph"]["nodes"]) == 4 else None
+
+    with_second_effect = client.wait_until("a second Blur Node", second_effect_created)
+    _, with_second_definition = _active_definition(with_second_effect)
+    second_effect_nodes = (
+        set(with_second_definition["graph"]["nodes"])
+        - original_nodes
+        - {effect_node_id}
+    )
+    if len(second_effect_nodes) != 1:
+        raise QaFailure("second Blur creation did not add exactly one Module Node")
+    second_effect_node_id = next(iter(second_effect_nodes))
+
+    def selected_target_wire_ports():
+        snapshot = client.component_snapshot()
+        source = _image_port(snapshot, "output", source_node_id)
+        old_target = _image_port(snapshot, "input", effect_node_id)
+        return (source, old_target) if source and old_target else None
+
+    client.wait_until(
+        "selected target wire ports", selected_target_wire_ports
+    )
+    _select_connection(client, source_effect_metadata["id"])
+
+    def target_reconnect_ports():
+        snapshot = client.component_snapshot()
+        old_target = _image_port(snapshot, "input", effect_node_id)
+        new_target = _image_port(snapshot, "input", second_effect_node_id)
+        return (old_target, new_target) if old_target and new_target else None
+
+    _, new_target = client.wait_until(
+        "visible target reconnect ports", target_reconnect_ports
+    )
+    _, target_handle = client.wait_component_settled(
+        _connection_handle_component_id(source_effect_metadata["id"], "target")
+    )
+    client.drag(component_center(target_handle), component_center(new_target), steps=12)
+
+    def target_reconnected():
+        state = client.state()
+        _, candidate = _active_definition(state)
+        connection = _connection(candidate, source_node_id, second_effect_node_id)
+        if not connection:
+            return None
+        for key, expected in source_effect_metadata.items():
+            if connection[key] != expected:
+                raise QaFailure(
+                    "target reconnect changed connection {}: {!r} != {!r}".format(
+                        key, connection[key], expected
+                    )
+                )
+        return state
+
+    client.wait_until("target endpoint reconnect", target_reconnected)
+
+    def source_reconnect_ports():
+        snapshot = client.component_snapshot()
+        old_source = _image_port(snapshot, "output", effect_node_id)
+        new_source = _image_port(snapshot, "output", second_effect_node_id)
+        target = _image_port(snapshot, "input", output_node_id)
+        return (
+            (old_source, new_source, target)
+            if old_source and new_source and target
+            else None
+        )
+
+    _, new_source, _ = client.wait_until(
+        "source reconnect ports", source_reconnect_ports
+    )
+    _select_connection(client, output_metadata["id"])
+    _, source_handle = client.wait_component_settled(
+        _connection_handle_component_id(output_metadata["id"], "source")
+    )
+    client.drag(component_center(source_handle), component_center(new_source), steps=12)
+
+    def source_reconnected():
+        state = client.state()
+        _, candidate = _active_definition(state)
+        connection = _connection(candidate, second_effect_node_id, output_node_id)
+        if not connection:
+            return None
+        for key, expected in output_metadata.items():
+            if connection[key] != expected:
+                raise QaFailure(
+                    "source reconnect changed connection {}: {!r} != {!r}".format(
+                        key, connection[key], expected
+                    )
+                )
+        return state
+
+    after_reconnect = client.wait_until("source endpoint reconnect", source_reconnected)
+    _, reconnected_definition = _active_definition(after_reconnect)
+    if len(reconnected_definition["graph"]["connections"]) != 2:
+        raise QaFailure("endpoint reconnect duplicated or dropped an authored connection")
+
+    after_connect = after_reconnect
+    project_before_navigation = after_connect["project"]
+    history_before_navigation = after_connect["history"]
+
+    _, before_pan_canvas = client.wait_component_settled(CANVAS_ID)
+    before_pan_metadata = before_pan_canvas.get("metadata") or {}
+    if before_pan_metadata.get("viewport_controller") != "shared":
+        raise QaFailure("Node Editor did not use the shared ViewportController")
+    before_pan = before_pan_metadata.get("pan") or {}
+    pan_start = find_clear_canvas_point(
+        client.component_snapshot(),
+        CANVAS_ID,
+        ("node_editor.node:", "node_editor.node_header:", "node_editor.port."),
+    )
+    pan_delta = {"x": 72.0, "y": 44.0}
+    client.drag(
+        pan_start,
+        {"x": pan_start["x"] + pan_delta["x"], "y": pan_start["y"] + pan_delta["y"]},
+        steps=8,
+        button="middle",
+    )
+    _, after_pan_canvas = client.wait_component_settled(CANVAS_ID)
+    after_pan = (after_pan_canvas.get("metadata") or {}).get("pan") or {}
+    applied_pan = {
+        "x": float(after_pan["x"]) - float(before_pan["x"]),
+        "y": float(after_pan["y"]) - float(before_pan["y"]),
+    }
+    if abs(applied_pan["x"] - pan_delta["x"]) > 2.0 or abs(
+        applied_pan["y"] - pan_delta["y"]
+    ) > 2.0:
+        raise QaFailure(
+            "Node Editor pan was ignored or applied more than once: {!r}".format(applied_pan)
+        )
+
+    _, before_canvas = client.wait_component_settled(CANVAS_ID)
+    scale_before = float((before_canvas.get("metadata") or {})["scale"])
+    if not math.isfinite(scale_before) or scale_before <= 0:
+        raise QaFailure("Node Editor published an invalid initial zoom")
+
+    observed_scales = [scale_before]
+    # Exercise the formerly freezing extreme zoom path repeatedly. Every
+    # injected step must publish a fresh frame and remain health-responsive.
+    for delta in (-1200.0, -1200.0, -1200.0, 1200.0, 1200.0):
+        client.scroll_component(CANVAS_ID, 0.0, delta, modifiers={"command": True})
+        _, candidate = client.wait_component_settled(CANVAS_ID)
+        scale = float((candidate.get("metadata") or {})["scale"])
+        if not math.isfinite(scale) or scale <= 0:
+            raise QaFailure("Node Editor zoom became non-finite")
+        observed_scales.append(scale)
+        if client.request("/health").get("ok") is not True:
+            raise QaFailure("Node Editor zoom made the app unresponsive")
+    if len(set(observed_scales)) < 2:
+        raise QaFailure("Node Editor ignored every zoom gesture")
+
+    final = client.state()
+    if (
+        final["project"] != project_before_navigation
+        or final["history"] != history_before_navigation
+    ):
+        raise QaFailure("Node Editor navigation mutated the Module or undo history")
     return {
-        "ok": True,
-        "suite": "node-editor-zoom",
-        "health": health,
-        "tab_click": tab_click,
-        "initial_frame": initial_snapshot["frame"],
-        "zoom_frame": zoom_snapshot["frame"],
-        "final_frame": final_snapshot["frame"],
-        "before": before,
-        "zoomed": zoomed,
-        "panned": panned,
-        "zoom_point": zoom_point,
-        "pan": {"from": start, "to": end, "actual_delta": actual_delta},
-        "header_lod": {
-            "detail": detail_header_evidence,
-            "overview": overview_header_evidence,
-        },
-        "state_guard": {
-            "history": final_state["history"],
-            "selection": final_state["editor"]["selection"],
-            "node_editor": final_state["editor"]["node_editor"],
-            "project_unchanged": True,
-        },
+        "suite": "node-editor",
+        "item_id": node_clip["id"],
+        "definition_id": current_definition_id,
+        "created_node_id": effect_node_id,
+        "reconnect_node_id": second_effect_node_id,
+        "connection_count": 2,
+        "reconnected_connection_ids": [
+            source_effect_metadata["id"],
+            output_metadata["id"],
+        ],
+        "direct_gesture_scale": gesture_scale,
+        "pan_delta": applied_pan,
+        "zoom_scales": observed_scales,
+        "canvas": canvas_metadata,
+        "history": final["history"],
         "actions": client.evidence,
-        "setup_frame": before_frame,
     }
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default=None)
-    parser.add_argument(
-        "--spawn",
-        action="store_true",
-        help="launch a fresh headful app with the deterministic fixture",
-    )
-    parser.add_argument(
-        "--evidence",
-        default="target/qa-node-editor-e2e-evidence.json",
-        help="JSON evidence output path",
-    )
-    parser.add_argument("--timeout", type=float, default=30.0)
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    process = None
-    port = free_port() if args.spawn else 39091
-    base_url = args.base_url or "http://127.0.0.1:{}".format(port)
-    try:
-        if args.spawn:
-            environment = os.environ.copy()
-            environment["RUVIE_QA_PORT"] = str(port)
-            environment["RUVIE_QA_FIXTURE"] = "node_editor_e2e"
-            process = subprocess.Popen(
-                ["cargo", "run", "-p", "app", "--locked"],
-                env=environment,
-                start_new_session=True,
-            )
-        client = QaClient(base_url, args.timeout)
-        result = run_suite(client)
-        result["run_id"] = os.environ.get("RUVIE_QA_RUN_ID")
-        evidence_path = os.path.abspath(args.evidence)
-        os.makedirs(os.path.dirname(evidence_path), exist_ok=True)
-        with open(evidence_path, "w", encoding="utf-8") as output:
-            json.dump(result, output, ensure_ascii=False, indent=2)
-            output.write("\n")
-        print("[qa-node-editor-e2e] PASS; evidence: {}".format(evidence_path))
-        return 0
-    except (QaFailure, AssertionError, KeyError, StopIteration, TypeError) as error:
-        print("[qa-node-editor-e2e] FAIL: {}".format(error), file=sys.stderr)
-        return 1
-    finally:
-        if process is not None:
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            try:
-                process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=2.0)
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(
+        run_suite_main(
+            "qa-node-editor-e2e",
+            run_suite,
+            "target/qa-node-editor-e2e-evidence.json",
+        )
+    )

@@ -1,6 +1,7 @@
 id = "brightness_contrast"
 name = "Brightness & Contrast"
 category = "Color & Tone"
+color_domain = "project_linear"
 
 [[properties]]
 name = "brightness"

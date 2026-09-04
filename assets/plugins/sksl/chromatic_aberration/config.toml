@@ -1,6 +1,7 @@
 id = "chromatic_aberration"
 name = "Chromatic Aberration (Pro)"
 category = "Distortion"
+color_domain = "project_linear"
 
 [[properties]]
 name = "intensity"

@@ -40,6 +40,7 @@ ordered-float = { version = "5.1.0", features = ["serde"] }
 sha2 = "0.10"
 libloading = "0.9"
 glutin = "0.32.3"
+glow = "0.16"
 raw-window-handle = "0.6"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -63,6 +64,7 @@ bytemuck = { version = "1.25.1", features = ["extern_crate_alloc"] }
 half = "2.7.1"
 libc = "0.2"
 unicode-segmentation = "1.12"
+ufbx = "=0.11.3"
 
 [dev-dependencies]
 tempfile = "3.27"

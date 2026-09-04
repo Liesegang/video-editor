@@ -17,6 +17,7 @@ use crate::plugin::{Plugin, PluginCategory};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -112,7 +113,7 @@ impl ExportSettings {
         Ok(settings)
     }
 
-    /// Build encoder settings directly from a Timeline-first Project and one
+    /// Build encoder settings directly from an authoring Project and one
     /// selected Timeline. No legacy Project or Composition is manufactured at
     /// this boundary.
     pub fn from_authoring_project(
@@ -175,7 +176,7 @@ impl ExportSettings {
             container: "png".into(),
             codec: "png".into(),
             pixel_format: "rgba".into(),
-            trusted_ffmpeg_path: None,
+            trusted_ffmpeg_path: bundled_ffmpeg_path(),
             width,
             height,
             fps,
@@ -194,7 +195,7 @@ impl ExportSettings {
         Ok(())
     }
 
-    /// Bind settings to a Timeline-first Project's exact export pipeline.
+    /// Bind settings to an authoring Project's exact export pipeline.
     pub fn bind_authoring_project_color_authority(
         &mut self,
         project: &AuthoringProject,
@@ -381,6 +382,24 @@ impl ExportSettings {
     }
 }
 
+fn bundled_ffmpeg_path() -> Option<String> {
+    let executable = std::env::current_exe().ok()?;
+    bundled_ffmpeg_path_from(&executable)
+}
+
+fn bundled_ffmpeg_path_from(executable: &std::path::Path) -> Option<String> {
+    let directory = executable.parent()?;
+    let filename = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let candidate: PathBuf = directory.join(filename);
+    candidate
+        .is_file()
+        .then(|| candidate.to_string_lossy().into_owned())
+}
+
 fn validate_fps(fps: f64) -> Result<(), LibraryError> {
     if fps.is_finite() && fps > 0.0 {
         Ok(())
@@ -421,9 +440,30 @@ impl ExportRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::ExportSettings;
+    use super::{ExportSettings, bundled_ffmpeg_path_from};
     use crate::model::project::{Composition, Project};
     use serde_json::json;
+
+    #[test]
+    fn app_local_ffmpeg_is_selected_without_using_path() -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let executable = temporary
+            .path()
+            .join(if cfg!(windows) { "app.exe" } else { "app" });
+        let ffmpeg = temporary.path().join(if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        });
+        std::fs::write(&executable, [])?;
+        std::fs::write(&ffmpeg, [])?;
+
+        assert_eq!(
+            bundled_ffmpeg_path_from(&executable),
+            Some(ffmpeg.to_string_lossy().into_owned())
+        );
+        Ok(())
+    }
 
     #[test]
     fn output_fps_preserves_duration_when_resampling_timeline_ranges() {

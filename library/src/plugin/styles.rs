@@ -93,26 +93,110 @@ impl StylePlugin for ImageOpacityStylePlugin {
 
 pub struct FillStylePlugin;
 
-fn renderer_color(
-    context: &FrameEvaluationContext,
-    properties: &PropertyMap,
-    eval_time: f64,
-    operation: &str,
-) -> Option<Color> {
-    let color = context.require_color_value(properties, "color", eval_time, operation)?;
-    crate::color_management::to_renderer_srgba8(&color)
-        .inspect_err(|error| {
-            log::error!("{operation} cannot cross the legacy renderer color boundary: {error}");
-        })
-        .ok()
-}
-
 fn apply_opacity(mut color: Color, opacity: f64) -> Color {
     // DrawStyle is the legacy u8 renderer boundary. Opacity is an explicit
     // Style operation at that boundary, not a conversion of Project color
     // data, so its result is intentionally quantized exactly once here.
     color.a = (f64::from(color.a) * opacity).round().clamp(0.0, 255.0) as u8;
     color
+}
+
+/// Evaluates the built-in Shape appearance boundary from values already
+/// sampled by an authoring runtime. The legacy graph context and Module graph
+/// therefore share the same Fill/Stroke materialization policy.
+pub(crate) fn builtin_style_from_values(
+    component_id: &str,
+    source_id: Uuid,
+    values: &std::collections::HashMap<String, PropertyValue>,
+) -> Option<StyleConfig> {
+    fn number(values: &std::collections::HashMap<String, PropertyValue>, key: &str) -> Option<f64> {
+        match values.get(key)? {
+            PropertyValue::Number(value) => Some(value.into_inner()),
+            PropertyValue::Integer(value) => Some(*value as f64),
+            _ => None,
+        }
+    }
+    fn string<'a>(
+        values: &'a std::collections::HashMap<String, PropertyValue>,
+        key: &str,
+    ) -> Option<&'a str> {
+        match values.get(key)? {
+            PropertyValue::String(value) => Some(value),
+            _ => None,
+        }
+    }
+    fn color(values: &std::collections::HashMap<String, PropertyValue>) -> Option<Color> {
+        match values.get("color")? {
+            PropertyValue::Color(value) => Some(value.clone()),
+            PropertyValue::ColorValue(value) => {
+                crate::color_management::to_renderer_srgba8(value).ok()
+            }
+            _ => None,
+        }
+    }
+
+    let opacity = number(values, "opacity")?;
+    if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+        return None;
+    }
+    let final_color = apply_opacity(color(values)?, opacity);
+    let style = match component_id {
+        "fill" => {
+            let offset = number(values, "offset")?;
+            if !offset.is_finite() {
+                return None;
+            }
+            DrawStyle::Fill {
+                color: final_color,
+                offset,
+            }
+        }
+        "stroke" => {
+            let width = number(values, "width")?;
+            let offset = number(values, "offset")?;
+            let miter = number(values, "miter_limit")?;
+            let dash_offset = number(values, "dash_offset")?;
+            if [width, offset, miter, dash_offset]
+                .into_iter()
+                .any(|value| !value.is_finite())
+                || width < 0.0
+                || miter < 0.0
+            {
+                return None;
+            }
+            let dash_array = string(values, "dash_array")?
+                .split_whitespace()
+                .map(str::parse::<f64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            if dash_array.iter().any(|value| !value.is_finite()) {
+                return None;
+            }
+            DrawStyle::Stroke {
+                color: final_color,
+                width,
+                offset,
+                join: match string(values, "join")? {
+                    "Miter" => JoinType::Miter,
+                    "Bevel" => JoinType::Bevel,
+                    _ => JoinType::Round,
+                },
+                cap: match string(values, "cap")? {
+                    "Butt" => CapType::Butt,
+                    "Square" => CapType::Square,
+                    _ => CapType::Round,
+                },
+                miter,
+                dash_array,
+                dash_offset,
+            }
+        }
+        _ => return None,
+    };
+    Some(StyleConfig {
+        id: source_id,
+        style,
+    })
 }
 
 impl Plugin for FillStylePlugin {
@@ -180,20 +264,13 @@ impl StylePlugin for FillStylePlugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<StyleConfig> {
-        let color = renderer_color(context, properties, eval_time, "Fill")?;
-        let opacity = context.evaluate_number(properties, "opacity", eval_time, 1.0);
-        let offset = context.evaluate_number(properties, "offset", eval_time, 0.0) as f32;
-
-        // Apply opacity to color
-        let final_color = apply_opacity(color, opacity);
-
-        Some(StyleConfig {
-            id: source_id,
-            style: DrawStyle::Fill {
-                color: final_color,
-                offset: offset as f64,
-            },
-        })
+        let values = context.evaluate_operation_properties(
+            self.descriptor().ok()?.properties(),
+            properties,
+            eval_time,
+            "Fill",
+        )?;
+        builtin_style_from_values(self.id(), source_id, &values)
     }
 }
 
@@ -332,55 +409,12 @@ impl StylePlugin for StrokeStylePlugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<StyleConfig> {
-        let color = renderer_color(context, properties, eval_time, "Stroke")?;
-        let width = context.evaluate_number(properties, "width", eval_time, 1.0) as f32;
-        let opacity = context.evaluate_number(properties, "opacity", eval_time, 1.0);
-        let offset = context.evaluate_number(properties, "offset", eval_time, 0.0) as f32;
-        let join_str = context
-            .require_string(properties, "join", eval_time, "Round")
-            .unwrap_or("Round".to_string());
-        let cap_str = context
-            .require_string(properties, "cap", eval_time, "Round")
-            .unwrap_or("Round".to_string());
-
-        let miter = context.evaluate_number(properties, "miter_limit", eval_time, 4.0) as f32;
-        let dash_array_str = context
-            .require_string(properties, "dash_array", eval_time, "0 0")
-            .unwrap_or("".to_string());
-        let dash_offset = context.evaluate_number(properties, "dash_offset", eval_time, 0.0) as f32;
-
-        let dash_array: Vec<f32> = dash_array_str
-            .split_whitespace()
-            .filter_map(|s| s.parse::<f32>().ok())
-            .collect();
-
-        let join = match join_str.as_str() {
-            "Miter" => JoinType::Miter,
-            "Bevel" => JoinType::Bevel,
-            _ => JoinType::Round,
-        };
-
-        let cap = match cap_str.as_str() {
-            "Butt" => CapType::Butt,
-            "Square" => CapType::Square,
-            _ => CapType::Round,
-        };
-
-        // Apply opacity to color
-        let final_color = apply_opacity(color, opacity);
-
-        Some(StyleConfig {
-            id: source_id,
-            style: DrawStyle::Stroke {
-                color: final_color,
-                width: width as f64,
-                offset: offset as f64,
-                join,
-                cap,
-                miter: miter as f64,
-                dash_array: dash_array.into_iter().map(|v| v as f64).collect(),
-                dash_offset: dash_offset as f64,
-            },
-        })
+        let values = context.evaluate_operation_properties(
+            self.descriptor().ok()?.properties(),
+            properties,
+            eval_time,
+            "Stroke",
+        )?;
+        builtin_style_from_values(self.id(), source_id, &values)
     }
 }

@@ -12,6 +12,7 @@
 //!   `{ "from": {"x": 10, "y": 20}, "to": {"x": 50, "y": 20}, "steps": 8 }`
 //! - `POST /v1/input/scroll` with
 //!   `{ "x": 10, "y": 20, "delta_x": 0, "delta_y": -240 }`
+//! - `POST /v1/input/close-request` with `{}`
 //! - `GET /v1/actions/{action-id}`
 //! - `POST /v1/captures`
 //! - `GET /v1/captures/{capture-id}`

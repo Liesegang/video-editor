@@ -1,4 +1,4 @@
-//! Offline/realtime-window audio mixing for the Timeline-first authoring model.
+//! Offline/realtime-window audio mixing for the Timeline authoring model.
 //!
 //! Ordinary Timeline placements are scheduled directly. This module never
 //! synthesizes the pre-v1 `Project`, container Nodes, or structural sound
@@ -15,12 +15,16 @@ use uuid::Uuid;
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::loader::AudioLoader;
 use crate::core::cache::CacheManager;
-use crate::core::render_plan::map_composition_time;
-use crate::model::authoring::{
-    AuthoringProject, MediaTime, SourceRef, TimelineId, TimelineItem, TimelineItemId,
-    TimelineTrackKind,
+use crate::core::render_plan::{
+    CompiledModuleDefinition, ModuleHost, RenderPlan, RenderPlanCompiler, map_composition_time,
 };
+use crate::model::authoring::{
+    AuthoringProject, MediaTime, ModulePortAddress, SourceRef, TimelineId, TimelineItem,
+    TimelineItemId, TimelineTrackKind,
+};
+use crate::model::node::NodeContent;
 use crate::model::project::property::{PropertyMap, TryGetProperty};
+use crate::model::project::{AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT, PortDataType};
 use crate::model::{Asset, AssetKind};
 
 pub const AUTHORING_AUDIO_SAMPLE_RATE: u32 = 48_000;
@@ -33,7 +37,7 @@ pub const MAX_AUTHORING_AUDIO_WINDOW_FRAMES: usize = AUTHORING_AUDIO_SAMPLE_RATE
 pub enum AuthoringAudioError {
     #[error("invalid authoring audio request: {0}")]
     InvalidRequest(String),
-    #[error("invalid Timeline-first audio schedule: {0}")]
+    #[error("invalid authoring audio schedule: {0}")]
     InvalidSchedule(String),
     #[error("cannot evaluate {scope}.gain: {message}")]
     Gain { scope: String, message: String },
@@ -55,6 +59,7 @@ pub struct AuthoringAudioMixer<'a> {
     project: &'a AuthoringProject,
     cache: &'a CacheManager,
     timeline_id: TimelineId,
+    format: AudioDecodeFormat,
     routes: Vec<AudioRoute>,
     sources: HashMap<Uuid, CachedAudioSource<'a>>,
     unsupported_video_assets: Vec<Uuid>,
@@ -73,12 +78,41 @@ impl<'a> AuthoringAudioMixer<'a> {
         cache: &'a CacheManager,
         timeline_id: TimelineId,
     ) -> Result<Self, AuthoringAudioError> {
+        Self::new_with_format(
+            project,
+            cache,
+            timeline_id,
+            AUTHORING_AUDIO_SAMPLE_RATE,
+            AUTHORING_AUDIO_CHANNELS,
+        )
+    }
+
+    /// Build a mixer for the concrete output-device format.
+    ///
+    /// Export keeps using the stable 48 kHz stereo defaults through
+    /// [`Self::new`]. Realtime Preview uses this constructor so device sample
+    /// rates and channel counts never make playback run at the wrong speed.
+    pub fn new_with_format(
+        project: &'a AuthoringProject,
+        cache: &'a CacheManager,
+        timeline_id: TimelineId,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, AuthoringAudioError> {
+        let format = AudioDecodeFormat::new(sample_rate, channels).ok_or_else(|| {
+            AuthoringAudioError::InvalidRequest(format!(
+                "invalid output format {sample_rate} Hz / {channels} channels"
+            ))
+        })?;
         let mut routes = Vec::new();
         let mut unsupported_video_assets = Vec::new();
         let mut composition_items = Vec::new();
         let mut timeline_stack = HashSet::new();
+        let plan =
+            RenderPlanCompiler::compile(project).map_err(AuthoringAudioError::InvalidSchedule)?;
         collect_routes(
             project,
+            &plan,
             timeline_id,
             &mut composition_items,
             &mut timeline_stack,
@@ -91,6 +125,7 @@ impl<'a> AuthoringAudioMixer<'a> {
             project,
             cache,
             timeline_id,
+            format,
             routes,
             sources: HashMap::new(),
             unsupported_video_assets,
@@ -121,9 +156,10 @@ impl<'a> AuthoringAudioMixer<'a> {
         start_frame: u64,
         frame_count: usize,
     ) -> Result<Vec<f32>, AuthoringAudioError> {
-        if frame_count > MAX_AUTHORING_AUDIO_WINDOW_FRAMES {
+        let maximum_frames = usize::try_from(self.format.sample_rate).unwrap_or(usize::MAX);
+        if frame_count > maximum_frames {
             return Err(AuthoringAudioError::InvalidRequest(format!(
-                "window has {frame_count} frames; maximum is {MAX_AUTHORING_AUDIO_WINDOW_FRAMES}"
+                "window has {frame_count} frames; maximum is {maximum_frames}"
             )));
         }
         let final_frame = start_frame
@@ -135,21 +171,23 @@ impl<'a> AuthoringAudioMixer<'a> {
             ));
         }
 
-        let mut output =
-            vec![0.0; frame_count.saturating_mul(usize::from(AUTHORING_AUDIO_CHANNELS))];
+        let channels = usize::from(self.format.channels);
+        let mut output = vec![0.0; frame_count.saturating_mul(channels)];
         for output_frame in 0..frame_count {
             let absolute_frame = start_frame + output_frame as u64;
-            let timeline_time = MediaTime::new(absolute_frame as i64, AUTHORING_AUDIO_SAMPLE_RATE)
+            let timeline_time = MediaTime::new(absolute_frame as i64, self.format.sample_rate)
                 .map_err(AuthoringAudioError::InvalidRequest)?;
             for route_index in 0..self.routes.len() {
                 let Some(sample) = self.evaluate_route(route_index, timeline_time)? else {
                     continue;
                 };
                 let source = self.source_for(sample.asset_id)?;
-                let stereo = source.sample(sample.source_time)?;
-                let base = output_frame * usize::from(AUTHORING_AUDIO_CHANNELS);
-                output[base] += stereo[0] * sample.gain;
-                output[base + 1] += stereo[1] * sample.gain;
+                let base = output_frame * channels;
+                source.mix_sample(
+                    sample.source_time,
+                    sample.gain,
+                    &mut output[base..base + channels],
+                )?;
             }
         }
         Ok(output)
@@ -287,6 +325,45 @@ impl<'a> AuthoringAudioMixer<'a> {
             source_time,
             format!("Timeline item {}", leaf.id),
         )?;
+        if let Some(node_id) = route.module_node_id {
+            let SourceRef::Module(invocation) = &leaf.source else {
+                return Err(AuthoringAudioError::InvalidSchedule(format!(
+                    "Audio route item {} is no longer a Node Clip",
+                    leaf.id
+                )));
+            };
+            let instance = self
+                .project
+                .module_instances
+                .get(&invocation.instance_id)
+                .ok_or_else(|| {
+                    AuthoringAudioError::InvalidSchedule(format!(
+                        "Node Clip {} has no Module instance {}",
+                        leaf.id, invocation.instance_id
+                    ))
+                })?;
+            let definition = self
+                .project
+                .module_definitions
+                .get(&instance.definition_id)
+                .ok_or_else(|| {
+                    AuthoringAudioError::InvalidSchedule(format!(
+                        "Node Clip {} has no Module definition {}",
+                        leaf.id, instance.definition_id
+                    ))
+                })?;
+            let node = definition.graph.nodes.get(&node_id).ok_or_else(|| {
+                AuthoringAudioError::InvalidSchedule(format!(
+                    "Node Clip {} has no Module Audio Node {node_id}",
+                    leaf.id
+                ))
+            })?;
+            gain *= gain_at(
+                node.properties(),
+                source_time,
+                format!("Module Audio Node {node_id}"),
+            )?;
+        }
         Ok(Some(ActiveAudioSample {
             asset_id: route.asset_id,
             source_time,
@@ -300,7 +377,7 @@ impl<'a> AuthoringAudioMixer<'a> {
     ) -> Result<&mut CachedAudioSource<'a>, AuthoringAudioError> {
         if !self.sources.contains_key(&asset_id) {
             let asset = self.asset(asset_id)?;
-            let source = CachedAudioSource::new(asset, self.cache)?;
+            let source = CachedAudioSource::new(asset, self.cache, self.format)?;
             self.sources.insert(asset_id, source);
         }
         self.sources.get_mut(&asset_id).ok_or_else(|| {
@@ -356,6 +433,7 @@ struct AudioRoute {
     composition_items: Vec<TimelineItemId>,
     asset_item_id: TimelineItemId,
     asset_id: Uuid,
+    module_node_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -367,6 +445,7 @@ struct ActiveAudioSample {
 
 fn collect_routes(
     project: &AuthoringProject,
+    plan: &RenderPlan,
     timeline_id: TimelineId,
     composition_items: &mut Vec<TimelineItemId>,
     timeline_stack: &mut HashSet<TimelineId>,
@@ -417,6 +496,7 @@ fn collect_routes(
                             composition_items: composition_items.clone(),
                             asset_item_id: item.id,
                             asset_id: *asset_id,
+                            module_node_id: None,
                         }),
                         AssetKind::Video => unsupported_video_assets.push(*asset_id),
                         AssetKind::Image | AssetKind::Model3D | AssetKind::Other => {}
@@ -426,6 +506,7 @@ fn collect_routes(
                     composition_items.push(item.id);
                     collect_routes(
                         project,
+                        plan,
                         instance.timeline_id,
                         composition_items,
                         timeline_stack,
@@ -434,15 +515,157 @@ fn collect_routes(
                     )?;
                     composition_items.pop();
                 }
-                SourceRef::Text { .. }
-                | SourceRef::Shape { .. }
-                | SourceRef::Solid { .. }
-                | SourceRef::Module(_) => {}
+                SourceRef::Module(_) => collect_module_routes(
+                    project,
+                    plan,
+                    timeline_id,
+                    item,
+                    composition_items,
+                    routes,
+                )?,
+                SourceRef::Text { .. } | SourceRef::Shape { .. } | SourceRef::Solid { .. } => {}
             }
         }
     }
     timeline_stack.remove(&timeline_id);
     Ok(())
+}
+
+fn collect_module_routes(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    timeline_id: TimelineId,
+    item: &TimelineItem,
+    composition_items: &[TimelineItemId],
+    routes: &mut Vec<AudioRoute>,
+) -> Result<(), AuthoringAudioError> {
+    let invocation = plan
+        .invocation(ModuleHost::TimelineItem {
+            timeline_id,
+            item_id: item.id,
+        })
+        .ok_or_else(|| {
+            AuthoringAudioError::InvalidSchedule(format!(
+                "Node Clip {} has no compiled Module invocation",
+                item.id
+            ))
+        })?;
+    let definition = plan
+        .module_definitions
+        .get(&invocation.definition_id)
+        .ok_or_else(|| {
+            AuthoringAudioError::InvalidSchedule(format!(
+                "Node Clip {} has no compiled Module definition {}",
+                item.id, invocation.definition_id
+            ))
+        })?;
+    let output = definition
+        .outputs
+        .get(&invocation.output_id)
+        .ok_or_else(|| {
+            AuthoringAudioError::InvalidSchedule(format!(
+                "Node Clip {} selects missing Module Output {}",
+                item.id, invocation.output_id
+            ))
+        })?;
+    let Some(source) = output.source(PortDataType::Audio) else {
+        return Ok(());
+    };
+    let mut leaves = Vec::new();
+    collect_module_audio_leaves(definition, source, &mut HashSet::new(), &mut leaves)?;
+    for (node_id, asset_id) in leaves {
+        if !project.assets.iter().any(|asset| asset.id == asset_id) {
+            return Err(AuthoringAudioError::InvalidSchedule(format!(
+                "Module Audio Node {node_id} refers to missing Asset {asset_id}"
+            )));
+        }
+        routes.push(AudioRoute {
+            composition_items: composition_items.to_vec(),
+            asset_item_id: item.id,
+            asset_id,
+            module_node_id: Some(node_id),
+        });
+    }
+    Ok(())
+}
+
+fn collect_module_audio_leaves(
+    definition: &CompiledModuleDefinition,
+    source: &ModulePortAddress,
+    path: &mut HashSet<Uuid>,
+    leaves: &mut Vec<(Uuid, Uuid)>,
+) -> Result<(), AuthoringAudioError> {
+    if !path.insert(source.node_id) {
+        return Err(AuthoringAudioError::InvalidSchedule(format!(
+            "Module Audio graph revisits Node {}",
+            source.node_id
+        )));
+    }
+    let result = (|| {
+        let node = definition.nodes.get(&source.node_id).ok_or_else(|| {
+            AuthoringAudioError::InvalidSchedule(format!(
+                "Module Audio source reaches missing Node {}",
+                source.node_id
+            ))
+        })?;
+        if !node.enabled {
+            return Ok(());
+        }
+        match &node.content {
+            NodeContent::Media(media) if source.port == AUDIO_OUTPUT_PORT => {
+                leaves.push((node.id, media.asset_id));
+                Ok(())
+            }
+            NodeContent::SoundMerge if source.port == AUDIO_OUTPUT_PORT => {
+                let target = ModulePortAddress {
+                    node_id: node.id,
+                    port: MERGE_SOUNDS_PORT.to_string(),
+                };
+                let mut inputs = definition
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.to == target)
+                    .collect::<Vec<_>>();
+                inputs.sort_by_key(|connection| (connection.order, connection.id));
+                if node.bypassed {
+                    inputs.truncate(1);
+                }
+                for connection in inputs {
+                    collect_module_audio_leaves(definition, &connection.from, path, leaves)?;
+                }
+                Ok(())
+            }
+            NodeContent::PluginOperation(_) if node.bypassed => {
+                let input_port = node.bypass_routes.get(&source.port).ok_or_else(|| {
+                    AuthoringAudioError::InvalidSchedule(format!(
+                        "Bypassed Module Audio Node {} has no route for '{}'",
+                        node.id, source.port
+                    ))
+                })?;
+                let target = ModulePortAddress {
+                    node_id: node.id,
+                    port: input_port.clone(),
+                };
+                let connection = definition
+                    .connections
+                    .iter()
+                    .find(|connection| connection.to == target)
+                    .ok_or_else(|| {
+                        AuthoringAudioError::InvalidSchedule(format!(
+                            "Bypassed Module Audio Node {} has no connected input",
+                            node.id
+                        ))
+                    })?;
+                collect_module_audio_leaves(definition, &connection.from, path, leaves)
+            }
+            _ => Err(AuthoringAudioError::InvalidSchedule(format!(
+                "Module Node {}:{} has no Audio runtime",
+                node.id, source.port
+            ))),
+        }
+    })();
+    path.remove(&source.node_id);
+    result
 }
 
 fn gain_at(
@@ -485,11 +708,11 @@ struct CachedAudioSource<'a> {
 }
 
 impl<'a> CachedAudioSource<'a> {
-    fn new(asset: &Asset, cache: &'a CacheManager) -> Result<Self, AuthoringAudioError> {
-        let format = AudioDecodeFormat::new(AUTHORING_AUDIO_SAMPLE_RATE, AUTHORING_AUDIO_CHANNELS)
-            .ok_or_else(|| {
-                AuthoringAudioError::InvalidRequest("fixed audio format is invalid".into())
-            })?;
+    fn new(
+        asset: &Asset,
+        cache: &'a CacheManager,
+        format: AudioDecodeFormat,
+    ) -> Result<Self, AuthoringAudioError> {
         let key =
             AudioSourceKey::read(&asset.path, asset.stream_index, format).map_err(|error| {
                 AuthoringAudioError::Decode {
@@ -507,12 +730,17 @@ impl<'a> CachedAudioSource<'a> {
         })
     }
 
-    fn sample(&mut self, source_time: MediaTime) -> Result<[f32; 2], AuthoringAudioError> {
+    fn mix_sample(
+        &mut self,
+        source_time: MediaTime,
+        gain: f32,
+        output: &mut [f32],
+    ) -> Result<(), AuthoringAudioError> {
         let numerator = i128::from(source_time.value())
-            .checked_mul(i128::from(AUTHORING_AUDIO_SAMPLE_RATE))
+            .checked_mul(i128::from(self.key.format.sample_rate))
             .ok_or_else(|| self.decode_error("source sample position overflowed"))?;
         if numerator < 0 {
-            return Ok([0.0, 0.0]);
+            return Ok(());
         }
         let denominator = i128::from(source_time.timescale());
         let first_frame = u64::try_from(numerator / denominator)
@@ -520,13 +748,12 @@ impl<'a> CachedAudioSource<'a> {
         let remainder = numerator % denominator;
         let fraction = (remainder as f64 / denominator as f64) as f32;
         let second_frame = first_frame.saturating_add(1);
-        let mut stereo = [0.0; 2];
-        for (channel, output) in stereo.iter_mut().enumerate() {
+        for (channel, output) in output.iter_mut().enumerate() {
             let first = self.sample_at(first_frame, channel)?.unwrap_or(0.0);
             let second = self.sample_at(second_frame, channel)?.unwrap_or(first);
-            *output = first + (second - first) * fraction;
+            *output += (first + (second - first) * fraction) * gain;
         }
-        Ok(stereo)
+        Ok(())
     }
 
     fn sample_at(

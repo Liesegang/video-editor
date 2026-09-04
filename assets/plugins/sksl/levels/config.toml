@@ -1,6 +1,7 @@
 id = "levels"
 name = "Levels"
 category = "Color & Tone"
+color_domain = "project_linear"
 
 [[properties]]
 name = "inBlack"

@@ -5,8 +5,8 @@ use super::module::{
 };
 use super::*;
 use crate::model::authoring::{
-    ModuleDefinitionSharing, ModulePortAddress, PublishedMediaInput, PublishedMediaOutput,
-    PublishedParameter, property_value_type,
+    ModuleDefinitionSharing, ModulePortAddress, PublishedMediaInput, PublishedParameter,
+    property_value_type,
 };
 use crate::model::project::{PortDataType, PortDirection};
 
@@ -45,24 +45,6 @@ pub enum ModuleInterfaceCommand {
     UnpublishMediaInput {
         input_id: PublishedMediaInputId,
     },
-    PublishMediaOutput {
-        name: String,
-        source: ModulePortAddress,
-    },
-    ReplaceMediaOutputSource {
-        output_id: PublishedMediaOutputId,
-        source: ModulePortAddress,
-    },
-    RenameMediaOutput {
-        output_id: PublishedMediaOutputId,
-        name: String,
-    },
-    /// Removes an output. Every affected invocation selecting it must be
-    /// atomically remapped; `None` succeeds only when the output is unused.
-    UnpublishMediaOutput {
-        output_id: PublishedMediaOutputId,
-        replacement: Option<PublishedMediaOutputId>,
-    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -70,14 +52,12 @@ pub struct ModuleInterfaceEditImpact {
     pub removed_parameter_overrides: usize,
     pub removed_automation_tracks: usize,
     pub removed_media_input_bindings: usize,
-    pub remapped_media_output_invocations: usize,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ModuleInterfaceEditResult {
     PublishedParameter(PublishedParameterId),
     PublishedMediaInput(PublishedMediaInputId),
-    PublishedMediaOutput(PublishedMediaOutputId),
     Updated,
     Unpublished(ModuleInterfaceEditImpact),
 }
@@ -156,10 +136,6 @@ enum InterfaceCleanup {
     None,
     Parameter(PublishedParameterId),
     MediaInput(PublishedMediaInputId),
-    MediaOutput {
-        output_id: PublishedMediaOutputId,
-        replacement: Option<PublishedMediaOutputId>,
-    },
 }
 
 fn apply_interface_command(
@@ -341,93 +317,6 @@ fn apply_definition_interface_command(
                 InterfaceCleanup::MediaInput(input_id),
             )
         }
-        ModuleInterfaceCommand::PublishMediaOutput { name, source } => {
-            let port = definition
-                .graph
-                .port_definition(&source, PortDirection::Output)?;
-            require_media_type(port.data_type, "Published media output")?;
-            let output_id = PublishedMediaOutputId::new();
-            definition
-                .interface
-                .media_outputs
-                .push(PublishedMediaOutput {
-                    id: output_id,
-                    name,
-                    data_type: port.data_type,
-                    source,
-                });
-            (
-                ModuleInterfaceEditResult::PublishedMediaOutput(output_id),
-                InterfaceCleanup::None,
-            )
-        }
-        ModuleInterfaceCommand::ReplaceMediaOutputSource { output_id, source } => {
-            let port = definition
-                .graph
-                .port_definition(&source, PortDirection::Output)?;
-            require_media_type(port.data_type, "Published media output")?;
-            let output = definition
-                .interface
-                .media_outputs
-                .iter_mut()
-                .find(|output| output.id == output_id)
-                .ok_or_else(|| format!("Missing Published media output {output_id}"))?;
-            if output.source == source {
-                return Err(format!(
-                    "Published media output {output_id} already sources {}:{}",
-                    source.node_id, source.port
-                ));
-            }
-            if output.data_type != port.data_type {
-                return Err(format!(
-                    "Published media output {output_id} cannot change from {:?} to {:?}",
-                    output.data_type, port.data_type
-                ));
-            }
-            output.source = source;
-            (ModuleInterfaceEditResult::Updated, InterfaceCleanup::None)
-        }
-        ModuleInterfaceCommand::RenameMediaOutput { output_id, name } => {
-            definition
-                .interface
-                .media_outputs
-                .iter_mut()
-                .find(|output| output.id == output_id)
-                .ok_or_else(|| format!("Missing Published media output {output_id}"))?
-                .name = name;
-            (ModuleInterfaceEditResult::Updated, InterfaceCleanup::None)
-        }
-        ModuleInterfaceCommand::UnpublishMediaOutput {
-            output_id,
-            replacement,
-        } => {
-            if replacement == Some(output_id) {
-                return Err("A removed media output cannot replace itself".to_string());
-            }
-            remove_by_id(
-                &mut definition.interface.media_outputs,
-                |entry| entry.id == output_id,
-                || format!("Missing Published media output {output_id}"),
-            )?;
-            if let Some(replacement_id) = replacement
-                && !definition
-                    .interface
-                    .media_outputs
-                    .iter()
-                    .any(|output| output.id == replacement_id)
-            {
-                return Err(format!(
-                    "Replacement Published media output {replacement_id} does not exist"
-                ));
-            }
-            (
-                ModuleInterfaceEditResult::Updated,
-                InterfaceCleanup::MediaOutput {
-                    output_id,
-                    replacement,
-                },
-            )
-        }
     };
     bump_interface_version(definition)?;
     Ok(result)
@@ -461,23 +350,6 @@ fn cleanup_interface_dependents(
             for_each_affected_invocation_mut(project, &affected, |invocation| {
                 impact.removed_media_input_bindings +=
                     usize::from(invocation.input_bindings.remove(&input_id).is_some());
-                Ok(())
-            })?;
-        }
-        InterfaceCleanup::MediaOutput {
-            output_id,
-            replacement,
-        } => {
-            for_each_affected_invocation_mut(project, &affected, |invocation| {
-                if invocation.output_id == output_id {
-                    let replacement = replacement.ok_or_else(|| {
-                        format!(
-                            "Published media output {output_id} is selected by an invocation; provide a replacement"
-                        )
-                    })?;
-                    invocation.output_id = replacement;
-                    impact.remapped_media_output_invocations += 1;
-                }
                 Ok(())
             })?;
         }
@@ -529,26 +401,25 @@ mod tests {
 
     use super::*;
     use crate::model::authoring::{
-        ModuleDefinitionSharing, ModuleGraph, ModuleInterface, ModuleTemplateOrigin,
-        TimelineInterval,
+        ModuleConnection, ModuleDefinitionSharing, ModuleTemplateOrigin, TimelineInterval,
     };
     use crate::model::node::Node;
-    use crate::model::project::{
-        AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
-    };
+    use crate::model::project::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT};
 
     struct InterfaceFixture {
         definition: ModuleDefinition,
         primary_input_id: PublishedMediaInputId,
-        output_id: PublishedMediaOutputId,
+        output_id: ModuleOutputId,
         original_input: ModulePortAddress,
         replacement_input: ModulePortAddress,
-        replacement_output: ModulePortAddress,
         audio_input: ModulePortAddress,
-        audio_output: ModulePortAddress,
     }
 
     fn interface_fixture(connect_replacement_input: bool) -> InterfaceFixture {
+        let (mut definition, output_id) = ModuleDefinition::new_image(
+            "Published Interface fixture",
+            ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+        );
         let original = Node::new_merge("Original");
         let replacement = Node::new_merge("Replacement");
         let audio = Node::new_sound_merge("Audio");
@@ -560,75 +431,43 @@ mod tests {
             node_id: replacement.id,
             port: MERGE_IMAGES_PORT.to_string(),
         };
-        let replacement_output = ModulePortAddress {
-            node_id: replacement.id,
-            port: IMAGE_OUTPUT_PORT.to_string(),
-        };
         let audio_input = ModulePortAddress {
             node_id: audio.id,
             port: MERGE_SOUNDS_PORT.to_string(),
         };
-        let audio_output = ModulePortAddress {
-            node_id: audio.id,
-            port: AUDIO_OUTPUT_PORT.to_string(),
-        };
         let primary_input_id = PublishedMediaInputId::new();
-        let output_id = PublishedMediaOutputId::new();
-        let connections = connect_replacement_input
-            .then(|| ModuleConnection {
+        if connect_replacement_input {
+            definition.graph.connections.push(ModuleConnection {
                 id: ModuleConnectionId::new(),
                 from: ModulePortAddress {
                     node_id: original.id,
-                    port: IMAGE_OUTPUT_PORT.to_string(),
+                    port: crate::model::project::IMAGE_OUTPUT_PORT.to_string(),
                 },
                 to: replacement_input.clone(),
                 order: 0,
-            })
-            .into_iter()
-            .collect();
+                blend_mode: BlendMode::Normal,
+            });
+        }
+        definition.graph.nodes.extend([
+            (original.id, original),
+            (replacement.id, replacement),
+            (audio.id, audio),
+        ]);
+        definition.interface.media_inputs.push(PublishedMediaInput {
+            id: primary_input_id,
+            name: "Host image".to_string(),
+            data_type: PortDataType::Image,
+            target: original_input.clone(),
+            required: false,
+            primary: true,
+        });
         InterfaceFixture {
-            definition: ModuleDefinition {
-                id: ModuleDefinitionId::new(),
-                name: "Published Interface fixture".to_string(),
-                sharing: ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
-                graph: ModuleGraph {
-                    nodes: HashMap::from([
-                        (original.id, original),
-                        (replacement.id, replacement),
-                        (audio.id, audio),
-                    ]),
-                    connections,
-                },
-                interface: ModuleInterface {
-                    media_inputs: vec![PublishedMediaInput {
-                        id: primary_input_id,
-                        name: "Host image".to_string(),
-                        data_type: PortDataType::Image,
-                        target: original_input.clone(),
-                        required: false,
-                        primary: true,
-                    }],
-                    media_outputs: vec![PublishedMediaOutput {
-                        id: output_id,
-                        name: "Image".to_string(),
-                        data_type: PortDataType::Image,
-                        source: ModulePortAddress {
-                            node_id: original_input.node_id,
-                            port: IMAGE_OUTPUT_PORT.to_string(),
-                        },
-                    }],
-                    ..ModuleInterface::default()
-                },
-                topology_revision: 1,
-                interface_version: 1,
-            },
+            definition,
             primary_input_id,
             output_id,
             original_input,
             replacement_input,
-            replacement_output,
             audio_input,
-            audio_output,
         }
     }
 
@@ -747,70 +586,16 @@ mod tests {
                     instance_id,
                     ModuleInterfaceCommand::RetargetPrimaryMediaInput {
                         input_id: fixture.primary_input_id,
-                        target: fixture.replacement_output.clone(),
+                        target: ModulePortAddress {
+                            node_id: fixture.replacement_input.node_id,
+                            port: IMAGE_OUTPUT_PORT.to_string(),
+                        },
                     },
                 )
                 .is_err(),
             "an output port may not become a Published input target"
         );
-        assert!(
-            service
-                .edit_instance_module_interface(
-                    instance_id,
-                    ModuleInterfaceCommand::ReplaceMediaOutputSource {
-                        output_id: fixture.output_id,
-                        source: fixture.replacement_input.clone(),
-                    },
-                )
-                .is_err(),
-            "an input port may not become a Published output source"
-        );
-        assert!(
-            service
-                .edit_instance_module_interface(
-                    instance_id,
-                    ModuleInterfaceCommand::ReplaceMediaOutputSource {
-                        output_id: fixture.output_id,
-                        source: fixture.audio_output,
-                    },
-                )
-                .is_err(),
-            "a stable Image output may not silently become Audio"
-        );
         assert_eq!(service.snapshot().expect("after").as_ref(), before.as_ref());
         assert_eq!(service.revision().expect("revision"), revision_before);
-    }
-
-    #[test]
-    fn published_output_retarget_keeps_public_id_and_undoes_atomically() {
-        let service = TimelineEditorService::create_default("Published output").expect("service");
-        let fixture = interface_fixture(false);
-        let instance_id = place_fixture(&service, &fixture);
-        let before = service.snapshot().expect("before");
-
-        let (_, private_definition_id, _) = service
-            .edit_instance_module_interface(
-                instance_id,
-                ModuleInterfaceCommand::ReplaceMediaOutputSource {
-                    output_id: fixture.output_id,
-                    source: fixture.replacement_output.clone(),
-                },
-            )
-            .expect("retarget published output");
-        let changed = service.snapshot().expect("changed");
-        let output = changed.module_definitions[&private_definition_id]
-            .interface
-            .media_outputs
-            .iter()
-            .find(|output| output.id == fixture.output_id)
-            .expect("stable output");
-        assert_eq!(output.source, fixture.replacement_output);
-        assert_eq!(output.data_type, PortDataType::Image);
-
-        assert!(service.undo().expect("undo").is_some());
-        assert_eq!(
-            service.snapshot().expect("after undo").as_ref(),
-            before.as_ref()
-        );
     }
 }

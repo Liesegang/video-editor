@@ -637,15 +637,16 @@ fn node_metadata(
                 unavailable_reason: Some(reason),
             }
         }
-        NodeContent::CompositionInstance(_) | NodeContent::Merge | NodeContent::SoundMerge => {
-            NodeMetadata {
-                label: node.name.clone(),
-                group: SemanticPropertyGroup::Source,
-                definitions: Vec::new(),
-                diagnostic: None,
-                unavailable_reason: None,
-            }
-        }
+        NodeContent::ModuleOutput(_)
+        | NodeContent::CompositionInstance(_)
+        | NodeContent::Merge
+        | NodeContent::SoundMerge => NodeMetadata {
+            label: node.name.clone(),
+            group: SemanticPropertyGroup::Source,
+            definitions: Vec::new(),
+            diagnostic: None,
+            unavailable_reason: None,
+        },
     }
 }
 

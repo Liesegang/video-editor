@@ -14,7 +14,7 @@ fi
 forbidden='structural_merge_node_id|structural_sound_merge_node_id|NodeContainer|CompositionInstanceContent'
 if rg -n --glob '*.rs' --glob '!tests.rs' --glob '!**/tests/**' \
     "${forbidden}" "${AUTHORING_ROOT}" "${PLAN_ROOT}"; then
-    echo "Timeline-first authoring or RenderPlan depends on retired graph-owned structure" >&2
+    echo "Timeline authoring or RenderPlan depends on retired graph-owned structure" >&2
     exit 1
 fi
 

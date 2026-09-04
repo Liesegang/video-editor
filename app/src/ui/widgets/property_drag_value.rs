@@ -72,11 +72,6 @@ impl FloatDragValueConfig {
         self.widget_with_suffix(value, &self.suffix)
     }
 
-    #[cfg(test)]
-    #[allow(
-        dead_code,
-        reason = "exercised by the retained vector-control compatibility fixture"
-    )]
     pub fn widget_without_suffix<'a>(&self, value: &'a mut f64) -> egui::DragValue<'a> {
         self.widget_with_suffix(value, "")
     }

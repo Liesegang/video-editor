@@ -341,7 +341,7 @@ fn explicit_pre_v1_color_and_svg_read_adapters_remain_lossless() -> Result<()> {
 }
 
 #[test]
-fn unsupported_colors_do_not_fall_back_inside_fill_or_stroke() -> Result<()> {
+fn canonical_colors_use_the_explicit_renderer_transform_or_fail_closed() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let factory = manager(plugins.clone());
     let unsupported = [
@@ -372,9 +372,31 @@ fn unsupported_colors_do_not_fall_back_inside_fill_or_stroke() -> Result<()> {
             );
             let project = project_with_graph(graph)?;
             let rendered = frame(&project, &plugins)?;
-            assert!(
-                objects(&rendered.items).is_empty(),
-                "{component} silently substituted a renderer color"
+            let objects = objects(&rendered.items);
+            let Ok(expected) = library::color_management::to_renderer_srgba8(color) else {
+                assert!(
+                    objects.is_empty(),
+                    "{component} substituted a fallback for unsupported color {color:?}"
+                );
+                continue;
+            };
+            let content = &objects
+                .first()
+                .with_context(|| format!("{component} produced no styled shape"))?
+                .content;
+            let FrameContent::Shape { styles, .. } = content else {
+                anyhow::bail!("{component} produced a non-shape object");
+            };
+            let style = &styles
+                .first()
+                .with_context(|| format!("{component} produced no style"))?
+                .style;
+            let actual = match style {
+                DrawStyle::Fill { color, .. } | DrawStyle::Stroke { color, .. } => color,
+            };
+            assert_eq!(
+                *actual, expected,
+                "{component} substituted a fallback instead of the explicit renderer transform"
             );
         }
     }

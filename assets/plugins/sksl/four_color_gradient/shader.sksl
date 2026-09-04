@@ -20,5 +20,7 @@ half4 main(float2 p) {
     // If used as generator, content is dummy.
 
     // Let's assume replace.
-    return color;
+    // Color uniforms are straight Project-working RGBA. Runtime shaders
+    // return premultiplied pixels to Skia.
+    return half4(color.rgb * color.a, color.a);
 }

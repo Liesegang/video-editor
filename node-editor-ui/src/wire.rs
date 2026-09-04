@@ -5,6 +5,10 @@ use egui::{Pos2, Vec2};
 const DISTANCE_SEGMENTS: u16 = 32;
 const INTERSECTION_SEGMENTS: u16 = 48;
 const SEGMENT_EPSILON: f32 = 1.0e-4;
+const BODY_SELECTION_PARAMETER: f32 = 0.5;
+const BODY_HIT_SCREEN_RADIUS: f32 = 8.0;
+const RECONNECT_HANDLE_SCREEN_OFFSET: f32 = 11.0;
+const RECONNECT_HANDLE_HIT_SCREEN_RADIUS: f32 = 7.0;
 
 /// A rendered cubic Bezier wire in canvas coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,6 +25,48 @@ pub enum HitRegion {
     Start,
     Body,
     End,
+}
+
+/// Endpoint of an existing wire being moved by a reconnect gesture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconnectEndpoint {
+    Source,
+    Target,
+}
+
+/// Canonical direct-manipulation geometry for one wire.
+///
+/// All positions and radii are in graph space. Painting, hit testing, and
+/// host-side accessibility/QA projection must derive their targets from this
+/// value so zoomed or curved wires do not acquire parallel interaction math.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WireInteractionGeometry {
+    body_selection_anchor: Pos2,
+    body_hit_radius: f32,
+    source_reconnect_handle: Pos2,
+    target_reconnect_handle: Pos2,
+    reconnect_handle_hit_radius: f32,
+}
+
+impl WireInteractionGeometry {
+    pub const fn body_selection_anchor(self) -> Pos2 {
+        self.body_selection_anchor
+    }
+
+    pub const fn body_hit_radius(self) -> f32 {
+        self.body_hit_radius
+    }
+
+    pub const fn reconnect_handle(self, endpoint: ReconnectEndpoint) -> Pos2 {
+        match endpoint {
+            ReconnectEndpoint::Source => self.source_reconnect_handle,
+            ReconnectEndpoint::Target => self.target_reconnect_handle,
+        }
+    }
+
+    pub const fn reconnect_handle_hit_radius(self) -> f32 {
+        self.reconnect_handle_hit_radius
+    }
 }
 
 impl CubicBezier {
@@ -101,6 +147,54 @@ impl CubicBezier {
             HitRegion::End
         } else {
             HitRegion::Body
+        }
+    }
+
+    /// Resolves the wire's selection and reconnect targets for one canvas
+    /// scale. Screen-space interaction sizes stay visually constant while the
+    /// returned geometry remains suitable for the frame's graph-space tests.
+    pub fn interaction_geometry(self, scale: f32) -> WireInteractionGeometry {
+        let scale = scale.abs().max(f32::EPSILON);
+        WireInteractionGeometry {
+            body_selection_anchor: self.point(BODY_SELECTION_PARAMETER),
+            body_hit_radius: BODY_HIT_SCREEN_RADIUS / scale,
+            source_reconnect_handle: self.reconnect_handle(
+                ReconnectEndpoint::Source,
+                RECONNECT_HANDLE_SCREEN_OFFSET,
+                scale,
+            ),
+            target_reconnect_handle: self.reconnect_handle(
+                ReconnectEndpoint::Target,
+                RECONNECT_HANDLE_SCREEN_OFFSET,
+                scale,
+            ),
+            reconnect_handle_hit_radius: RECONNECT_HANDLE_HIT_SCREEN_RADIUS / scale,
+        }
+    }
+
+    /// Places the reconnect handle a constant visual distance inside the wire.
+    /// The returned coordinate remains in graph space.
+    fn reconnect_handle(self, endpoint: ReconnectEndpoint, screen_offset: f32, scale: f32) -> Pos2 {
+        let (edge, inward) = match endpoint {
+            ReconnectEndpoint::Source => (self.start, self.control_a),
+            ReconnectEndpoint::Target => (self.end, self.control_b),
+        };
+        let direction = inward - edge;
+        let normalized = if direction.is_finite() && direction.length_sq() > f32::EPSILON {
+            direction.normalized()
+        } else {
+            match endpoint {
+                ReconnectEndpoint::Source => Vec2::X,
+                ReconnectEndpoint::Target => -Vec2::X,
+            }
+        };
+        edge + normalized * (screen_offset / scale.abs().max(f32::EPSILON))
+    }
+
+    pub(crate) const fn endpoint(self, endpoint: ReconnectEndpoint) -> Pos2 {
+        match endpoint {
+            ReconnectEndpoint::Source => self.start,
+            ReconnectEndpoint::Target => self.end,
         }
     }
 }
@@ -202,5 +296,28 @@ mod tests {
         assert_eq!(curve.hit_region(Pos2::new(0.5, 0.0), 8.0), HitRegion::Start);
         assert_eq!(curve.hit_region(Pos2::new(2.0, 0.0), 8.0), HitRegion::Body);
         assert_eq!(curve.hit_region(Pos2::new(3.5, 0.0), 8.0), HitRegion::End);
+    }
+
+    #[test]
+    fn interaction_geometry_uses_curve_and_scale_authoritatively() {
+        let curve = CubicBezier::new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(0.0, 100.0),
+            Pos2::new(100.0, 100.0),
+            Pos2::new(100.0, 0.0),
+        );
+
+        let geometry = curve.interaction_geometry(2.0);
+        assert_eq!(geometry.body_selection_anchor(), curve.point(0.5));
+        assert_eq!(geometry.body_hit_radius(), 4.0);
+        assert_eq!(geometry.reconnect_handle_hit_radius(), 3.5);
+        assert_eq!(
+            geometry.reconnect_handle(ReconnectEndpoint::Source),
+            Pos2::new(0.0, 5.5)
+        );
+        assert_eq!(
+            geometry.reconnect_handle(ReconnectEndpoint::Target),
+            Pos2::new(100.0, 5.5)
+        );
     }
 }

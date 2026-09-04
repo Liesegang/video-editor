@@ -2,6 +2,7 @@ use egui::{Pos2, Rect, Vec2};
 
 use crate::input::interaction_input;
 use crate::layout_swipe::hit_anchor as hit_layout_swipe_anchor;
+use crate::wire::ReconnectEndpoint;
 use crate::{after_click, GraphFrame, ItemId, LayoutSwipeHitArea, LayoutSwipePhase, PortDirection};
 
 use super::{
@@ -121,7 +122,7 @@ fn cancel_disabled_gesture<NodeId, PortId, WireId, GroupId>(
     let disabled = match state.gesture.as_ref() {
         Some(Gesture::Hold { .. } | Gesture::Move { .. }) => !options.move_items,
         Some(Gesture::Marquee { .. }) => !options.select || !options.marquee,
-        Some(Gesture::Connect { .. }) => !options.connect,
+        Some(Gesture::Connect { .. } | Gesture::Reconnect { .. }) => !options.connect,
         Some(Gesture::Resize { .. }) => !options.resize_groups,
         Some(Gesture::LayoutSwipe(_)) => options.layout_swipe == LayoutSwipeHitArea::Disabled,
         None => false,
@@ -152,6 +153,7 @@ fn cancel_gesture<NodeId, PortId, WireId, GroupId>(
             | Gesture::Marquee { .. }
             | Gesture::Move { .. }
             | Gesture::Connect { .. }
+            | Gesture::Reconnect { .. }
             | Gesture::Resize { .. },
         )
         | None => {}
@@ -179,6 +181,19 @@ fn begin<NodeId, PortId, WireId, GroupId, Key>(
     GroupId: Clone + Eq,
     Key: Copy + Eq,
 {
+    if options.connect {
+        if let Some((wire, endpoint)) = hit::reconnect_handle(frame, graph_position) {
+            state.gesture = Some(Gesture::Reconnect {
+                wire,
+                endpoint,
+                current: screen_position,
+                transform: frame.transform,
+            });
+            capture_pointer(ui);
+            return;
+        }
+    }
+
     if options.connect {
         if let Some(port) = hit::port(frame, graph_position) {
             state.gesture = Some(Gesture::Connect {
@@ -323,7 +338,9 @@ fn update<NodeId, PortId, WireId, GroupId>(
     };
     match gesture {
         Gesture::Hold { .. } => {}
-        Gesture::Marquee { current, .. } | Gesture::Connect { current, .. } => {
+        Gesture::Marquee { current, .. }
+        | Gesture::Connect { current, .. }
+        | Gesture::Reconnect { current, .. } => {
             *current = screen_position;
         }
         Gesture::Move {
@@ -419,6 +436,14 @@ fn finish<NodeId, PortId, WireId, GroupId, Key>(
         Gesture::Connect {
             from, transform, ..
         } if options.connect => finish_connect(frame, from, transform, pointer, outputs),
+        Gesture::Reconnect {
+            wire,
+            endpoint,
+            transform,
+            ..
+        } if options.connect => {
+            finish_reconnect(frame, wire, endpoint, transform, pointer, outputs);
+        }
         Gesture::Move {
             items,
             transform,
@@ -443,9 +468,69 @@ fn finish<NodeId, PortId, WireId, GroupId, Key>(
         Gesture::Hold { .. }
         | Gesture::Marquee { .. }
         | Gesture::Connect { .. }
+        | Gesture::Reconnect { .. }
         | Gesture::Move { .. }
         | Gesture::Resize { .. } => {}
     }
+}
+
+fn finish_reconnect<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    wire_id: WireId,
+    endpoint: ReconnectEndpoint,
+    transform: egui::emath::TSTransform,
+    pointer: Option<Pos2>,
+    outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
+) where
+    PortId: Clone + Eq,
+    WireId: Clone + Eq,
+    Key: Copy + Eq,
+{
+    let Some(wire) = frame.wires.iter().find(|wire| wire.id == wire_id) else {
+        return;
+    };
+    let Some(position) = pointer else {
+        return;
+    };
+    let graph_position = transform.inverse() * position;
+    let Some(candidate) = hit::port(frame, graph_position) else {
+        return;
+    };
+    let (fixed_id, wanted_direction) = match endpoint {
+        ReconnectEndpoint::Source => (&wire.to, PortDirection::Output),
+        ReconnectEndpoint::Target => (&wire.from, PortDirection::Input),
+    };
+    let Some(fixed) = frame.ports.iter().find(|port| port.id == *fixed_id) else {
+        return;
+    };
+    let types_compatible = match endpoint {
+        ReconnectEndpoint::Source => {
+            (frame.ports_compatible)(candidate.type_key.value(), fixed.type_key.value())
+        }
+        ReconnectEndpoint::Target => {
+            (frame.ports_compatible)(fixed.type_key.value(), candidate.type_key.value())
+        }
+    };
+    if candidate.direction != wanted_direction
+        || candidate.id == fixed.id
+        || !types_compatible
+        || !candidate.connectable
+        || !fixed.connectable
+    {
+        return;
+    }
+    let (from, to) = match endpoint {
+        ReconnectEndpoint::Source => (candidate.id.clone(), fixed.id.clone()),
+        ReconnectEndpoint::Target => (fixed.id.clone(), candidate.id.clone()),
+    };
+    if from == wire.from && to == wire.to {
+        return;
+    }
+    outputs.push(EditorOutput::Reconnect {
+        wire: wire.id.clone(),
+        from,
+        to,
+    });
 }
 
 fn finish_connect<NodeId, PortId, WireId, GroupId, Key>(
@@ -468,19 +553,23 @@ fn finish_connect<NodeId, PortId, WireId, GroupId, Key>(
     let Some(target) = hit::port(frame, graph_position) else {
         return;
     };
-    if source.id == target.id
-        || source.direction == target.direction
-        || source.type_key != target.type_key
-        || !source.connectable
-        || !target.connectable
+    if source.id == target.id || source.direction == target.direction {
+        return;
+    }
+    let (output, input) = match source.direction {
+        PortDirection::Output => (source, target),
+        PortDirection::Input => (target, source),
+    };
+    if !output.connectable
+        || !input.connectable
+        || !(frame.ports_compatible)(output.type_key.value(), input.type_key.value())
     {
         return;
     }
-    let (from, to) = match source.direction {
-        PortDirection::Output => (source.id.clone(), target.id.clone()),
-        PortDirection::Input => (target.id.clone(), source.id.clone()),
-    };
-    outputs.push(EditorOutput::Connect { from, to });
+    outputs.push(EditorOutput::Connect {
+        from: output.id.clone(),
+        to: input.id.clone(),
+    });
 }
 
 fn finish_reparent<NodeId, PortId, WireId, GroupId, Key>(

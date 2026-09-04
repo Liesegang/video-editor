@@ -20,13 +20,17 @@ float3 hsv2rgb(float3 c) {
 }
 
 half4 main(float2 p) {
-    half4 color = content.eval(p);
-    float3 hsv = rgb2hsv(color.rgb);
+    half4 source = content.eval(p);
+    if (source.a <= 0.0) {
+        return half4(0.0);
+    }
+    float3 straight = float3(source.rgb) / float(source.a);
+    float3 hsv = rgb2hsv(straight);
 
     hsv.x += hue / 360.0;
     hsv.y *= saturation;
     hsv.z *= value;
 
-    color.rgb = half3(hsv2rgb(hsv));
-    return color;
+    straight = hsv2rgb(hsv);
+    return half4(half3(straight * float(source.a)), source.a);
 }

@@ -1,6 +1,7 @@
 id = "lens_distortion"
 name = "Lens Distortion"
 category = "Distortion"
+color_domain = "project_linear"
 
 [[properties]]
 name = "strength"

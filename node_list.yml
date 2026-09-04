@@ -1407,7 +1407,7 @@ Blur:
       exposure: Graph
       multiplicity: Single
       property: sigma_x
-      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: false }
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 32.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: true }
     - name: sigma_y
       key: property:sigma_y
       label: Sigma Y
@@ -1416,7 +1416,7 @@ Blur:
       exposure: Graph
       multiplicity: Single
       property: sigma_y
-      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 100.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: false }
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 32.0, step: 0.1, suffix: px, min_hard_limit: true, max_hard_limit: true }
     - name: tile_mode
       key: property:tile_mode
       label: Tile Mode
@@ -1782,7 +1782,7 @@ Tile:
   operation_category: effect
   component_id: tile
   operation: effect.apply.v1
-  description: Repeat one source rectangle across a destination rectangle
+  description: Repeat a centre-origin source rectangle across the canvas
   inputs:
     - name: time
       key: time
@@ -1791,23 +1791,23 @@ Tile:
       side: Left
       exposure: Graph
       multiplicity: Single
-    - name: x
-      key: property:x
-      label: X
+    - name: offset_x
+      key: property:offset_x
+      label: Offset X
       type: Number
       side: Left
       exposure: Graph
       multiplicity: Single
-      property: x
+      property: offset_x
       property_metadata: { ui_type: Float, default: 0.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
-    - name: y
-      key: property:y
-      label: Y
+    - name: offset_y
+      key: property:offset_y
+      label: Offset Y
       type: Number
       side: Left
       exposure: Graph
       multiplicity: Single
-      property: y
+      property: offset_y
       property_metadata: { ui_type: Float, default: 0.0, min: -10000.0, max: 10000.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
     - name: width
       key: property:width

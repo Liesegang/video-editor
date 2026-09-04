@@ -10,6 +10,7 @@
 mod grid;
 mod navigation;
 mod theme;
+mod transform;
 
 pub use grid::{grid_lines, paint_canvas, GridAxis, GridConfig, GridLine, GridLineKind};
 pub use navigation::{
@@ -17,3 +18,4 @@ pub use navigation::{
     NavigationConfig, NavigationDelta, NavigationInput, ZoomPolicy,
 };
 pub use theme::{CanvasTheme, GridStroke};
+pub use transform::{fit_canvas, CanvasTransform};

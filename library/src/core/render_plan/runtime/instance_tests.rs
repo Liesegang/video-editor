@@ -4,16 +4,13 @@ use super::*;
 use crate::core::render_plan::RenderPlanCompiler;
 use crate::editor::TimelineEditorService;
 use crate::model::authoring::{
-    CompositionParameterTarget, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing,
-    ModuleGraph, ModuleInstance, ModuleInstanceId, ModuleInterface, ModuleInvocation,
-    ModulePortAddress, PublishedMediaInput, PublishedMediaInputId, PublishedMediaOutput,
-    PublishedMediaOutputId, RationalRate, TimeMap, TimelineInterval, TimelineTrack,
-    TimelineTrackId,
+    CompositionParameterTarget, ModuleDefinition, ModuleDefinitionSharing, ModuleInstance,
+    ModuleInstanceId, ModuleInvocation, PublishedMediaInput, PublishedMediaInputId, RationalRate,
+    TimeMap, TimelineInterval, TimelineTrack, TimelineTrackId,
 };
 use crate::model::frame::color::Color;
 use crate::model::frame::entity::{FrameContent, FrameItem};
-use crate::model::node::Node;
-use crate::model::project::connection::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
+use crate::model::project::connection::PortDataType;
 use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
 
 fn seconds(value: i64) -> MediaTime {
@@ -93,53 +90,30 @@ fn repeated_nested_fixture() -> RepeatedNestedFixture {
             time_map: TimeMap::default(),
             layer: 0,
             parent: None,
+            blend_mode: BlendMode::Normal,
             authored_properties: PropertyMap::new(),
         },
     );
 
-    let merge = Node::new_merge("Published root input");
-    let merge_id = merge.id;
-    let definition_id = ModuleDefinitionId::new();
+    let (mut definition, output_id) =
+        ModuleDefinition::new_image("Root input adapter", ModuleDefinitionSharing::Private);
+    let definition_id = definition.id;
     let instance_id = ModuleInstanceId::new();
     let input_id = PublishedMediaInputId::new();
-    let output_id = PublishedMediaOutputId::new();
-    project.module_definitions.insert(
-        definition_id,
-        ModuleDefinition {
-            id: definition_id,
-            name: "Root input adapter".to_string(),
-            sharing: ModuleDefinitionSharing::Private,
-            graph: ModuleGraph {
-                nodes: HashMap::from([(merge_id, merge)]),
-                connections: Vec::new(),
-            },
-            interface: ModuleInterface {
-                media_inputs: vec![PublishedMediaInput {
-                    id: input_id,
-                    name: "Root image".to_string(),
-                    data_type: PortDataType::Image,
-                    target: ModulePortAddress {
-                        node_id: merge_id,
-                        port: MERGE_IMAGES_PORT.to_string(),
-                    },
-                    required: true,
-                    primary: false,
-                }],
-                media_outputs: vec![PublishedMediaOutput {
-                    id: output_id,
-                    name: "Image".to_string(),
-                    data_type: PortDataType::Image,
-                    source: ModulePortAddress {
-                        node_id: merge_id,
-                        port: IMAGE_OUTPUT_PORT.to_string(),
-                    },
-                }],
-                ..ModuleInterface::default()
-            },
-            topology_revision: 1,
-            interface_version: 1,
-        },
-    );
+    let output_target = definition
+        .output(output_id)
+        .unwrap()
+        .target(PortDataType::Image)
+        .unwrap();
+    definition.interface.media_inputs.push(PublishedMediaInput {
+        id: input_id,
+        name: "Root image".to_string(),
+        data_type: PortDataType::Image,
+        target: output_target,
+        required: true,
+        primary: false,
+    });
+    project.module_definitions.insert(definition_id, definition);
     project.module_instances.insert(
         instance_id,
         ModuleInstance {
@@ -173,6 +147,7 @@ fn repeated_nested_fixture() -> RepeatedNestedFixture {
             time_map: TimeMap::default(),
             layer: 0,
             parent: None,
+            blend_mode: BlendMode::Normal,
             authored_properties: PropertyMap::new(),
         },
     );
@@ -195,6 +170,7 @@ fn repeated_nested_fixture() -> RepeatedNestedFixture {
                 time_map: TimeMap::default(),
                 layer,
                 parent: None,
+                blend_mode: BlendMode::Normal,
                 authored_properties: PropertyMap::new(),
             },
         );
@@ -234,6 +210,7 @@ fn exact_binding_resolves_against_the_selected_composition_instance_path() {
     let first = evaluate_timeline_render_plan_frame_at_instance(
         &fixture.project,
         &plan,
+        &crate::plugin::PluginManager::default(),
         fixture.child_timeline_id,
         30,
         1.0,
@@ -244,6 +221,7 @@ fn exact_binding_resolves_against_the_selected_composition_instance_path() {
     let second = evaluate_timeline_render_plan_frame_at_instance(
         &fixture.project,
         &plan,
+        &crate::plugin::PluginManager::default(),
         fixture.child_timeline_id,
         30,
         1.0,
@@ -310,6 +288,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Definition title".to_string(),
+                ensemble_operations: Vec::new(),
             },
             TimelineInterval::new(seconds(0), seconds(4)).unwrap(),
             0,
@@ -387,7 +366,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
     }
 
     let project = service.snapshot().unwrap();
-    let SourceRef::Text { text } = &project.items[&text_item_id].source else {
+    let SourceRef::Text { text, .. } = &project.items[&text_item_id].source else {
         panic!("definition target must remain Text");
     };
     assert_eq!(text, "Definition title");
@@ -424,6 +403,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
         let frame = evaluate_timeline_render_plan_frame_at_instance(
             &project,
             &plan,
+            &crate::plugin::PluginManager::default(),
             child_timeline_id,
             0,
             1.0,
@@ -464,6 +444,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
     let first = evaluate_timeline_render_plan_frame_at_instance(
         &updated_project,
         &updated_plan,
+        &crate::plugin::PluginManager::default(),
         child_timeline_id,
         0,
         1.0,
@@ -474,6 +455,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
     let second = evaluate_timeline_render_plan_frame_at_instance(
         &updated_project,
         &updated_plan,
+        &crate::plugin::PluginManager::default(),
         child_timeline_id,
         0,
         1.0,

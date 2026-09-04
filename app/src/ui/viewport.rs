@@ -20,6 +20,7 @@ pub struct ViewportController<'a> {
     hand_tool_key: Option<egui::Key>,
     pan_tool_active: bool,
     zoom_tool_active: bool,
+    direct_manipulation_passthrough: bool,
     screen_origin: Option<egui::Pos2>,
 }
 
@@ -32,6 +33,7 @@ impl<'a> ViewportController<'a> {
             hand_tool_key,
             pan_tool_active: false,
             zoom_tool_active: false,
+            direct_manipulation_passthrough: false,
             screen_origin: None,
         }
     }
@@ -51,6 +53,14 @@ impl<'a> ViewportController<'a> {
         self
     }
 
+    /// Leave an unmodified primary drag available to content rendered inside
+    /// the viewport. Space/hand-tool pan, zoom-tool scrub, middle-button pan,
+    /// wheel, and pinch remain owned by this controller.
+    pub fn with_direct_manipulation_passthrough(mut self, enabled: bool) -> Self {
+        self.direct_manipulation_passthrough = enabled;
+        self
+    }
+
     /// Screen coordinate corresponding to world zero before panel pan.
     pub fn with_screen_origin(mut self, origin: egui::Pos2) -> Self {
         self.screen_origin = Some(origin);
@@ -63,20 +73,41 @@ impl<'a> ViewportController<'a> {
         state: &mut impl ViewportState,
         handled_hand_tool_drag: &mut bool,
     ) -> (bool, egui::Response) {
-        let response = self
-            .ui
-            .interact(rect, self.id, egui::Sense::click_and_drag());
         let key_active = self
             .hand_tool_key
             .is_some_and(|key| self.ui.input(|input| input.key_down(key)));
+        let middle_down = self.ui.input(|input| input.pointer.middle_down());
+        let navigation_drag_enabled = !self.direct_manipulation_passthrough
+            || key_active
+            || self.pan_tool_active
+            || self.zoom_tool_active
+            || middle_down;
+        let sense = if navigation_drag_enabled {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::hover()
+        };
+        let response = self.ui.interact(rect, self.id, sense);
         let pointer_delta = self.ui.input(|input| input.pointer.delta());
-        let primary_pan = (key_active || self.pan_tool_active)
-            && response.dragged_by(egui::PointerButton::Primary)
-            && !self.zoom_tool_active;
-        let middle_pan = response.dragged_by(egui::PointerButton::Middle);
-        let scrub_zoom = self.zoom_tool_active
-            && response.dragged_by(egui::PointerButton::Primary)
-            && !primary_pan;
+        let hovered = self.ui.rect_contains_pointer(rect);
+        // A child canvas such as egui-snarl may become the final response
+        // owner after this adapter runs. Explicit navigation chords are still
+        // unambiguous, so passthrough mode samples their held buttons directly
+        // instead of depending on response ownership.
+        let primary_drag = if self.direct_manipulation_passthrough {
+            hovered && self.ui.input(|input| input.pointer.primary_down())
+        } else {
+            response.dragged_by(egui::PointerButton::Primary)
+        };
+        let middle_drag = if self.direct_manipulation_passthrough {
+            hovered && middle_down
+        } else {
+            response.dragged_by(egui::PointerButton::Middle)
+        };
+        let primary_pan =
+            (key_active || self.pan_tool_active) && primary_drag && !self.zoom_tool_active;
+        let middle_pan = middle_drag;
+        let scrub_zoom = self.zoom_tool_active && primary_drag && !primary_pan;
 
         if key_active || self.pan_tool_active {
             self.ui.output_mut(|output| {
@@ -100,7 +131,6 @@ impl<'a> ViewportController<'a> {
         }
 
         let screen_origin = self.screen_origin.unwrap_or(rect.min);
-        let hovered = self.ui.rect_contains_pointer(rect);
         let input = self.ui.input(|input| NavigationInput {
             anchor: input.pointer.hover_pos().map(|position| {
                 let local = position - screen_origin;

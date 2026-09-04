@@ -474,6 +474,9 @@ fn route(
             "/v1/input/pinch" => serde_json::from_slice::<PinchRequest>(&request.body)
                 .map(InputAction::Pinch)
                 .map_err(|error| format!("invalid JSON body: {error}")),
+            "/v1/input/close-request" => {
+                parse_empty_object(&request.body).map(|()| InputAction::CloseRequest)
+            }
             _ => return HttpResponse::json(404, json!({"error": "endpoint not found"})),
         }
     } else {
@@ -518,6 +521,16 @@ fn route(
 
 fn parse_pointer(body: &[u8]) -> Result<PointerRequest, String> {
     serde_json::from_slice(body).map_err(|error| format!("invalid JSON body: {error}"))
+}
+
+fn parse_empty_object(body: &[u8]) -> Result<(), String> {
+    let value = serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|error| format!("invalid JSON body: {error}"))?;
+    if value.as_object().is_some_and(serde_json::Map::is_empty) {
+        Ok(())
+    } else {
+        Err("request body must be an empty JSON object".to_string())
+    }
 }
 
 fn percent_decode(value: &str) -> Result<String, &'static str> {
@@ -926,6 +939,35 @@ mod tests {
                 .unwrap()
                 .action,
             InputAction::Key(KeyRequest { pressed: true, .. })
+        ));
+    }
+
+    #[test]
+    fn close_request_endpoint_queues_a_native_viewport_event() {
+        let (sender, receiver) = mpsc::sync_channel(4);
+        let (state_sender, _state_receiver) = mpsc::sync_channel(1);
+        let server = QaServer::start(
+            0,
+            sender,
+            state_sender,
+            Arc::new(ActionTracker::default()),
+            egui::Context::default(),
+        )
+        .unwrap();
+        let body = "{}";
+        let http = format!(
+            "POST /v1/input/close-request HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let response = request(server.address(), &http);
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(matches!(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .action,
+            InputAction::CloseRequest
         ));
     }
 }

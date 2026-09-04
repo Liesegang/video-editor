@@ -2,7 +2,7 @@ uniform shader content;
 uniform float angle;
 uniform float position;
 uniform float softness;
-uniform float invert; // bool-ish
+uniform int invert;
 uniform float2 resolution;
 
 half4 main(float2 p) {
@@ -19,7 +19,7 @@ half4 main(float2 p) {
     float dist = dot(uv, n) - position;
 
     // Invert logic
-    if (invert > 0.5) {
+    if (invert != 0) {
         dist = -dist;
     }
 
@@ -29,7 +29,9 @@ half4 main(float2 p) {
     // Convert softness to UV space approx.
     float soft_uv = softness / min(resolution.x, resolution.y) * 2.0;
 
-    float alpha = smoothstep(-soft_uv, 0.0, dist);
+    float alpha = soft_uv <= 0.0
+        ? (dist >= 0.0 ? 1.0 : 0.0)
+        : smoothstep(-soft_uv, 0.0, dist);
 
     half4 color = content.eval(p);
     return color * alpha;

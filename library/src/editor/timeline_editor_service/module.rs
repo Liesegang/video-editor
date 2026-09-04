@@ -1,5 +1,17 @@
 use super::*;
 
+mod connections;
+mod output;
+mod parameter_automation;
+
+use connections::{
+    connect_definition_ports, disconnect_definition_connection, reconnect_definition_connection,
+    set_definition_connection_blend_mode,
+};
+use output::{
+    require_insertable_processing_node, require_output_state, require_removable_processing_node,
+};
+
 impl TimelineEditorService {
     pub fn add_module_definition(
         &self,
@@ -76,6 +88,7 @@ impl TimelineEditorService {
                             time_map: TimeMap::default(),
                             layer: placement.layer,
                             parent: None,
+                            blend_mode: BlendMode::Normal,
                             authored_properties: PropertyMap::new(),
                         },
                     );
@@ -127,6 +140,7 @@ impl TimelineEditorService {
                             time_map: TimeMap::default(),
                             layer: placement.layer,
                             parent: None,
+                            blend_mode: BlendMode::Normal,
                             authored_properties: PropertyMap::new(),
                         },
                     );
@@ -135,159 +149,6 @@ impl TimelineEditorService {
                 },
             )
             .map(|((item_id, instance_id), changes)| (item_id, instance_id, changes))
-            .map_err(LibraryError::Validation)
-    }
-
-    pub fn set_module_parameter(
-        &self,
-        instance_id: ModuleInstanceId,
-        parameter_id: PublishedParameterId,
-        value: PropertyValue,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        session
-            .transact(
-                vec![ProjectInvalidation::ModuleInstance { instance_id }],
-                |project| {
-                    project
-                        .module_instances
-                        .get_mut(&instance_id)
-                        .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                        .parameter_overrides
-                        .insert(parameter_id, value);
-                    Ok(())
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
-    /// Removes one instance-local value so the invocation follows the
-    /// definition's published default again. This never mutates Module
-    /// topology or another instance.
-    pub fn clear_module_parameter_override(
-        &self,
-        instance_id: ModuleInstanceId,
-        parameter_id: PublishedParameterId,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        session
-            .transact(
-                vec![ProjectInvalidation::ModuleInstance { instance_id }],
-                |project| {
-                    let instance = project
-                        .module_instances
-                        .get_mut(&instance_id)
-                        .ok_or_else(|| format!("Missing Module instance {instance_id}"))?;
-                    instance
-                        .parameter_overrides
-                        .remove(&parameter_id)
-                        .map(|_| ())
-                        .ok_or_else(|| {
-                            format!(
-                                "Module instance {instance_id} has no override for {parameter_id}"
-                            )
-                        })
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
-    pub fn upsert_module_parameter_keyframe(
-        &self,
-        item_id: TimelineItemId,
-        parameter_id: PublishedParameterId,
-        local_time: MediaTime,
-        value: PropertyValue,
-        easing: Option<EasingFunction>,
-    ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
-        let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    let invocation = item_module_invocation_mut(project, item_id)?;
-                    let track = invocation
-                        .automation_tracks
-                        .entry(parameter_id)
-                        .or_insert_with(|| AutomationTrack {
-                            keyframes: Vec::new(),
-                        });
-                    track.upsert(local_time, value, easing)
-                },
-            )
-            .map_err(LibraryError::Validation)
-    }
-
-    pub fn update_module_parameter_keyframe(
-        &self,
-        item_id: TimelineItemId,
-        parameter_id: PublishedParameterId,
-        keyframe_id: KeyframeId,
-        update: AuthoringKeyframeUpdate,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    let track = item_module_invocation_mut(project, item_id)?
-                        .automation_tracks
-                        .get_mut(&parameter_id)
-                        .ok_or_else(|| {
-                            format!("Missing automation for Published parameter {parameter_id}")
-                        })?;
-                    track.update_keyframe(keyframe_id, update.time, update.value, update.easing)
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
-    pub fn remove_module_parameter_keyframe(
-        &self,
-        item_id: TimelineItemId,
-        parameter_id: PublishedParameterId,
-        keyframe_id: KeyframeId,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    let invocation = item_module_invocation_mut(project, item_id)?;
-                    let remove_track = {
-                        let track = invocation
-                            .automation_tracks
-                            .get_mut(&parameter_id)
-                            .ok_or_else(|| {
-                                format!("Missing automation for Published parameter {parameter_id}")
-                            })?;
-                        if !track.remove_keyframe(keyframe_id) {
-                            return Err(format!("Missing Automation Keyframe {keyframe_id}"));
-                        }
-                        track.keyframes.is_empty()
-                    };
-                    if remove_track {
-                        invocation.automation_tracks.remove(&parameter_id);
-                    }
-                    Ok(())
-                },
-            )
-            .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
 
@@ -441,6 +302,35 @@ impl TimelineEditorService {
         .map(|(_, definition_id, changes)| (definition_id, changes))
     }
 
+    /// Moves either endpoint of one existing connection in a single
+    /// copy-on-write transaction. Stable edge identity, input order and Blend
+    /// metadata survive the edit; the complete candidate topology is
+    /// validated before commit.
+    pub fn reconnect_instance_module_connection(
+        &self,
+        instance_id: ModuleInstanceId,
+        connection_id: ModuleConnectionId,
+        from: crate::model::authoring::ModulePortAddress,
+        to: crate::model::authoring::ModulePortAddress,
+    ) -> Result<(ModuleDefinitionId, ChangeSet), LibraryError> {
+        self.edit_instance_definition(instance_id, |definition| {
+            reconnect_definition_connection(definition, connection_id, from, to)
+        })
+        .map(|(_, definition_id, changes)| (definition_id, changes))
+    }
+
+    pub fn set_instance_module_connection_blend_mode(
+        &self,
+        instance_id: ModuleInstanceId,
+        connection_id: ModuleConnectionId,
+        blend_mode: BlendMode,
+    ) -> Result<(ModuleDefinitionId, ChangeSet), LibraryError> {
+        self.edit_instance_definition(instance_id, |definition| {
+            set_definition_connection_blend_mode(definition, connection_id, blend_mode)
+        })
+        .map(|(_, definition_id, changes)| (definition_id, changes))
+    }
+
     pub fn set_instance_module_node_state(
         &self,
         instance_id: ModuleInstanceId,
@@ -536,6 +426,17 @@ impl TimelineEditorService {
     ) -> Result<SharedModuleEdit<()>, LibraryError> {
         self.edit_shared_definition(definition_id, |definition| {
             disconnect_definition_connection(definition, connection_id)
+        })
+    }
+
+    pub fn set_shared_module_connection_blend_mode(
+        &self,
+        definition_id: ModuleDefinitionId,
+        connection_id: ModuleConnectionId,
+        blend_mode: BlendMode,
+    ) -> Result<SharedModuleEdit<()>, LibraryError> {
+        self.edit_shared_definition(definition_id, |definition| {
+            set_definition_connection_blend_mode(definition, connection_id, blend_mode)
         })
     }
 
@@ -773,6 +674,7 @@ fn add_node_to_definition(
     definition: &mut ModuleDefinition,
     node: Node,
 ) -> Result<uuid::Uuid, String> {
+    require_insertable_processing_node(&node)?;
     let node_id = node.id;
     if definition.graph.nodes.insert(node_id, node).is_some() {
         return Err(format!("Module Node {node_id} already exists"));
@@ -785,6 +687,7 @@ fn remove_node_from_definition(
     definition: &mut ModuleDefinition,
     node_id: uuid::Uuid,
 ) -> Result<(), String> {
+    require_removable_processing_node(definition, node_id)?;
     if definition.graph.nodes.remove(&node_id).is_none() {
         return Err(format!("Missing Module Node {node_id}"));
     }
@@ -802,10 +705,6 @@ fn remove_node_from_definition(
         .retain(|entry| entry.target.node_id != node_id);
     definition
         .interface
-        .media_outputs
-        .retain(|entry| entry.source.node_id != node_id);
-    definition
-        .interface
         .signals
         .retain(|entry| entry.source.node_id != node_id);
     definition
@@ -816,40 +715,6 @@ fn remove_node_from_definition(
     if before != interface_len(definition) {
         bump_interface_version(definition)?;
     }
-    Ok(())
-}
-
-fn connect_definition_ports(
-    definition: &mut ModuleDefinition,
-    from: crate::model::authoring::ModulePortAddress,
-    to: crate::model::authoring::ModulePortAddress,
-    order: i64,
-) -> Result<ModuleConnectionId, String> {
-    let connection_id = ModuleConnectionId::new();
-    definition.graph.connections.push(ModuleConnection {
-        id: connection_id,
-        from,
-        to,
-        order,
-    });
-    bump_topology_revision(definition)?;
-    Ok(connection_id)
-}
-
-fn disconnect_definition_connection(
-    definition: &mut ModuleDefinition,
-    connection_id: ModuleConnectionId,
-) -> Result<(), String> {
-    let before = definition.graph.connections.len();
-    definition
-        .graph
-        .connections
-        .retain(|connection| connection.id != connection_id);
-    if before == definition.graph.connections.len() {
-        return Err(format!("Missing Module connection {connection_id}"));
-    }
-    normalize_connection_order(definition);
-    bump_topology_revision(definition)?;
     Ok(())
 }
 
@@ -865,6 +730,7 @@ fn set_definition_node_state(
         .nodes
         .get_mut(&node_id)
         .ok_or_else(|| format!("Missing Module Node {node_id}"))?;
+    require_output_state(node, enabled, bypassed)?;
     node.name = name;
     node.enabled = enabled;
     node.bypassed = bypassed;
@@ -946,7 +812,7 @@ fn set_definition_node_property(
     bump_topology_revision(definition)
 }
 
-fn bump_topology_revision(definition: &mut ModuleDefinition) -> Result<(), String> {
+pub(super) fn bump_topology_revision(definition: &mut ModuleDefinition) -> Result<(), String> {
     definition.topology_revision = definition
         .topology_revision
         .checked_add(1)
@@ -965,34 +831,6 @@ pub(super) fn bump_interface_version(definition: &mut ModuleDefinition) -> Resul
 fn interface_len(definition: &ModuleDefinition) -> usize {
     definition.interface.parameters.len()
         + definition.interface.media_inputs.len()
-        + definition.interface.media_outputs.len()
         + definition.interface.signals.len()
         + definition.interface.actions.len()
-}
-
-fn normalize_connection_order(definition: &mut ModuleDefinition) {
-    let mut targets = definition
-        .graph
-        .connections
-        .iter()
-        .map(|connection| connection.to.clone())
-        .collect::<Vec<_>>();
-    targets.sort_by(|left, right| {
-        left.node_id
-            .cmp(&right.node_id)
-            .then_with(|| left.port.cmp(&right.port))
-    });
-    targets.dedup();
-    for target in targets {
-        let mut connections = definition
-            .graph
-            .connections
-            .iter_mut()
-            .filter(|connection| connection.to == target)
-            .collect::<Vec<_>>();
-        connections.sort_by_key(|connection| connection.order);
-        for (order, connection) in connections.into_iter().enumerate() {
-            connection.order = order as i64;
-        }
-    }
 }

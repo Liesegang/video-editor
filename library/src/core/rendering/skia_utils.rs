@@ -59,6 +59,21 @@ impl GpuContext {
             std::num::NonZeroU32::new(height).unwrap_or(std::num::NonZeroU32::MIN),
         );
     }
+
+    /// Load raw OpenGL entry points from the display which owns Ganesh's
+    /// current context. Stateful scene work must use this context rather than
+    /// creating a second graphics device.
+    #[cfg(feature = "gl")]
+    pub(crate) fn create_glow_context(&self) -> glow::Context {
+        use glutin::display::GlDisplay;
+
+        // SAFETY: this loader is backed by the same glutin Display and current
+        // context used to construct `direct_context`. SceneRuntime never moves
+        // the returned function table to another GL context or thread.
+        unsafe {
+            glow::Context::from_loader_function_cstr(|name| self._display.get_proc_address(name))
+        }
+    }
 }
 
 pub fn create_gpu_context(
@@ -90,6 +105,8 @@ pub fn create_gpu_context(
 
 pub fn get_current_context_handle() -> Option<usize> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
+    // SAFETY: querying the calling thread's current WGL context has no pointer
+    // preconditions and does not transfer ownership of the returned handle.
     unsafe {
         let handle = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
         if !handle.is_null() {
@@ -109,11 +126,17 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows supplied the window handle and message parameters to
+    // this registered callback; forwarding them preserves DefWindowProcW's
+    // required calling convention and lifetime.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn create_dummy_window() -> Result<RawWindowHandle, String> {
+    // SAFETY: the class descriptor owns `class_name` for every Win32 call in
+    // this block, its callback uses the system ABI, and every returned handle
+    // is checked before being converted to a non-zero raw-window handle.
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
         let class_name = "VideoEditorDummyClass\0"
@@ -156,8 +179,9 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             return Err("Failed to create dummy window".to_string());
         }
 
-        let mut handle =
-            Win32WindowHandle::new(std::num::NonZeroIsize::new(hwnd as isize).unwrap());
+        let hwnd = std::num::NonZeroIsize::new(hwnd as isize)
+            .ok_or_else(|| "CreateWindowExW returned a null window handle".to_string())?;
+        let mut handle = Win32WindowHandle::new(hwnd);
         handle.hinstance = std::num::NonZeroIsize::new(hinstance as isize);
 
         Ok(RawWindowHandle::Win32(handle))
@@ -166,8 +190,8 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn init_glutin_headless(
-    #[allow(unused)] share_handle: Option<usize>,
-    #[allow(unused)] share_hwnd: Option<isize>,
+    share_handle: Option<usize>,
+    share_hwnd: Option<isize>,
 ) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
@@ -178,6 +202,9 @@ fn init_glutin_headless(
 
     // Identify target pixel format if sharing
     let target_pf_index = if let Some(hwnd_ptr) = share_hwnd {
+        // SAFETY: `share_hwnd` comes from the host's live native viewport. We
+        // retain neither the HWND nor its borrowed DC, and ReleaseDC is called
+        // on every successful GetDC path before leaving this block.
         unsafe {
             let hwnd = hwnd_ptr as HWND;
             let dc = GetDC(hwnd);
@@ -202,6 +229,8 @@ fn init_glutin_headless(
 
     // 2. Create Display
     let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
+    // SAFETY: the raw display handle names the process-wide Windows display;
+    // glutin owns the resulting Display and validates WGL availability.
     let display = unsafe {
         glutin::display::Display::new(
             raw_display_handle,
@@ -216,6 +245,8 @@ fn init_glutin_headless(
         .with_surface_type(ConfigSurfaceTypes::WINDOW)
         .build();
 
+    // SAFETY: `template` contains no borrowed native resources and `display`
+    // remains alive for the complete iterator and selected Config lifetime.
     let config = unsafe { display.find_configs(template) }
         .map_err(|e| format!("Failed to find configs: {}", e))?
         .reduce(|accum, config| {
@@ -254,16 +285,20 @@ fn init_glutin_headless(
         .with_context_api(glutin::context::ContextApi::OpenGl(None))
         .build(Some(raw_window_handle));
 
+    // SAFETY: the window handle is the live dummy HWND created above; Config,
+    // Display, and the resulting context remain owned together in GpuContext.
     let not_current_context = unsafe { display.create_context(&config, &context_attributes) }
         .map_err(|e| format!("Failed to create GL context: {}", e))?;
 
     // 5. Create Window Surface
     let attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new().build(
         raw_window_handle,
-        std::num::NonZeroU32::new(1920).unwrap(), // Initial Size
-        std::num::NonZeroU32::new(1080).unwrap(),
+        std::num::NonZeroU32::new(1920).unwrap_or(std::num::NonZeroU32::MIN), // Initial Size
+        std::num::NonZeroU32::new(1080).unwrap_or(std::num::NonZeroU32::MIN),
     );
 
+    // SAFETY: the attributes reference the same live dummy HWND and the
+    // selected Config supports WINDOW surfaces by construction.
     let surface = unsafe { display.create_window_surface(&config, &attrs) }
         .map_err(|e| format!("Failed to create window surface: {}", e))?;
 
@@ -274,6 +309,9 @@ fn init_glutin_headless(
 
     // 7. Share Lists (Context Sharing)
     let context = if let Some(share_hglrc) = share_handle {
+        // SAFETY: our context is current on this thread before querying its
+        // HGLRC. It is made non-current before wglShareLists and restored on
+        // the same Surface before any GL or Skia operation can observe it.
         unsafe {
             let my_hglrc = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
             if my_hglrc.is_null() {

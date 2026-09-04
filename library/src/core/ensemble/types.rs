@@ -110,15 +110,13 @@ impl EnsembleLine {
 #[derive(Debug, Clone)]
 pub struct EffectorContext {
     pub time: f32,
-    /// Index within the target's animation scope. Char intentionally uses 0
-    /// so delay/easing starts simultaneously for every character.
+    /// Index of the addressed group: one Block, each Line, or each Char.
     pub index: usize,
     pub total: usize,
     /// Absolute element index, independent of the target-local `index` above.
     pub element_index: usize,
     /// Deterministic seed identity for target-scoped procedural variation.
-    /// Block uses the global index, Line the line-local index, and Char the
-    /// element's stable identity.
+    /// Block, Line, and Char use their corresponding stable group identity.
     pub element_identity: u64,
     pub block_group_id: u64,
     pub line_group_id: u64,

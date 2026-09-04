@@ -141,23 +141,12 @@ fn register_invocation(
             instance.definition_id, instance.id
         )
     })?;
-    let output = definition
-        .media_outputs
-        .get(&authored.output_id)
-        .ok_or_else(|| {
-            format!(
-                "Module instance {} selects missing published output {}",
-                instance.id, authored.output_id
-            )
-        })?;
-    if matches!(host, ModuleHost::TimelineItem { .. })
-        && output.interface.data_type != PortDataType::Image
-    {
-        return Err(format!(
-            "Node Clip Module output {} must be Image in the first render slice",
-            authored.output_id
-        ));
-    }
+    definition.outputs.get(&authored.output_id).ok_or_else(|| {
+        format!(
+            "Module instance {} selects missing Output terminal {}",
+            instance.id, authored.output_id
+        )
+    })?;
     validate_invocation_inputs(host, authored, definition)?;
 
     let index = invocations.len();
@@ -317,19 +306,41 @@ pub(super) fn compile_module(
     definition.validate()?;
     let order = topological_order(definition)?;
     let mut active_nodes = HashSet::new();
-    let mut media_outputs = HashMap::new();
-    for output in &definition.interface.media_outputs {
-        let ancestry = nodes_reaching(&definition.graph.connections, output.source.node_id);
-        active_nodes.extend(ancestry.iter().copied());
+    let mut outputs = HashMap::new();
+    for output in definition.outputs() {
+        let mut ancestry = HashSet::new();
+        let mut sources = HashMap::new();
+        for (data_type, target) in output.targets() {
+            if let Some(source) = definition
+                .graph
+                .connections
+                .iter()
+                .find(|connection| connection.to == target)
+                .map(|connection| connection.from.clone())
+            {
+                ancestry.extend(nodes_reaching(
+                    &definition.graph.connections,
+                    source.node_id,
+                ));
+                sources.insert(data_type, source);
+            }
+        }
+        active_nodes.extend(
+            ancestry
+                .iter()
+                .copied()
+                .filter(|node_id| *node_id != output.node_id),
+        );
         let evaluation_order = order
             .iter()
-            .filter(|node_id| ancestry.contains(node_id))
+            .filter(|node_id| ancestry.contains(node_id) && **node_id != output.node_id)
             .copied()
             .collect();
-        media_outputs.insert(
+        outputs.insert(
             output.id,
             CompiledModuleOutput {
-                interface: output.clone(),
+                terminal: output,
+                sources,
                 evaluation_order,
             },
         );
@@ -383,6 +394,7 @@ pub(super) fn compile_module(
             right.id,
         ))
     });
+    let particle_outputs = super::particle::compile_particle_outputs(definition, &outputs)?;
     Ok(CompiledModuleDefinition {
         id: definition.id,
         topology_revision: definition.topology_revision,
@@ -404,7 +416,8 @@ pub(super) fn compile_module(
             .cloned()
             .map(|input| (input.id, input))
             .collect(),
-        media_outputs,
+        outputs,
+        particle_outputs,
         signals: definition
             .interface
             .signals
@@ -505,9 +518,6 @@ pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u
     }
     for input in &mut executable.interface.media_inputs {
         input.name.clear();
-    }
-    for output in &mut executable.interface.media_outputs {
-        output.name.clear();
     }
     for signal in &mut executable.interface.signals {
         signal.name.clear();

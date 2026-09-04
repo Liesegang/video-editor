@@ -4,10 +4,14 @@ uniform half3 midtones;
 uniform half3 highlights;
 
 half4 main(float2 p) {
-    half4 color = content.eval(p);
+    half4 source = content.eval(p);
+    if (source.a <= 0.0) {
+        return half4(0.0);
+    }
+    float3 color = float3(source.rgb) / float(source.a);
 
     // Luma for weighting
-    float luma = dot(color.rgb, half3(0.2126, 0.7152, 0.0722));
+    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
 
     // Weights
     float shadow_k = 1.0 - smoothstep(0.0, 0.5, luma);
@@ -15,12 +19,12 @@ half4 main(float2 p) {
     float midtone_k = 1.0 - shadow_k - highlight_k;
 
     // Apply shifts
-    color.rgb += shadows * shadow_k;
-    color.rgb += midtones * midtone_k;
-    color.rgb += highlights * highlight_k;
+    color += float3(shadows) * shadow_k;
+    color += float3(midtones) * midtone_k;
+    color += float3(highlights) * highlight_k;
 
     // Clamp result
-    color.rgb = clamp(color.rgb, 0.0, 1.0);
+    color = clamp(color, 0.0, 1.0);
 
-    return color;
+    return half4(half3(color * float(source.a)), source.a);
 }

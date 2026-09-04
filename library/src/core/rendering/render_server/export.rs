@@ -391,7 +391,7 @@ fn prepare_authoring_audio(
         })?;
     if !mixer.unsupported_video_assets().is_empty() {
         log::warn!(
-            "Timeline-first export does not infer embedded audio for {} Video Asset(s); separately imported Audio Assets remain authoritative",
+            "Authoring export does not infer embedded audio for {} Video Asset(s); separately imported Audio Assets remain authoritative",
             mixer.unsupported_video_assets().len()
         );
     }
@@ -450,6 +450,7 @@ fn run_authoring_png_export(
     let frame_info = match evaluate_timeline_render_plan_frame_at_instance(
         request.project.as_ref(),
         request.plan.as_ref(),
+        plugin_manager.as_ref(),
         request.timeline_id,
         request.frame_number,
         1.0,
@@ -589,6 +590,7 @@ fn run_authoring_video_export(
             frame_info = evaluate_timeline_render_plan_frame_at_instance(
                 request.project.as_ref(),
                 request.plan.as_ref(),
+                plugin_manager.as_ref(),
                 request.timeline_id,
                 exact_frame,
                 1.0,

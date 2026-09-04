@@ -6,7 +6,16 @@
   "distribution": "uv-managed",
   "package_layout": {
     "manifest": "python-runtime-manifest.json",
-    "stdlib": "python/lib/python3.13",
-    "site_packages": "python/lib/python3.13/site-packages"
+    "home": "python",
+    "windows": {
+      "loader_library": "python313.dll",
+      "stdlib": "python/Lib",
+      "extension_modules": "python/DLLs",
+      "site_packages": "python/Lib/site-packages"
+    },
+    "unix": {
+      "stdlib": "python/lib/python3.13",
+      "site_packages": "python/lib/python3.13/site-packages"
+    }
   }
 }

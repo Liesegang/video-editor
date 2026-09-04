@@ -1,6 +1,7 @@
 use super::*;
 use ordered_float::OrderedFloat;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::model::frame::color::Color;
@@ -9,8 +10,8 @@ use crate::model::frame::entity::StyleConfig;
 use crate::model::project::{Composition, EvalOutput, PortDirection, Project, TIME_PORT};
 use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::{
-    EffectColorDomain, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError,
-    PropertyEvaluator, PropertyPlugin,
+    EffectColorDomain, FrameEvaluationContext, LoadPlugin, OperationDescriptor,
+    OperationDescriptorError, Plugin, PropertyEvaluator, PropertyPlugin,
 };
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;

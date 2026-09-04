@@ -5,8 +5,88 @@ use crate::model::property::{PropertyMap, PropertyValue};
 use super::super::{
     AttachmentOwner, AttachmentStage, AutomationTrack, BuiltinEffectInstance, CompositionParameter,
     DurationPolicy, MediaInputBinding, MediaTime, ModuleInvocation, ModulePortAddress,
-    PublishedParameter, PublishedParameterId, TimelineItem, TimelineItemId, property_value_type,
+    PublishedParameter, PublishedParameterId, TextEnsembleOperation, TimelineItem, TimelineItemId,
+    property_value_type, text_ensemble_direct_contract_is_compatible,
 };
+
+pub(super) fn validate_text_ensemble_operations(
+    operations: &[TextEnsembleOperation],
+    item_id: TimelineItemId,
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    let mut decorator_phase = false;
+    for operation in operations {
+        if operation.id.is_nil() || !ids.insert(operation.id) {
+            return Err(format!(
+                "Timeline item {item_id} repeats or omits a Text Ensemble operation ID"
+            ));
+        }
+        if operation.operation.component_id.trim().is_empty()
+            || operation.operation.version.trim().is_empty()
+        {
+            return Err(format!(
+                "Text Ensemble operation {} has an incomplete identity",
+                operation.id
+            ));
+        }
+        let supported = matches!(
+            (
+                operation.operation.category.as_str(),
+                operation.operation.operation.as_str(),
+            ),
+            (
+                crate::plugin::EFFECTOR_CATEGORY,
+                crate::plugin::EFFECTOR_APPLY_OPERATION
+            ) | (
+                crate::plugin::DECORATOR_CATEGORY,
+                crate::plugin::DECORATOR_APPLY_OPERATION
+            )
+        );
+        if !supported {
+            return Err(format!(
+                "Text Ensemble operation {} is not an Effector or Decorator",
+                operation.id
+            ));
+        }
+        match operation.operation.category.as_str() {
+            crate::plugin::DECORATOR_CATEGORY => decorator_phase = true,
+            crate::plugin::EFFECTOR_CATEGORY if decorator_phase => {
+                return Err(format!(
+                    "Text Ensemble operation {} places an Effector after the Decorator phase",
+                    operation.id
+                ));
+            }
+            _ => {}
+        }
+        if !text_ensemble_direct_contract_is_compatible(&operation.declared_ports) {
+            return Err(format!(
+                "Text Ensemble operation {} requires unsupported media inputs",
+                operation.id
+            ));
+        }
+        let declared_properties = operation
+            .declared_ports
+            .iter()
+            .filter_map(|port| port.key.strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX))
+            .collect::<HashSet<_>>();
+        let authored_properties = operation
+            .properties
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<HashSet<_>>();
+        if declared_properties != authored_properties {
+            return Err(format!(
+                "Text Ensemble operation {} properties do not match its declared ports",
+                operation.id
+            ));
+        }
+        validate_authored_properties(
+            &operation.properties,
+            &format!("Text Ensemble operation {}", operation.id),
+        )?;
+    }
+    Ok(())
+}
 
 pub(super) fn validate_composition_parameter_value(
     parameter: &CompositionParameter,
@@ -137,27 +217,8 @@ pub(super) fn validate_attachment_stage(
     owner: &AttachmentOwner,
     stage: AttachmentStage,
 ) -> Result<(), String> {
-    let valid = match owner {
-        AttachmentOwner::Item { .. } => matches!(
-            stage,
-            AttachmentStage::ItemTimeMap
-                | AttachmentStage::ItemPreTransform
-                | AttachmentStage::ItemPostTransform
-                | AttachmentStage::AudioPreFader
-                | AttachmentStage::AudioPostFader
-        ),
-        AttachmentOwner::Track { .. } => {
-            matches!(
-                stage,
-                AttachmentStage::TrackPostComposite | AttachmentStage::TrackPostMix
-            )
-        }
-        AttachmentOwner::Timeline { .. } => matches!(
-            stage,
-            AttachmentStage::TimelinePostComposite | AttachmentStage::TimelinePostMix
-        ),
-    };
-    valid
+    owner
+        .supports_stage(stage)
         .then_some(())
         .ok_or_else(|| format!("Attachment stage {stage:?} is invalid for {owner:?}"))
 }
@@ -233,19 +294,9 @@ pub(super) fn validate_builtin_effect(
 pub(super) fn attachment_media_type(
     stage: AttachmentStage,
 ) -> Result<crate::model::project::PortDataType, String> {
-    match stage {
-        AttachmentStage::ItemPreTransform
-        | AttachmentStage::ItemPostTransform
-        | AttachmentStage::TrackPostComposite
-        | AttachmentStage::TimelinePostComposite => Ok(crate::model::project::PortDataType::Image),
-        AttachmentStage::AudioPreFader
-        | AttachmentStage::AudioPostFader
-        | AttachmentStage::TrackPostMix
-        | AttachmentStage::TimelinePostMix => Ok(crate::model::project::PortDataType::Audio),
-        AttachmentStage::ItemTimeMap => {
-            Err("ItemTimeMap requires a future Behavior contract, not a media Effect".to_string())
-        }
-    }
+    stage.effect_media_type().ok_or_else(|| {
+        "ItemTimeMap requires a future Behavior contract, not a media Effect".to_string()
+    })
 }
 
 pub(super) fn invocation_input_items(invocation: &ModuleInvocation) -> Vec<TimelineItemId> {

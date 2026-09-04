@@ -1,6 +1,7 @@
 id = "vignette"
 name = "Vignette"
 category = "Stylize"
+color_domain = "project_linear"
 
 [[properties]]
 name = "radius"

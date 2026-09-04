@@ -452,6 +452,12 @@ impl AuthoringProject {
                 SourceRef::Asset { asset_id } if !asset_ids.contains(asset_id) => {
                     return Err(format!("Item {} refers to a missing Asset", item.id));
                 }
+                SourceRef::Text {
+                    ensemble_operations,
+                    ..
+                } => {
+                    validate_text_ensemble_operations(ensemble_operations, item.id)?;
+                }
                 SourceRef::Composition(instance) => {
                     let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {
                         format!("Item {} refers to a missing nested Timeline", item.id)
@@ -543,12 +549,9 @@ impl AuthoringProject {
             .get(&instance.definition_id)
             .ok_or_else(|| "Module Attachment has a missing definition".to_string())?;
         let output = definition
-            .interface
-            .media_outputs
-            .iter()
-            .find(|output| output.id == invocation.output_id)
+            .output(invocation.output_id)
             .ok_or_else(|| "Module Attachment has a missing output".to_string())?;
-        if output.data_type != expected {
+        if !output.supports(expected) {
             return Err("Module Attachment output is incompatible with its Stage".to_string());
         }
         let primary = definition
@@ -591,11 +594,8 @@ impl AuthoringProject {
                 )
             })?;
         definition
-            .interface
-            .media_outputs
-            .iter()
-            .find(|output| output.id == invocation.output_id)
-            .ok_or_else(|| "Invocation selects an unknown Published media output".to_string())?;
+            .output(invocation.output_id)
+            .ok_or_else(|| "Invocation selects an unknown dedicated Module Output".to_string())?;
         for input_id in invocation.input_bindings.keys() {
             if !definition
                 .interface
@@ -718,20 +718,12 @@ impl AuthoringProject {
                     .get(&instance.definition_id)
                     .ok_or_else(|| "Media source has a missing Module definition".to_string())?;
                 definition
-                    .interface
-                    .media_outputs
-                    .iter()
-                    .find(|candidate| candidate.id == invocation.output_id)
+                    .output(invocation.output_id)
                     .is_some_and(|candidate| {
-                        candidate.data_type
-                            == match output {
-                                MediaOutputKind::Image => {
-                                    crate::model::project::PortDataType::Image
-                                }
-                                MediaOutputKind::Audio => {
-                                    crate::model::project::PortDataType::Audio
-                                }
-                            }
+                        candidate.supports(match output {
+                            MediaOutputKind::Image => crate::model::project::PortDataType::Image,
+                            MediaOutputKind::Audio => crate::model::project::PortDataType::Audio,
+                        })
                     })
             }
         })

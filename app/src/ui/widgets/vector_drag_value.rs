@@ -131,16 +131,12 @@ mod tests {
         ));
 
         assert_eq!(rects.len(), 4);
-        assert!(
-            rects
-                .windows(2)
-                .all(|pair| pair[0].right() < pair[1].left())
-        );
-        assert!(
-            rects
-                .windows(2)
-                .all(|pair| (pair[0].center().y - pair[1].center().y).abs() < 0.01)
-        );
+        assert!(rects
+            .windows(2)
+            .all(|pair| pair[0].right() < pair[1].left()));
+        assert!(rects
+            .windows(2)
+            .all(|pair| (pair[0].center().y - pair[1].center().y).abs() < 0.01));
         let total_width = group_rect.width();
         assert!(
             (CONTROL_WIDTH - 0.1..=CONTROL_WIDTH + 0.1).contains(&total_width),

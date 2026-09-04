@@ -667,6 +667,7 @@ impl FrameEvaluator<'_> {
                 GeneratorContent::Solid => "solid",
                 GeneratorContent::SkSL => "sksl",
             },
+            NodeContent::ModuleOutput(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::CompositionInstance(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),

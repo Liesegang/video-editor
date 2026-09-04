@@ -250,6 +250,29 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
+    /// Switches a built-in Effect parameter back to a constant in one
+    /// undoable edit. Clearing automation and storing its replacement value are
+    /// one model operation so Undo never exposes a half-switched mode.
+    pub fn set_builtin_effect_parameter_constant(
+        &self,
+        attachment_id: AttachmentId,
+        key: &str,
+        value: PropertyValue,
+    ) -> Result<ChangeSet, LibraryError> {
+        let mut session = self.write_session()?;
+        let owner = attachment_owner(session.project(), attachment_id)?;
+        let invalidations = owner_invalidations(session.project(), &owner)?;
+        session
+            .transact(invalidations, |project| {
+                let parameter = builtin_effect_parameter_mut(project, attachment_id, key)?;
+                parameter.value = value;
+                parameter.automation = None;
+                Ok(())
+            })
+            .map(|(_, changes)| changes)
+            .map_err(LibraryError::Validation)
+    }
+
     pub fn upsert_builtin_effect_parameter_keyframe(
         &self,
         attachment_id: AttachmentId,
@@ -386,6 +409,30 @@ impl TimelineEditorService {
         attachment_id: AttachmentId,
         new_index: usize,
     ) -> Result<ChangeSet, LibraryError> {
+        let stage = self
+            .read_session()?
+            .project()
+            .attachments
+            .get(&attachment_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Attachment {attachment_id}")))?
+            .stage;
+        self.move_attachment(attachment_id, stage, new_index)
+    }
+
+    /// Atomically moves an Effect to a destination evaluation stage and
+    /// insertion slot. `target_index` addresses the destination stack after
+    /// the moving entry has been removed, so both same-stage reordering and
+    /// cross-stage insertion use the same unambiguous contract.
+    ///
+    /// Owner/stage compatibility and the processor media contract are checked
+    /// by the authoritative Project validation before the transaction commits.
+    /// Source and destination orders are normalized in this same undo step.
+    pub fn move_attachment(
+        &self,
+        attachment_id: AttachmentId,
+        target_stage: AttachmentStage,
+        target_index: usize,
+    ) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
         let attachment = session
             .project()
@@ -395,35 +442,50 @@ impl TimelineEditorService {
                 LibraryError::Validation(format!("Missing Attachment {attachment_id}"))
             })?;
         let owner = attachment.owner.clone();
-        let stage = attachment.stage;
-        let stack_len = session
+        let source_stage = attachment.stage;
+        let destination_len = session
             .project()
             .attachments
             .values()
-            .filter(|candidate| candidate.owner == owner && candidate.stage == stage)
+            .filter(|candidate| {
+                candidate.owner == owner
+                    && candidate.stage == target_stage
+                    && candidate.id != attachment_id
+            })
             .count();
-        if new_index >= stack_len {
+        if target_index > destination_len {
             return Err(LibraryError::Validation(format!(
-                "Attachment index {new_index} is outside stack of length {stack_len}"
+                "Attachment insertion index {target_index} is outside destination stack of length {destination_len}"
             )));
         }
         let invalidations = owner_invalidations(session.project(), &owner)?;
         session
             .transact(invalidations, |project| {
-                let mut ids = project
+                let source_ids =
+                    ordered_attachment_ids_excluding(project, &owner, source_stage, attachment_id);
+                let mut destination_ids = if source_stage == target_stage {
+                    source_ids.clone()
+                } else {
+                    ordered_attachment_ids_excluding(project, &owner, target_stage, attachment_id)
+                };
+                destination_ids.insert(target_index, attachment_id);
+
+                if source_stage != target_stage {
+                    for (order, id) in source_ids.into_iter().enumerate() {
+                        project
+                            .attachments
+                            .get_mut(&id)
+                            .ok_or_else(|| format!("Missing Attachment {id}"))?
+                            .order = i64::try_from(order)
+                            .map_err(|_| "Attachment stack is too large".to_string())?;
+                    }
+                }
+                project
                     .attachments
-                    .values()
-                    .filter(|candidate| candidate.owner == owner && candidate.stage == stage)
-                    .map(|candidate| (candidate.order, candidate.id))
-                    .collect::<Vec<_>>();
-                ids.sort_by_key(|(order, _)| *order);
-                let old_index = ids
-                    .iter()
-                    .position(|(_, id)| *id == attachment_id)
-                    .ok_or_else(|| format!("Missing Attachment {attachment_id}"))?;
-                let moved = ids.remove(old_index);
-                ids.insert(new_index, moved);
-                for (order, (_, id)) in ids.into_iter().enumerate() {
+                    .get_mut(&attachment_id)
+                    .ok_or_else(|| format!("Missing Attachment {attachment_id}"))?
+                    .stage = target_stage;
+                for (order, id) in destination_ids.into_iter().enumerate() {
                     project
                         .attachments
                         .get_mut(&id)
@@ -447,6 +509,24 @@ fn attachment_owner(
         .get(&attachment_id)
         .map(|attachment| attachment.owner.clone())
         .ok_or_else(|| LibraryError::Validation(format!("Missing Attachment {attachment_id}")))
+}
+
+fn ordered_attachment_ids_excluding(
+    project: &AuthoringProject,
+    owner: &AttachmentOwner,
+    stage: AttachmentStage,
+    excluded: AttachmentId,
+) -> Vec<AttachmentId> {
+    let mut entries = project
+        .attachments
+        .values()
+        .filter(|candidate| {
+            candidate.owner == *owner && candidate.stage == stage && candidate.id != excluded
+        })
+        .map(|candidate| (candidate.order, candidate.id))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| *entry);
+    entries.into_iter().map(|(_, id)| id).collect()
 }
 
 fn attachment_module_invocation_mut(
@@ -524,52 +604,28 @@ pub(super) fn normalize_all_attachment_orders(project: &mut AuthoringProject) {
 mod tests {
     use super::*;
     use crate::model::authoring::{
-        ModuleDefinitionSharing, ModuleGraph, ModuleInterface, ModulePortAddress,
-        PublishedMediaInput, PublishedMediaInputId, PublishedMediaOutput, PublishedMediaOutputId,
+        ModuleDefinitionSharing, ModuleOutputId, ModulePortAddress, PublishedMediaInput,
+        PublishedMediaInputId,
     };
-    use crate::model::project::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
+    use crate::model::project::{MERGE_IMAGES_PORT, PortDataType};
 
-    fn private_image_effect() -> (ModuleDefinition, PublishedMediaOutputId) {
-        let output = Node::new_merge("Effect Output");
-        let output_node_id = output.id;
-        let output_id = PublishedMediaOutputId::new();
-        (
-            ModuleDefinition {
-                id: ModuleDefinitionId::new(),
-                name: "Node Effect".to_string(),
-                sharing: ModuleDefinitionSharing::Private,
-                graph: ModuleGraph {
-                    nodes: HashMap::from([(output_node_id, output)]),
-                    connections: Vec::new(),
-                },
-                interface: ModuleInterface {
-                    media_inputs: vec![PublishedMediaInput {
-                        id: PublishedMediaInputId::new(),
-                        name: "Input".to_string(),
-                        data_type: PortDataType::Image,
-                        target: ModulePortAddress {
-                            node_id: output_node_id,
-                            port: MERGE_IMAGES_PORT.to_string(),
-                        },
-                        required: true,
-                        primary: true,
-                    }],
-                    media_outputs: vec![PublishedMediaOutput {
-                        id: output_id,
-                        name: "Image".to_string(),
-                        data_type: PortDataType::Image,
-                        source: ModulePortAddress {
-                            node_id: output_node_id,
-                            port: IMAGE_OUTPUT_PORT.to_string(),
-                        },
-                    }],
-                    ..ModuleInterface::default()
-                },
-                topology_revision: 1,
-                interface_version: 1,
-            },
-            output_id,
-        )
+    fn private_image_effect() -> (ModuleDefinition, ModuleOutputId) {
+        let (mut definition, output_id) =
+            ModuleDefinition::new_image("Node Effect", ModuleDefinitionSharing::Private);
+        let target = definition
+            .output(output_id)
+            .expect("Output terminal")
+            .target(PortDataType::Image)
+            .expect("Image input");
+        definition.interface.media_inputs.push(PublishedMediaInput {
+            id: PublishedMediaInputId::new(),
+            name: "Input".to_string(),
+            data_type: PortDataType::Image,
+            target,
+            required: true,
+            primary: true,
+        });
+        (definition, output_id)
     }
 
     #[test]

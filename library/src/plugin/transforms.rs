@@ -65,6 +65,15 @@ pub fn evaluate_source(
 ) -> Option<Transform> {
     let evaluated =
         context.evaluate_operation_properties(definitions, properties, eval_time, "Transform")?;
+    transform_from_values(&evaluated)
+}
+
+/// Materialize the native Transform operation after an authoring runtime has
+/// resolved connected inputs and evaluator-backed properties. Project graphs
+/// and bounded Module graphs share this unit conversion and axis policy.
+pub(crate) fn transform_from_values(
+    evaluated: &std::collections::HashMap<String, PropertyValue>,
+) -> Option<Transform> {
     let position = evaluated.get("position")?.get_as::<Vec2>()?;
     let rotation = evaluated.get("rotation")?.get_as::<f64>()?;
     let scale = evaluated.get("scale")?.get_as::<Vec2>()?;

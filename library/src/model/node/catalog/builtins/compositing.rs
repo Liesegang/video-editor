@@ -39,8 +39,8 @@ const SPECS: &[DescriptorSpec] = &[
     DescriptorSpec::implemented(
         DescriptorIdentity::new(
             "native.sound.merge",
-            "Sound Merge",
-            "Sound",
+            "Audio Mix",
+            "Audio",
             "node_editor.menu.create.sound_merge",
             &["sound", "audio", "merge", "mix", "layers"],
         ),

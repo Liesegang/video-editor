@@ -29,7 +29,11 @@ float gaussian(float2 p, float seed_val) {
 }
 
 half4 main(float2 p) {
-    half4 color = content.eval(p);
+    half4 source = content.eval(p);
+    if (source.a <= 0.0) {
+        return half4(0.0);
+    }
+    float3 color = float3(source.rgb) / float(source.a);
 
     float t = seed;
     if (animate != 0) {
@@ -53,7 +57,7 @@ half4 main(float2 p) {
 
     if (blend_mode == 0) {
         // Additive (Simple)
-        color.rgb += noise_val;
+        color += noise_val;
     } else {
         // Overlay (Contrast preserving)
         // If base < 0.5: 2 * base * (0.5 + noise) -- approximation
@@ -83,7 +87,7 @@ half4 main(float2 p) {
         // let n_norm = clamp(noise_val + 0.5, 0.0, 1.0);
 
         // Apply per channel
-        float3 c = color.rgb;
+        float3 c = color;
         float3 n_norm = noise_val + 0.5; // Center around 0.5
 
         // Branchless Overlay approximation
@@ -100,8 +104,8 @@ half4 main(float2 p) {
         // If amount is 0, noise_val is 0, n_norm is 0.5.
         // Overlay with 0.5 is Identity. Correct.
 
-        color.rgb = overlay;
+        color = overlay;
     }
 
-    return color;
+    return half4(half3(color * float(source.a)), source.a);
 }

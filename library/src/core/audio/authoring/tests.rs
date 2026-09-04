@@ -91,6 +91,7 @@ fn add_asset_item(
             },
             layer: 0,
             parent: None,
+            blend_mode: crate::model::BlendMode::Normal,
             authored_properties: PropertyMap::new(),
         },
     );
@@ -205,6 +206,7 @@ fn nested_timeline_uses_composition_and_leaf_local_time() {
             time_map: TimeMap::default(),
             layer: 0,
             parent: None,
+            blend_mode: crate::model::BlendMode::Normal,
             authored_properties: PropertyMap::new(),
         },
     );
@@ -307,4 +309,18 @@ fn video_assets_are_explicitly_reported_as_unsupported() {
     let cache = CacheManager::with_audio_chunk_capacity(2);
     let mixer = AuthoringAudioMixer::root(&project, &cache).unwrap();
     assert_eq!(mixer.unsupported_video_assets(), &[asset_id]);
+}
+
+#[test]
+fn realtime_device_format_controls_window_shape_and_bound() {
+    let project = project_with_audio_track(48_000);
+    let cache = CacheManager::with_audio_chunk_capacity(2);
+    let timeline_id = project.root_timeline_id;
+    let mut mixer =
+        AuthoringAudioMixer::new_with_format(&project, &cache, timeline_id, 44_100, 6).unwrap();
+
+    assert_eq!(mixer.render_window(0, 7).unwrap().len(), 42);
+    let error = mixer.render_window(0, 44_101).unwrap_err();
+    assert!(matches!(error, AuthoringAudioError::InvalidRequest(_)));
+    assert!(AuthoringAudioMixer::new_with_format(&project, &cache, timeline_id, 0, 2).is_err());
 }

@@ -54,7 +54,7 @@ impl EditorService {
             audio_engine,
             cache_manager,
             plugin_manager,
-        ));
+        )?);
 
         Ok(Self {
             project_manager,

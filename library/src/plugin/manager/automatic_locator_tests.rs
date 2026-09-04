@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::frame::Image;
-use crate::plugin::{LoadPluginResult, Plugin};
+use crate::plugin::{LoadPlugin, LoadPluginResult, Plugin};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
