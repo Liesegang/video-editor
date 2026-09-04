@@ -49,7 +49,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 - [x] **完了：復旧点を固定する。** `pre-production-ui-reset-20260904` と `recovery/before-production-ui-reset-20260904` が復元点を指す。以後、比較のために production UI の挙動と見た目を参照し、旧 evaluator を本番へ戻さない。
 
-- [ ] **部分実装：Rust workspace package を `crates/` へ集約する。** host が所有する `app`、`library`、`color-management`、`plugin-api`、`python-runtime`、`pan-zoom-ui`、`node-editor-ui`、`xtask` は `crates/<name>` に配置され、root `Cargo.toml` もその配置を参照している。次を満たして完了とする。
+- [x] **完了：Rust workspace package を `crates/` へ集約する。** host が所有する `app`、`library`、`color-management`、`plugin-api`、`python-runtime`、`pan-zoom-ui`、`node-editor-ui`、`xtask` は `crates/<name>` に配置され、root `Cargo.toml` もその配置を参照している。次を満たして完了とする。
   - 旧 root package directory が Git 差分上も削除され、同じ source の二重配置がない。
   - `plugins/<plugin-id>` は独立配布する plugin bundle、`examples/` は外部実装例として workspace package 集約の対象外であることを明文化する。
   - portable script、docs、CI、fixture の manifest path を全て新配置へ直す。

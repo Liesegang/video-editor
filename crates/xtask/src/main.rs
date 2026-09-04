@@ -169,4 +169,15 @@ mod tests {
         ]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn repository_root_is_above_the_crates_directory() -> TaskResult<()> {
+        let root = repository_root()?;
+        assert!(root.join("Cargo.toml").is_file());
+        assert_eq!(
+            root.join("crates/xtask"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+        );
+        Ok(())
+    }
 }

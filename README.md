@@ -19,6 +19,20 @@ The two advanced editors have distinct names and responsibilities:
 - **Curve Editor** edits keyframes, interpolation, and value-over-time curves.
 - **Node Editor** edits processing Nodes and their connections inside one bounded Module.
 
+## Repository layout
+
+All Cargo packages owned by the host application live under `crates/` and are
+members of the root workspace. Package names remain stable, so development and
+CI commands should select them with `cargo ... -p <package>` from the repository
+root instead of depending on a package's filesystem path.
+
+`plugins/<plugin-id>/` is reserved for independently distributed plugin
+bundles. Each plugin owns its manifest and lockfile and is intentionally not a
+root-workspace member; this keeps the stable plugin boundary honest and proves
+that a plugin does not link to host-internal crates. `examples/` contains
+standalone third-party integration examples for the same reason. Neither tree
+is a duplicate location for host packages.
+
 ### Windows development build
 
 Run the Rust bootstrap task once. After that, ordinary Cargo builds and tests
