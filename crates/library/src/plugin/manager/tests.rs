@@ -83,101 +83,72 @@ fn every_bundled_property_definition_is_valid_and_operations_are_materialized() 
         IMAGE_TRANSFORM_COMPONENT_ID.to_string(),
         transform_definitions.len(),
     ));
-    let registered_effect_ids;
-    {
+    let (effects, exporters, entity_converters, effectors, decorators, styles, path_effects) = {
         let registry = manager.read_registry();
-        registered_effect_ids = registry
-            .effect_plugins
-            .values()
-            .map(|plugin| plugin.id().to_string())
-            .collect::<HashSet<_>>();
+        (
+            registry.effect_plugins.snapshot(),
+            registry.export_plugins.snapshot(),
+            registry.entity_converter_plugins.snapshot(),
+            registry.effector_plugins.snapshot(),
+            registry.decorator_plugins.snapshot(),
+            registry.style_plugins.snapshot(),
+            registry.path_effect_plugins.snapshot(),
+        )
+    };
+    let registered_effect_ids = effects
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
 
-        for plugin in registry.entity_converter_plugins.values() {
-            let definitions = plugin.get_property_definitions(1920, 1080, 640, 360);
-            check_definitions(
-                &format!("converter {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
+    for (id, plugin) in &entity_converters {
+        let definitions = plugin.get_property_definitions(1920, 1080, 640, 360);
+        check_definitions(&format!("converter {id}"), &definitions, &mut failures);
+    }
+    for kind in ["video", "image", "text", "shape", "solid", "sksl"] {
+        if !entity_converters
+            .iter()
+            .any(|(_, plugin)| plugin.supports_kind(kind))
+        {
+            failures.push(format!("built-in converter kind {kind} is not registered"));
         }
-        for kind in ["video", "image", "text", "shape", "solid", "sksl"] {
-            if !registry
-                .entity_converter_plugins
-                .values()
-                .any(|plugin| plugin.supports_kind(kind))
-            {
-                failures.push(format!("built-in converter kind {kind} is not registered"));
-            }
-        }
-        for plugin in registry.export_plugins.values() {
-            let definitions = plugin.properties();
-            check_definitions(
-                &format!("exporter {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
-        }
+    }
+    for (id, plugin) in exporters {
+        let definitions = plugin.properties();
+        check_definitions(&format!("exporter {id}"), &definitions, &mut failures);
+    }
 
-        for plugin in registry.effect_plugins.values() {
-            let definitions = plugin.properties();
-            check_definitions(
-                &format!("effect {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
-            operation_contracts.push(("effect", plugin.id().to_string(), definitions.len()));
-        }
-        for plugin in registry.effector_plugins.values() {
-            let definitions = plugin.properties();
-            check_definitions(
-                &format!("effector {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
-            operation_contracts.push(("effector", plugin.id().to_string(), definitions.len()));
-        }
-        for plugin in registry.decorator_plugins.values() {
-            let definitions = plugin.properties();
-            check_definitions(
-                &format!("decorator {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
-            operation_contracts.push(("decorator", plugin.id().to_string(), definitions.len()));
-        }
-        for plugin in registry.style_plugins.values() {
-            match plugin.descriptor() {
-                Ok(descriptor) => {
-                    check_definitions(
-                        &format!("style {}", plugin.id()),
-                        descriptor.properties(),
-                        &mut failures,
-                    );
-                    operation_contracts.push((
-                        "style",
-                        plugin.id().to_string(),
-                        descriptor.properties().len(),
-                    ));
-                }
-                Err(error) => failures.push(format!(
-                    "style {} descriptor is invalid: {error}",
-                    plugin.id()
-                )),
+    for (id, plugin) in effects {
+        let definitions = plugin.properties();
+        check_definitions(&format!("effect {id}"), &definitions, &mut failures);
+        operation_contracts.push(("effect", id, definitions.len()));
+    }
+    for (id, plugin) in effectors {
+        let definitions = plugin.properties();
+        check_definitions(&format!("effector {id}"), &definitions, &mut failures);
+        operation_contracts.push(("effector", id, definitions.len()));
+    }
+    for (id, plugin) in decorators {
+        let definitions = plugin.properties();
+        check_definitions(&format!("decorator {id}"), &definitions, &mut failures);
+        operation_contracts.push(("decorator", id, definitions.len()));
+    }
+    for (id, plugin) in styles {
+        match plugin.descriptor() {
+            Ok(descriptor) => {
+                check_definitions(
+                    &format!("style {id}"),
+                    descriptor.properties(),
+                    &mut failures,
+                );
+                operation_contracts.push(("style", id, descriptor.properties().len()));
             }
+            Err(error) => failures.push(format!("style {id} descriptor is invalid: {error}")),
         }
-        for plugin in registry.path_effect_plugins.values() {
-            let definitions = plugin.properties();
-            check_definitions(
-                &format!("path effect {}", plugin.id()),
-                &definitions,
-                &mut failures,
-            );
-            operation_contracts.push((
-                PATH_EFFECT_CATEGORY,
-                plugin.id().to_string(),
-                definitions.len(),
-            ));
-        }
+    }
+    for (id, plugin) in path_effects {
+        let definitions = plugin.properties();
+        check_definitions(&format!("path effect {id}"), &definitions, &mut failures);
+        operation_contracts.push((PATH_EFFECT_CATEGORY, id, definitions.len()));
     }
 
     for missing in expected_sksl_ids.difference(&registered_effect_ids) {
