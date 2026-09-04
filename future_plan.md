@@ -178,6 +178,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Transition は `from_item`、`to_item`、edit point/interval、duration/alignment、processor reference、parameters/automation を Timeline が所有する。
   - 使い方は Transition preset を二 Clip の edit point へ drag/drop、または edit point の右クリック `Add Transition` とする。Timeline 上の handle で duration/alignment、Inspector/Curve Editor で値/easing を編集する。場当たり的な上部ボタンは追加しない。
   - Cross Dissolve、Dip to Color、Wipe、Audio Crossfade を built-in baseline とし、同じ typed transition contract を plugin から追加できる。
+  - Transition processor は built-in/pluginに加え、明示的な有限 `Transition ModuleDefinition` としてNode Editorで作成できる。Image系は保護された `A: Image`、`B: Image`、`Progress: Number(0..1)` と一つの `Image Output`、Audio系は同型のAudio portsを必須interfaceとし、内部Node UUIDをTimelineから参照しない。
+  - Timeline上の各Transitionは共有Definitionに対する一つのModuleInstance/invocationとinstance parameter/automationだけを持つ。同じDefinitionを多数配置しても一度だけcompileし、`Edit Transition Logic` を明示したときだけ既存production Node Editorを開く。from/to ClipやTimeline全体をNodeへ展開しない。
+  - Transition Moduleがmatte、displacement source、Signal等を追加利用する場合もPublished Media/Parameter/SignalとInstancePathを通し、任意の外部Node UUIDや暗黙のlayer番号へbindしない。
   - RenderPlan は from/to の二入力と normalized progress を一 invocation に compile し、Clip を Node 化しない。
   - trim、ripple、roll、split、delete が Transition を deterministic に preserve/resize/remove し、dangling reference を作らない。
   - adjacent、intentional overlap、Nested Timeline、different frame/audio formats、reverse/rate-stretch を golden image/audio と native QA で検証する。
