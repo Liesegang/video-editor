@@ -56,7 +56,7 @@ assert_safe_archive() {
 }
 
 assert_exact_rust_dependency() {
-    grep -Fq 'ocio-rs = { version = "=0.2.1"' "${REPOSITORY_ROOT}/color-management/Cargo.toml" ||
+    grep -Fq 'ocio-rs = { version = "=0.2.1"' "${REPOSITORY_ROOT}/crates/color-management/Cargo.toml" ||
         die "color-management must pin ocio-rs exactly to 0.2.1"
 }
 
@@ -68,10 +68,10 @@ run_self_test() {
     assert_exact_rust_dependency
     grep -Fq './scripts/test-real-opencolorio.sh' "${REPOSITORY_ROOT}/.github/workflows/quality.yml" ||
         die "quality workflow does not run the real OpenColorIO gate"
-    [[ -f "${REPOSITORY_ROOT}/color-management/tests/real_ocio_non_identity.rs" ]] ||
+    [[ -f "${REPOSITORY_ROOT}/crates/color-management/tests/real_ocio_non_identity.rs" ]] ||
         die "non-identity numeric test source is missing"
     grep -Fq 'production_named_ocio_preview_chains_view_output_to_bound_srgb_surface' \
-        "${REPOSITORY_ROOT}/library/src/core/rendering/managed_color_runtime_tests.rs" ||
+        "${REPOSITORY_ROOT}/crates/library/src/core/rendering/managed_color_runtime_tests.rs" ||
         die "production OCIO surface-authority test source is missing"
     grep -Eq '^[[:space:]]*run_real_non_identity_test$' "${BASH_SOURCE[0]}" ||
         die "real OpenColorIO gate does not invoke the non-identity numeric test"

@@ -1,16 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
-    "color-management",
-    "plugin-api",
-    "python-runtime",
-    "library",
-    "pan-zoom-ui",
-    "node-editor-ui",
-    "app",
-    "xtask",
+    "crates/color-management",
+    "crates/plugin-api",
+    "crates/python-runtime",
+    "crates/library",
+    "crates/pan-zoom-ui",
+    "crates/node-editor-ui",
+    "crates/app",
+    "crates/xtask",
 ]
-default-members = ["app"]
+default-members = ["crates/app"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

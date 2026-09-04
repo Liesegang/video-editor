@@ -13,6 +13,6 @@ resolver = "2"
 crate-type = ["cdylib"]
 
 [dependencies]
-ruvie-plugin-api = { path = "../../plugin-api" }
+ruvie-plugin-api = { path = "../../crates/plugin-api" }
 rand = "0.8.6"
 serde_json = "1.0"

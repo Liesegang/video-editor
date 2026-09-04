@@ -9,7 +9,7 @@ The repository uses one entry point locally and in CI:
 It runs an explicit feature/target matrix. The default pass is required because
 `--all-features` does not compile `cfg(not(feature = "..."))` branches; the
 library CPU-fallback pass is required because both the default and maximal
-workspace configurations enable `library/gl`:
+workspace configurations enable `library/gl` from `crates/library`:
 
 ```bash
 ./scripts/quality-gate-self-test.sh

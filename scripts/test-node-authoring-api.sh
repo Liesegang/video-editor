@@ -15,7 +15,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-library = { path = "${REPOSITORY_ROOT}/library" }
+library = { path = "${REPOSITORY_ROOT}/crates/library" }
 EOF
 
 cat >"${PROBE_ROOT}/src/bin/pass.rs" <<'EOF'

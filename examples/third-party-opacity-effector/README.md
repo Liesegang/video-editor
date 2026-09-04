@@ -31,7 +31,7 @@ separate bundle builds for each supported OS and CPU architecture.
 
 Native plugins are trusted in-process code, not sandboxed extensions. See
 [`docs/runtime-plugins.md`](../../docs/runtime-plugins.md) and the
-language-neutral [`plugin-api/ABI-v1.md`](../../plugin-api/ABI-v1.md).
+language-neutral [`crates/plugin-api/ABI-v1.md`](../../crates/plugin-api/ABI-v1.md).
 
 The full proof builds the host first and executes that same prebuilt host-side
 probe only after independently building and installing this library:

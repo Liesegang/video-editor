@@ -1,0 +1,96 @@
+# node-editor-ui
+
+`node-editor-ui` is a domain-neutral immediate-mode Node Editor for egui. It
+can render and interact with a host graph without depending on RuViE, video
+types, UUIDs, plugins, or a persisted graph model.
+
+## Ownership contract
+
+The host is the only source of truth. Every frame it lends descriptors and
+applies returned intents to its own model and history:
+
+```text
+host graph / selection / history
+            |
+            | borrowed GraphFrame
+            v
+      node-editor-ui
+            |
+            | EditorOutput intents
+            v
+         host adapter
+```
+
+`GraphFrame` borrows flat descriptor slices for Nodes, concrete Ports,
+authored Wires, and nested Groups. IDs and `TypeKey` values are opaque host
+types. Geometry is frame-local and uses one graph-to-screen transform. Its
+single back-to-front `selection_order` defines cross-kind Node/Group hit and
+marquee-primary policy; lookup-map iteration is never an interaction policy.
+
+`InteractionState` retains only the active pointer gesture. It never retains
+Nodes, positions, connections, authoritative selection, undo data, or a render
+cache. Dropping it loses no project data.
+
+## Reusable surface
+
+`Editor::show` owns generic group/node chrome, ports, wires, selection
+presentation, and interaction orchestration. The same `Editor` chrome API can
+be embedded into an external layout engine while it is being retired: Node
+frame/header styling, bounded non-selectable header and port labels, typed
+socket presentation, and group shell painting still consume host-provided
+borrowed labels/colors and no graph model. A host implements
+`NodeBodyRenderer<NodeId>` for domain-specific body controls. A Node's explicit
+`header_rect` is its movement handle, while body controls combine their real
+egui responses into `NodeBodyResponse`; a slider or drag value therefore owns
+its drag instead of moving the Node. The same frame path emits:
+
+- `Select` and `DeselectWire`
+- incremental `Move`, followed once by `MoveEnd { Released | Cancelled }`, and
+  `ResizeGroup`
+- `Connect` and `Disconnect`
+- `Delete` and `Reparent`
+
+`tests/fake_host.rs` renders nested groups and host bodies in headless egui and
+drives real pointer/key frames for every intent without importing a RuViE or
+video type.
+
+## RuViE adapter status
+
+RuViE's production Node Editor now projects its authoritative `Project`,
+rendered geometry, actual Snarl draw order, and `SelectionState` through
+`crates/app/src/ui/panels/node_editor/module_document/surface.rs`. Blank click, marquee, Node/Group
+selection, wire deselection, Node/Group header movement, drag threshold, and
+multi-selection deltas use `Editor::interact` and the same `InteractionState`
+as the standalone renderer. Selection and movement are no longer parallel
+app-only gesture state machines. Overview scale keeps large Node/Group click
+targets and blank deselection while precise marquee, wire selection, and
+movement remain gated.
+
+A Move end is emitted only after the drag threshold produced a real `Move`.
+Hosts close exactly one movement transaction for either outcome. `Cancelled`
+(Escape, pointer/capture loss, or movement being disabled) commits the current
+positions as a movement-only transaction and must never run drop, reparent, or
+splice behavior; `Released` alone permits those release semantics.
+
+This is a usable reusable-core vertical slice, **not completion of the RuViE
+renderer migration**. Production Node body/header shells, selection emphasis,
+Node header content, output labels/socket visuals, and group backdrop/outline
+now use that reusable chrome API. RuViE remains responsible only for resolving
+Project semantics into the borrowed glyph, label, palette, status, and type
+color descriptors.
+
+The following production behavior still belongs to the existing Snarl adapter
+and must move in coherent slices:
+
+1. Project-specific Node body/input controls and Group header commands.
+2. Group edge resize and nested containment constraints.
+3. Connect/reconnect/disconnect, wire knife, and connection context menus.
+4. Reparent/drop scoring and Merge physical-layer reorder gestures.
+5. Snarl viewport/layout ownership and RuViE HTTP QA publication.
+
+The generic intents already cover those operations so later slices can replace
+adapter ownership without changing the public graph contract or inventing a
+second model.
+
+Run `scripts/check-node-editor-ui-boundary.sh` to enforce the dependency and
+production-adapter direction. The repository quality gate runs it as well.

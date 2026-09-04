@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-AUTHORING_ROOT="${REPOSITORY_ROOT}/library/src/model/authoring"
-PLAN_ROOT="${REPOSITORY_ROOT}/library/src/core/render_plan"
+AUTHORING_ROOT="${REPOSITORY_ROOT}/crates/library/src/model/authoring"
+PLAN_ROOT="${REPOSITORY_ROOT}/crates/library/src/core/render_plan"
 
 if [[ ! -d "${AUTHORING_ROOT}" || ! -d "${PLAN_ROOT}" ]]; then
     echo "Node-islands authoring and RenderPlan roots must exist" >&2

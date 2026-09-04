@@ -18,7 +18,7 @@ each branch still has explicit integration blockers below.
   - `aa3a402 test(quality): add Rust file size policy checker`
 - The legacy Project-graph wire suite described by this historical handoff was
   retired with that editing model. Current native UI coverage is listed in
-  `app/src/qa/README.md` and runs through
+  `crates/app/src/qa/README.md` and runs through
   `python3 scripts/qa-runner.py --mode full`.
 
 All branches in the next table are pushed, have an upstream, and were clean at
@@ -64,25 +64,25 @@ is intentionally not yet called by `scripts/quality-gate.sh`:
 
 | Lines | File |
 | ---: | --- |
-| 16072 | `app/src/ui/panels/node_editor.rs` |
-| 4482 | `library/src/plugin/runtime_native.rs` |
-| 2865 | `library/tests/project_graph_tests.rs` |
-| 2619 | `library/src/model/project/connection.rs` |
-| 2505 | `app/src/ui/panels/inspector/mod.rs` |
-| 2102 | `library/src/editor/project_service.rs` |
-| 2032 | `app/src/ui/panels/preview/mod.rs` |
-| 1941 | `app/src/ui/panels/timeline/clip_area/clips.rs` |
-| 1758 | `library/src/plugin/manager.rs` |
-| 1626 | `library/src/core/framing/frame.rs` |
-| 1451 | `library/src/model/project/property.rs` |
-| 1439 | `library/src/model/project/mod.rs` |
-| 1356 | `library/tests/effector_graph_tests.rs` |
+| 16072 | `crates/app/src/ui/panels/node_editor.rs` |
+| 4482 | `crates/library/src/plugin/runtime_native.rs` |
+| 2865 | `crates/library/tests/project_graph_tests.rs` |
+| 2619 | `crates/library/src/model/project/connection.rs` |
+| 2505 | `crates/app/src/ui/panels/inspector/mod.rs` |
+| 2102 | `crates/library/src/editor/project_service.rs` |
+| 2032 | `crates/app/src/ui/panels/preview/mod.rs` |
+| 1941 | `crates/app/src/ui/panels/timeline/clip_area/clips.rs` |
+| 1758 | `crates/library/src/plugin/manager.rs` |
+| 1626 | `crates/library/src/core/framing/frame.rs` |
+| 1451 | `crates/library/src/model/project/property.rs` |
+| 1439 | `crates/library/src/model/project/mod.rs` |
+| 1356 | `crates/library/tests/effector_graph_tests.rs` |
 | 1320 | `plugins/random_property/src/lib.rs` |
-| 1320 | `library/src/plugin/loaders/ffmpeg_video.rs` |
-| 1305 | `library/src/core/rendering/skia_renderer.rs` |
-| 1274 | `library/tests/media_fixture_e2e_tests.rs` |
-| 1088 | `library/src/core/audio/mixer.rs` |
-| 1072 | `app/src/ui/panels/inspector/properties.rs` |
+| 1320 | `crates/library/src/plugin/loaders/ffmpeg_video.rs` |
+| 1305 | `crates/library/src/core/rendering/skia_renderer.rs` |
+| 1274 | `crates/library/tests/media_fixture_e2e_tests.rs` |
+| 1088 | `crates/library/src/core/audio/mixer.rs` |
+| 1072 | `crates/app/src/ui/panels/inspector/properties.rs` |
 
 Implement a baseline-ref ratchet checker and self-tests without a path
 allowlist. A feature branch must fail if it creates a new `>1000` file or makes
@@ -154,7 +154,7 @@ Start from `origin/codex/node-editor-modular-38a1579`.
   model/render/hit/gesture, QA geometry, graph queries, panel orchestration,
   layout, commands, resize/selection, merge layers, and wire menus.
 - Wire Escape/blank-click/menu-close deselection remains covered.
-- `app/src/ui/panels/node_editor/mod.rs` is still about 8339 lines.
+- `crates/app/src/ui/panels/node_editor/mod.rs` is still about 8339 lines.
 - The `node-editor-ui` crate/ADR/fake host are designed but not implemented.
 
 Finish the remaining production and test separation, then move only generic
@@ -249,7 +249,7 @@ clear. Remaining work:
   alphabetizing fallback ports;
 - metadata/default/invalid-range/round-trip tests and real-coordinate drag/Undo
   E2E;
-- split the branch's `library/src/model/node/mod.rs` (about 1113 lines) and any
+- split the branch's `crates/library/src/model/node/mod.rs` (about 1113 lines) and any
   other touched oversized file.
 
 ## Priority 3 — finish the single-model editing experience

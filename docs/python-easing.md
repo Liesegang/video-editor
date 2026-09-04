@@ -43,7 +43,7 @@ pre-evaluation is implemented, audio Expressions use their authored fallback
 and report one diagnostic.
 
 Windows source and published builds place the pinned runtime next to the
-application according to `python-runtime/cpython-runtime.json`. Published
+application according to `crates/python-runtime/cpython-runtime.json`. Published
 applications always prefer that private runtime over a developer environment
 override. The publisher never copies the build machine's `site-packages`;
 shipping third-party Python packages requires an explicitly locked input.

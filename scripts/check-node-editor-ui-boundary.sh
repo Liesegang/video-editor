@@ -15,6 +15,11 @@ fi
 
 cd "${CHECK_ROOT}"
 
+SOURCE_ROOT="${CHECK_ROOT}"
+if [[ -d "${CHECK_ROOT}/crates" ]]; then
+    SOURCE_ROOT="${CHECK_ROOT}/crates"
+fi
+
 node_editor_tree="$(
     cargo tree \
         -p node-editor-ui \
@@ -31,7 +36,8 @@ for forbidden_package in app library; do
     fi
 done
 
-if grep -REn '(^|[^[:alnum:]_])(app|library|uuid)::' node-editor-ui/src node-editor-ui/tests; then
+if grep -REn '(^|[^[:alnum:]_])(app|library|uuid)::' \
+    "${SOURCE_ROOT}/node-editor-ui/src" "${SOURCE_ROOT}/node-editor-ui/tests"; then
     echo "node-editor-ui sources must use opaque host IDs and contain no RuViE domain imports" >&2
     exit 1
 fi
@@ -42,10 +48,10 @@ if ! grep -Eq '^node-editor-ui v' <<<"${app_tree}"; then
     exit 1
 fi
 
-surface_path="app/src/ui/panels/node_editor/module_document/surface.rs"
-viewer_path="app/src/ui/panels/node_editor/module_document/viewer.rs"
-theme_path="app/src/ui/panels/node_editor/components/theme.rs"
-if [[ -d "app/src/ui/panels/node_editor" ]]; then
+surface_path="${SOURCE_ROOT}/app/src/ui/panels/node_editor/module_document/surface.rs"
+viewer_path="${SOURCE_ROOT}/app/src/ui/panels/node_editor/module_document/viewer.rs"
+theme_path="${SOURCE_ROOT}/app/src/ui/panels/node_editor/components/theme.rs"
+if [[ -d "${SOURCE_ROOT}/app/src/ui/panels/node_editor" ]]; then
     if [[ ! -f "${surface_path}" ]] \
         || ! grep -Fq 'ModuleSurfaceProjection' "${surface_path}" \
         || ! grep -Fq 'Editor::interact' "${surface_path}" \
@@ -71,8 +77,9 @@ if [[ -d "app/src/ui/panels/node_editor" ]]; then
     done
 fi
 
-if [[ -d "app/src/ui/module_node_editor" ]] \
-    || grep -REn 'module_node_editor|ModuleNodeEditor' app/src --include='*.rs'; then
+if [[ -d "${SOURCE_ROOT}/app/src/ui/module_node_editor" ]] \
+    || grep -REn 'module_node_editor|ModuleNodeEditor' \
+        "${SOURCE_ROOT}/app/src" --include='*.rs'; then
     echo "app must keep one Node Editor surface for bounded Module documents" >&2
     exit 1
 fi
