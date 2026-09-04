@@ -99,7 +99,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 ## M2: production editor surface の復旧と統合
 
-- [ ] **部分実装：共通 viewport を唯一の navigation 実装にする。** Timeline、Curve Editor、Node Editor、Preview は `pan-zoom-ui::CanvasState` と application `ViewportController` を使用しているが、全 native interaction の回帰確認が残る。
+- [ ] **部分実装：共通 viewport を唯一の navigation 実装にする。** Timeline、Curve Editor、Node Editor、Preview は `pan-zoom-ui::CanvasState` と application `ViewportController` を使用し、2026-09-05 時点の既存 native interaction suite は全件通過した。複合 pan/zoom 中の長時間操作、極端な座標、Transition/Ripple/3D を含む未追加シナリオは残る。
   - grid、content、hit test、selection、gizmo、overlay、QA metadata が同じ transform から導出され、pan/zoom 中に相対位置がずれない。
   - Node zoom が freeze せず、Timeline の通常 drag が意図せず scroll に化けない。
   - Timeline/Curve の playhead は canvas clip rect 内だけに描画し、Curve の channel list や表示時間外へ出ない。
@@ -287,6 +287,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：Preview/Audio/Export parity を保証する。** Project linear RGBAF32 と encoded sRGBA8/plugin boundary、alpha、HDR/SDR、sample rate/channel layout、frame/sample rounding を明文化し、mosaic/diagonal_clip のような format mismatch を compile 時に診断/convert する。Preview と Export は同じ derived plan/effect/audio/scene semantics を使う。
 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
+  - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で既存 17 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Audio、Ensemble、Settings、Unsaved を含む）が全件通過した。
   - Assets drag、Timeline move/trim/reorder/content zoom、Preview select/gizmo/text/path、Curve drag、Dope Sheet、Node add/connect/reconnect/property、Effect reorder、Ensemble、Audio playback、Unsaved dialog、Transition、Ripple を scenario 化する。
   - `python scripts/qa-runner.py --mode full --jobs 1` が clean release-like build で通り、panic/render/plugin error が 0 件になる。
 
