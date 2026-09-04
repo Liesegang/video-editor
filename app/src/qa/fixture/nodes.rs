@@ -1,5 +1,5 @@
-use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::Node;
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;

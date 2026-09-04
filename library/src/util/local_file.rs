@@ -24,8 +24,8 @@ pub(crate) struct DirectRegularFile {
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct WindowsFileIdentity {
-    volume_serial: u32,
-    file_index: u64,
+    pub(crate) volume_serial: u32,
+    pub(crate) file_index: u64,
 }
 
 impl DirectRegularFile {
@@ -257,7 +257,7 @@ fn verify_windows_identity(path: &Path, canonical_path: &Path, opened: &File) ->
 }
 
 #[cfg(windows)]
-fn windows_file_identity(file: &File) -> io::Result<WindowsFileIdentity> {
+pub(crate) fn windows_file_identity(file: &File) -> io::Result<WindowsFileIdentity> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType,

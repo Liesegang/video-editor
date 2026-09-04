@@ -1,4 +1,3 @@
-use super::probe::MetadataOutputProbeRequest;
 use super::server::HttpResponse;
 use serde_json::{json, Value};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
@@ -12,7 +11,6 @@ const UI_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 /// transient editor state. The QA bridge keeps no synchronized model cache.
 pub enum UiQueryKind {
     Snapshot,
-    MetadataOutput(MetadataOutputProbeRequest),
 }
 
 pub struct UiQuery {

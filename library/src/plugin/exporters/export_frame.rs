@@ -1,4 +1,5 @@
 use crate::error::LibraryError;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
 use crate::model::project::{Project, ResolvedColorManagementConfig};
 
@@ -23,7 +24,15 @@ pub enum ExportColorAuthority {
 
 impl ExportColorAuthority {
     pub(crate) fn from_project(project: &Project) -> Result<Self, LibraryError> {
-        let intent = match project.resolved_color_management() {
+        Self::from_resolved(project.resolved_color_management())
+    }
+
+    pub(crate) fn from_authoring_project(project: &AuthoringProject) -> Result<Self, LibraryError> {
+        Self::from_resolved(project.resolved_color_management())
+    }
+
+    fn from_resolved(resolved: ResolvedColorManagementConfig) -> Result<Self, LibraryError> {
+        let intent = match resolved {
             ResolvedColorManagementConfig::Ready(intent) => intent,
             ResolvedColorManagementConfig::Unavailable { diagnostics, .. } => {
                 return Err(LibraryError::Render(format!(
@@ -83,6 +92,14 @@ impl ExportFrame {
         image: Image,
     ) -> Result<Self, LibraryError> {
         let color_authority = ExportColorAuthority::from_project(project)?;
+        Self::new_verified(image, color_authority)
+    }
+
+    pub(crate) fn from_authoring_render(
+        project: &AuthoringProject,
+        image: Image,
+    ) -> Result<Self, LibraryError> {
+        let color_authority = ExportColorAuthority::from_authoring_project(project)?;
         Self::new_verified(image, color_authority)
     }
 

@@ -3,15 +3,15 @@ use std::error::Error;
 use std::io;
 use std::sync::{Arc, RwLock};
 
+use library::EditorService;
 use library::cache::CacheManager;
+use library::model::Node;
 use library::model::project::{
-    NodeContainer, PortAddress, PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT,
-    IMAGE_OUTPUT_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NodeContainer, PortAddress,
+    PortOwner, Project, ProjectConnection,
 };
 use library::model::property::{Property, PropertyValue};
-use library::model::Node;
-use library::plugin::{property_port_key, PluginManager, IMAGE_OPACITY_STYLE_COMPONENT_ID};
-use library::EditorService;
+use library::plugin::{IMAGE_OPACITY_STYLE_COMPONENT_ID, PluginManager, property_port_key};
 
 use super::*;
 use crate::state::context::EditorContext;
@@ -64,8 +64,8 @@ fn connection_map(project: &Project) -> HashMap<Uuid, ProjectConnection> {
 }
 
 #[test]
-fn descriptor_catalogs_are_typed_hierarchical_and_exclude_image_opacity_as_shape_style(
-) -> TestResult {
+fn descriptor_catalogs_are_typed_hierarchical_and_exclude_image_opacity_as_shape_style()
+-> TestResult {
     let fixture = fixture()?;
     let effects = effect_catalog(&fixture.service, fixture.clip_id);
     assert!(effects.iter().any(|item| {
@@ -155,9 +155,11 @@ fn reorder_and_remove_qa_metadata_publish_distinct_preservation_contracts() {
 
     assert_eq!(reorder["action"], "reorder");
     assert!(reorder_preserves.iter().any(|item| item == "node_uuid"));
-    assert!(reorder_preserves
-        .iter()
-        .any(|item| item == "external_property_wires"));
+    assert!(
+        reorder_preserves
+            .iter()
+            .any(|item| item == "external_property_wires")
+    );
     assert_eq!(reorder["changes"], serde_json::json!(["merge_input_order"]));
 
     assert_eq!(remove["action"], "remove");
@@ -207,13 +209,15 @@ fn effect_actions_append_at_post_merge_tail_and_reorder_only_main_flow_endpoints
         .semantic_container_style_stack(fixture.owner)?
         .merge_node_id()
         .ok_or_else(|| io::Error::other("Shape Clip semantic Merge missing"))?;
-    assert!(snapshot(&fixture.project)?
-        .connections
-        .iter()
-        .any(|connection| {
-            connection.from == PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT)
-                && connection.to == PortAddress::new(PortOwner::Node(blur), IMAGE_INPUT_PORT)
-        }));
+    assert!(
+        snapshot(&fixture.project)?
+            .connections
+            .iter()
+            .any(|connection| {
+                connection.from == PortAddress::new(PortOwner::Node(merge_id), IMAGE_OUTPUT_PORT)
+                    && connection.to == PortAddress::new(PortOwner::Node(blur), IMAGE_INPUT_PORT)
+            })
+    );
 
     let (property_wire, fanout_wire) = {
         let mut project = fixture
@@ -329,13 +333,15 @@ fn rejected_stack_action_preserves_project_history_and_clip_selection() -> TestR
     let mut editor_context = EditorContext::new(fixture.composition_id);
     editor_context.select_target(SelectionTarget::Clip(fixture.clip_id));
 
-    assert!(execute_with_history(
-        &fixture.service,
-        &mut history,
-        fixture.owner,
-        StackAction::ReorderEffects(vec![blur, blur]),
-    )
-    .is_err());
+    assert!(
+        execute_with_history(
+            &fixture.service,
+            &mut history,
+            fixture.owner,
+            StackAction::ReorderEffects(vec![blur, blur]),
+        )
+        .is_err()
+    );
     assert_eq!(snapshot(&fixture.project)?, before);
     assert_eq!(history.undo_depth(), history_before);
     assert_eq!(

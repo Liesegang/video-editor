@@ -1,8 +1,8 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
+use library::EditorService as ProjectService;
 use library::model::project::{PortOwner, Project};
 use library::model::{Clip, NodeContent};
-use library::EditorService as ProjectService;
 use log::error;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -152,7 +152,7 @@ fn track_for_selection(project: &Project, target: SelectionTarget) -> Option<Uui
                     library::model::NodeContainer::Composition(_) => None,
                 })
         }),
-        SelectionTarget::Composition(_) => None,
+        SelectionTarget::Composition(_) | SelectionTarget::TimelineItem(_) => None,
     }
 }
 
@@ -711,7 +711,7 @@ mod tests {
     use library::editor::project_service::GeneratorNodeRequest;
     use library::model::frame::color::Color;
     use library::model::project::{
-        NodeContainer, PortAddress, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+        IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortAddress,
     };
     use library::model::{Node, Track};
     use library::plugin::PluginManager;
@@ -774,8 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn expanded_clip_label_uses_source_instead_of_terminal_effect_or_merge(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn expanded_clip_label_uses_source_instead_of_terminal_effect_or_merge()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut project = Project::new("timeline label");
         let clip = Clip::new("Clip fallback", 0.0, 5.0);
         let clip_id = clip.id;
@@ -825,8 +825,8 @@ mod tests {
     }
 
     #[test]
-    fn expanded_clip_label_does_not_escape_through_a_foreign_output_binding(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn expanded_clip_label_does_not_escape_through_a_foreign_output_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut project = Project::new("malformed timeline label");
         let clip = Clip::new("Clip fallback", 0.0, 5.0);
         let clip_id = clip.id;

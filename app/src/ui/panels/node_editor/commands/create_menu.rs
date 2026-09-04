@@ -1,11 +1,11 @@
 use crate::ui::widgets::searchable_context_menu::SearchableItem;
 use library::model::{
-    native_node_catalog, native_node_descriptor, NativeNodeFactory, Node, Project,
+    NativeNodeFactory, Node, Project, native_node_catalog, native_node_descriptor,
 };
 use library::plugin::{
-    PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
-    EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
-    IMAGE_TRANSFORM_COMPONENT_ID, PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY,
+    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
+    IMAGE_TRANSFORM_COMPONENT_ID, PATH_EFFECT_APPLY_OPERATION, PATH_EFFECT_CATEGORY, PluginManager,
     SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, TRANSFORM_APPLY_OPERATION,
     TRANSFORM_CATEGORY,
 };
@@ -419,7 +419,7 @@ pub(in crate::ui::panels::node_editor) fn create_operation_node_for_request(
         }
         NodeCreateRequest::Native(_) => return None,
         NodeCreateRequest::Clip | NodeCreateRequest::Track | NodeCreateRequest::Composition => {
-            return None
+            return None;
         }
     };
     match result {
@@ -468,8 +468,8 @@ mod tests {
     use super::*;
     use crate::ui::panels::node_editor::test_fixture::fixture;
     use library::model::project::{
-        PortAddress, PortDataType, PortDirection, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
-        MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+        IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress, PortDataType,
+        PortDirection, PortOwner, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
     };
     use library::model::{BlendMode, NodeContainer, NodeContent};
 
@@ -546,10 +546,12 @@ mod tests {
                 }));
             }
             for property in ["position", "rotation", "scale", "anchor"] {
-                assert!(operation
-                    .declared_ports
-                    .iter()
-                    .any(|port| port.key == format!("property:{property}")));
+                assert!(
+                    operation
+                        .declared_ports
+                        .iter()
+                        .any(|port| port.key == format!("property:{property}"))
+                );
             }
         }
 
@@ -557,9 +559,11 @@ mod tests {
             &items,
             "image root placement",
         );
-        assert!(image_matches
-            .iter()
-            .any(|index| items[*index].value == NodeCreateRequest::ImageTransform));
+        assert!(
+            image_matches
+                .iter()
+                .any(|index| items[*index].value == NodeCreateRequest::ImageTransform)
+        );
     }
 
     #[test]
@@ -695,12 +699,16 @@ mod tests {
             .clone();
 
         let wire_items = wire_splice_menu_items(&project, connection_id, &plugins);
-        assert!(wire_items
-            .iter()
-            .any(|item| item.value == NodeCreateRequest::ImageTransform));
-        assert!(!wire_items
-            .iter()
-            .any(|item| item.value == NodeCreateRequest::ShapeTransform));
+        assert!(
+            wire_items
+                .iter()
+                .any(|item| item.value == NodeCreateRequest::ImageTransform)
+        );
+        assert!(
+            !wire_items
+                .iter()
+                .any(|item| item.value == NodeCreateRequest::ShapeTransform)
+        );
 
         let image_transform =
             create_operation_node_for_request(&NodeCreateRequest::ImageTransform, &plugins)

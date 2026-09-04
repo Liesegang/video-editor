@@ -188,6 +188,12 @@ impl EditorContext {
         self.node_editor_state.directional_layout_release_guard = false;
         self.node_editor_state.last_directional_layout_swipe = None;
         self.node_editor_state.pending_navigation = None;
+        self.node_editor_state.focus_requested = false;
+        self.node_editor_state.active_document = None;
+        self.node_editor_state.module_surface_interaction.cancel();
+        self.node_editor_state.module_selected_nodes.clear();
+        self.node_editor_state.module_primary_node = None;
+        self.node_editor_state.module_selected_connection = None;
         self.node_editor_state.layout_changed_during_drag = false;
         self.node_editor_state.node_reparent = None;
         self.node_editor_state.container_resize = None;
@@ -274,8 +280,10 @@ impl EditorContext {
         let before = self.selection.targets().to_vec();
         let composition_id = self.active_composition_id;
         self.selection.retain(|target| {
-            composition_id
-                .is_some_and(|active| selection_target_composition(project, target) == Some(active))
+            matches!(target, SelectionTarget::TimelineItem(_))
+                || composition_id.is_some_and(|active| {
+                    selection_target_composition(project, target) == Some(active)
+                })
         });
         let changed = self.selection.targets() != before;
         if changed {
@@ -309,6 +317,7 @@ fn selection_target_composition(project: &Project, target: SelectionTarget) -> O
                         .and_then(|track_id| project.find_composition_for_track(track_id)),
                 })
         }),
+        SelectionTarget::TimelineItem(_) => None,
     }
 }
 
@@ -738,11 +747,13 @@ mod tests {
         assert!(context.interaction.preview_selection_drag_start.is_none());
         assert!(context.interaction.preview_edit_target.is_none());
         assert!(context.interaction.preview_viewport.auto_fit);
-        assert!(context
-            .interaction
-            .preview_viewport
-            .fitted_composition_id
-            .is_none());
+        assert!(
+            context
+                .interaction
+                .preview_viewport
+                .fitted_composition_id
+                .is_none()
+        );
         assert_eq!(context.graph_editor.active_target, None);
         assert!(context.graph_editor.visible_properties.is_empty());
         assert_eq!(context.node_editor_state.selected_connection_id, None);

@@ -1,7 +1,7 @@
 use crate::action::HistoryManager;
 use crate::state::context_types::NodeEditorState;
-use library::model::project::{PortDataType, PortOwner};
 use library::model::Project;
+use library::model::project::{PortDataType, PortOwner};
 use std::sync::{Arc, RwLock};
 
 use super::wire::{
@@ -9,7 +9,7 @@ use super::wire::{
     splice_existing_node_on_connection,
 };
 use crate::ui::panels::node_editor::{
-    container_output_node_id, set_container_size, NodeEdit, QueuedNodeEdit,
+    NodeEdit, QueuedNodeEdit, container_output_node_id, set_container_size,
 };
 
 pub(in crate::ui::panels::node_editor) fn apply_edit(

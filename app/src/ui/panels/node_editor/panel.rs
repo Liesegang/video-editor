@@ -1,4 +1,4 @@
-use crate::action::{request_node_layout_command, HistoryManager};
+use crate::action::{HistoryManager, request_node_layout_command};
 use crate::command::{CommandId, CommandRegistry};
 use crate::state::context::EditorContext;
 use crate::state::context_types::{
@@ -6,38 +6,39 @@ use crate::state::context_types::{
     SelectionState, SelectionTarget,
 };
 use eframe::egui;
-use library::model::project::PortOwner;
-use library::model::Project;
 use library::EditorService;
+use library::model::Project;
+use library::model::project::PortOwner;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 use super::layout::{
-    apply_directional_layout_commit, apply_directional_layout_preview,
-    finish_directional_layout_release_guard, finish_edits_before_directional_layout_start,
-    handle_directional_layout_outputs, recover_directional_layout_release_guard,
-    DirectionalLayoutFrameOutcome,
+    DirectionalLayoutFrameOutcome, apply_directional_layout_commit,
+    apply_directional_layout_preview, finish_directional_layout_release_guard,
+    finish_edits_before_directional_layout_start, handle_directional_layout_outputs,
+    recover_directional_layout_release_guard,
 };
 use crate::utils::lock::{mutex_lock_or_recover, write_or_recover};
 
 use super::{
-    apply_auto_layout, apply_edit, apply_layout_edit, apply_queued_node_edits, build_snarl,
-    capture_container_resize_before_canvas, compute_auto_layout, compute_full_composition_layout,
-    container_inactive, container_resize_interactions, final_node_positions, finish_node_reparent,
-    flush_pending_continuous_edit, handle_context_menu, implicit_time_overlay_requested,
-    layout_needs_reflow, layout_toolbar, native_variadic_merge_target, node_can_splice_connection,
-    move_change, move_end, node_drop_intents, node_editor_canvas_metadata, node_editor_details_visible,
-    node_editor_port_interactions_enabled, node_editor_snarl_style_for, paint_container_foreground,
-    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
-    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
-    register_implicit_time_context_wires, register_implicit_time_overlay, register_rendered_edges,
-    register_reparent_drop_targets, rendered_edge_at_position, select_logical_item,
-    selected_container_owners, selection_target_for_owner, show_wire_context_menu,
-    splice_node_for_release, wire_interactions, wire_port_drop_rect, wire_secondary_click_hit,
     AutoLayoutScope, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
     QueuedNodeEdit, ReparentReleaseOutcome, SurfaceCapture, SurfaceProjection, TimeContextNode,
-    WireInteractionFrame, WireSecondaryClickHit,
+    WireInteractionFrame, WireSecondaryClickHit, apply_auto_layout, apply_edit, apply_layout_edit,
+    apply_queued_node_edits, build_snarl, capture_container_resize_before_canvas,
+    compute_auto_layout, compute_full_composition_layout, container_inactive,
+    container_resize_interactions, final_node_positions, finish_node_reparent,
+    flush_pending_continuous_edit, handle_context_menu, implicit_time_overlay_requested,
+    layout_needs_reflow, layout_toolbar, move_change, move_end, native_variadic_merge_target,
+    node_can_splice_connection, node_drop_intents, node_editor_canvas_metadata,
+    node_editor_details_visible, node_editor_port_interactions_enabled,
+    node_editor_snarl_style_for, paint_container_foreground, port_owner_composition,
+    port_owner_for_node_container, primary_node_drop_intent, push_history_snapshot,
+    record_node_reparent_origins, register_container_chrome, register_implicit_time_context_wires,
+    register_implicit_time_overlay, register_rendered_edges, register_reparent_drop_targets,
+    rendered_edge_at_position, select_logical_item, selected_container_owners,
+    selection_target_for_owner, show_wire_context_menu, splice_node_for_release, wire_interactions,
+    wire_port_drop_rect, wire_secondary_click_hit,
 };
 
 fn wire_pointer_owns_layout(state: &NodeEditorState) -> bool {
@@ -157,6 +158,7 @@ pub fn node_editor_panel(
                 .ok()
                 .and_then(|project| project.find_node_container(id))
                 .map(port_owner_for_node_container),
+            SelectionTarget::TimelineItem(_) => None,
         })
         .unwrap_or(PortOwner::Composition(comp_id));
     let container_label = match selected_container {
@@ -921,12 +923,14 @@ mod tests {
 
     #[test]
     fn explicit_selection_layout_is_unavailable_without_selected_nodes() {
-        assert!(resolve_layout_scope(
-            CommandId::NodeEditorCleanLayoutSelection,
-            &[],
-            PortOwner::Composition(Uuid::new_v4()),
-        )
-        .is_none());
+        assert!(
+            resolve_layout_scope(
+                CommandId::NodeEditorCleanLayoutSelection,
+                &[],
+                PortOwner::Composition(Uuid::new_v4()),
+            )
+            .is_none()
+        );
     }
 
     #[test]

@@ -51,9 +51,11 @@ fn collapsed_reparent_excludes_both_the_header_and_stored_body() {
         Some(NodeContainer::Track(track_id))
     );
     project.get_clip_mut(clip_id).unwrap().ui_collapsed = false;
-    assert!(project
-        .attach_node_to_container(NodeContainer::Track(track_id), node_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Track(track_id), node_id)
+            .is_ok()
+    );
     let expanded_drop = project.get_clip(clip_id).map(|clip| {
         nested_content_rect(
             container_rect(clip.ui_position, clip.ui_size),
@@ -116,9 +118,11 @@ fn reparent_overlap_uses_deepest_legal_content_and_authoritative_stacking_order(
     second_clip.ui_size = first_clip.ui_size;
     let second_clip_id = second_clip.id;
     project.add_clip(second_clip);
-    assert!(project
-        .attach_clip_to_track(track_id, second_clip_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_clip_to_track(track_id, second_clip_id)
+            .is_ok()
+    );
 
     let first_rect = container_rect(first_clip.ui_position, first_clip.ui_size);
     let content = nested_content_rect(first_rect, AUTO_LAYOUT_CLIP_TOP);
@@ -165,9 +169,11 @@ fn reparent_overlap_uses_deepest_legal_content_and_authoritative_stacking_order(
         1.0,
     );
     assert_eq!(intents.len(), 1);
-    assert!(intents
-        .first()
-        .is_some_and(|intent| { intent.target.container == NodeContainer::Clip(second_clip_id) }));
+    assert!(
+        intents.first().is_some_and(|intent| {
+            intent.target.container == NodeContainer::Clip(second_clip_id)
+        })
+    );
 
     let Some(second_clip) = project.get_clip_mut(second_clip_id) else {
         assert!(project.get_clip(second_clip_id).is_some());
@@ -226,16 +232,18 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
     );
     let small_min = egui::pos2(origin.position[0] + 4.0, origin.position[1] + 3.0);
     let small_rect = egui::Rect::from_min_size(small_min, exact_node_size);
-    assert!(node_drop_intents(
-        &project,
-        composition_id,
-        &gesture,
-        &HashMap::from([(node_id, rendered_rect)]),
-        &HashMap::from([(node_id, [small_min.x, small_min.y])]),
-        small_rect.center(),
-        1.0,
-    )
-    .is_empty());
+    assert!(
+        node_drop_intents(
+            &project,
+            composition_id,
+            &gesture,
+            &HashMap::from([(node_id, rendered_rect)]),
+            &HashMap::from([(node_id, [small_min.x, small_min.y])]),
+            small_rect.center(),
+            1.0,
+        )
+        .is_empty()
+    );
     let mut non_node_state = NodeEditorState::default();
     record_node_reparent_origins(
         &project,
@@ -311,9 +319,11 @@ fn reparent_intent_keeps_origin_across_header_padding_until_node_fully_exits() {
     );
     assert_eq!(intents.len(), 1);
     assert_eq!(intents[0].final_rect, exited_rect);
-    assert!(intents
-        .first()
-        .is_some_and(|intent| intent.target.container == NodeContainer::Track(track_id)));
+    assert!(
+        intents
+            .first()
+            .is_some_and(|intent| intent.target.container == NodeContainer::Track(track_id))
+    );
 }
 
 #[test]
@@ -383,9 +393,11 @@ fn subthreshold_screen_drag_repairs_containment_without_changing_owner() {
             AUTO_LAYOUT_CLIP_TOP,
         )
     });
-    assert!(content
-        .zip(estimated_rect)
-        .is_some_and(|(content, estimated)| rect_contains_rect(content, estimated)));
+    assert!(
+        content
+            .zip(estimated_rect)
+            .is_some_and(|(content, estimated)| rect_contains_rect(content, estimated))
+    );
     assert!(!layout_needs_reflow(&project, composition_id));
 }
 
@@ -493,9 +505,11 @@ fn reparent_applies_when_only_node_overlap_requires_optional_auto_layout() {
     let overlap_node = Node::new_merge("Intentional overlap");
     let overlap_node_id = overlap_node.id;
     project.add_node(overlap_node);
-    assert!(project
-        .attach_node_to_container(NodeContainer::Track(track_id), overlap_node_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Track(track_id), overlap_node_id)
+            .is_ok()
+    );
     let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
     assert!(plan.is_some());
     let Some(plan) = plan else {
@@ -543,9 +557,11 @@ fn reparent_applies_when_only_node_overlap_requires_optional_auto_layout() {
         final_rect.center(),
         1.0,
     );
-    assert!(intents
-        .first()
-        .is_some_and(|intent| { intent.target.container == NodeContainer::Track(track_id) }));
+    assert!(
+        intents
+            .first()
+            .is_some_and(|intent| { intent.target.container == NodeContainer::Track(track_id) })
+    );
     assert_eq!(intents[0].final_rect, final_rect);
     if let Some(node) = project.get_node_mut(node_id) {
         node.ui_position = final_position;

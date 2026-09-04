@@ -6,11 +6,15 @@ use crate::command::CommandId;
 use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
+use library::PropertyOwner;
 use library::animation::EasingFunction; // Added import
 use library::editor::project_service::SemanticPropertyOwner;
-use library::model::project::{NodeContainer, PortAddress, PortDataType, PortOwner};
+use library::model::authoring::{
+    AttachmentId, InstancePath, ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId,
+    ModulePortAddress, TimelineItemId,
+};
+use library::model::project::{NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner};
 use library::model::property::KeyframeId;
-use library::PropertyOwner;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyframeValueComponent {
@@ -310,6 +314,13 @@ pub enum DragStateItem {
         id: Uuid,
         pos: Option<egui::Pos2>,
     },
+    /// Reusable Module definition dragged from the Assets panel. Dropping it
+    /// creates a fresh ModuleInstance-backed Node Clip; the definition graph
+    /// itself remains shared and is never copied into the Timeline.
+    ModuleDefinition {
+        definition_id: ModuleDefinitionId,
+        pos: Option<egui::Pos2>,
+    },
 }
 
 /// Exact Project entity selected by the UI.
@@ -325,6 +336,10 @@ pub enum SelectionTarget {
     Clip(Uuid),
     Track(Uuid),
     Composition(Uuid),
+    /// Timeline-first authored placement. Keeping this distinct from the
+    /// pre-v1 `Clip` prevents registry probing from turning a Node Clip into a
+    /// legacy graph container with the same UUID.
+    TimelineItem(TimelineItemId),
 }
 
 /// View-local routing for Preview interaction.
@@ -345,14 +360,21 @@ impl SelectionTarget {
     pub const fn node_id(self) -> Option<Uuid> {
         match self {
             Self::Node(id) => Some(id),
-            Self::Clip(_) | Self::Track(_) | Self::Composition(_) => None,
+            Self::Clip(_) | Self::Track(_) | Self::Composition(_) | Self::TimelineItem(_) => None,
         }
     }
 
     pub const fn clip_id(self) -> Option<Uuid> {
         match self {
             Self::Clip(id) => Some(id),
-            Self::Node(_) | Self::Track(_) | Self::Composition(_) => None,
+            Self::Node(_) | Self::Track(_) | Self::Composition(_) | Self::TimelineItem(_) => None,
+        }
+    }
+
+    pub const fn timeline_item_id(self) -> Option<TimelineItemId> {
+        match self {
+            Self::TimelineItem(id) => Some(id),
+            Self::Node(_) | Self::Clip(_) | Self::Track(_) | Self::Composition(_) => None,
         }
     }
 }
@@ -709,6 +731,43 @@ pub struct NodeEditorState {
         Option<super::node_editor_layout::NodeEditorDirectionalLayoutExecution>,
     #[serde(skip)]
     pub pending_navigation: Option<Uuid>,
+    /// One-shot request used by document hosts (for example a Timeline Node
+    /// Clip) to reveal the Node Editor. This is deliberately separate from
+    /// the View menu's toggle action so opening a document can never close an
+    /// already-visible tab.
+    #[serde(skip)]
+    pub focus_requested: bool,
+    /// Explicit document shown by the Logic-depth editor. A missing document
+    /// means that no user-authored Module is open; Timeline containers are
+    /// never inferred and expanded into a graph.
+    #[serde(skip)]
+    pub active_document: Option<NodeEditorDocument>,
+    /// Module-document interaction state is deliberately disjoint from the
+    /// pre-v1 Project adapter below. Neither state retains authoritative graph
+    /// data, but separating them prevents a document switch from reusing an
+    /// in-flight wire or movement gesture with another host's IDs.
+    #[serde(skip)]
+    pub module_surface_interaction:
+        node_editor_ui::InteractionState<Uuid, ModuleEditorPortId, ModuleConnectionId, Uuid>,
+    #[serde(skip)]
+    pub module_selected_nodes: std::collections::HashSet<Uuid>,
+    #[serde(skip)]
+    pub module_primary_node: Option<Uuid>,
+    #[serde(skip)]
+    pub module_selected_connection: Option<ModuleConnectionId>,
+    /// Empty-canvas secondary-click menu for the active Module document.
+    /// Its screen anchor is presentation-only and is never persisted.
+    #[serde(skip)]
+    pub module_create_menu: Option<ContextMenuState>,
+    /// Incremental graph-space movement preview. Positions are committed to
+    /// the authoring service only when the pointer gesture ends, avoiding one
+    /// undo entry per repaint.
+    #[serde(skip)]
+    pub module_node_drag_offsets: std::collections::HashMap<Uuid, egui::Vec2>,
+    #[serde(skip)]
+    pub module_canvas_pan: egui::Vec2,
+    #[serde(skip, default = "default_module_canvas_zoom")]
+    pub module_canvas_zoom: f32,
     #[serde(skip)]
     pub layout_changed_during_drag: bool,
     /// Project-specific reparent transaction state created from generic Move
@@ -776,6 +835,61 @@ pub struct NodeEditorState {
     /// undo/redo transaction.
     #[serde(skip)]
     pub merge_layer_reorder: Option<NodeEditorMergeLayerReorderGesture>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeEditorDocument {
+    ModuleDefinition {
+        definition_id: ModuleDefinitionId,
+        host: ModuleEditorHost,
+    },
+}
+
+/// Invocation context is separate from the shared Module definition being
+/// edited. This lets the same Node Editor host a source Node Clip now and an
+/// Attachment later without changing the graph document identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModuleEditorHost {
+    NodeClip {
+        timeline_item_id: TimelineItemId,
+        instance_path: InstancePath,
+        module_instance_id: ModuleInstanceId,
+    },
+    Attachment {
+        attachment_id: AttachmentId,
+        instance_path: InstancePath,
+        module_instance_id: ModuleInstanceId,
+    },
+}
+
+/// Physical Module-editor port identity. Module addresses deliberately omit
+/// direction because direction is supplied by a connection endpoint; the UI
+/// adds it so an input and output with the same stable key cannot collide.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModuleEditorPortId {
+    pub address: ModulePortAddress,
+    pub direction: PortDirection,
+}
+
+impl NodeEditorState {
+    pub fn request_document(&mut self, document: NodeEditorDocument) {
+        if self.active_document.as_ref() != Some(&document) {
+            self.module_surface_interaction.cancel();
+            self.module_selected_nodes.clear();
+            self.module_primary_node = None;
+            self.module_selected_connection = None;
+            self.module_create_menu = None;
+            self.module_node_drag_offsets.clear();
+            self.module_canvas_pan = egui::Vec2::ZERO;
+            self.module_canvas_zoom = default_module_canvas_zoom();
+            self.active_document = Some(document);
+        }
+        self.focus_requested = true;
+    }
+}
+
+fn default_module_canvas_zoom() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

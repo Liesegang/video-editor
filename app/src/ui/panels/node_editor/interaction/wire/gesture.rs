@@ -3,21 +3,21 @@ use crate::state::context_types::{
     NodeEditorWireDragKind, NodeEditorWireGesture, NodeEditorWireKnifeGesture,
 };
 use eframe::egui::{self, Color32};
-use library::model::project::{PortAddress, PortDirection, PortOwner};
 use library::model::Project;
+use library::model::project::{PortAddress, PortDirection, PortOwner};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use super::model::edit_for_port_addresses;
 
 use crate::ui::panels::node_editor::{
-    container_output_binding_port, container_output_port, editable_wire_is_current,
-    editable_wire_qa_value, editable_wire_sort_key, editable_wire_stable_key,
-    knife_segment_hits_edge, node_editor_port_interactions_enabled, qa_container_key,
-    reconnect_handle_at_position, reconnect_handle_position, rendered_container_output_at_position,
-    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
-    rendered_wire_drag_kind, NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey, WIRE_DRAG_THRESHOLD, WIRE_RECONNECT_HANDLE_RADIUS,
+    NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_DRAG_THRESHOLD,
+    WIRE_RECONNECT_HANDLE_RADIUS, container_output_binding_port, container_output_port,
+    editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
+    editable_wire_stable_key, knife_segment_hits_edge, node_editor_port_interactions_enabled,
+    qa_container_key, reconnect_handle_at_position, reconnect_handle_position,
+    rendered_container_output_at_position, rendered_edge_at_position,
+    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
 };
 
 pub(in crate::ui::panels::node_editor) struct WireInteractionFrame<'a> {
@@ -741,9 +741,9 @@ mod tests {
     use crate::test_support::media_node_for_canvas;
     use crate::ui::panels::node_editor::apply_queued_node_edits;
     use library::editor::project_service::MediaNodeRequest;
-    use library::model::asset::{Asset, AssetKind};
-    use library::model::project::{Composition, NodeContainer, AUDIO_OUTPUT_PORT};
     use library::model::Clip;
+    use library::model::asset::{Asset, AssetKind};
+    use library::model::project::{AUDIO_OUTPUT_PORT, Composition, NodeContainer};
 
     fn add_audio_media(project: &mut Project, name: &str) -> uuid::Uuid {
         let asset = Asset::new(name, &format!("/fixture/{name}.wav"), AssetKind::Audio);

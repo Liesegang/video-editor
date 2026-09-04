@@ -3,7 +3,10 @@
 //! This module contains all services that the GUI (app crate) should use
 //! to interact with the library.
 
+mod asset_import;
 pub mod audio_service;
+mod authoring_factory;
+mod authoring_qa_fixture;
 pub mod color_service;
 pub mod editor_service;
 pub mod export_service;
@@ -12,10 +15,16 @@ pub mod ocio_shim;
 pub mod project_model;
 pub mod project_service;
 pub mod render_service;
+pub mod timeline_editor_service;
 
 // Re-exports for convenient access
 pub use crate::model::NodeGraphBundle;
 pub use audio_service::AudioService;
+pub use authoring_factory::{AuthoringNodeFactory, BuiltinEffectFactory, ModuleNodeRequest};
+pub use authoring_qa_fixture::{
+    TIMELINE_FIRST_E2E_FIXTURE, TIMELINE_FIRST_E2E_IMAGE, TimelineFirstE2EFixture,
+    TimelineFirstE2EFixtureInfo, build_timeline_first_e2e_fixture,
+};
 pub use color_service::ColorSpaceManager as ColorService;
 pub use editor_service::EditorService;
 pub use export_service::ExportService;
@@ -25,3 +34,9 @@ pub use handlers::property_ops::PropertyOwner;
 pub use project_model::ProjectModel;
 pub use project_service::ProjectManager as ProjectService;
 pub use render_service::{RenderDestination, RenderService};
+pub use timeline_editor_service::{
+    AuthoringKeyframeUpdate, AuthoringPropertyOwner, ModuleAttachmentPlacement,
+    ModuleInputDependency, ModuleInputHost, ModuleInterfaceCommand, ModuleInterfaceEditImpact,
+    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodePresentationUpdate,
+    PreparedModuleDefinitionEdit, SharedModuleEdit, TimelineEditorService, TimelineSettingsUpdate,
+};

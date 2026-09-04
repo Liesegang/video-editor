@@ -1,9 +1,9 @@
-use library::model::project::{EvalOutput, EvalResult, PortAddress, PortOwner};
-use library::model::property::PropertyValue;
-use library::model::Project;
-use library::plugin::PluginManager;
 use library::EditorService as ProjectService;
 use library::PropertyOwner;
+use library::model::Project;
+use library::model::project::{EvalOutput, EvalResult, PortAddress, PortOwner};
+use library::model::property::PropertyValue;
+use library::plugin::PluginManager;
 use uuid::Uuid;
 
 /// Resolve the property authoring time for a Node.
@@ -136,11 +136,11 @@ pub fn update_node_property(
 mod tests {
     use super::*;
     use library::model::project::{
-        PortAddress, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, TIME_PORT,
+        FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, PortAddress, TIME_PORT,
     };
     use library::model::{
-        Clip, ColorContent, Composition, Node, NodeContainer, Project, COLOR_RED_PORT,
-        COLOR_VALUE_PORT,
+        COLOR_RED_PORT, COLOR_VALUE_PORT, Clip, ColorContent, Composition, Node, NodeContainer,
+        Project,
     };
 
     #[test]

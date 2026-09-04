@@ -2,11 +2,11 @@ use std::error::Error;
 use std::io;
 use std::sync::{Arc, RwLock};
 
+use library::EditorService;
 use library::cache::CacheManager;
 use library::model::project::{NodeContainer, Project};
 use library::model::property::{PropertyValue, Vec2};
 use library::plugin::PluginManager;
-use library::EditorService;
 use ordered_float::OrderedFloat;
 
 use super::*;

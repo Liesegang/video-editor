@@ -1,6 +1,6 @@
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService as ProjectService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::{
@@ -333,7 +333,7 @@ pub(super) fn show_clip_area(
 
 #[cfg(test)]
 mod tests {
-    use super::{box_selection_start_position, timeline_navigation_config, TimelineViewportState};
+    use super::{TimelineViewportState, box_selection_start_position, timeline_navigation_config};
     use crate::ui::viewport::ViewportController;
     use pan_zoom_ui::{AxisMask, InputPolicy, ZoomPolicy};
 

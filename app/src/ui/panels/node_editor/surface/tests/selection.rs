@@ -215,17 +215,19 @@ fn production_adapter_handles_zoomed_marquee_blank_and_wire_deselect() {
 
     let start = transform * egui::pos2(40.0, 50.0);
     let end = transform * egui::pos2(310.0, 165.0);
-    assert!(run_pointer_frame(
-        &context,
-        &projection,
-        &mut state,
-        node_editor_ui::InteractionOptions::SELECTION,
-        vec![
-            egui::Event::PointerMoved(start),
-            pointer_button(start, true),
-        ],
-    )
-    .is_empty());
+    assert!(
+        run_pointer_frame(
+            &context,
+            &projection,
+            &mut state,
+            node_editor_ui::InteractionOptions::SELECTION,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+        )
+        .is_empty()
+    );
     let marquee = run_pointer_frame(
         &context,
         &projection,

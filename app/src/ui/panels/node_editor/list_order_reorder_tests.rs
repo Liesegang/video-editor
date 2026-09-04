@@ -1,7 +1,7 @@
 use super::merge_reorder_tests::{pointer_button, render_merge_frame};
 use super::*;
 use library::model::project::connection::LIST_ITEMS_INPUT_PORT;
-use library::model::project::{PortAddress, ProjectConnection, NUMBER_RESULT_OUTPUT_PORT};
+use library::model::project::{NUMBER_RESULT_OUTPUT_PORT, PortAddress, ProjectConnection};
 use library::model::{Composition, ListContent};
 
 struct ListUiFixture {
@@ -211,10 +211,12 @@ fn real_pointer_list_row_drag_reorders_by_connection_identity_and_roundtrips() {
             fixture.connection_ids[0],
         ]
     );
-    assert!(canonical_connections(&fixture.project, fixture.make_id)
-        .iter()
-        .enumerate()
-        .all(|(index, connection)| connection.order == index as i64));
+    assert!(
+        canonical_connections(&fixture.project, fixture.make_id)
+            .iter()
+            .enumerate()
+            .all(|(index, connection)| connection.order == index as i64)
+    );
 
     let restored: Project =
         serde_json::from_str(&serde_json::to_string(&fixture.project).unwrap()).unwrap();

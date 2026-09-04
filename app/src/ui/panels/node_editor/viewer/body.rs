@@ -1,11 +1,11 @@
-use super::{property_value_summary, ProjectNodeViewer};
+use super::{ProjectNodeViewer, property_value_summary};
 use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::*;
 use crate::ui::panels::time_context::time_source_state;
 use crate::ui::widgets::color_value_picker::color_value_picker;
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::property_mode::{
-    property_for_mode, property_mode_control, toggled_keyframe_property, PropertyModeAction,
+    PropertyModeAction, property_for_mode, property_mode_control, toggled_keyframe_property,
 };
 use crate::ui::widgets::searchable_context_menu::show_searchable_items_with_qa;
 use eframe::egui::{self, Color32};

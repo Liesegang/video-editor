@@ -83,6 +83,9 @@ pub struct EditorConfig {
     pub normal_stroke: Stroke,
     pub wire_stroke: Stroke,
     pub port_radius: f32,
+    /// Below this scale the surface paints only inexpensive graph overview
+    /// geometry. Body widgets and precise port gestures are disabled.
+    pub details_min_scale: f32,
 }
 
 impl Default for EditorConfig {
@@ -97,7 +100,14 @@ impl Default for EditorConfig {
             normal_stroke: Stroke::new(1.0, Color32::from_rgb(79, 84, 100)),
             wire_stroke: Stroke::new(2.5, Color32::from_rgb(145, 151, 170)),
             port_radius: 5.0,
+            details_min_scale: 0.18,
         }
+    }
+}
+
+impl EditorConfig {
+    fn details_visible(self, scale: f32) -> bool {
+        scale.is_finite() && scale >= self.details_min_scale.max(f32::EPSILON)
     }
 }
 
@@ -171,12 +181,17 @@ impl Editor {
         Key: Copy + Eq,
         Renderer: NodeBodyRenderer<NodeId>,
     {
-        let body_pointer_owned = paint(ui, frame, renderer, config);
+        let details_visible = config.details_visible(frame.transform.scaling);
+        let body_pointer_owned = paint(ui, frame, renderer, config, details_visible);
         interaction::interact(
             ui,
             frame,
             state,
-            InteractionOptions::ALL,
+            if details_visible {
+                InteractionOptions::ALL
+            } else {
+                InteractionOptions::OVERVIEW_SELECTION
+            },
             body_pointer_owned,
         )
     }
@@ -225,6 +240,7 @@ fn paint<NodeId, PortId, WireId, GroupId, Key, Renderer>(
     frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     renderer: &mut Renderer,
     config: EditorConfig,
+    details_visible: bool,
 ) -> bool
 where
     NodeId: Clone + Eq,
@@ -260,11 +276,11 @@ where
             divider: config.normal_stroke,
             header_height: header.height(),
             corner_radius: 8,
-            details_visible: true,
+            details_visible,
         };
         chrome::paint_group_backdrop(&painter, rect, group_chrome);
         chrome::paint_group_foreground(&painter, rect, group_chrome);
-        if header.is_positive() {
+        if details_visible && header.is_positive() {
             painter.text(
                 header.left_center() + Vec2::new(9.0, 0.0),
                 egui::Align2::LEFT_CENTER,
@@ -293,10 +309,10 @@ where
 
     let mut body_pointer_owned = false;
     for node in frame.nodes {
-        body_pointer_owned |= paint_node(ui, frame, node, renderer, config);
+        body_pointer_owned |= paint_node(ui, frame, node, renderer, config, details_visible);
     }
 
-    for port in frame.ports {
+    for port in frame.ports.iter().filter(|_| details_visible) {
         let center = frame.screen_position(port.center);
         if !frame.viewport.contains(center) {
             continue;
@@ -337,6 +353,7 @@ fn paint_node<NodeId, PortId, WireId, GroupId, Key, Renderer>(
     node: &NodeDescriptor<'_, NodeId, GroupId>,
     renderer: &mut Renderer,
     config: EditorConfig,
+    details_visible: bool,
 ) -> bool
 where
     NodeId: Clone + Eq,
@@ -380,35 +397,37 @@ where
         .intersect(rect)
         .intersect(frame.viewport);
     painter.rect_filled(header, CornerRadius::same(7), visual.header_fill);
-    ui.scope_builder(
-        egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(8.0, 0.0))),
-        |ui| {
-            ui.set_clip_rect(header.intersect(frame.viewport));
-            chrome::show_node_header(
-                ui,
-                NodeHeader {
-                    title: node.title,
-                    title_color: Some(if node.enabled {
-                        ui.visuals().strong_text_color()
-                    } else {
-                        ui.visuals().weak_text_color()
-                    }),
-                    leading: None,
-                    trailing: None,
-                    accent: ui.visuals().weak_text_color(),
-                    min_width: (header.width() - 16.0).max(0.0),
-                    title_width: (header.width() - 24.0).max(0.0),
-                    row_height: header.height(),
-                    details_visible: true,
-                },
-            );
-        },
-    );
+    if details_visible {
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(8.0, 0.0))),
+            |ui| {
+                ui.set_clip_rect(header.intersect(frame.viewport));
+                chrome::show_node_header(
+                    ui,
+                    NodeHeader {
+                        title: node.title,
+                        title_color: Some(if node.enabled {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().weak_text_color()
+                        }),
+                        leading: None,
+                        trailing: None,
+                        accent: ui.visuals().weak_text_color(),
+                        min_width: (header.width() - 16.0).max(0.0),
+                        title_width: (header.width() - 24.0).max(0.0),
+                        row_height: header.height(),
+                        details_visible: true,
+                    },
+                );
+            },
+        );
+    }
 
     let body =
         egui::Rect::from_min_max(Pos2::new(rect.left(), header.bottom()), rect.right_bottom())
             .shrink2(Vec2::new(7.0, 5.0));
-    if body.is_positive() {
+    if details_visible && body.is_positive() {
         return ui
             .scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
                 ui.set_clip_rect(body.intersect(frame.viewport));

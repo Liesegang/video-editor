@@ -6,11 +6,11 @@
 use std::time::Duration;
 
 use egui::{Color32, Painter, Rect, Stroke};
+use library::EditorService as ProjectService;
 use library::audio::mixer::audio_stream_index_for_media;
 use library::audio::waveform::AudioWaveformWindow;
 use library::editor::audio_service::routed_audio_media_nodes_for_clip;
 use library::model::{AssetKind, Clip, NodeContent, Project};
-use library::EditorService as ProjectService;
 use serde_json::json;
 use uuid::Uuid;
 

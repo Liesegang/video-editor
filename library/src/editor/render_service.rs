@@ -3,15 +3,17 @@ use crate::core::framing::get_frame_from_project;
 use crate::core::rendering::managed_color_backend::{
     ManagedRenderDestination, ProjectColorPipeline,
 };
-use crate::core::rendering::managed_color_source::ingest_loaded_media;
+use crate::core::rendering::managed_color_source::ingest_loaded_media_from_assets;
 use crate::core::rendering::media_color_ingress::{
-    MediaAssetKind, require_unmanaged_abi_srgb, source_asset,
+    MediaAssetKind, require_unmanaged_abi_srgb, source_asset_from_assets,
 };
 use crate::core::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest,
 };
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
+use crate::model::asset::Asset;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::entity::{
     FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject, ImageSurface,
 };
@@ -35,8 +37,8 @@ pub enum RenderDestination {
 }
 
 enum RenderColorAuthority<'a> {
-    Project {
-        project: &'a Project,
+    Managed {
+        assets: &'a [Asset],
         pipeline: &'a ProjectColorPipeline,
     },
     UnmanagedAbi,
@@ -47,7 +49,7 @@ fn prepare_effect_colors(
     color_parameters: &[String],
     color_authority: &RenderColorAuthority<'_>,
 ) -> Result<(), LibraryError> {
-    let RenderColorAuthority::Project { pipeline, .. } = color_authority else {
+    let RenderColorAuthority::Managed { pipeline, .. } = color_authority else {
         return Ok(());
     };
     for name in color_parameters {
@@ -147,6 +149,31 @@ impl<T: Renderer> RenderService<T> {
         ExportFrame::from_project_render(project_model.project().as_ref(), image)
     }
 
+    /// Render a Timeline-first frame for an exporter and retain the exact
+    /// authoring Project color authority with the terminal pixels.
+    pub fn render_authoring_export_frame(
+        &mut self,
+        project: &AuthoringProject,
+        frame_info: &FrameInfo,
+    ) -> Result<ExportFrame, LibraryError> {
+        let output = self.render_authoring_frame(project, frame_info, RenderDestination::Export)?;
+        let image = match output {
+            RenderOutput::Image(image) => image,
+            RenderOutput::Working(_) => {
+                return Err(LibraryError::Render(
+                    "authoring export received an unterminated working frame".to_string(),
+                ));
+            }
+            RenderOutput::Texture(_) => {
+                return Err(LibraryError::Render(
+                    "authoring export received a GPU texture without a typed readback boundary"
+                        .to_string(),
+                ));
+            }
+        };
+        ExportFrame::from_authoring_render(project, image)
+    }
+
     /// Render a Project-evaluated frame with its exact color and Asset
     /// authority. Preview and export must use this entry point.
     pub fn render_project_frame(
@@ -164,14 +191,47 @@ impl<T: Renderer> RenderService<T> {
             .use_project_linear_surface(pipeline.working_surface_contract()?)?;
         let output = self.render_with_authority(
             frame_info,
-            &RenderColorAuthority::Project {
-                project,
+            &RenderColorAuthority::Managed {
+                assets: &project.assets,
                 pipeline: &pipeline,
             },
         )?;
         let RenderOutput::Working(working) = output else {
             return Err(LibraryError::Render(
                 "Project renderer did not retain the typed linear RGBAF32 root output".to_string(),
+            ));
+        };
+        pipeline.terminal_image(&working).map(RenderOutput::Image)
+    }
+
+    /// Rasterize a Timeline-first authoring frame under the authoring
+    /// Project's exact color and Asset authority. Frame evaluation remains a
+    /// separate RenderPlan step so asynchronous workers can return the same
+    /// `FrameInfo` they actually rendered.
+    pub fn render_authoring_frame(
+        &mut self,
+        project: &AuthoringProject,
+        frame_info: &FrameInfo,
+        destination: RenderDestination,
+    ) -> Result<RenderOutput, LibraryError> {
+        let managed_destination = match destination {
+            RenderDestination::Preview => ManagedRenderDestination::Preview,
+            RenderDestination::Export => ManagedRenderDestination::Export,
+        };
+        let pipeline = ProjectColorPipeline::for_authoring_project(project, managed_destination)?;
+        self.renderer
+            .use_project_linear_surface(pipeline.working_surface_contract()?)?;
+        let output = self.render_with_authority(
+            frame_info,
+            &RenderColorAuthority::Managed {
+                assets: &project.assets,
+                pipeline: &pipeline,
+            },
+        )?;
+        let RenderOutput::Working(working) = output else {
+            return Err(LibraryError::Render(
+                "Authoring renderer did not retain the typed linear RGBAF32 root output"
+                    .to_string(),
             ));
         };
         pipeline.terminal_image(&working).map(RenderOutput::Image)
@@ -377,8 +437,8 @@ impl<T: Renderer> RenderService<T> {
                 stream_index,
             } => {
                 let source_color_authority = match color_authority {
-                    RenderColorAuthority::Project { project, .. } => {
-                        source_asset(project, surface, MediaAssetKind::Video)?
+                    RenderColorAuthority::Managed { assets, .. } => {
+                        source_asset_from_assets(assets, surface, MediaAssetKind::Video)?
                             .and_then(|asset| asset.source_color.decoder_color_authority())
                     }
                     RenderColorAuthority::UnmanagedAbi => None,
@@ -599,11 +659,16 @@ impl<T: Renderer> RenderService<T> {
                 .load_resource(request, &self.cache_manager)
         })?;
         let layer = match color_authority {
-            RenderColorAuthority::Project {
-                project, pipeline, ..
+            RenderColorAuthority::Managed {
+                assets, pipeline, ..
             } => {
-                let working =
-                    ingest_loaded_media(project, pipeline, surface, expected_kind, response)?;
+                let working = ingest_loaded_media_from_assets(
+                    assets,
+                    pipeline,
+                    surface,
+                    expected_kind,
+                    response,
+                )?;
                 RenderOutput::Working(working)
             }
             RenderColorAuthority::UnmanagedAbi => {

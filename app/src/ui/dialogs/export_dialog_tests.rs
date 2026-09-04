@@ -1,8 +1,8 @@
-use super::{channel, ExportDialog, ExportUpdate};
+use super::{ExportDialog, ExportUpdate, channel};
 use library::cache::CacheManager;
 use library::plugin::PluginManager;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 #[test]

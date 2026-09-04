@@ -1,15 +1,15 @@
 use eframe::egui::{self, Color32};
+use library::LibraryError;
 use library::core::framing::{FrameEvaluator, InputValuePreview};
+use library::model::Project;
 use library::model::frame::color::Color;
 use library::model::project::{PortAddress, PortDataType, PortOwner};
 use library::model::property::PropertyValue;
-use library::model::Project;
 use library::plugin::PluginManager;
-use library::LibraryError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::ui::panels::node_editor::{port_owner_composition, qa_container_key, PORT_ROW_HEIGHT};
+use crate::ui::panels::node_editor::{PORT_ROW_HEIGHT, port_owner_composition, qa_container_key};
 
 pub(super) struct RenderedConnectedInput {
     pub(super) response: egui::Response,
@@ -557,10 +557,12 @@ mod tests {
         );
         assert_eq!(error.label, "Error");
         assert_eq!(error.metadata["input_status"], "error");
-        assert!(error.metadata["error"]
-            .as_str()
-            .unwrap()
-            .contains("broken wire"));
+        assert!(
+            error.metadata["error"]
+                .as_str()
+                .unwrap()
+                .contains("broken wire")
+        );
     }
 
     #[test]

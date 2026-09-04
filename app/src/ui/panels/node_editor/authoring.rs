@@ -129,7 +129,7 @@ fn create_native_action(
     graph_position: egui::Pos2,
     comp_id: Uuid,
 ) -> Option<CreateAction> {
-    use library::model::{native_node_descriptor, GeneratorContent, NativeNodeFactory};
+    use library::model::{GeneratorContent, NativeNodeFactory, native_node_descriptor};
 
     let descriptor = native_node_descriptor(catalog_id)?;
     let result = match descriptor.factory() {

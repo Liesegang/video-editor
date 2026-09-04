@@ -1,14 +1,14 @@
-use super::{wire_interactions, WireInteractionFrame};
+use super::{WireInteractionFrame, wire_interactions};
 use crate::action::HistoryManager;
 use crate::state::context_types::NodeEditorState;
 use crate::ui::panels::node_editor::{
-    apply_queued_node_edits, NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey,
+    NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
+    apply_queued_node_edits,
 };
 use eframe::egui;
 use library::model::project::{
-    NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, IMAGE_OUTPUT_PORT,
-    MERGE_IMAGES_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortAddress, PortDataType, PortDirection,
+    PortOwner,
 };
 use library::model::{Composition, Node, Project};
 use std::collections::HashMap;

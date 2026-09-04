@@ -24,14 +24,14 @@ use crate::ui::panels::node_editor::canvas::node_editor_details_visible;
 use crate::ui::panels::node_editor::container_hierarchy_needs_reflow;
 use crate::ui::panels::node_editor::surface::SurfaceOutput;
 use crate::ui::panels::node_editor::{
+    AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP, GraphItem, QueuedNodeEdit,
     apply_queued_node_edits, commands::flush_pending_continuous_edit_with_project,
-    grow_container_hierarchy_to_rect_all_edges, GraphItem, QueuedNodeEdit, AUTO_LAYOUT_COLUMN_GAP,
-    AUTO_LAYOUT_ROW_GAP,
+    grow_container_hierarchy_to_rect_all_edges,
 };
 
 use super::{
-    container_hierarchy_regresses, BranchDirection, DirectionalLayoutMode,
-    DirectionalLayoutRequest, LayoutAxis, NodeLayoutGeometry,
+    BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest, LayoutAxis,
+    NodeLayoutGeometry, container_hierarchy_regresses,
 };
 
 const POSITION_EPSILON: f32 = 0.001;

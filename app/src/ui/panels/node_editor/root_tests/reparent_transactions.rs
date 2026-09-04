@@ -79,9 +79,11 @@ fn multi_node_drag_uses_primary_target_without_splitting_the_group() {
                 merge_rect
             }
     }));
-    assert!(intents
-        .iter()
-        .all(|intent| intent.target.container == NodeContainer::Track(track_id)));
+    assert!(
+        intents
+            .iter()
+            .all(|intent| intent.target.container == NodeContainer::Track(track_id))
+    );
 
     if let Some(node) = project.get_node_mut(solid_id) {
         node.ui_position = [solid_min.x, solid_min.y];
@@ -155,9 +157,11 @@ fn reparent_min_edge_growth_keeps_node_drop_position_and_contains_every_ancestor
     };
     clip.ui_position = [490.0, 380.0];
     clip.ui_size = [800.0, 600.0];
-    assert!(project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
+            .is_ok()
+    );
 
     let clip_before = project.get_clip(clip_id).map(|clip| clip.ui_position);
     let track_before = project.get_track(track_id).map(|track| track.ui_position);
@@ -207,12 +211,14 @@ fn reparent_min_edge_growth_keeps_node_drop_position_and_contains_every_ancestor
         project.get_node(node_id).map(|node| node.ui_position),
         Some([final_min.x, final_min.y])
     );
-    assert!(project
-        .get_clip(clip_id)
-        .zip(clip_before)
-        .is_some_and(|(clip, before)| {
-            clip.ui_position[0] < before[0] && clip.ui_position[1] < before[1]
-        }));
+    assert!(
+        project
+            .get_clip(clip_id)
+            .zip(clip_before)
+            .is_some_and(|(clip, before)| {
+                clip.ui_position[0] < before[0] && clip.ui_position[1] < before[1]
+            })
+    );
     assert_eq!(
         project.get_track(track_id).map(|track| track.ui_position),
         track_before,
@@ -260,9 +266,11 @@ fn reparent_min_edge_growth_keeps_node_drop_position_and_contains_every_ancestor
 #[test]
 fn composition_root_fallback_expands_same_owner_on_left_and_top() {
     let (mut project, composition_id, _, _, node_id, _) = fixture();
-    assert!(project
-        .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
+            .is_ok()
+    );
     let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
     assert!(plan.is_some());
     let Some(plan) = plan else {
@@ -329,20 +337,22 @@ fn composition_root_fallback_expands_same_owner_on_left_and_top() {
         .get_composition(composition_id)
         .map(|composition| composition.ui_position);
     assert!(reparent_nodes_from_intents(&mut project, &intents));
-    assert!(project
-        .get_composition(composition_id)
-        .zip(before)
-        .is_some_and(|(composition, before)| {
-            composition.ui_position[0] < before[0]
-                && composition.ui_position[1] < before[1]
-                && rect_contains_rect(
-                    composition_content_rect(container_rect(
-                        composition.ui_position,
-                        composition.ui_size,
-                    )),
-                    final_rect,
-                )
-        }));
+    assert!(
+        project
+            .get_composition(composition_id)
+            .zip(before)
+            .is_some_and(|(composition, before)| {
+                composition.ui_position[0] < before[0]
+                    && composition.ui_position[1] < before[1]
+                    && rect_contains_rect(
+                        composition_content_rect(container_rect(
+                            composition.ui_position,
+                            composition.ui_size,
+                        )),
+                        final_rect,
+                    )
+            })
+    );
     assert_eq!(
         project.get_node(node_id).map(|node| node.ui_position),
         Some([final_min.x, final_min.y])
@@ -366,9 +376,11 @@ fn reparent_clears_only_old_output_binding_and_preserves_typed_wire_identity_and
     track_output.ui_position = [1_350.0, 420.0];
     let track_output_id = track_output.id;
     project.add_node(track_output);
-    assert!(project
-        .attach_node_to_container(NodeContainer::Track(track_id), track_output_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Track(track_id), track_output_id)
+            .is_ok()
+    );
     let structural_merge_id = project
         .get_track(track_id)
         .unwrap()
@@ -379,12 +391,16 @@ fn reparent_clears_only_old_output_binding_and_preserves_typed_wire_identity_and
             PortAddress::new(PortOwner::Node(track_output_id), MERGE_IMAGES_PORT),
         )
         .unwrap();
-    assert!(project
-        .set_output_node(NodeContainer::Track(track_id), Some(track_output_id))
-        .is_ok());
-    assert!(project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(solid_id))
-        .is_ok());
+    assert!(
+        project
+            .set_output_node(NodeContainer::Track(track_id), Some(track_output_id))
+            .is_ok()
+    );
+    assert!(
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(solid_id))
+            .is_ok()
+    );
     if let Some(track) = project.get_track_mut(track_id) {
         track.ui_size = [1_800.0, 1_000.0];
     }

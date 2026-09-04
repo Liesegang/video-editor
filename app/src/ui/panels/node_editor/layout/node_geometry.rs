@@ -3,8 +3,8 @@ use library::model::{GeneratorContent, Node, NodeContent, Project};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    input_definitions, merge_layer_rows, output_definitions, GraphItem, COMPOSE_COLOR_BODY_WIDTH,
-    MERGE_BODY_WIDTH, NODE_BODY_WIDTH, NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
+    COMPOSE_COLOR_BODY_WIDTH, GraphItem, MERGE_BODY_WIDTH, NODE_BODY_WIDTH, NODE_HEADER_WIDTH,
+    PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, input_definitions, merge_layer_rows, output_definitions,
 };
 
 /// Conservative non-body allowance for the input controls, output label,

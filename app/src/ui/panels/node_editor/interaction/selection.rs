@@ -22,7 +22,7 @@ pub(in crate::ui::panels::node_editor) fn selected_container_owners(
             SelectionTarget::Composition(id) => Some(PortOwner::Composition(id)),
             SelectionTarget::Track(id) => Some(PortOwner::Track(id)),
             SelectionTarget::Clip(id) => Some(PortOwner::Clip(id)),
-            SelectionTarget::Node(_) => None,
+            SelectionTarget::Node(_) | SelectionTarget::TimelineItem(_) => None,
         })
         .collect()
 }

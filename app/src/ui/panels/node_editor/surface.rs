@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 
 use eframe::egui;
+use library::model::Project;
 use library::model::project::{
     PortAddress, PortDataType, PortDirection as ProjectPortDirection, PortOwner as ProjectPortOwner,
 };
-use library::model::Project;
 use node_editor_ui::{
     AuthoritativeSelection, CubicBezier, EditorOutput, GraphFrame, GroupDescriptor, ItemId,
     MoveEndOutcome, NodeBodyResponse, NodeDescriptor, PortDescriptor, PortDirection,
@@ -21,9 +21,10 @@ use uuid::Uuid;
 use crate::state::context_types::{NodeEditorEditableWire, SelectionTarget};
 
 use super::{
-    container_output_binding_port, container_output_binding_type, container_output_port,
-    parent_container_owner, port_owner_for_node_container, ContainerVisual, LayoutEdit,
-    RenderedEdge, RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT, PORT_ROW_HEIGHT,
+    CONTAINER_HEADER_HEIGHT, ContainerVisual, LayoutEdit, PORT_ROW_HEIGHT, RenderedEdge,
+    RenderedEdgeKind, RenderedPortKey, container_output_binding_port,
+    container_output_binding_type, container_output_port, parent_container_owner,
+    port_owner_for_node_container,
 };
 
 pub(super) type SurfacePortId = PortInstanceId<PortAddress, NodeEditorEditableWire>;
@@ -182,7 +183,7 @@ impl<'a> SurfaceProjection<'a> {
         let mut selected_items = selection
             .iter()
             .copied()
-            .map(surface_selection_item)
+            .filter_map(surface_selection_item)
             .collect::<Vec<_>>();
         let selected_wire = selected_wire
             .map(|connection_id| NodeEditorEditableWire::ProjectConnection { connection_id });
@@ -191,7 +192,7 @@ impl<'a> SurfaceProjection<'a> {
         }
         let primary = selected_wire
             .map(ItemId::Wire)
-            .or_else(|| primary.map(surface_selection_item));
+            .or_else(|| primary.and_then(surface_selection_item));
 
         Self {
             nodes,
@@ -248,8 +249,9 @@ fn ordered_selection_items(
             SelectionTarget::Clip(id) => containers
                 .iter()
                 .any(|container| container.owner == ProjectPortOwner::Clip(*id)),
+            SelectionTarget::TimelineItem(_) => false,
         })
-        .map(surface_selection_item)
+        .filter_map(surface_selection_item)
         .collect::<Vec<_>>();
 
     // A missing callback should degrade deterministically for tests/partial
@@ -412,8 +414,13 @@ fn target_is_ancestor(
     ancestor: SelectionTarget,
     descendant: SelectionTarget,
 ) -> bool {
-    let ancestor = owner_for_selection_target(ancestor);
-    let mut current = parent_owner(project, owner_for_selection_target(descendant));
+    let Some(ancestor) = owner_for_selection_target(ancestor) else {
+        return false;
+    };
+    let Some(descendant) = owner_for_selection_target(descendant) else {
+        return false;
+    };
+    let mut current = parent_owner(project, descendant);
     while let Some(owner) = current {
         if owner == ancestor {
             return true;
@@ -434,12 +441,13 @@ fn parent_owner(project: &Project, owner: ProjectPortOwner) -> Option<ProjectPor
     }
 }
 
-const fn owner_for_selection_target(target: SelectionTarget) -> ProjectPortOwner {
+const fn owner_for_selection_target(target: SelectionTarget) -> Option<ProjectPortOwner> {
     match target {
-        SelectionTarget::Node(id) => ProjectPortOwner::Node(id),
-        SelectionTarget::Clip(id) => ProjectPortOwner::Clip(id),
-        SelectionTarget::Track(id) => ProjectPortOwner::Track(id),
-        SelectionTarget::Composition(id) => ProjectPortOwner::Composition(id),
+        SelectionTarget::Node(id) => Some(ProjectPortOwner::Node(id)),
+        SelectionTarget::Clip(id) => Some(ProjectPortOwner::Clip(id)),
+        SelectionTarget::Track(id) => Some(ProjectPortOwner::Track(id)),
+        SelectionTarget::Composition(id) => Some(ProjectPortOwner::Composition(id)),
+        SelectionTarget::TimelineItem(_) => None,
     }
 }
 
@@ -468,6 +476,7 @@ fn layout_edit_for_delta(
             owner: ProjectPortOwner::Composition(id),
             delta: [delta.x, delta.y],
         }),
+        SelectionTarget::TimelineItem(_) => None,
     }
 }
 
@@ -488,12 +497,13 @@ fn selection_target(
 
 const fn surface_selection_item(
     target: SelectionTarget,
-) -> ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire> {
+) -> Option<ItemId<Uuid, ProjectPortOwner, NodeEditorEditableWire>> {
     match target {
-        SelectionTarget::Node(id) => ItemId::Node(id),
-        SelectionTarget::Clip(id) => ItemId::Group(ProjectPortOwner::Clip(id)),
-        SelectionTarget::Track(id) => ItemId::Group(ProjectPortOwner::Track(id)),
-        SelectionTarget::Composition(id) => ItemId::Group(ProjectPortOwner::Composition(id)),
+        SelectionTarget::Node(id) => Some(ItemId::Node(id)),
+        SelectionTarget::Clip(id) => Some(ItemId::Group(ProjectPortOwner::Clip(id))),
+        SelectionTarget::Track(id) => Some(ItemId::Group(ProjectPortOwner::Track(id))),
+        SelectionTarget::Composition(id) => Some(ItemId::Group(ProjectPortOwner::Composition(id))),
+        SelectionTarget::TimelineItem(_) => None,
     }
 }
 

@@ -1,7 +1,7 @@
 mod support;
 
 use anyhow::{Context, Result, anyhow, bail};
-use library::ProjectModel;
+use library::editor::ProjectModel;
 use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
 use library::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem};

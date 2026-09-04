@@ -1,7 +1,7 @@
 use crate::model::vector::{VectorDragGesture, VectorEditorState};
 use egui::{Pos2, Response, Ui};
 use library::model::vector::{
-    move_handle, move_vertices, set_point_type, HandleType, PointType, VectorPath,
+    HandleType, PointType, VectorPath, move_handle, move_vertices, set_point_type,
 };
 use library::rendering::renderer::Affine2D;
 

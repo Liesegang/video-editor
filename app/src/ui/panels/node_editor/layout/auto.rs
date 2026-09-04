@@ -7,15 +7,16 @@ use uuid::Uuid;
 use super::merge_alignment::enforce_layout_edge_clearance;
 use super::node_geometry::estimated_node_size;
 use super::ranking::{
-    canonical_layout_edges, first_free_y, layout_node_band, node_band_bounds, node_rank_columns,
-    rank_nodes_by_scc, NodeBandBounds, NodeBandPlacement,
+    NodeBandBounds, NodeBandPlacement, canonical_layout_edges, first_free_y, layout_node_band,
+    node_band_bounds, node_rank_columns, rank_nodes_by_scc,
 };
 use crate::ui::panels::node_editor::{
-    container_rect, estimated_node_rect, rects_are_closer_than, AutoLayoutPlan, AutoLayoutScope,
-    ContainerLayout, AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
+    AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
     AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
     AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
-    AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, MIN_CONTAINER_SIZE,
+    AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, AutoLayoutPlan,
+    AutoLayoutScope, ContainerLayout, MIN_CONTAINER_SIZE, container_rect, estimated_node_rect,
+    rects_are_closer_than,
 };
 
 const CHILD_CONTAINER_NODE_GAP: f32 = AUTO_LAYOUT_NODE_PADDING + 0.5;

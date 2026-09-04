@@ -1,7 +1,7 @@
 //! Deterministic audio sources used only by the Node Editor HTTP QA fixture.
 
-use library::editor::project_service::MediaNodeRequest;
 use library::editor::ProjectService;
+use library::editor::project_service::MediaNodeRequest;
 use library::model::node::Node;
 use library::model::project::asset::{Asset, AssetKind};
 use uuid::Uuid;

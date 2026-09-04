@@ -315,7 +315,7 @@ pub(in crate::ui::panels::node_editor) fn layout_toolbar(
 
 #[cfg(test)]
 mod tests {
-    use super::{command_for_click, command_icon, layout_toolbar, DIRECTIONAL_LAYOUT_HELP};
+    use super::{DIRECTIONAL_LAYOUT_HELP, command_for_click, command_icon, layout_toolbar};
     use crate::command::{CommandId, CommandRegistry};
     use crate::config::AppConfig;
     use crate::ui::panels::node_editor::{reset_test_rects, test_metadata, test_rect};
@@ -443,12 +443,16 @@ mod tests {
             let metadata = test_metadata(id).expect("layout control metadata");
             assert_eq!(metadata["scope"], scope);
             assert_eq!(metadata["command_id"], super::command_name(command));
-            assert!(metadata["label"]
-                .as_str()
-                .is_some_and(|label| !label.is_empty()));
-            assert!(metadata["shortcut"]
-                .as_str()
-                .is_some_and(|shortcut| shortcut.ends_with('L')));
+            assert!(
+                metadata["label"]
+                    .as_str()
+                    .is_some_and(|label| !label.is_empty())
+            );
+            assert!(
+                metadata["shortcut"]
+                    .as_str()
+                    .is_some_and(|shortcut| shortcut.ends_with('L'))
+            );
         }
         assert_ne!(
             command_icon(CommandId::NodeEditorCleanLayoutSelection),

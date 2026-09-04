@@ -5,7 +5,7 @@ use crate::test_support::generator_node;
 use library::editor::project_service::GeneratorNodeRequest;
 use library::model::frame::color::Color;
 use library::model::project::{
-    NodeContainer, PortOwner, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortOwner, ProjectConnection,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{
@@ -15,7 +15,7 @@ use library::model::{
     Clip, Composition, DataContent, ListContent, Node, NodeContent, SoundAnalysisContent,
 };
 use library::plugin::{
-    PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PATH_EFFECT_CATEGORY, PluginManager,
     SHAPE_TRANSFORM_COMPONENT_ID, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
 use ordered_float::OrderedFloat;
@@ -215,17 +215,19 @@ fn explicit_selection_from_another_composition_does_not_fall_back() {
         .attach_clip_to_track(other_track_id, other_clip_id)
         .unwrap();
 
-    assert!(resolve_selection(
-        &project,
-        Some(SelectionTarget::Node(other_node_id)),
-        active_id,
-    )
-    .is_none());
+    assert!(
+        resolve_selection(
+            &project,
+            Some(SelectionTarget::Node(other_node_id)),
+            active_id,
+        )
+        .is_none()
+    );
 }
 
 #[test]
-fn structural_status_reuses_the_authoritative_clip_semantics(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn structural_status_reuses_the_authoritative_clip_semantics()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut project = Project::new("inspector graph semantics");
     let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
     let composition_id = composition.id;
@@ -363,8 +365,10 @@ fn facade_output_mode_describes_timeline_child_compositing() {
             FacadeOutputMode::TimelineChildren(Some(result.id))
         );
         assert_eq!(output_mode.qa_value(), "timeline_children");
-        assert!(facade_output_text(owner_kind, output_mode, &nodes)
-            .contains("structural Merge and authored downstream graph"));
+        assert!(
+            facade_output_text(owner_kind, output_mode, &nodes)
+                .contains("structural Merge and authored downstream graph")
+        );
         let metadata = facade_output_metadata(owner_kind, output_mode, true);
         assert_eq!(metadata["owner_kind"], owner_kind.qa_value());
         assert_eq!(metadata["output_mode"], "timeline_children");
@@ -924,7 +928,9 @@ fn node_and_inspector_timing_adapters_derive_from_the_same_clip_metadata() {
     let stretch = Clip::timing_property_definition("time_stretch").unwrap();
     let node_stretch = crate::ui::panels::node_editor::node_timing_drag_config(stretch).unwrap();
     assert_eq!(node_stretch.hard_min, Some(0.0));
-    assert!(stretch
-        .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
-        .is_ok());
+    assert!(
+        stretch
+            .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
+            .is_ok()
+    );
 }

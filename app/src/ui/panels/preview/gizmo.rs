@@ -498,8 +498,8 @@ mod tests {
     use crate::state::context::EditorContext;
     use crate::state::context_types::{GizmoState, SelectionTarget};
     use crate::ui::panels::preview::clip::{PreviewClip, PreviewSpatialKind, PreviewSpatialLayer};
-    use library::model::frame::transform::Transform;
     use library::model::Node;
+    use library::model::frame::transform::Transform;
     use library::rendering::renderer::Affine2D;
     use uuid::Uuid;
 

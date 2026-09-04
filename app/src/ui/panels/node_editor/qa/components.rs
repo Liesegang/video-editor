@@ -1,6 +1,6 @@
 use eframe::egui;
-use library::model::project::PortOwner;
 use library::model::Project;
+use library::model::project::PortOwner;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{GraphItem, PortAnchorKind, WIRE_PORT_DROP_RADIUS};

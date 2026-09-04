@@ -55,6 +55,10 @@ impl PickerDraft {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "geometry is exposed to the native-input QA tests without affecting picker behavior"
+)]
 pub(crate) struct ColorPickerGeometry {
     pub popup: Rect,
     pub authored_space: Rect,
@@ -64,6 +68,10 @@ pub(crate) struct ColorPickerGeometry {
 }
 
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "diagnostics and gesture completion are consumed by the native-input QA tests"
+)]
 pub(crate) struct ColorPickerEdit {
     pub response: Response,
     pub value: Option<ColorValue>,

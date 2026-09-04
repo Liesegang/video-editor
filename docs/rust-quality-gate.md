@@ -40,6 +40,18 @@ Rust 1.95.0 is pinned in `rust-toolchain.toml`. Rustup users get that toolchain
 automatically. A standalone Cargo installation, such as Homebrew Cargo, ignores
 the rustup override file; it must provide Rust 1.95.0 plus Clippy and rustfmt.
 
+On Windows, rust-skia publishes MSVC binaries but not Windows GNU binaries for
+the pinned release. Bootstrap the repository once before invoking Cargo:
+
+```powershell
+.\scripts\bootstrap-windows.ps1
+cargo build --release
+```
+
+The bootstrap installs and selects `1.95.0-x86_64-pc-windows-msvc`. A Windows
+GNU host is unsupported because it falls back to a large Skia source build and
+does not match the packaged native dependencies.
+
 The production/default Clippy pass intentionally selects only libraries and
 binaries. Consequently the `allow-unwrap-in-tests`, `allow-expect-in-tests`, and
 `allow-panic-in-tests` settings cannot weaken that production pass. The separate

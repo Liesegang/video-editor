@@ -11,8 +11,8 @@ use crate::ui::panels::node_editor::types::{
     MERGE_OUTPUT_FIRST_ROW_Y, NODE_OUTPUT_FIRST_ROW_Y,
 };
 use crate::ui::panels::node_editor::{
-    estimated_merge_input_anchor_offset, merge_layer_rows, output_definitions, GraphItem,
-    PortAnchorKind, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP, PORT_ROW_HEIGHT,
+    AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_ROW_GAP, GraphItem, PORT_ROW_HEIGHT, PortAnchorKind,
+    estimated_merge_input_anchor_offset, merge_layer_rows, output_definitions,
 };
 
 pub(super) fn pack_targeted_column(
@@ -156,7 +156,7 @@ fn authored_container_output_y(project: &Project, source: &PortAddress) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::model::project::{PortAddress, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
+    use library::model::project::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress};
 
     fn merge_with_sources(tops_back_to_front: &[f32]) -> (Project, Uuid, BTreeMap<Uuid, [f32; 2]>) {
         let mut project = Project::new("Merge alignment");
@@ -171,12 +171,14 @@ mod tests {
             let source_id = source.id;
             project.add_node(source);
             positions.insert(source_id, [0.0, top]);
-            assert!(project
-                .connect_ports(
-                    PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-                    PortAddress::new(PortOwner::Node(target_id), MERGE_IMAGES_PORT),
-                )
-                .is_ok());
+            assert!(
+                project
+                    .connect_ports(
+                        PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+                        PortAddress::new(PortOwner::Node(target_id), MERGE_IMAGES_PORT),
+                    )
+                    .is_ok()
+            );
         }
         positions.insert(target_id, [600.0, 0.0]);
         (project, target_id, positions)

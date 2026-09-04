@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use egui::{Color32, RichText, Ui};
-use library::model::property::{PropertyMap, PropertyValue};
 use library::EditorService;
+use library::model::property::{PropertyMap, PropertyValue};
 
 pub(super) struct EvaluatedPropertyMap {
     values: HashMap<String, PropertyValue>,
@@ -147,8 +147,8 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use library::cache::CacheManager;
-    use library::model::property::Property;
     use library::model::Project;
+    use library::model::property::Property;
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
@@ -215,9 +215,11 @@ mod tests {
                 && issue.recovered
                 && issue.source.as_deref() == Some("1 / 0")
         }));
-        assert!(evaluated
-            .issues()
-            .iter()
-            .any(|issue| issue.property == "malformed" && !issue.recovered));
+        assert!(
+            evaluated
+                .issues()
+                .iter()
+                .any(|issue| issue.property == "malformed" && !issue.recovered)
+        );
     }
 }

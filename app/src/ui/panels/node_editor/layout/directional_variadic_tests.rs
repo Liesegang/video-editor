@@ -3,9 +3,9 @@ use super::*;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use library::model::project::connection::{LIST_ITEMS_INPUT_PORT, LIST_ITEM_OUTPUT_PORT};
-use library::model::project::{AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT};
 use library::model::ListContent;
+use library::model::project::connection::{LIST_ITEM_OUTPUT_PORT, LIST_ITEMS_INPUT_PORT};
+use library::model::project::{AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT};
 
 impl Fixture {
     fn add_sound_merge(

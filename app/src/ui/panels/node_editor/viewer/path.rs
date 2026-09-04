@@ -1,6 +1,6 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::{
-    bounded_non_selectable_label, property_label, INLINE_CONTROL_WIDTH,
+    INLINE_CONTROL_WIDTH, bounded_non_selectable_label, property_label,
 };
 use eframe::egui;
 use library::model::PathOperationContent;

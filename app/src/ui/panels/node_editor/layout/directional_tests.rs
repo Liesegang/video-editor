@@ -1,10 +1,10 @@
 use super::*;
 
 use crate::ui::panels::node_editor::{
-    immediate_child_rects, AutoLayoutPlan, AUTO_LAYOUT_TRACK_TOP,
+    AUTO_LAYOUT_TRACK_TOP, AutoLayoutPlan, immediate_child_rects,
 };
 use library::model::project::{
-    PortAddress, PortOwner, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress, PortOwner, ProjectConnection,
 };
 use library::model::{Clip, Composition, Node, NodeContainer, Project};
 
@@ -335,8 +335,8 @@ fn container_output_does_not_create_a_hidden_structural_helper_edge() {
 }
 
 #[test]
-fn layout_keeps_direct_nodes_clear_of_immediate_child_containers(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn layout_keeps_direct_nodes_clear_of_immediate_child_containers()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new();
     let composition_owner = NodeContainer::Composition(fixture.composition_id);
     let track_owner = NodeContainer::Track(fixture.track_id);

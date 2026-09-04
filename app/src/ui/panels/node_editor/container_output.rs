@@ -1,5 +1,5 @@
-use library::model::project::{PortDataType, PortOwner, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT};
 use library::model::Project;
+use library::model::project::{AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortOwner};
 use uuid::Uuid;
 
 pub(in crate::ui::panels::node_editor) const IMAGE_OUTPUT_BINDING_PORT: &str =

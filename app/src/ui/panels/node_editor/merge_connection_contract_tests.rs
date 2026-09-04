@@ -1,9 +1,9 @@
 use super::merge_reorder_tests::three_layer_fixture;
 use super::*;
-use library::model::project::{
-    PortDefinition, PortExposure, PortSide, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-};
 use library::model::PluginOperationContent;
+use library::model::project::{
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDefinition, PortExposure, PortSide, ProjectConnection,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -103,14 +103,18 @@ fn merge_connections_project_to_distinct_pins_and_disconnect_by_identity() {
             connection_id: connection_ids[1],
         },
     ));
-    assert!(!project
-        .connections
-        .iter()
-        .any(|connection| connection.id == connection_ids[1]));
-    assert!(project
-        .connections
-        .iter()
-        .any(|connection| connection.id == connection_ids[0]));
+    assert!(
+        !project
+            .connections
+            .iter()
+            .any(|connection| connection.id == connection_ids[1])
+    );
+    assert!(
+        project
+            .connections
+            .iter()
+            .any(|connection| connection.id == connection_ids[0])
+    );
 }
 
 #[test]
@@ -128,9 +132,11 @@ fn non_merge_variadic_images_keeps_one_generic_pin_and_disconnects_by_address() 
         return;
     };
     project.add_node(plugin);
-    assert!(project
-        .attach_node_to_container(container, plugin_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(container, plugin_id)
+            .is_ok()
+    );
     let target = PortAddress::new(PortOwner::Node(plugin_id), MERGE_IMAGES_PORT);
     let first_from = PortAddress::new(PortOwner::Node(source_ids[0]), IMAGE_OUTPUT_PORT);
     let second_from = PortAddress::new(PortOwner::Node(source_ids[1]), IMAGE_OUTPUT_PORT);
@@ -144,11 +150,13 @@ fn non_merge_variadic_images_keeps_one_generic_pin_and_disconnects_by_address() 
         plugin_slots.first().map(|slot| &slot.role),
         Some(MergeInputSlotRole::Canonical)
     ));
-    assert!(project
-        .connections
-        .iter()
-        .filter(|connection| connection.to == target)
-        .all(|connection| !connection_supports_authored_blend(&project, connection)));
+    assert!(
+        project
+            .connections
+            .iter()
+            .filter(|connection| connection.to == target)
+            .all(|connection| !connection_supports_authored_blend(&project, connection))
+    );
 
     let (snarl, _) = build_snarl(&project, composition_id);
     let plugin_snarl_id = snarl
@@ -184,14 +192,18 @@ fn non_merge_variadic_images_keeps_one_generic_pin_and_disconnects_by_address() 
         Some(NodeEdit::Disconnect { from, to }) if from == &second_from && to == &target
     ));
     assert!(edit.is_some_and(|edit| apply_edit(&mut project, edit)));
-    assert!(project
-        .connections
-        .iter()
-        .any(|connection| connection.from == first_from && connection.to == target));
-    assert!(!project
-        .connections
-        .iter()
-        .any(|connection| connection.from == second_from && connection.to == target));
+    assert!(
+        project
+            .connections
+            .iter()
+            .any(|connection| connection.from == first_from && connection.to == target)
+    );
+    assert!(
+        !project
+            .connections
+            .iter()
+            .any(|connection| connection.from == second_from && connection.to == target)
+    );
 }
 
 #[test]
@@ -209,9 +221,11 @@ fn physical_merge_endpoint_identity_is_independent_of_authored_blend_support() {
         return;
     };
     project.add_node(plugin);
-    assert!(project
-        .attach_node_to_container(container, plugin_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(container, plugin_id)
+            .is_ok()
+    );
 
     let any_from = PortAddress::new(PortOwner::Node(plugin_id), "value");
     let merge_target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);

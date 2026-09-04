@@ -1,15 +1,15 @@
 use eframe::egui;
+use library::model::Project;
 use library::model::project::{
     ContainerAudioSourceKind, ContainerImageSourceKind, PortAddress, PortDataType, PortOwner,
 };
-use library::model::Project;
 use std::collections::HashMap;
 
 use super::render::register_edge_component;
 use crate::ui::panels::node_editor::{
+    EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
     container_output_binding_port, container_output_port, container_output_type_key, pin_color,
-    qa_container_key, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
-    RenderedPortKey,
+    qa_container_key,
 };
 
 #[derive(Clone, Copy)]

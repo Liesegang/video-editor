@@ -19,7 +19,7 @@ mod graph;
 #[path = "directional_packing.rs"]
 mod packing;
 
-use graph::{actual_node_edges, semantic_edge_cmp, ActualNodeEdge, BranchGraph, SemanticNodeOrder};
+use graph::{ActualNodeEdge, BranchGraph, SemanticNodeOrder, actual_node_edges, semantic_edge_cmp};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) enum BranchDirection {

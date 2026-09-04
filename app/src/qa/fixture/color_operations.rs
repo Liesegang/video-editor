@@ -1,6 +1,6 @@
 //! Minimal graph fixture for physical Color Node creation and wiring QA.
 
-use super::{FixtureInfo, E2E_COMPOSITION_ID};
+use super::{E2E_COMPOSITION_ID, FixtureInfo};
 use library::model::{Composition, Project};
 use uuid::Uuid;
 

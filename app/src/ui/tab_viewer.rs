@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use crate::command::{CommandRegistry, CommandScope};
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
-    action::{activate_composition_with_history, HistoryManager},
+    action::{HistoryManager, activate_composition_with_history},
     model::ui_types::Tab,
     state::context::EditorContext,
     ui::panels::{assets, inspector, node_editor, preview, timeline},
@@ -172,9 +172,9 @@ pub fn active_command_scope(
     dock_state: &DockState<Tab>,
     pointer_hover_pos: Option<egui::Pos2>,
     node_editor_rect: Option<egui::Rect>,
-    has_active_composition: bool,
+    has_editable_document: bool,
 ) -> CommandScope {
-    if !has_active_composition {
+    if !has_editable_document {
         return CommandScope::Global;
     }
     if let Some(pointer) = pointer_hover_pos {
@@ -218,9 +218,23 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
     dock_state
 }
 
+/// Makes an editor document's panel visible without applying the toggle
+/// semantics used by the View menu. Repeated document-open requests must
+/// focus the existing tab instead of closing it or creating duplicates.
+pub fn focus_or_open_tab(dock_state: &mut DockState<Tab>, tab: Tab) {
+    if dock_state.find_tab(&tab).is_none() {
+        dock_state.push_to_focused_leaf(tab);
+    }
+
+    if let Some((surface, node, tab_index)) = dock_state.find_tab(&tab) {
+        dock_state.set_active_tab((surface, node, tab_index));
+        dock_state.set_focused_node_and_surface((surface, node));
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{active_command_scope, create_initial_dock_state};
+    use super::{active_command_scope, create_initial_dock_state, focus_or_open_tab};
     use crate::command::CommandScope;
     use crate::model::ui_types::Tab;
 
@@ -273,5 +287,37 @@ mod tests {
             active_command_scope(&dock, Some(egui::pos2(50.0, 50.0)), Some(node_rect), false,),
             CommandScope::Global
         );
+    }
+
+    #[test]
+    fn document_open_focuses_existing_node_editor_without_toggling_it_closed() {
+        let mut dock = create_initial_dock_state();
+        focus_or_open_tab(&mut dock, Tab::NodeEditor);
+        let (surface, node, _) = dock.find_tab(&Tab::NodeEditor).expect("node editor tab");
+        assert_eq!(dock.focused_leaf(), Some((surface, node)));
+
+        focus_or_open_tab(&mut dock, Tab::NodeEditor);
+        let all_node_editor_tabs = dock
+            .iter_all_tabs()
+            .filter(|(_, tab)| **tab == Tab::NodeEditor)
+            .count();
+        assert_eq!(all_node_editor_tabs, 1);
+    }
+
+    #[test]
+    fn document_open_reopens_a_closed_node_editor_once() {
+        let mut dock = create_initial_dock_state();
+        let index = dock.find_tab(&Tab::NodeEditor).expect("node editor tab");
+        dock.remove_tab(index);
+        assert!(dock.find_tab(&Tab::NodeEditor).is_none());
+
+        focus_or_open_tab(&mut dock, Tab::NodeEditor);
+        assert!(dock.find_tab(&Tab::NodeEditor).is_some());
+        focus_or_open_tab(&mut dock, Tab::NodeEditor);
+        let all_node_editor_tabs = dock
+            .iter_all_tabs()
+            .filter(|(_, tab)| **tab == Tab::NodeEditor)
+            .count();
+        assert_eq!(all_node_editor_tabs, 1);
     }
 }

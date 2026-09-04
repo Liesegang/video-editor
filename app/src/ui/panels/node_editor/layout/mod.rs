@@ -19,8 +19,8 @@ pub(in crate::ui::panels::node_editor) use auto::{
     compute_auto_layout, compute_full_composition_layout, immediate_child_rects,
 };
 pub(in crate::ui::panels::node_editor) use directional::{
-    plan_directional_layout, BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest,
-    LayoutAxis, NodeLayoutGeometry,
+    BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest, LayoutAxis,
+    NodeLayoutGeometry, plan_directional_layout,
 };
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use node_geometry::estimated_merge_node_width;
@@ -39,10 +39,10 @@ pub(in crate::ui::panels::node_editor) use reflow::{
 };
 pub(in crate::ui::panels::node_editor) use structural_merge::ensure_structural_merge_layout;
 pub(in crate::ui::panels::node_editor) use swipe::{
-    apply_directional_layout_commit, apply_directional_layout_preview,
-    finish_directional_layout_release_guard, finish_edits_before_directional_layout_start,
-    handle_directional_layout_outputs, recover_directional_layout_release_guard,
-    DirectionalLayoutFrameOutcome,
+    DirectionalLayoutFrameOutcome, apply_directional_layout_commit,
+    apply_directional_layout_preview, finish_directional_layout_release_guard,
+    finish_edits_before_directional_layout_start, handle_directional_layout_outputs,
+    recover_directional_layout_release_guard,
 };
 pub(in crate::ui::panels::node_editor) use types::{
     AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit,

@@ -3,7 +3,7 @@ use library::model::project::connection::DATA_VALUE_PROPERTY;
 use library::model::property::{Property, PropertyValue};
 use uuid::Uuid;
 
-use super::{property_value_summary, ProjectNodeViewer};
+use super::{ProjectNodeViewer, property_value_summary};
 use crate::ui::panels::node_editor::property_label;
 
 impl ProjectNodeViewer<'_> {

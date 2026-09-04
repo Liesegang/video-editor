@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use egui::Ui;
+use library::EditorService;
 use library::model::project::{
-    ContainerGraphSemantics, PortOwner, ProjectConnection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
-    MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    ContainerGraphSemantics, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortOwner,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::{GeneratorContent, Node, NodeContent};
 use library::plugin::TRANSFORM_CATEGORY;
-use library::EditorService;
 use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};

@@ -2,10 +2,107 @@ use crate::action::HistoryManager;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
 use crate::state::context_types::NodeEditorEditableWire;
+use crate::state::context_types::{ModuleEditorHost, NodeEditorDocument};
 use egui_dock::DockState;
-use library::model::project::{NodeContainer, Project};
 use library::PropertyOwner;
-use serde_json::{json, Value};
+use library::model::project::{NodeContainer, Project};
+use serde_json::{Value, json};
+
+pub fn authoring_snapshot(
+    frame: u64,
+    project: &library::model::authoring::AuthoringProject,
+    editor: &crate::state::authoring::AuthoringUiState,
+    dock_state: &DockState<Tab>,
+    service: &library::editor::TimelineEditorService,
+) -> Result<Value, String> {
+    use crate::state::authoring::AuthoringSelection;
+
+    let active_tabs = dock_state
+        .iter_leaves()
+        .filter_map(|(_, leaf)| leaf.tabs.get(leaf.active.0))
+        .map(|tab| tab.name())
+        .collect::<Vec<_>>();
+    let selection = editor.selection.primary().map(|selection| match selection {
+        AuthoringSelection::Timeline(id) => json!({"kind": "timeline", "id": id}),
+        AuthoringSelection::Track(id) => json!({"kind": "track", "id": id}),
+        AuthoringSelection::Item(id) => json!({"kind": "timeline_item", "id": id}),
+        AuthoringSelection::Asset(id) => json!({"kind": "asset", "id": id}),
+        AuthoringSelection::ModuleDefinition(id) => {
+            json!({"kind": "module_definition", "id": id})
+        }
+    });
+    let document = editor
+        .node_editor
+        .active_document
+        .as_ref()
+        .map(|document| match document {
+            NodeEditorDocument::ModuleDefinition {
+                definition_id,
+                host,
+            } => {
+                let (kind, instance_id) = match host {
+                    ModuleEditorHost::NodeClip {
+                        module_instance_id, ..
+                    } => ("node_clip", module_instance_id),
+                    ModuleEditorHost::Attachment {
+                        module_instance_id, ..
+                    } => ("attachment", module_instance_id),
+                };
+                json!({
+                    "kind": "module_definition",
+                    "definition_id": definition_id,
+                    "host": kind,
+                    "instance_id": instance_id,
+                })
+            }
+        });
+    let serialized_project = serde_json::to_value(project)
+        .map_err(|error| format!("failed to serialize authoritative Project: {error}"))?;
+    let revision = service
+        .revision()
+        .map_err(|error| format!("failed to read authoring revision: {error}"))?;
+    Ok(json!({
+        "frame": frame,
+        "project": serialized_project,
+        "editor": {
+            "navigation": {"active_timeline_id": editor.active_timeline_id},
+            "selection": {"primary": selection},
+            "timeline": {
+                "current_frame": editor.timeline.current_frame,
+                "is_playing": editor.timeline.is_playing,
+                "pixels_per_second": editor.timeline.pixels_per_second,
+                "item_gesture_active": editor.timeline.item_gesture.is_some(),
+                "library_drag_active": editor.timeline.library_drag.is_some(),
+            },
+            "preview": {
+                "pan": {"x": editor.preview.pan.x, "y": editor.preview.pan.y},
+                "zoom": editor.preview.zoom,
+                "show_grid": editor.preview.show_grid,
+                "auto_fit": editor.preview.auto_fit,
+                "rendered_revision": editor.preview.rendered_revision,
+                "rendered_frame": editor.preview.rendered_frame,
+                "texture_width": editor.preview.texture_width,
+                "texture_height": editor.preview.texture_height,
+                "nontransparent_pixels": editor.preview.nontransparent_pixels,
+                "pixel_hash": editor.preview.pixel_hash,
+            },
+            "node_editor": {
+                "document": document,
+                "selected_node_count": editor.node_editor.module_selected_nodes.len(),
+                "selected_connection": editor.node_editor.module_selected_connection,
+            },
+            "curve": {"drag_active": editor.curve.drag.is_some()},
+            "status": editor.status,
+            "error": editor.error,
+        },
+        "dock": {"active_tabs": active_tabs},
+        "history": {
+            "can_undo": service.can_undo().unwrap_or(false),
+            "can_redo": service.can_redo().unwrap_or(false),
+            "revision": revision.get(),
+        },
+    }))
+}
 
 fn node_container_key(container: NodeContainer) -> String {
     match container {
@@ -97,6 +194,51 @@ pub fn snapshot(
 
     let project = serde_json::to_value(project)
         .map_err(|error| format!("failed to serialize authoritative Project: {error}"))?;
+    let node_editor_document = editor_context
+        .node_editor_state
+        .active_document
+        .as_ref()
+        .map(|document| match document {
+            NodeEditorDocument::ModuleDefinition {
+                definition_id,
+                host,
+            } => {
+                let (host_kind, timeline_item_id, attachment_id, instance_path, instance_id) =
+                    match host {
+                        ModuleEditorHost::NodeClip {
+                            timeline_item_id,
+                            instance_path,
+                            module_instance_id,
+                        } => (
+                            "node_clip",
+                            Some(*timeline_item_id),
+                            None,
+                            instance_path,
+                            *module_instance_id,
+                        ),
+                        ModuleEditorHost::Attachment {
+                            attachment_id,
+                            instance_path,
+                            module_instance_id,
+                        } => (
+                            "attachment",
+                            None,
+                            Some(*attachment_id),
+                            instance_path,
+                            *module_instance_id,
+                        ),
+                    };
+                json!({
+                    "document_kind": "module_definition",
+                    "module_definition_id": definition_id,
+                    "module_instance_id": instance_id,
+                    "instance_path": instance_path,
+                    "host_kind": host_kind,
+                    "timeline_item_id": timeline_item_id,
+                    "attachment_id": attachment_id,
+                })
+            }
+        });
     let directional_layout_swipe = editor_context
         .node_editor_state
         .directional_layout_swipe
@@ -250,6 +392,8 @@ pub fn snapshot(
                 "modal_error": editor_context.interaction.active_modal_error,
             },
             "node_editor": {
+                "document": node_editor_document,
+                "focus_requested": editor_context.node_editor_state.focus_requested,
                 "context_menu_open": editor_context.node_editor_context_menu.is_some(),
                 "pending_layout_command": editor_context.node_editor_state.pending_layout_command,
                 "layout_execution_serial": editor_context.node_editor_state.layout_execution_serial,
@@ -423,8 +567,8 @@ mod tests {
     use super::*;
     use crate::state::context_types::SelectionTarget;
     use crate::ui::tab_viewer::create_initial_dock_state;
-    use library::model::project::connection::DATA_VALUE_PROPERTY;
     use library::model::project::Composition;
+    use library::model::project::connection::DATA_VALUE_PROPERTY;
     use library::model::property::{ColorSpaceRef, ColorValue, Property, PropertyValue};
     use library::model::{DataContent, Node};
 

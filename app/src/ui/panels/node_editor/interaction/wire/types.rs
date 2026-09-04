@@ -9,8 +9,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
-    clipped_qa_rect, node_editor_port_interactions_enabled, qa_container_key, qa_rect_metadata,
-    wire_port_drop_rect, SurfaceCapture,
+    SurfaceCapture, clipped_qa_rect, node_editor_port_interactions_enabled, qa_container_key,
+    qa_rect_metadata, wire_port_drop_rect,
 };
 
 pub(in crate::ui::panels::node_editor) struct QaPin {

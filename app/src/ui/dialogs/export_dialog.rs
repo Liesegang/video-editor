@@ -1,7 +1,7 @@
 use eframe::egui;
 use log::error;
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 

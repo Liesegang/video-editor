@@ -26,7 +26,6 @@ pub enum CommandId {
     TogglePlayback,
 
     // Tools
-    HandTool,
     ShowCommandPalette,
 
     // Node Editor
@@ -61,6 +60,7 @@ pub struct CommandContext {
 }
 
 impl CommandContext {
+    #[cfg(test)]
     pub fn palette_origin(area: Self, focused: Self) -> Self {
         Self {
             scope: if area.scope == CommandScope::NodeEditor
@@ -237,13 +237,6 @@ impl CommandRegistry {
                 true, // Trigger on release
             ),
             // Tools
-            Command::new(
-                CommandId::HandTool,
-                "Hand Tool (Hold)",
-                Some((Modifiers::NONE, Key::Space)),
-                true, // Allow focused for panning in text fields? Maybe no.
-                false,
-            ),
             Command::new(
                 CommandId::ShowCommandPalette,
                 "Command Palette",

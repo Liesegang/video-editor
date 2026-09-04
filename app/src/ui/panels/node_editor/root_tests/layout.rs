@@ -228,9 +228,11 @@ fn scoped_layouts_leave_every_out_of_scope_entity_byte_identical() {
     )
     .unwrap();
     assert!(!track_plan.track_layouts.contains_key(&ids.empty_track));
-    assert!(!track_plan
-        .node_positions
-        .contains_key(&ids.composition_node));
+    assert!(
+        !track_plan
+            .node_positions
+            .contains_key(&ids.composition_node)
+    );
     apply_auto_layout(&mut track_project, ids.composition, &track_plan);
     assert_eq!(
         track_project.get_track(ids.empty_track).unwrap(),

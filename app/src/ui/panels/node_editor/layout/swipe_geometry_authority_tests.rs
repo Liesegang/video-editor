@@ -79,8 +79,8 @@ fn assert_close(actual: f32, expected: f32) {
 }
 
 #[test]
-fn detailed_measured_geometry_unions_estimate_and_commit_matches_preview_and_undo(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn detailed_measured_geometry_unions_estimate_and_commit_matches_preview_and_undo()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let before = fixture.project.clone();
     let source_position = before
@@ -205,8 +205,8 @@ fn detailed_measured_geometry_unions_estimate_and_commit_matches_preview_and_und
 }
 
 #[test]
-fn overview_ignores_screen_stable_outline_and_is_zoom_stable(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn overview_ignores_screen_stable_outline_and_is_zoom_stable()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let preview_at = |scale: f32| {
         let rendered = fixture
@@ -252,8 +252,8 @@ fn overview_ignores_screen_stable_outline_and_is_zoom_stable(
 }
 
 #[test]
-fn unmeasured_nodes_fall_back_to_conservative_estimated_geometry(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn unmeasured_nodes_fall_back_to_conservative_estimated_geometry()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let preview = downstream_preview(&fixture, &HashMap::new(), 1.0)?;
     let source_position = fixture

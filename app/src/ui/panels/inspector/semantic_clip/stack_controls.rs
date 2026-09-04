@@ -9,7 +9,7 @@ use library::editor::project_service::{
     SemanticPropertyGroup, SemanticStyleStack,
 };
 use library::model::project::{
-    NodeContainer, PortDataType, PortDirection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortDataType, PortDirection,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::plugin::{
@@ -22,12 +22,12 @@ use uuid::Uuid;
 
 use crate::action::HistoryManager;
 use crate::ui::widgets::searchable_context_menu::{
-    searchable_menu_button, show_searchable_items_with_qa, SearchableItem,
+    SearchableItem, searchable_menu_button, show_searchable_items_with_qa,
 };
 
 mod qa;
 
-use qa::{register_action_button, register_stack_row, render_query_error, StackQaAction};
+use qa::{StackQaAction, register_action_button, register_stack_row, render_query_error};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StackAction {

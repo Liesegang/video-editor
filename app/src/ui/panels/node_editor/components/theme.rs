@@ -10,10 +10,10 @@ use node_editor_ui::{Editor, GroupChrome, NodePalette};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    canonical_pin_definitions, node_editor_details_visible, screen_stroke_in_graph_units,
-    ContainerKind, ContainerVisual, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
-    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, EMBEDDED_PORT_LABEL_INSET,
-    PORT_ROW_HEIGHT,
+    CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_ROW_HEIGHT,
+    CONTAINER_RIGHT_PORT_Y, ContainerKind, ContainerVisual, EMBEDDED_PORT_LABEL_INSET,
+    PORT_ROW_HEIGHT, canonical_pin_definitions, node_editor_details_visible,
+    screen_stroke_in_graph_units,
 };
 
 pub(in crate::ui::panels::node_editor) const VALUE_NODE_CATEGORY_LABEL: &str = "Value";

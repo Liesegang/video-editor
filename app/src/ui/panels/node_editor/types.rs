@@ -252,9 +252,13 @@ mod tests {
                     "{kind:?} {anchor:?} hit {hit:?} overlaps content {content:?}",
                 );
             }
-            assert!(!visual
-                .unit_scale_port_hit_rect(PortAnchorKind::OutputSinks, 0)
-                .intersects(visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 0,)));
+            assert!(
+                !visual
+                    .unit_scale_port_hit_rect(PortAnchorKind::OutputSinks, 0)
+                    .intersects(
+                        visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 0,)
+                    )
+            );
         }
     }
 

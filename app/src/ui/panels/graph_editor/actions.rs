@@ -1,9 +1,9 @@
+use super::PropertyComponent;
 use super::mutation::{
-    add_keyframe, property_component, remove_keyframe, resolve_graph_property, update_keyframe,
-    validate_keyframe_component, GraphMutationRoute,
+    GraphMutationRoute, add_keyframe, property_component, remove_keyframe, resolve_graph_property,
+    update_keyframe, validate_keyframe_component,
 };
 use super::utils::{property_component_value, replace_property_component};
-use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::state::context_types::GraphPropertyAddress;
@@ -462,9 +462,10 @@ mod tests {
         let keyframe_id = keyframe.id;
         let mut node = Node::new_add("typed vector action");
         let node_id = node.id;
-        assert!(node
-            .set_property("b".to_string(), Property::keyframe(vec![keyframe]))
-            .is_ok());
+        assert!(
+            node.set_property("b".to_string(), Property::keyframe(vec![keyframe]))
+                .is_ok()
+        );
         let mut model = Project::new("typed vector action");
         model.add_node(node);
         let project = Arc::new(RwLock::new(model));
@@ -531,12 +532,13 @@ mod tests {
     fn exact_node_vec4_w_add_and_move_preserve_xyz_and_reject_scalar_mismatch() {
         let mut node = Node::new_add("Vec4 Graph target");
         let node_id = node.id;
-        assert!(node
-            .set_property(
+        assert!(
+            node.set_property(
                 "b".to_string(),
                 Property::constant(vec4(1.0, 2.0, 3.0, 4.0)),
             )
-            .is_ok());
+            .is_ok()
+        );
         let (mut composition, track) = Composition::new("main", 640, 360, 30.0, 10.0);
         let composition_id = composition.id;
         composition.track_ids = vec![track.id];

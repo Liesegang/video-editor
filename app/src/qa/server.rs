@@ -3,7 +3,6 @@ use super::input::{
     ActionPhase, ActionTracker, DragRequest, InputAction, InputCommand, KeyRequest, PinchRequest,
     PointerRequest, ScrollRequest, TextRequest,
 };
-use super::probe;
 use super::registry;
 use super::ui_query::{self, UiQuery};
 use serde_json::{json, Value};
@@ -362,10 +361,6 @@ fn route(
 
     if request.method == "GET" && path == "/v1/state" {
         return ui_query::snapshot_response(query_sender, repaint_context);
-    }
-
-    if request.method == "POST" && path == "/v1/probes/metadata-output" {
-        return probe::endpoint_response(&request.body, query_sender, repaint_context);
     }
 
     if request.method == "GET" {

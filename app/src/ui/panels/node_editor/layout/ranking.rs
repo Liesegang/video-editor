@@ -1,8 +1,8 @@
 use eframe::egui;
-use library::model::project::{PortOwner, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT};
 #[cfg(test)]
 use library::model::Node;
 use library::model::Project;
+use library::model::project::{AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, PortOwner};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
@@ -736,19 +736,21 @@ mod tests {
         let ranks = rank_nodes_by_scc(&node_ids, &edge_pairs);
         let columns = node_rank_columns(&project, &node_ids, &ranks, 20.0);
         let mut positions = BTreeMap::new();
-        assert!(layout_node_band(
-            &project,
-            &node_ids,
-            &ranks,
-            &columns,
-            &edges,
-            NodeBandPlacement {
-                container_output_y: &HashMap::new(),
-                origin_y: 40.0,
-                positions: &mut positions,
-            },
-        )
-        .is_some());
+        assert!(
+            layout_node_band(
+                &project,
+                &node_ids,
+                &ranks,
+                &columns,
+                &edges,
+                NodeBandPlacement {
+                    container_output_y: &HashMap::new(),
+                    origin_y: 40.0,
+                    positions: &mut positions,
+                },
+            )
+            .is_some()
+        );
         (project, positions)
     }
 
@@ -822,12 +824,11 @@ mod tests {
                 .total_cmp(&right.left())
                 .then_with(|| left.top().total_cmp(&right.top()))
         });
-        assert!(rects
-            .iter()
-            .enumerate()
-            .all(|(index, left)| rects[index + 1..]
+        assert!(rects.iter().enumerate().all(|(index, left)| {
+            rects[index + 1..]
                 .iter()
-                .all(|right| !left.intersects(*right))));
+                .all(|right| !left.intersects(*right))
+        }));
     }
 
     #[test]
@@ -866,18 +867,24 @@ mod tests {
         let output = Node::new_merge("Clip output");
         let output_id = output.id;
         project.add_node(output);
-        assert!(project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), output_id)
-            .is_ok());
+        assert!(
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), output_id)
+                .is_ok()
+        );
         let disconnected = Node::new_merge("Disconnected but inside bounds");
         let disconnected_id = disconnected.id;
         project.add_node(disconnected);
-        assert!(project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), disconnected_id)
-            .is_ok());
-        assert!(project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(output_id))
-            .is_ok());
+        assert!(
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), disconnected_id)
+                .is_ok()
+        );
+        assert!(
+            project
+                .set_output_node(NodeContainer::Clip(clip_id), Some(output_id))
+                .is_ok()
+        );
         let authored_connections = project.connections.clone();
 
         let nodes = vec![
@@ -937,12 +944,13 @@ mod tests {
             .map(|node| node.ui_position[1] + estimated_node_size(&project, node.id).y)
             .max_by(f32::total_cmp)
             .unwrap_or(clip.ui_position[1]);
-        assert!(clip
-            .node_ids
-            .iter()
-            .filter_map(|node_id| project.get_node(*node_id))
-            .all(|node| node.ui_position[1]
-                >= clip.ui_position[1] + crate::ui::panels::node_editor::AUTO_LAYOUT_CLIP_TOP));
+        assert!(
+            clip.node_ids
+                .iter()
+                .filter_map(|node_id| project.get_node(*node_id))
+                .all(|node| node.ui_position[1]
+                    >= clip.ui_position[1] + crate::ui::panels::node_editor::AUTO_LAYOUT_CLIP_TOP)
+        );
         assert_eq!(
             clip.ui_position[1] + clip.ui_size[1] - clip_node_bottom,
             crate::ui::panels::node_editor::AUTO_LAYOUT_TRACK_BOTTOM

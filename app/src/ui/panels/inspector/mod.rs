@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService;
+use library::model::project::Project;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
@@ -19,18 +19,18 @@ mod property_inference;
 mod selection;
 mod semantic_clip;
 
-use facade::{render_semantic_graph_facade, FacadeOwnerKind};
+use facade::{FacadeOwnerKind, render_semantic_graph_facade};
 use node_inspector::{node_display_type, render_node};
 use presentation::{render_multi_selection_notice, render_node_time_source};
-use selection::{resolve_selection, InspectorSelection};
+use selection::{InspectorSelection, resolve_selection};
 
 #[cfg(test)]
 use clip_timing::inspector_timing_drag_config;
 #[cfg(test)]
 use facade::{
-    content_connection_metadata, facade_output_metadata, facade_output_text,
-    is_content_flow_connection, native_value_nodes, operation_category, operation_state_label,
-    semantic_visual_sources, source_kind, FacadeOutputMode, OPERATION_CATEGORY_SECTIONS,
+    FacadeOutputMode, OPERATION_CATEGORY_SECTIONS, content_connection_metadata,
+    facade_output_metadata, facade_output_text, is_content_flow_connection, native_value_nodes,
+    operation_category, operation_state_label, semantic_visual_sources, source_kind,
 };
 #[cfg(test)]
 use node_inspector::{

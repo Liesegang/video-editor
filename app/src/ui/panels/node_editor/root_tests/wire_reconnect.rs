@@ -56,22 +56,24 @@ fn selected_source_handle_wins_over_socket_fanout_and_reconnects_atomically() {
 
     // An unselected connected socket keeps the ordinary fan-out gesture.
     let mut fanout_state = NodeEditorState::default();
-    assert!(run_wire_interaction_frames(
-        &project,
-        &edge,
-        &rendered_ports,
-        &mut fanout_state,
-        vec![
-            vec![egui::Event::PointerMoved(edge.start)],
-            vec![egui::Event::PointerButton {
-                pos: edge.start,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ],
-    )
-    .is_empty());
+    assert!(
+        run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut fanout_state,
+            vec![
+                vec![egui::Event::PointerMoved(edge.start)],
+                vec![egui::Event::PointerButton {
+                    pos: edge.start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        )
+        .is_empty()
+    );
     assert!(fanout_state.normal_connect_gesture.is_some());
     assert!(fanout_state.wire_gesture.is_none());
 
@@ -121,11 +123,13 @@ fn selected_source_handle_wins_over_socket_fanout_and_reconnects_atomically() {
             }],
         ],
     );
-    let [QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
-        connection_id,
-        from,
-        to,
-    })] = edits.as_slice()
+    let [
+        QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
+            connection_id,
+            from,
+            to,
+        }),
+    ] = edits.as_slice()
     else {
         panic!("endpoint drag did not queue one reconnect: {edits:?}");
     };

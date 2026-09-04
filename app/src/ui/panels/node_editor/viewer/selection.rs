@@ -1,9 +1,9 @@
 use crate::ui::panels::node_editor::{
-    container_inactive, container_visual_style, graph_item_inactive,
-    native_variadic_merge_for_node, node_palette, ContainerVisual, ContainerVisualStyle, GraphItem,
+    ContainerVisual, ContainerVisualStyle, GraphItem, container_inactive, container_visual_style,
+    graph_item_inactive, native_variadic_merge_for_node, node_palette,
 };
-use library::model::project::PortOwner;
 use library::model::Project;
+use library::model::project::PortOwner;
 use node_editor_ui::{Editor, NodeVisualStyle};
 use uuid::Uuid;
 

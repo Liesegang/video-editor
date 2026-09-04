@@ -52,7 +52,7 @@ impl ExportAudioTempFile {
 mod tests {
     use super::ExportAudioTempFile;
     use std::fs;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
     use uuid::Uuid;
 

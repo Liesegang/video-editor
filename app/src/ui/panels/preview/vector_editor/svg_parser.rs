@@ -208,9 +208,11 @@ mod tests {
         // Close -> is_closed
 
         let result = parse_svg_path(original_path);
-        assert!(result
-            .as_ref()
-            .is_ok_and(|path| path.points.len() == 4 && path.is_closed));
+        assert!(
+            result
+                .as_ref()
+                .is_ok_and(|path| path.points.len() == 4 && path.is_closed)
+        );
         let generated = result.as_ref().map(to_svg_path);
         // Expect: M 10,10 L 90,10 L 90,90 L 10,90 Z
         // Note: Floats might format differently.

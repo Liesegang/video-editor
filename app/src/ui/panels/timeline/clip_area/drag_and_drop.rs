@@ -1,8 +1,8 @@
 use egui::Ui;
-use library::model::asset::AssetKind;
-use library::model::project::Project;
 use library::ClipBundle;
 use library::EditorService as ProjectService;
+use library::model::asset::AssetKind;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -269,6 +269,10 @@ pub(super) fn handle_drag_and_drop(
                                     )
                                     .ok();
                             }
+                            // Module definitions belong to the Timeline-first
+                            // authoring surface. The legacy Timeline must not
+                            // materialize one as a graph-backed Clip.
+                            DragStateItem::ModuleDefinition { .. } => {}
                         }
                     } // proj_read is now dropped
 

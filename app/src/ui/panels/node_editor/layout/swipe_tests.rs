@@ -1,16 +1,16 @@
 use super::*;
 
-use library::model::project::{
-    Composition, PortAddress, PortOwner, ProjectConnection, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-};
 use library::model::Node;
+use library::model::project::{
+    Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress, PortOwner, ProjectConnection,
+};
 
 use crate::state::context_types::NodeEditorPendingEdit;
 use crate::ui::panels::node_editor::{
-    apply_auto_layout, apply_queued_node_edits, compute_auto_layout, container_rect,
-    estimated_node_rect, estimated_node_size, nested_content_rect, AutoLayoutScope, NodeEdit,
-    QueuedNodeEdit, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
-    AUTO_LAYOUT_COMPOSITION_RIGHT,
+    AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COMPOSITION_BOTTOM, AUTO_LAYOUT_COMPOSITION_RIGHT,
+    AutoLayoutScope, NodeEdit, QueuedNodeEdit, apply_auto_layout, apply_queued_node_edits,
+    compute_auto_layout, container_rect, estimated_node_rect, estimated_node_size,
+    nested_content_rect,
 };
 
 struct Fixture {
@@ -409,8 +409,8 @@ fn start_and_update_only_change_sparse_display_projection() -> Result<(), Box<dy
 }
 
 #[test]
-fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn commit_is_one_atomic_history_entry_and_undo_restores_positions()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let before = fixture.project.clone();
     let mut project = fixture.project;
@@ -485,8 +485,8 @@ fn commit_is_one_atomic_history_entry_and_undo_restores_positions(
 }
 
 #[test]
-fn start_closes_pending_property_history_before_layout_commit(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn start_closes_pending_property_history_before_layout_commit()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let initial = fixture.project.clone();
     let mut project = fixture.project;
@@ -570,8 +570,8 @@ fn start_closes_pending_property_history_before_layout_commit(
 }
 
 #[test]
-fn cancelled_layout_keeps_the_closed_property_history_entry(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn cancelled_layout_keeps_the_closed_property_history_entry()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let initial = fixture.project.clone();
     let mut project = fixture.project;
@@ -643,8 +643,8 @@ fn cancelled_layout_keeps_the_closed_property_history_entry(
 }
 
 #[test]
-fn releasing_a_before_pointer_cancels_without_project_or_history_change(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn releasing_a_before_pointer_cancels_without_project_or_history_change()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let before = fixture.project.clone();
     let mut state = NodeEditorState::default();
@@ -723,8 +723,8 @@ fn releasing_a_before_pointer_cancels_without_project_or_history_change(
 }
 
 #[test]
-fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let before = fixture.project.clone();
     let mut state = NodeEditorState::default();
@@ -787,8 +787,8 @@ fn focus_loss_without_pointer_release_recovers_on_the_next_stable_frame(
 }
 
 #[test]
-fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;
     let track_id = fixture
         .project
@@ -855,8 +855,8 @@ fn shift_alt_and_negative_vertical_swipe_are_frozen_at_start(
 }
 
 #[test]
-fn concurrent_project_change_rejects_whole_commit_without_partial_layout(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn concurrent_project_change_rejects_whole_commit_without_partial_layout()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let mut project = fixture.project;
     let mut state = NodeEditorState::default();

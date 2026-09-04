@@ -1,28 +1,48 @@
 use log::error;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{
+    Receiver, Sender, SyncSender, TryRecvError, TrySendError, channel, sync_channel,
+};
 use std::thread;
 
 use crate::RenderDestination;
 use crate::cache::SharedCacheManager;
+use crate::core::render_plan::{RenderPlan, evaluate_timeline_render_plan_frame_at_instance};
 use crate::editor::RenderService;
 use crate::error::LibraryError;
-use crate::model::frame::frame::FrameInfo;
-use crate::model::project::Project;
+use crate::model::authoring::{AuthoringProject, InstancePath, TimelineId};
+use crate::model::frame::frame::{FrameInfo, Region};
 use crate::plugin::PluginManager;
 use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::rendering::skia_renderer::SkiaRenderer;
 
-pub use crate::rendering::render_authority::RenderFrameAuthority;
+mod export;
+
+use export::{
+    AuthoringExportRequest, AuthoringPngExportRequest, AuthoringVideoExportRequest,
+    run_authoring_export_worker,
+};
 
 pub struct RenderServer {
     tx: Sender<RenderRequest>,
-    rx_result: Receiver<RenderResult>,
+    rx_authoring_result: Receiver<RenderResult>,
+    tx_authoring_export: SyncSender<AuthoringExportRequest>,
+    rx_authoring_export_result: Receiver<AuthoringExportResult>,
     handle: Option<thread::JoinHandle<()>>,
+    export_handle: Option<thread::JoinHandle<()>>,
 }
 
 enum RenderRequest {
-    Render(RenderRequestId, Arc<Project>, FrameInfo),
+    RenderAuthoring {
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        instance_path: Option<InstancePath>,
+        frame_number: i64,
+        render_scale: f64,
+        region: Option<Region>,
+    },
     SetSharingContext(usize, Option<isize>),
     Shutdown,
 }
@@ -54,10 +74,76 @@ pub struct RenderResult {
     pub frame_info: FrameInfo,
 }
 
+/// Result of a full-frame Timeline-first export request.
+///
+/// Export has a dedicated queue and worker so Preview coalescing can neither
+/// discard an export request nor consume its completion.
+pub struct AuthoringExportResult {
+    pub request_id: RenderRequestId,
+    pub timeline_id: TimelineId,
+    pub frame_number: i64,
+    pub output_path: String,
+    pub output: Result<(), LibraryError>,
+    pub frame_info: FrameInfo,
+    /// Frames accepted by the exporter before the request completed.
+    pub frames_exported: u64,
+    /// Total frames selected by the immutable export request.
+    pub frame_count: u64,
+}
+
+fn authoring_error_frame_info(
+    project: &AuthoringProject,
+    timeline_id: TimelineId,
+    frame_number: i64,
+    render_scale: f64,
+    region: Option<Region>,
+) -> FrameInfo {
+    let Some(timeline) = project.timelines.get(&timeline_id) else {
+        return FrameInfo {
+            width: 1,
+            height: 1,
+            background_color: crate::model::frame::color::Color::black(),
+            color_profile: "sRGB".to_string(),
+            render_scale: ordered_float::OrderedFloat(render_scale),
+            now_time: ordered_float::OrderedFloat(0.0),
+            region,
+            items: Vec::new(),
+        };
+    };
+    let now_time = (frame_number >= 0)
+        .then(|| crate::model::authoring::MediaTime::from_frame_index(frame_number, timeline.fps))
+        .and_then(Result::ok)
+        .map(crate::model::authoring::MediaTime::to_seconds_f64)
+        .unwrap_or(0.0);
+    FrameInfo {
+        width: timeline.width,
+        height: timeline.height,
+        background_color: timeline.background_color.clone(),
+        color_profile: timeline.color_profile.clone(),
+        render_scale: ordered_float::OrderedFloat(render_scale),
+        now_time: ordered_float::OrderedFloat(now_time),
+        region,
+        items: Vec::new(),
+    }
+}
+
 impl RenderServer {
     pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
         let (tx, rx) = channel::<RenderRequest>();
-        let (tx_result, rx_result) = channel::<RenderResult>();
+        let (tx_authoring_result, rx_authoring_result) = channel::<RenderResult>();
+        let (tx_authoring_export, rx_authoring_export) = sync_channel::<AuthoringExportRequest>(1);
+        let (tx_authoring_export_result, rx_authoring_export_result) =
+            channel::<AuthoringExportResult>();
+        let export_plugin_manager = Arc::clone(&plugin_manager);
+        let export_cache_manager = Arc::clone(&cache_manager);
+        let export_handle = thread::spawn(move || {
+            run_authoring_export_worker(
+                rx_authoring_export,
+                tx_authoring_export_result,
+                export_plugin_manager,
+                export_cache_manager,
+            );
+        });
 
         let handle = thread::spawn(move || {
             let mut current_background_color = crate::model::frame::color::Color {
@@ -91,8 +177,26 @@ impl RenderServer {
 
                 for request in std::iter::once(first_request).chain(rx.try_iter()) {
                     match request {
-                        RenderRequest::Render(request_id, project, frame_info) => {
-                            pending_render = Some((request_id, project, frame_info));
+                        RenderRequest::RenderAuthoring {
+                            request_id,
+                            project,
+                            plan,
+                            timeline_id,
+                            instance_path,
+                            frame_number,
+                            render_scale,
+                            region,
+                        } => {
+                            pending_render = Some(RenderRequest::RenderAuthoring {
+                                request_id,
+                                project,
+                                plan,
+                                timeline_id,
+                                instance_path,
+                                frame_number,
+                                render_scale,
+                                region,
+                            });
                         }
                         RenderRequest::SetSharingContext(handle, hwnd) => {
                             if let Some(render_service) = render_service.as_mut()
@@ -106,15 +210,59 @@ impl RenderServer {
                     }
                 }
 
-                let Some((request_id, project, frame_info)) = pending_render else {
+                let Some(pending_render) = pending_render else {
                     continue;
+                };
+                let (request_id, project, frame_info) = match pending_render {
+                    RenderRequest::RenderAuthoring {
+                        request_id,
+                        project,
+                        plan,
+                        timeline_id,
+                        instance_path,
+                        frame_number,
+                        render_scale,
+                        region,
+                    } => match evaluate_timeline_render_plan_frame_at_instance(
+                        project.as_ref(),
+                        plan.as_ref(),
+                        timeline_id,
+                        frame_number,
+                        render_scale,
+                        region,
+                        instance_path.as_ref(),
+                    ) {
+                        Ok(frame_info) => (request_id, project, frame_info),
+                        Err(error) => {
+                            let frame_info = authoring_error_frame_info(
+                                project.as_ref(),
+                                timeline_id,
+                                frame_number,
+                                render_scale,
+                                region,
+                            );
+                            if tx_authoring_result
+                                .send(RenderResult {
+                                    request_id,
+                                    frame_hash: 0,
+                                    output: Err(error),
+                                    frame_info,
+                                })
+                                .is_err()
+                            {
+                                break 'server;
+                            }
+                            continue 'server;
+                        }
+                    },
+                    RenderRequest::SetSharingContext(_, _) | RenderRequest::Shutdown => continue,
                 };
                 let Some(render_service) = render_service.as_mut() else {
                     let error =
                         LibraryError::Render(initialization_error.clone().unwrap_or_else(|| {
                             "Preview renderer is unavailable without an error message".to_string()
                         }));
-                    if tx_result
+                    if tx_authoring_result
                         .send(RenderResult {
                             request_id,
                             frame_hash: 0,
@@ -156,7 +304,7 @@ impl RenderServer {
                         }
                         Err(error) => {
                             error!("Failed to resize render target: {error}");
-                            if tx_result
+                            if tx_authoring_result
                                 .send(RenderResult {
                                     request_id,
                                     frame_hash: 0,
@@ -172,7 +320,7 @@ impl RenderServer {
                     }
                 }
 
-                let output = render_service.render_project_frame(
+                let output = render_service.render_authoring_frame(
                     project.as_ref(),
                     &frame_info,
                     RenderDestination::Preview,
@@ -180,7 +328,7 @@ impl RenderServer {
                 if let Err(error) = &output {
                     error!("Failed to render frame: {error}");
                 }
-                if tx_result
+                if tx_authoring_result
                     .send(RenderResult {
                         request_id,
                         frame_hash: 0,
@@ -196,33 +344,204 @@ impl RenderServer {
 
         Self {
             tx,
-            rx_result,
+            rx_authoring_result,
+            tx_authoring_export,
+            rx_authoring_export_result,
             handle: Some(handle),
+            export_handle: Some(export_handle),
         }
     }
 
-    /// Queue a render and return whether the worker accepted it.
-    ///
-    /// A failed submission is observable so a caller-side scheduler can clear
-    /// its in-flight slot instead of waiting forever for a result.
-    pub fn send_request(
+    /// Queue a Timeline-first render. Evaluation and rasterization both happen
+    /// on the render worker; Project ownership stays in `AuthoringProject` and
+    /// the immutable derived plan is shared across requests.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the asynchronous boundary keeps exact frame, scale, and region explicit"
+    )]
+    pub fn send_authoring_request(
         &self,
         request_id: RenderRequestId,
-        project: Arc<Project>,
-        frame_info: FrameInfo,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        frame_number: i64,
+        render_scale: f64,
+        region: Option<Region>,
     ) -> bool {
-        if let Err(error) = self
-            .tx
-            .send(RenderRequest::Render(request_id, project, frame_info))
-        {
+        self.send_authoring_request_at_instance(
+            request_id,
+            project,
+            plan,
+            timeline_id,
+            None,
+            frame_number,
+            render_scale,
+            region,
+        )
+    }
+
+    /// Queue a Timeline-first render in a concrete nested placement context.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the asynchronous boundary keeps exact frame, viewport, and instance context explicit"
+    )]
+    pub fn send_authoring_request_at_instance(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        instance_path: Option<InstancePath>,
+        frame_number: i64,
+        render_scale: f64,
+        region: Option<Region>,
+    ) -> bool {
+        if let Err(error) = self.tx.send(RenderRequest::RenderAuthoring {
+            request_id,
+            project,
+            plan,
+            timeline_id,
+            instance_path,
+            frame_number,
+            render_scale,
+            region,
+        }) {
             log::debug!("Render server is unavailable: {error}");
             return false;
         }
         true
     }
 
-    pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {
-        self.rx_result.try_recv()
+    /// Queue one full-resolution Timeline-first frame for PNG export.
+    ///
+    /// The bounded dedicated worker is intentionally independent from Preview
+    /// request coalescing. `false` means the single pending export slot is busy
+    /// or the worker is unavailable; callers may retry without losing an
+    /// accepted request.
+    pub fn send_authoring_png_export_request(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        frame_number: i64,
+        output_path: String,
+    ) -> bool {
+        self.send_authoring_png_export_request_at_instance(
+            request_id,
+            project,
+            plan,
+            timeline_id,
+            None,
+            frame_number,
+            output_path,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "export boundary keeps exact frame and instance context explicit"
+    )]
+    pub fn send_authoring_png_export_request_at_instance(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        instance_path: Option<InstancePath>,
+        frame_number: i64,
+        output_path: String,
+    ) -> bool {
+        match self
+            .tx_authoring_export
+            .try_send(AuthoringExportRequest::Png(AuthoringPngExportRequest {
+                request_id,
+                project,
+                plan,
+                timeline_id,
+                instance_path,
+                frame_number,
+                output_path,
+            })) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                log::debug!("Authoring export worker already has a pending request");
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                log::debug!("Authoring export worker is unavailable");
+                false
+            }
+        }
+    }
+
+    /// Queue a full-duration Timeline-first video export.
+    ///
+    /// Frames are rendered from the immutable Project/RenderPlan snapshot and
+    /// streamed to the FFmpeg exporter on the dedicated export worker. Audio
+    /// is intentionally absent until the authoring runtime has a real audio
+    /// schedule and mixer; this API does not manufacture a legacy graph or a
+    /// silent placeholder source.
+    pub fn send_authoring_video_export_request(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        output_path: String,
+    ) -> bool {
+        self.send_authoring_video_export_request_at_instance(
+            request_id,
+            project,
+            plan,
+            timeline_id,
+            None,
+            output_path,
+        )
+    }
+
+    /// Queue a full-duration video export in a concrete nested placement.
+    pub fn send_authoring_video_export_request_at_instance(
+        &self,
+        request_id: RenderRequestId,
+        project: Arc<AuthoringProject>,
+        plan: Arc<RenderPlan>,
+        timeline_id: TimelineId,
+        instance_path: Option<InstancePath>,
+        output_path: String,
+    ) -> bool {
+        match self
+            .tx_authoring_export
+            .try_send(AuthoringExportRequest::Video(AuthoringVideoExportRequest {
+                request_id,
+                project,
+                plan,
+                timeline_id,
+                instance_path,
+                output_path,
+            })) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                log::debug!("Authoring export worker already has a pending request");
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                log::debug!("Authoring export worker is unavailable");
+                false
+            }
+        }
+    }
+
+    /// Poll a Timeline-first Preview completion.
+    pub fn poll_authoring_result(&self) -> Result<RenderResult, TryRecvError> {
+        self.rx_authoring_result.try_recv()
+    }
+
+    /// Poll only Timeline-first export completions. Preview never observes or
+    /// discards values from this receiver.
+    pub fn poll_authoring_export_result(&self) -> Result<AuthoringExportResult, TryRecvError> {
+        self.rx_authoring_export_result.try_recv()
     }
 
     pub fn set_sharing_context(&self, handle: usize, hwnd: Option<isize>) {
@@ -235,68 +554,113 @@ impl RenderServer {
 impl Drop for RenderServer {
     fn drop(&mut self) {
         drop(self.tx.send(RenderRequest::Shutdown));
+        drop(
+            self.tx_authoring_export
+                .send(AuthoringExportRequest::Shutdown),
+        );
         if let Some(handle) = self.handle.take()
             && handle.join().is_err()
         {
             error!("Render server thread panicked during shutdown");
         }
+        if let Some(handle) = self.export_handle.take()
+            && handle.join().is_err()
+        {
+            error!("Authoring export thread panicked during shutdown");
+        }
     }
 }
+
+#[cfg(test)]
+mod export_tests;
 
 #[cfg(test)]
 mod tests {
     use super::{RenderRequestId, RenderServer};
     use crate::cache::CacheManager;
+    use crate::core::render_plan::RenderPlanCompiler;
+    use crate::model::authoring::{
+        AuthoringProject, MediaTime, RationalRate, Timeline, TimelineId, TimelineTrack,
+        TimelineTrackId, TimelineTrackKind,
+    };
     use crate::model::frame::color::Color;
-    use crate::model::frame::frame::FrameInfo;
-    use crate::model::project::Project;
+    use crate::model::project::property::PropertyMap;
     use crate::plugin::PluginManager;
     use crate::rendering::renderer::RenderOutput;
-    use ordered_float::OrderedFloat;
     use std::sync::Arc;
     use std::time::Duration;
 
-    fn empty_frame(width: u64, height: u64) -> FrameInfo {
-        FrameInfo {
-            width,
-            height,
-            background_color: Color::black(),
-            color_profile: "sRGB".to_string(),
-            render_scale: OrderedFloat(1.0),
-            now_time: OrderedFloat(0.0),
-            region: None,
-            items: Vec::new(),
-        }
-    }
-
     #[test]
-    fn resize_error_is_returned_and_the_next_valid_frame_recovers() {
+    fn authoring_request_renders_the_selected_nested_timeline() {
+        let mut project = AuthoringProject::new(
+            "nested authoring Preview",
+            8,
+            8,
+            RationalRate::new(30, 1).unwrap(),
+            MediaTime::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        let timeline_id = TimelineId::new();
+        let track_id = TimelineTrackId::new();
+        project.timelines.insert(
+            timeline_id,
+            Timeline {
+                id: timeline_id,
+                name: "Opened nested Timeline".to_string(),
+                width: 3,
+                height: 2,
+                fps: RationalRate::new(24, 1).unwrap(),
+                duration: MediaTime::new(1, 1).unwrap(),
+                background_color: Color {
+                    r: 16,
+                    g: 32,
+                    b: 64,
+                    a: 255,
+                },
+                color_profile: "sRGB".to_string(),
+                track_order: vec![track_id],
+                authored_properties: PropertyMap::new(),
+                published_parameters: Vec::new(),
+            },
+        );
+        project.tracks.insert(
+            track_id,
+            TimelineTrack {
+                id: track_id,
+                timeline_id,
+                name: "Nested video".to_string(),
+                kind: TimelineTrackKind::AudioVisual,
+                authored_properties: PropertyMap::new(),
+            },
+        );
+        let plan = RenderPlanCompiler::compile(&project).unwrap();
         let server = RenderServer::new(
             Arc::new(PluginManager::default()),
             Arc::new(CacheManager::new()),
         );
-        let project = Arc::new(Project::new("render server test"));
-        assert!(server.send_request(
-            RenderRequestId::new(41),
-            Arc::clone(&project),
-            empty_frame(0, 0)
-        ));
-        let failed = server
-            .rx_result
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap();
-        assert_eq!(failed.request_id, RenderRequestId::new(41));
-        assert!(failed.output.is_err());
 
-        assert!(server.send_request(RenderRequestId::new(42), project, empty_frame(2, 2)));
-        let recovered = server
-            .rx_result
+        assert!(server.send_authoring_request(
+            RenderRequestId::new(43),
+            Arc::new(project),
+            Arc::new(plan),
+            timeline_id,
+            0,
+            1.0,
+            None,
+        ));
+        let rendered = server
+            .rx_authoring_result
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
-        assert_eq!(recovered.request_id, RenderRequestId::new(42));
-        let RenderOutput::Image(image) = recovered.output.unwrap() else {
+
+        assert_eq!(rendered.request_id, RenderRequestId::new(43));
+        assert_eq!(
+            (rendered.frame_info.width, rendered.frame_info.height),
+            (3, 2)
+        );
+        let RenderOutput::Image(image) = rendered.output.unwrap() else {
             panic!("CPU fallback must return an image");
         };
-        assert_eq!((image.width, image.height), (2, 2));
+        assert_eq!((image.width, image.height), (3, 2));
     }
 }

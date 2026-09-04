@@ -4,9 +4,9 @@ use library::model::property::{
 };
 use ordered_float::OrderedFloat;
 
-use super::{register_property_control, PropertyAction, PropertyRenderContext};
+use super::{PropertyAction, PropertyRenderContext, register_property_control};
 use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
-use crate::ui::widgets::vector_drag_value::{vector_drag_values, VectorAxisResponse};
+use crate::ui::widgets::vector_drag_value::{VectorAxisResponse, vector_drag_values};
 
 const AXES: [&str; 4] = ["X", "Y", "Z", "W"];
 

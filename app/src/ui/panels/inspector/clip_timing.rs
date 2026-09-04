@@ -1,14 +1,14 @@
 use std::sync::{Arc, RwLock};
 
 use egui::Ui;
+use library::EditorService;
+use library::model::Clip;
 use library::model::node::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY,
 };
 use library::model::project::Project;
 use library::model::property::{PropertyDefinition, PropertyValue};
-use library::model::Clip;
-use library::EditorService;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 

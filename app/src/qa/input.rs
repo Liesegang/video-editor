@@ -348,6 +348,11 @@ impl InputSequencer {
             // egui widgets read modifiers from `InputState`, not necessarily
             // from the PointerButton/Key event that triggered them. Mirror a
             // real held modifier in RawInput for every frame of the gesture.
+            // A loopback QA gesture also represents deliberate user input,
+            // even when the native test window is behind the HTTP client.
+            // Mark that frame focused so focus-aware canvas interactions take
+            // the same path as a foreground pointer gesture.
+            raw_input.focused = true;
             raw_input.modifiers = step.modifiers;
             raw_input.events.extend(step.events);
             if step.final_step {
@@ -790,9 +795,13 @@ mod tests {
             .unwrap();
 
         let context = egui::Context::default();
-        let mut raw_input = egui::RawInput::default();
+        let mut raw_input = egui::RawInput {
+            focused: false,
+            ..egui::RawInput::default()
+        };
         sequencer.inject_for_frame(&context, &mut raw_input, 1.0);
         assert_eq!(raw_input.events.len(), 1);
+        assert!(raw_input.focused);
         assert_eq!(tracker.get(9).unwrap().phase, ActionPhase::Injected);
     }
 

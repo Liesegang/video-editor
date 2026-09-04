@@ -358,11 +358,7 @@ impl PreviewRenderScheduler {
 
 const fn next_nonzero(value: u64) -> u64 {
     let next = value.wrapping_add(1);
-    if next == 0 {
-        1
-    } else {
-        next
-    }
+    if next == 0 { 1 } else { next }
 }
 
 #[cfg(test)]

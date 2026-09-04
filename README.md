@@ -1,5 +1,19 @@
 # Video Editor
 
+## Authoring architecture
+
+RuViE is a timeline editor with explicitly authored, bounded Node Modules. A
+normal video, audio, text, or nested-Timeline clip is never expanded into a
+user-facing graph. A **Node Clip** is the deliberate Timeline placement of a
+reusable Module; its placement and animation belong to the Timeline while its
+processing topology belongs to the Module Definition.
+
+This keeps ordinary editing usable without the Node Editor and guarantees that
+the number of normal Timeline items does not increase the number of Nodes. The
+derived hierarchical Render Plan is runtime data and is not editable or stored
+as the Project's source of truth. See
+[`docs/adr/0001-node-islands.md`](docs/adr/0001-node-islands.md).
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Liesegang/video-editor)
 
 AviUtlの代替を目指した、Rustで書かれたオープンソースの動画編集ソフトウェアです。直感的なインターフェースと柔軟な拡張性を兼ね備え、高品質な動画編集を無料で提供することを目的としています（現在開発途中です）。

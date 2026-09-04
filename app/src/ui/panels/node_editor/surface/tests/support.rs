@@ -11,18 +11,18 @@ pub(super) use library::model::{Composition, Node, NodeContainer, Project};
 pub(super) use node_editor_ui::{ItemId, MoveEndOutcome};
 pub(super) use uuid::Uuid;
 
-pub(super) use crate::action::{commit_live_project_edits, HistoryManager};
+pub(super) use crate::action::{HistoryManager, commit_live_project_edits};
 pub(super) use crate::state::context::EditorContext;
 pub(super) use crate::state::context_types::{NodeEditorEditableWire, SelectionTarget};
 pub(super) use crate::ui::panels::node_editor::{
-    apply_layout_edit, build_snarl, test_fixture::fixture, ContainerKind, ContainerVisual,
-    LayoutEdit, RenderedPortKey, CONTAINER_HEADER_HEIGHT,
+    CONTAINER_HEADER_HEIGHT, ContainerKind, ContainerVisual, LayoutEdit, RenderedPortKey,
+    apply_layout_edit, build_snarl, test_fixture::fixture,
 };
 
 use super::super::SurfacePortId;
 pub(super) use super::super::{
-    deselects_wire, move_change, move_end, selection_change, SurfaceCapture, SurfaceOutput,
-    SurfaceProjection, SurfaceSelectionChange,
+    SurfaceCapture, SurfaceOutput, SurfaceProjection, SurfaceSelectionChange, deselects_wire,
+    move_change, move_end, selection_change,
 };
 
 pub(super) type SurfaceState =

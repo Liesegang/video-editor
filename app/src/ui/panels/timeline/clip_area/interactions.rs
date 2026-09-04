@@ -1,6 +1,6 @@
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService as ProjectService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};

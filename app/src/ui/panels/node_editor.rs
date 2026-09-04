@@ -12,6 +12,7 @@ use crate::ui::widgets::searchable_context_menu::{
 use eframe::egui::{self, Color32};
 #[cfg(test)]
 use egui_snarl::ui::{SnarlPin, SnarlStyle};
+use library::EditorService;
 use library::model::project::PortOwner;
 #[cfg(test)]
 use library::model::project::{PortAddress, PortDataType, PortDirection};
@@ -22,10 +23,9 @@ use library::model::{BlendMode, ColorContent, GeneratorContent, ValueContent};
 use library::model::{Clip, Node, NodeContainer, NodeContent, NodeGraphBundle, Project};
 #[cfg(test)]
 use library::plugin::{
-    PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, SHAPE_TRANSFORM_COMPONENT_ID,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PluginManager, SHAPE_TRANSFORM_COMPONENT_ID,
     STYLE_APPLY_OPERATION, TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
-use library::EditorService;
 #[cfg(test)]
 use ordered_float::OrderedFloat;
 #[cfg(test)]
@@ -56,43 +56,44 @@ mod time_context_overlay;
 #[cfg(test)]
 mod time_context_tests;
 
+#[cfg(test)]
+use canvas::{
+    NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MAX_TRANSLATION,
+    NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE, node_editor_snarl_style,
+    sanitize_node_editor_transform,
+};
 use canvas::{
     node_editor_canvas_metadata, node_editor_details_visible,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
     node_editor_snarl_style_for, paint_node_editor_canvas_grid, resolve_node_editor_transform,
     sanitized_node_editor_scale, screen_stroke_in_graph_units,
 };
-#[cfg(test)]
-use canvas::{
-    node_editor_snarl_style, sanitize_node_editor_transform, NODE_EDITOR_DETAIL_SCALE,
-    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE,
-    NODE_EDITOR_RESIZE_INTERACTION_SCALE,
-};
 use container_output::{
-    container_output_binding_port, container_output_binding_type, container_output_node_id,
-    container_output_port, container_output_type_key, AUDIO_OUTPUT_BINDING_PORT,
-    IMAGE_OUTPUT_BINDING_PORT,
+    AUDIO_OUTPUT_BINDING_PORT, IMAGE_OUTPUT_BINDING_PORT, container_output_binding_port,
+    container_output_binding_type, container_output_node_id, container_output_port,
+    container_output_type_key,
 };
 use property_evaluation::{evaluate_node_property, render_node_property_issue};
 use time_context_overlay::{
-    implicit_time_overlay_requested, register_implicit_time_overlay,
-    IMPLICIT_TIME_OVERLAY_KEY_LABEL,
+    IMPLICIT_TIME_OVERLAY_KEY_LABEL, implicit_time_overlay_requested,
+    register_implicit_time_overlay,
 };
 mod types;
 
 use types::{
-    ContainerKind, ContainerVisual, GraphItem, PinDefinition, PortAnchorKind, AUTO_LAYOUT_CLIP_GAP,
-    AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COLUMN_GAP, AUTO_LAYOUT_COMPOSITION_BOTTOM,
-    AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT, AUTO_LAYOUT_COMPOSITION_TOP,
-    AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP,
-    AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP,
-    COMPOSE_COLOR_BODY_WIDTH, CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
-    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, DETACHED_GRAPH_NODE_GAP,
-    EMBEDDED_PORT_LABEL_INSET, INLINE_CONTROL_WIDTH, MERGE_BODY_WIDTH, MIN_CONTAINER_SIZE,
-    NODE_BODY_WIDTH, NODE_HEADER_WIDTH, NODE_REPARENT_DRAG_THRESHOLD,
-    NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT, PORT_SOCKET_SIZE,
-    PROPERTY_LABEL_WIDTH, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH, WIRE_DRAG_THRESHOLD,
-    WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS, WIRE_RECONNECT_HANDLE_OFFSET,
+    AUTO_LAYOUT_CLIP_GAP, AUTO_LAYOUT_CLIP_TOP, AUTO_LAYOUT_COLUMN_GAP,
+    AUTO_LAYOUT_COMPOSITION_BOTTOM, AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_RIGHT,
+    AUTO_LAYOUT_COMPOSITION_TOP, AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP,
+    AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_GAP, AUTO_LAYOUT_TRACK_LEFT,
+    AUTO_LAYOUT_TRACK_RIGHT, AUTO_LAYOUT_TRACK_TOP, COMPOSE_COLOR_BODY_WIDTH,
+    CONTAINER_CONTROL_OFFSET, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
+    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, ContainerKind, ContainerVisual,
+    DETACHED_GRAPH_NODE_GAP, EMBEDDED_PORT_LABEL_INSET, GraphItem, INLINE_CONTROL_WIDTH,
+    MERGE_BODY_WIDTH, MIN_CONTAINER_SIZE, NODE_BODY_WIDTH, NODE_HEADER_WIDTH,
+    NODE_REPARENT_DRAG_THRESHOLD, NODE_REPARENT_POINTER_OVERLAP_THRESHOLD, PORT_LABEL_WIDTH,
+    PORT_ROW_HEIGHT, PORT_SOCKET_SIZE, PROPERTY_LABEL_WIDTH, PinDefinition, PortAnchorKind,
+    RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH, WIRE_DRAG_THRESHOLD, WIRE_ENDPOINT_RADIUS,
+    WIRE_HIT_RADIUS, WIRE_PORT_DROP_RADIUS, WIRE_RECONNECT_HANDLE_OFFSET,
     WIRE_RECONNECT_HANDLE_RADIUS,
 };
 mod interaction;
@@ -102,7 +103,7 @@ use interaction::{
     WireSecondaryClickHit,
 };
 use surface::{
-    deselects_wire, move_change, move_end, selection_change, SurfaceCapture, SurfaceProjection,
+    SurfaceCapture, SurfaceProjection, deselects_wire, move_change, move_end, selection_change,
 };
 mod qa;
 
@@ -116,7 +117,7 @@ mod commands;
 use commands::{NodeEdit, QueuedNodeEdit};
 mod layout;
 
-use layout::{node_body_width, AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit};
+use layout::{AutoLayoutPlan, AutoLayoutScope, ContainerLayout, LayoutEdit, node_body_width};
 mod viewer;
 
 use viewer::ProjectNodeViewer;
@@ -124,14 +125,14 @@ use viewer::ProjectNodeViewer;
 mod components;
 
 use components::{
+    ContainerVisualStyle, VALUE_NODE_CATEGORY_LABEL, container_highlight_metadata, container_icon,
+    container_visual_style, node_icon, node_palette, paint_container_backdrop,
+    paint_container_foreground, pin_color, pin_info, value_operation_label,
+};
+use components::{
     bounded_non_selectable_label, continuous_color_edit_button, continuous_response_finished,
     layout_toolbar, non_selectable_label, port_label_width, property_label,
     strong_non_selectable_label,
-};
-use components::{
-    container_highlight_metadata, container_icon, container_visual_style, node_icon, node_palette,
-    paint_container_backdrop, paint_container_foreground, pin_color, pin_info,
-    value_operation_label, ContainerVisualStyle, VALUE_NODE_CATEGORY_LABEL,
 };
 use qa::{
     clipped_qa_rect, edge_endpoint_qa_metadata, qa_container_key, qa_port_id, qa_rect_metadata,
@@ -140,6 +141,11 @@ use qa::{
 mod queries;
 #[cfg(test)]
 use interaction::resize_regions;
+use interaction::{
+    TimeContextNode, register_container_chrome, register_implicit_time_context_wires,
+    register_rendered_edges,
+};
+use interaction::{WireInteractionFrame, overview_wire_graph_points, wire_interactions};
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
 use interaction::{cubic_bezier_point, register_edge_component};
@@ -153,45 +159,39 @@ use interaction::{
     rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
     wire_secondary_click_hit,
 };
-use interaction::{overview_wire_graph_points, wire_interactions, WireInteractionFrame};
-use interaction::{
-    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
-    TimeContextNode,
-};
 use interaction::{select_logical_item, selected_container_owners, selection_target_for_owner};
 #[cfg(test)]
 use queries::clip_is_active;
 pub(super) use queries::node_timing_drag_config;
 use queries::{
-    canonical_pin_definitions, container_collapsed, container_inactive, container_name_and_size,
-    container_title, graph_item_inactive, graph_item_inactive_reason, graph_item_title,
-    input_definitions, node_property_definition, node_property_time, node_title,
+    GraphItemInactiveReason, canonical_pin_definitions, container_collapsed, container_inactive,
+    container_name_and_size, container_title, graph_item_inactive, graph_item_inactive_reason,
+    graph_item_title, input_definitions, node_property_definition, node_property_time, node_title,
     output_definitions, parent_container_owner, port_owner_composition,
-    port_owner_for_node_container, GraphItemInactiveReason,
+    port_owner_for_node_container,
 };
 mod panel;
 pub use panel::node_editor_panel;
 mod graph_build;
 pub use commands::flush_pending_continuous_edit;
 use commands::node_can_splice_connection;
-use commands::{apply_edit, apply_queued_node_edits};
 use commands::{
-    create_operation_node_for_request, node_create_menu_items, wire_splice_menu_items,
-    NodeCreateRequest,
+    NodeCreateRequest, create_operation_node_for_request, node_create_menu_items,
+    wire_splice_menu_items,
 };
+use commands::{apply_edit, apply_queued_node_edits};
 #[cfg(test)]
 use commands::{insert_node_on_connection, splice_existing_node_on_connection};
 use components::{
-    blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
-    connection_supports_authored_blend, estimated_merge_input_anchor_offset,
-    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
-    native_variadic_connection_visual_cmp, native_variadic_merge_for_node,
+    MergeInputSlot, MergeInputSlotRole, MergeLayerRow, NativeVariadicMergeKind, blend_mode_label,
+    blend_mode_qa_key, blend_mode_searchable_items, connection_supports_authored_blend,
+    estimated_merge_input_anchor_offset, merge_input_index_for_connection, merge_input_slots,
+    merge_layer_rows, native_variadic_connection_visual_cmp, native_variadic_merge_for_node,
     native_variadic_merge_target, register_merge_layer_component, wire_order_menu_state,
-    wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
-    MergeLayerRow, NativeVariadicMergeKind,
+    wire_order_menu_states, wire_order_qa_metadata,
 };
 #[cfg(test)]
-use components::{merge_images_target_node_id, merge_vacant_slot, WireOrderMenuState};
+use components::{WireOrderMenuState, merge_images_target_node_id, merge_vacant_slot};
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]

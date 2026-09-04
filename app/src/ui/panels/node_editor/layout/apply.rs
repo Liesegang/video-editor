@@ -1,5 +1,5 @@
-use library::model::project::PortOwner;
 use library::model::Project;
+use library::model::project::PortOwner;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{AutoLayoutPlan, MIN_CONTAINER_SIZE};

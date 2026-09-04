@@ -15,7 +15,7 @@ use crate::ui::panels::node_editor::{
     AUTO_LAYOUT_TRACK_BOTTOM, AUTO_LAYOUT_TRACK_TOP,
 };
 
-use super::super::{immediate_child_rects, AutoLayoutPlan};
+use super::super::{AutoLayoutPlan, immediate_child_rects};
 use super::graph::BranchGraph;
 use super::{BranchDirection, DirectionalLayoutMode, DirectionalLayoutRequest, NodeLayoutGeometry};
 

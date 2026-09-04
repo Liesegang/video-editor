@@ -3,15 +3,15 @@ use super::*;
 use crate::test_support::generator_node;
 use library::animation::EasingFunction;
 use library::editor::project_service::GeneratorNodeRequest;
+use library::model::Composition;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::DrawStyle;
 use library::model::frame::entity::StyleConfig;
 use library::model::project::{
-    ProjectConnection, FMOD_X_INPUT_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
-    MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    FMOD_X_INPUT_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyMap};
-use library::model::Composition;
 use library::plugin::{
     FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin, StylePlugin,
 };

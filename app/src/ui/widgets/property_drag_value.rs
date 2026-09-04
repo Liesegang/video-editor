@@ -59,6 +59,7 @@ impl FloatDragValueConfig {
 
     /// Map underlying model units into a presentation coordinate. Inspector
     /// uses this for seconds → frames; Node Editor uses the identity map.
+    #[cfg(test)]
     pub fn transformed(mut self, scale: f64, offset: f64, suffix: impl Into<String>) -> Self {
         self.speed *= scale;
         self.hard_min = self.hard_min.map(|value| value * scale + offset);
@@ -71,6 +72,11 @@ impl FloatDragValueConfig {
         self.widget_with_suffix(value, &self.suffix)
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "exercised by the retained vector-control compatibility fixture"
+    )]
     pub fn widget_without_suffix<'a>(&self, value: &'a mut f64) -> egui::DragValue<'a> {
         self.widget_with_suffix(value, "")
     }

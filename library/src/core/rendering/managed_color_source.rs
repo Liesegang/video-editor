@@ -4,16 +4,28 @@ use ruvie_color_management::{ManagedLinearWorkingImage, SRGB_SPACE_ID, StandardC
 
 use super::managed_color_backend::ProjectColorPipeline;
 use super::media_color_ingress::{
-    MediaAssetKind, reconcile_detected_source, source_asset, standard_space_for_description,
-    validate_decoded_storage_fidelity,
+    MediaAssetKind, reconcile_detected_source, source_asset_from_assets,
+    standard_space_for_description, validate_decoded_storage_fidelity,
 };
 use crate::error::LibraryError;
 use crate::model::asset::{Asset, AssetSourceInterpretation, SourceColorDescription};
+#[cfg(test)]
 use crate::model::project::Project;
 use crate::plugin::{DecodedColorSpace, DecodedPixelDescription, LoadResponse};
 
+#[cfg(test)]
 pub(crate) fn ingest_loaded_media(
     project: &Project,
+    pipeline: &ProjectColorPipeline,
+    surface: &crate::model::frame::entity::ImageSurface,
+    kind: MediaAssetKind,
+    response: LoadResponse,
+) -> Result<ManagedLinearWorkingImage, LibraryError> {
+    ingest_loaded_media_from_assets(&project.assets, pipeline, surface, kind, response)
+}
+
+pub(crate) fn ingest_loaded_media_from_assets(
+    assets: &[Asset],
     pipeline: &ProjectColorPipeline,
     surface: &crate::model::frame::entity::ImageSurface,
     kind: MediaAssetKind,
@@ -25,7 +37,7 @@ pub(crate) fn ingest_loaded_media(
             surface.file_path
         )));
     }
-    let asset = source_asset(project, surface, kind)?.ok_or_else(|| {
+    let asset = source_asset_from_assets(assets, surface, kind)?.ok_or_else(|| {
         LibraryError::Render(format!(
             "managed color rendering requires an authoritative Asset for {:?}",
             surface.file_path

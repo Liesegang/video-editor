@@ -1,14 +1,14 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::evaluate_node_property;
 use crate::ui::panels::node_editor::{
-    bounded_non_selectable_label, clipped_qa_rect, node_property_time, qa_rect_metadata, NodeEdit,
-    COMPOSE_COLOR_BODY_WIDTH,
+    COMPOSE_COLOR_BODY_WIDTH, NodeEdit, bounded_non_selectable_label, clipped_qa_rect,
+    node_property_time, qa_rect_metadata,
 };
 use crate::ui::widgets::color_value_picker::color_value_picker;
 use eframe::egui;
+use library::model::ColorContent;
 use library::model::project::PortOwner;
 use library::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
-use library::model::ColorContent;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -217,8 +217,8 @@ mod tests {
     use super::*;
     use crate::ui::panels::node_editor::apply_edit;
     use library::animation::EasingFunction;
-    use library::model::property::{Keyframe, Property};
     use library::model::Project;
+    use library::model::property::{Keyframe, Property};
 
     fn number(value: f64) -> PropertyValue {
         PropertyValue::Number(OrderedFloat(value))

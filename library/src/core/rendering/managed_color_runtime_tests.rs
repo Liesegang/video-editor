@@ -5,9 +5,9 @@ use ordered_float::OrderedFloat;
 use ruvie_color_management::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 use uuid::Uuid;
 
-#[cfg(feature = "opencolorio")]
-use crate::ProjectModel;
 use crate::cache::CacheManager;
+#[cfg(feature = "opencolorio")]
+use crate::editor::ProjectModel;
 use crate::model::Project;
 use crate::model::asset::{
     Asset, AssetKind, SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,

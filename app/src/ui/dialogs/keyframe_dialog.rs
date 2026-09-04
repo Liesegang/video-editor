@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
+use library::EditorService;
 use library::animation::EasingFunction;
 use library::model::project::Project;
 use library::model::property::KeyframeUpdate;
-use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -11,11 +11,11 @@ use crate::state::context_types::{
     KeyframeDialogEditControl, KeyframeDialogState, KeyframeDialogValues, KeyframeValueComponent,
 };
 use crate::ui::panels::graph_editor::mutation::{
-    property_component, resolve_graph_property, update_keyframe, validate_keyframe_component,
-    GraphMutationRoute,
+    GraphMutationRoute, property_component, resolve_graph_property, update_keyframe,
+    validate_keyframe_component,
 };
 use crate::ui::panels::graph_editor::utils::{
-    replace_property_component, time_mapper_for_owner, PropertyComponent,
+    PropertyComponent, replace_property_component, time_mapper_for_owner,
 };
 
 struct PreparedKeyframeDialogUpdate {
@@ -497,8 +497,8 @@ mod tests {
     use super::*;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, PropertyValue, Vec4};
     use library::model::Clip;
+    use library::model::property::{Keyframe, Property, PropertyValue, Vec4};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
 
@@ -518,9 +518,10 @@ mod tests {
         let mut node = library::model::Node::new_add("dialog");
         node.name = "dialog".to_string();
         let node_id = node.id;
-        assert!(node
-            .set_property("b".to_string(), Property::keyframe(vec![keyframe]))
-            .is_ok());
+        assert!(
+            node.set_property("b".to_string(), Property::keyframe(vec![keyframe]))
+                .is_ok()
+        );
         let mut clip = Clip::new("mapped", 4.0, 8.0);
         clip.trim_in = OrderedFloat(1.5);
         clip.time_stretch = OrderedFloat(0.5);

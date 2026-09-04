@@ -11,6 +11,8 @@ use ruvie_color_management::{
 };
 
 use crate::error::LibraryError;
+use crate::model::asset::Asset;
+use crate::model::authoring::AuthoringProject;
 use crate::model::frame::Image;
 use crate::model::project::{
     ColorConfigIdentity, DEFAULT_BUNDLED_COLOR_CONFIG_ID, LEGACY_BUNDLED_COLOR_CONFIG_V1_ID,
@@ -48,8 +50,26 @@ impl ProjectColorPipeline {
         destination: ManagedRenderDestination,
     ) -> Result<Self, LibraryError> {
         let intent = resolved_intent(project)?;
+        Self::for_intent(&project.assets, intent, destination)
+    }
+
+    /// Build the color authority directly from the Timeline-first authoring
+    /// Project. This deliberately does not manufacture a legacy `Project`.
+    pub(crate) fn for_authoring_project(
+        project: &AuthoringProject,
+        destination: ManagedRenderDestination,
+    ) -> Result<Self, LibraryError> {
+        let intent = resolved_authoring_intent(project)?;
+        Self::for_intent(&project.assets, intent, destination)
+    }
+
+    fn for_intent(
+        assets: &[Asset],
+        intent: ModelValidatedColorManagementConfig,
+        destination: ManagedRenderDestination,
+    ) -> Result<Self, LibraryError> {
         validate_terminal_storage(&intent, destination)?;
-        let backend = backend_for_project(project, &intent)?;
+        let backend = backend_for_assets(assets, &intent)?;
         let context = project_color_context(&intent);
         validate_terminal_backend_binding(backend.as_ref(), &intent, destination, &context)?;
         let srgb_surface_binding = intent.srgb_surface_space().map_err(|issue| {
@@ -366,7 +386,19 @@ fn validate_terminal_backend_binding(
 }
 
 fn resolved_intent(project: &Project) -> Result<ModelValidatedColorManagementConfig, LibraryError> {
-    match project.resolved_color_management() {
+    require_resolved_intent(project.resolved_color_management())
+}
+
+fn resolved_authoring_intent(
+    project: &AuthoringProject,
+) -> Result<ModelValidatedColorManagementConfig, LibraryError> {
+    require_resolved_intent(project.resolved_color_management())
+}
+
+fn require_resolved_intent(
+    resolved: ResolvedColorManagementConfig,
+) -> Result<ModelValidatedColorManagementConfig, LibraryError> {
+    match resolved {
         ResolvedColorManagementConfig::Ready(intent) => Ok(*intent),
         ResolvedColorManagementConfig::Unavailable { diagnostics, .. } => {
             Err(LibraryError::Render(format!(
@@ -381,8 +413,8 @@ fn resolved_intent(project: &Project) -> Result<ModelValidatedColorManagementCon
     }
 }
 
-fn backend_for_project(
-    project: &Project,
+fn backend_for_assets(
+    assets: &[Asset],
     intent: &ModelValidatedColorManagementConfig,
 ) -> Result<Box<dyn ColorTransformBackend>, LibraryError> {
     match intent.config().config() {
@@ -403,8 +435,7 @@ fn backend_for_project(
             sha256,
             ocio_version,
         } => {
-            let asset = project
-                .assets
+            let asset = assets
                 .iter()
                 .find(|asset| asset.id == *asset_id)
                 .ok_or_else(|| {

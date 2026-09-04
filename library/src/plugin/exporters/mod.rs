@@ -9,8 +9,9 @@ pub use self::ffmpeg_export::FfmpegExportPlugin;
 pub use self::png_export::PngExportPlugin;
 
 use crate::error::LibraryError;
+use crate::model::authoring::{AuthoringProject, Timeline};
 use crate::model::project::Composition;
-use crate::model::project::Project;
+use crate::model::project::{ExportConfig, Project};
 use crate::model::property::PropertyDefinition;
 use crate::plugin::{Plugin, PluginCategory};
 use serde_json::Value;
@@ -107,40 +108,66 @@ impl ExportSettings {
             composition.fps,
         );
         settings.bind_project_color_authority(project)?;
+        settings.apply_document_config(&project.export);
+        Ok(settings)
+    }
 
-        let config = &project.export;
+    /// Build encoder settings directly from a Timeline-first Project and one
+    /// selected Timeline. No legacy Project or Composition is manufactured at
+    /// this boundary.
+    pub fn from_authoring_project(
+        project: &AuthoringProject,
+        timeline: &Timeline,
+    ) -> Result<Self, LibraryError> {
+        let width = u32::try_from(timeline.width).map_err(|_| {
+            LibraryError::Render(format!(
+                "Timeline width {} exceeds the encoder limit",
+                timeline.width
+            ))
+        })?;
+        let height = u32::try_from(timeline.height).map_err(|_| {
+            LibraryError::Render(format!(
+                "Timeline height {} exceeds the encoder limit",
+                timeline.height
+            ))
+        })?;
+        let mut settings = ExportSettings::for_dimensions(width, height, timeline.fps.to_f64());
+        settings.bind_authoring_project_color_authority(project)?;
+        settings.apply_document_config(&project.export);
+        Ok(settings)
+    }
+
+    fn apply_document_config(&mut self, config: &ExportConfig) {
         if config.container.is_none()
             && config.codec.is_none()
             && config.pixel_format.is_none()
             && config.parameters.is_empty()
         {
-            return Ok(settings);
+            return;
         }
 
         if let Some(value) = &config.container {
-            settings.container = value.clone();
+            self.container = value.clone();
         }
         if let Some(value) = &config.codec {
-            settings.codec = value.clone();
+            self.codec = value.clone();
         }
         if let Some(value) = &config.pixel_format {
-            settings.pixel_format = value.clone();
+            self.pixel_format = value.clone();
         }
-        settings.parameters = config.parameters.clone();
+        self.parameters = config.parameters.clone();
         for runtime_key in ["audio_source", "audio_channels", "audio_sample_rate"] {
-            settings.parameters.remove(runtime_key);
+            self.parameters.remove(runtime_key);
         }
 
-        if matches!(settings.export_format(), ExportFormat::Video) {
-            if settings.codec == "png" {
-                settings.codec = "libx264".into();
+        if matches!(self.export_format(), ExportFormat::Video) {
+            if self.codec == "png" {
+                self.codec = "libx264".into();
             }
-            if settings.pixel_format == "rgba" {
-                settings.pixel_format = "yuv420p".into();
+            if self.pixel_format == "rgba" {
+                self.pixel_format = "yuv420p".into();
             }
         }
-
-        Ok(settings)
     }
 
     pub fn for_dimensions(width: u32, height: u32, fps: f64) -> Self {
@@ -164,6 +191,15 @@ impl ExportSettings {
     /// intentionally unusable for export until this succeeds.
     pub fn bind_project_color_authority(&mut self, project: &Project) -> Result<(), LibraryError> {
         self.color_authority = Some(ExportColorAuthority::from_project(project)?);
+        Ok(())
+    }
+
+    /// Bind settings to a Timeline-first Project's exact export pipeline.
+    pub fn bind_authoring_project_color_authority(
+        &mut self,
+        project: &AuthoringProject,
+    ) -> Result<(), LibraryError> {
+        self.color_authority = Some(ExportColorAuthority::from_authoring_project(project)?);
         Ok(())
     }
 

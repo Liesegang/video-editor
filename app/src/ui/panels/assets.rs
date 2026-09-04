@@ -1,16 +1,16 @@
 use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
+use library::EditorService;
 use library::model::asset::AssetKind;
 use library::model::project::Project;
-use library::EditorService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::utils::lock::read_or_recover;
 use crate::{
-    action::{activate_composition_with_history, commit_live_project_edits, HistoryManager},
+    action::{HistoryManager, activate_composition_with_history, commit_live_project_edits},
     state::context::EditorContext,
     state::context_types::{DragStateItem, SelectionTarget},
 };

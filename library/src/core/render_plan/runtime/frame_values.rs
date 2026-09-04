@@ -1,0 +1,348 @@
+//! Timeline property sampling and FrameInfo item construction.
+
+use super::*;
+
+pub(super) fn stage_key(stage: ItemOutputStage) -> u8 {
+    match stage {
+        ItemOutputStage::Content => 0,
+        ItemOutputStage::PostEffects => 1,
+        ItemOutputStage::PostTransform => 2,
+    }
+}
+
+pub(super) fn planned_source_matches(planned: PlannedSource, source: &SourceRef) -> bool {
+    matches!(
+        (planned, source),
+        (PlannedSource::Asset, SourceRef::Asset { .. })
+            | (PlannedSource::Text, SourceRef::Text { .. })
+            | (PlannedSource::Shape, SourceRef::Shape { .. })
+            | (PlannedSource::Solid, SourceRef::Solid { .. })
+            | (PlannedSource::Module, SourceRef::Module(_))
+    ) || matches!(
+        (planned, source),
+        (
+            PlannedSource::Composition { timeline_id },
+            SourceRef::Composition(instance)
+        ) if timeline_id == instance.timeline_id
+    )
+}
+
+pub(super) fn evaluate_property_map(
+    properties: &PropertyMap,
+    time: f64,
+    owner: &str,
+) -> Result<HashMap<String, PropertyValue>, LibraryError> {
+    properties
+        .iter()
+        .map(|(key, property)| {
+            property
+                .evaluate_at(time)
+                .map(|value| (key.clone(), value))
+                .map_err(|error| {
+                    LibraryError::Render(format!(
+                        "Cannot evaluate {owner} property '{key}': {error}"
+                    ))
+                })
+        })
+        .collect()
+}
+
+pub(super) fn sample_automation(
+    track: &crate::model::authoring::AutomationTrack,
+    time: MediaTime,
+) -> Result<PropertyValue, LibraryError> {
+    let first = track
+        .keyframes
+        .first()
+        .ok_or_else(|| LibraryError::Validation("Automation Track has no Keyframes".to_string()))?;
+    if time <= first.time {
+        return Ok(first.value.clone());
+    }
+    let last = track.keyframes.last().ok_or_else(|| {
+        LibraryError::Validation("Automation Track has no last Keyframe".to_string())
+    })?;
+    if time >= last.time {
+        return Ok(last.value.clone());
+    }
+    for window in track.keyframes.windows(2) {
+        let Some(start) = window.first() else {
+            continue;
+        };
+        let Some(end) = window.get(1) else {
+            continue;
+        };
+        if time < start.time || time >= end.time {
+            continue;
+        }
+        let elapsed = time
+            .checked_sub(start.time)
+            .map_err(LibraryError::Validation)?
+            .to_seconds_f64();
+        let duration = end
+            .time
+            .checked_sub(start.time)
+            .map_err(LibraryError::Validation)?
+            .to_seconds_f64();
+        if duration <= f64::EPSILON {
+            return Ok(start.value.clone());
+        }
+        let amount = start.easing.try_apply(elapsed / duration)?;
+        return Ok(PropertyValue::interpolate(&start.value, &end.value, amount));
+    }
+    Err(LibraryError::Render(
+        "Automation time did not resolve to a Keyframe segment".to_string(),
+    ))
+}
+
+pub(super) fn transform_at(properties: &PropertyMap, time: f64) -> Result<Transform, LibraryError> {
+    transform_from_values(&evaluate_property_map(properties, time, "Timeline")?)
+}
+
+pub(super) fn transform_from_values(
+    values: &HashMap<String, PropertyValue>,
+) -> Result<Transform, LibraryError> {
+    let mut transform = Transform::default();
+    if let Some(value) = values.get("position") {
+        let PropertyValue::Vec2(value) = value else {
+            return Err(type_error("position", "Vec2"));
+        };
+        transform.position.x = value.x.into_inner();
+        transform.position.y = value.y.into_inner();
+    }
+    if let Some(value) = values.get("scale") {
+        let PropertyValue::Vec2(value) = value else {
+            return Err(type_error("scale", "Vec2"));
+        };
+        transform.scale.x = value.x.into_inner();
+        transform.scale.y = value.y.into_inner();
+    }
+    if let Some(value) = values.get("anchor") {
+        let PropertyValue::Vec2(value) = value else {
+            return Err(type_error("anchor", "Vec2"));
+        };
+        transform.anchor.x = value.x.into_inner();
+        transform.anchor.y = value.y.into_inner();
+    }
+    if values.contains_key("rotation") {
+        transform.rotation = required_number(values, "rotation", "Transform")?;
+    }
+    if values.contains_key("opacity") {
+        transform.opacity = required_number(values, "opacity", "Transform")?;
+    }
+    Ok(transform)
+}
+
+pub(super) fn text_item_from_values(
+    source_id: uuid::Uuid,
+    text: &str,
+    values: &HashMap<String, PropertyValue>,
+) -> Result<FrameItem, LibraryError> {
+    let font = values
+        .get("font_family")
+        .or_else(|| values.get("font"))
+        .and_then(|value| match value {
+            PropertyValue::String(value) => Some(value.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Arial".to_string());
+    let size = values
+        .get("size")
+        .or_else(|| values.get("font_size"))
+        .map(|_| {
+            if values.contains_key("size") {
+                required_number(&values, "size", "Text item")
+            } else {
+                required_number(&values, "font_size", "Text item")
+            }
+        })
+        .transpose()?
+        .unwrap_or(48.0);
+    let color = match values.get("color") {
+        Some(_) => required_color(&values, "color", "Text item")?,
+        None => crate::model::frame::color::Color::white(),
+    };
+    Ok(FrameItem::Object(FrameObject {
+        source_node_id: source_id,
+        spatial_transform_node_id: None,
+        spatial_transform: Box::default(),
+        content_bounds: None,
+        content: FrameContent::Text {
+            text: text.to_string(),
+            font,
+            size,
+            styles: vec![StyleConfig {
+                id: source_id,
+                style: DrawStyle::Fill { color, offset: 0.0 },
+            }],
+            effects: Vec::new(),
+            ensemble: None,
+            transform: Transform::default(),
+        },
+    }))
+}
+
+pub(super) fn shape_item(
+    source_id: uuid::Uuid,
+    shape: &crate::model::authoring::ShapeSource,
+) -> Result<FrameItem, LibraryError> {
+    let width = direct_number(&shape.parameters, "width").unwrap_or(100.0);
+    let height = direct_number(&shape.parameters, "height").unwrap_or(100.0);
+    let color = match shape.parameters.get("color") {
+        Some(PropertyValue::Color(color)) => color.clone(),
+        Some(PropertyValue::ColorValue(color)) => {
+            crate::color_management::to_renderer_srgba8(color)
+                .map_err(|error| LibraryError::Render(error.to_string()))?
+        }
+        Some(_) => return Err(type_error("Shape color", "Color")),
+        None => crate::model::frame::color::Color::white(),
+    };
+    let (path, canonical_path) = match shape.shape_kind {
+        crate::model::authoring::ShapeKind::Rectangle => {
+            (format!("M 0 0 H {width} V {height} H 0 Z"), None)
+        }
+        crate::model::authoring::ShapeKind::Ellipse => (
+            format!(
+                "M {width} 0 A {} {} 0 1 1 0 0 A {} {} 0 1 1 {width} 0 Z",
+                width / 2.0,
+                height / 2.0,
+                width / 2.0,
+                height / 2.0
+            ),
+            None,
+        ),
+        crate::model::authoring::ShapeKind::Path => match shape.parameters.get("path") {
+            Some(PropertyValue::Path(path)) => (
+                crate::model::path::write_legacy_svg_path_data(path)
+                    .map_err(|error| LibraryError::Render(error.to_string()))?,
+                Some(path.clone()),
+            ),
+            _ => return Err(type_error("Shape path", "Path")),
+        },
+    };
+    Ok(shape_object(
+        source_id,
+        path,
+        canonical_path,
+        color,
+        Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
+    ))
+}
+
+pub(super) fn solid_item(
+    source_id: uuid::Uuid,
+    width: u64,
+    height: u64,
+    color: crate::model::frame::color::Color,
+    blend_mode: BlendMode,
+) -> FrameItem {
+    FrameItem::Group(FrameGroup {
+        source_id,
+        kind: FrameGroupKind::Node,
+        width,
+        height,
+        background_color: transparent(),
+        transform: Transform::default(),
+        blend_mode,
+        effect_time: OrderedFloat(0.0),
+        effects: Vec::new(),
+        items: vec![shape_object(
+            source_id,
+            format!("M 0 0 H {width} V {height} H 0 Z"),
+            None,
+            color,
+            Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
+        )],
+    })
+}
+
+pub(super) fn shape_object(
+    source_id: uuid::Uuid,
+    path: String,
+    canonical_path: Option<crate::model::path::PathValue>,
+    color: crate::model::frame::color::Color,
+    content_bounds: Option<FrameBounds>,
+) -> FrameItem {
+    FrameItem::Object(FrameObject {
+        source_node_id: source_id,
+        spatial_transform_node_id: None,
+        spatial_transform: Box::default(),
+        content_bounds,
+        content: FrameContent::Shape {
+            path,
+            canonical_path,
+            styles: vec![StyleConfig {
+                id: source_id,
+                style: DrawStyle::Fill { color, offset: 0.0 },
+            }],
+            path_effects: Vec::new(),
+            effects: Vec::new(),
+            ensemble: None,
+            transform: Transform::default(),
+        },
+    })
+}
+
+pub(super) fn required_string(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<String, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::String(value)) => Ok(value.clone()),
+        _ => Err(type_error(&format!("{owner} {key}"), "String")),
+    }
+}
+
+pub(super) fn required_number(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<f64, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::Number(value)) => Ok(value.into_inner()),
+        Some(PropertyValue::Integer(value)) => Ok(*value as f64),
+        _ => Err(type_error(&format!("{owner} {key}"), "Number")),
+    }
+}
+
+pub(super) fn required_color(
+    values: &HashMap<String, PropertyValue>,
+    key: &str,
+    owner: &str,
+) -> Result<crate::model::frame::color::Color, LibraryError> {
+    match values.get(key) {
+        Some(PropertyValue::Color(value)) => Ok(value.clone()),
+        Some(PropertyValue::ColorValue(value)) => {
+            crate::color_management::to_renderer_srgba8(value)
+                .map_err(|error| LibraryError::Render(error.to_string()))
+        }
+        _ => Err(type_error(&format!("{owner} {key}"), "Color")),
+    }
+}
+
+pub(super) fn direct_number(values: &HashMap<String, PropertyValue>, key: &str) -> Option<f64> {
+    match values.get(key) {
+        Some(PropertyValue::Number(value)) => Some(value.into_inner()),
+        Some(PropertyValue::Integer(value)) => Some(*value as f64),
+        _ => None,
+    }
+}
+
+pub(super) fn type_error(owner: &str, expected: &str) -> LibraryError {
+    LibraryError::Validation(format!("{owner} must evaluate to {expected}"))
+}
+
+pub(super) fn neutralize_root_blend(item: &mut FrameItem) {
+    if let FrameItem::Group(group) = item {
+        group.blend_mode = BlendMode::Normal;
+    }
+}
+
+pub(super) fn transparent() -> crate::model::frame::color::Color {
+    crate::model::frame::color::Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    }
+}

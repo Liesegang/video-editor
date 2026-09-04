@@ -1,10 +1,10 @@
 use egui::Ui;
+use library::EditorService as ProjectService;
 #[cfg(test)]
 use library::audio::mixer::audio_stream_index_for_media;
 use library::model::asset::AssetKind;
 use library::model::project::{PortOwner, Project};
 use library::model::{Clip, Node, NodeContent, Track};
-use library::EditorService as ProjectService;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -15,15 +15,15 @@ use crate::{
     ui::layer_order::reverse_slot,
 };
 
-use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
+use super::super::utils::flatten::{DisplayRow, flatten_tracks_to_rows};
 use super::reorder::{
-    calculate_insert_index, clip_insertion_markers, clip_reorder_preview, clip_reorder_projection,
-    destination_index_for_clip_slot, nearest_clip_insertion_slot, ClipReorderProjection,
+    ClipReorderProjection, calculate_insert_index, clip_insertion_markers, clip_reorder_preview,
+    clip_reorder_projection, destination_index_for_clip_slot, nearest_clip_insertion_slot,
 };
 
 mod item;
 
-use item::{draw_single_clip, SingleClipDrawContext};
+use item::{SingleClipDrawContext, draw_single_clip};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 

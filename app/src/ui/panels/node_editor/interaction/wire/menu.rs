@@ -4,17 +4,16 @@ use crate::ui::widgets::searchable_context_menu::{
     show_searchable_popup_frame,
 };
 use eframe::egui;
-use library::model::project::{PortDataType, PortOwner};
 use library::model::Project;
+use library::model::project::{PortDataType, PortOwner};
 use library::plugin::PluginManager;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
+    NodeEdit, QueuedNodeEdit, blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
     connection_supports_authored_blend, create_operation_node_for_request,
     editable_wire_is_current, editable_wire_stable_key, non_selectable_label, qa_container_key,
-    wire_order_menu_state, wire_order_qa_metadata, wire_splice_menu_items, NodeEdit,
-    QueuedNodeEdit,
+    wire_order_menu_state, wire_order_qa_metadata, wire_splice_menu_items,
 };
 
 fn wire_menu_accepts_actions(

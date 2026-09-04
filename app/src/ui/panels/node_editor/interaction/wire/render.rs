@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32};
-use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner, TIME_PORT};
 use library::model::Project;
+use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner, TIME_PORT};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -10,17 +10,16 @@ use super::hit::cubic_bezier_point;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
+    CONTAINER_HEADER_HEIGHT, ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter,
+    RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_RECONNECT_HANDLE_RADIUS,
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend,
     container_highlight_metadata, container_inactive, container_output_node_id,
     container_output_type_key, container_visual_style, edge_endpoint_qa_metadata,
     native_variadic_merge_target, node_editor_details_visible, overview_wire_graph_points,
     pin_color, qa_container_key, qa_rect_metadata, reconnect_handle_position,
-    screen_stroke_in_graph_units,
-    wire_order_menu_states, ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter,
-    RenderedEdge, RenderedEdgeKind, RenderedPortKey, CONTAINER_HEADER_HEIGHT,
-    WIRE_RECONNECT_HANDLE_RADIUS,
+    screen_stroke_in_graph_units, wire_order_menu_states,
 };
-use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
+use crate::ui::panels::time_context::{TimeSourceState, time_source_state};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ui::panels::node_editor) struct TimeContextNode {

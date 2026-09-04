@@ -2,13 +2,13 @@ use eframe::egui;
 use library::model::property::{PropertyDefinition, PropertyValue};
 use uuid::Uuid;
 
+use crate::ui::panels::node_editor::{
+    PORT_ROW_HEIGHT, PinDefinition, clipped_qa_rect, qa_rect_metadata,
+};
 #[cfg(test)]
 use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
-use crate::ui::panels::node_editor::{
-    clipped_qa_rect, qa_rect_metadata, PinDefinition, PORT_ROW_HEIGHT,
-};
 use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
-use crate::ui::widgets::vector_drag_value::{vector_drag_values, VectorAxisResponse};
+use crate::ui::widgets::vector_drag_value::{VectorAxisResponse, vector_drag_values};
 
 use super::ProjectNodeViewer;
 
@@ -146,7 +146,7 @@ mod tests {
     use crate::action::HistoryManager;
     use crate::state::context_types::{NodeEditorPendingEdit, NodeEditorState};
     use crate::ui::panels::node_editor::commands::{
-        apply_queued_node_edits, NodeEdit, QueuedNodeEdit,
+        NodeEdit, QueuedNodeEdit, apply_queued_node_edits,
     };
     use crate::ui::panels::node_editor::test_fixture::fixture;
     use library::model::project::{NodeContainer, PortOwner};

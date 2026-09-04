@@ -364,27 +364,31 @@ mod tests {
     }
 
     #[test]
-    fn expression_mode_rejects_structured_values_until_the_runtime_supports_them(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn expression_mode_rejects_structured_values_until_the_runtime_supports_them()
+    -> Result<(), Box<dyn std::error::Error>> {
         let color = library::model::property::ColorValue::new(
             library::model::property::ColorSpaceRef::srgb(),
             [0.5, 0.25, 1.0, 1.0],
         )?;
-        assert!(property_for_mode(
-            None,
-            PropertyAuthoringMode::Expression,
-            PropertyValue::ColorValue(color),
-            0.0,
-        )
-        .is_err());
+        assert!(
+            property_for_mode(
+                None,
+                PropertyAuthoringMode::Expression,
+                PropertyValue::ColorValue(color),
+                0.0,
+            )
+            .is_err()
+        );
         let path = library::model::path::PathValue::empty(library::model::path::FillRule::NonZero);
-        assert!(property_for_mode(
-            None,
-            PropertyAuthoringMode::Expression,
-            PropertyValue::Path(path),
-            0.0,
-        )
-        .is_err());
+        assert!(
+            property_for_mode(
+                None,
+                PropertyAuthoringMode::Expression,
+                PropertyValue::Path(path),
+                0.0,
+            )
+            .is_err()
+        );
         Ok(())
     }
 }

@@ -453,9 +453,11 @@ fn empty_merge_body_has_a_stable_empty_state_and_minimum_estimated_height() {
     assert!(merge_layer_rows(&project, merge_id).is_empty());
     assert_eq!(estimated_node_size(&project, merge_id).y, 220.0);
     let rects = render_test_graph(&project, composition_id);
-    assert!(rects
-        .get(&format!("node_editor.merge_layers.empty:{merge_id}"))
-        .is_some_and(egui::Rect::is_positive));
+    assert!(
+        rects
+            .get(&format!("node_editor.merge_layers.empty:{merge_id}"))
+            .is_some_and(egui::Rect::is_positive)
+    );
 }
 
 #[test]
@@ -515,52 +517,56 @@ fn real_egui_wire_hit_selects_and_dragging_the_body_queues_disconnect() {
     );
     assert!(state.selected_connection_id.is_none());
 
-    assert!(run_wire_interaction_frames(
-        &project,
-        &edge,
-        &rendered_ports,
-        &mut state,
-        vec![
-            vec![egui::Event::PointerMoved(midpoint)],
-            vec![egui::Event::PointerButton {
-                pos: midpoint,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            vec![egui::Event::PointerButton {
-                pos: midpoint,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ],
-    )
-    .is_empty());
+    assert!(
+        run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(midpoint)],
+                vec![egui::Event::PointerButton {
+                    pos: midpoint,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerButton {
+                    pos: midpoint,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        )
+        .is_empty()
+    );
     assert_eq!(state.selected_connection_id, Some(connection.id));
     let blank = egui::pos2(32.0, 32.0);
-    assert!(run_wire_interaction_frames(
-        &project,
-        &edge,
-        &rendered_ports,
-        &mut state,
-        vec![
-            vec![egui::Event::PointerMoved(blank)],
-            vec![egui::Event::PointerButton {
-                pos: blank,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            vec![egui::Event::PointerButton {
-                pos: blank,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ],
-    )
-    .is_empty());
+    assert!(
+        run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(blank)],
+                vec![egui::Event::PointerButton {
+                    pos: blank,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerButton {
+                    pos: blank,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        )
+        .is_empty()
+    );
     assert!(state.selected_connection_id.is_none());
 
     let dragged = midpoint + egui::vec2(0.0, 48.0);

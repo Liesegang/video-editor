@@ -2,7 +2,7 @@ use egui::{Color32, Id, Ui};
 use library::model::path::{FillRule, PathValue};
 use library::model::property::{ColorSpaceRef, ColorValue, PropertyValue};
 
-use crate::ui::widgets::color_value_picker::{color_value_picker, ColorPickerEdit};
+use crate::ui::widgets::color_value_picker::{ColorPickerEdit, color_value_picker};
 
 #[derive(Clone)]
 struct ColorDraft {
@@ -432,8 +432,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_color_is_displayed_exactly_in_a_canonical_color_control(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn legacy_color_is_displayed_exactly_in_a_canonical_color_control()
+    -> Result<(), Box<dyn std::error::Error>> {
         let legacy = Color {
             r: 17,
             g: 128,
@@ -449,8 +449,8 @@ mod tests {
     }
 
     #[test]
-    fn canonical_picker_metadata_keeps_stable_transform_and_storage_contract(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn canonical_picker_metadata_keeps_stable_transform_and_storage_contract()
+    -> Result<(), Box<dyn std::error::Error>> {
         let context = egui::Context::default();
         let color = ColorValue::new(ColorSpaceRef::linear_srgb(), [0.25, 0.5, 0.75, 1.0])?;
         let mut metadata = None;
@@ -489,8 +489,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_svg_is_displayed_as_its_actual_canonical_path(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn legacy_svg_is_displayed_as_its_actual_canonical_path()
+    -> Result<(), Box<dyn std::error::Error>> {
         let legacy = "M 2 3 Q 20 40 38 3 Z";
         let default = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
         let adapted = canonical_path_for_inspector(
@@ -517,8 +517,8 @@ mod tests {
     }
 
     #[test]
-    fn long_canonical_path_keeps_apply_clickable_and_emits_exact_value(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn long_canonical_path_keeps_apply_clickable_and_emits_exact_value()
+    -> Result<(), Box<dyn std::error::Error>> {
         const PREFIX: &str = "test.path:value";
         let context = egui::Context::default();
         context.memory_mut(|memory| memory.set_everything_is_visible(true));

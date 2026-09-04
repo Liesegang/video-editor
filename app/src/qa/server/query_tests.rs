@@ -23,7 +23,7 @@ fn request(address: SocketAddr, request: &str) -> Result<String, String> {
 }
 
 #[test]
-fn state_and_probe_endpoints_are_answered_on_demand_by_the_ui_side() -> Result<(), String> {
+fn state_endpoint_is_answered_on_demand_by_the_ui_side() -> Result<(), String> {
     let (sender, _receiver) = mpsc::sync_channel(1);
     let (query_sender, query_receiver) = mpsc::sync_channel(1);
     let server = QaServer::start(
@@ -55,35 +55,5 @@ fn state_and_probe_endpoints_are_answered_on_demand_by_the_ui_side() -> Result<(
     assert!(response.contains("\"frame\":42"));
     assert!(response.contains("\"name\":\"authoritative\""));
 
-    let node_id = uuid::Uuid::new_v4();
-    let body = format!("{{\"node_id\":\"{node_id}\",\"port\":\"value\",\"global_time\":1.25}}");
-    let requester = std::thread::spawn(move || {
-        request(
-            address,
-            &format!(
-                "POST /v1/probes/metadata-output HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        )
-    });
-    let query = query_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|error| error.to_string())?;
-    let probe = match &query.kind {
-        UiQueryKind::MetadataOutput(probe) => probe,
-        UiQueryKind::Snapshot => {
-            return Err("metadata endpoint enqueued a snapshot query".to_string());
-        }
-    };
-    assert_eq!(probe.node_id, node_id);
-    query
-        .response
-        .send(Ok(json!({"result": "runtime"})))
-        .map_err(|error| error.to_string())?;
-    let response = requester
-        .join()
-        .map_err(|_| "metadata requester thread panicked".to_string())??;
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains("\"result\":\"runtime\""));
     Ok(())
 }

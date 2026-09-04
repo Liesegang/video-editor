@@ -1,0 +1,537 @@
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::model::node::{Node, NodeContent, native_node_descriptor_for_node};
+use crate::model::project::connection::{
+    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortDirection,
+    PortExposure, PortMultiplicity, PortSide, TIME_PORT,
+};
+use crate::model::project::property::PropertyValue;
+
+use super::{
+    ModuleConnectionId, ModuleDefinitionId, ModuleInstanceId, PublishedActionId,
+    PublishedMediaInputId, PublishedMediaOutputId, PublishedParameterId, PublishedSignalId,
+};
+
+/// Reusable logic. Host capability is derived from the published interface;
+/// definitions deliberately have no mutually-exclusive Generator/Effect role.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleDefinition {
+    pub id: ModuleDefinitionId,
+    pub name: String,
+    pub sharing: ModuleDefinitionSharing,
+    pub graph: ModuleGraph,
+    pub interface: ModuleInterface,
+    pub topology_revision: u64,
+    pub interface_version: u64,
+}
+
+impl ModuleDefinition {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err(format!("Module definition {} has no name", self.id));
+        }
+        if self.topology_revision == 0 || self.interface_version == 0 {
+            return Err(format!(
+                "Module definition {} has an invalid revision",
+                self.id
+            ));
+        }
+        self.sharing.validate()?;
+        self.graph.validate()?;
+        self.interface.validate(&self.graph)
+    }
+}
+
+/// Persisted edit-sharing policy. A private definition belongs to exactly one
+/// instance. A reusable definition is immutable through ordinary instance
+/// editing, even while it currently has only one placement.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(
+    tag = "kind",
+    content = "origin",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ModuleDefinitionSharing {
+    Private,
+    /// Project-local sharing created by split/duplicate. It is not exposed as
+    /// a reusable Asset and ordinary edits still use copy-on-write.
+    SharedLocal,
+    ReusableTemplate(ModuleTemplateOrigin),
+}
+
+impl ModuleDefinitionSharing {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Private
+            | Self::SharedLocal
+            | Self::ReusableTemplate(ModuleTemplateOrigin::Project) => Ok(()),
+            Self::ReusableTemplate(ModuleTemplateOrigin::External { locator, version }) => {
+                if locator.trim().is_empty() || version.trim().is_empty() {
+                    Err("Reusable Module origin is incomplete".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModuleTemplateOrigin {
+    Project,
+    External { locator: String, version: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleGraph {
+    pub nodes: HashMap<uuid::Uuid, Node>,
+    pub connections: Vec<ModuleConnection>,
+}
+
+impl ModuleGraph {
+    pub fn validate(&self) -> Result<(), String> {
+        let mut indegree = self
+            .nodes
+            .keys()
+            .copied()
+            .map(|node_id| (node_id, 0_usize))
+            .collect::<HashMap<_, _>>();
+        let mut outgoing: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+        let mut connection_ids = HashSet::new();
+        let mut contracts = HashMap::with_capacity(self.nodes.len());
+        for (key, node) in &self.nodes {
+            if *key != node.id {
+                return Err(format!(
+                    "Module Node map key {key} does not match {}",
+                    node.id
+                ));
+            }
+            if matches!(node.content(), NodeContent::CompositionInstance(_)) {
+                return Err("Module graph cannot contain a Composition instance".to_string());
+            }
+            contracts.insert(*key, ModuleNodePortContract::resolve(node)?);
+        }
+        let mut target_orders: HashMap<ModulePortAddress, Vec<i64>> = HashMap::new();
+        for connection in &self.connections {
+            if !connection_ids.insert(connection.id) {
+                return Err(format!("Module graph repeats connection {}", connection.id));
+            }
+            if !self.nodes.contains_key(&connection.from.node_id) {
+                return Err(format!(
+                    "Module connection {} has a missing source",
+                    connection.id
+                ));
+            }
+            if !self.nodes.contains_key(&connection.to.node_id) {
+                return Err(format!(
+                    "Module connection {} has a missing target",
+                    connection.id
+                ));
+            }
+            if connection.from.node_id == connection.to.node_id {
+                return Err(format!(
+                    "Module connection {} is a self-cycle",
+                    connection.id
+                ));
+            }
+            if connection.order < 0 {
+                return Err(format!(
+                    "Module connection {} has a negative input order",
+                    connection.id
+                ));
+            }
+            let source = contracts
+                .get(&connection.from.node_id)
+                .ok_or_else(|| format!("Module connection {} has a missing source", connection.id))?
+                .require(&connection.from.port, PortDirection::Output)?;
+            let target = contracts
+                .get(&connection.to.node_id)
+                .ok_or_else(|| format!("Module connection {} has a missing target", connection.id))?
+                .require(&connection.to.port, PortDirection::Input)?;
+            if !target.data_type.accepts(source.data_type) {
+                return Err(format!(
+                    "Module connection {} cannot connect {:?} to {:?}",
+                    connection.id, source.data_type, target.data_type
+                ));
+            }
+            target_orders
+                .entry(connection.to.clone())
+                .or_default()
+                .push(connection.order);
+            *indegree.get_mut(&connection.to.node_id).ok_or_else(|| {
+                format!("Module connection {} has a missing target", connection.id)
+            })? += 1;
+            outgoing
+                .entry(connection.from.node_id)
+                .or_default()
+                .push(connection.to.node_id);
+        }
+        for (target, mut orders) in target_orders {
+            let port = contracts
+                .get(&target.node_id)
+                .ok_or_else(|| format!("Module input {} has a missing Node", target.node_id))?
+                .require(&target.port, PortDirection::Input)?;
+            orders.sort_unstable();
+            match port.multiplicity {
+                PortMultiplicity::Single if orders.as_slice() != [0] => {
+                    return Err(format!(
+                        "Single Module input {}:{} must have exactly one connection at order 0",
+                        target.node_id, target.port
+                    ));
+                }
+                PortMultiplicity::Variadic
+                    if orders
+                        .iter()
+                        .enumerate()
+                        .any(|(expected, actual)| *actual != expected as i64) =>
+                {
+                    return Err(format!(
+                        "Variadic Module input {}:{} must use contiguous orders from zero",
+                        target.node_id, target.port
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let mut ready = indegree
+            .iter()
+            .filter_map(|(node_id, degree)| (*degree == 0).then_some(*node_id))
+            .collect::<Vec<_>>();
+        let mut visited = 0;
+        while let Some(node_id) = ready.pop() {
+            visited += 1;
+            for target in outgoing.get(&node_id).into_iter().flatten() {
+                let degree = indegree
+                    .get_mut(target)
+                    .ok_or_else(|| "Module graph traversal reached a missing target".to_string())?;
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push(*target);
+                }
+            }
+        }
+        if visited != self.nodes.len() {
+            return Err("Module graph contains a cycle".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn port_definition(
+        &self,
+        address: &ModulePortAddress,
+        direction: PortDirection,
+    ) -> Result<PortDefinition, String> {
+        let node = self
+            .nodes
+            .get(&address.node_id)
+            .ok_or_else(|| format!("Module port refers to missing Node {}", address.node_id))?;
+        ModuleNodePortContract::resolve(node)?
+            .require(&address.port, direction)
+            .cloned()
+    }
+
+    fn has_connection_to(&self, address: &ModulePortAddress) -> bool {
+        self.connections
+            .iter()
+            .any(|connection| connection.to == *address)
+    }
+}
+
+/// Canonical typed port contract for a Node persisted inside a Module.
+/// Plugin contracts are persisted with the Node; first-party contracts are
+/// resolved through the native catalog. Unknown native identities fail closed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModuleNodePortContract {
+    pub ports: Vec<PortDefinition>,
+}
+
+impl ModuleNodePortContract {
+    pub fn resolve(node: &Node) -> Result<Self, String> {
+        let ports = match node.content() {
+            NodeContent::PluginOperation(operation) => operation.declared_ports.clone(),
+            NodeContent::Media(_) => vec![
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::output(
+                    IMAGE_OUTPUT_PORT,
+                    "Image",
+                    PortDataType::Image,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+                PortDefinition::output(
+                    AUDIO_OUTPUT_PORT,
+                    "Audio",
+                    PortDataType::Audio,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+            NodeContent::CompositionInstance(_) => {
+                return Err("Module graph cannot contain a Composition instance".to_string());
+            }
+            _ => native_node_descriptor_for_node(node)
+                .ok_or_else(|| {
+                    format!(
+                        "Module Node {} has no persisted or canonical port contract",
+                        node.id
+                    )
+                })?
+                .ports()
+                .to_vec(),
+        };
+        let mut addresses = HashSet::new();
+        for port in &ports {
+            if port.key.trim().is_empty() {
+                return Err(format!(
+                    "Module Node {} declares an empty port key",
+                    node.id
+                ));
+            }
+            if !addresses.insert((port.direction, port.key.as_str())) {
+                return Err(format!(
+                    "Module Node {} repeats {:?} port '{}'",
+                    node.id, port.direction, port.key
+                ));
+            }
+            if port.direction == PortDirection::Output
+                && port.multiplicity != PortMultiplicity::Single
+            {
+                return Err(format!(
+                    "Module Node {} output '{}' cannot be variadic",
+                    node.id, port.key
+                ));
+            }
+        }
+        Ok(Self { ports })
+    }
+
+    pub fn require(&self, key: &str, direction: PortDirection) -> Result<&PortDefinition, String> {
+        self.ports
+            .iter()
+            .find(|port| port.key == key && port.direction == direction)
+            .ok_or_else(|| format!("Module Node has no {direction:?} port '{key}'"))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleConnection {
+    pub id: ModuleConnectionId,
+    pub from: ModulePortAddress,
+    pub to: ModulePortAddress,
+    pub order: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct ModulePortAddress {
+    pub node_id: uuid::Uuid,
+    pub port: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleInterface {
+    pub parameters: Vec<PublishedParameter>,
+    pub media_inputs: Vec<PublishedMediaInput>,
+    pub media_outputs: Vec<PublishedMediaOutput>,
+    pub signals: Vec<PublishedSignal>,
+    pub actions: Vec<PublishedAction>,
+}
+
+impl ModuleInterface {
+    fn validate(&self, graph: &ModuleGraph) -> Result<(), String> {
+        let mut ids = HashSet::new();
+        let mut published_targets = HashSet::new();
+        for parameter in &self.parameters {
+            require_interface_id(&mut ids, parameter.id.as_uuid())?;
+            require_interface_name(&parameter.name, "Published parameter")?;
+            let target = graph.port_definition(&parameter.target, PortDirection::Input)?;
+            require_unambiguous_published_target(graph, &mut published_targets, &parameter.target)?;
+            if !parameter
+                .data_type
+                .accepts(property_value_type(&parameter.default_value))
+            {
+                return Err(format!(
+                    "Published parameter {} has a mismatched default",
+                    parameter.id
+                ));
+            }
+            if !target.data_type.accepts(parameter.data_type) {
+                return Err(format!(
+                    "Published parameter {} type does not match its target",
+                    parameter.id
+                ));
+            }
+        }
+        let mut primary_media_inputs = 0;
+        for input in &self.media_inputs {
+            require_interface_id(&mut ids, input.id.as_uuid())?;
+            require_interface_name(&input.name, "Published media input")?;
+            let target = graph.port_definition(&input.target, PortDirection::Input)?;
+            require_unambiguous_published_target(graph, &mut published_targets, &input.target)?;
+            if !is_media_type(input.data_type) {
+                return Err(format!("Published media input {} is not media", input.id));
+            }
+            if !target.data_type.accepts(input.data_type) {
+                return Err(format!(
+                    "Published media input {} type does not match its target",
+                    input.id
+                ));
+            }
+            primary_media_inputs += usize::from(input.primary);
+        }
+        if primary_media_inputs > 1 {
+            return Err("A Module may publish at most one primary media input".to_string());
+        }
+        for output in &self.media_outputs {
+            require_interface_id(&mut ids, output.id.as_uuid())?;
+            require_interface_name(&output.name, "Published media output")?;
+            let source = graph.port_definition(&output.source, PortDirection::Output)?;
+            if !is_media_type(output.data_type) {
+                return Err(format!("Published media output {} is not media", output.id));
+            }
+            if !output.data_type.accepts(source.data_type) {
+                return Err(format!(
+                    "Published media output {} type does not match its source",
+                    output.id
+                ));
+            }
+        }
+        for signal in &self.signals {
+            require_interface_id(&mut ids, signal.id.as_uuid())?;
+            require_interface_name(&signal.name, "Published signal")?;
+            let source = graph.port_definition(&signal.source, PortDirection::Output)?;
+            if !signal.data_type.accepts(source.data_type) {
+                return Err(format!(
+                    "Published signal {} type does not match its source",
+                    signal.id
+                ));
+            }
+        }
+        for action in &self.actions {
+            require_interface_id(&mut ids, action.id.as_uuid())?;
+            require_interface_name(&action.name, "Published action")?;
+            graph.port_definition(&action.target, PortDirection::Input)?;
+            require_unambiguous_published_target(graph, &mut published_targets, &action.target)?;
+        }
+        Ok(())
+    }
+}
+
+fn require_interface_name(name: &str, label: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        Err(format!("{label} has no name"))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_unambiguous_published_target(
+    graph: &ModuleGraph,
+    published_targets: &mut HashSet<ModulePortAddress>,
+    target: &ModulePortAddress,
+) -> Result<(), String> {
+    if graph.has_connection_to(target) {
+        return Err(format!(
+            "Published target {}:{} is also driven by a Module connection",
+            target.node_id, target.port
+        ));
+    }
+    if !published_targets.insert(target.clone()) {
+        return Err(format!(
+            "Module publishes target {}:{} more than once",
+            target.node_id, target.port
+        ));
+    }
+    Ok(())
+}
+
+fn require_interface_id(ids: &mut HashSet<uuid::Uuid>, id: uuid::Uuid) -> Result<(), String> {
+    if ids.insert(id) {
+        Ok(())
+    } else {
+        Err("A Module has duplicate Published Interface IDs".to_string())
+    }
+}
+
+fn is_media_type(data_type: PortDataType) -> bool {
+    matches!(data_type, PortDataType::Image | PortDataType::Audio)
+}
+
+pub(crate) fn property_value_type(value: &PropertyValue) -> PortDataType {
+    match value {
+        PropertyValue::Integer(_) => PortDataType::Integer,
+        PropertyValue::Number(_) => PortDataType::Number,
+        PropertyValue::String(_) => PortDataType::String,
+        PropertyValue::Boolean(_) => PortDataType::Boolean,
+        PropertyValue::Vec2(_) => PortDataType::Vec2,
+        PropertyValue::Vec3(_) => PortDataType::Vec3,
+        PropertyValue::Vec4(_) => PortDataType::Vec4,
+        PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PortDataType::Color,
+        PropertyValue::Path(_) => PortDataType::Path,
+        PropertyValue::Array(_) => PortDataType::List,
+        PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => PortDataType::Any,
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedParameter {
+    pub id: PublishedParameterId,
+    pub name: String,
+    pub data_type: PortDataType,
+    pub default_value: PropertyValue,
+    pub target: ModulePortAddress,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedMediaInput {
+    pub id: PublishedMediaInputId,
+    pub name: String,
+    pub data_type: PortDataType,
+    pub target: ModulePortAddress,
+    pub required: bool,
+    pub primary: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedMediaOutput {
+    pub id: PublishedMediaOutputId,
+    pub name: String,
+    pub data_type: PortDataType,
+    pub source: ModulePortAddress,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedSignal {
+    pub id: PublishedSignalId,
+    pub name: String,
+    pub data_type: PortDataType,
+    pub source: ModulePortAddress,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedAction {
+    pub id: PublishedActionId,
+    pub name: String,
+    pub target: ModulePortAddress,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleInstance {
+    pub id: ModuleInstanceId,
+    pub definition_id: ModuleDefinitionId,
+    pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
+}

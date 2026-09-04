@@ -4,7 +4,7 @@ use library::core::framing::FrameEvaluator;
 use library::model::project::{EvalOutput, PortAddress, PortOwner, Project};
 use library::plugin::PluginManager;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::mpsc::SyncSender;
 use uuid::Uuid;
 
@@ -112,8 +112,8 @@ mod tests {
         EvaluationContext, Plugin, PropertyEvaluationError, PropertyEvaluator, PropertyPlugin,
     };
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountingEvaluator {
         evaluations: Arc<AtomicUsize>,
@@ -230,26 +230,32 @@ mod tests {
 
     #[test]
     fn probe_request_validation_is_bounded() {
-        assert!(MetadataOutputProbeRequest {
-            node_id: Uuid::new_v4(),
-            port: " ".to_string(),
-            global_time: 0.0,
-        }
-        .validate()
-        .is_err());
-        assert!(MetadataOutputProbeRequest {
-            node_id: Uuid::new_v4(),
-            port: "x".repeat(MAX_PORT_BYTES + 1),
-            global_time: 0.0,
-        }
-        .validate()
-        .is_err());
-        assert!(MetadataOutputProbeRequest {
-            node_id: Uuid::new_v4(),
-            port: "value".to_string(),
-            global_time: f64::INFINITY,
-        }
-        .validate()
-        .is_err());
+        assert!(
+            MetadataOutputProbeRequest {
+                node_id: Uuid::new_v4(),
+                port: " ".to_string(),
+                global_time: 0.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            MetadataOutputProbeRequest {
+                node_id: Uuid::new_v4(),
+                port: "x".repeat(MAX_PORT_BYTES + 1),
+                global_time: 0.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            MetadataOutputProbeRequest {
+                node_id: Uuid::new_v4(),
+                port: "value".to_string(),
+                global_time: f64::INFINITY,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

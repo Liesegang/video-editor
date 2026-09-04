@@ -1,11 +1,11 @@
 mod support;
 
 use anyhow::{Context, Result, anyhow, bail};
-use library::EditorService;
 use library::cache::CacheManager;
 use library::core::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::core::audio::loader::AudioLoader;
 use library::core::audio::mixer::{mix_samples, render_samples};
+use library::editor::EditorService;
 use library::editor::project_service::MediaNodeRequest;
 use library::model::{Asset, AssetKind, Clip, Composition, NodeContainer, Project};
 use library::plugin::PluginManager;

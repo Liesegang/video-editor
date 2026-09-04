@@ -22,6 +22,9 @@ echo "[quality] Rust file size ratchet"
 echo "[quality] Node Editor dependency boundary"
 "${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"
 
+echo "[quality] Timeline / Node Module ownership boundary"
+bash "${SCRIPT_DIR}/check-node-islands-boundary.sh"
+
 echo "[quality] rustfmt"
 cargo fmt --all -- --check
 cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check

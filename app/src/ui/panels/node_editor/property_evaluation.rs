@@ -1,8 +1,8 @@
 use egui::{Color32, RichText, Ui};
 use egui_phosphor::regular as icons;
+use library::model::Project;
 use library::model::project::PortOwner;
 use library::model::property::{Property, PropertyValue};
-use library::model::Project;
 use library::plugin::{
     EvaluationContext, PluginManager, PropertyEvaluationError, PropertyEvaluationOutcome,
 };

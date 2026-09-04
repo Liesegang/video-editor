@@ -6,8 +6,8 @@ use library::model::{NodeContainer, Project};
 use crate::state::context_types::NodeEditorEditableWire;
 use crate::ui::panels::node_editor::components::merge_vacant_slot;
 use crate::ui::panels::node_editor::{
-    container_output_node_id, input_definitions, merge_input_slots, native_variadic_merge_for_node,
-    output_definitions, ContainerVisual, GraphItem, NodeEdit,
+    ContainerVisual, GraphItem, NodeEdit, container_output_node_id, input_definitions,
+    merge_input_slots, native_variadic_merge_for_node, output_definitions,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use crate::test_support::media_node_for_canvas;
     use crate::ui::panels::node_editor::{
-        apply_edit, AUDIO_OUTPUT_BINDING_PORT, IMAGE_OUTPUT_BINDING_PORT,
+        AUDIO_OUTPUT_BINDING_PORT, IMAGE_OUTPUT_BINDING_PORT, apply_edit,
     };
     use library::editor::project_service::MediaNodeRequest;
     use library::model::asset::{Asset, AssetKind};
@@ -288,21 +288,25 @@ mod tests {
             (IMAGE_OUTPUT_PORT, AUDIO_OUTPUT_BINDING_PORT),
             (AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_BINDING_PORT),
         ] {
-            assert!(edit_for_port_addresses(
+            assert!(
+                edit_for_port_addresses(
+                    &project,
+                    PortAddress::new(node, source),
+                    PortAddress::new(clip, sink),
+                    true,
+                )
+                .is_none()
+            );
+        }
+        assert!(
+            edit_for_port_addresses(
                 &project,
-                PortAddress::new(node, source),
-                PortAddress::new(clip, sink),
+                PortAddress::new(node, AUDIO_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Track(track_id), AUDIO_OUTPUT_BINDING_PORT),
                 true,
             )
-            .is_none());
-        }
-        assert!(edit_for_port_addresses(
-            &project,
-            PortAddress::new(node, AUDIO_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Track(track_id), AUDIO_OUTPUT_BINDING_PORT),
-            true,
-        )
-        .is_none());
+            .is_none()
+        );
     }
 
     #[test]

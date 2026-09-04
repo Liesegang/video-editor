@@ -1,11 +1,11 @@
 use egui_snarl::Snarl;
-use library::model::project::{PortDataType, PortOwner};
 use library::model::Project;
+use library::model::project::{PortDataType, PortOwner};
 use std::collections::HashMap;
 
 use crate::ui::panels::node_editor::{
-    container_output_binding_port, container_output_port, input_definitions, output_definitions,
-    ContainerVisual, GraphItem, PortAnchorKind,
+    ContainerVisual, GraphItem, PortAnchorKind, container_output_binding_port,
+    container_output_port, input_definitions, output_definitions,
 };
 
 pub(super) fn connect_container_output_wires(

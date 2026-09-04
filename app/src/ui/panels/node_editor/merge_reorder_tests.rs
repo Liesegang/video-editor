@@ -59,21 +59,27 @@ pub(super) fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3
         node.ui_position = [310.0, 300.0 + index as f32 * 120.0];
         source_ids[index] = node.id;
         project.add_node(node);
-        assert!(project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), source_ids[index])
-            .is_ok());
+        assert!(
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), source_ids[index])
+                .is_ok()
+        );
     }
 
     let mut merge = Node::new_merge("Merge");
     merge.ui_position = [720.0, 350.0];
     let merge_id = merge.id;
     project.add_node(merge);
-    assert!(project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), merge_id)
-        .is_ok());
-    assert!(project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), merge_id)
+            .is_ok()
+    );
+    assert!(
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
+            .is_ok()
+    );
 
     let target = PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     let mut connection_ids = [Uuid::nil(); 3];
@@ -87,15 +93,21 @@ pub(super) fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3
             connection_ids[index] = connection_id;
         }
     }
-    assert!(project
-        .set_connection_blend_mode(connection_ids[0], BlendMode::LinearDodge)
-        .is_ok());
-    assert!(project
-        .set_connection_blend_mode(connection_ids[1], BlendMode::Multiply)
-        .is_ok());
-    assert!(project
-        .set_connection_blend_mode(connection_ids[2], BlendMode::Screen)
-        .is_ok());
+    assert!(
+        project
+            .set_connection_blend_mode(connection_ids[0], BlendMode::LinearDodge)
+            .is_ok()
+    );
+    assert!(
+        project
+            .set_connection_blend_mode(connection_ids[1], BlendMode::Multiply)
+            .is_ok()
+    );
+    assert!(
+        project
+            .set_connection_blend_mode(connection_ids[2], BlendMode::Screen)
+            .is_ok()
+    );
     (
         project,
         composition_id,
@@ -323,9 +335,11 @@ fn vacant_bottom_slot_inserts_a_new_back_layer_without_changing_its_physical_slo
     );
     let source_id = source.id;
     project.add_node(source);
-    assert!(project
-        .attach_node_to_container(container, source_id)
-        .is_ok());
+    assert!(
+        project
+            .attach_node_to_container(container, source_id)
+            .is_ok()
+    );
 
     let before_slots = merge_input_slots(&project, merge_id);
     let Some(vacant_index) = before_slots.iter().position(|slot| {
@@ -426,9 +440,11 @@ fn real_pointer_connects_advanced_image_at_structural_boundary_with_one_stable_h
         before_slots.get(before_vacant_index).map(|slot| &slot.role),
         Some(MergeInputSlotRole::Vacant(NativeVariadicMergeKind::Image))
     ));
-    assert!(before_slots[..before_vacant_index]
-        .iter()
-        .all(|slot| { !matches!(slot.role, MergeInputSlotRole::Connected(_)) }));
+    assert!(
+        before_slots[..before_vacant_index]
+            .iter()
+            .all(|slot| { !matches!(slot.role, MergeInputSlotRole::Connected(_)) })
+    );
 
     let context = egui::Context::default();
     let mut state = NodeEditorState::default();
@@ -818,10 +834,12 @@ fn real_pointer_drag_outside_rows_cancels_without_project_or_layout_change() {
         frame += 1;
     }
     assert!(edits.is_empty());
-    assert!(state
-        .merge_layer_reorder
-        .as_ref()
-        .is_some_and(|gesture| gesture.finished && gesture.target_index.is_none()));
+    assert!(
+        state
+            .merge_layer_reorder
+            .as_ref()
+            .is_some_and(|gesture| gesture.finished && gesture.target_index.is_none())
+    );
     assert_eq!(
         merge_layer_rows(&project, merge_id)
             .iter()

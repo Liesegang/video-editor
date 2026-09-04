@@ -382,11 +382,13 @@ fn zero_time_stretch_is_preserved_as_freeze_and_negative_input_is_rejected() {
         .unwrap(),
         0.0
     );
-    assert!(Clip::validate_timing_property_value(
-        "time_stretch",
-        &PropertyValue::Number(OrderedFloat(-0.5)),
-    )
-    .is_err());
+    assert!(
+        Clip::validate_timing_property_value(
+            "time_stretch",
+            &PropertyValue::Number(OrderedFloat(-0.5)),
+        )
+        .is_err()
+    );
 
     assert!(apply_edit(
         &mut loaded,

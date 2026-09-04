@@ -7,6 +7,7 @@ use crate::model::asset::{
     Asset, AssetKind, SourceColorDescription, SourceColorPrimaries, SourceTransferCharacteristic,
 };
 use crate::model::frame::entity::ImageSurface;
+#[cfg(test)]
 use crate::model::project::Project;
 use crate::plugin::{DecodedColorSpace, DecodedPixelBuffer, DecodedPixelDescription};
 
@@ -32,16 +33,28 @@ impl MediaAssetKind {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn source_asset<'a>(
     project: &'a Project,
+    surface: &ImageSurface,
+    expected_kind: MediaAssetKind,
+) -> Result<Option<&'a Asset>, LibraryError> {
+    source_asset_from_assets(&project.assets, surface, expected_kind)
+}
+
+/// Resolve a media surface against the authoritative Asset collection without
+/// coupling the renderer to either persisted Project model.
+pub(crate) fn source_asset_from_assets<'a>(
+    assets: &'a [Asset],
     surface: &ImageSurface,
     expected_kind: MediaAssetKind,
 ) -> Result<Option<&'a Asset>, LibraryError> {
     let Some(asset_id) = surface.asset_id else {
         return Ok(None);
     };
-    let asset = project
-        .get_asset(asset_id)
+    let asset = assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
         .ok_or_else(|| LibraryError::Render(format!("source Asset {asset_id} no longer exists")))?;
     if !expected_kind.matches(&asset.kind) || asset.path != surface.file_path {
         return Err(LibraryError::Render(format!(

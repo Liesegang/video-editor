@@ -358,10 +358,12 @@ fn production_option_disable_after_delta_cancels_and_commits_current_position_on
         vec![egui::Event::PointerMoved(start + egui::vec2(18.0, 9.0))],
     );
     let moved_change = move_change(&project, &moved).expect("production movement before disable");
-    assert!(editor_context
-        .node_editor_state
-        .surface_interaction
-        .is_move_active());
+    assert!(
+        editor_context
+            .node_editor_state
+            .surface_interaction
+            .is_move_active()
+    );
 
     let disabled = run_pointer_frame(
         &context,
@@ -371,13 +373,17 @@ fn production_option_disable_after_delta_cancels_and_commits_current_position_on
         Vec::new(),
     );
     assert_eq!(move_end(&disabled), Some(MoveEndOutcome::Cancelled));
-    assert!(disabled
-        .iter()
-        .all(|output| !matches!(output, SurfaceOutput::Reparent { .. })));
-    assert!(!editor_context
-        .node_editor_state
-        .surface_interaction
-        .is_active());
+    assert!(
+        disabled
+            .iter()
+            .all(|output| !matches!(output, SurfaceOutput::Reparent { .. }))
+    );
+    assert!(
+        !editor_context
+            .node_editor_state
+            .surface_interaction
+            .is_active()
+    );
 
     let mut edited = project.clone();
     for edit in moved_change.edits {

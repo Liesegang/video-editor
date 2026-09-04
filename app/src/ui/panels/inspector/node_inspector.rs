@@ -15,7 +15,7 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 use super::action_handler::ActionContext;
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use super::path_effect;
-use super::properties::{render_property_rows, PropertyRenderContext};
+use super::properties::{PropertyRenderContext, render_property_rows};
 use super::property_authoring::PropertyAction;
 use super::property_inference::inferred_property_definitions;
 use crate::ui::widgets::color_value_picker::color_value_picker;

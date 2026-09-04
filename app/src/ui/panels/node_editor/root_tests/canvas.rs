@@ -47,11 +47,13 @@ fn extreme_zoom_transform_and_adaptive_grid_remain_finite_and_bounded() {
     for (screen, graph) in screen_wire.into_iter().zip(graph_wire) {
         assert!((transform * graph).distance(screen) < 0.001);
     }
-    assert!(overview_wire_graph_points(
-        screen_wire,
-        egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.0),
-    )
-    .is_none());
+    assert!(
+        overview_wire_graph_points(
+            screen_wire,
+            egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.0),
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -363,13 +365,15 @@ fn overview_port_qa_rect_matches_the_real_reconnect_drop_hit_test() {
         },
         offscreen,
     )]);
-    assert!(rendered_port_at_position(
-        &offscreen_ports,
-        PortDirection::Output,
-        offscreen.center(),
-        canvas,
-    )
-    .is_none());
+    assert!(
+        rendered_port_at_position(
+            &offscreen_ports,
+            PortDirection::Output,
+            offscreen.center(),
+            canvas,
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -481,8 +485,10 @@ fn extreme_zoom_disables_precision_hits_without_expanding_node_hit_area() {
         desired_center,
         egui::vec2(MIN_CONTAINER_SIZE.x * scale, MIN_CONTAINER_SIZE.y * scale),
     );
-    assert!(resize_regions(tiny_container)
-        .iter()
-        .any(|(_, _, rect, _)| rect.contains(desired_center)));
+    assert!(
+        resize_regions(tiny_container)
+            .iter()
+            .any(|(_, _, rect, _)| rect.contains(desired_center))
+    );
     assert!(!node_editor_resize_interactions_enabled(scale));
 }

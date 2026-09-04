@@ -327,10 +327,12 @@ fn effect_operation_add_is_ltr_typed_atomic_and_preserves_the_clip_output() {
 
     let factory = style_graph_factory();
     let plugins = factory.get_plugin_manager();
-    assert!(plugins
-        .get_available_effects()
-        .iter()
-        .any(|(id, _, _)| id == "blur"));
+    assert!(
+        plugins
+            .get_available_effects()
+            .iter()
+            .any(|(id, _, _)| id == "blur")
+    );
     let source = factory
         .create_solid_node(
             library::model::frame::color::Color {
@@ -457,9 +459,11 @@ fn effector_operation_nodes_and_menu_use_the_authoritative_descriptor() {
     let menu_entries = available_effector_menu_entries(plugins.as_ref());
     assert!(menu_entries.contains(&("transform".to_string(), "Transform Modulation".to_string())));
     assert!(menu_entries.contains(&("opacity".to_string(), "Opacity Modulation".to_string())));
-    assert!(menu_entries
-        .windows(2)
-        .all(|entries| entries[0].1 <= entries[1].1));
+    assert!(
+        menu_entries
+            .windows(2)
+            .all(|entries| entries[0].1 <= entries[1].1)
+    );
 
     for component_id in ["transform", "opacity"] {
         let descriptor = plugins

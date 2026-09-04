@@ -3,7 +3,7 @@ use library::model::project::{PortOwner, Project};
 use uuid::Uuid;
 
 use crate::state::context::EditorContext;
-use crate::ui::panels::time_context::{time_source_state, TimeSourcePresentation, TimeSourceState};
+use crate::ui::panels::time_context::{TimeSourcePresentation, TimeSourceState, time_source_state};
 
 #[derive(Clone, Debug)]
 pub(super) struct NodeTimeSource {

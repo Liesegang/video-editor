@@ -9,8 +9,8 @@ use egui_snarl::ui::{
     BackgroundPattern, PinPlacement, SelectionStyle, SnarlStyle, WireLayer, WireStyle,
 };
 use pan_zoom_ui::{
-    apply_navigation, sanitize_state, CanvasState, CanvasTheme, GridConfig, NavigationConfig,
-    NavigationDelta, ZoomPolicy,
+    CanvasState, CanvasTheme, GridConfig, NavigationConfig, NavigationDelta, ZoomPolicy,
+    apply_navigation, sanitize_state,
 };
 use uuid::Uuid;
 

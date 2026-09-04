@@ -1,21 +1,21 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use library::PropertyOwner;
 use library::editor::project_service::{
     SemanticAnimationSupport, SemanticContainerPropertyStack, SemanticPropertyAccess,
     SemanticPropertyGroup, SemanticPropertyOwner,
 };
+use library::model::Node;
 use library::model::project::{NodeContainer, Project};
 use library::model::property::{Property, PropertyDefinition, PropertyMap};
-use library::model::Node;
-use library::PropertyOwner;
 use uuid::Uuid;
 
 use crate::state::context_types::{GraphPropertyAddress, KeyframeValueComponent, SelectionTarget};
 
 use super::actions::graph_property_name;
 use super::utils::{
-    numeric_property_components, time_mapper_for_owner, PropertyComponent, TimeMapper,
+    PropertyComponent, TimeMapper, numeric_property_components, time_mapper_for_owner,
 };
 
 #[derive(Clone)]
@@ -339,6 +339,7 @@ fn selection_id(target: SelectionTarget) -> String {
         SelectionTarget::Clip(id) => format!("clip:{id}"),
         SelectionTarget::Track(id) => format!("track:{id}"),
         SelectionTarget::Composition(id) => format!("composition:{id}"),
+        SelectionTarget::TimelineItem(id) => format!("timeline_item:{id}"),
     }
 }
 
@@ -385,7 +386,7 @@ pub fn selection_for_container(container: NodeContainer) -> SelectionTarget {
 
 pub fn container_for_selection(target: SelectionTarget) -> Option<NodeContainer> {
     match target {
-        SelectionTarget::Node(_) => None,
+        SelectionTarget::Node(_) | SelectionTarget::TimelineItem(_) => None,
         SelectionTarget::Clip(id) => Some(NodeContainer::Clip(id)),
         SelectionTarget::Track(id) => Some(NodeContainer::Track(id)),
         SelectionTarget::Composition(id) => Some(NodeContainer::Composition(id)),
@@ -612,9 +613,11 @@ mod tests {
             .expect("Solid color row is preserved");
         assert_eq!(color.component, None);
         assert!(!color.is_plottable());
-        assert!(!projection
-            .rows()
-            .any(|row| row.component == Some(PropertyComponent::W)));
+        assert!(
+            !projection
+                .rows()
+                .any(|row| row.component == Some(PropertyComponent::W))
+        );
         assert_eq!(*shared.read().expect("project read"), before);
     }
 

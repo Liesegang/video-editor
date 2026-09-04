@@ -9,11 +9,11 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
+use library::EditorService;
 use library::editor::project_service::SemanticPropertyAccess;
+use library::model::NodeContent;
 use library::model::project::{NodeContainer, Project};
 use library::model::property::PropertyDefinition;
-use library::model::NodeContent;
-use library::EditorService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ use crate::state::transport::seek_transport;
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
 use pan_zoom_ui::{AxisMask, CanvasState, NavigationConfig};
-use projection::{container_for_selection, GraphPropertyProjection, GraphPropertyRow};
+use projection::{GraphPropertyProjection, GraphPropertyRow, container_for_selection};
 
 fn graph_navigation_config() -> NavigationConfig {
     NavigationConfig {
@@ -121,6 +121,9 @@ fn graph_property_projection(
             let project = project.read().map_err(|error| error.to_string())?;
             Ok(GraphPropertyProjection::semantic(&project, &stack))
         }
+        SelectionTarget::TimelineItem(_) => {
+            Err("Timeline Item automation requires the authoring projection".to_string())
+        }
     }
 }
 
@@ -149,6 +152,7 @@ fn graph_selection_for_composition(
         SelectionTarget::Composition(id) => {
             id == composition_id && project.get_composition(id).is_some()
         }
+        SelectionTarget::TimelineItem(_) => false,
     };
     belongs.then_some(target)
 }
@@ -161,7 +165,9 @@ fn graph_valid_time_range(
     let clip_id = match target {
         SelectionTarget::Node(node_id) => project.find_parent_clip(node_id),
         SelectionTarget::Clip(clip_id) => Some(clip_id),
-        SelectionTarget::Track(_) | SelectionTarget::Composition(_) => None,
+        SelectionTarget::Track(_)
+        | SelectionTarget::Composition(_)
+        | SelectionTarget::TimelineItem(_) => None,
     };
     let Some(clip_id) = clip_id else {
         return Some((0.0, composition_duration));
@@ -583,9 +589,9 @@ fn node_belongs_to_composition(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_graph_drag_if_owner_changed, graph_navigation_config, graph_node_selection,
-        graph_property_qa_metadata, graph_selection_for_composition, GraphViewportState,
-        HistoryManager, SelectionTarget,
+        GraphViewportState, HistoryManager, SelectionTarget, finish_graph_drag_if_owner_changed,
+        graph_navigation_config, graph_node_selection, graph_property_qa_metadata,
+        graph_selection_for_composition,
     };
     use crate::state::context::EditorContext;
     use crate::state::context_types::GraphKeyframeDragState;

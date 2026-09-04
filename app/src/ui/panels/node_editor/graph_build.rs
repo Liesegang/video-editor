@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui_snarl::Snarl;
-use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use library::model::Project;
+use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -10,9 +10,9 @@ mod container_outputs;
 use container_outputs::connect_container_output_wires;
 
 use super::{
-    input_definitions, merge_input_index_for_connection, native_variadic_merge_target,
-    output_definitions, ContainerKind, ContainerVisual, GraphItem, PortAnchorKind,
-    CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y, MIN_CONTAINER_SIZE,
+    CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y, ContainerKind,
+    ContainerVisual, GraphItem, MIN_CONTAINER_SIZE, PortAnchorKind, input_definitions,
+    merge_input_index_for_connection, native_variadic_merge_target, output_definitions,
 };
 
 pub(super) fn build_snarl(

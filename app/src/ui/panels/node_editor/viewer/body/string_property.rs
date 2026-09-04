@@ -1,12 +1,12 @@
 use eframe::egui;
+use library::model::Node;
 use library::model::project::PortOwner;
 use library::model::property::PropertyValue;
-use library::model::Node;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    continuous_response_finished, evaluate_node_property, node_property_time, property_label,
-    render_node_property_issue, NodeEdit, INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT,
+    INLINE_CONTROL_WIDTH, NodeEdit, PORT_ROW_HEIGHT, continuous_response_finished,
+    evaluate_node_property, node_property_time, property_label, render_node_property_issue,
 };
 
 use super::ProjectNodeViewer;

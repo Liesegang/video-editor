@@ -1,15 +1,15 @@
 use eframe::egui;
-use library::model::project::connection::{LIST_ITEMS_INPUT_PORT, LIST_ITEM_OUTPUT_PORT};
+use library::model::project::connection::{LIST_ITEM_OUTPUT_PORT, LIST_ITEMS_INPUT_PORT};
 use library::model::project::{
-    PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner, AUDIO_OUTPUT_PORT,
-    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
+    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, PortAddress,
+    PortDataType, PortDirection, PortMultiplicity, PortOwner,
 };
 use library::model::{BlendMode, ListContent, NodeContainer, NodeContent, Project};
 use std::{cmp::Ordering, collections::HashMap};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    canonical_pin_definitions, clipped_qa_rect, qa_container_key, qa_rect_metadata, PinDefinition,
+    PinDefinition, canonical_pin_definitions, clipped_qa_rect, qa_container_key, qa_rect_metadata,
 };
 #[cfg(test)]
 use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
@@ -675,9 +675,11 @@ mod tests {
             .find(|item| item.value == BlendMode::LinearDodge)
             .unwrap();
         assert_eq!(linear_dodge.label, "Linear Dodge (Add)");
-        assert!(linear_dodge
-            .keywords
-            .iter()
-            .any(|keyword| keyword == "linear_dodge"));
+        assert!(
+            linear_dodge
+                .keywords
+                .iter()
+                .any(|keyword| keyword == "linear_dodge")
+        );
     }
 }

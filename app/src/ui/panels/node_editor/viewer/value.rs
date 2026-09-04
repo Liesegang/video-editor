@@ -1,7 +1,7 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::{
-    bounded_non_selectable_label, property_label, value_operation_label, INLINE_CONTROL_WIDTH,
-    VALUE_NODE_CATEGORY_LABEL,
+    INLINE_CONTROL_WIDTH, VALUE_NODE_CATEGORY_LABEL, bounded_non_selectable_label, property_label,
+    value_operation_label,
 };
 use eframe::egui;
 use library::model::ValueContent;

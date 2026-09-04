@@ -1,0 +1,414 @@
+//! Transient UI state for the Timeline-first authoring model.
+//!
+//! None of these values are persisted as Project data. Gestures retain their
+//! immutable model origin and expose only a visual projection until release;
+//! the editor service therefore receives one atomic command per gesture.
+
+use std::collections::HashSet;
+use std::time::Instant;
+
+use library::model::authoring::{
+    AttachmentId, InstancePath, MediaTime, ModuleDefinitionId, ProjectRevision, TimelineId,
+    TimelineInterval, TimelineItemId, TimelineTrackId,
+};
+use library::model::property::Vec2 as PropertyVec2;
+
+use super::module_node_editor::ModuleNodeEditorState;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AuthoringSelection {
+    Timeline(TimelineId),
+    Track(TimelineTrackId),
+    Item(TimelineItemId),
+    Asset(uuid::Uuid),
+    ModuleDefinition(ModuleDefinitionId),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AuthoringSelectionState {
+    selected: Vec<AuthoringSelection>,
+}
+
+impl AuthoringSelectionState {
+    pub fn primary(&self) -> Option<AuthoringSelection> {
+        self.selected.last().copied()
+    }
+
+    pub fn contains(&self, selection: AuthoringSelection) -> bool {
+        self.selected.contains(&selection)
+    }
+
+    pub fn replace(&mut self, selection: AuthoringSelection) {
+        self.selected.clear();
+        self.selected.push(selection);
+    }
+
+    pub fn clear(&mut self) {
+        self.selected.clear();
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(AuthoringSelection) -> bool) {
+        self.selected.retain(|selection| keep(*selection));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimelineGestureKind {
+    Move,
+    TrimStart,
+    TrimEnd,
+}
+
+/// Immutable origin plus the current visual projection of one clip gesture.
+#[derive(Clone, Debug)]
+pub struct TimelineItemGesture {
+    pub item_id: TimelineItemId,
+    pub kind: TimelineGestureKind,
+    pub pointer_origin: egui::Pos2,
+    pub original_track_id: TimelineTrackId,
+    pub original_layer: i64,
+    pub original_interval: TimelineInterval,
+    pub projected_track_id: TimelineTrackId,
+    pub projected_layer: i64,
+    /// Exact expanded clip row under the pointer. Layer alone is not a stable
+    /// row identity while clips are being reordered.
+    pub projected_row_item_id: Option<TimelineItemId>,
+    pub projected_interval: TimelineInterval,
+}
+
+impl TimelineItemGesture {
+    pub fn changed(&self) -> bool {
+        self.projected_track_id != self.original_track_id
+            || self.projected_layer != self.original_layer
+            || self.projected_interval != self.original_interval
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthoringLibraryDrag {
+    Asset(uuid::Uuid),
+    Timeline(TimelineId),
+    ModuleDefinition(ModuleDefinitionId),
+    NewNodeClip,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthoringTimelineView {
+    pub current_frame: i64,
+    pub is_playing: bool,
+    pub pixels_per_second: f32,
+    pub horizontal_scroll: f32,
+    pub vertical_scroll: f32,
+    pub expanded_tracks: HashSet<TimelineTrackId>,
+    pub item_gesture: Option<TimelineItemGesture>,
+    pub library_drag: Option<AuthoringLibraryDrag>,
+    pub playback_anchor: Option<(Instant, i64)>,
+}
+
+impl Default for AuthoringTimelineView {
+    fn default() -> Self {
+        Self {
+            current_frame: 0,
+            is_playing: false,
+            pixels_per_second: 80.0,
+            horizontal_scroll: 0.0,
+            vertical_scroll: 0.0,
+            expanded_tracks: HashSet::new(),
+            item_gesture: None,
+            library_drag: None,
+            playback_anchor: None,
+        }
+    }
+}
+
+impl AuthoringTimelineView {
+    pub fn seek_frame(&mut self, frame: i64) {
+        self.current_frame = frame.max(0);
+        if self.is_playing {
+            self.playback_anchor = Some((Instant::now(), self.current_frame));
+        }
+    }
+
+    pub fn set_playing(&mut self, playing: bool) {
+        if self.is_playing == playing {
+            return;
+        }
+        self.is_playing = playing;
+        self.playback_anchor = playing.then(|| (Instant::now(), self.current_frame));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewTool {
+    Select,
+    Pan,
+    Zoom,
+}
+
+/// Immutable authoring origin plus the current canvas-only position preview.
+/// The Project is updated exactly once when the pointer is released.
+#[derive(Clone, Debug)]
+pub(crate) struct PreviewPositionGesture {
+    pub item_id: TimelineItemId,
+    pub pointer_origin: egui::Pos2,
+    pub zoom_origin: f32,
+    pub original_position: PropertyVec2,
+    pub projected_position: PropertyVec2,
+    pub local_time: MediaTime,
+    pub keyframed: bool,
+    pub project_revision: ProjectRevision,
+}
+
+#[derive(Clone)]
+pub struct AuthoringPreviewView {
+    pub pan: egui::Vec2,
+    pub zoom: f32,
+    pub auto_fit: bool,
+    pub show_grid: bool,
+    pub active_tool: PreviewTool,
+    pub fitted_timeline: Option<TimelineId>,
+    pub last_viewport_size: egui::Vec2,
+    pub texture: Option<egui::TextureHandle>,
+    pub texture_width: u32,
+    pub texture_height: u32,
+    pub rendered_revision: Option<u64>,
+    pub rendered_frame: Option<i64>,
+    pub nontransparent_pixels: Option<u64>,
+    pub pixel_hash: Option<u64>,
+    pub(crate) position_gesture: Option<PreviewPositionGesture>,
+}
+
+impl Default for AuthoringPreviewView {
+    fn default() -> Self {
+        Self {
+            pan: egui::Vec2::ZERO,
+            zoom: 1.0,
+            auto_fit: true,
+            show_grid: true,
+            active_tool: PreviewTool::Select,
+            fitted_timeline: None,
+            last_viewport_size: egui::Vec2::ZERO,
+            texture: None,
+            texture_width: 0,
+            texture_height: 0,
+            rendered_revision: None,
+            rendered_frame: None,
+            nontransparent_pixels: None,
+            pixel_hash: None,
+            position_gesture: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CurveKeyDrag {
+    pub item_id: TimelineItemId,
+    pub target: CurveTarget,
+    pub component: CurveValueComponent,
+    pub keyframe_id: library::model::property::KeyframeId,
+    pub original_time: MediaTime,
+    pub original_value: library::model::property::PropertyValue,
+    pub projected_time: MediaTime,
+    pub projected_value: library::model::property::PropertyValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CurveValueComponent {
+    Scalar,
+    X,
+    Y,
+    Z,
+    W,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CurveTarget {
+    AuthoredProperty(String),
+    ModuleParameter(library::model::authoring::PublishedParameterId),
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthoringCurveView {
+    pub target_item: Option<TimelineItemId>,
+    pub pan: egui::Vec2,
+    pub zoom_x: f32,
+    pub zoom_y: f32,
+    pub visible_parameters: HashSet<library::model::authoring::PublishedParameterId>,
+    pub visible_authored_properties: HashSet<String>,
+    pub drag: Option<CurveKeyDrag>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AuthoringInspectorView {
+    pub target: Option<AuthoringSelection>,
+    /// Revision from which the editable draft was populated. Drafts stay
+    /// stable during a gesture, then refresh after any committed edit/undo.
+    pub synced_revision: Option<ProjectRevision>,
+    pub name: String,
+    pub text: String,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    pub property_values: std::collections::HashMap<String, library::model::property::PropertyValue>,
+    pub effect_values:
+        std::collections::HashMap<(AttachmentId, String), library::model::property::PropertyValue>,
+}
+
+impl AuthoringInspectorView {
+    pub fn invalidate(&mut self) {
+        self.target = None;
+        self.synced_revision = None;
+        self.property_values.clear();
+        self.effect_values.clear();
+    }
+}
+
+impl Default for AuthoringCurveView {
+    fn default() -> Self {
+        Self {
+            target_item: None,
+            pan: egui::Vec2::ZERO,
+            zoom_x: 1.0,
+            zoom_y: 1.0,
+            visible_parameters: HashSet::new(),
+            visible_authored_properties: HashSet::new(),
+            drag: None,
+        }
+    }
+}
+
+pub struct AuthoringUiState {
+    pub active_timeline_id: TimelineId,
+    /// Concrete placement path used to disambiguate repeated nested
+    /// compositions. The root id always remains the Project root Timeline.
+    pub active_instance_path: Option<InstancePath>,
+    pub selection: AuthoringSelectionState,
+    pub timeline: AuthoringTimelineView,
+    pub preview: AuthoringPreviewView,
+    pub curve: AuthoringCurveView,
+    pub inspector: AuthoringInspectorView,
+    pub node_editor: ModuleNodeEditorState,
+    pub error: Option<String>,
+    pub status: String,
+}
+
+impl AuthoringUiState {
+    pub fn new(root_timeline_id: TimelineId) -> Self {
+        Self {
+            active_timeline_id: root_timeline_id,
+            active_instance_path: Some(InstancePath::root(root_timeline_id)),
+            selection: AuthoringSelectionState::default(),
+            timeline: AuthoringTimelineView::default(),
+            preview: AuthoringPreviewView::default(),
+            curve: AuthoringCurveView::default(),
+            inspector: AuthoringInspectorView::default(),
+            node_editor: ModuleNodeEditorState::default(),
+            error: None,
+            status: "Ready".to_string(),
+        }
+    }
+
+    pub fn reconcile(&mut self, project: &library::model::authoring::AuthoringProject) {
+        let invalid_concrete_path = self.active_instance_path.as_ref().is_some_and(|path| {
+            resolve_instance_path_timeline(project, path) != Some(self.active_timeline_id)
+        });
+        if !project.timelines.contains_key(&self.active_timeline_id) || invalid_concrete_path {
+            self.active_timeline_id = project.root_timeline_id;
+            self.active_instance_path = Some(InstancePath::root(project.root_timeline_id));
+            self.preview.auto_fit = true;
+        }
+        self.selection.retain(|selection| match selection {
+            AuthoringSelection::Timeline(id) => project.timelines.contains_key(&id),
+            AuthoringSelection::Track(id) => project.tracks.contains_key(&id),
+            AuthoringSelection::Item(id) => project.items.contains_key(&id),
+            AuthoringSelection::Asset(id) => project.assets.iter().any(|asset| asset.id == id),
+            AuthoringSelection::ModuleDefinition(id) => {
+                project.module_definitions.contains_key(&id)
+            }
+        });
+        self.timeline.expanded_tracks.retain(|track_id| {
+            project
+                .tracks
+                .get(track_id)
+                .is_some_and(|track| track.timeline_id == self.active_timeline_id)
+        });
+        let maximum_frame = project
+            .timelines
+            .get(&self.active_timeline_id)
+            .and_then(|timeline| timeline.duration.checked_frame_index(timeline.fps).ok())
+            .unwrap_or(0)
+            .max(0);
+        self.timeline.current_frame = self.timeline.current_frame.clamp(0, maximum_frame);
+    }
+}
+
+fn resolve_instance_path_timeline(
+    project: &library::model::authoring::AuthoringProject,
+    path: &InstancePath,
+) -> Option<TimelineId> {
+    if path.root_timeline_id != project.root_timeline_id {
+        return None;
+    }
+    let mut timeline_id = path.root_timeline_id;
+    for item_id in &path.composition_items {
+        let item = project.items.get(item_id)?;
+        let track = project.tracks.get(&item.track_id)?;
+        if track.timeline_id != timeline_id {
+            return None;
+        }
+        let library::model::authoring::SourceRef::Composition(instance) = &item.source else {
+            return None;
+        };
+        timeline_id = instance.timeline_id;
+    }
+    project
+        .timelines
+        .contains_key(&timeline_id)
+        .then_some(timeline_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::authoring::{AuthoringProject, RationalRate};
+
+    #[test]
+    fn item_gesture_does_not_mutate_its_origin() {
+        let original =
+            TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap()).unwrap();
+        let mut gesture = TimelineItemGesture {
+            item_id: TimelineItemId::new(),
+            kind: TimelineGestureKind::Move,
+            pointer_origin: egui::pos2(10.0, 10.0),
+            original_track_id: TimelineTrackId::new(),
+            original_layer: 0,
+            original_interval: original,
+            projected_track_id: TimelineTrackId::new(),
+            projected_layer: 2,
+            projected_row_item_id: None,
+            projected_interval: original,
+        };
+        gesture.projected_interval.start = MediaTime::new(3, 1).unwrap();
+        assert_eq!(gesture.original_interval, original);
+        assert!(gesture.changed());
+    }
+
+    #[test]
+    fn reconcile_discards_only_stale_ui_references() {
+        let project = AuthoringProject::new(
+            "test",
+            1920,
+            1080,
+            RationalRate::new(30, 1).unwrap(),
+            MediaTime::new(10, 1).unwrap(),
+        )
+        .unwrap();
+        let mut state = AuthoringUiState::new(project.root_timeline_id);
+        state
+            .selection
+            .replace(AuthoringSelection::Item(TimelineItemId::new()));
+        state.timeline.current_frame = 1_000;
+        state.reconcile(&project);
+        assert_eq!(state.selection.primary(), None);
+        assert_eq!(state.timeline.current_frame, 300);
+    }
+}

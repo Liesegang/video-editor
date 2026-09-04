@@ -4,12 +4,12 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
-use library::model::project::{PortAddress, PortOwner};
 use library::model::Project;
+use library::model::project::{PortAddress, PortOwner};
 use uuid::Uuid;
 
-use super::{semantic_node_cmp, semantic_node_cmp_without_geometry};
 use super::{BranchDirection, NodeLayoutGeometry};
+use super::{semantic_node_cmp, semantic_node_cmp_without_geometry};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ActualNodeEdge {

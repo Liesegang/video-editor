@@ -1,12 +1,12 @@
 use super::*;
 use crate::test_support::{generator_node, media_node_for_canvas};
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest};
+use library::model::Asset;
 use library::model::frame::color::Color;
 use library::model::project::{
-    NodeContainer, PortAddress, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortAddress,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::Asset;
 use library::plugin::PluginManager;
 
 fn project_with_clip(name: &str) -> (Project, Uuid) {
@@ -480,14 +480,18 @@ fn failed_timing_update_cancels_gesture_without_history_or_preview_damage() {
     assert_eq!(history.undo_depth(), 1);
     assert!(!editor_context.interaction.is_resizing_entity);
     assert!(!editor_context.interaction.is_moving_selected_entity);
-    assert!(editor_context
-        .interaction
-        .dragged_entity_original_track_id
-        .is_none());
-    assert!(editor_context
-        .interaction
-        .dragged_entity_hovered_track_id
-        .is_none());
+    assert!(
+        editor_context
+            .interaction
+            .dragged_entity_original_track_id
+            .is_none()
+    );
+    assert!(
+        editor_context
+            .interaction
+            .dragged_entity_hovered_track_id
+            .is_none()
+    );
     assert!(!editor_context.interaction.dragged_entity_has_moved);
     assert_eq!(
         (

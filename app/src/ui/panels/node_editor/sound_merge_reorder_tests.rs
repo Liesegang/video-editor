@@ -1,8 +1,8 @@
 use super::merge_reorder_tests::{pointer_button, render_merge_frame};
 use super::*;
 use library::model::project::{
-    PortDefinition, PortExposure, PortSide, ProjectConnection, AUDIO_OUTPUT_PORT,
-    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT,
+    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, PortDefinition,
+    PortExposure, PortSide, ProjectConnection,
 };
 use library::model::{Composition, PluginOperationContent};
 
@@ -239,11 +239,13 @@ fn sound_merge_projects_audio_connections_in_canonical_top_to_bottom_rows_withou
         );
     }
     for row in rows {
-        assert!(test_rect(&format!(
-            "node_editor.merge_layer.blend_select:{}:{}",
-            fixture.sound_merge_id, row.connection_id
-        ))
-        .is_none());
+        assert!(
+            test_rect(&format!(
+                "node_editor.merge_layer.blend_select:{}:{}",
+                fixture.sound_merge_id, row.connection_id
+            ))
+            .is_none()
+        );
     }
 }
 
@@ -412,9 +414,11 @@ fn structural_and_custom_sound_rows_cannot_cross_the_mandatory_prefix() {
             target,
         );
         assert!(edits.is_empty());
-        assert!(state
-            .merge_layer_reorder
-            .as_ref()
-            .is_some_and(|gesture| gesture.finished && gesture.target_index.is_none()));
+        assert!(
+            state
+                .merge_layer_reorder
+                .as_ref()
+                .is_some_and(|gesture| gesture.finished && gesture.target_index.is_none())
+        );
     }
 }

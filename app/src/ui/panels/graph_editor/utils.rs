@@ -1,11 +1,11 @@
 use egui::{Pos2, Rect, Vec2};
+use library::PropertyOwner;
+use library::model::Clip;
 use library::model::project::Project;
 use library::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2 as PropertyVec2,
     Vec3 as PropertyVec3, Vec4 as PropertyVec4,
 };
-use library::model::Clip;
-use library::PropertyOwner;
 use ordered_float::OrderedFloat;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

@@ -401,7 +401,7 @@ impl ColorManagementConfig {
         validation::diagnostics(self, assets)
     }
 
-    pub(super) fn blocking_diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+    pub(crate) fn blocking_diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
         validation::blocking_diagnostics(self, assets)
     }
 
@@ -435,7 +435,7 @@ pub enum RequestedColorManagementConfig {
 }
 
 impl RequestedColorManagementConfig {
-    pub(super) fn from_config(config: ColorManagementConfig) -> Self {
+    pub(crate) fn from_config(config: ColorManagementConfig) -> Self {
         Self::Config(Box::new(config))
     }
 
@@ -453,7 +453,7 @@ impl RequestedColorManagementConfig {
         }
     }
 
-    pub(super) fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
+    pub(crate) fn diagnostics(&self, assets: &[Asset]) -> Vec<ColorManagementIssue> {
         match self {
             Self::Config(config) => config.diagnostics(assets),
             Self::Malformed {
@@ -847,7 +847,7 @@ impl std::fmt::Display for ColorManagementField {
     }
 }
 
-pub(super) fn resolve_color_management(
+pub(crate) fn resolve_color_management(
     requested: &RequestedColorManagementConfig,
     assets: &[Asset],
 ) -> ResolvedColorManagementConfig {

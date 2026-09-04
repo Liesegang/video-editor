@@ -1,5 +1,5 @@
 use super::*;
-use crate::PropertyOwner;
+use crate::editor::PropertyOwner;
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
 use crate::model::project::{

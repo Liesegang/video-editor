@@ -24,10 +24,10 @@ pub mod util;
 pub mod error;
 pub use error::LibraryError;
 
-// Re-export animation types from model for backward compatibility
+// Animation types remain part of the public authoring surface.
 pub use model::animation;
 
-// Re-exports for backward compatibility
+// Core subsystems used by the application and plugins.
 pub use core::audio;
 pub use core::cache;
 pub use core::ensemble;
@@ -37,15 +37,11 @@ pub use core::rendering;
 pub use crate::model::frame::Image;
 pub use crate::plugin::{ExportColorAuthority, ExportFrame, ExportSettings};
 
-// Re-export the services that the app will need
+// Timeline-first Preview/export boundary used by the app.
 pub use core::rendering::render_server::{
-    RenderFrameAuthority, RenderRequestId, RenderResult, RenderServer,
+    AuthoringExportResult, RenderRequestId, RenderResult, RenderServer,
 };
 pub use core::rendering::skia_renderer::SkiaRenderer;
-pub use editor::ExportService;
-pub use editor::ProjectModel;
-pub use editor::ProjectService;
-pub use editor::{ClipBundle, EditorService, KeyframeBatchUpdate, NodeGraphBundle, PropertyOwner};
 pub use editor::{RenderDestination, RenderService};
 
 /// Explicitly starts the trusted in-process CPython host. GUI applications

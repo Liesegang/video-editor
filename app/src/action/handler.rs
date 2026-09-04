@@ -7,8 +7,8 @@ use std::io::Write;
 use library::EditorService;
 
 use crate::action::{
-    activate_composition_with_history, commit_live_project_edits, request_node_layout_command,
-    HistoryManager,
+    HistoryManager, activate_composition_with_history, commit_live_project_edits,
+    request_node_layout_command,
 };
 use crate::command::CommandId;
 use crate::model::ui_types::Tab;
@@ -284,6 +284,9 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                     context.editor_context.interaction.active_confirmation = Some(dialog);
                     false
                 }
+                // Timeline-first items are owned by TimelineEditorService and
+                // are never deleted through the legacy Project command path.
+                SelectionTarget::TimelineItem(_) => false,
             };
             if removed {
                 let project = context.project_service.get_project();
@@ -337,24 +340,24 @@ fn handle_view_command(action: CommandId, context: ActionContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_edit_command, handle_file_command, ActionContext};
+    use super::{ActionContext, handle_edit_command, handle_file_command};
     use crate::action::HistoryManager;
     use crate::command::CommandId;
     use crate::state::context::EditorContext;
     use crate::state::context_types::{GraphKeyframeDragState, SelectionTarget};
     use crate::ui::tab_viewer::create_initial_dock_state;
+    use library::EditorService;
     use library::cache::CacheManager;
     use library::model::project::{NodeContainer, Project};
     use library::model::property::KeyframeId;
     use library::model::{Clip, Composition, Node};
     use library::plugin::PluginManager;
-    use library::EditorService;
     use std::sync::{Arc, RwLock};
     use uuid::Uuid;
 
     #[test]
-    fn delete_dispatches_same_uuid_node_and_clip_by_target_kind(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn delete_dispatches_same_uuid_node_and_clip_by_target_kind()
+    -> Result<(), Box<dyn std::error::Error>> {
         let shared_id = Uuid::new_v4();
         let mut project_model = Project::new("typed delete");
         let (composition, track) = Composition::new("main", 320, 180, 30.0, 2.0);
@@ -461,8 +464,8 @@ mod tests {
     }
 
     #[test]
-    fn new_project_keeps_only_one_replacement_baseline_after_interrupted_edit(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn new_project_keeps_only_one_replacement_baseline_after_interrupted_edit()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut initial = Project::new("old project");
         let (composition, track) = Composition::new("old", 320, 180, 30.0, 2.0);
         let old_composition_id = composition.id;
@@ -513,9 +516,11 @@ mod tests {
         assert_eq!(history.undo_depth(), 1);
         assert_eq!(history.undo(&current), None);
         assert!(editor_context.graph_editor.keyframe_drag.is_none());
-        assert!(editor_context
-            .active_composition_id
-            .is_some_and(|id| current.get_composition(id).is_some()));
+        assert!(
+            editor_context
+                .active_composition_id
+                .is_some_and(|id| current.get_composition(id).is_some())
+        );
         Ok(())
     }
 }

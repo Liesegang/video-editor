@@ -66,10 +66,12 @@ mod tests {
                 .track_ids,
             vec![SOURCE_TRACK_ID]
         );
-        assert!(project
-            .get_track(PARENT_TRACK_ID)
-            .unwrap()
-            .clip_ids
-            .is_empty());
+        assert!(
+            project
+                .get_track(PARENT_TRACK_ID)
+                .unwrap()
+                .clip_ids
+                .is_empty()
+        );
     }
 }

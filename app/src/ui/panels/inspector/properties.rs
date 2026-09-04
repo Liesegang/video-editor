@@ -4,7 +4,7 @@ use library::model::property::{Property, PropertyDefinition, PropertyUiType, Pro
 use ordered_float::OrderedFloat;
 
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
-use super::property_authoring::{render_property_authoring, PropertyAction};
+use super::property_authoring::{PropertyAction, render_property_authoring};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
 pub(super) mod structured;
@@ -786,7 +786,7 @@ pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::plugin::{PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
+    use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PluginManager};
 
     #[test]
     fn qa_metadata_preserves_the_complete_property_definition() {

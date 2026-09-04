@@ -5,6 +5,7 @@ pub(crate) mod managed_color_backend;
 pub(crate) mod managed_color_source;
 pub(crate) mod media_color_ingress;
 pub(crate) mod path_geometry;
+#[cfg(test)]
 mod render_authority;
 pub mod render_server;
 pub mod renderer;

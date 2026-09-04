@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::context_types::SelectionTarget;
 
-use super::presentation::{resolve_node_time_source, NodeTimeSource};
+use super::presentation::{NodeTimeSource, resolve_node_time_source};
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -91,7 +91,8 @@ pub(super) fn resolve_selection(
             SelectionTarget::Node(_)
             | SelectionTarget::Clip(_)
             | SelectionTarget::Track(_)
-            | SelectionTarget::Composition(_),
+            | SelectionTarget::Composition(_)
+            | SelectionTarget::TimelineItem(_),
         ) => return None,
         None => {}
     }

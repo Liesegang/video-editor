@@ -16,6 +16,17 @@ pub(in crate::ui::panels::node_editor) use wire::cubic_bezier_point;
 pub(in crate::ui::panels::node_editor) use wire::register_edge_component;
 pub(in crate::ui::panels::node_editor) use wire::show_wire_context_menu;
 pub(in crate::ui::panels::node_editor) use wire::{
+    EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
+    WireSecondaryClickHit,
+};
+pub(in crate::ui::panels::node_editor) use wire::{
+    TimeContextNode, register_container_chrome, register_implicit_time_context_wires,
+    register_rendered_edges,
+};
+pub(in crate::ui::panels::node_editor) use wire::{
+    WireInteractionFrame, overview_wire_graph_points, wire_interactions,
+};
+pub(in crate::ui::panels::node_editor) use wire::{
     disconnect_context_target, edit_for_wire, embedded_pin_center, graph_item_owner,
 };
 pub(in crate::ui::panels::node_editor) use wire::{
@@ -24,15 +35,4 @@ pub(in crate::ui::panels::node_editor) use wire::{
     reconnect_handle_position, rendered_container_output_at_position, rendered_edge_at_position,
     rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
     wire_secondary_click_hit,
-};
-pub(in crate::ui::panels::node_editor) use wire::{
-    overview_wire_graph_points, wire_interactions, WireInteractionFrame,
-};
-pub(in crate::ui::panels::node_editor) use wire::{
-    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
-    TimeContextNode,
-};
-pub(in crate::ui::panels::node_editor) use wire::{
-    EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
-    WireSecondaryClickHit,
 };

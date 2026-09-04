@@ -1,8 +1,8 @@
 use crate::state::context::EditorContext;
 use crate::state::transport::seek_transport;
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService as ProjectService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 mod draw;

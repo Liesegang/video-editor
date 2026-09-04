@@ -5,8 +5,8 @@ use library::editor::project_service::GeneratorNodeRequest;
 use library::model::Clip;
 
 #[test]
-fn dense_text_vertical_distribute_rejects_before_overlapping_sibling_clip(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn dense_text_vertical_distribute_rejects_before_overlapping_sibling_clip()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = NestedFixture::new()?;
     let owner = NodeContainer::Clip(fixture.clip_id);
     let clip_rect = fixture
@@ -143,8 +143,8 @@ fn dense_text_vertical_distribute_rejects_before_overlapping_sibling_clip(
 }
 
 #[test]
-fn exact_vertical_distribute_can_grow_owner_hierarchy_and_undo_once(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn exact_vertical_distribute_can_grow_owner_hierarchy_and_undo_once()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = NestedFixture::new()?;
     let before = fixture.project.clone();
     let clip_before = container_geometry(&fixture.project, NodeContainer::Clip(fixture.clip_id))
@@ -267,8 +267,8 @@ fn exact_vertical_distribute_can_grow_owner_hierarchy_and_undo_once(
 }
 
 #[test]
-fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = NestedFixture::new()?;
     let before = fixture.project.clone();
     let mut project = fixture.project;
@@ -337,8 +337,8 @@ fn clip_layout_growth_propagates_through_track_and_composition_in_one_undo_step(
 }
 
 #[test]
-fn composition_direct_layout_grows_only_composition_and_preserves_child_track(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn composition_direct_layout_grows_only_composition_and_preserves_child_track()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = NestedFixture::new()?;
     let owner = NodeContainer::Composition(fixture.composition_id);
     let mut source = Node::new_merge("Composition direct source");
@@ -470,8 +470,8 @@ fn contained_layout_does_not_resize_any_container() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn unrelated_legacy_hierarchy_violation_does_not_block_safe_layout(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn unrelated_legacy_hierarchy_violation_does_not_block_safe_layout()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = NestedFixture::new()?;
     let track_right = fixture
         .project
@@ -534,8 +534,8 @@ fn unrelated_legacy_hierarchy_violation_does_not_block_safe_layout(
 }
 
 #[test]
-fn new_child_overlap_rejects_whole_commit_on_an_invalidity_free_baseline(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn new_child_overlap_rejects_whole_commit_on_an_invalidity_free_baseline()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = NestedFixture::new()?;
     let pair = add_composition_direct_pair(&mut fixture, 0x7301, 0x7302)?;
     let source = pair.source;
@@ -754,8 +754,8 @@ fn worsening_the_same_legacy_overlap_rejects_atomically() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn upstream_layout_keeps_structural_merge_anchor_and_preview_positions_exact(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn upstream_layout_keeps_structural_merge_anchor_and_preview_positions_exact()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = NestedFixture::new()?;
     let owner = NodeContainer::Track(fixture.track_id);
     let anchor = fixture

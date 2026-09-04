@@ -1,4 +1,4 @@
-use super::{collect_preview_drag_targets, revalidate_preview_drag_target, PreviewInteractions};
+use super::{PreviewInteractions, collect_preview_drag_targets, revalidate_preview_drag_target};
 use crate::state::context::EditorContext;
 use crate::state::context_types::{BodyDragState, SelectionTarget};
 use crate::test_support::generator_node;
@@ -126,9 +126,11 @@ fn multi_drag_keeps_exact_primary_and_only_canonical_secondaries() {
         .find(|target| target.edit_target.owner == canonical_owner)
         .expect("canonical secondary");
     assert!(canonical_target.requires_canonical_owner);
-    assert!(targets
-        .iter()
-        .all(|target| target.edit_target.owner != ambiguous_owner));
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.edit_target.owner != ambiguous_owner)
+    );
 }
 
 #[test]
@@ -235,11 +237,13 @@ fn singular_primary_is_not_armed_for_body_drag() {
         Uuid::new_v4(),
         singular_affine(),
     );
-    assert!(collect_preview_drag_targets(
-        std::slice::from_ref(&visual),
-        &[owner],
-        Some(owner),
-        Some(&visual.edit_target()),
-    )
-    .is_empty());
+    assert!(
+        collect_preview_drag_targets(
+            std::slice::from_ref(&visual),
+            &[owner],
+            Some(owner),
+            Some(&visual.edit_target()),
+        )
+        .is_empty()
+    );
 }

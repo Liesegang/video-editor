@@ -3,7 +3,7 @@ use library::model::project::Project;
 use uuid::Uuid;
 
 use super::clip::{
-    resolve_owner_edit_target, visual_for_exact_instance, OwnerEditTargetResolution, PreviewClip,
+    OwnerEditTargetResolution, PreviewClip, resolve_owner_edit_target, visual_for_exact_instance,
 };
 
 /// Reconcile the primary selection with one exact rendered branch.
@@ -19,9 +19,10 @@ pub(super) fn resolve_primary_edit_target(
 ) -> OwnerEditTargetResolution {
     match primary {
         SelectionTarget::Node(node_id) => resolve_node_edit_target(project, visuals, node_id),
-        SelectionTarget::Clip(_) | SelectionTarget::Track(_) | SelectionTarget::Composition(_) => {
-            resolve_owner_edit_target(visuals, primary)
-        }
+        SelectionTarget::Clip(_)
+        | SelectionTarget::Track(_)
+        | SelectionTarget::Composition(_)
+        | SelectionTarget::TimelineItem(_) => resolve_owner_edit_target(visuals, primary),
     }
 }
 
@@ -104,9 +105,10 @@ pub(super) fn edit_target_matches_visual(target: &PreviewEditTarget, visual: &Pr
         SelectionTarget::Node(node_id) => {
             target.spatial_node_id == Some(node_id) && visual.spatial_layer(node_id).is_some()
         }
-        SelectionTarget::Clip(_) | SelectionTarget::Track(_) | SelectionTarget::Composition(_) => {
-            target.owner == visual.owner_target
-        }
+        SelectionTarget::Clip(_)
+        | SelectionTarget::Track(_)
+        | SelectionTarget::Composition(_)
+        | SelectionTarget::TimelineItem(_) => target.owner == visual.owner_target,
     }
 }
 

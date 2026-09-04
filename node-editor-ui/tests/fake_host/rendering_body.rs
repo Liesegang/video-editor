@@ -26,6 +26,43 @@ fn fake_host_renders_nested_groups_nodes_wires_ports_and_host_bodies() {
 }
 
 #[test]
+fn overview_zoom_skips_body_widgets_that_cannot_fit_at_that_scale() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let mut renderer = FakeBodyRenderer::default();
+
+    let full = context.run(
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0))),
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(context, |ui| {
+                    let mut frame = graph.frame(&[], None);
+                    frame.transform = egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.02);
+                    let outputs = Editor::show(
+                        ui,
+                        &frame,
+                        &mut state,
+                        &mut renderer,
+                        EditorConfig::default(),
+                    );
+                    assert!(outputs.is_empty());
+                });
+        },
+    );
+
+    assert!(renderer.rendered.into_inner().is_empty());
+    assert!(
+        !full.shapes.is_empty(),
+        "overview shells should still render"
+    );
+}
+
+#[test]
 fn fake_external_layout_consumes_the_same_chrome_descriptors() {
     let context = egui::Context::default();
     let response_rects = RefCell::new(Vec::new());

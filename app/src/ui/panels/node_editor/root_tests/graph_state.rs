@@ -373,10 +373,12 @@ fn alt_drag_knife_batches_explicit_and_output_binding() -> Result<(), String> {
         &mut history,
         &mut state,
     ));
-    assert!(project
-        .connections
-        .iter()
-        .all(|connection| !connection_ids.contains(&connection.id)));
+    assert!(
+        project
+            .connections
+            .iter()
+            .all(|connection| !connection_ids.contains(&connection.id))
+    );
     let edited_clip = project
         .get_clip(clip_id)
         .ok_or_else(|| "knife removed its Clip".to_string())?;

@@ -1,11 +1,8 @@
+pub mod authoring_tab_viewer;
 pub mod command_palette;
 pub mod dialogs;
-pub mod easing_menus;
-pub(crate) mod layer_order;
-pub mod menu;
-pub mod panels;
-pub mod selection;
-pub mod tab_viewer;
+pub mod module_node_editor;
 pub mod theme;
+pub mod timeline_first;
 pub mod viewport;
 pub mod widgets;

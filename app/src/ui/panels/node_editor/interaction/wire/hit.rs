@@ -1,15 +1,15 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorWireDragKind};
 use eframe::egui;
-use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use library::model::Project;
+use library::model::project::{PortAddress, PortDirection, PortOwner, PortSide};
 use node_editor_ui::{CubicBezier, HitRegion};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
+    RenderedEdge, RenderedPortKey, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
+    WIRE_RECONNECT_HANDLE_OFFSET, WIRE_RECONNECT_HANDLE_RADIUS, WireSecondaryClickHit,
     container_output_node_id, container_output_type_key, qa_container_key, wire_port_drop_rect,
-    RenderedEdge, RenderedPortKey, WireSecondaryClickHit, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
-    WIRE_RECONNECT_HANDLE_OFFSET, WIRE_RECONNECT_HANDLE_RADIUS,
 };
 
 pub(in crate::ui::panels::node_editor) fn cubic_bezier_point(

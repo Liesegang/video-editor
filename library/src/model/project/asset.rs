@@ -98,6 +98,10 @@ impl Asset {
         self.imported_content_sha256.as_deref()
     }
 
+    pub(crate) fn record_imported_content_sha256(&mut self, digest: String) {
+        self.imported_content_sha256 = Some(digest);
+    }
+
     /// Maps source-local seconds to a source frame using the Asset FPS when
     /// valid, otherwise the caller's evaluation FPS. This mapping is shared
     /// by graph evaluation and the video entity converter so the persisted

@@ -129,15 +129,19 @@ fn implicit_time_context_wire_is_transient_qa_only_and_tracks_explicit_state() {
     let inherited_badge = test_metadata(&format!("node_editor.time_source.node:{merge_id}"))
         .expect("Merge Time source badge");
     assert_eq!(inherited_badge["state"], "inherited");
-    assert!(inherited_badge["label"]
-        .as_str()
-        .is_some_and(|label| label.starts_with("Inherited · Clip Clip")));
+    assert!(
+        inherited_badge["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with("Inherited · Clip Clip"))
+    );
     let explicit_badge = test_metadata(&format!("node_editor.time_source.node:{solid_id}"))
         .expect("Solid Time source badge");
     assert_eq!(explicit_badge["state"], "explicit");
-    assert!(explicit_badge["label"]
-        .as_str()
-        .is_some_and(|label| label.starts_with("Explicit · Clip Clip.Time")));
+    assert!(
+        explicit_badge["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with("Explicit · Clip Clip.Time"))
+    );
     assert_eq!(project, initial, "rendering must not mutate Project");
 
     let connection_id = project

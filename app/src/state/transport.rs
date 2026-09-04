@@ -78,8 +78,8 @@ mod tests {
     }
 
     #[test]
-    fn playing_seek_moves_the_concrete_audio_master_clock_before_next_sample(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn playing_seek_moves_the_concrete_audio_master_clock_before_next_sample()
+    -> Result<(), Box<dyn std::error::Error>> {
         let project = Arc::new(RwLock::new(Project::new("transport seek")));
         let service = EditorService::new(
             project,

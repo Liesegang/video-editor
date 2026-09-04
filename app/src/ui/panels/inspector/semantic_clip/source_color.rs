@@ -1,12 +1,12 @@
 //! Asset-owned source-color authoring for the Timeline/Preview Clip facade.
 
 use egui::{RichText, Ui};
+use library::EditorService;
 use library::editor::project_service::{
     AssetSourceColorInspector, AssetSourceColorInspectorInterpretation,
 };
 use library::model::asset::{SourceColorAssumption, SourceColorDescription};
 use library::model::project::NodeContainer;
-use library::EditorService;
 use uuid::Uuid;
 
 use crate::action::HistoryManager;

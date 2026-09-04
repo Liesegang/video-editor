@@ -202,7 +202,7 @@ pub fn activate_composition_with_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{activate_composition_with_history, request_node_layout_command, HistoryManager};
+    use super::{HistoryManager, activate_composition_with_history, request_node_layout_command};
     use crate::command::CommandId;
     use crate::state::context::EditorContext;
     use crate::state::context_types::{

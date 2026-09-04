@@ -3,7 +3,7 @@ use egui_phosphor::regular as icons;
 use library::model::property::{Property, PropertyDefinition, PropertyValue};
 
 pub(crate) use crate::ui::widgets::property_mode::PropertyAuthoringMode;
-use crate::ui::widgets::property_mode::{property_mode_control, PropertyModeAction};
+use crate::ui::widgets::property_mode::{PropertyModeAction, property_mode_control};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyAction {

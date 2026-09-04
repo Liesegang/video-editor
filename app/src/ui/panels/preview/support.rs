@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 
-use library::model::project::Project;
 use library::EditorService;
+use library::model::project::Project;
 
 use crate::state::context_types::{PreviewPrimaryGesture, PreviewViewportRuntimeState};
 use crate::state::preview_render::{PreviewCompletionDecision, PreviewRenderScheduler};

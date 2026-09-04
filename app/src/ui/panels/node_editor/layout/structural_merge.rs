@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::merge_alignment::merge_anchor_aligned_top;
 use super::{
-    estimated_node_rect, estimated_node_size, immediate_child_rects, rects_are_closer_than,
-    AutoLayoutPlan,
+    AutoLayoutPlan, estimated_node_rect, estimated_node_size, immediate_child_rects,
+    rects_are_closer_than,
 };
 use crate::ui::panels::node_editor::{
-    container_geometry, grow_container_to_rect, AUTO_LAYOUT_COMPOSITION_LEFT,
-    AUTO_LAYOUT_COMPOSITION_TOP, AUTO_LAYOUT_NODE_PADDING, AUTO_LAYOUT_ROW_GAP,
-    AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_TOP,
+    AUTO_LAYOUT_COMPOSITION_LEFT, AUTO_LAYOUT_COMPOSITION_TOP, AUTO_LAYOUT_NODE_PADDING,
+    AUTO_LAYOUT_ROW_GAP, AUTO_LAYOUT_TRACK_LEFT, AUTO_LAYOUT_TRACK_TOP, container_geometry,
+    grow_container_to_rect,
 };
 
 pub(in crate::ui::panels::node_editor) fn ensure_structural_merge_layout(

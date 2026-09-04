@@ -44,16 +44,31 @@ impl<'a> Modal<'a> {
         self
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "kept for isolated modal layout tests without enlarging the production API"
+    )]
     pub fn collapsible(mut self, collapsible: bool) -> Self {
         self.collapsible = collapsible;
         self
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "kept for isolated modal layout tests without enlarging the production API"
+    )]
     pub fn fixed_size(mut self, size: impl Into<Vec2>) -> Self {
         self.fixed_size = Some(size.into());
         self
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "kept for isolated modal layout tests without enlarging the production API"
+    )]
     pub fn default_width(mut self, width: f32) -> Self {
         self.default_width = Some(width);
         self

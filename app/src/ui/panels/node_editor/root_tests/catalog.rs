@@ -694,9 +694,11 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
     }));
     let items = node_create_menu_items(plugins.as_ref());
     assert!(items.iter().all(|item| item.category.is_some()));
-    assert!(items
-        .iter()
-        .any(|item| { item.value == NodeCreateRequest::Native("native.sksl-shader".to_string()) }));
+    assert!(
+        items.iter().any(|item| {
+            item.value == NodeCreateRequest::Native("native.sksl-shader".to_string())
+        })
+    );
 
     let root_transform = items
         .iter()
@@ -723,9 +725,11 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
         &items,
         "root placement",
     );
-    assert!(root_matches
-        .iter()
-        .any(|index| items[*index] == *root_transform));
+    assert!(
+        root_matches
+            .iter()
+            .any(|index| items[*index] == *root_transform)
+    );
     let root_node = create_operation_node_for_request(&root_transform.value, plugins.as_ref())
         .expect("root Transform request uses the operation factory");
     let NodeContent::PluginOperation(root_operation) = root_node.content() else {
@@ -783,10 +787,12 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
         runtime_style.qa_metadata.as_ref().unwrap()["label"],
         "Runtime Hatch"
     );
-    assert!(runtime_style
-        .keywords
-        .iter()
-        .any(|keyword| keyword == runtime_style_id));
+    assert!(
+        runtime_style
+            .keywords
+            .iter()
+            .any(|keyword| keyword == runtime_style_id)
+    );
 
     let blur = items
         .iter()
@@ -794,10 +800,11 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
             matches!(&item.value, NodeCreateRequest::Effect(effect_id) if effect_id == "blur")
         })
         .expect("built-in Blur effect is exposed in the Add menu");
-    assert!(blur
-        .category
-        .as_deref()
-        .is_some_and(|category| category.starts_with("Image Effects /")));
+    assert!(
+        blur.category
+            .as_deref()
+            .is_some_and(|category| category.starts_with("Image Effects /"))
+    );
     assert_eq!(
         blur.qa_id.as_deref(),
         Some("node_editor.menu.create.effect:blur")
@@ -834,9 +841,11 @@ fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type()
         )
         .unwrap();
     let splice_items = wire_splice_menu_items(&project, shape_connection, plugins.as_ref());
-    assert!(splice_items
-        .iter()
-        .any(|item| item.value == NodeCreateRequest::ShapeTransform));
+    assert!(
+        splice_items
+            .iter()
+            .any(|item| item.value == NodeCreateRequest::ShapeTransform)
+    );
     assert!(splice_items.iter().any(|item| {
         matches!(&item.value, NodeCreateRequest::Decorator(id) if id == "backplate")
     }));

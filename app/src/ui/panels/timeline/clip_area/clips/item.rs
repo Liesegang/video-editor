@@ -1,8 +1,8 @@
-use egui::{epaint::StrokeKind, Ui};
+use egui::{Ui, epaint::StrokeKind};
 use egui_phosphor::regular as icons;
+use library::EditorService as ProjectService;
 use library::model::project::Project;
 use library::model::{Clip, Track};
-use library::EditorService as ProjectService;
 
 use crate::{
     state::{context::EditorContext, context_types::SelectionTarget},
@@ -10,12 +10,12 @@ use crate::{
 };
 
 use super::{
+    ClipAreaGeometry, ClipReorderProjection, DeferredClipAction, DisplayRow, EDGE_DRAG_WIDTH,
     begin_resize_gesture, clip_graph_nodes, clip_insertion_markers,
     destination_index_for_clip_slot, finish_resize_gesture, get_clip_color,
     mark_resize_timing_changed, nearest_clip_insertion_slot, semantic_source_kind,
     semantic_source_label, timeline_drag_delta, timing_after_body_drag,
-    timing_after_left_edge_drag, ClipAreaGeometry, ClipReorderProjection, DeferredClipAction,
-    DisplayRow, EDGE_DRAG_WIDTH,
+    timing_after_left_edge_drag,
 };
 
 pub(super) struct SingleClipDrawContext<'a> {

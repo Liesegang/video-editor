@@ -8,7 +8,7 @@ use pan_zoom_ui::{CanvasState, CanvasTheme, GridAxis, GridConfig, GridLineKind, 
 
 use super::actions::{Action, KeyframeMove};
 use super::projection::GraphPropertyRow;
-use super::utils::{property_component_value, GraphTransform};
+use super::utils::{GraphTransform, property_component_value};
 
 #[derive(Clone, Copy)]
 pub(super) struct GraphCanvasTheme {

@@ -4,8 +4,8 @@
 //! describes that existing scope for UI surfaces; it never authors a graph
 //! connection or stores derived state in `Project`.
 
-use library::model::project::{PortAddress, PortDirection, PortOwner, Project, TIME_PORT};
 use library::model::NodeContainer;
+use library::model::project::{PortAddress, PortDirection, PortOwner, Project, TIME_PORT};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -17,8 +17,7 @@ fn run_node_editor_panel_frame(
     editor_context: &mut EditorContext,
 ) {
     reset_test_rects();
-    let command_registry =
-        crate::command::CommandRegistry::new(&crate::config::AppConfig::new());
+    let command_registry = crate::command::CommandRegistry::new(&crate::config::AppConfig::new());
     drop(context.run(
         egui::RawInput {
             screen_rect: Some(screen),
@@ -204,10 +203,12 @@ fn assert_production_move_cancellation(
     assert_eq!(history.undo_depth(), history_before_cancel + 1);
     assert_eq!(history.redo_depth(), 0);
     assert!(editor_context.node_editor_state.node_reparent.is_none());
-    assert!(!editor_context
-        .node_editor_state
-        .surface_interaction
-        .is_active());
+    assert!(
+        !editor_context
+            .node_editor_state
+            .surface_interaction
+            .is_active()
+    );
     assert!(!editor_context.node_editor_state.layout_changed_during_drag);
 
     // The physical button can still release after Escape/pointer loss. It is

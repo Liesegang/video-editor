@@ -3,8 +3,8 @@ use crate::state::context_types::{PreviewBodyDragTarget, PreviewEditTarget, Sele
 use crate::ui::panels::preview::{
     action::PreviewAction,
     clip::{
-        resolve_owner_edit_target, visual_for_exact_instance, OwnerEditTargetResolution,
-        PreviewClip, PreviewSpatialLayer,
+        OwnerEditTargetResolution, PreviewClip, PreviewSpatialLayer, resolve_owner_edit_target,
+        visual_for_exact_instance,
     },
     gizmo,
     routing::exact_visual_for_edit_target,

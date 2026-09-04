@@ -3,8 +3,8 @@ use crate::ui::panels::node_editor::*;
 use eframe::egui::{self, Color32};
 use egui_phosphor::regular as icons;
 use egui_snarl::{
-    ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
+    ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
 };
 use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
 use library::model::property::PropertyValue;
@@ -745,12 +745,16 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         if let Some((owner, label)) = delete_target {
             let blocked_reason = match owner {
                 PortOwner::Node(node_id)
-                    if self.project.compositions.iter().any(|composition| {
-                        composition.structural_merge_node_id == node_id
-                    })
-                        || self.project.tracks.values().any(|track| {
-                            track.structural_merge_node_id == node_id
-                        }) =>
+                    if self
+                        .project
+                        .compositions
+                        .iter()
+                        .any(|composition| composition.structural_merge_node_id == node_id)
+                        || self
+                            .project
+                            .tracks
+                            .values()
+                            .any(|track| track.structural_merge_node_id == node_id) =>
                 {
                     Some(
                         "Structural Merge nodes belong to their Timeline container and cannot be deleted directly",

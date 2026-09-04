@@ -12,14 +12,14 @@ use library::editor::project_service::{
     SemanticAnimationSupport, SemanticContainerPropertyStack, SemanticPropertyAccess,
     SemanticPropertyGroup, SemanticPropertyOwner, SemanticPropertySection,
 };
+use library::model::Clip;
 use library::model::project::{NodeContainer, Project};
 use library::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
-use library::model::Clip;
 use library::{EditorService, PropertyOwner};
 
 use super::clip_timing::render_clip_timing;
 use super::evaluation::{evaluate_property_map, render_evaluation_issues};
-use super::properties::{render_property_rows, PropertyRenderContext};
+use super::properties::{PropertyRenderContext, render_property_rows};
 use super::property_authoring::PropertyAction;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;

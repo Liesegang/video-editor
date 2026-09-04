@@ -239,8 +239,8 @@ mod tests {
     use library::cache::CacheManager;
     use library::model::property::PropertyValue;
     use library::model::{
-        Clip, ColorContent, DataContent, Node, Project, COLOR_ALPHA_PORT, COLOR_RED_PORT,
-        COLOR_SPACE_PORT,
+        COLOR_ALPHA_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT, Clip, ColorContent, DataContent, Node,
+        Project,
     };
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
@@ -567,13 +567,15 @@ mod tests {
                 PropertyValue::String("1".to_string()),
             )]),
         };
-        assert!(property_for_mode(
-            Some(&malformed),
-            PropertyAuthoringMode::Constant,
-            number(1.0),
-            0.0,
-        )
-        .is_err());
+        assert!(
+            property_for_mode(
+                Some(&malformed),
+                PropertyAuthoringMode::Constant,
+                number(1.0),
+                0.0,
+            )
+            .is_err()
+        );
         Ok(())
     }
 

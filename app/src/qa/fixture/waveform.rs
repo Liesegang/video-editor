@@ -1,8 +1,8 @@
 //! Deterministic Audio-only and embedded-Video-audio Timeline waveform fixture.
 
 use super::FixtureInfo;
-use library::editor::project_service::MediaNodeRequest;
 use library::editor::ProjectService;
+use library::editor::project_service::MediaNodeRequest;
 use library::model::project::{PortAddress, PortOwner, TIME_PORT};
 use library::model::{Asset, AssetKind, Clip, Composition, NodeContainer, Project, Track};
 use uuid::Uuid;

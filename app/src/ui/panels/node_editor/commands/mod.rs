@@ -4,8 +4,8 @@ mod types;
 mod wire;
 
 pub(in crate::ui::panels::node_editor) use create_menu::{
-    create_operation_node_for_request, node_create_menu_items, wire_splice_menu_items,
-    NodeCreateRequest,
+    NodeCreateRequest, create_operation_node_for_request, node_create_menu_items,
+    wire_splice_menu_items,
 };
 pub use edit::flush_pending_continuous_edit;
 pub(in crate::ui::panels::node_editor) use edit::{

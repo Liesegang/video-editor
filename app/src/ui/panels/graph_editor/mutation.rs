@@ -16,7 +16,7 @@ use crate::state::context_types::{GraphPropertyAddress, KeyframeValueComponent, 
 
 use super::projection::container_for_selection;
 use super::utils::{
-    property_component_value, time_mapper_for_owner, PropertyComponent, TimeMapper,
+    PropertyComponent, TimeMapper, property_component_value, time_mapper_for_owner,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -72,6 +72,9 @@ pub(crate) fn resolve_graph_property(
         SelectionTarget::Node(node_id) => resolve_exact_node(project, address, node_id),
         SelectionTarget::Clip(_) | SelectionTarget::Track(_) | SelectionTarget::Composition(_) => {
             resolve_semantic_stack_property(project_service, project, address)
+        }
+        SelectionTarget::TimelineItem(_) => {
+            Err("Timeline Item automation requires an authoring property route".to_string())
         }
     }
 }
@@ -245,17 +248,17 @@ mod tests {
     use crate::ui::dialogs::keyframe_dialog::{
         apply_keyframe_dialog_change, flush_keyframe_dialog_transaction,
     };
-    use crate::ui::panels::graph_editor::actions::{process_action, Action, KeyframeMove};
+    use crate::ui::panels::graph_editor::actions::{Action, KeyframeMove, process_action};
     use crate::ui::panels::graph_editor::projection::GraphPropertyProjection;
     use library::cache::CacheManager;
     use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
     use library::model::frame::color::Color;
     use library::model::project::{
-        NodeGraphBundle, PortAddress, PortOwner, NUMBER_RESULT_OUTPUT_PORT,
+        NUMBER_RESULT_OUTPUT_PORT, NodeGraphBundle, PortAddress, PortOwner,
     };
     use library::model::property::{Property, Vec2};
     use library::model::{Clip, Composition, Node};
-    use library::plugin::{property_port_key, PluginManager};
+    use library::plugin::{PluginManager, property_port_key};
     use ordered_float::OrderedFloat;
 
     struct Fixture {
@@ -521,9 +524,11 @@ mod tests {
             &mut history,
         );
         assert_eq!(history.undo_depth(), 5);
-        assert!(semantic_property(&fixture, "position")
-            .keyframes()
-            .is_empty());
+        assert!(
+            semantic_property(&fixture, "position")
+                .keyframes()
+                .is_empty()
+        );
     }
 
     #[test]

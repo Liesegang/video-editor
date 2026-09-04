@@ -40,7 +40,7 @@ impl OutputPathIdentity {
     pub(crate) fn refresh_existing_file(&mut self) {
         self.existing_file = fs::metadata(&self.resolved_path)
             .ok()
-            .and_then(|metadata| existing_file_identity(&metadata));
+            .and_then(|metadata| existing_file_identity(&self.resolved_path, &metadata));
     }
 }
 
@@ -59,7 +59,9 @@ pub(crate) fn output_path_identity(path: &str) -> Result<OutputPathIdentity, Lib
     };
     let resolved_path = resolve_absolute(&absolute, 0)?;
     let existing_file = match fs::metadata(&resolved_path) {
-        Ok(metadata) if metadata.file_type().is_file() => existing_file_identity(&metadata),
+        Ok(metadata) if metadata.file_type().is_file() => {
+            existing_file_identity(&resolved_path, &metadata)
+        }
         Ok(_) => {
             return Err(LibraryError::Render(format!(
                 "path '{}' resolves to a directory, FIFO, socket, or device instead of a regular file",
@@ -77,7 +79,7 @@ pub(crate) fn output_path_identity(path: &str) -> Result<OutputPathIdentity, Lib
 }
 
 #[cfg(unix)]
-fn existing_file_identity(metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
+fn existing_file_identity(_path: &Path, metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
     use std::os::unix::fs::MetadataExt;
 
     Some(ExistingFileIdentity::Unix {
@@ -87,17 +89,17 @@ fn existing_file_identity(metadata: &fs::Metadata) -> Option<ExistingFileIdentit
 }
 
 #[cfg(windows)]
-fn existing_file_identity(metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
-    use std::os::windows::fs::MetadataExt;
-
+fn existing_file_identity(path: &Path, _metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
+    let file = fs::File::open(path).ok()?;
+    let identity = crate::util::local_file::windows_file_identity(&file).ok()?;
     Some(ExistingFileIdentity::Windows {
-        volume: metadata.volume_serial_number()?,
-        index: metadata.file_index()?,
+        volume: identity.volume_serial,
+        index: identity.file_index,
     })
 }
 
 #[cfg(not(any(unix, windows)))]
-fn existing_file_identity(_metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
+fn existing_file_identity(_path: &Path, _metadata: &fs::Metadata) -> Option<ExistingFileIdentity> {
     None
 }
 
@@ -271,7 +273,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn existing_hard_links_share_one_file_identity() {
         let directory = tempfile::tempdir().unwrap();

@@ -1,16 +1,16 @@
 use crate::state::context_types::{ContainerResizeEdge, ContainerResizeState, NodeEditorState};
 use eframe::egui;
-use library::model::project::PortOwner;
 use library::model::Project;
+use library::model::project::PortOwner;
 
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
+    AUTO_LAYOUT_NODE_PADDING, CONTAINER_HEADER_HEIGHT, ContainerVisual, GraphItem, LayoutEdit,
+    MIN_CONTAINER_SIZE, PORT_SOCKET_SIZE, PortAnchorKind, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH,
     clipped_qa_rect, container_rect, estimated_node_rect, input_definitions,
     node_editor_port_interactions_enabled, node_editor_resize_interactions_enabled,
-    output_definitions, qa_container_key, qa_rect_metadata, wire_port_drop_rect, ContainerVisual,
-    GraphItem, LayoutEdit, PortAnchorKind, AUTO_LAYOUT_NODE_PADDING, CONTAINER_HEADER_HEIGHT,
-    MIN_CONTAINER_SIZE, PORT_SOCKET_SIZE, RESIZE_CORNER_SIZE, RESIZE_HIT_WIDTH,
+    output_definitions, qa_container_key, qa_rect_metadata, wire_port_drop_rect,
 };
 
 /// Capture a resize press before Snarl gets a chance to treat the same
@@ -418,7 +418,7 @@ pub(in crate::ui::panels::node_editor) fn container_child_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::panels::node_editor::{resolve_node_editor_transform, ContainerKind};
+    use crate::ui::panels::node_editor::{ContainerKind, resolve_node_editor_transform};
     use library::model::Composition;
     use uuid::Uuid;
 
@@ -558,14 +558,16 @@ mod tests {
         assert!(pointer_hits_container_port(
             &project, &visual, transform, screen, output,
         ));
-        assert!(resize_hit(
-            &project,
-            std::slice::from_ref(&visual),
-            transform,
-            screen,
-            output,
-        )
-        .is_none());
+        assert!(
+            resize_hit(
+                &project,
+                std::slice::from_ref(&visual),
+                transform,
+                screen,
+                output,
+            )
+            .is_none()
+        );
 
         let input = visual.embedded_port_center(PortAnchorKind::ExternalInputs, 0);
         let input_drop_padding = egui::pos2(visual.rect().left(), input.y);
@@ -576,14 +578,16 @@ mod tests {
             screen,
             input_drop_padding,
         ));
-        assert!(resize_hit(
-            &project,
-            std::slice::from_ref(&visual),
-            transform,
-            screen,
-            input_drop_padding,
-        )
-        .is_none());
+        assert!(
+            resize_hit(
+                &project,
+                std::slice::from_ref(&visual),
+                transform,
+                screen,
+                input_drop_padding,
+            )
+            .is_none()
+        );
 
         let ordinary_right_edge = visual.rect().right_center();
         assert!(!pointer_hits_container_port(

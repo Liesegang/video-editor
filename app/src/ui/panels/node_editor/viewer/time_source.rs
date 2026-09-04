@@ -1,6 +1,6 @@
 use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::{
-    bounded_non_selectable_label, clipped_qa_rect, qa_rect_metadata, PinDefinition, PORT_ROW_HEIGHT,
+    PORT_ROW_HEIGHT, PinDefinition, bounded_non_selectable_label, clipped_qa_rect, qa_rect_metadata,
 };
 #[cfg(test)]
 use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};

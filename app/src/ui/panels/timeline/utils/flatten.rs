@@ -141,9 +141,10 @@ mod tests {
             row_track_ids,
             track_ids.iter().rev().copied().collect::<Vec<_>>()
         );
-        assert!(rows
-            .iter()
-            .all(|row| matches!(row, DisplayRow::TrackHeader { depth: 0, .. })));
+        assert!(
+            rows.iter()
+                .all(|row| matches!(row, DisplayRow::TrackHeader { depth: 0, .. }))
+        );
     }
 
     #[test]

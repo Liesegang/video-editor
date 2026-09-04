@@ -624,7 +624,7 @@ impl Drop for ExportService {
 #[cfg(test)]
 mod tests {
     use super::{ExportService, SaveTask};
-    use crate::ProjectModel;
+    use crate::editor::ProjectModel;
     use crate::error::LibraryError;
     use crate::model::frame::Image;
     use crate::model::project::{Composition, Project};
