@@ -872,9 +872,9 @@ Merge:
     - name: image
       type: Image
 
-# --- Sound ---
-Sound Merge:
-  category: Sound
+# --- Audio ---
+Audio Mix:
+  category: Audio
   catalog_status: native
   catalog_id: native.sound.merge
   runtime_status: implemented
@@ -2247,23 +2247,18 @@ Particle Emitter:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.emitter
-  runtime_status: design-needed
+  runtime_status: implemented
   description: Base emitter context (GPU Compute)
   inputs:
     - name: capacity
       type: Integer
       description: Max particle count (Buffer Size)
-    - name: simulation_space
-      type: Enum
-      options: [Local, World]
     - name: rate
       type: Scalar
     - name: lifetime
       type: Scalar
-    - name: loop
-      type: Boolean
-    - name: duration
-      type: Scalar
+    - name: seed
+      type: Integer
   outputs:
     - name: particles
       type: ParticleSystem
@@ -2307,7 +2302,7 @@ Initialize Particle:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.initialize
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
@@ -2346,7 +2341,7 @@ Gravity Force:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.gravity-force
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
@@ -2359,7 +2354,7 @@ Drag Force:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.drag-force
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
@@ -2503,20 +2498,12 @@ Sprite Renderer:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.sprite-renderer
-  runtime_status: design-needed
+  runtime_status: implemented
   inputs:
     - name: particles
       type: ParticleSystem
-    - name: texture
-      type: Image
     - name: color
       type: Color
-    - name: blend_mode
-      type: Enum
-      options: [Alpha, Additive, Multiply]
-    - name: alignment
-      type: Enum
-      options: [View, Velocity, World]
   outputs:
     - name: image
       type: Image

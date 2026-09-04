@@ -110,10 +110,11 @@ impl EnsembleLine {
 #[derive(Debug, Clone)]
 pub struct EffectorContext {
     pub time: f32,
-    /// Index of the addressed group: one Block, each Line, or each Char.
+    /// Operation-local sequence index. Step Delay uses the target's authored
+    /// character sequence; group-based effectors use the addressed group.
     pub index: usize,
     pub total: usize,
-    /// Absolute element index, independent of the target-local `index` above.
+    /// Absolute element index, independent of the operation-local `index` above.
     pub element_index: usize,
     /// Deterministic seed identity for target-scoped procedural variation.
     /// Block, Line, and Char use their corresponding stable group identity.

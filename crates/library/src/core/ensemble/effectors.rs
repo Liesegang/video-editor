@@ -35,17 +35,35 @@ pub fn evaluate_configured_transform(
             | EffectorConfig::Opacity { target, .. }
             | EffectorConfig::Randomize { target, .. } => *target,
         };
-        let (index, total, random_identity, target_center) = match target {
-            EffectorTarget::Block => (0, 1, element.block_group_id, element.block_center),
+        let (
+            group_index,
+            group_total,
+            sequence_index,
+            sequence_total,
+            random_identity,
+            target_center,
+        ) = match target {
+            EffectorTarget::Block => (
+                0,
+                1,
+                element.global_index,
+                element.total_chars,
+                element.block_group_id,
+                element.block_center,
+            ),
             EffectorTarget::Line => (
                 element.line_index,
                 element.line_count,
+                element.line_char_index,
+                element.line_char_count,
                 element.line_group_id,
                 element.line_center,
             ),
             EffectorTarget::Char => (
                 element.global_index,
                 element.total_chars,
+                0,
+                1,
                 element.stable_id,
                 element.char_center,
             ),
@@ -54,6 +72,15 @@ pub fn evaluate_configured_transform(
                     "Ensemble EffectorTarget::Parts is not supported".to_string(),
                 ));
             }
+        };
+        // Target grouping and Step Delay sequencing are related but distinct.
+        // A Block sequences every character, a Line restarts that sequence for
+        // each line, and a Char is an independent one-element sequence. Other
+        // effectors use the addressed group itself for their context.
+        let (index, total) = if matches!(config, EffectorConfig::StepDelay { .. }) {
+            (sequence_index, sequence_total)
+        } else {
+            (group_index, group_total)
         };
         let context = EffectorContext {
             time,
@@ -500,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_step_delay_uses_block_line_and_character_groups() {
+    fn configured_step_delay_uses_authored_target_sequence_scopes() {
         let config = |target| EffectorConfig::StepDelay {
             delay_per_element: 0.25,
             duration: 1.0,
@@ -512,7 +539,7 @@ mod tests {
             evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.0, element(3, 0))
                 .unwrap();
         let block_middle =
-            evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.5, element(3, 0))
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 1.25, element(3, 0))
                 .unwrap();
         let block_end =
             evaluate_configured_transform(&[config(EffectorTarget::Block)], 2.0, element(3, 0))
@@ -525,10 +552,24 @@ mod tests {
             evaluate_configured_transform(&[config(EffectorTarget::Line)], 0.5, element(3, 0))
                 .unwrap();
         let character =
-            evaluate_configured_transform(&[config(EffectorTarget::Char)], 1.25, element(3, 2))
+            evaluate_configured_transform(&[config(EffectorTarget::Char)], 0.5, element(3, 2))
                 .unwrap();
-        assert_eq!(line.opacity, 0.25);
+        assert_eq!(line.opacity, 0.5);
         assert_eq!(character.opacity, 0.5);
+
+        let scoped_element = element(3, 2);
+        let block =
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.75, scoped_element)
+                .unwrap();
+        let line =
+            evaluate_configured_transform(&[config(EffectorTarget::Line)], 0.75, scoped_element)
+                .unwrap();
+        let character =
+            evaluate_configured_transform(&[config(EffectorTarget::Char)], 0.75, scoped_element)
+                .unwrap();
+        assert_eq!(block.opacity, 0.0);
+        assert_eq!(line.opacity, 0.25);
+        assert_eq!(character.opacity, 0.75);
     }
 
     #[test]
