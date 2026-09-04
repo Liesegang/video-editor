@@ -148,6 +148,10 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Fill/Stroke の見た目は `Color` へ押し込めず、第一級の `Paint = Solid | Gradient | Pattern` として型付けする。Paint対応スウォッチは既存Color pickerの同じ導線から `Solid / Gradient / Pattern` を切り替え、単色だけを受けるparameterの型契約は勝手に広げない。
   - `Gradient` は stable ID、Linear/Radial/Conic/Freeform種別、stable stop ID、position、managed color、opacity、midpoint/interpolation、spread、gradient transformを保持する。stop追加・削除・並べ替え、Canvas上の方向/中心/半径編集、Inspector/Curve Editorのautomationを同じ値へ接続する。
   - 通常のGradient編集はそのAppearance instanceだけを変更する。再利用swatch/presetは明示的な共有 `PaintDefinition` とinstance override/detachを持ち、共有定義を編集するときだけ影響instance数を表示する。補間とcompositeはProject working-linear color spaceで行い、Preview/Exportのterminal変換と混同しない。
+  - Color Palette は Project に stable swatch ID、名前、順序、group/tag、`PaintDefinition` を保存し、SolidだけでなくGradient/Patternも同じswatch gridへ置ける。built-in/user libraryからProjectへ取り込む操作と、Project内で再現可能な保存データを分ける。
+  - 共通Paint pickerには `Picker / Palette` を同じpopup内で切り替える導線を置き、現在値の追加、検索、group、複製、drag reorder、rename、削除、import/exportを提供する。色ボタンとは別の一時的なPalette panelや上部ボタンを増やさない。
+  - swatch適用は `Copy` と明示的な `Linked` を区別する。Linked swatchの編集時は影響Appearance数を表示して一つのtransactionで更新し、missing/削除時もresolved Paintを保持して黙って透明や黒へ変えない。managed `ColorValue` を8-bit表示色へ不可逆変換しない。
+  - Paletteの保存/load、Undo/Redo、linked update、Solid/Gradient選択、drag reorder、広色域/HDR値保持をunit testとnative HTTP QAで検証する。
   - 対象は `WholeShape | Group(stable_id) | Subpath(stable_id)` とし、Path 編集後も対応を保つ。対象が消えた場合は黙って別要素へ掛けず、orphan/conflict として Inspector に残す。
   - Inspector は既存 Effect Stack の property row、keyframe mode、drag/drop、insertion preview、icon/context menu を共通 primitive として再利用し、entry の複製、group化、enable/bypass、削除、drag reorder を一つの Undo で行う。
   - Timeline/Dope Sheet/Curve Editor が entry parameter の時間を所有する。RenderPlan は Appearance を局所的な Shape branch/style/effect/composite passへ派生 compileし、Appearance数に比例したユーザー向けNodeを自動生成しない。
