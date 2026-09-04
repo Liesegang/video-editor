@@ -16,8 +16,8 @@ echo "[quality] shell syntax and policy self-test"
 bash -n "${SCRIPT_DIR}"/*.sh
 "${SCRIPT_DIR}/quality-gate-self-test.sh"
 
-echo "[quality] Rust file size ratchet"
-"${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
+echo "[quality] first-party source file size"
+bash "${SCRIPT_DIR}/check-source-file-size.sh"
 
 echo "[quality] Node Editor dependency boundary"
 "${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"

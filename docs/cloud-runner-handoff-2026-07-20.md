@@ -58,7 +58,8 @@ handoff time.
 
 ## Priority 0 — make the size policy an actual gate
 
-`scripts/check-rust-file-size.sh` and its boundary self-tests already exist.
+At the time of this handoff, the original Rust-only size checker and its
+boundary self-tests already existed.
 The hard scan currently reports the following 19 main-branch violations, so it
 is intentionally not yet called by `scripts/quality-gate.sh`:
 
@@ -93,6 +94,12 @@ make its presence fail-closed in `quality-gate-self-test.sh`.
 Clippy has `too_many_lines` for functions, not a file/module line-count lint.
 Keep strict Clippy as a complementary rule rather than pretending it enforces
 this policy.
+
+Completion note (2026-09-05): the inventory reached zero, so the Rust-only
+ratchet was replaced by the strict first-party source gate at
+`scripts/check-source-file-size.sh`. The CI quality gate now runs it
+unconditionally for Rust, Python, portable shell, JavaScript/TypeScript,
+C/C++, and SkSL source, tests, and QA automation.
 
 ## Priority 1 — independent, loosely coupled Node Editor library
 

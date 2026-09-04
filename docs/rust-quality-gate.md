@@ -112,10 +112,14 @@ license, and the exact patch surface are recorded in the vendored directory's
 `PATCHES.md`. This removes the unmaintained packages from `Cargo.lock` instead
 of suppressing their RustSec advisories.
 
-The 1,000-line ratchet applies to first-party Rust. Audited upstream snapshots
-under `third_party/` retain their upstream/generated file layout and are
-excluded explicitly; the executable policy fixture proves that an equally
-large file anywhere in first-party source still fails.
+The strict 1,000-line gate in `scripts/check-source-file-size.sh` applies to
+first-party Rust, Python, portable shell, JavaScript/TypeScript, C/C++, and
+SkSL source, tests, and QA automation. It scans tracked and non-ignored
+untracked files with NUL-delimited paths. Generated output and imported source
+under `generated/`, `third_party/`, `external/`, `target/`, and
+`node_modules/` retain their own layout and are excluded explicitly. The
+executable policy fixture proves that a 1,001-line first-party file fails and
+that spaces, newlines, and leading dashes in paths cannot bypass the scan.
 
 ## Executable policy test
 

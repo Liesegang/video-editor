@@ -20,8 +20,7 @@ trap cleanup EXIT
 ROOT_LOCKFILE="${REPOSITORY_ROOT}/Cargo.lock"
 RUNTIME_PROPERTY_LOCKFILE="${REPOSITORY_ROOT}/plugins/random_property/Cargo.lock"
 QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
-RUST_FILE_SIZE_GATE="${SCRIPT_DIR}/check-rust-file-size.sh"
-RUST_FILE_SIZE_RATCHET="${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
+SOURCE_FILE_SIZE_GATE="${SCRIPT_DIR}/check-source-file-size.sh"
 NODE_EDITOR_BOUNDARY_GATE="${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"
 NODE_EDITOR_BOUNDARY_FIXTURES="${REPOSITORY_ROOT}/quality/fixtures/node-editor-ui-boundary"
 
@@ -86,7 +85,7 @@ require_gate_command 'cargo test --workspace --all-targets --all-features --lock
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked'
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked'
 require_gate_command '"${SCRIPT_DIR}/quality-gate-self-test.sh"'
-require_gate_command '"${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"'
+require_gate_command 'bash "${SCRIPT_DIR}/check-source-file-size.sh"'
 require_gate_command '"${SCRIPT_DIR}/check-node-editor-ui-boundary.sh"'
 require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
 require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
@@ -114,158 +113,98 @@ expect_node_editor_boundary_failure() {
 expect_node_editor_boundary_failure optional
 expect_node_editor_boundary_failure target-specific
 
-RUST_SIZE_FIXTURE="${TEST_LOG_DIR}/rust-file-size"
-mkdir -p "${RUST_SIZE_FIXTURE}"
-awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
-    > "${RUST_SIZE_FIXTURE}/boundary.rs"
-"${RUST_FILE_SIZE_GATE}" --root "${RUST_SIZE_FIXTURE}" --max-lines 3 \
-    > "${TEST_LOG_DIR}/rust-file-size-pass.log"
-
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_SIZE_FIXTURE}/too-large.rs"
-if "${RUST_FILE_SIZE_GATE}" \
-    --root "${RUST_SIZE_FIXTURE}" \
-    --max-lines 3 \
-    > "${TEST_LOG_DIR}/rust-file-size-fail.log" 2>&1; then
-    echo "oversized Rust file unexpectedly passed" >&2
-    exit 1
-fi
-if ! grep -Fq 'too-large.rs: 4 lines (limit 3)' \
-    "${TEST_LOG_DIR}/rust-file-size-fail.log"; then
-    echo "Rust file size fixture failed for the wrong reason" >&2
-    cat "${TEST_LOG_DIR}/rust-file-size-fail.log" >&2
-    exit 1
-fi
-rm -- "${RUST_SIZE_FIXTURE}/too-large.rs"
-
-awk 'BEGIN { for (line = 1; line <= 1001; line += 1) print "// line" }' \
-    > "${RUST_SIZE_FIXTURE}/production-limit.rs"
-if "${RUST_FILE_SIZE_GATE}" --root "${RUST_SIZE_FIXTURE}" \
-    > "${TEST_LOG_DIR}/rust-file-size-default.log" 2>&1; then
-    echo "default Rust file size limit unexpectedly accepted 1001 lines" >&2
-    exit 1
-fi
-if ! grep -Fq 'production-limit.rs: 1001 lines (limit 1000)' \
-    "${TEST_LOG_DIR}/rust-file-size-default.log"; then
-    echo "default Rust file size fixture failed for the wrong reason" >&2
-    cat "${TEST_LOG_DIR}/rust-file-size-default.log" >&2
-    exit 1
-fi
-
-RUST_RATCHET_FIXTURE="${TEST_LOG_DIR}/rust-file-size-ratchet"
-mkdir -p "${RUST_RATCHET_FIXTURE}"
-git -C "${RUST_RATCHET_FIXTURE}" init -q
-git -C "${RUST_RATCHET_FIXTURE}" config user.email quality@example.invalid
-git -C "${RUST_RATCHET_FIXTURE}" config user.name 'Quality Gate'
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
-awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/boundary.rs"
-: > "${RUST_RATCHET_FIXTURE}/empty.rs"
-ODD_RUST_FILE=$'line\nbreak.rs'
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/${ODD_RUST_FILE}"
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/space name.rs"
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/-dash.rs"
-git -C "${RUST_RATCHET_FIXTURE}" add -- '*.rs'
-git -C "${RUST_RATCHET_FIXTURE}" commit -qm baseline
-git -C "${RUST_RATCHET_FIXTURE}" branch -m fixture-head
-RUST_RATCHET_BASELINE="$(git -C "${RUST_RATCHET_FIXTURE}" rev-parse HEAD)"
-
-# An unavailable implicit integration base must fail closed rather than
-# silently comparing the branch with itself.
-if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
-    > "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log" 2>&1; then
-    echo "Rust file size ratchet unexpectedly passed without a baseline" >&2
-    exit 1
-fi
-if ! grep -Fq 'Rust file size baseline is required' \
-    "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log"; then
-    echo "missing Rust file size baseline failed for the wrong reason" >&2
-    cat "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log" >&2
-    exit 1
-fi
-
-# Comparing with an unrelated or newer commit can hide branch regressions, so
-# only an actual ancestor may serve as the integration baseline.
-git -C "${RUST_RATCHET_FIXTURE}" checkout -qb unrelated
-echo '// unrelated history' > "${RUST_RATCHET_FIXTURE}/unrelated.rs"
-git -C "${RUST_RATCHET_FIXTURE}" add -- unrelated.rs
-git -C "${RUST_RATCHET_FIXTURE}" commit -qm unrelated
-RUST_RATCHET_UNRELATED="$(git -C "${RUST_RATCHET_FIXTURE}" rev-parse HEAD)"
-git -C "${RUST_RATCHET_FIXTURE}" checkout -q --detach "${RUST_RATCHET_BASELINE}"
-if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
-    --baseline-ref "${RUST_RATCHET_UNRELATED}" --max-lines 3 \
-    > "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log" 2>&1; then
-    echo "Rust file size ratchet unexpectedly accepted a non-ancestor baseline" >&2
-    exit 1
-fi
-if ! grep -Fq 'Rust file size baseline must be an ancestor of HEAD' \
-    "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log"; then
-    echo "non-ancestor Rust file size baseline failed for the wrong reason" >&2
-    cat "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log" >&2
-    exit 1
-fi
-
-# Existing debt may shrink or remain unchanged.
-awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
-"${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
-    --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
-    > "${TEST_LOG_DIR}/rust-file-size-ratchet-pass.log"
-
-expect_ratchet_failure() {
-    local expected="$1"
-    local log_file="${TEST_LOG_DIR}/rust-file-size-ratchet-fail.log"
-    if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
-        --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
-        >"${log_file}" 2>&1; then
-        echo "Rust file size regression unexpectedly passed" >&2
-        exit 1
-    fi
-    if ! grep -Fq "${expected}" "${log_file}"; then
-        echo "Rust file size ratchet failed for the wrong reason" >&2
-        cat "${log_file}" >&2
-        exit 1
-    fi
+run_source_file_size_gate() {
+    bash "${SOURCE_FILE_SIZE_GATE}" "$@"
 }
 
-awk 'BEGIN { for (line = 1; line <= 5; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
-expect_ratchet_failure 'existing-oversized.rs: oversized file grew from 4 to 5 lines'
-git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- existing-oversized.rs
+SOURCE_SIZE_FIXTURE="${TEST_LOG_DIR}/source-file-size"
+mkdir -p "${SOURCE_SIZE_FIXTURE}"
+for source_file in \
+    boundary.rs helper.py tool.sh browser.js panel.ts view.tsx \
+    plugin.h shader.sksl; do
+    awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+        > "${SOURCE_SIZE_FIXTURE}/${source_file}"
+done
+
+# Exercise the non-Git find path before the fixture becomes a repository.
+run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-find-pass.log"
+
+git -C "${SOURCE_SIZE_FIXTURE}" init -q
+ODD_SOURCE_FILE=$'line\nbreak.js'
+for source_file in 'space name.py' '-dash.sh' "${ODD_SOURCE_FILE}"; do
+    awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+        > "${SOURCE_SIZE_FIXTURE}/${source_file}"
+done
+
+# Git emits these paths as a NUL-delimited stream. Spaces, newlines, and a
+# leading dash must remain one filename and cannot become shell arguments.
+run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-git-pass.log"
+
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "# line" }' \
+    > "${SOURCE_SIZE_FIXTURE}/too-large.py"
+if run_source_file_size_gate \
+    --root "${SOURCE_SIZE_FIXTURE}" \
+    --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-fail.log" 2>&1; then
+    echo "oversized first-party source file unexpectedly passed" >&2
+    exit 1
+fi
+if ! grep -Fq 'too-large.py: 4 lines (limit 3)' \
+    "${TEST_LOG_DIR}/source-file-size-fail.log"; then
+    echo "source file size fixture failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/source-file-size-fail.log" >&2
+    exit 1
+fi
+rm -- "${SOURCE_SIZE_FIXTURE}/too-large.py"
 
 awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/boundary.rs"
-expect_ratchet_failure 'boundary.rs: grew from 3 to 4 lines and now exceeds limit 3'
-git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- boundary.rs
+    > "${SOURCE_SIZE_FIXTURE}/${ODD_SOURCE_FILE}"
+if run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-newline.log" 2>&1; then
+    echo "source file with a newline unexpectedly passed" >&2
+    exit 1
+fi
+if ! grep -Fq 'break.js: 4 lines (limit 3)' \
+    "${TEST_LOG_DIR}/source-file-size-newline.log"; then
+    echo "NUL-delimited source path failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/source-file-size-newline.log" >&2
+    exit 1
+fi
+awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+    > "${SOURCE_SIZE_FIXTURE}/${ODD_SOURCE_FILE}"
 
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/empty.rs"
-expect_ratchet_failure 'empty.rs: grew from 0 to 4 lines and now exceeds limit 3'
-git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- empty.rs
+# Generated output, vendored/imported source, and build targets are not
+# first-party modules. Oversized files in those exact directory classes pass.
+for excluded in generated third_party external target node_modules; do
+    mkdir -p "${SOURCE_SIZE_FIXTURE}/${excluded}/nested"
+    awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+        > "${SOURCE_SIZE_FIXTURE}/${excluded}/nested/excluded.ts"
+done
+run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-exclusions-pass.log"
 
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/new.rs"
-expect_ratchet_failure 'new.rs: new oversized file has 4 lines (limit 3)'
+awk 'BEGIN { for (line = 1; line <= 1001; line += 1) print "# line" }' \
+    > "${SOURCE_SIZE_FIXTURE}/production-limit.py"
+if run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" \
+    > "${TEST_LOG_DIR}/source-file-size-default.log" 2>&1; then
+    echo "default source file size limit unexpectedly accepted 1001 lines" >&2
+    exit 1
+fi
+if ! grep -Fq 'production-limit.py: 1001 lines (limit 1000)' \
+    "${TEST_LOG_DIR}/source-file-size-default.log"; then
+    echo "default source file size fixture failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/source-file-size-default.log" >&2
+    exit 1
+fi
+rm -- "${SOURCE_SIZE_FIXTURE}/production-limit.py"
 
-# Vendored upstream source is explicitly separated from first-party size
-# policy; the failures above prove ordinary source cannot use this exemption.
-rm -- "${RUST_RATCHET_FIXTURE}/new.rs"
-mkdir -p "${RUST_RATCHET_FIXTURE}/third_party/upstream"
-awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/third_party/upstream/generated.rs"
-"${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
-    --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
-    > "${TEST_LOG_DIR}/rust-file-size-ratchet-third-party-pass.log"
-
-# A newline is a valid filename byte. Growing this existing file must still be
-# attributed to one baseline entry rather than being split into two records.
-awk 'BEGIN { for (line = 1; line <= 5; line += 1) print "// line" }' \
-    > "${RUST_RATCHET_FIXTURE}/${ODD_RUST_FILE}"
-expect_ratchet_failure 'break.rs: oversized file grew from 4 to 5 lines'
+# Large data catalogs are not source modules and therefore are not scanned.
+awk 'BEGIN { for (line = 1; line <= 1001; line += 1) print "entry" }' \
+    > "${SOURCE_SIZE_FIXTURE}/node_list.yml"
+run_source_file_size_gate --root "${SOURCE_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/source-file-size-data-pass.log"
 
 # This also catches a stale lockfile after workspace manifests change.
 cargo metadata \

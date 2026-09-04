@@ -58,6 +58,8 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：production baseline を記録する。** 復旧 tag と現 main について、project load、first frame、seek、edit-to-preview、連続再生、audio、export、100/1,000/10,000 Clip、同一 Module 多数配置、GPU/CPU/メモリを同じ fixture で計測する。数値、OS、GPU、driver、release profile、fixture hash を `docs/performance/` に保存し、未計測の「速い」を完了条件に使わない。
 
 - [ ] **部分実装：コード品質の継続ゲートを固定する。** `AGENTS.md` の再利用、共通 surface、DRY、1,000 行制限を CI で検査し、`rg` ベースの境界検査だけでなく Rust dependency graph と source line count も検証する。
+  - [x] `scripts/check-source-file-size.sh` を CI の fail-closed quality gate に組み込み、first-party の Rust/Python/shell/JS/TS/C/C++/SkSL を 1,000 行以下に固定した。tracked と non-ignored untracked の両方を NUL-safe に検査する。
+  - [ ] 重複 owner、恒久的な `new`/`legacy`/`timeline_first`/意味のない `v2`、名称責務、`.ps1` 混入は、機械検査できる範囲を追加し終えるまでレビュー規約だけで完了扱いにしない。
   - 同じ責務の重複 owner がない。
   - `new`、`legacy`、`timeline_first`、意味のない `v2` を恒久 module 名にしない。
   - repository automation に `.ps1` を commit しない。
