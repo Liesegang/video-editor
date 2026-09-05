@@ -32,6 +32,8 @@ use uuid::Uuid;
 
 #[path = "tests/render_target.rs"]
 mod render_target;
+#[path = "tests/vector_layer_native.rs"]
+mod vector_layer_native;
 
 const CUSTOM_BLEND_MODES: [BlendMode; 10] = [
     BlendMode::LinearBurn,

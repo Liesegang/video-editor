@@ -1,5 +1,7 @@
 use std::fmt;
 
+use rayon::prelude::*;
+
 use crate::{
     ColorLinearity, ColorReferenceSpace, ColorSpaceInfo, VerifiedSourceSpace, VerifiedWorkingSpace,
     contract::{BackendBuild, BackendCapabilities, CpuSamplePrecision},
@@ -559,6 +561,29 @@ impl CpuColorProcessor for BuiltinCpuProcessor {
         &self,
         pixels: &mut [[f32; 3]],
     ) -> Result<(), ColorManagementError> {
+        if pixels.len() < BUILTIN_PARALLEL_PIXEL_THRESHOLD {
+            return self.transform_rgb_f32_chunk(pixels);
+        }
+
+        // Rayon preserves the order of this indexed collect. Workers may
+        // finish out of order, but reporting the first chunk error therefore
+        // retains the scalar processor's deterministic pixel order.
+        let results = pixels
+            .par_chunks_mut(BUILTIN_PARALLEL_CHUNK_PIXELS)
+            .map(|chunk| self.transform_rgb_f32_chunk(chunk))
+            .collect::<Vec<_>>();
+        for result in results {
+            result?;
+        }
+        Ok(())
+    }
+}
+
+const BUILTIN_PARALLEL_PIXEL_THRESHOLD: usize = 4 * 1024;
+const BUILTIN_PARALLEL_CHUNK_PIXELS: usize = 4 * 1024;
+
+impl BuiltinCpuProcessor {
+    fn transform_rgb_f32_chunk(&self, pixels: &mut [[f32; 3]]) -> Result<(), ColorManagementError> {
         for pixel in pixels {
             validate_rgb_f32(*pixel)?;
             let transformed = self
@@ -936,3 +961,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "builtin_bulk_tests.rs"]
+mod builtin_bulk_tests;

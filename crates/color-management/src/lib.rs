@@ -26,6 +26,7 @@ mod processor_boundary;
 mod request;
 mod standard_hdr;
 mod standard_spaces;
+mod terminal_pack;
 mod transform;
 mod verified_space;
 

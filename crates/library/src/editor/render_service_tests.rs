@@ -23,6 +23,9 @@ use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "render_service_tests/native_vector_draw.rs"]
+mod native_vector_draw;
+
 #[test]
 fn output_times_map_to_source_frames_with_interval_semantics() {
     let upsampled: Vec<u64> = (0..120)
@@ -59,6 +62,9 @@ struct CountingEffect {
 struct TexturePathRenderer {
     saw_texture_layer: bool,
     native_group_composites: usize,
+    direct_text_draws: usize,
+    direct_shape_draws: usize,
+    direct_sksl_draws: usize,
     direct_particle_draws: usize,
     particle_rasterizations: usize,
 }
@@ -127,6 +133,36 @@ impl Renderer for TexturePathRenderer {
         _request: crate::rendering::renderer::SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         Err(LibraryError::Render("unexpected SkSL".into()))
+    }
+
+    fn draw_text_layer(
+        &mut self,
+        _request: TextRasterRequest<'_>,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.direct_text_draws += 1;
+        Ok(())
+    }
+
+    fn draw_shape_layer(
+        &mut self,
+        _request: ShapeRasterRequest<'_>,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.direct_shape_draws += 1;
+        Ok(())
+    }
+
+    fn draw_sksl_layer(
+        &mut self,
+        _request: SkSLRasterRequest<'_>,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.direct_sksl_draws += 1;
+        Ok(())
     }
 
     fn rasterize_particle_layer(
@@ -469,13 +505,19 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
     let renderer = TexturePathRenderer {
         saw_texture_layer: false,
         native_group_composites: 0,
+        direct_text_draws: 0,
+        direct_shape_draws: 0,
+        direct_sksl_draws: 0,
         direct_particle_draws: 0,
         particle_rasterizations: 0,
     };
     let mut service = RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
 
     let output = service.render_from_frame_info(&frame).unwrap();
-    assert!(service.renderer.saw_texture_layer);
+    assert!(
+        service.renderer.saw_texture_layer || service.renderer.direct_shape_draws > 0,
+        "shape content must stay on a backend-native draw path"
+    );
     assert!(
         service.renderer.native_group_composites > 0,
         "no-effect Composition/Merge groups must use the backend-native combined boundary"
@@ -549,6 +591,9 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
     let renderer = TexturePathRenderer {
         saw_texture_layer: false,
         native_group_composites: 0,
+        direct_text_draws: 0,
+        direct_shape_draws: 0,
+        direct_sksl_draws: 0,
         direct_particle_draws: 0,
         particle_rasterizations: 0,
     };

@@ -414,15 +414,52 @@ pub trait Renderer {
         request: TextRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError>;
 
+    /// Render and composite one text layer into the active target. Backends
+    /// override this combined boundary when they can retain native storage;
+    /// the default remains correct for CPU renderers.
+    fn draw_text_layer(
+        &mut self,
+        request: TextRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.rasterize_text_layer(request)?;
+        self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
+    }
+
     fn rasterize_shape_layer(
         &mut self,
         request: ShapeRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError>;
 
+    /// Render and composite one shape layer without requiring an intermediate
+    /// CPU image when the backend can retain its native surface.
+    fn draw_shape_layer(
+        &mut self,
+        request: ShapeRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.rasterize_shape_layer(request)?;
+        self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
+    }
+
     fn rasterize_sksl_layer(
         &mut self,
         request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError>;
+
+    /// Render and composite one SkSL layer without requiring an intermediate
+    /// CPU image when the backend can retain its native surface.
+    fn draw_sksl_layer(
+        &mut self,
+        request: SkSLRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.rasterize_sksl_layer(request)?;
+        self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
+    }
 
     /// Stateful GPU scene boundary. Non-GPU renderers fail closed instead of
     /// substituting a CPU implementation with different behavior.

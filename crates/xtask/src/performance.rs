@@ -15,6 +15,7 @@ pub(super) struct PerformanceOptions {
     output: Option<PathBuf>,
     warmup: u32,
     samples: u32,
+    gpu_preview: bool,
 }
 
 impl PerformanceOptions {
@@ -24,6 +25,7 @@ impl PerformanceOptions {
             output: None,
             warmup: DEFAULT_WARMUP,
             samples: DEFAULT_SAMPLES,
+            gpu_preview: false,
         };
         let mut warmup_seen = false;
         let mut samples_seen = false;
@@ -51,6 +53,11 @@ impl PerformanceOptions {
                 }
                 samples_seen = true;
                 options.samples = parse_count(&mut arguments, "--samples", false)?;
+            } else if argument == "--gpu-preview" {
+                if options.gpu_preview {
+                    return Err(TaskError::new("--gpu-preview was specified more than once"));
+                }
+                options.gpu_preview = true;
             } else {
                 return Err(TaskError::new(format!(
                     "unknown performance-baseline argument '{}'",
@@ -100,7 +107,8 @@ pub(super) fn run(repository: &Path, options: &PerformanceOptions) -> TaskResult
     fs::create_dir_all(parent).map_err(|error| io_error("create directory", parent, error))?;
 
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
+    let mut command = Command::new(cargo);
+    command
         .current_dir(repository)
         .args([
             "bench",
@@ -120,7 +128,11 @@ pub(super) fn run(repository: &Path, options: &PerformanceOptions) -> TaskResult
             &options.samples.to_string(),
             "--repository-root",
         ])
-        .arg(repository)
+        .arg(repository);
+    if options.gpu_preview {
+        command.arg("--gpu-preview");
+    }
+    let status = command
         .status()
         .map_err(|error| TaskError::new(format!("cannot start performance benchmark: {error}")))?;
     if !status.success() {
@@ -219,6 +231,7 @@ mod tests {
                 output: Some(PathBuf::from("result.json")),
                 warmup: 0,
                 samples: 3,
+                gpu_preview: false,
             }
         );
         Ok(())
@@ -228,6 +241,23 @@ mod tests {
     fn rejects_zero_samples() {
         assert!(
             PerformanceOptions::parse([OsString::from("--samples"), OsString::from("0")]).is_err()
+        );
+    }
+
+    #[test]
+    fn gpu_preview_is_opt_in_and_cannot_be_repeated() {
+        assert!(!PerformanceOptions::parse([]).unwrap().gpu_preview);
+        assert!(
+            PerformanceOptions::parse([OsString::from("--gpu-preview")])
+                .unwrap()
+                .gpu_preview
+        );
+        assert!(
+            PerformanceOptions::parse([
+                OsString::from("--gpu-preview"),
+                OsString::from("--gpu-preview"),
+            ])
+            .is_err()
         );
     }
 

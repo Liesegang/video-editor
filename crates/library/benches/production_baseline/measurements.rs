@@ -65,13 +65,6 @@ pub fn run(
         "RenderServer authoring video worker -> ffmpeg_export",
         "not sampled by the portable baseline because the result depends on an explicitly configured external FFmpeg binary, codec, and destination filesystem; the PNG production export boundary is measured instead",
     ));
-    metrics.push(unavailable(
-        "gpu_preview_frame",
-        "preview",
-        "Render one Preview frame on the active graphics device",
-        "RenderService<SkiaRenderer> GPU backend",
-        "the reproducible baseline deliberately selects Skia's CPU backend; no GPU value is inferred",
-    ));
     Ok(metrics)
 }
 

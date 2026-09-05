@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "generated_at_unix_ms": 1788610849378,
+  "environment": {
+    "os": {
+      "name": "windows",
+      "architecture": "x86_64",
+      "version": {
+        "value": "Microsoft Windows [Version 10.0.26200.9278]",
+        "reason": null
+      }
+    },
+    "cpu": {
+      "value": "AMD64 Family 23 Model 113 Stepping 0, AuthenticAMD",
+      "reason": null
+    },
+    "gpu": {
+      "value": "NVIDIA GeForce RTX 3090/PCIe/SSE2",
+      "reason": null
+    },
+    "graphics_driver": {
+      "value": "4.6.0 NVIDIA 616.56",
+      "reason": null
+    },
+    "logical_parallelism": {
+      "value": "24",
+      "reason": null
+    }
+  },
+  "build": {
+    "profile": "bench",
+    "debug_assertions": false,
+    "git_commit": "b0f67ffad460e55906845a884f01f084caf7c935",
+    "git_dirty": true,
+    "rustc": {
+      "value": "rustc 1.95.0 (59807616e 2026-04-14)",
+      "reason": null
+    }
+  },
+  "fixture": {
+    "name": "production-baseline-v1",
+    "generator_version": 1,
+    "sha256": "30f75bcd9a994063c4e6ace0bd3ea95259cc9ffd6575120343d6306a5cd0a324",
+    "load_document_sha256": "9d214d56783d4b396cfe307e517f77c47eeac1359f1f54ea1c69711716af526a",
+    "audio_media_sha256": "bab9145496b7e8eb262cd877a671b84cfdb932d23086480b8035ba52c527fa53",
+    "workloads": [
+      {
+        "name": "timeline-items-100",
+        "timeline_items": 100,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "timeline-items-1000",
+        "timeline_items": 1000,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "timeline-items-10000",
+        "timeline_items": 10000,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "shared-module-1000",
+        "timeline_items": 1000,
+        "module_definitions": 1,
+        "module_instances": 1000
+      },
+      {
+        "name": "preview",
+        "timeline_items": 4,
+        "module_definitions": 0,
+        "module_instances": 0
+      }
+    ]
+  },
+  "run": {
+    "warmup_iterations": 2,
+    "sample_count": 5,
+    "timer": "std::time::Instant"
+  },
+  "metrics": [
+    {
+      "status": "measured",
+      "name": "project_load_1000_items",
+      "category": "project_load",
+      "description": "Read, deserialize, and validate a 1,000-item authoring Project",
+      "production_path": "ProjectFileStore::load -> ProjectDocument::from_json -> AuthoringProject::validate",
+      "fixture": "timeline-items-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6558300,
+        6032500,
+        6316500,
+        6338500,
+        5957800
+      ],
+      "summary": {
+        "minimum_ns": 5957800,
+        "median_ns": 6316500,
+        "mean_ns": 6240720,
+        "p95_ns": 6558300,
+        "maximum_ns": 6558300
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_100_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-100",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        1003300,
+        987900,
+        1068700,
+        994000,
+        1073200
+      ],
+      "summary": {
+        "minimum_ns": 987900,
+        "median_ns": 1003300,
+        "mean_ns": 1025420,
+        "p95_ns": 1073200,
+        "maximum_ns": 1073200
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_1000_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        14478500,
+        14270300,
+        14307700,
+        13362600,
+        14649700
+      ],
+      "summary": {
+        "minimum_ns": 13362600,
+        "median_ns": 14307700,
+        "mean_ns": 14213760,
+        "p95_ns": 14649700,
+        "maximum_ns": 14649700
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_10000_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-10000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        186207000,
+        179868000,
+        183297700,
+        181287900,
+        188159100
+      ],
+      "summary": {
+        "minimum_ns": 179868000,
+        "median_ns": 183297700,
+        "mean_ns": 183763940,
+        "p95_ns": 188159100,
+        "maximum_ns": 188159100
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_shared_module_1000_instances",
+      "category": "render_plan_compile",
+      "description": "Compile 1,000 placements which share one compiled Module definition",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "shared-module-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        16360000,
+        17090600,
+        17275100,
+        15735800,
+        16948200
+      ],
+      "summary": {
+        "minimum_ns": 15735800,
+        "median_ns": 16948200,
+        "mean_ns": 16681940,
+        "p95_ns": 17275100,
+        "maximum_ns": 17275100
+      }
+    },
+    {
+      "status": "measured",
+      "name": "first_frame_cpu_preview",
+      "category": "first_frame",
+      "description": "Cold compile, frame evaluation, CPU Skia initialization, and Preview raster",
+      "production_path": "RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        4962200,
+        5336200,
+        4825300,
+        5483800,
+        4989800
+      ],
+      "summary": {
+        "minimum_ns": 4825300,
+        "median_ns": 4989800,
+        "mean_ns": 5119460,
+        "p95_ns": 5483800,
+        "maximum_ns": 5483800
+      }
+    },
+    {
+      "status": "measured",
+      "name": "seek_cpu_preview",
+      "category": "seek",
+      "description": "Evaluate and raster a discontinuous frame on a warm CPU Preview renderer",
+      "production_path": "evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        5120600,
+        4266600,
+        5080700,
+        4119300,
+        4903900
+      ],
+      "summary": {
+        "minimum_ns": 4119300,
+        "median_ns": 4903900,
+        "mean_ns": 4698220,
+        "p95_ns": 5120600,
+        "maximum_ns": 5120600
+      }
+    },
+    {
+      "status": "measured",
+      "name": "consecutive_cpu_preview_frames",
+      "category": "continuous_frames",
+      "description": "Evaluate and raster 30 consecutive frames on one warm CPU Preview renderer",
+      "production_path": "evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        4516160,
+        4489336,
+        4650940,
+        4451280,
+        4388966
+      ],
+      "summary": {
+        "minimum_ns": 4388966,
+        "median_ns": 4489336,
+        "mean_ns": 4499336.4,
+        "p95_ns": 4650940,
+        "maximum_ns": 4650940
+      }
+    },
+    {
+      "status": "measured",
+      "name": "edit_to_cpu_preview",
+      "category": "edit_to_preview",
+      "description": "Commit one Inspector-style item property edit, snapshot, compile, evaluate, and raster Preview",
+      "production_path": "TimelineEditorService::set_authored_property_constant -> snapshot -> RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        4921000,
+        4532900,
+        4598700,
+        4742100,
+        4524400
+      ],
+      "summary": {
+        "minimum_ns": 4524400,
+        "median_ns": 4598700,
+        "mean_ns": 4663820,
+        "p95_ns": 4921000,
+        "maximum_ns": 4921000
+      }
+    },
+    {
+      "status": "measured",
+      "name": "audio_first_window",
+      "category": "audio",
+      "description": "Compile routes, decode, and mix the first 100 ms authoring audio window",
+      "production_path": "AuthoringAudioMixer::root -> render_window",
+      "fixture": "authoring-audio-e2e",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        9217300,
+        9193200,
+        9242500,
+        9635200,
+        9449700
+      ],
+      "summary": {
+        "minimum_ns": 9193200,
+        "median_ns": 9242500,
+        "mean_ns": 9347580,
+        "p95_ns": 9635200,
+        "maximum_ns": 9635200
+      }
+    },
+    {
+      "status": "measured",
+      "name": "audio_cached_window",
+      "category": "audio",
+      "description": "Mix the same 100 ms authoring audio window from the production decode cache",
+      "production_path": "AuthoringAudioMixer::render_window",
+      "fixture": "authoring-audio-e2e",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6395100,
+        6347300,
+        6338200,
+        6286600,
+        6628900
+      ],
+      "summary": {
+        "minimum_ns": 6286600,
+        "median_ns": 6347300,
+        "mean_ns": 6399220,
+        "p95_ns": 6628900,
+        "maximum_ns": 6628900
+      }
+    },
+    {
+      "status": "measured",
+      "name": "single_frame_png_export",
+      "category": "export",
+      "description": "Evaluate, CPU-raster, color-terminate, and write one authoring frame as PNG",
+      "production_path": "RenderServer authoring PNG worker -> RenderService::render_authoring_export_frame -> png_export",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6862900,
+        6037100,
+        6186600,
+        7739300,
+        6754800
+      ],
+      "summary": {
+        "minimum_ns": 6037100,
+        "median_ns": 6754800,
+        "mean_ns": 6716140,
+        "p95_ns": 7739300,
+        "maximum_ns": 7739300
+      }
+    },
+    {
+      "status": "unavailable",
+      "name": "full_timeline_video_export",
+      "category": "export",
+      "description": "Encode and mux a complete Timeline video",
+      "production_path": "RenderServer authoring video worker -> ffmpeg_export",
+      "value": null,
+      "reason": "not sampled by the portable baseline because the result depends on an explicitly configured external FFmpeg binary, codec, and destination filesystem; the PNG production export boundary is measured instead"
+    },
+    {
+      "status": "measured",
+      "name": "frame_evaluation_320x180",
+      "category": "frame_evaluation",
+      "description": "Evaluate four Timeline solids without rasterization",
+      "production_path": "evaluate_render_plan_frame",
+      "fixture": "preview-4-solids-320x180",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        6160,
+        6536,
+        6680,
+        6346,
+        6150
+      ],
+      "summary": {
+        "minimum_ns": 6150,
+        "median_ns": 6346,
+        "mean_ns": 6374.4,
+        "p95_ns": 6680,
+        "maximum_ns": 6680
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_raster_and_termination_320x180",
+      "category": "preview",
+      "description": "Warm OpenGL Preview raster, working-pixel readback and CPU display termination; excludes UI upload",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview-4-solids-320x180",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 3,
+      "samples_ns_per_operation": [
+        2745766,
+        3086133,
+        2874533,
+        2825133,
+        2960566
+      ],
+      "summary": {
+        "minimum_ns": 2745766,
+        "median_ns": 2874533,
+        "mean_ns": 2898426.2,
+        "p95_ns": 3086133,
+        "maximum_ns": 3086133
+      }
+    },
+    {
+      "status": "measured",
+      "name": "frame_evaluation_1920x1080",
+      "category": "frame_evaluation",
+      "description": "Evaluate four Timeline solids without rasterization",
+      "production_path": "evaluate_render_plan_frame",
+      "fixture": "preview-4-solids-1920x1080",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        5843,
+        6136,
+        5836,
+        5833,
+        6470
+      ],
+      "summary": {
+        "minimum_ns": 5833,
+        "median_ns": 5843,
+        "mean_ns": 6023.6,
+        "p95_ns": 6470,
+        "maximum_ns": 6470
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_raster_and_termination_1920x1080",
+      "category": "preview",
+      "description": "Warm OpenGL Preview raster, working-pixel readback and CPU display termination; excludes UI upload",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview-4-solids-1920x1080",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 3,
+      "samples_ns_per_operation": [
+        64753166,
+        63893700,
+        65389433,
+        64983266,
+        64226233
+      ],
+      "summary": {
+        "minimum_ns": 63893700,
+        "median_ns": 64753166,
+        "mean_ns": 64649159.6,
+        "p95_ns": 65389433,
+        "maximum_ns": 65389433
+      }
+    }
+  ]
+}

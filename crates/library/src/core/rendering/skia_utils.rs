@@ -43,6 +43,12 @@ unsafe extern "system" {
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::Graphics::OpenGL::{HGLRC, wglShareLists};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GpuDriverInfo {
+    pub renderer: String,
+    pub version: String,
+}
+
 pub struct GpuContext {
     // Fields are dropped in declaration order. Ganesh must release its GL
     // resources while the context and its glutin owners are still alive.
@@ -55,6 +61,30 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
+    /// Query the device which actually owns this renderer, not another system adapter.
+    pub fn driver_info(&self) -> Result<GpuDriverInfo, LibraryError> {
+        #[cfg(feature = "gl")]
+        {
+            use glow::HasContext;
+            self.ensure_current()?;
+            let gl = self.create_glow_context();
+            // SAFETY: ensure_current activated the live owner of this function table.
+            let (renderer, version) = unsafe {
+                (
+                    gl.get_parameter_string(glow::RENDERER),
+                    gl.get_parameter_string(glow::VERSION),
+                )
+            };
+            Ok(GpuDriverInfo { renderer, version })
+        }
+        #[cfg(not(feature = "gl"))]
+        {
+            Err(LibraryError::Render(
+                "OpenGL support is not enabled".to_string(),
+            ))
+        }
+    }
+
     pub(crate) fn ensure_current(&self) -> Result<(), LibraryError> {
         if self.context.is_current() {
             return Ok(());

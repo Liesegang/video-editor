@@ -120,7 +120,9 @@ fn parse_arguments(arguments: impl IntoIterator<Item = OsString>) -> TaskResult<
 
 fn print_usage() {
     println!("cargo xtask bootstrap");
-    println!("cargo xtask performance-baseline [--output PATH] [--warmup COUNT] [--samples COUNT]");
+    println!(
+        "cargo xtask performance-baseline [--output PATH] [--warmup COUNT] [--samples COUNT] [--gpu-preview]"
+    );
     println!("cargo xtask publish [--skip-build] [--output PATH]");
 }
 

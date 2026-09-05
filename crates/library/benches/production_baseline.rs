@@ -1,5 +1,7 @@
 #[path = "production_baseline/fixtures.rs"]
 mod fixtures;
+#[path = "production_baseline/gpu_preview.rs"]
+mod gpu_preview;
 #[path = "production_baseline/measurements.rs"]
 mod measurements;
 #[path = "production_baseline/report.rs"]
@@ -21,9 +23,11 @@ struct Arguments {
     repository_root: PathBuf,
     warmup: u32,
     samples: u32,
+    gpu_preview: bool,
 }
 
 fn main() -> BenchResult<()> {
+    env_logger::init();
     let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
     // `cargo test --all-targets` executes harness-free benchmark binaries with
     // no arguments. Keep that repository gate fast while still exercising the
@@ -35,20 +39,44 @@ fn main() -> BenchResult<()> {
     }
     let arguments = parse_arguments(raw_arguments)?;
     let fixture_set = fixtures::FixtureSet::build(&arguments.repository_root)?;
-    let metrics = measurements::run(
+    let mut metrics = measurements::run(
         &fixture_set,
         RunConfiguration {
             warmup_iterations: arguments.warmup,
             sample_count: arguments.samples,
         },
     )?;
-    let report = BaselineReport::new(
+    let gpu_driver = if arguments.gpu_preview {
+        let measured = gpu_preview::run(
+            &fixture_set,
+            RunConfiguration {
+                warmup_iterations: arguments.warmup,
+                sample_count: arguments.samples,
+            },
+        )?;
+        metrics.extend(measured.metrics);
+        Some(measured.driver)
+    } else {
+        metrics.push(report::unavailable(
+            "gpu_preview_frame",
+            "preview",
+            "Render one Preview frame on the active graphics device",
+            "RenderService<SkiaRenderer> GPU backend",
+            "GPU measurement requires the opt-in --gpu-preview flag; the default workload selects CPU Skia",
+        ));
+        None
+    };
+    let mut report = BaselineReport::new(
         &arguments.repository_root,
         &fixture_set,
         arguments.warmup,
         arguments.samples,
         metrics,
     )?;
+    if let Some(driver) = gpu_driver {
+        report.environment.gpu = system::HardwareProbe::available(driver.renderer);
+        report.environment.graphics_driver = system::HardwareProbe::available(driver.version);
+    }
     let source = serde_json::to_string_pretty(&report)?;
     let parent = arguments
         .output
@@ -69,8 +97,15 @@ fn parse_arguments(
     let mut warmup = None;
     let mut samples = None;
     let mut cargo_bench_flag = false;
+    let mut gpu_preview = false;
     while let Some(argument) = arguments.next() {
-        let target = if argument == "--bench" {
+        let target = if argument == "--gpu-preview" {
+            if gpu_preview {
+                return Err("--gpu-preview was repeated".into());
+            }
+            gpu_preview = true;
+            continue;
+        } else if argument == "--bench" {
             if cargo_bench_flag {
                 return Err("Cargo --bench marker was repeated".into());
             }
@@ -108,6 +143,7 @@ fn parse_arguments(
         repository_root: repository_root.ok_or("--repository-root is required")?,
         warmup: warmup.ok_or("--warmup is required")?,
         samples: samples.ok_or("--samples is required")?,
+        gpu_preview,
     })
 }
 

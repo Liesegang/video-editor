@@ -211,7 +211,9 @@ impl<T: Renderer> RenderService<T> {
                 "Project renderer did not retain the typed linear RGBAF32 root output".to_string(),
             ));
         };
-        pipeline.terminal_image(&working).map(RenderOutput::Image)
+        measure_debug("RenderService::terminal_color", || {
+            pipeline.terminal_image(&working).map(RenderOutput::Image)
+        })
     }
 
     /// Rasterize an authoring Timeline frame under the project
@@ -238,7 +240,9 @@ impl<T: Renderer> RenderService<T> {
                     .to_string(),
             ));
         };
-        pipeline.terminal_image(&working).map(RenderOutput::Image)
+        measure_debug("RenderService::terminal_color", || {
+            pipeline.terminal_image(&working).map(RenderOutput::Image)
+        })
     }
 
     /// Validate the exact Project-linear Particle rendering boundary without
@@ -540,16 +544,26 @@ impl<T: Renderer> RenderService<T> {
                 transform,
             } => {
                 let render_transform = context.transform(transform);
+                let request = TextRasterRequest {
+                    text,
+                    size: *size,
+                    font_name: font,
+                    styles,
+                    ensemble: ensemble.as_ref(),
+                    transform: render_transform,
+                    current_time,
+                };
+                if effects.is_empty() {
+                    return measure_debug(format!("Draw text '{text}'"), || {
+                        self.renderer.draw_text_layer(
+                            request,
+                            transform.opacity,
+                            crate::model::BlendMode::Normal,
+                        )
+                    });
+                }
                 let text_layer = measure_debug(format!("Rasterize text layer '{}'", text), || {
-                    self.renderer.rasterize_text_layer(TextRasterRequest {
-                        text,
-                        size: *size,
-                        font_name: font,
-                        styles,
-                        ensemble: ensemble.as_ref(),
-                        transform: render_transform,
-                        current_time,
-                    })
+                    self.renderer.rasterize_text_layer(request)
                 })?;
                 let final_image =
                     self.apply_effects(text_layer, effects, current_time, color_authority)?;
@@ -572,15 +586,25 @@ impl<T: Renderer> RenderService<T> {
                 transform,
             } => {
                 let render_transform = context.transform(transform);
+                let request = ShapeRasterRequest {
+                    path_data: path,
+                    canonical_path: canonical_path.as_ref(),
+                    styles,
+                    path_effects,
+                    ensemble: ensemble.as_ref(),
+                    transform: render_transform,
+                };
+                if effects.is_empty() {
+                    return measure_debug(format!("Draw shape {path}"), || {
+                        self.renderer.draw_shape_layer(
+                            request,
+                            transform.opacity,
+                            crate::model::BlendMode::Normal,
+                        )
+                    });
+                }
                 let shape_layer = measure_debug(format!("Rasterize shape layer {}", path), || {
-                    self.renderer.rasterize_shape_layer(ShapeRasterRequest {
-                        path_data: path,
-                        canonical_path: canonical_path.as_ref(),
-                        styles,
-                        path_effects,
-                        ensemble: ensemble.as_ref(),
-                        transform: render_transform,
-                    })
+                    self.renderer.rasterize_shape_layer(request)
                 })?;
                 let final_image =
                     self.apply_effects(shape_layer, effects, current_time, color_authority)?;
@@ -601,14 +625,24 @@ impl<T: Renderer> RenderService<T> {
                 transform,
             } => {
                 let render_transform = context.transform(transform);
+                let request = SkSLRasterRequest {
+                    shader_code: shader,
+                    resolution: *resolution,
+                    time: current_time as f32,
+                    transform: &render_transform,
+                    color_domain: *color_domain,
+                };
+                if effects.is_empty() {
+                    return measure_debug("Draw SkSL", || {
+                        self.renderer.draw_sksl_layer(
+                            request,
+                            transform.opacity,
+                            crate::model::BlendMode::Normal,
+                        )
+                    });
+                }
                 let sksl_layer = measure_debug("Rasterize SkSL", || {
-                    self.renderer.rasterize_sksl_layer(SkSLRasterRequest {
-                        shader_code: shader,
-                        resolution: *resolution,
-                        time: current_time as f32,
-                        transform: &render_transform,
-                        color_domain: *color_domain,
-                    })
+                    self.renderer.rasterize_sksl_layer(request)
                 })?;
                 let final_image =
                     self.apply_effects(sksl_layer, effects, current_time, color_authority)?;

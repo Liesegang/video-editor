@@ -31,6 +31,7 @@ mod legacy_backplate;
 mod output_compositing;
 mod paint;
 mod particle;
+mod vector_layers;
 
 use output_compositing::build_transform_matrix;
 use paint::{PaintFactory, StrokeRenderConfig};
@@ -70,6 +71,21 @@ struct GroupSurface {
 }
 
 impl SkiaRenderer {
+    /// Report whether the active root render target is backed by a GPU
+    /// texture. Performance probes use this to reject a silent raster-surface
+    /// fallback even when a nominal OpenGL context exists.
+    pub fn is_gpu_backed(&mut self) -> Result<bool, LibraryError> {
+        self.activate_graphics_context()?;
+        if self.gpu_context.is_none() {
+            return Ok(false);
+        }
+        Ok(skia_safe::gpu::surfaces::get_backend_texture(
+            &mut self.surface,
+            skia_safe::surface::BackendHandleAccess::FlushRead,
+        )
+        .is_some())
+    }
+
     pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::render_to_texture");
         if self.surface_contract.working().is_some() {
@@ -336,115 +352,6 @@ impl SkiaRenderer {
             )
         })
     }
-
-    /// Render text with ensemble effectors and decorators.
-    fn rasterize_ensemble_text(
-        &mut self,
-        request: TextRasterRequest<'_>,
-        ensemble_data: &crate::core::ensemble::EnsembleData,
-    ) -> Result<RenderOutput, LibraryError> {
-        use crate::core::ensemble::target::EffectorTarget;
-        use crate::core::ensemble::types::EffectorConfig;
-
-        let TextRasterRequest {
-            text,
-            size,
-            font_name,
-            styles,
-            transform,
-            current_time,
-            ..
-        } = request;
-        let current_time = current_time as f32;
-
-        log::debug!(
-            "Ensemble rendering: {} effectors, {} decorators",
-            ensemble_data.effector_configs.len(),
-            ensemble_data.decorator_configs.len()
-        );
-
-        for config in &ensemble_data.effector_configs {
-            let target = match config {
-                EffectorConfig::Transform { target, .. }
-                | EffectorConfig::StepDelay { target, .. }
-                | EffectorConfig::Opacity { target, .. }
-                | EffectorConfig::Randomize { target, .. } => target,
-            };
-            if *target == EffectorTarget::Parts {
-                return Err(LibraryError::Render(
-                    "Ensemble EffectorTarget::Parts is not supported".to_string(),
-                ));
-            }
-        }
-        let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_layer_surface()?;
-        {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-
-            let matrix = build_transform_matrix(&transform);
-            canvas.save();
-            canvas.concat(&matrix);
-
-            let font_mgr = skia_safe::FontMgr::default();
-            let typeface = font_mgr
-                .match_family_style(font_name, skia_safe::FontStyle::default())
-                .or_else(|| font_mgr.legacy_make_typeface(None, skia_safe::FontStyle::default()))
-                .ok_or_else(|| {
-                    LibraryError::Render(format!(
-                        "No usable font was found for Ensemble text family {font_name:?}"
-                    ))
-                })?;
-            let font = skia_safe::Font::from_typeface(typeface, size as f32);
-            let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
-            let elements = &runtime_text.elements;
-
-            let character_transforms =
-                evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
-
-            legacy_backplate::draw_text_backplates(
-                canvas,
-                &runtime_text,
-                &character_transforms,
-                &ensemble_data.decorator_configs,
-                &self.surface_contract,
-            )?;
-
-            for (character, character_transform) in elements.iter().zip(&character_transforms) {
-                let center = Point::new(
-                    character.bounds.left + character.advance / 2.0,
-                    (character.bounds.top + character.bounds.bottom) / 2.0,
-                );
-                canvas.save();
-                canvas.translate((center.x, center.y));
-                canvas.translate(character_transform.translate);
-                canvas.rotate(character_transform.rotate, None);
-                canvas.scale(character_transform.scale);
-                canvas.translate((-center.x, -center.y));
-
-                for config in styles {
-                    let paint = PaintFactory::new(&self.surface_contract).text_paint(
-                        &config.style,
-                        character_transform.opacity,
-                        character_transform.color_override.as_ref(),
-                    )?;
-                    // TODO: draw SkParagraph shaping runs with source mapping.
-                    // Per-grapheme draw_str cannot preserve cross-element
-                    // ligatures or contextual forms in complex scripts.
-                    canvas.draw_str(
-                        &character.source,
-                        (character.bounds.left, character.baseline),
-                        &font,
-                        &paint,
-                    );
-                }
-                canvas.restore();
-            }
-
-            canvas.restore();
-        }
-        self.snapshot_surface(&mut layer, target_width, target_height)
-    }
 }
 
 impl Renderer for SkiaRenderer {
@@ -589,73 +496,19 @@ impl Renderer for SkiaRenderer {
         &mut self,
         request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        match request.color_domain {
-            SkSLColorDomain::ProjectWorkingLinear if self.surface_contract.working().is_none() => {
-                return Err(LibraryError::Render(
-                    "Project-working-linear SkSL cannot render into an unmanaged sRGBA8 surface"
-                        .to_string(),
-                ));
-            }
-            SkSLColorDomain::ProjectWorkingLinear => {}
-        }
-        let shader_code = request.shader_code;
-        let resolution = request.resolution;
-        let time = request.time;
-        let transform = request.transform;
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_layer_surface()?;
-        {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
-
-            let preprocessed_code = shader_utils::preprocess_shader(shader_code);
-            let effect = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None)
-                .map_err(|error| {
-                    log::error!(
-                        "SkSL Compilation Error: {}\nCode:\n{}",
-                        error,
-                        preprocessed_code
-                    );
-                    LibraryError::Render(format!("SkSL compilation failed: {error}"))
-                })?;
-            let uniform_size = effect.uniform_size();
-            let mut data: Vec<u8> = vec![0; uniform_size];
-
-            let shader_context = ShaderContext {
-                resolution,
-                time,
-                time_delta: 1.0 / 60.0,
-                frame: (time * 60.0).floor(),
-                mouse: (0.0, 0.0, 0.0, 0.0),
-                date: (2024.0, 1.0, 1.0, 0.0),
-            };
-
-            shader_utils::bind_standard_uniforms(&effect, &mut data, &shader_context);
-
-            let uniforms = skia_safe::Data::new_copy(&data);
-
-            let straight_shader =
-                effect
-                    .make_shader(uniforms, &[], None)
-                    .ok_or(LibraryError::Render(
-                        "Failed to create SkSL shader".to_string(),
-                    ))?;
-            // ProjectWorkingLinear is a straight-alpha ABI. Skia assumes every
-            // shader result is already premultiplied, so adapt it exactly once
-            // without clipping negative or greater-than-one working RGB.
-            let shader = self.premultiply_straight_sksl_shader(straight_shader)?;
-
-            let mut paint = Paint::default();
-            paint.set_shader(shader);
-            let matrix = build_transform_matrix(transform);
-            canvas.save();
-            canvas.concat(&matrix);
-            let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
-            canvas.draw_rect(rect, &paint);
-            canvas.restore();
-        }
-
+        let mut layer = self.create_sksl_layer_surface(request)?;
         self.snapshot_surface(&mut layer, target_width, target_height)
+    }
+
+    fn draw_sksl_layer(
+        &mut self,
+        request: SkSLRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.create_sksl_layer_surface(request)?;
+        self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
     fn rasterize_particle_layer(
@@ -685,128 +538,38 @@ impl Renderer for SkiaRenderer {
         &mut self,
         request: TextRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        let _timer = ScopedTimer::debug(format!(
-            "SkiaRenderer::rasterize_text_layer len={} size={} ensemble={}",
-            request.text.len(),
-            request.size,
-            request.ensemble.is_some()
-        ));
-
-        // If ensemble is enabled, use ensemble rendering
-        if let Some(ensemble_data) = request.ensemble
-            && ensemble_data.enabled
-        {
-            return self.rasterize_ensemble_text(request, ensemble_data);
-        }
-
-        let TextRasterRequest {
-            text,
-            size,
-            font_name,
-            styles,
-            transform,
-            ..
-        } = request;
-
-        // Standard text rendering (existing code)
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_layer_surface()?;
-        {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-
-            let matrix = build_transform_matrix(&transform);
-            canvas.save();
-            canvas.concat(&matrix);
-
-            for config in styles {
-                let style = &config.style;
-                let paint =
-                    PaintFactory::new(&self.surface_contract).text_paint(style, 1.0, None)?;
-                let paragraph = build_text_paragraph(text, font_name, size as f32, Some(&paint));
-                paragraph.paint(canvas, (0.0, 0.0));
-            }
-
-            canvas.restore();
-        }
+        let mut layer = self.create_text_layer_surface(request)?;
         self.snapshot_surface(&mut layer, target_width, target_height)
+    }
+
+    fn draw_text_layer(
+        &mut self,
+        request: TextRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.create_text_layer_surface(request)?;
+        self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
     fn rasterize_shape_layer(
         &mut self,
         request: ShapeRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
-        let ShapeRasterRequest {
-            path_data,
-            canonical_path,
-            styles,
-            path_effects,
-            ensemble,
-            transform,
-        } = request;
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_layer_surface()?;
-        {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            let path = super::path_geometry::resolve_renderer_path(canonical_path, path_data)?;
-            let matrix = build_transform_matrix(&transform);
-            canvas.save();
-            canvas.concat(&matrix);
-            if let Some(ensemble) = ensemble
-                && ensemble.enabled
-            {
-                legacy_backplate::draw_path_backplates(
-                    canvas,
-                    &path,
-                    &ensemble.decorator_configs,
-                    &self.surface_contract,
-                )?;
-            }
-            for config in styles {
-                let style = &config.style;
-                match style {
-                    DrawStyle::Fill { color, offset } => {
-                        PaintFactory::new(&self.surface_contract).draw_shape_fill(
-                            canvas,
-                            &path,
-                            color,
-                            path_effects,
-                            *offset,
-                        )?;
-                    }
-                    DrawStyle::Stroke {
-                        color,
-                        width,
-                        offset,
-                        cap,
-                        join,
-                        miter,
-                        dash_array,
-                        dash_offset,
-                    } => {
-                        PaintFactory::new(&self.surface_contract).draw_shape_stroke(
-                            canvas,
-                            &path,
-                            path_effects,
-                            StrokeRenderConfig {
-                                color,
-                                width: *width,
-                                offset: *offset,
-                                cap,
-                                join,
-                                miter: *miter,
-                                dash_array,
-                                dash_offset: *dash_offset,
-                            },
-                        )?;
-                    }
-                }
-            }
-            canvas.restore();
-        }
+        let mut layer = self.create_shape_layer_surface(request)?;
         self.snapshot_surface(&mut layer, target_width, target_height)
+    }
+
+    fn draw_shape_layer(
+        &mut self,
+        request: ShapeRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.create_shape_layer_surface(request)?;
+        self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError> {

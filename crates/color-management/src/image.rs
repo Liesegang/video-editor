@@ -1,6 +1,8 @@
 use std::fmt;
 
 use crate::processor_boundary::{validate_output_direction, validate_source_direction};
+pub(crate) use crate::terminal_pack::pack_straight_rgba8;
+use crate::terminal_pack::pack_transformed_straight_rgba8;
 use crate::{ColorManagementError, CpuColorProcessor, WorkingColorIdentity};
 
 /// Per-image CPU safety budget. 8K RGBA32F fits; larger working images must
@@ -341,6 +343,22 @@ impl LinearWorkingImage {
         &self,
         working_to_output: &dyn CpuColorProcessor,
     ) -> Result<Vec<[f32; 4]>, LinearWorkingImageError> {
+        let straight = self.transformed_straight_rgb(working_to_output)?;
+        let mut rgba = allocate_pixels(self.width, self.height)?;
+        for (transformed, pixel) in straight.into_iter().zip(&self.pixels) {
+            if pixel[3] == 0.0 {
+                rgba.push([0.0; 4]);
+            } else {
+                rgba.push([transformed[0], transformed[1], transformed[2], pixel[3]]);
+            }
+        }
+        Ok(rgba)
+    }
+
+    fn transformed_straight_rgb(
+        &self,
+        working_to_output: &dyn CpuColorProcessor,
+    ) -> Result<Vec<[f32; 3]>, LinearWorkingImageError> {
         let mut straight = allocate_rgb_pixels(self.width, self.height)?;
         for pixel in &self.pixels {
             let alpha = pixel[3];
@@ -354,16 +372,7 @@ impl LinearWorkingImage {
         validate_rgb_pixels(&straight)?;
         working_to_output.transform_rgb_f32_in_place(&mut straight)?;
         validate_rgb_pixels(&straight)?;
-
-        let mut rgba = allocate_pixels(self.width, self.height)?;
-        for (transformed, pixel) in straight.into_iter().zip(&self.pixels) {
-            if pixel[3] == 0.0 {
-                rgba.push([0.0; 4]);
-            } else {
-                rgba.push([transformed[0], transformed[1], transformed[2], pixel[3]]);
-            }
-        }
-        Ok(rgba)
+        Ok(straight)
     }
 
     /// Apply a working-to-display/output transform and quantize at the terminal
@@ -373,35 +382,9 @@ impl LinearWorkingImage {
         working_to_output: &dyn CpuColorProcessor,
     ) -> Result<Vec<u8>, LinearWorkingImageError> {
         validate_output_direction(working_to_output)?;
-        let straight = self.to_straight_rgba_f32_unchecked(working_to_output)?;
-        pack_straight_rgba8(self.width, self.height, &straight)
+        let straight = self.transformed_straight_rgb(working_to_output)?;
+        pack_transformed_straight_rgba8(self.width, self.height, &straight, &self.pixels)
     }
-}
-
-pub(crate) fn pack_straight_rgba8(
-    width: u32,
-    height: u32,
-    straight: &[[f32; 4]],
-) -> Result<Vec<u8>, LinearWorkingImageError> {
-    let component_count = straight
-        .len()
-        .checked_mul(4)
-        .ok_or(LinearWorkingImageError::DimensionOverflow { width, height })?;
-    let mut rgba = Vec::new();
-    rgba.try_reserve_exact(component_count).map_err(|_| {
-        LinearWorkingImageError::AllocationFailed {
-            bytes: component_count,
-        }
-    })?;
-    for pixel in straight {
-        rgba.extend([
-            quantize_unorm8(f64::from(pixel[0])),
-            quantize_unorm8(f64::from(pixel[1])),
-            quantize_unorm8(f64::from(pixel[2])),
-            quantize_unorm8(f64::from(pixel[3])),
-        ]);
-    }
-    Ok(rgba)
 }
 
 fn checked_pixel_count(width: u32, height: u32) -> Result<usize, LinearWorkingImageError> {
@@ -499,13 +482,13 @@ fn validate_straight_rgba_f32(pixels: &[[f32; 4]]) -> Result<(), LinearWorkingIm
     Ok(())
 }
 
-fn quantize_unorm8(value: f64) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
 #[cfg(test)]
 #[path = "pq_image_tests.rs"]
 mod pq_image_tests;
+
+#[cfg(test)]
+#[path = "terminal_pack_tests.rs"]
+mod terminal_pack_tests;
 
 #[cfg(test)]
 mod tests {

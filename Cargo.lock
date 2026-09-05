@@ -2420,6 +2420,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "cpal",
+ "env_logger",
  "ffmpeg-next",
  "glow",
  "glutin",
@@ -3821,6 +3822,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "ocio-rs",
+ "rayon",
  "sha2",
  "tempfile",
  "windows-sys 0.61.2",

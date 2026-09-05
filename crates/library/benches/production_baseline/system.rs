@@ -29,7 +29,7 @@ pub struct HardwareProbe {
 }
 
 impl HardwareProbe {
-    fn available(value: impl Into<String>) -> Self {
+    pub(crate) fn available(value: impl Into<String>) -> Self {
         Self {
             value: Some(value.into()),
             reason: None,

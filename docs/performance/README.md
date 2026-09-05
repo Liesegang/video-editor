@@ -46,6 +46,24 @@ is also explicitly unavailable because its result depends on the configured
 external FFmpeg binary, codec, and destination filesystem. The production PNG
 export boundary remains measured.
 
+To additionally measure the actual OpenGL Preview renderer at 320×180 and
+1920×1080, run:
+
+```sh
+cargo xtask performance-baseline --gpu-preview --output target/performance/gpu-preview.json
+```
+
+This opt-in workload uses the same four Solid items as the CPU fixture at
+each stated resolution. It records frame evaluation separately from warm
+rasterization, working-pixel readback, and display color termination. GPU
+initialization and the first managed frame are outside the warm timing;
+UI texture upload and presentation are not measured. The command rejects a
+missing OpenGL context or raster-backed Project working surface instead of
+labeling a CPU fallback as GPU performance.
+Device and driver strings come from that renderer's current OpenGL context.
+Compare like-sized metrics with the same device and concurrent workload;
+these short measurements do not establish sustained 60 fps or dropped-frame rates.
+
 The first-frame metric includes RenderPlan compilation, frame evaluation, CPU
 Skia renderer construction, and Preview raster. Seek and consecutive-frame
 metrics reuse an initialized renderer and compiled plan. The audio fixture
