@@ -46,6 +46,23 @@ before a failure; `published` becomes true only after atomic replacement.
 Failed exports emit one terminal failure completion so the app can clear its
 pending state, but never emit a success or published update.
 
+Focused production-path regressions execute a non-zero built-in Blur
+Attachment and the real FFmpeg Video Loader before a private, test-only
+one-shot hook converts their successful callback into a failure. Ordinary
+errors are covered on both the first and second frame. A first-frame failure
+does not call an exporter and therefore does not finalize one; after an earlier
+frame has been accepted, the pinned exporter is finalized exactly once. These
+checks preserve an existing destination byte-for-byte, remove staging output,
+emit one failed completion, and allow the same `RenderServer` to complete the
+next request. The second-frame cases with an Audio route also verify removal of
+the generated temporary Audio file.
+
+A separate unwind injected after a successful second-frame FFmpeg load verifies
+that Audio and staging cleanup still run and that the worker accepts the next
+request after discarding the renderer. This test does not claim that a renderer
+survives a panic; ordinary `LibraryError` and unwinding panic deliberately have
+different renderer-lifetime contracts.
+
 An unwinding panic in the video job body is converted to an error before the
 same pinned exporter is finalized exactly once. Finalization has its own panic
 guard; Audio and staging cleanup still run, the renderer is discarded only

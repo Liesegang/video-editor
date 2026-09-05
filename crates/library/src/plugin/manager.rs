@@ -6,6 +6,8 @@ mod effects;
 mod ensemble_operations;
 mod export_destination_lease;
 mod registration;
+#[cfg(test)]
+mod render_failure_injection;
 mod runtime_plugins;
 mod shape_operations;
 
@@ -137,6 +139,8 @@ pub struct PluginManager {
     bundled_operations: bundled::BundledOperationInventory,
     render_revision: AtomicU64,
     export_destination_leases: ExportDestinationLeaseRegistry,
+    #[cfg(test)]
+    render_failure: render_failure_injection::OneShotRenderFailure,
 }
 
 impl PluginManager {
@@ -158,6 +162,8 @@ impl PluginManager {
             bundled_operations: bundled::BundledOperationInventory::default(),
             render_revision: AtomicU64::new(1),
             export_destination_leases: ExportDestinationLeaseRegistry::default(),
+            #[cfg(test)]
+            render_failure: render_failure_injection::OneShotRenderFailure::default(),
         }
     }
 
@@ -561,7 +567,12 @@ impl PluginManager {
         };
         for (plugin_id, plugin) in plugins {
             match plugin.load(request, cache) {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    #[cfg(test)]
+                    self.render_failure
+                        .after_loader_success(&plugin_id, request)?;
+                    return Ok(response);
+                }
                 Err(LoadPluginError::Unsupported) => {}
                 Err(LoadPluginError::Failed(error)) => {
                     log::error!(

@@ -15,6 +15,9 @@ use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+#[path = "export_atomic_tests/render_failure_tests.rs"]
+mod render_failure_tests;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ExportFault {
     #[default]
@@ -269,9 +272,21 @@ fn export_server_for_project(
     Arc<RenderPlan>,
     Arc<Mutex<ExportProbe>>,
 ) {
+    export_server_for_project_with_plugins(fault, project, Arc::new(PluginManager::new()))
+}
+
+fn export_server_for_project_with_plugins(
+    fault: ExportFault,
+    project: Arc<AuthoringProject>,
+    plugins: Arc<PluginManager>,
+) -> (
+    RenderServer,
+    Arc<AuthoringProject>,
+    Arc<RenderPlan>,
+    Arc<Mutex<ExportProbe>>,
+) {
     let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
     let probe = Arc::new(Mutex::new(ExportProbe::default()));
-    let plugins = Arc::new(PluginManager::new());
     plugins.register_export_plugin(Arc::new(StagingProbeExporter {
         fault,
         probe: Arc::clone(&probe),
@@ -299,6 +314,13 @@ fn request_export(
         .rx_authoring_export_result
         .recv_timeout(Duration::from_secs(10))
         .unwrap()
+}
+
+fn assert_no_additional_completion(server: &RenderServer) {
+    assert!(matches!(
+        server.rx_authoring_export_result.try_recv(),
+        Err(TryRecvError::Empty)
+    ));
 }
 
 fn sibling_paths(directory: &Path, final_path: &Path) -> Vec<PathBuf> {
@@ -438,10 +460,7 @@ fn assert_panic_is_terminal_and_worker_recovers(
         vec![wave_path.clone()]
     );
     assert_eq!(probe.lock().unwrap().finishes, 1);
-    assert!(matches!(
-        server.rx_authoring_export_result.try_recv(),
-        Err(TryRecvError::Empty)
-    ));
+    assert_no_additional_completion(&server);
     assert_runtime_audio_cleaned(&probe);
 
     let recovered = request_export(&server, &project, &plan, 9_101, &failed_path);
@@ -455,10 +474,7 @@ fn assert_panic_is_terminal_and_worker_recovers(
         vec![wave_path]
     );
     assert_eq!(probe.lock().unwrap().finishes, 2);
-    assert!(matches!(
-        server.rx_authoring_export_result.try_recv(),
-        Err(TryRecvError::Empty)
-    ));
+    assert_no_additional_completion(&server);
     assert_runtime_audio_cleaned(&probe);
 }
 

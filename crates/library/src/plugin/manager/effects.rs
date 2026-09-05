@@ -53,6 +53,8 @@ impl PluginManager {
                     }
                 }
             }
+            #[cfg(test)]
+            self.render_failure.after_effect_success(key, params)?;
             Ok(output)
         } else if matches!(input, RenderOutput::Working(_)) {
             Err(LibraryError::Plugin(format!(
