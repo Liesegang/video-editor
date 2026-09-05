@@ -413,6 +413,9 @@ pub struct CurveKeyDrag {
     pub keyframe_id: library::model::property::KeyframeId,
     pub original_time: MediaTime,
     pub original_value: library::model::property::PropertyValue,
+    /// Global press position retained after egui clears it on release. The
+    /// same absolute gesture remains editable outside the plot's hit region.
+    pub pointer_origin: egui::Pos2,
     pub projected_time: MediaTime,
     pub projected_value: library::model::property::PropertyValue,
 }
@@ -466,6 +469,9 @@ pub struct CurveEditorState {
     /// One canonical transform shared by curve content, grid, hit testing,
     /// playhead, navigation, and QA geometry.
     pub canvas: pan_zoom_ui::CanvasState,
+    /// Fitted vertical domain of this view, independent of key edits. Changing
+    /// a value must not rescale the graph underneath the pointer on release.
+    pub value_range: Option<(f64, f64)>,
     /// Lanes the user explicitly hid. Newly authored or promoted lanes are
     /// visible by default without maintaining a second snapshot of known
     /// lanes that can become stale while the selected Item stays the same.
@@ -529,6 +535,7 @@ impl Default for CurveEditorState {
         Self {
             target_owner: None,
             canvas: pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0),
+            value_range: None,
             hidden_lanes: HashSet::new(),
             drag: None,
             keyframe_editor: None,

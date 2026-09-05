@@ -1,4 +1,4 @@
-use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringKeyframeUpdate, TimelineEditorService};
 use library::model::authoring::{AuthoringProject, MediaTime};
@@ -10,15 +10,12 @@ use pan_zoom_ui::{
 
 use crate::state::authoring::{
     AuthoringSelection, AuthoringUiState, AutomationLaneId, AutomationOwner, CurveEditorState,
-    CurveKeyDrag, CurveKeyframeEditor,
 };
 use crate::ui::automation_lanes::{
     self, component_name, component_value, lane_metadata, owner_metadata, with_component,
     AutomationChannel as CurveSeries,
 };
-use crate::ui::easing_menus::{
-    easing_name, easing_summary, show_easing_menu, show_easing_parameters, EasingMenuQaScope,
-};
+use crate::ui::easing_menus::{easing_name, show_easing_menu, show_easing_parameters};
 use crate::ui::time_ruler::{TimeRuler, TimeRulerTick};
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
 
@@ -32,6 +29,11 @@ const MIN_VALUE_ZOOM: f32 = 1.0e-6;
 const MAX_TIME_ZOOM: f32 = 20.0;
 const MAX_VALUE_ZOOM: f32 = 100_000.0;
 
+mod curves;
+use curves::{paint_curve, update_key_drag};
+
+#[cfg(test)]
+mod drag_tests;
 #[cfg(test)]
 mod tests;
 
@@ -90,6 +92,7 @@ fn curve_toolbar(ui: &mut egui::Ui, state: &mut AuthoringUiState, has_curves: bo
             );
             if fit.clicked() {
                 state.curve_editor.canvas = CanvasState::uniform(Vec2::ZERO, 1.0);
+                state.curve_editor.value_range = None;
             }
             ui.label(egui::RichText::new("Drag points to edit time and value").weak());
         },
@@ -165,7 +168,14 @@ fn curve_canvas(
         return;
     };
     let duration = interval.duration.to_seconds_f64().max(1.0 / 30.0);
-    let (value_min, value_max) = value_extent(series);
+    let (value_min, value_max) = if series.iter().all(|curve| curve.points.is_empty()) {
+        state.curve_editor.value_range.unwrap_or((-1.0, 1.0))
+    } else {
+        *state
+            .curve_editor
+            .value_range
+            .get_or_insert_with(|| value_extent(series))
+    };
     let canvas_rect = Rect::from_min_max(
         Pos2::new(rect.left(), (rect.top() + RULER_HEIGHT).min(rect.bottom())),
         rect.right_bottom(),
@@ -200,6 +210,7 @@ fn curve_canvas(
         finish_key_drag(ui, state, service);
         return;
     };
+    update_key_drag(ui, state, transform);
     let visible_value_range = transform.visible_value_range();
     let transform_finite = transform.canvas.state.pan.is_finite()
         && transform.canvas.state.zoom.is_finite()
@@ -215,6 +226,10 @@ fn curve_canvas(
             "pan": {"x": transform.canvas.state.pan.x, "y": transform.canvas.state.pan.y},
             "zoom": {"x": transform.canvas.state.zoom.x, "y": transform.canvas.state.zoom.y},
             "finite": transform_finite,
+            "visible_time_range": {
+                "min": transform.time_at_screen_x(transform.rect.left()),
+                "max": transform.time_at_screen_x(transform.rect.right()),
+            },
             "visible_value_range": visible_value_range.map(|(min, max)| serde_json::json!({
                 "min": min,
                 "max": max,
@@ -464,183 +479,6 @@ fn format_curve_value(value: f64) -> String {
     }
 }
 
-fn paint_curve(
-    ui: &mut egui::Ui,
-    state: &mut AuthoringUiState,
-    service: &TimelineEditorService,
-    curve: &CurveSeries,
-    color: Color32,
-    transform: CurveTransform,
-) {
-    if curve.points.is_empty() {
-        return;
-    }
-    let painter = ui.painter().with_clip_rect(transform.rect);
-    let mut samples = Vec::new();
-    if curve.points.len() == 1 {
-        let point = &curve.points[0];
-        samples.push(transform.point(0.0, point.value));
-        samples.push(transform.point(transform.duration, point.value));
-    } else {
-        for pair in curve.points.windows(2) {
-            let start = &pair[0];
-            let end = &pair[1];
-            for step in 0..=24 {
-                let ratio = f64::from(step) / 24.0;
-                let eased = start.easing.apply(ratio);
-                let time = start.time.to_seconds_f64()
-                    + (end.time.to_seconds_f64() - start.time.to_seconds_f64()) * ratio;
-                let value = start.value + (end.value - start.value) * eased;
-                samples.push(transform.point(time, value));
-            }
-        }
-    }
-    painter.add(egui::Shape::line(samples, Stroke::new(2.0, color)));
-
-    for point in &curve.points {
-        let projected = state.curve_editor.drag.as_ref().filter(|drag| {
-            drag.lane == curve.id
-                && drag.component == curve.component
-                && drag.keyframe_id == point.id
-        });
-        let time = projected.map_or(point.time, |drag| drag.projected_time);
-        let value = projected
-            .and_then(|drag| component_value(&drag.projected_value, curve.component))
-            .unwrap_or(point.value);
-        let center = transform.point(time.to_seconds_f64(), value);
-        if !transform.rect.contains(center) {
-            continue;
-        }
-        let hit = Rect::from_center_size(center, Vec2::splat(POINT_RADIUS * 3.0))
-            .intersect(transform.rect);
-        let response = ui.interact(
-            hit,
-            ui.id()
-                .with(("curve-key", &curve.id, point.id, curve.component)),
-            Sense::click_and_drag(),
-        );
-        crate::qa::register_component_with_metadata(
-            format!(
-                "curve_editor.key:{}:{}",
-                point.id,
-                component_name(curve.component)
-            ),
-            "curve_editor_keyframe",
-            hit,
-            true,
-            Some(serde_json::json!({
-                "item_id": match &curve.id.owner {
-                    AutomationOwner::Item(item_id) => Some(*item_id),
-                    _ => None,
-                },
-                "target": automation_lanes::target_metadata(&curve.id.target),
-                "lane": lane_metadata(&curve.id),
-                "keyframe_id": point.id,
-                "time": time.to_seconds_f64(),
-                "value": value,
-                "component": component_name(curve.component),
-            })),
-        );
-        if response.drag_started() {
-            state.curve_editor.drag = Some(CurveKeyDrag {
-                lane: curve.id.clone(),
-                component: curve.component,
-                keyframe_id: point.id,
-                original_time: point.time,
-                original_value: point.full_value.clone(),
-                projected_time: point.time,
-                projected_value: point.full_value.clone(),
-            });
-        }
-        if response.double_clicked() {
-            state.curve_editor.keyframe_editor = Some(CurveKeyframeEditor {
-                lane: curve.id.clone(),
-                component: curve.component,
-                keyframe_id: point.id,
-                time: point.time,
-                value: point.full_value.clone(),
-                easing: point.easing.clone(),
-            });
-        }
-        let mut easing_update = None;
-        response.context_menu(|ui| {
-            let edit = ui.button(format!("{} Edit keyframe…", icons::PENCIL_SIMPLE));
-            crate::qa::register_component(
-                format!(
-                    "curve_editor.keyframe_menu.edit:{}:{}",
-                    point.id,
-                    component_name(curve.component)
-                ),
-                "curve_editor_keyframe_action",
-                edit.rect,
-            );
-            if edit.clicked() {
-                state.curve_editor.keyframe_editor = Some(CurveKeyframeEditor {
-                    lane: curve.id.clone(),
-                    component: curve.component,
-                    keyframe_id: point.id,
-                    time: point.time,
-                    value: point.full_value.clone(),
-                    easing: point.easing.clone(),
-                });
-                ui.close();
-            }
-            ui.separator();
-            ui.strong("Interpolation after key");
-            ui.weak(easing_summary(&point.easing));
-            ui.separator();
-            let keyframe_id = point.id.to_string();
-            show_easing_menu(
-                ui,
-                Some(&point.easing),
-                Some(EasingMenuQaScope::new(
-                    "curve_editor.keyframe_menu.easing",
-                    &keyframe_id,
-                )),
-                |easing| easing_update = Some(easing),
-            );
-            if easing_update.is_some() {
-                ui.close();
-            }
-        });
-        if let Some(easing) = easing_update {
-            update_curve_easing(state, service, curve.id.clone(), point.id, easing);
-        }
-        if response.dragged() {
-            if let Some(drag) = state.curve_editor.drag.as_mut() {
-                if drag.keyframe_id == point.id {
-                    let delta = response.drag_delta();
-                    let time = (drag.original_time.to_seconds_f64()
-                        + transform.delta_time(delta.x))
-                    .max(0.0);
-                    if let Ok(time) = MediaTime::from_seconds_f64(time, 1_000_000) {
-                        drag.projected_time = time;
-                    }
-                    let original =
-                        component_value(&drag.original_value, drag.component).unwrap_or(0.0);
-                    drag.projected_value = with_component(
-                        drag.original_value.clone(),
-                        drag.component,
-                        original + transform.delta_value(delta.y),
-                    );
-                }
-            }
-        }
-        let fill = if response.hovered() || response.dragged() {
-            Color32::WHITE
-        } else {
-            color
-        };
-        painter.rect_filled(Rect::from_center_size(center, Vec2::splat(8.0)), 1.0, fill);
-        painter.rect_stroke(
-            Rect::from_center_size(center, Vec2::splat(8.0)),
-            1.0,
-            Stroke::new(1.0, Color32::BLACK),
-            StrokeKind::Inside,
-        );
-    }
-}
-
 fn show_keyframe_editor(
     context: &egui::Context,
     state: &mut AuthoringUiState,
@@ -884,6 +722,7 @@ fn sync_visibility(state: &mut AuthoringUiState, owner: &AutomationOwner, series
     if state.curve_editor.target_owner.as_ref() != Some(owner) {
         state.curve_editor.target_owner = Some(owner.clone());
         state.curve_editor.canvas = CanvasState::uniform(Vec2::ZERO, 1.0);
+        state.curve_editor.value_range = None;
         state.curve_editor.hidden_lanes.clear();
         state.curve_editor.drag = None;
         state.curve_editor.keyframe_editor = None;

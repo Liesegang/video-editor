@@ -227,10 +227,12 @@ fn changing_curve_owner_resets_only_owner_local_visibility_and_navigation() {
     sync_visibility(&mut state, &first_owner, std::slice::from_ref(&first));
     state.curve_editor.hidden_lanes.insert(first.id);
     state.curve_editor.canvas = CanvasState::new(Vec2::splat(20.0), Vec2::splat(3.0));
+    state.curve_editor.value_range = Some((-100.0, 100.0));
 
     sync_visibility(&mut state, &second_owner, std::slice::from_ref(&second));
 
     assert!(state.curve_editor.hidden_lanes.is_empty());
+    assert_eq!(state.curve_editor.value_range, None);
     assert!(series_visible(&state, &second));
     assert_eq!(
         state.curve_editor.canvas,
