@@ -1,18 +1,13 @@
+mod authoring_audio;
 mod panic_guard;
 mod video_output;
 mod worker;
 
 use std::collections::BTreeSet;
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::cache::SharedCacheManager;
-use crate::core::audio::authoring::{
-    AUTHORING_AUDIO_CHANNELS, AUTHORING_AUDIO_SAMPLE_RATE, AuthoringAudioMixer,
-    MAX_AUTHORING_AUDIO_WINDOW_FRAMES,
-};
 use crate::core::render_plan::{
     RenderCapability, RenderPlan, evaluate_timeline_render_plan_frame_at_instance,
 };
@@ -29,6 +24,9 @@ use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::output_path_identity::output_path_identity;
 
 use super::{AuthoringExportResult, RenderRequestId, authoring_error_frame_info};
+#[cfg(test)]
+pub(super) use authoring_audio::TemporaryAudioTestControl;
+use authoring_audio::{TemporaryAuthoringAudio, prepare_authoring_audio};
 use panic_guard::catch_export_panic;
 use video_output::AuthoringVideoOutput;
 pub(super) use worker::run_authoring_export_worker;
@@ -50,6 +48,8 @@ pub(super) struct AuthoringVideoExportRequest {
     pub(super) timeline_id: TimelineId,
     pub(super) instance_path: Option<InstancePath>,
     pub(super) output_path: String,
+    #[cfg(test)]
+    pub(super) temporary_audio_test_control: Arc<TemporaryAudioTestControl>,
 }
 
 pub(super) enum AuthoringExportRequest {
@@ -473,188 +473,22 @@ fn combine_export_and_finish(
     }
 }
 
-struct TemporaryAuthoringAudio {
-    path: Option<PathBuf>,
-    writer: Option<BufWriter<File>>,
-}
-
-impl TemporaryAuthoringAudio {
-    fn create() -> Result<Self, LibraryError> {
-        let path = std::env::temp_dir().join(format!(
-            "ruvie-authoring-audio-{}.f32le",
-            uuid::Uuid::new_v4()
-        ));
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| {
-                LibraryError::Render(format!(
-                    "cannot create temporary authoring audio '{}': {error}",
-                    path.display()
-                ))
-            })?;
-        Ok(Self {
-            path: Some(path),
-            writer: Some(BufWriter::new(file)),
-        })
-    }
-
-    fn write_samples(&mut self, samples: &[f32]) -> Result<(), LibraryError> {
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            LibraryError::Render("temporary authoring audio is already closed".to_string())
-        })?;
-        for sample in samples {
-            writer.write_all(&sample.to_le_bytes()).map_err(|error| {
-                LibraryError::Render(format!("cannot write temporary authoring audio: {error}"))
-            })?;
-        }
-        Ok(())
-    }
-
-    fn finish_writing(&mut self) -> Result<String, LibraryError> {
-        if let Some(mut writer) = self.writer.take() {
-            writer.flush().map_err(|error| {
-                LibraryError::Render(format!("cannot flush temporary authoring audio: {error}"))
-            })?;
-        }
-        let path = self.path.as_ref().ok_or_else(|| {
-            LibraryError::Render("temporary authoring audio path is unavailable".to_string())
-        })?;
-        path.to_str().map(str::to_owned).ok_or_else(|| {
-            LibraryError::Render(format!(
-                "temporary authoring audio path is not valid UTF-8: {}",
-                path.display()
-            ))
-        })
-    }
-
-    fn cleanup(&mut self) -> Result<(), LibraryError> {
-        self.writer.take();
-        let Some(path) = self.path.as_ref() else {
-            return Ok(());
-        };
-        match std::fs::remove_file(path) {
-            Ok(()) => {
-                self.path = None;
-                Ok(())
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.path = None;
-                Ok(())
-            }
-            Err(error) => Err(LibraryError::Render(format!(
-                "cannot remove temporary authoring audio '{}': {error}",
-                path.display()
-            ))),
-        }
-    }
-}
-
-impl Drop for TemporaryAuthoringAudio {
-    fn drop(&mut self) {
-        self.writer.take();
-        if let Some(path) = self.path.take()
-            && let Err(error) = std::fs::remove_file(&path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            log::error!(
-                "failed to remove temporary authoring audio '{}': {error}",
-                path.display()
-            );
-        }
-    }
-}
-
-fn authoring_audio_frame_count(
-    project: &AuthoringProject,
-    timeline_id: TimelineId,
-) -> Result<u64, LibraryError> {
-    let duration = project
-        .timelines
-        .get(&timeline_id)
-        .ok_or_else(|| LibraryError::Render("export Timeline is missing".to_string()))?
-        .duration;
-    if duration.is_negative() {
-        return Err(LibraryError::Validation(
-            "export Timeline duration must be non-negative".to_string(),
-        ));
-    }
-    let numerator = i128::from(duration.value())
-        .checked_mul(i128::from(AUTHORING_AUDIO_SAMPLE_RATE))
-        .ok_or_else(|| LibraryError::Render("export audio frame count overflowed".to_string()))?;
-    let denominator = i128::from(duration.timescale());
-    let frames = if numerator == 0 {
-        0
-    } else {
-        numerator.checked_add(denominator - 1).ok_or_else(|| {
-            LibraryError::Render("export audio frame count overflowed".to_string())
-        })? / denominator
-    };
-    u64::try_from(frames)
-        .map_err(|_| LibraryError::Render("export audio frame count exceeds u64".to_string()))
-}
-
-fn prepare_authoring_audio(
-    project: &AuthoringProject,
-    timeline_id: TimelineId,
-    cache_manager: &SharedCacheManager,
-    settings: &mut ExportSettings,
-) -> Result<Option<TemporaryAuthoringAudio>, LibraryError> {
-    let mut mixer = AuthoringAudioMixer::new(project, cache_manager.as_ref(), timeline_id)
-        .map_err(|error| {
-            LibraryError::Render(format!("authoring audio schedule failed: {error}"))
-        })?;
-    if !mixer.unsupported_video_assets().is_empty() {
-        log::warn!(
-            "Authoring export does not infer embedded audio for {} Video Asset(s); separately imported Audio Assets remain authoritative",
-            mixer.unsupported_video_assets().len()
-        );
-    }
-    if !mixer.has_audio_routes() {
-        return Ok(None);
-    }
-
-    let frame_count = authoring_audio_frame_count(project, timeline_id)?;
-    let mut temporary = TemporaryAuthoringAudio::create()?;
-    let mut start_frame = 0_u64;
-    while start_frame < frame_count {
-        let remaining = frame_count - start_frame;
-        let window_frames = usize::try_from(
-            remaining.min(MAX_AUTHORING_AUDIO_WINDOW_FRAMES as u64),
-        )
-        .map_err(|_| LibraryError::Render("authoring audio window exceeds usize".to_string()))?;
-        let samples = mixer
-            .render_window(start_frame, window_frames)
-            .map_err(|error| {
-                LibraryError::Render(format!("authoring audio render failed: {error}"))
-            })?;
-        temporary.write_samples(&samples)?;
-        start_frame = start_frame
-            .checked_add(window_frames as u64)
-            .ok_or_else(|| LibraryError::Render("authoring audio range overflowed".to_string()))?;
-    }
-    let path = temporary.finish_writing()?;
-    settings.bind_runtime_audio_source(
-        path,
-        AUTHORING_AUDIO_CHANNELS,
-        AUTHORING_AUDIO_SAMPLE_RATE,
-    )?;
-    Ok(Some(temporary))
-}
-
-fn combine_export_and_cleanup(
-    export: Result<(), LibraryError>,
+pub(super) fn combine_operation_and_cleanup(
+    operation: Result<(), LibraryError>,
     cleanup: Result<(), LibraryError>,
-    cleanup_failure: &str,
+    operation_failure: &'static str,
+    cleanup_failure: &'static str,
 ) -> Result<(), LibraryError> {
-    match (export, cleanup) {
+    match (operation, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(export_error), Ok(())) => Err(export_error),
+        (Err(operation_error), Ok(())) => Err(operation_error),
         (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
-        (Err(export_error), Err(cleanup_error)) => Err(LibraryError::Render(format!(
-            "video export failed: {export_error}; {cleanup_failure}: {cleanup_error}"
-        ))),
+        (Err(operation_error), Err(cleanup_error)) => Err(LibraryError::OperationAndCleanup {
+            operation_phase: operation_failure,
+            operation: Box::new(operation_error),
+            cleanup_phase: cleanup_failure,
+            cleanup: Box::new(cleanup_error),
+        }),
     }
 }
 
@@ -844,12 +678,16 @@ fn run_authoring_video_export(
         // second coordinator cannot publish over the same user-selected path.
         destination_lease = Some(plugin_manager.reserve_export_destination(&request.output_path)?);
         video_output = Some(AuthoringVideoOutput::begin(&request.output_path)?);
-        temporary_audio = prepare_authoring_audio(
+        let audio_preparation = prepare_authoring_audio(
             request.project.as_ref(),
             request.timeline_id,
             cache_manager,
             &mut settings,
-        )?;
+            &mut temporary_audio,
+            #[cfg(test)]
+            Arc::clone(&request.temporary_audio_test_control),
+        );
+        audio_preparation?;
         for frame_index in 0..frame_count {
             let exact_frame = i64::try_from(frame_index)
                 .map_err(|_| LibraryError::Render("video frame index exceeds i64".to_string()))?;
@@ -906,8 +744,12 @@ fn run_authoring_video_export(
     let cleanup = temporary_audio
         .as_mut()
         .map_or(Ok(()), TemporaryAuthoringAudio::cleanup);
-    let mut output =
-        combine_export_and_cleanup(output, cleanup, "temporary audio cleanup also failed");
+    let mut output = combine_operation_and_cleanup(
+        output,
+        cleanup,
+        "video export failed",
+        "temporary audio cleanup also failed",
+    );
     if output.is_ok() {
         output = video_output
             .take()
@@ -924,7 +766,12 @@ fn run_authoring_video_export(
         && let Some(video_output) = video_output.take()
     {
         let cleanup = video_output.abort();
-        output = combine_export_and_cleanup(output, cleanup, "staging cleanup also failed");
+        output = combine_operation_and_cleanup(
+            output,
+            cleanup,
+            "video export failed",
+            "staging cleanup also failed",
+        );
     }
     if job_panicked || finish_panicked {
         *renderer = None;

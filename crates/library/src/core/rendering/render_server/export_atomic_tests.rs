@@ -15,6 +15,8 @@ use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+#[path = "export_atomic_tests/audio_cleanup_tests.rs"]
+mod audio_cleanup_tests;
 #[path = "export_atomic_tests/render_failure_tests.rs"]
 mod render_failure_tests;
 
@@ -323,6 +325,28 @@ fn assert_no_additional_completion(server: &RenderServer) {
     ));
 }
 
+fn assert_temporary_audio_cleaned(
+    server: &RenderServer,
+    expected_created: usize,
+    expected_explicit_attempts: usize,
+    expected_drop_attempts: usize,
+    expected_injected_failures: usize,
+) {
+    let (paths, explicit_attempts, drop_attempts, injected_failures) =
+        server.temporary_audio_test_observation();
+    assert_eq!(paths.len(), expected_created);
+    assert_eq!(explicit_attempts, expected_explicit_attempts);
+    assert_eq!(drop_attempts, expected_drop_attempts);
+    assert_eq!(injected_failures, expected_injected_failures);
+    for path in paths {
+        assert!(
+            !path.exists(),
+            "temporary Audio remains at {}",
+            path.display()
+        );
+    }
+}
+
 fn sibling_paths(directory: &Path, final_path: &Path) -> Vec<PathBuf> {
     let mut paths = fs::read_dir(directory)
         .unwrap()
@@ -461,6 +485,7 @@ fn assert_panic_is_terminal_and_worker_recovers(
     );
     assert_eq!(probe.lock().unwrap().finishes, 1);
     assert_no_additional_completion(&server);
+    assert_temporary_audio_cleaned(&server, 1, 1, 0, 0);
     assert_runtime_audio_cleaned(&probe);
 
     let recovered = request_export(&server, &project, &plan, 9_101, &failed_path);
@@ -475,6 +500,7 @@ fn assert_panic_is_terminal_and_worker_recovers(
     );
     assert_eq!(probe.lock().unwrap().finishes, 2);
     assert_no_additional_completion(&server);
+    assert_temporary_audio_cleaned(&server, 2, 2, 0, 0);
     assert_runtime_audio_cleaned(&probe);
 }
 

@@ -17,6 +17,8 @@ use crate::rendering::skia_renderer::SkiaRenderer;
 mod export;
 mod preview_mailbox;
 
+#[cfg(test)]
+use export::TemporaryAudioTestControl;
 use export::{
     AuthoringExportRequest, AuthoringPngExportRequest, AuthoringVideoExportRequest,
     run_authoring_export_worker,
@@ -28,6 +30,8 @@ pub struct RenderServer {
     rx_authoring_result: Receiver<RenderResult>,
     tx_authoring_export: SyncSender<AuthoringExportRequest>,
     rx_authoring_export_result: Receiver<AuthoringExportResult>,
+    #[cfg(test)]
+    temporary_audio_test_control: Arc<TemporaryAudioTestControl>,
     handle: Option<thread::JoinHandle<()>>,
     export_handle: Option<thread::JoinHandle<()>>,
 }
@@ -137,6 +141,8 @@ impl RenderServer {
         let (tx_authoring_export, rx_authoring_export) = sync_channel::<AuthoringExportRequest>(1);
         let (tx_authoring_export_result, rx_authoring_export_result) =
             channel::<AuthoringExportResult>();
+        #[cfg(test)]
+        let temporary_audio_test_control = Arc::new(TemporaryAudioTestControl::default());
         let export_plugin_manager = Arc::clone(&plugin_manager);
         let export_cache_manager = Arc::clone(&cache_manager);
         let export_handle = thread::spawn(move || {
@@ -329,6 +335,8 @@ impl RenderServer {
             rx_authoring_result,
             tx_authoring_export,
             rx_authoring_export_result,
+            #[cfg(test)]
+            temporary_audio_test_control,
             handle: Some(handle),
             export_handle: Some(export_handle),
         }
@@ -506,6 +514,8 @@ impl RenderServer {
                 timeline_id,
                 instance_path,
                 output_path,
+                #[cfg(test)]
+                temporary_audio_test_control: Arc::clone(&self.temporary_audio_test_control),
             })) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
@@ -534,6 +544,27 @@ impl RenderServer {
         if !self.preview_mailbox.set_sharing_context(handle, hwnd) {
             log::debug!("Render server is unavailable");
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_temporary_audio_cleanup_attempts(
+        &self,
+        attempts: usize,
+    ) -> Result<(), LibraryError> {
+        self.temporary_audio_test_control
+            .fail_cleanup_attempts(attempts)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_temporary_audio_explicit_cleanup(&self) -> Result<(), LibraryError> {
+        self.temporary_audio_test_control.fail_explicit_cleanup()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn temporary_audio_test_observation(
+        &self,
+    ) -> (Vec<std::path::PathBuf>, usize, usize, usize) {
+        self.temporary_audio_test_control.observation()
     }
 }
 

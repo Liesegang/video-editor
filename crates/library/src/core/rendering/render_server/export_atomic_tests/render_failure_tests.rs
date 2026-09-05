@@ -164,6 +164,9 @@ fn assert_failure_then_recovery(
         assert_eq!(probe.finishes, expected_finishes);
     }
     assert_no_additional_completion(&fixture.server);
+    if fixture.wave_path.is_some() {
+        assert_temporary_audio_cleaned(&fixture.server, 1, 1, 0, 0);
+    }
     if fixture.wave_path.is_some() && expected_frames_before_failure > 0 {
         assert_runtime_audio_cleaned(&fixture.probe);
     }
@@ -194,6 +197,7 @@ fn assert_failure_then_recovery(
     }
     assert_no_additional_completion(&fixture.server);
     if fixture.wave_path.is_some() {
+        assert_temporary_audio_cleaned(&fixture.server, 2, 2, 0, 0);
         assert_runtime_audio_cleaned(&fixture.probe);
     }
 }
@@ -201,7 +205,7 @@ fn assert_failure_then_recovery(
 #[test]
 fn production_blur_frame_zero_failure_is_atomic_and_the_same_server_recovers() {
     let directory = tempfile::tempdir().unwrap();
-    let (fixture, plugins) = blur_fixture(None);
+    let (fixture, plugins) = blur_fixture(Some(directory.path()));
     plugins
         .fail_effect_once_after_success("blur", MediaTime::zero().to_seconds_f64())
         .unwrap();

@@ -358,6 +358,78 @@ def _application_error_lines() -> tuple[pathlib.Path, list[str]]:
     return log_path, [line for line in lines if ERROR_LEVEL.search(line)]
 
 
+def _trigger_export(client) -> None:
+    client.key("e", True, command=True)
+    client.key("e", False, command=True)
+
+
+def _wait_for_successful_export(
+    client, output: pathlib.Path, expected_frames: int, description: str
+) -> dict:
+    def completed_export():
+        state = client.state()
+        if state["editor"].get("error") is not None:
+            raise QaFailure("native Export failed: " + state["editor"]["error"])
+        match = SUCCESS.match(state["editor"].get("status", ""))
+        if match is None:
+            return None
+        if pathlib.Path(match.group(2)).resolve() != output:
+            raise QaFailure("Export completed for an unexpected destination")
+        if int(match.group(1)) != expected_frames:
+            raise QaFailure("Export status reported an unexpected frame count")
+        return state
+
+    return client.wait_until(description, completed_export, timeout=60.0)
+
+
+def _exercise_failed_export_status(client, output: pathlib.Path, encoded: bytes) -> dict:
+    output.unlink()
+    try:
+        output.mkdir()
+        before_entries = _directory_entries(output.parent)
+        _trigger_export(client)
+
+        expected_status = "Export failed for " + str(output)
+
+        def completed_failure():
+            state = client.state()
+            status = state["editor"].get("status", "")
+            error = state["editor"].get("error")
+            if status != expected_status or error is None:
+                return None
+            if not error.startswith(expected_status + ":"):
+                raise QaFailure("failed Export did not identify its destination")
+            if "instead of a regular file" not in error:
+                raise QaFailure("failed Export did not retain the concrete worker error")
+            return state
+
+        failed = client.wait_until(
+            "production video Export failure completion",
+            completed_failure,
+            timeout=15.0,
+        )
+        unexpected = _new_unexpected_siblings(
+            before_entries, _directory_entries(output.parent), output
+        )
+        if unexpected:
+            raise QaFailure(
+                "failed Export left new sibling files: "
+                + ", ".join(str(path) for path in unexpected)
+            )
+        if not output.is_dir():
+            raise QaFailure("failed Export replaced or removed the directory destination")
+        return {
+            "status": failed["editor"]["status"],
+            "error": failed["editor"]["error"],
+            "destination_kind_after_failure": "directory",
+            "new_unexpected_siblings": [],
+        }
+    finally:
+        if output.is_dir():
+            output.rmdir()
+        output.write_bytes(encoded)
+
+
 def run_suite(client):
     client.wait_health()
     initial = client.wait_until(
@@ -377,23 +449,10 @@ def run_suite(client):
     sentinel_hash = hashlib.sha256(SENTINEL).hexdigest()
     before_entries = _directory_entries(output.parent)
 
-    client.key("e", True, command=True)
-    client.key("e", False, command=True)
-
-    def completed_export():
-        state = client.state()
-        if state["editor"].get("error") is not None:
-            raise QaFailure("native Export failed: " + state["editor"]["error"])
-        match = SUCCESS.match(state["editor"].get("status", ""))
-        if match is None:
-            return None
-        if pathlib.Path(match.group(2)).resolve() != output:
-            raise QaFailure("Export completed for an unexpected destination")
-        if int(match.group(1)) != expected_frames:
-            raise QaFailure("Export status reported an unexpected frame count")
-        return state
-
-    completed = client.wait_until("production video Export completion", completed_export, timeout=60.0)
+    _trigger_export(client)
+    completed = _wait_for_successful_export(
+        client, output, expected_frames, "production video Export completion"
+    )
     encoded = output.read_bytes()
     if not encoded or hashlib.sha256(encoded).hexdigest() == sentinel_hash:
         raise QaFailure("successful Export did not replace the existing destination")
@@ -413,6 +472,36 @@ def run_suite(client):
     if unexpected:
         raise QaFailure(
             "Export left new sibling files: "
+            + ", ".join(str(path) for path in unexpected)
+        )
+    failed_export = _exercise_failed_export_status(client, output, encoded)
+
+    _trigger_export(client)
+
+    def retry_started():
+        state = client.state()
+        status = state["editor"].get("status", "")
+        if status == failed_export["status"]:
+            return None
+        if state["editor"].get("error") is not None:
+            raise QaFailure("Export retry retained the previous failure")
+        if status.startswith("Exporting ") or SUCCESS.match(status) is not None:
+            return state
+        return None
+
+    retry = client.wait_until("production video Export retry start", retry_started, timeout=5.0)
+    recovered = _wait_for_successful_export(
+        client, output, expected_frames, "production video Export retry completion"
+    )
+    recovered_encoded = output.read_bytes()
+    if not recovered_encoded:
+        raise QaFailure("successful Export retry produced an empty destination")
+    unexpected = _new_unexpected_siblings(
+        before_entries, _directory_entries(output.parent), output
+    )
+    if unexpected:
+        raise QaFailure(
+            "Export retry left new sibling files: "
             + ", ".join(str(path) for path in unexpected)
         )
     log_path, error_lines = _application_error_lines()
@@ -440,6 +529,12 @@ def run_suite(client):
         "stream_timing": streams["timing"],
         "decoded_frames": decoded,
         "decoded_audio": decoded_audio,
+        "failed_export": failed_export,
+        "retry": {
+            "started_status": retry["editor"]["status"],
+            "completed_status": recovered["editor"]["status"],
+            "bytes": len(recovered_encoded),
+        },
         "new_unexpected_siblings": [],
         "app_log": {"path": str(log_path), "error_count": 0},
         "actions": client.evidence,

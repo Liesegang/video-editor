@@ -39,12 +39,23 @@ UNC shares while retaining the automatic-media ban on network locators. Any
 earlier render, effect, frame-write, encoder,
 cleanup, validation, or publication failure preserves an existing destination
 and attempts to remove the staging file. Once temporary Audio ownership has
-returned to the coordinator, a cleanup failure is included in the reported
-error rather than hidden; reporting cleanup failure during Audio preparation
-itself remains an E1 task. `frames_exported` counts frames accepted
+been created, the coordinator owns it before rendering or writing any samples.
+Normal completion, preparation errors, frame errors, and unwinding panics all
+therefore return to one explicit cleanup path. Transient interrupted, sharing,
+or permission failures receive a bounded retry before publication. If cleanup
+still fails, publication is rejected and the cleanup error is reported together
+with any primary failure in a typed `LibraryError::OperationAndCleanup`; `Drop`
+performs a final bounded fallback rather than being the normal cleanup path. A
+permanent operating-system failure can still leave the exact temporary path
+behind and remains visible in the error log.
+`frames_exported` counts frames accepted
 before a failure; `published` becomes true only after atomic replacement.
 Failed exports emit one terminal failure completion so the app can clear its
-pending state, but never emit a success or published update.
+pending state, replace the stale `Exporting ...` status with `Export failed for
+...`, and surface the concrete failure; they never emit a success or published
+update. Starting a retry clears only the error previously reported by Export,
+so an unrelated subsystem error is neither hidden nor mistaken for Export
+progress.
 
 Focused production-path regressions execute a non-zero built-in Blur
 Attachment and the real FFmpeg Video Loader before a private, test-only
@@ -82,7 +93,10 @@ The focused regression checks are:
 ```sh
 cargo test -p library core::rendering -- --nocapture
 cargo test -p library util::atomic_file -- --nocapture
-cargo test -p app render_error_invalidates_stale_output -- --nocapture
-cargo test -p app failed_export_update_stops_progress -- --nocapture
+cargo test -p app failed_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
+cargo test -p app unpublished_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
+cargo test -p app retry_after_failed_export_clears_only_the_previous_export_error -- --nocapture
+cargo test -p library production_blur_frame_zero_failure_is_atomic_and_the_same_server_recovers -- --nocapture
+cargo test -p library audio_preparation_and_cleanup_failures_are_both_reported_before_frame_zero -- --nocapture
 python scripts/qa-runner.py --mode full --jobs 1
 ```

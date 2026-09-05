@@ -71,6 +71,14 @@ pub enum LibraryError {
     Project(String),
     #[error("Rendering error: {0}")]
     Render(String),
+    #[error("{operation_phase}: {operation}; {cleanup_phase}: {cleanup}")]
+    OperationAndCleanup {
+        operation_phase: &'static str,
+        #[source]
+        operation: Box<LibraryError>,
+        cleanup_phase: &'static str,
+        cleanup: Box<LibraryError>,
+    },
     #[error(transparent)]
     TransitionSourceHandleUnavailable(#[from] TransitionSourceHandleError),
     #[error("Invalid composition index: {0}")]
