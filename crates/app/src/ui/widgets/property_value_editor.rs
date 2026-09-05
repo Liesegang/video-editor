@@ -95,7 +95,7 @@ pub(crate) fn property_value_editor(
                 response,
             }
         }
-        PropertyValue::String(text) => string_editor(ui, id, text, definition),
+        PropertyValue::String(text) => string_editor(ui, id, qa_id, text, definition),
         PropertyValue::Vec2(vector) => vector2_editor(
             ui,
             qa_id,
@@ -245,18 +245,19 @@ fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
 fn string_editor(
     ui: &mut Ui,
     id: Id,
+    qa_id: &str,
     text: &mut String,
     definition: Option<&PropertyDefinition>,
 ) -> PropertyValueEdit {
     match definition.map(PropertyDefinition::ui_type) {
         Some(PropertyUiType::Dropdown { options }) => {
-            return combo_string_editor(ui, id.with("dropdown"), text, options);
+            return combo_string_editor(ui, id.with("dropdown"), qa_id, text, options);
         }
         Some(PropertyUiType::Font) => {
             static AVAILABLE_FONTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
             let fonts = AVAILABLE_FONTS
                 .get_or_init(library::core::rendering::skia_utils::get_available_fonts);
-            return combo_string_editor(ui, id.with("font"), text, fonts);
+            return combo_string_editor(ui, id.with("font"), qa_id, text, fonts);
         }
         Some(PropertyUiType::MultilineText) => {
             let response = ui.add(
@@ -289,6 +290,7 @@ fn string_editor(
 fn combo_string_editor(
     ui: &mut Ui,
     id: Id,
+    qa_id: &str,
     text: &mut String,
     options: &[String],
 ) -> PropertyValueEdit {
@@ -298,7 +300,14 @@ fn combo_string_editor(
         .width(184.0)
         .show_ui(ui, |ui| {
             for option in options {
-                ui.selectable_value(text, option.clone(), option);
+                let response = ui.selectable_value(text, option.clone(), option);
+                crate::qa::register_component_with_metadata(
+                    format!("{qa_id}.option:{option}"),
+                    "inspector_property_option",
+                    response.rect,
+                    response.enabled(),
+                    Some(serde_json::json!({"value": option, "selected": text == option})),
+                );
             }
         });
     let changed = *text != previous;

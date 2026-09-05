@@ -101,6 +101,12 @@ struct TransientProjectProjection {
     project: Arc<AuthoringProject>,
 }
 
+struct TransientRenderPlan {
+    revision: ProjectRevision,
+    edit: u64,
+    plan: Arc<RenderPlan>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum TransientProjectionStage {
     Text,
@@ -178,6 +184,10 @@ pub struct AuthoringPreviewRuntime {
     /// and the transform gizmo. An unchanged edit reuses its Arc instead of
     /// cloning a large Project again on every repaint.
     transient_projections: TransientProjectionCache,
+    /// The compiler's derived plan for the last immutable gesture snapshot.
+    /// Navigation requests reuse it; the authoritative snapshot/plan remain
+    /// available unchanged for cancel and current-frame export.
+    transient_plan: Option<TransientRenderPlan>,
     latest: Option<PreviewIntent>,
     desired: Option<DesiredRender>,
     in_flight: Option<InFlightRender>,
@@ -256,9 +266,12 @@ impl AuthoringPreviewRuntime {
         playback: Option<PlaybackSequence>,
         project: Arc<AuthoringProject>,
         plan: Arc<RenderPlan>,
-    ) {
+    ) -> Result<(), String> {
         let intent = PreviewIntent { key, playback };
         self.latest = Some(intent.clone());
+        if intent.key.transient_edit.is_none() {
+            self.transient_plan = None;
+        }
         if self
             .in_flight
             .as_ref()
@@ -269,16 +282,43 @@ impl AuthoringPreviewRuntime {
                 .as_ref()
                 .is_some_and(|request| request.intent == intent)
         {
-            return;
+            return Ok(());
         }
         if self.desired.is_some() {
             self.coalesced = self.coalesced.wrapping_add(1);
         }
+        // A projected Project alone cannot update the values copied into
+        // CompiledModuleInvocation. Derive the matching plan through the
+        // existing incremental compiler, retaining shared compiled topology.
+        self.desired = None;
+        let plan = if let Some(edit) = intent.key.transient_edit {
+            match self
+                .transient_plan
+                .as_ref()
+                .filter(|cached| cached.revision == intent.key.revision && cached.edit == edit)
+            {
+                Some(cached) => Arc::clone(&cached.plan),
+                None => {
+                    self.transient_plan = None;
+                    let (projected_plan, _) = self.plan_cache.compile(project.as_ref())?;
+                    let projected_plan = Arc::new(projected_plan);
+                    self.transient_plan = Some(TransientRenderPlan {
+                        revision: intent.key.revision,
+                        edit,
+                        plan: Arc::clone(&projected_plan),
+                    });
+                    projected_plan
+                }
+            }
+        } else {
+            plan
+        };
         self.desired = Some(DesiredRender {
             intent,
             project,
             plan,
         });
+        Ok(())
     }
 
     fn project_transient_edit(
@@ -537,7 +577,7 @@ pub fn preview_panel(
             |source| gizmo::transient_render_project(source, state),
         );
         let transient_edit = combine_transient_edits(upstream_edit, transform_edit);
-        runtime.request(
+        if let Err(error) = runtime.request(
             PreviewRequestKey {
                 revision,
                 timeline_id: timeline.id,
@@ -550,7 +590,9 @@ pub fn preview_panel(
             playback,
             render_project,
             plan,
-        );
+        ) {
+            runtime.report_error(state, error);
+        }
     } else {
         runtime.suspend();
     }
@@ -879,15 +921,13 @@ fn project_inspector_transient_edit(
         return (Arc::clone(project), None);
     };
     let digest = edit.digest();
-    match TimelineEditorService::project_authored_property_values(
-        project,
-        edit.owner,
-        vec![edit.update.clone()],
-    ) {
+    match edit.project(project) {
         Ok(projected) => (Arc::new(projected), Some(digest)),
         Err(_) => (Arc::clone(project), None),
     }
 }
 
+#[cfg(test)]
+mod plan_tests;
 #[cfg(test)]
 mod tests;

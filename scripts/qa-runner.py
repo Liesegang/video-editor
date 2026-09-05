@@ -95,6 +95,12 @@ FULL_SUITES = (
     SuiteSpec("audio-playback", "qa-audio-playback-e2e.py", AUTHORING_AUDIO_FIXTURE),
     SuiteSpec("text-ensemble", "qa-text-ensemble-e2e.py"),
     SuiteSpec(
+        "text-tracking",
+        "qa-text-tracking-e2e.py",
+        project_file=True,
+        expects_exit=True,
+    ),
+    SuiteSpec(
         "video-export",
         "qa-video-export-e2e.py",
         AUTHORING_AUDIO_FIXTURE,

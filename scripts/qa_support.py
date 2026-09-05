@@ -63,6 +63,32 @@ def project_file_evidence(path: pathlib.Path, description: str) -> dict:
     }
 
 
+def save_project_to_disk(client: "QaClient", path: pathlib.Path, label: str):
+    """Save through the production command and prove the exact Project reached disk."""
+
+    before = client.state()
+    expected_project = before["project"]
+    file_before = project_file_evidence(path, label + " Project before save")
+    client.key("s", True, command=True)
+    client.key("s", False, command=True)
+
+    def saved_to_disk():
+        state = client.state()
+        if (
+            state["editor"].get("status") != "Project saved"
+            or state["project"] != expected_project
+        ):
+            return None
+        evidence = project_file_evidence(path, label + " saved Project")
+        return (
+            (state, evidence)
+            if evidence["sha256"] != file_before["sha256"]
+            else None
+        )
+
+    return client.wait_until(label + " save reaching disk", saved_to_disk)
+
+
 def process_group_options() -> dict:
     if os.name == "nt":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}

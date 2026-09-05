@@ -125,3 +125,115 @@ fn playhead_is_hidden_outside_the_visible_curve_plot() {
     );
     assert_eq!(visible_playhead_x(transform, f64::NAN), None);
 }
+
+fn test_series(
+    owner: AutomationOwner,
+    target: crate::state::authoring::AutomationTarget,
+) -> CurveSeries {
+    CurveSeries {
+        id: AutomationLaneId { owner, target },
+        component: crate::state::authoring::CurveValueComponent::Scalar,
+        label: "Value".to_string(),
+        points: Vec::new(),
+    }
+}
+
+#[test]
+fn new_and_promoted_lanes_are_visible_without_forgetting_explicitly_hidden_lanes() {
+    let item_id = library::model::authoring::TimelineItemId::new();
+    let owner = AutomationOwner::Item(item_id);
+    let position = test_series(
+        owner.clone(),
+        crate::state::authoring::AutomationTarget::AuthoredProperty {
+            owner: library::editor::AuthoringPropertyOwner::Item(item_id),
+            key: "position".to_string(),
+        },
+    );
+    let direct_tracking = test_series(
+        owner.clone(),
+        crate::state::authoring::AutomationTarget::AuthoredProperty {
+            owner: library::editor::AuthoringPropertyOwner::TextEnsemble {
+                item_id,
+                operation_id: uuid::Uuid::new_v4(),
+            },
+            key: "amount".to_string(),
+        },
+    );
+    let promoted_tracking = test_series(
+        owner.clone(),
+        crate::state::authoring::AutomationTarget::ModuleParameter(
+            library::model::authoring::PublishedParameterId::new(),
+        ),
+    );
+    let mut state = AuthoringUiState::new(library::model::authoring::TimelineId::new());
+
+    sync_visibility(&mut state, &owner, std::slice::from_ref(&position));
+    assert!(series_visible(&state, &position));
+    state.curve_editor.hidden_lanes.insert(position.id.clone());
+
+    sync_visibility(
+        &mut state,
+        &owner,
+        &[position.clone(), direct_tracking.clone()],
+    );
+    assert!(!series_visible(&state, &position));
+    assert!(series_visible(&state, &direct_tracking));
+
+    state
+        .curve_editor
+        .hidden_lanes
+        .insert(direct_tracking.id.clone());
+    sync_visibility(
+        &mut state,
+        &owner,
+        &[position.clone(), promoted_tracking.clone()],
+    );
+    assert!(!series_visible(&state, &position));
+    assert!(series_visible(&state, &promoted_tracking));
+    assert!(!state
+        .curve_editor
+        .hidden_lanes
+        .contains(&direct_tracking.id));
+
+    sync_visibility(&mut state, &owner, std::slice::from_ref(&promoted_tracking));
+    sync_visibility(&mut state, &owner, &[position.clone(), promoted_tracking]);
+    assert!(
+        series_visible(&state, &position),
+        "a removed and re-authored lane returns with the visible default"
+    );
+}
+
+#[test]
+fn changing_curve_owner_resets_only_owner_local_visibility_and_navigation() {
+    let first_item = library::model::authoring::TimelineItemId::new();
+    let first_owner = AutomationOwner::Item(first_item);
+    let first = test_series(
+        first_owner.clone(),
+        crate::state::authoring::AutomationTarget::AuthoredProperty {
+            owner: library::editor::AuthoringPropertyOwner::Item(first_item),
+            key: "opacity".to_string(),
+        },
+    );
+    let second_item = library::model::authoring::TimelineItemId::new();
+    let second_owner = AutomationOwner::Item(second_item);
+    let second = test_series(
+        second_owner.clone(),
+        crate::state::authoring::AutomationTarget::AuthoredProperty {
+            owner: library::editor::AuthoringPropertyOwner::Item(second_item),
+            key: "opacity".to_string(),
+        },
+    );
+    let mut state = AuthoringUiState::new(library::model::authoring::TimelineId::new());
+    sync_visibility(&mut state, &first_owner, std::slice::from_ref(&first));
+    state.curve_editor.hidden_lanes.insert(first.id);
+    state.curve_editor.canvas = CanvasState::new(Vec2::splat(20.0), Vec2::splat(3.0));
+
+    sync_visibility(&mut state, &second_owner, std::slice::from_ref(&second));
+
+    assert!(state.curve_editor.hidden_lanes.is_empty());
+    assert!(series_visible(&state, &second));
+    assert_eq!(
+        state.curve_editor.canvas,
+        CanvasState::uniform(Vec2::ZERO, 1.0)
+    );
+}

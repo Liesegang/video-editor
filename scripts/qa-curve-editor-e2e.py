@@ -65,7 +65,11 @@ def wait_position_key(client, item_id, keyframe_id=None, component="x"):
             if not (
                 candidate.get("type") == "curve_editor_keyframe"
                 and metadata.get("item_id") == item_id
-                and target == {"kind": "authored_property", "key": POSITION_PROPERTY}
+                and target == {
+                    "kind": "authored_property",
+                    "owner": {"kind": "item", "item_id": item_id},
+                    "key": POSITION_PROPERTY,
+                }
                 and metadata.get("component") == component
                 and (keyframe_id is None or metadata.get("keyframe_id") == keyframe_id)
             ):

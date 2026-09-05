@@ -604,15 +604,16 @@ fn operation_entry(
                         (state.inspector.synced_revision, local_time)
                     {
                         if let Some(target) = direct_edit_target(property, local_time) {
-                            state.inspector.transient_property_edit = Some(TransientPropertyEdit {
-                                source_revision,
-                                owner,
-                                update: AuthoringPropertyValueUpdate {
-                                    key: definition.name().to_string(),
-                                    value: edited_value.clone(),
-                                    target,
-                                },
-                            });
+                            state.inspector.transient_property_edit =
+                                Some(TransientPropertyEdit::authored(
+                                    source_revision,
+                                    owner,
+                                    AuthoringPropertyValueUpdate {
+                                        key: definition.name().to_string(),
+                                        value: edited_value.clone(),
+                                        target,
+                                    },
+                                ));
                         }
                     }
                 }

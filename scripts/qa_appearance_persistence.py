@@ -17,6 +17,7 @@ from qa_support import (
     media_seconds,
     project_file_evidence,
     request_clean_native_close,
+    save_project_to_disk,
     seek_timeline_seconds,
     settled_preview_state,
     spawned_authoring_app,
@@ -62,29 +63,11 @@ def _save_and_reopen(client, label, preview_seconds):
     before = client.state()
     expected_project = before["project"]
     project_file = _project_file()
-    file_before = project_file_evidence(project_file, label + " Project before save")
     expected_previews = [
         _preview_at(client, seconds, before["history"]["revision"])
         for seconds in preview_seconds
     ]
-    client.key("s", True, command=True)
-    client.key("s", False, command=True)
-
-    def saved_to_disk():
-        state = client.state()
-        if (
-            state["editor"].get("status") != "Project saved"
-            or state["project"] != expected_project
-        ):
-            return None
-        evidence = project_file_evidence(project_file, label + " saved Project")
-        return (
-            (state, evidence)
-            if evidence["sha256"] != file_before["sha256"]
-            else None
-        )
-
-    saved, saved_file = client.wait_until(label + " save reaching disk", saved_to_disk)
+    saved, saved_file = save_project_to_disk(client, project_file, label)
 
     client.key("n", True, command=True)
     client.key("n", False, command=True)

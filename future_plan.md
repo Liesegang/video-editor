@@ -65,6 +65,12 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
 - [ ] Path/Vector は既存正本を拡張し、線分への頂点追加、Pen 新規描画、Rectangle/Ellipse の drag 作成、頂点の Corner/Smooth/Symmetric を右クリックで編集する。既存 Path の移動だけで Illustrator 相当の完成扱いにせず、M2 の全 Vector 要件を継続する。
 - [ ] Ensemble Tracking（文字間隔）を bundled descriptor と共通 runtime へ追加し、Target・keyframe・明示 Node Clip 化前後・実画素を検証する。Step Delay は clip-local time の描画テストだけで修正済みとせず、native UI で発生条件を再現して解消する。
+  - [x] 通常TextのEnsembleとText/ShapeのAppearanceを、既存のProperty ownerを参照する共通automation laneへ接続した。TimelineとCurveで同じkeyframe IDを使い、明示Node Clip化後は公開parameterへ参照先を切り替える。Curveの表示状態は明示的に隠したlaneだけを保持し、新しいlaneが非表示のまま残る不具合を修正した。
+  - [x] 公開parameterの数値ドラッグを既存のInspector一時投影へ接続し、Previewには投影したProjectと対応するRenderPlanを送る。既存incremental compiler cacheでModule本体とTimeline scheduleのArcを共有し、同じ一時編集のplanはpan/zoomやフレーム変更でも再利用する。定数、キー、確定操作との一致、失敗時の待機要求破棄、確定済みcacheの保持をPreviewの実request処理で検証した。
+  - [x] LTRの複数行TextでTrackingのLine/Block/Char、押下中の画素変化、release一回の履歴、Undo、clip-local 0.5/1.5秒のキー、Node Clip化前後のID/値/補間/画素、保存と新プロセスでの再読込みを実UIで確認した。押下中と確定後の画素も一致する（`target/qa-runs/20260906T-tracking-final/text-tracking`）。Curveからの同一キーの時刻変更とUndoは通過したが、移動量の正しさは次項に残す。
+  - [ ] Curveのキードラッグを、フレームごとの差分ではなく押下開始からの総移動量で評価する。24pxを10ステップで動かした実UI記録では時刻が0.5→0.509906秒となり、最後の1ステップ分しか反映されていない。現行処理はeguiの各フレームの`drag_delta()`を開始値へ加えている。既存の総移動量APIを使い、横方向の時刻と縦方向の値、異なる入力ステップ数、pan/zoom、Undoを期待座標との比較で検証する。
+  - [ ] RTLと左右混在の文字列で、正のTrackingが文字間隔を広げることを検証する。現行処理は論理順のindexに応じて+Xへ移動するため、右から左へ並ぶrunでは逆方向に働く可能性がある。既存の組版結果を使う回帰テストで再現し、固定する端と行間の意味を定めてから共通runtimeを修正する。
+  - 今回のworkspace全targetは1,706 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 26 tests、819 filesの1,000行制限も通過した（`target/qa-workspace-test-20260906-tracking-verified.log`）。最終release appのnative HTTP QAは25/25で、実画面を確認し、app/suite logにERROR/panic/描画失敗はなく、QA appは終了済み（`target/qa-runs/20260906T-tracking-final`）。途中の実UI検査が検出したlane非表示と古いRenderPlanによる一時値の描画漏れは修正し、失敗記録を`20260906T-tracking-targeted-r1`と`r3`に保持した。移動量とRTLを含むTracking全体の完了や60fpsの証明ではない。
   - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。この時点で残った neutral Ensemble と空 stack の文字描画差は、次項で修正した。
   - [x] 通常 Text と Ensemble を、同じ SkParagraph の実描画用 glyph、Font、位置、行原点を使う一つの本体描画へ統合した。
     文字ごとの `draw_str` と未使用の Ensemble 専用 Char/Line/Text モデルを削除し、変形と bounds も既存 affine 計算へ統一した。

@@ -277,7 +277,11 @@ def run_suite(client):
         if text_id in (state := client.state())["editor"]["timeline"]["expanded_items"]
         else None,
     )
-    position_target = {"kind": "authored_property", "key": "position"}
+    position_target = {
+        "kind": "authored_property",
+        "owner": {"kind": "item", "item_id": text_id},
+        "key": "position",
+    }
     try:
         position_lane = client.wait_until(
             "visible Text property lane",
@@ -298,7 +302,11 @@ def run_suite(client):
         position_lane = wait_lane(client, text_id, position_target)
     if (position_lane.get("metadata") or {}).get("keyframe_count") != 2:
         raise QaFailure("Position lane did not expose both authoritative keyframes")
-    opacity_target = {"kind": "authored_property", "key": "opacity"}
+    opacity_target = {
+        "kind": "authored_property",
+        "owner": {"kind": "item", "item_id": text_id},
+        "key": "opacity",
+    }
     if find_component(
         client.component_snapshot(),
         "timeline_property_label",

@@ -14,15 +14,7 @@ impl TimelineEditorService {
         session
             .transact(
                 vec![ProjectInvalidation::ModuleInstance { instance_id }],
-                |project| {
-                    project
-                        .module_instances
-                        .get_mut(&instance_id)
-                        .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                        .parameter_overrides
-                        .insert(parameter_id, value);
-                    Ok(())
-                },
+                |project| set_instance_parameter_value(project, instance_id, parameter_id, value),
             )
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
@@ -70,13 +62,7 @@ impl TimelineEditorService {
                             "Node Clip {item_id} changed Module instance during the edit"
                         ));
                     }
-                    project
-                        .module_instances
-                        .get_mut(&instance_id)
-                        .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                        .parameter_overrides
-                        .insert(parameter_id, value);
-                    Ok(())
+                    set_instance_parameter_value(project, instance_id, parameter_id, value)
                 },
             )
             .map(|(_, changes)| changes)
@@ -125,7 +111,6 @@ impl TimelineEditorService {
     ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
         let mut session = self.write_session()?;
         let timeline_id = timeline_for_item(session.project(), item_id)?;
-        require_item_parameter_automation(session.project(), item_id, parameter_id)?;
         session
             .transact(
                 vec![ProjectInvalidation::Item {
@@ -133,17 +118,61 @@ impl TimelineEditorService {
                     item_id,
                 }],
                 |project| {
-                    let invocation = item_module_invocation_mut(project, item_id)?;
-                    let track = invocation
-                        .automation_tracks
-                        .entry(parameter_id)
-                        .or_insert_with(|| AutomationTrack {
-                            keyframes: Vec::new(),
-                        });
-                    track.upsert(local_time, value, easing)
+                    upsert_parameter_keyframe(
+                        project,
+                        item_id,
+                        parameter_id,
+                        local_time,
+                        value,
+                        easing,
+                    )
                 },
             )
             .map_err(LibraryError::Validation)
+    }
+
+    /// Projects an Inspector gesture without writing Project state or Undo
+    /// history. Uses the same value/keyframe mutation as the release command,
+    /// retaining Timeline automation ownership and instance-local constants.
+    pub fn project_module_parameter_value(
+        project: &AuthoringProject,
+        item_id: TimelineItemId,
+        instance_id: ModuleInstanceId,
+        parameter_id: PublishedParameterId,
+        value: PropertyValue,
+        target: AuthoringPropertyValueTarget,
+    ) -> Result<AuthoringProject, LibraryError> {
+        let mut projected = project.clone();
+        let invocation = item_module_invocation_mut(&mut projected, item_id)
+            .map_err(LibraryError::Validation)?;
+        if invocation.instance_id != instance_id {
+            return Err(LibraryError::Validation(format!(
+                "Node Clip {item_id} changed Module instance during the edit"
+            )));
+        }
+        match target {
+            AuthoringPropertyValueTarget::Constant => {
+                if invocation.automation_tracks.contains_key(&parameter_id) {
+                    return Err(LibraryError::Validation(format!(
+                        "Published parameter {parameter_id} is controlled by Timeline automation"
+                    )));
+                }
+                set_instance_parameter_value(&mut projected, instance_id, parameter_id, value)
+                    .map_err(LibraryError::Validation)?;
+            }
+            AuthoringPropertyValueTarget::Keyframe { local_time } => {
+                upsert_parameter_keyframe(
+                    &mut projected,
+                    item_id,
+                    parameter_id,
+                    local_time,
+                    value,
+                    None,
+                )
+                .map_err(LibraryError::Validation)?;
+            }
+        }
+        Ok(projected)
     }
 
     pub fn update_module_parameter_keyframe(
@@ -215,11 +244,54 @@ impl TimelineEditorService {
     }
 }
 
+fn set_instance_parameter_value(
+    project: &mut AuthoringProject,
+    instance_id: ModuleInstanceId,
+    parameter_id: PublishedParameterId,
+    value: PropertyValue,
+) -> Result<(), String> {
+    let instance = project
+        .module_instances
+        .get_mut(&instance_id)
+        .ok_or_else(|| format!("Missing Module instance {instance_id}"))?;
+    let definition = project
+        .module_definitions
+        .get(&instance.definition_id)
+        .ok_or_else(|| format!("Missing Module definition {}", instance.definition_id))?;
+    definition.validate_parameter_value(parameter_id, &value)?;
+    instance.parameter_overrides.insert(parameter_id, value);
+    definition.validate_parameter_overrides(&instance.parameter_overrides)
+}
+
+fn upsert_parameter_keyframe(
+    project: &mut AuthoringProject,
+    item_id: TimelineItemId,
+    parameter_id: PublishedParameterId,
+    local_time: MediaTime,
+    value: PropertyValue,
+    easing: Option<EasingFunction>,
+) -> Result<KeyframeId, String> {
+    let definition = require_item_parameter_automation(project, item_id, parameter_id)
+        .map_err(|error| error.to_string())?;
+    definition.validate_parameter_value(parameter_id, &value)?;
+    if local_time.is_negative() {
+        return Err("Automation Keyframe time must be non-negative".to_string());
+    }
+    let invocation = item_module_invocation_mut(project, item_id)?;
+    let track = invocation
+        .automation_tracks
+        .entry(parameter_id)
+        .or_insert_with(|| AutomationTrack {
+            keyframes: Vec::new(),
+        });
+    track.upsert(local_time, value, easing)
+}
+
 fn require_item_parameter_automation(
     project: &AuthoringProject,
     item_id: TimelineItemId,
     parameter_id: PublishedParameterId,
-) -> Result<(), LibraryError> {
+) -> Result<&ModuleDefinition, LibraryError> {
     let item = project
         .items
         .get(&item_id)
@@ -238,7 +310,7 @@ fn require_item_parameter_automation(
                 invocation.instance_id
             ))
         })?;
-    project
+    let definition = project
         .module_definitions
         .get(&instance.definition_id)
         .ok_or_else(|| {
@@ -246,9 +318,11 @@ fn require_item_parameter_automation(
                 "Missing Module definition {}",
                 instance.definition_id
             ))
-        })?
+        })?;
+    definition
         .require_parameter_automation(parameter_id)
-        .map_err(LibraryError::Validation)
+        .map_err(LibraryError::Validation)?;
+    Ok(definition)
 }
 
 #[cfg(test)]

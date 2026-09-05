@@ -115,17 +115,33 @@ fn channel_list(
             if !handled.insert(candidate.id.clone()) {
                 continue;
             }
-            let mut visible = state.curve_editor.visible_lanes.contains(&candidate.id);
-            if ui.checkbox(&mut visible, target_label(candidate)).changed() {
+            let label = target_label(candidate);
+            let mut visible = !state.curve_editor.hidden_lanes.contains(&candidate.id);
+            let response = ui.checkbox(&mut visible, label);
+            if response.changed() {
                 if visible {
-                    state
-                        .curve_editor
-                        .visible_lanes
-                        .insert(candidate.id.clone());
+                    state.curve_editor.hidden_lanes.remove(&candidate.id);
                 } else {
-                    state.curve_editor.visible_lanes.remove(&candidate.id);
+                    state.curve_editor.hidden_lanes.insert(candidate.id.clone());
                 }
             }
+            crate::qa::register_component_with_metadata(
+                format!("curve_editor.channel:{:?}", candidate.id),
+                "curve_editor_channel",
+                response.rect,
+                response.enabled(),
+                Some(serde_json::json!({
+                    "lane": lane_metadata(&candidate.id),
+                    "target": automation_lanes::target_metadata(&candidate.id.target),
+                    "label": label,
+                    "visible": visible,
+                    "components": series
+                        .iter()
+                        .filter(|series| series.id == candidate.id)
+                        .map(|series| component_name(series.component))
+                        .collect::<Vec<_>>(),
+                })),
+            );
         }
     });
     ui.painter().line_segment(
@@ -868,19 +884,19 @@ fn sync_visibility(state: &mut AuthoringUiState, owner: &AutomationOwner, series
     if state.curve_editor.target_owner.as_ref() != Some(owner) {
         state.curve_editor.target_owner = Some(owner.clone());
         state.curve_editor.canvas = CanvasState::uniform(Vec2::ZERO, 1.0);
-        state.curve_editor.visible_lanes = lanes;
+        state.curve_editor.hidden_lanes.clear();
         state.curve_editor.drag = None;
         state.curve_editor.keyframe_editor = None;
     } else {
         state
             .curve_editor
-            .visible_lanes
+            .hidden_lanes
             .retain(|lane| lanes.contains(lane));
     }
 }
 
 fn series_visible(state: &AuthoringUiState, series: &CurveSeries) -> bool {
-    state.curve_editor.visible_lanes.contains(&series.id)
+    !state.curve_editor.hidden_lanes.contains(&series.id)
 }
 
 fn value_extent(series: &[CurveSeries]) -> (f64, f64) {

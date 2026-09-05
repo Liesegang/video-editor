@@ -526,15 +526,15 @@ fn property_entry(
             (state.inspector.synced_revision, local_time)
         {
             if let Some(target) = direct_edit_target(property, local_time) {
-                state.inspector.transient_property_edit = Some(TransientPropertyEdit {
+                state.inspector.transient_property_edit = Some(TransientPropertyEdit::authored(
                     source_revision,
                     owner,
-                    update: AuthoringPropertyValueUpdate {
+                    AuthoringPropertyValueUpdate {
                         key: definition.name().to_string(),
                         value: edited_value.clone(),
                         target,
                     },
-                });
+                ));
             }
         }
     }

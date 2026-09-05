@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use library::editor::{ParticleNodeClipPlacement, TimelineEditorService};
+use library::editor::{
+    AuthoringPropertyOwner, ParticleNodeClipPlacement, TextEnsembleOperationKind,
+    TimelineEditorService,
+};
 use library::model::authoring::{
     InstancePath, MediaTime, ModuleDefinition, ModuleDefinitionSharing, ModuleInstance,
     ModuleInstanceId, ModuleInvocation, PublishedParameterId, SourceRef, TimelineInterval,
@@ -266,4 +269,145 @@ fn builtin_effect_keyframes_keep_one_id_across_inspector_timeline_and_curve() {
         .expect("updated lane");
     assert_eq!(lane.points[0].id, keyframe_id);
     assert_eq!(lane.points[0].time, MediaTime::new(3, 2).unwrap());
+}
+
+#[test]
+fn direct_text_operation_properties_share_lane_identity_and_mutation() {
+    let plugins = PluginManager::default();
+    let service = TimelineEditorService::create_default("direct operation lanes").unwrap();
+    let project = service.snapshot().unwrap();
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    drop(project);
+    let (item_id, _) = service
+        .add_item(
+            track_id,
+            "Text".to_string(),
+            SourceRef::Text {
+                text: "Tracked".to_string(),
+                appearance_operations: Vec::new(),
+                ensemble_operations: Vec::new(),
+            },
+            TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap()).unwrap(),
+            0,
+        )
+        .unwrap();
+    let (fill_id, _) = service
+        .add_appearance_operation(&plugins, item_id, "fill", 0)
+        .unwrap();
+    let (tracking_id, _) = service
+        .add_text_ensemble_operation_by_id(
+            &plugins,
+            item_id,
+            TextEnsembleOperationKind::Effector,
+            "tracking",
+        )
+        .unwrap();
+    let tracking_owner = AuthoringPropertyOwner::TextEnsemble {
+        item_id,
+        operation_id: tracking_id,
+    };
+    let (tracking_key_id, _) = service
+        .set_authored_property_keyframe_mode(
+            tracking_owner,
+            "amount".to_string(),
+            MediaTime::new(1, 1).unwrap(),
+            PropertyValue::from(12.0),
+        )
+        .unwrap();
+    let fill_owner = AuthoringPropertyOwner::Appearance {
+        item_id,
+        operation_id: fill_id,
+    };
+    let (fill_key_id, _) = service
+        .set_authored_property_keyframe_mode(
+            fill_owner,
+            "offset".to_string(),
+            MediaTime::new(1, 1).unwrap(),
+            PropertyValue::from(2.0),
+        )
+        .unwrap();
+
+    let project = service.snapshot().unwrap();
+    let lanes = collect_item_lanes(&project, item_id);
+    let tracking_target = AutomationTarget::AuthoredProperty {
+        owner: tracking_owner,
+        key: "amount".to_string(),
+    };
+    let tracking = lanes
+        .iter()
+        .find(|lane| lane.id.target == tracking_target)
+        .expect("Tracking lane");
+    assert_eq!(tracking.label, "Tracking · Amount");
+    assert_eq!(tracking.points[0].id, tracking_key_id);
+    let dope_tracking = collect_item_keyframed_lanes(&project, item_id)
+        .into_iter()
+        .find(|lane| lane.id.target == tracking_target)
+        .expect("Tracking Dope Sheet lane");
+    assert_eq!(dope_tracking.points[0].id, tracking_key_id);
+    assert!(numeric_channels(&lanes).iter().any(|channel| {
+        channel.id.target == tracking_target
+            && channel.component == CurveValueComponent::Scalar
+            && channel.points[0].id == tracking_key_id
+    }));
+    assert_eq!(
+        target_metadata(&tracking_target),
+        serde_json::json!({
+            "kind": "authored_property",
+            "owner": {
+                "kind": "text_ensemble",
+                "item_id": item_id,
+                "operation_id": tracking_id,
+            },
+            "key": "amount",
+        })
+    );
+
+    let fill_target = AutomationTarget::AuthoredProperty {
+        owner: fill_owner,
+        key: "offset".to_string(),
+    };
+    let fill = lanes
+        .iter()
+        .find(|lane| lane.id.target == fill_target)
+        .expect("Appearance lane");
+    assert_eq!(fill.label, "Fill · Offset");
+    assert_eq!(fill.points[0].id, fill_key_id);
+
+    update_keyframe(
+        &service,
+        &tracking.id,
+        tracking_key_id,
+        AuthoringKeyframeUpdate {
+            time: Some(MediaTime::new(3, 2).unwrap()),
+            value: Some(PropertyValue::from(24.0)),
+            easing: Some(EasingFunction::EaseInOutQuad),
+        },
+    )
+    .unwrap();
+    let project = service.snapshot().unwrap();
+    let updated = collect_item_lanes(&project, item_id)
+        .into_iter()
+        .find(|lane| lane.id.target == tracking_target)
+        .expect("updated Tracking lane");
+    assert_eq!(updated.points[0].id, tracking_key_id);
+    assert_eq!(updated.points[0].time, MediaTime::new(3, 2).unwrap());
+    assert_eq!(updated.points[0].value, PropertyValue::from(24.0));
+    assert_eq!(updated.points[0].easing, EasingFunction::EaseInOutQuad);
+
+    let mismatched_lane = AutomationLaneId {
+        owner: AutomationOwner::Item(TimelineItemId::new()),
+        target: tracking_target,
+    };
+    let error = update_keyframe(
+        &service,
+        &mismatched_lane,
+        tracking_key_id,
+        AuthoringKeyframeUpdate {
+            time: None,
+            value: Some(PropertyValue::from(-100.0)),
+            easing: None,
+        },
+    )
+    .expect_err("a lane cannot mutate another Item's authored operation");
+    assert!(matches!(error, library::LibraryError::Validation(_)));
 }

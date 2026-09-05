@@ -82,6 +82,7 @@ class QaRunnerTests(unittest.TestCase):
             "node-clip-conversion",
             "audio-playback",
             "text-ensemble",
+            "text-tracking",
             "video-export",
         ]
         full = RUNNER.suite_specs("full")
@@ -100,6 +101,9 @@ class QaRunnerTests(unittest.TestCase):
         appearance = next(suite for suite in full if suite.name == "appearance")
         self.assertTrue(appearance.project_file)
         self.assertTrue(appearance.expects_exit)
+        tracking = next(suite for suite in full if suite.name == "text-tracking")
+        self.assertTrue(tracking.project_file)
+        self.assertTrue(tracking.expects_exit)
         video_export = next(suite for suite in full if suite.name == "video-export")
         self.assertTrue(video_export.export_file)
         self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)
@@ -118,6 +122,7 @@ class QaRunnerTests(unittest.TestCase):
         files = [SCRIPTS / "qa-runner.py", SCRIPTS / "qa_support.py"]
         files.extend(SCRIPTS / suite.script for suite in RUNNER.suite_specs("full"))
         files.append(SCRIPTS / "qa_appearance_persistence.py")
+        files.append(SCRIPTS / "qa_text_ensemble_support.py")
         files.append(SCRIPTS / "qa-particle-persistence-e2e.py")
         files.append(pathlib.Path(__file__))
         for path in files:

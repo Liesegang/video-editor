@@ -3,14 +3,14 @@
 //! The Timeline owns parameter automation and external media bindings. The
 //! Module Definition supplies the finite graph and its published interface.
 
-use library::editor::TimelineEditorService;
+use library::editor::{AuthoringPropertyValueTarget, TimelineEditorService};
 use library::model::authoring::{
     AuthoringProject, ModuleDefinition, ModuleInstance, ModuleInvocation, PublishedParameter,
     TimelineItem,
 };
 use library::plugin::PluginManager;
 
-use crate::state::authoring::AuthoringUiState;
+use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
 use crate::ui::property_metadata::{
     node_property_definition, published_parameter_keyframe_capability,
 };
@@ -149,7 +149,7 @@ pub(super) fn published_parameter_row(
         published_parameter_definition(context.plugins, context.definition, parameter);
     let (allow_keyframe, keyframe_disabled_reason) =
         published_parameter_keyframe_capability(context.definition, parameter.id);
-    let (finished, mode_action, edited_value) = {
+    let (changed, finished, mode_action, edited_value) = {
         let value = state
             .inspector
             .property_values
@@ -171,8 +171,49 @@ pub(super) fn published_parameter_row(
                 allow_expression: false,
             },
         );
-        (result.finished, result.mode_action, value.clone())
+        (
+            result.changed,
+            result.finished,
+            result.mode_action,
+            value.clone(),
+        )
     };
+    if changed {
+        let validation = property_definition.as_ref().map_or(Ok(()), |definition| {
+            definition.validate_value(&edited_value)
+        });
+        if let Err(error) = validation {
+            state.error = Some(error);
+        } else if let (Some(source_revision), Ok(local_time)) =
+            (state.inspector.synced_revision, &local_time)
+        {
+            let target = if automation.is_some() {
+                AuthoringPropertyValueTarget::Keyframe {
+                    local_time: *local_time,
+                }
+            } else {
+                AuthoringPropertyValueTarget::Constant
+            };
+            state.inspector.transient_property_edit =
+                Some(TransientPropertyEdit::module_parameter(
+                    source_revision,
+                    context.item.id,
+                    context.instance.id,
+                    parameter.id,
+                    edited_value.clone(),
+                    target,
+                ));
+        }
+    }
+    if finished
+        && state
+            .inspector
+            .transient_property_edit
+            .as_ref()
+            .is_some_and(|edit| edit.matches_module_parameter(context.item.id, parameter.id))
+    {
+        state.inspector.transient_property_edit = None;
+    }
     if finished && edited_value != model_value {
         let result = match &local_time {
             Ok(time) => commit_module_parameter_value(
@@ -191,6 +232,7 @@ pub(super) fn published_parameter_row(
         }
     }
     if let Some(action) = mode_action {
+        state.inspector.transient_property_edit = None;
         let result = match &local_time {
             Ok(time) => apply_module_parameter_mode_action(
                 context.service,

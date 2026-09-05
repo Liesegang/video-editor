@@ -277,6 +277,33 @@ Projectに二つ目の文字モデルを保存せず、使われていないEnse
 検証には通常Textとneutral Ensembleの比較に加え、独立してParagraphを直接描くテストを残す。
 二つの新経路が同じ誤りを持っていても、相互比較だけでは検出できないためである。
 
+### Inspectorと時間編集の所有権
+
+通常TextのEnsembleとText/ShapeのAppearanceは、既存のoperation内のPropertyを編集する。
+TimelineとCurve Editorは、そのPropertyのowner、key、keyframe IDを共通のautomation laneから参照する。
+operationごとの別の曲線モデルは持たず、キーの移動もInspectorと同じ編集serviceへ渡す。
+同名のPropertyが複数のoperationにあっても、operation IDで区別する。
+
+明示的なNode Clip化後は、公開parameterの定数をModule Instanceが、キーをTimeline上のinvocationが所有する。
+変換時はキーのID、ローカル時刻、値、補間を保持し、曲線の参照先を公開parameterへ切り替える。
+通常TextのoperationとModule内部を双方向同期しない。
+
+Curve Editorは、ユーザーが明示的に隠したチャンネルを一時UI状態として保持する。
+新しくキーを作ったPropertyや、Node Clip化で参照先が公開parameterへ変わったチャンネルは既定で表示する。
+現在表示中のID集合だけを保持すると、同じClipへの編集で生じた新しいチャンネルが非表示のまま残るためである。
+
+Inspectorの数値ドラッグは、一つの一時編集状態からPreviewへ投影する。
+通常Propertyと公開parameterでは値の保存先が異なるため、投影先を型で区別し、各保存先の既存編集処理を使う。
+ドラッグ中はProjectのrevisionとUndo履歴を変更せず、release時に一回だけ確定する。
+選択、revision、再生位置が変わった場合は既存のInspector同期処理で投影を破棄する。
+公開parameterの投影では、別Instanceへの変更やTimeline automationを定数で置き換える要求を拒否する。
+
+投影したProjectには、その投影から導出したRenderPlanを組み合わせる。
+公開parameterの値とautomationはCompiledModuleInvocationにも保持されるため、確定前のRenderPlanではドラッグ中の値を描画できない。
+同じincremental compiler cacheで投影をコンパイルし、変更のないModule本体とTimeline scheduleを共有する。
+revisionと一時編集のdigestが同じ間は投影用planを再利用し、pan/zoomだけでは再コンパイルしない。
+投影の失敗時は送信待ちの要求を破棄し、確定済みProjectとplanのcacheは変更しない。
+
 ### 外形と描画範囲
 
 グラデーションの座標と、ぼかし処理に必要な余白は別の用途を持つ。

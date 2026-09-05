@@ -13,7 +13,7 @@ use library::model::authoring::{
     AttachmentOwner, AttachmentProcessor, AuthoringProject, InstancePath, MediaTime, SourceRef,
     TimelineItemId, TransitionId,
 };
-use library::model::property::{KeyframeId, PropertyValue};
+use library::model::property::{KeyframeId, Property, PropertyMap, PropertyValue};
 
 use crate::state::authoring::{
     AutomationLaneId, AutomationOwner, AutomationTarget, CurveValueComponent,
@@ -68,33 +68,60 @@ pub(crate) fn collect_item_lanes(
         return Vec::new();
     };
     let mut lanes = Vec::new();
-    let mut properties = item.authored_properties.iter().collect::<Vec<_>>();
-    properties.sort_by(|left, right| left.0.cmp(right.0));
-    for (key, property) in properties {
-        let mut points = property
-            .keyframes()
-            .into_iter()
-            .filter_map(|keyframe| {
-                MediaTime::from_seconds_f64(keyframe.time.into_inner(), 1_000_000)
-                    .ok()
-                    .map(|time| AutomationPoint {
-                        id: keyframe.id,
-                        time,
-                        value: keyframe.value,
-                        easing: keyframe.easing,
-                    })
-            })
-            .collect::<Vec<_>>();
-        points.sort_by_key(|point| point.time);
-        lanes.push(AutomationLane {
-            id: AutomationLaneId {
-                owner: AutomationOwner::Item(item_id),
-                target: AutomationTarget::AuthoredProperty(key.clone()),
-            },
-            label: humanize_label(key),
-            base_value: property.value().cloned(),
-            points,
-        });
+    push_authored_property_lanes(
+        &mut lanes,
+        AutomationOwner::Item(item_id),
+        AuthoringPropertyOwner::Item(item_id),
+        None,
+        &item.authored_properties,
+    );
+
+    match &item.source {
+        SourceRef::Text {
+            appearance_operations,
+            ensemble_operations,
+            ..
+        } => {
+            for operation in ensemble_operations {
+                push_authored_property_lanes(
+                    &mut lanes,
+                    AutomationOwner::Item(item_id),
+                    AuthoringPropertyOwner::TextEnsemble {
+                        item_id,
+                        operation_id: operation.id,
+                    },
+                    Some(humanize_label(&operation.operation.component_id)),
+                    &operation.properties,
+                );
+            }
+            for operation in appearance_operations {
+                push_authored_property_lanes(
+                    &mut lanes,
+                    AutomationOwner::Item(item_id),
+                    AuthoringPropertyOwner::Appearance {
+                        item_id,
+                        operation_id: operation.id,
+                    },
+                    Some(humanize_label(&operation.operation.component_id)),
+                    &operation.properties,
+                );
+            }
+        }
+        SourceRef::Shape { shape } => {
+            for operation in &shape.appearance_operations {
+                push_authored_property_lanes(
+                    &mut lanes,
+                    AutomationOwner::Item(item_id),
+                    AuthoringPropertyOwner::Appearance {
+                        item_id,
+                        operation_id: operation.id,
+                    },
+                    Some(humanize_label(&operation.operation.component_id)),
+                    &operation.properties,
+                );
+            }
+        }
+        _ => {}
     }
 
     if let SourceRef::Module(invocation) = &item.source {
@@ -177,6 +204,53 @@ pub(crate) fn collect_item_lanes(
         }
     }
     lanes
+}
+
+fn push_authored_property_lanes(
+    lanes: &mut Vec<AutomationLane>,
+    lane_owner: AutomationOwner,
+    property_owner: AuthoringPropertyOwner,
+    label_prefix: Option<String>,
+    properties: &PropertyMap,
+) {
+    let mut properties = properties.iter().collect::<Vec<_>>();
+    properties.sort_by(|left, right| left.0.cmp(right.0));
+    for (key, property) in properties {
+        let mut points = authored_property_points(property);
+        points.sort_by_key(|point| point.time);
+        lanes.push(AutomationLane {
+            id: AutomationLaneId {
+                owner: lane_owner.clone(),
+                target: AutomationTarget::AuthoredProperty {
+                    owner: property_owner,
+                    key: key.clone(),
+                },
+            },
+            label: label_prefix
+                .as_ref()
+                .map(|prefix| format!("{prefix} \u{b7} {}", humanize_label(key)))
+                .unwrap_or_else(|| humanize_label(key)),
+            base_value: property.value().cloned(),
+            points,
+        });
+    }
+}
+
+fn authored_property_points(property: &Property) -> Vec<AutomationPoint> {
+    property
+        .keyframes()
+        .into_iter()
+        .filter_map(|keyframe| {
+            MediaTime::from_seconds_f64(keyframe.time.into_inner(), 1_000_000)
+                .ok()
+                .map(|time| AutomationPoint {
+                    id: keyframe.id,
+                    time,
+                    value: keyframe.value,
+                    easing: keyframe.easing,
+                })
+        })
+        .collect()
 }
 
 pub(crate) fn transition_owner(
@@ -375,14 +449,28 @@ pub(crate) fn update_keyframe(
     update: AuthoringKeyframeUpdate,
 ) -> Result<(), library::LibraryError> {
     match (&lane.owner, &lane.target) {
-        (AutomationOwner::Item(item_id), AutomationTarget::AuthoredProperty(key)) => service
-            .update_authored_property_keyframe(
-                AuthoringPropertyOwner::Item(*item_id),
-                key,
-                keyframe_id,
-                update,
-            )
-            .map(|_| ()),
+        (AutomationOwner::Item(item_id), AutomationTarget::AuthoredProperty { owner, key }) => {
+            let target_item_id = match owner {
+                AuthoringPropertyOwner::Item(target_item_id)
+                | AuthoringPropertyOwner::TextEnsemble {
+                    item_id: target_item_id,
+                    ..
+                }
+                | AuthoringPropertyOwner::Appearance {
+                    item_id: target_item_id,
+                    ..
+                } => Some(*target_item_id),
+                AuthoringPropertyOwner::Timeline(_) | AuthoringPropertyOwner::Track(_) => None,
+            };
+            if target_item_id != Some(*item_id) {
+                return Err(library::LibraryError::Validation(format!(
+                    "Item {item_id} automation lane cannot edit {owner:?}"
+                )));
+            }
+            service
+                .update_authored_property_keyframe(*owner, key, keyframe_id, update)
+                .map(|_| ())
+        }
         (AutomationOwner::Item(item_id), AutomationTarget::ModuleParameter(parameter_id)) => {
             service
                 .update_module_parameter_keyframe(*item_id, *parameter_id, keyframe_id, update)
@@ -576,9 +664,11 @@ pub(crate) fn component_name(component: CurveValueComponent) -> &'static str {
 
 pub(crate) fn target_metadata(target: &AutomationTarget) -> serde_json::Value {
     match target {
-        AutomationTarget::AuthoredProperty(key) => {
-            serde_json::json!({"kind": "authored_property", "key": key})
-        }
+        AutomationTarget::AuthoredProperty { owner, key } => serde_json::json!({
+            "kind": "authored_property",
+            "owner": authored_property_owner_metadata(*owner),
+            "key": key,
+        }),
         AutomationTarget::ModuleParameter(id) => {
             serde_json::json!({"kind": "module_parameter", "id": id})
         }
@@ -586,6 +676,39 @@ pub(crate) fn target_metadata(target: &AutomationTarget) -> serde_json::Value {
             "kind": "attachment_parameter",
             "attachment_id": attachment_id,
             "key": key,
+        }),
+    }
+}
+
+fn authored_property_owner_metadata(owner: AuthoringPropertyOwner) -> serde_json::Value {
+    match owner {
+        AuthoringPropertyOwner::Timeline(timeline_id) => serde_json::json!({
+            "kind": "timeline",
+            "timeline_id": timeline_id,
+        }),
+        AuthoringPropertyOwner::Track(track_id) => serde_json::json!({
+            "kind": "track",
+            "track_id": track_id,
+        }),
+        AuthoringPropertyOwner::Item(item_id) => serde_json::json!({
+            "kind": "item",
+            "item_id": item_id,
+        }),
+        AuthoringPropertyOwner::TextEnsemble {
+            item_id,
+            operation_id,
+        } => serde_json::json!({
+            "kind": "text_ensemble",
+            "item_id": item_id,
+            "operation_id": operation_id,
+        }),
+        AuthoringPropertyOwner::Appearance {
+            item_id,
+            operation_id,
+        } => serde_json::json!({
+            "kind": "appearance",
+            "item_id": item_id,
+            "operation_id": operation_id,
         }),
     }
 }

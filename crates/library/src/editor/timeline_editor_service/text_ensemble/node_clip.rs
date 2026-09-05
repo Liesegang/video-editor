@@ -628,3 +628,6 @@ const fn category_for_kind(kind: TextEnsembleOperationKind) -> &'static str {
 #[cfg(test)]
 #[path = "node_clip/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "node_clip/tracking_tests.rs"]
+mod tracking_tests;

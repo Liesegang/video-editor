@@ -233,12 +233,14 @@ fn playback_requests_keep_one_in_flight_and_one_latest_desired_frame() {
     };
     let mut runtime = AuthoringPreviewRuntime::default();
 
-    runtime.request(
-        request_key(timeline_id, 1),
-        Some(playback),
-        Arc::clone(&project),
-        Arc::clone(&plan),
-    );
+    runtime
+        .request(
+            request_key(timeline_id, 1),
+            Some(playback),
+            Arc::clone(&project),
+            Arc::clone(&plan),
+        )
+        .expect("initial Preview request");
     let first = runtime.desired.take().expect("first desired request");
     runtime.in_flight = Some(InFlightRender {
         request_id: RenderRequestId::new(1),
@@ -246,12 +248,14 @@ fn playback_requests_keep_one_in_flight_and_one_latest_desired_frame() {
     });
 
     for frame_number in 2..=55 {
-        runtime.request(
-            request_key(timeline_id, frame_number),
-            Some(playback),
-            Arc::clone(&project),
-            Arc::clone(&plan),
-        );
+        runtime
+            .request(
+                request_key(timeline_id, frame_number),
+                Some(playback),
+                Arc::clone(&project),
+                Arc::clone(&plan),
+            )
+            .expect("coalesced Preview request");
     }
 
     assert_eq!(
@@ -357,15 +361,15 @@ fn inspector_drag_projects_into_preview_without_mutating_the_source_project() {
     let revision = service.revision().expect("revision");
     let source = service.snapshot().expect("source Project");
     let mut state = AuthoringUiState::new(timeline_id);
-    state.inspector.transient_property_edit = Some(TransientPropertyEdit {
-        source_revision: revision,
-        owner: AuthoringPropertyOwner::Item(item_id),
-        update: AuthoringPropertyValueUpdate {
+    state.inspector.transient_property_edit = Some(TransientPropertyEdit::authored(
+        revision,
+        AuthoringPropertyOwner::Item(item_id),
+        AuthoringPropertyValueUpdate {
             key: "opacity".to_string(),
             value: PropertyValue::from(0.25),
             target: AuthoringPropertyValueTarget::Constant,
         },
-    });
+    ));
 
     let digest = inspector_transient_edit_digest(revision, &state).expect("edit digest");
     let (projected, applied) = project_inspector_transient_edit(&source, revision, &state);

@@ -5,12 +5,8 @@
 //! the editor service therefore receives one atomic command per gesture.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
-use library::editor::{
-    AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
-};
 use library::model::authoring::{
     AttachmentId, InstancePath, MediaInputBinding, MediaTime, ModuleDefinitionId, ProjectRevision,
     PublishedMediaInputId, TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId,
@@ -432,7 +428,13 @@ pub enum CurveValueComponent {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AutomationTarget {
-    AuthoredProperty(String),
+    /// One property in the existing authoring model. `AutomationOwner` owns
+    /// the lane's time domain, while this value identifies the exact direct
+    /// PropertyMap that Inspector, Timeline, and Curve Editor all mutate.
+    AuthoredProperty {
+        owner: library::editor::AuthoringPropertyOwner,
+        key: String,
+    },
     ModuleParameter(library::model::authoring::PublishedParameterId),
     AttachmentParameter {
         attachment_id: AttachmentId,
@@ -464,7 +466,10 @@ pub struct CurveEditorState {
     /// One canonical transform shared by curve content, grid, hit testing,
     /// playhead, navigation, and QA geometry.
     pub canvas: pan_zoom_ui::CanvasState,
-    pub visible_lanes: HashSet<AutomationLaneId>,
+    /// Lanes the user explicitly hid. Newly authored or promoted lanes are
+    /// visible by default without maintaining a second snapshot of known
+    /// lanes that can become stale while the selected Item stays the same.
+    pub hidden_lanes: HashSet<AutomationLaneId>,
     pub drag: Option<CurveKeyDrag>,
     pub keyframe_editor: Option<CurveKeyframeEditor>,
 }
@@ -516,41 +521,15 @@ impl AuthoringInspectorView {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TransientPropertyEdit {
-    pub(crate) source_revision: ProjectRevision,
-    pub(crate) owner: AuthoringPropertyOwner,
-    pub(crate) update: AuthoringPropertyValueUpdate,
-}
-
-impl TransientPropertyEdit {
-    pub(crate) fn digest(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.source_revision.get().hash(&mut hasher);
-        self.owner.hash(&mut hasher);
-        self.update.key.hash(&mut hasher);
-        self.update.value.hash(&mut hasher);
-        match self.update.target {
-            AuthoringPropertyValueTarget::Constant => 0_u8.hash(&mut hasher),
-            AuthoringPropertyValueTarget::Keyframe { local_time } => {
-                1_u8.hash(&mut hasher);
-                local_time.hash(&mut hasher);
-            }
-        }
-        hasher.finish()
-    }
-
-    pub(crate) fn matches(&self, owner: AuthoringPropertyOwner, key: &str) -> bool {
-        self.owner == owner && self.update.key == key
-    }
-}
+mod inspector_preview;
+pub(crate) use inspector_preview::TransientPropertyEdit;
 
 impl Default for CurveEditorState {
     fn default() -> Self {
         Self {
             target_owner: None,
             canvas: pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0),
-            visible_lanes: HashSet::new(),
+            hidden_lanes: HashSet::new(),
             drag: None,
             keyframe_editor: None,
         }
@@ -786,42 +765,5 @@ mod tests {
         assert_eq!(state.selection.primary(), None);
         assert!(state.timeline.transition_module_assignment.is_none());
         assert_eq!(state.timeline.current_frame, 300);
-    }
-
-    #[test]
-    fn transient_property_digest_tracks_value_owner_and_keyframe_time() {
-        let item_id = TimelineItemId::new();
-        let operation_id = uuid::Uuid::new_v4();
-        let edit = TransientPropertyEdit {
-            source_revision: ProjectRevision::initial(),
-            owner: AuthoringPropertyOwner::TextEnsemble {
-                item_id,
-                operation_id,
-            },
-            update: AuthoringPropertyValueUpdate {
-                key: "tx".to_string(),
-                value: library::model::property::PropertyValue::from(12.0),
-                target: AuthoringPropertyValueTarget::Constant,
-            },
-        };
-        let initial_digest = edit.digest();
-        assert_eq!(initial_digest, edit.digest());
-
-        let mut changed_value = edit.clone();
-        changed_value.update.value = library::model::property::PropertyValue::from(-7.0);
-        assert_ne!(edit.digest(), changed_value.digest());
-
-        let mut changed_target = edit.clone();
-        changed_target.update.target = AuthoringPropertyValueTarget::Keyframe {
-            local_time: MediaTime::new(1, 2).unwrap(),
-        };
-        assert_ne!(edit.digest(), changed_target.digest());
-
-        let mut changed_owner = edit.clone();
-        changed_owner.owner = AuthoringPropertyOwner::TextEnsemble {
-            item_id,
-            operation_id: uuid::Uuid::new_v4(),
-        };
-        assert_ne!(edit.digest(), changed_owner.digest());
     }
 }

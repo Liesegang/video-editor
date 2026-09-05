@@ -454,9 +454,21 @@ pub(super) fn finish_keyframe_gesture(
 
 pub(super) fn property_component_id(item_id: TimelineItemId, lane: &AutomationLane) -> String {
     let suffix = match &lane.id.target {
-        crate::state::authoring::AutomationTarget::AuthoredProperty(key) => {
-            format!("property:{key}")
-        }
+        crate::state::authoring::AutomationTarget::AuthoredProperty { owner, key } => match owner {
+            library::editor::AuthoringPropertyOwner::Item(_) => format!("property:{key}"),
+            library::editor::AuthoringPropertyOwner::TextEnsemble { operation_id, .. } => {
+                format!("text_ensemble:{operation_id}:{key}")
+            }
+            library::editor::AuthoringPropertyOwner::Appearance { operation_id, .. } => {
+                format!("appearance:{operation_id}:{key}")
+            }
+            library::editor::AuthoringPropertyOwner::Timeline(timeline_id) => {
+                format!("timeline:{timeline_id}:{key}")
+            }
+            library::editor::AuthoringPropertyOwner::Track(track_id) => {
+                format!("track:{track_id}:{key}")
+            }
+        },
         crate::state::authoring::AutomationTarget::ModuleParameter(id) => {
             format!("parameter:{id}")
         }
@@ -547,9 +559,10 @@ mod tests {
             anchor_item_id: item_id,
             lane: crate::state::authoring::AutomationLaneId {
                 owner: crate::state::authoring::AutomationOwner::Item(item_id),
-                target: crate::state::authoring::AutomationTarget::AuthoredProperty(
-                    "position".to_string(),
-                ),
+                target: crate::state::authoring::AutomationTarget::AuthoredProperty {
+                    owner: library::editor::AuthoringPropertyOwner::Item(item_id),
+                    key: "position".to_string(),
+                },
             },
             keyframe_id: library::model::property::KeyframeId::new(),
             pointer_origin_x: 20.0,

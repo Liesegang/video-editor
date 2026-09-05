@@ -138,7 +138,10 @@ fn expanded_clip_adds_shared_property_rows_directly_after_its_clip() {
         &rows[clip_row + 1].kind,
         RowKind::Property { item_id, lane }
             if *item_id == item_ids[2]
-                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty {
+                    owner: library::editor::AuthoringPropertyOwner::Item(item_ids[2]),
+                    key: "position".to_string(),
+                }
     ));
 }
 
@@ -174,13 +177,19 @@ fn keyframe_mode_keeps_constant_properties_out_of_the_dope_sheet() {
         &row.kind,
         RowKind::Property { item_id, lane }
             if *item_id == item_ids[2]
-                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty {
+                    owner: library::editor::AuthoringPropertyOwner::Item(item_ids[2]),
+                    key: "position".to_string(),
+                }
     )));
     assert!(!rows.iter().any(|row| matches!(
         &row.kind,
         RowKind::Property { item_id, lane }
             if *item_id == item_ids[0]
-                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty("opacity".to_string())
+                && lane.target == crate::state::authoring::AutomationTarget::AuthoredProperty {
+                    owner: library::editor::AuthoringPropertyOwner::Item(item_ids[0]),
+                    key: "opacity".to_string(),
+                }
     )));
 }
 
@@ -297,7 +306,10 @@ fn live_reorder_projection_moves_clip_and_property_rows_as_one_block() {
     .expect("projection");
     let target = crate::state::authoring::AutomationLaneId {
         owner: crate::state::authoring::AutomationOwner::Item(item_ids[0]),
-        target: crate::state::authoring::AutomationTarget::AuthoredProperty("position".to_string()),
+        target: crate::state::authoring::AutomationTarget::AuthoredProperty {
+            owner: library::editor::AuthoringPropertyOwner::Item(item_ids[0]),
+            key: "position".to_string(),
+        },
     };
 
     assert_eq!(projection.row_for_item(item_ids[0]), Some(1));
