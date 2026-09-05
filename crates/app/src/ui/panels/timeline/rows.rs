@@ -5,8 +5,8 @@ use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
 use library::model::authoring::{
-    ordered_track_item_ids, AuthoringProject, InstancePath, TimelineId, TimelineItemId,
-    TimelineTrackId,
+    ordered_track_item_ids, AuthoringProject, InstancePath, ProjectRevision, TimelineId,
+    TimelineItemId, TimelineTrackId,
 };
 
 use crate::state::authoring::{
@@ -122,6 +122,7 @@ pub(super) fn display_rows(
 pub(super) fn draw_rows(
     ui: &mut egui::Ui,
     project: &Arc<AuthoringProject>,
+    project_revision: ProjectRevision,
     state: &mut AuthoringUiState,
     rows: &[DisplayRow],
     row_projection: Option<&TimelineRowProjection>,
@@ -154,6 +155,7 @@ pub(super) fn draw_rows(
             draw_track_header(
                 ui,
                 project,
+                project_revision,
                 state,
                 track_id,
                 expanded,
@@ -380,6 +382,7 @@ fn draw_item_properties(
 fn draw_track_header(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
+    project_revision: ProjectRevision,
     state: &mut AuthoringUiState,
     track_id: TimelineTrackId,
     expanded: bool,
@@ -408,7 +411,7 @@ fn draw_track_header(
         ui.id().with(("track", track_id)),
         Sense::click_and_drag(),
     );
-    super::tracks::begin_gesture(ui, project, state, track_id, &response);
+    super::tracks::begin_gesture(ui, project, state, track_id, &response, project_revision);
     crate::qa::register_component_with_metadata(
         format!("timeline.track:{track_id}"),
         "timeline_track",

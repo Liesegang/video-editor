@@ -621,7 +621,7 @@ impl eframe::App for RuViEApp {
                     .show(context, |ui| status_bar(ui, &project, self));
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut viewer = AuthoringTabViewer::new(
-                        &project,
+                        (&project, revision),
                         &mut self.state,
                         &self.service,
                         &self.plugins,

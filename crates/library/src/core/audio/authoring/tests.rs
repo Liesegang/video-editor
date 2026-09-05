@@ -11,9 +11,9 @@ use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, CompositionInstance, DurationPolicy, ModuleConnection,
     ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing,
     ModuleInstance, ModuleInstanceId, ModulePortAddress, PublishedMediaInput,
-    PublishedMediaInputId, PublishedParameter, PublishedParameterId, RationalRate, TimeMap,
-    Timeline, TimelineInterval, TimelineTrack, TimelineTrackId, Transition, TransitionAlignment,
-    TransitionId, TransitionMediaType, TransitionProcessor,
+    PublishedMediaInputId, PublishedParameter, PublishedParameterId, RationalRate,
+    TRACK_VISIBILITY_PROPERTY, TimeMap, Timeline, TimelineInterval, TimelineTrack, TimelineTrackId,
+    Transition, TransitionAlignment, TransitionId, TransitionMediaType, TransitionProcessor,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::{Node, ValueContent};
@@ -330,6 +330,47 @@ fn adjacent_audio_crossfade_has_deterministic_linear_amplitude_and_half_open_bou
     {
         assert_stereo_near(frame(&rendered, index), [expected; 2]);
     }
+}
+
+#[test]
+fn hiding_an_audio_visual_track_does_not_change_its_rendered_audio_samples() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("audio-visual-visibility.wav");
+    let samples = [[0.25, -0.5], [0.5, -0.25], [-0.75, 0.125], [0.375, 0.625]];
+    write_stereo_wave(&path, &samples);
+
+    let mut visible = project_with_audio_track(samples.len() as i64);
+    let track_id = visible.timelines[&visible.root_timeline_id].track_order[0];
+    visible.tracks.get_mut(&track_id).unwrap().kind = TimelineTrackKind::AudioVisual;
+    let asset_id = add_audio_asset(&mut visible, &path, samples.len());
+    add_asset_item(&mut visible, track_id, asset_id, 0, samples.len() as i64, 0);
+    visible.validate().unwrap();
+    let cache = CacheManager::with_audio_chunk_capacity(2);
+    let visible_audio = AuthoringAudioMixer::root(&visible, &cache)
+        .unwrap()
+        .render_window(0, samples.len())
+        .unwrap();
+    assert!(visible_audio.iter().any(|sample| *sample != 0.0));
+
+    let mut hidden = visible.clone();
+    hidden
+        .tracks
+        .get_mut(&track_id)
+        .unwrap()
+        .authored_properties
+        .set(
+            TRACK_VISIBILITY_PROPERTY.to_string(),
+            Property::constant(PropertyValue::Boolean(false)),
+        );
+    hidden.validate().unwrap();
+    let hidden_audio = AuthoringAudioMixer::root(&hidden, &cache)
+        .unwrap()
+        .render_window(0, samples.len())
+        .unwrap();
+    assert_eq!(
+        hidden_audio, visible_audio,
+        "the Track Eye owns only image participation, never Audio mute"
+    );
 }
 
 #[test]

@@ -10,7 +10,7 @@ use egui_dock::TabViewer;
 use egui_phosphor::regular as icons;
 use library::cache::CacheManager;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
-use library::model::authoring::AuthoringProject;
+use library::model::authoring::{AuthoringProject, ProjectRevision};
 use library::plugin::PluginManager;
 use library::RenderServer;
 
@@ -25,6 +25,7 @@ use crate::ui::panels::timeline::timeline_panel;
 
 pub struct AuthoringTabViewer<'a> {
     project: &'a Arc<AuthoringProject>,
+    project_revision: ProjectRevision,
     state: &'a mut AuthoringUiState,
     service: &'a TimelineEditorService,
     plugins: &'a Arc<PluginManager>,
@@ -40,7 +41,7 @@ impl<'a> AuthoringTabViewer<'a> {
         reason = "The dock TabViewer borrows the frame's authoritative editor services and mutable panel runtimes; bundling them would only move these borrow boundaries"
     )]
     pub fn new(
-        project: &'a Arc<AuthoringProject>,
+        project_frame: (&'a Arc<AuthoringProject>, ProjectRevision),
         state: &'a mut AuthoringUiState,
         service: &'a TimelineEditorService,
         plugins: &'a Arc<PluginManager>,
@@ -50,7 +51,8 @@ impl<'a> AuthoringTabViewer<'a> {
         preview_runtime: &'a mut AuthoringPreviewRuntime,
     ) -> Self {
         Self {
-            project,
+            project: project_frame.0,
+            project_revision: project_frame.1,
             state,
             service,
             plugins,
@@ -78,7 +80,7 @@ impl TabViewer for AuthoringTabViewer<'_> {
             ),
             Tab::Timeline => timeline_panel(
                 ui,
-                self.project,
+                (self.project, self.project_revision),
                 self.state,
                 self.service,
                 self.plugins.as_ref(),

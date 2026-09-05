@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
 """Verify Timeline selection, independent edits, and atomic cross-Track group moves."""
 
+import os
+import pathlib
+
 from qa_support import (
     QaFailure,
+    bring_timeline_component,
+    capture_viewport,
     component_center,
     item_by_name,
     media_seconds,
     run_suite_main,
     seek_timeline_seconds,
+    settled_preview_state,
 )
 
 
 TARGET_NAME = "QA Overlap"
 SIBLING_NAME = "QA Image"
+
+
+def _artifact_dir():
+    value = pathlib.Path(
+        os.environ.get(
+            "RUVIE_QA_ARTIFACT_DIR",
+            pathlib.Path("target") / "qa-timeline-edit-e2e",
+        )
+    ).resolve()
+    value.mkdir(parents=True, exist_ok=True)
+    return value
 
 
 def _interval(item):
@@ -51,13 +68,55 @@ def _selected_item_ids(client):
 
 
 def _verify_track_headers(client):
-    before = client.state()
-    project = before["project"]
+    initial = client.state()
+    project = initial["project"]
     timeline_id = project["root_timeline_id"]
     order = project["timelines"][timeline_id]["track_order"]
-    source_id, target_id = order[-1], order[-2]
+    text = item_by_name(project, "QA Text")
+    source_id = text["track_id"]
+    target_id = next(track_id for track_id in order if track_id != source_id)
+
+    bring_timeline_component(client, "timeline.track_expand:" + source_id, 800.0)
+    _, source_track = client.wait_component("timeline.track:" + source_id)
+    if not (source_track.get("metadata") or {}).get("expanded"):
+        client.click_component("timeline.track_expand:" + source_id)
+    bring_timeline_component(client, "timeline.item_expand:" + text["id"], -800.0)
+    if text["id"] not in client.state()["editor"]["timeline"]["expanded_items"]:
+        client.click_component("timeline.item_expand:" + text["id"])
+    client.wait_until(
+        "Text property row inside expanded Track block",
+        lambda: component
+        if (
+            component := next(
+                (
+                    item
+                    for item in client.component_snapshot()["components"]
+                    if item.get("type") == "timeline_property_label"
+                    and (item.get("metadata") or {}).get("item_id") == text["id"]
+                ),
+                None,
+            )
+        )
+        else None,
+    )
+    bring_timeline_component(client, "timeline.track_header:" + target_id, 800.0)
+    before = client.state()
+    project = before["project"]
     _, source = client.wait_component_settled("timeline.track_header:" + source_id)
     _, target = client.wait_component_settled("timeline.track_header:" + target_id)
+    before_snapshot = client.component_snapshot()
+    before_text_row = _component(before_snapshot, "timeline.row:" + text["id"])
+    before_property = next(
+        (
+            component
+            for component in before_snapshot["components"]
+            if component.get("type") == "timeline_property_label"
+            and (component.get("metadata") or {}).get("item_id") == text["id"]
+        ),
+        None,
+    )
+    if before_text_row is None or before_property is None:
+        raise QaFailure("expanded Text Clip/property rows were not visibly painted")
     start, end = component_center(source), component_center(target)
     client.inject("press", {**start, "button": "primary", "coordinate_space": "points"})
     client.inject("move", {**end, "button": "primary", "coordinate_space": "points"})
@@ -68,17 +127,90 @@ def _verify_track_headers(client):
     def projected():
         snapshot = client.component_snapshot()
         preview = _component(snapshot, "timeline.track_reorder_preview")
-        if preview and preview.get("metadata", {}).get("displayed_order") == expected[::-1]:
+        metadata = (preview or {}).get("metadata") or {}
+        if metadata.get("displayed_order") == expected[::-1] and metadata.get("rows"):
             return snapshot, preview
         return None
 
     held_snapshot, held = client.wait_until("Track blocks reflow while header drag is held", projected)
     if client.state()["project"] != project or client.state()["history"] != before["history"]:
         raise QaFailure("Header drag mutated the Project before release")
-    original_target_y = target["rect_points"]["center_y"]
-    moved_target = _component(held_snapshot, "timeline.track_header:" + target_id)
-    if moved_target is None or _near(moved_target["rect_points"]["center_y"], original_target_y):
-        raise QaFailure("Header drag showed an overlay but did not reflow the actual rows")
+    rows = held["metadata"]["rows"]
+    source_rows = [
+        row
+        for row in rows
+        if row.get("track_id") == source_id
+        or (row.get("kind") == "property" and row.get("item_id") == text["id"])
+    ]
+    indices = [row["display_row_index"] for row in source_rows]
+    if indices != list(range(indices[0], indices[0] + len(indices))):
+        raise QaFailure("Header drag split the expanded Track block")
+    if not any(row.get("kind") == "clip" for row in source_rows) or not any(
+        row.get("kind") == "property" for row in source_rows
+    ):
+        raise QaFailure("Header drag preview omitted expanded Clip/property rows")
+    source_row = next(row for row in rows if row.get("track_id") == source_id and row["kind"] == "track")
+    target_row = next(row for row in rows if row.get("track_id") == target_id and row["kind"] == "track")
+    if source_row["display_row_index"] == (source.get("metadata") or {}).get(
+        "display_row_index"
+    ) or target_row["display_row_index"] == (target.get("metadata") or {}).get(
+        "display_row_index"
+    ):
+        raise QaFailure("Header drag did not project actual Track row positions")
+    held_text_row = _component(held_snapshot, "timeline.row:" + text["id"])
+    held_property = next(
+        (
+            component
+            for component in held_snapshot["components"]
+            if component.get("type") == "timeline_property_label"
+            and (component.get("metadata") or {}).get("item_id") == text["id"]
+        ),
+        None,
+    )
+    if held_text_row is None or held_property is None:
+        raise QaFailure("projected Text Clip/property rows were not visibly painted")
+    preview_text = next(
+        row
+        for row in rows
+        if row.get("kind") == "clip" and row.get("item_id") == text["id"]
+    )
+    preview_property = next(
+        row
+        for row in rows
+        if row.get("kind") == "property" and row.get("item_id") == text["id"]
+    )
+    for component, preview_row, original in (
+        (held_text_row, preview_text, before_text_row),
+        (held_property, preview_property, before_property),
+    ):
+        metadata = component.get("metadata") or {}
+        if metadata.get("display_row_index") != preview_row["display_row_index"]:
+            raise QaFailure("painted child row disagrees with Track block projection")
+        if _near(
+            component["rect_points"]["center_y"],
+            original["rect_points"]["center_y"],
+        ):
+            raise QaFailure("expanded child row did not visibly reflow while held")
+    canvas = _component(held_snapshot, "timeline.canvas")
+    canvas_metadata = (canvas or {}).get("metadata") or {}
+    row_metrics = canvas_metadata.get("row_metrics") or {}
+    screen_origin = canvas_metadata.get("screen_origin") or {}
+    pan = canvas_metadata.get("pan") or {}
+    for component, preview_row in (
+        (held_text_row, preview_text),
+        (held_property, preview_property),
+    ):
+        expected_y = (
+            float(screen_origin["y"])
+            + float(pan["y"])
+            + float(preview_row["display_row_index"]) * float(row_metrics["stride"])
+            + float(row_metrics["track_height"]) * 0.5
+        )
+        if not _near(component["rect_points"]["center_y"], expected_y, 0.75):
+            raise QaFailure("projected child row diverged from shared Timeline Canvas geometry")
+    held_capture = capture_viewport(
+        client, _artifact_dir() / "track-block-reorder-held.png"
+    )
     client.inject("release", {**end, "button": "primary", "coordinate_space": "points"})
     committed = client.wait_until(
         "Header release commits Track order",
@@ -90,41 +222,80 @@ def _verify_track_headers(client):
         raise QaFailure("Track header reorder changed clip placement")
     client.key("z", True, command=True)
     client.key("z", False, command=True)
-    client.wait_until("Undo restores Track block order", lambda: client.state()["project"] == project)
+    restored_order = client.wait_until(
+        "Undo restores Track block order",
+        lambda: state if (state := client.state())["project"] == project else None,
+    )
+
+    bring_timeline_component(client, "timeline.track_header:" + target_id, 800.0)
+    _, source = client.wait_component_settled("timeline.track_header:" + source_id)
+    _, target = client.wait_component_settled("timeline.track_header:" + target_id)
+    escape_start, escape_end = component_center(source), component_center(target)
+    client.inject(
+        "press", {**escape_start, "button": "primary", "coordinate_space": "points"}
+    )
+    client.inject(
+        "move", {**escape_end, "button": "primary", "coordinate_space": "points"}
+    )
+    client.wait_component("timeline.track_reorder_preview")
+    client.key("escape", True)
+    client.key("escape", False)
+    client.wait_until(
+        "Escape removes Track reorder projection",
+        lambda: True
+        if _component(client.component_snapshot(), "timeline.track_reorder_preview") is None
+        else None,
+    )
+    client.inject(
+        "release", {**escape_end, "button": "primary", "coordinate_space": "points"}
+    )
+    escaped = client.state()
+    if escaped["project"] != project or escaped["history"] != restored_order["history"]:
+        raise QaFailure("Escape committed or recorded the Track reorder")
 
     image_track_id = item_by_name(project, SIBLING_NAME)["track_id"]
     seek_timeline_seconds(client, 0.5)
     baseline = client.state()
-    def rendered(revision):
-        state = client.state()
-        preview = state["editor"]["preview"]
-        if (state["history"]["revision"] == revision
-                and preview.get("rendered_revision") == revision
-                and preview.get("rendered_frame") == state["editor"]["timeline"]["current_frame"]
-                and preview.get("pixel_hash") is not None
-                and state["editor"].get("error") is None):
-            return state
-        return None
-
-    visible = client.wait_until("Visible Track Preview", lambda: rendered(baseline["history"]["revision"]))
+    frame = baseline["editor"]["timeline"]["current_frame"]
+    visible = client.wait_until(
+        "Visible Track Preview",
+        lambda: settled_preview_state(client, baseline["history"]["revision"], frame),
+    )
+    _, eye = client.wait_component("timeline.track_visibility:" + image_track_id)
+    if (eye.get("metadata") or {}).get("visible") is not True:
+        raise QaFailure("Track Eye metadata did not start visible")
     client.click_component("timeline.track_visibility:" + image_track_id)
     hidden = client.wait_until(
         "Hidden Track Preview",
-        lambda: rendered(baseline["history"]["revision"] + 1),
+        lambda: settled_preview_state(
+            client, baseline["history"]["revision"] + 1, frame
+        ),
     )
     if hidden["editor"]["preview"]["pixel_hash"] == visible["editor"]["preview"]["pixel_hash"]:
         raise QaFailure("Track Eye changed state but not rendered pixels")
     if hidden["project"]["items"] != project["items"]:
         raise QaFailure("Track Eye changed clip placement")
+    _, hidden_eye = client.wait_component("timeline.track_visibility:" + image_track_id)
+    if (hidden_eye.get("metadata") or {}).get("visible") is not False:
+        raise QaFailure("Track Eye icon did not reflect hidden video")
     client.key("z", True, command=True)
     client.key("z", False, command=True)
     restored = client.wait_until(
         "Undo Track visibility restores Preview",
-        lambda: rendered(baseline["history"]["revision"] + 2),
+        lambda: settled_preview_state(
+            client, baseline["history"]["revision"] + 2, frame
+        ),
     )
     if restored["project"] != project or restored["editor"]["preview"]["pixel_hash"] != visible["editor"]["preview"]["pixel_hash"]:
         raise QaFailure("Track visibility Undo did not restore model and pixels")
-    return {"held_preview": held, "committed_order": expected, "visibility_pixel_change": True}
+    return {
+        "held_preview": held,
+        "held_capture": held_capture,
+        "expanded_block_rows": source_rows,
+        "committed_order": expected,
+        "escape_preserved_history": True,
+        "visibility_pixel_change": True,
+    }
 
 
 def run_suite(client):

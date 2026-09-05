@@ -60,7 +60,20 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
   - [x] 削除 service を選択単位の一つの transaction にし、Published Interface、instance override、Timeline automation、media binding の依存整理を共通化した。private/COW/shared、複数 Node の Undo/Redo、必須 Output を含む不正な batch の原子的拒否を 6 件で検証し、`3526bfc` を main へ push 済み。
   - UI の追加検証は `target/qa-runs/20260906T-integrated-authoring-final/node-editor` で PASS。body 右クリック、Delete、公開 parameter を持つ Source の削除、複数選択の一回 Undo、Output 保護、縮小 overview の Backspace を含む。非対応 Node の bypass は model validation が原子的に拒否し、COW と履歴を保つ。既存の型保持 bypass と disabled は維持する。
 - [x] 選択 edge の通常描画・ハイライト・hit-test・切断・再接続 handle を共通 wire geometry へ統一し、拡大縮小後も実画面上で一致することを確認する。
-- [ ] Track header の Eye で映像の表示を切り替え、Audio は維持する。header drag では展開中の Clip/property を含む Track block の実配置を押下中から予告し、release 時だけ一回の並べ替えを commit する。Clip の時間配置不変、Escape、Undo、画素の変化を確認する。
+- [x] Track headerのEyeで映像だけを切り替え、展開したClipとキーフレーム行をTrack単位で並べ替える既存実装を検証した。
+  空Trackだけを動かしていた以前のQAを、複数ClipとTextのPosition行を展開したTrackの操作へ拡張した。
+  押下中の全rowの連続性に加え、可視ClipとPosition行の実描画座標が共有Canvasの期待値と0.75px以内で一致することを確認した。
+  Projectと履歴は押下中に変化せず、releaseで一回だけ確定し、全Clipの所属と時間配置が不変で、UndoとEscape後のreleaseも確認した。
+  別の編集が入った後に古いTrackドラッグが確定する不具合を実egui入力で再現し、既存の原子的なProject/revisionペアをTimelineまで渡して中止するよう修正した。
+  表示中のsnapshot取得後に別パネルが編集した場合も同じペアを保持し、release直前には最新revisionを再確認する。
+  開始時のEscape、押下中の安定性、最終release位置での無変更、同フレームの別編集を含むTrack UIの8 testsを通した。
+  Eyeは実UIで表示状態とPreview画素が変わり、UndoでProjectと画素が戻ることを確認した。
+  AudioVisual Trackの実WAVサンプルは、映像の表示前後で完全一致し、Track並べ替えのcoreテストでも全ClipとModuleが不変で、一回のUndo/Redoで復元する。
+  最終releaseのnative HTTP QAは25/25で、押下中の実画面も確認した（`target/qa-runs/20260906T-track-header-final/timeline-edit/track-block-reorder-held.png`）。
+  workspace全target 1,736 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 27 tests、828 filesの1,000行制限も通過し、50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した（`target/qa-workspace-test-20260906-track-header-final.log`）。
+  通常の`target/release/app.exe`を更新し、検証したSHA-256は`F8C82ED38783EE16383E6FB70EDF62760150F37E624B24E64C15928D0F5C323E`。
+  古いrevisionで余分なcommitが発生した再現は`target/qa-track-drag-revision-red-98bc098.log`へ保持した。
+  旧binaryが拡張row計測を持たず止まったQAは`20260906T-track-header-block-red-r1`へ保持し、これを実際のrow移動失敗とは扱わない。
 - [ ] Assets と Timeline の footer は共通 panel allocation を使い、panel 外への漏れ・不要な scrollbar・縦位置の不揃いを修正する。Preview toolbar も既存 tool 群を整列し、頂点種類は右クリックから選べるようにする。
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
 - [ ] Path/Vector は既存正本を拡張し、線分への頂点追加、Pen 新規描画、Rectangle/Ellipse の drag 作成、頂点の Corner/Smooth/Symmetric を右クリックで編集する。既存 Path の移動だけで Illustrator 相当の完成扱いにせず、M2 の全 Vector 要件を継続する。

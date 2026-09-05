@@ -25,7 +25,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
 use library::model::authoring::{
-    AuthoringProject, MediaTime, ModuleDefinitionId, TimelineItem, TimelineItemId,
+    AuthoringProject, MediaTime, ModuleDefinitionId, ProjectRevision, TimelineItem, TimelineItemId,
     TransitionCreationCandidate, TransitionId,
 };
 use library::plugin::PluginManager;
@@ -77,13 +77,14 @@ enum DeferredItemAction {
 
 pub fn timeline_panel(
     ui: &mut egui::Ui,
-    project: &Arc<AuthoringProject>,
+    project_frame: (&Arc<AuthoringProject>, ProjectRevision),
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
     waveform: &AuthoringWaveformService,
     media_previews: &mut AuthoringMediaPreviewService,
 ) {
+    let (project, project_revision) = project_frame;
     let Some(timeline) = project.timelines.get(&state.active_timeline_id) else {
         ui.centered_and_justified(|ui| ui.label("No Timeline selected"));
         return;
@@ -130,7 +131,7 @@ pub fn timeline_panel(
         &property_items,
         state.active_instance_path.as_ref(),
     );
-    tracks::update_projection(ui, project, state, &rows, content_rect);
+    tracks::update_projection(ui, project, state, &rows, content_rect, project_revision);
     let rows = tracks::project_rows(rows, state.timeline.track_gesture.as_ref());
     tracks::register_projection_qa(&rows, state.timeline.track_gesture.as_ref(), sidebar_rect);
     let row_projection = timeline_row_projection(
@@ -212,6 +213,7 @@ pub fn timeline_panel(
     draw_rows(
         ui,
         project,
+        project_revision,
         state,
         &rows,
         row_projection.as_ref(),

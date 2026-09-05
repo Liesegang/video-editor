@@ -144,6 +144,7 @@ pub struct TimelineSelectionGesture {
 pub struct TimelineTrackGesture {
     pub timeline_id: TimelineId,
     pub track_id: TimelineTrackId,
+    pub source_revision: ProjectRevision,
     pub original_order: Vec<TimelineTrackId>,
     pub projected_index: usize,
 }

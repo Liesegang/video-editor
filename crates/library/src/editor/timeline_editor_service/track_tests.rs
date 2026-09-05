@@ -119,3 +119,73 @@ fn track_visual_visibility_rejects_untyped_or_animated_state_atomically() {
     assert!(error.contains("Constant Boolean"), "{error}");
     assert_eq!(service.snapshot().unwrap().as_ref(), before.as_ref());
 }
+
+#[test]
+fn track_reorder_preserves_every_clip_placement_and_is_one_undoable_edit() {
+    let service = TimelineEditorService::create_default("Track reorder").unwrap();
+    let before_tracks = service.snapshot().unwrap();
+    let timeline_id = before_tracks.root_timeline_id;
+    let back = before_tracks.timelines[&timeline_id].track_order[0];
+    let (middle, _) = service
+        .add_track(
+            timeline_id,
+            "Middle".to_string(),
+            TimelineTrackKind::AudioVisual,
+        )
+        .unwrap();
+    let (front, _) = service
+        .add_track(timeline_id, "Front".to_string(), TimelineTrackKind::Visual)
+        .unwrap();
+    service
+        .add_item(
+            back,
+            "Back clip".to_string(),
+            SourceRef::Solid {
+                color: Color::white(),
+            },
+            TimelineInterval::new(MediaTime::new(2, 1).unwrap(), MediaTime::new(3, 1).unwrap())
+                .unwrap(),
+            4,
+        )
+        .unwrap();
+    service
+        .add_item(
+            middle,
+            "Middle clip".to_string(),
+            SourceRef::Solid {
+                color: Color::black(),
+            },
+            TimelineInterval::new(MediaTime::new(1, 1).unwrap(), MediaTime::new(2, 1).unwrap())
+                .unwrap(),
+            -3,
+        )
+        .unwrap();
+    let original = service.snapshot().unwrap();
+    assert_eq!(
+        original.timelines[&timeline_id].track_order,
+        vec![back, middle, front]
+    );
+
+    let changes = service.reorder_track(timeline_id, back, 2).unwrap();
+    assert_eq!(
+        changes.invalidations,
+        vec![ProjectInvalidation::TimelineStructure { timeline_id }]
+    );
+    let reordered = service.snapshot().unwrap();
+    assert_eq!(
+        reordered.timelines[&timeline_id].track_order,
+        vec![middle, front, back]
+    );
+    assert_eq!(
+        reordered.items, original.items,
+        "Track order must not rewrite Clip track, time, source, parent, or layer placement"
+    );
+    assert_eq!(reordered.tracks, original.tracks);
+    assert_eq!(reordered.module_definitions, original.module_definitions);
+    assert_eq!(reordered.module_instances, original.module_instances);
+
+    service.undo().unwrap().expect("one reorder undo");
+    assert_eq!(service.snapshot().unwrap().as_ref(), original.as_ref());
+    service.redo().unwrap().expect("one reorder redo");
+    assert_eq!(service.snapshot().unwrap().as_ref(), reordered.as_ref());
+}
