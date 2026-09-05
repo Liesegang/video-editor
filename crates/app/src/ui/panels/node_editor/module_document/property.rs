@@ -10,7 +10,7 @@ use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, toggled_keyframe_property,
     PropertyModeAction, PropertyModeState,
 };
-use crate::ui::widgets::property_value_editor::property_value_editor;
+use crate::ui::widgets::property_value_editor::{property_value_editor, PropertyValueEditorSpec};
 
 #[allow(
     clippy::too_many_arguments,
@@ -26,6 +26,7 @@ pub(super) fn show_property_input(
     connected: bool,
     context: ModulePropertyContext,
     qa_transform: egui::emath::TSTransform,
+    palette: &library::model::authoring::ProjectPalette,
 ) -> (egui::Response, Option<ModuleEditorAction>) {
     let evaluator_context =
         EvaluationContext::new(node.properties(), context.fps, context.resolution);
@@ -107,9 +108,12 @@ pub(super) fn show_property_input(
             egui::Id::new(("module_property", node.id, key)),
             &qa_id,
             value,
-            definition,
-            "",
-            0.05,
+            PropertyValueEditorSpec {
+                definition,
+                fallback_suffix: "",
+                fallback_speed: 0.05,
+                palette,
+            },
         );
         if edit.changed {
             action = Some(ModuleEditorAction::SetNodeProperty {

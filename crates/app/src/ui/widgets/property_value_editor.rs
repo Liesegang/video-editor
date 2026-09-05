@@ -5,6 +5,7 @@
 //! edited draft to their model.
 
 use egui::{Id, Response, Ui};
+use library::model::authoring::ProjectPalette;
 use library::model::frame::color::Color;
 use library::model::property::{
     PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
@@ -19,6 +20,13 @@ pub(crate) struct PropertyValueEdit {
     pub response: Response,
     pub changed: bool,
     pub finished: bool,
+}
+
+pub(crate) struct PropertyValueEditorSpec<'a> {
+    pub definition: Option<&'a PropertyDefinition>,
+    pub fallback_suffix: &'a str,
+    pub fallback_speed: f64,
+    pub palette: &'a ProjectPalette,
 }
 
 #[derive(Clone)]
@@ -37,10 +45,14 @@ pub(crate) fn property_value_editor(
     id: Id,
     qa_id: &str,
     value: &mut PropertyValue,
-    definition: Option<&PropertyDefinition>,
-    fallback_suffix: &str,
-    fallback_speed: f64,
+    spec: PropertyValueEditorSpec<'_>,
 ) -> PropertyValueEdit {
+    let PropertyValueEditorSpec {
+        definition,
+        fallback_suffix,
+        fallback_speed,
+        palette,
+    } = spec;
     let default = definition.map(PropertyDefinition::default_value);
     let mut edit = match value {
         PropertyValue::Number(number) => {
@@ -106,7 +118,10 @@ pub(crate) fn property_value_editor(
             fallback_speed,
         ),
         PropertyValue::ColorValue(color) => {
-            let picker = color_value_picker(ui, id.with("color"), color);
+            let picker = color_value_picker(ui, id.with("color"), color, Some(palette));
+            if let Some(intent) = picker.palette_intent {
+                super::palette_intent::queue(ui.ctx(), intent);
+            }
             let changed = picker.value.is_some();
             if let Some(candidate) = picker.value {
                 *color = candidate;
@@ -126,7 +141,10 @@ pub(crate) fn property_value_editor(
                     source: color.clone(),
                     authored: library::model::property::ColorValue::from_straight_srgba8(color),
                 });
-            let picker = color_value_picker(ui, id.with("color"), &draft.authored);
+            // Legacy Color is an encoded sRGBA8 raster/plugin boundary. Do
+            // not offer managed Palette copy here: an HDR or wide-gamut
+            // PaintDefinition cannot be represented without data loss.
+            let picker = color_value_picker(ui, id.with("color"), &draft.authored, None);
             let changed = picker.value.is_some();
             if let Some(candidate) = picker.value {
                 match library::color_management::to_renderer_srgba8(&candidate) {
@@ -385,6 +403,7 @@ mod tests {
             y: OrderedFloat(20.0),
         });
         let mut rect = egui::Rect::NOTHING;
+        let palette = ProjectPalette::default();
         drop(context.run(egui::RawInput::default(), |context| {
             egui::CentralPanel::default().show(context, |ui| {
                 rect = property_value_editor(
@@ -392,9 +411,12 @@ mod tests {
                     egui::Id::new("position"),
                     "inspector.test.position",
                     &mut value,
-                    None,
-                    " px",
-                    1.0,
+                    PropertyValueEditorSpec {
+                        definition: None,
+                        fallback_suffix: " px",
+                        fallback_speed: 1.0,
+                        palette: &palette,
+                    },
                 )
                 .response
                 .rect;

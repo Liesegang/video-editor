@@ -440,6 +440,7 @@ fn effect_parameters(
                     let result = property_row(
                         ui,
                         draft,
+                        &resources.project.palette,
                         PropertyRowSpec {
                             control_id: &format!("attachment:{}:{}", attachment.id, contract.key),
                             label,

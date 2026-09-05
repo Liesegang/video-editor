@@ -126,6 +126,7 @@ pub(super) fn instance_parameters(
                                 None,
                                 "",
                                 0.1,
+                                &project.palette,
                             );
                             (finished, value.clone())
                         };

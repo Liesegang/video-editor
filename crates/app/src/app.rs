@@ -6,6 +6,7 @@
 
 mod audio_playback;
 pub(crate) mod guarded_action;
+mod project_palette;
 mod startup;
 mod timeline_runtime;
 
@@ -674,6 +675,7 @@ impl eframe::App for RuViEApp {
                         .show_close_buttons(true)
                         .show_inside(ui, &mut viewer);
                 });
+                project_palette::apply_pending(context, &self.service, &mut self.state);
                 if std::mem::take(&mut self.state.node_editor.focus_requested) {
                     focus_or_open_tab(&mut self.dock_state, Tab::NodeEditor);
                 }

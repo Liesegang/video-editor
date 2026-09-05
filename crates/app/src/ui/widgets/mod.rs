@@ -1,6 +1,7 @@
 pub(crate) mod blend_mode_picker;
 pub(crate) mod color_value_picker;
 pub mod modal;
+pub(crate) mod palette_intent;
 pub mod property_drag_value;
 pub(crate) mod property_mode;
 pub(crate) mod property_value_editor;

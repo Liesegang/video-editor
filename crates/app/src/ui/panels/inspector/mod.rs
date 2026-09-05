@@ -461,6 +461,7 @@ fn transform_section(
                             let result = property_row(
                                 ui,
                                 value,
+                                &project.palette,
                                 PropertyRowSpec {
                                     control_id: &format!("item:{}:{key}", item.id),
                                     label,
@@ -614,6 +615,7 @@ fn module_parameters(
                     let result = property_row(
                         ui,
                         value,
+                        &project.palette,
                         PropertyRowSpec {
                             control_id: &format!(
                                 "module_instance:{}:{}",

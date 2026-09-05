@@ -56,6 +56,7 @@ pub(super) fn fit_module_document_canvas(
 pub(super) fn show_module_document(
     ui: &mut egui::Ui,
     definition: &ModuleDefinition,
+    palette: &library::model::authoring::ProjectPalette,
     state: &mut NodeEditorState,
     plugins: &PluginManager,
     property_context: ModulePropertyContext,
@@ -94,6 +95,7 @@ pub(super) fn show_module_document(
     {
         let mut viewer = ModuleNodeViewer {
             definition,
+            palette,
             plugins,
             property_context,
             selected_nodes: &state.selected_nodes,

@@ -57,6 +57,7 @@ pub(super) fn module_effect_controls(
                 None,
                 "",
                 0.1,
+                &resources.project.palette,
             ) {
                 edited = Some(draft.clone());
             }

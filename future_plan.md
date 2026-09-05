@@ -142,7 +142,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Blur の大きい sigma で UI を固めず、Tile は centered origin と Offset X/Y を持つ。`mosaic`、`diagonal_clip` 等は Project linear RGBAF32 と宣言した color boundary を正しく変換する。
   - Text Ensemble の既存機能、target、X/Y translate/scale、rotation、stagger/easing を復旧し、Timeline/Node Clip の同じ値へ反映する。
 
-- [ ] **未実装：Shape Layer の Appearance を Illustrator 相当の第一級スタックにする。** 通常の Shape Clip は現在単一 Fill に限られるため、geometry と分離した Timeline 所有の `AppearanceStack` を導入し、簡単な装飾のために Node Editor を開かせない。
+- [ ] **部分実装：Shape Layer の Appearance を Illustrator 相当の第一級スタックにする。** 通常の Shape Clip は現在単一 Fill に限られるため、geometry と分離した Timeline 所有の `AppearanceStack` を導入し、簡単な装飾のために Node Editor を開かせない。
+  - [x] Slice A として Project 所有の `ProjectPalette`、stable `PaintDefinitionId`、Solid `PaintDefinition`、厳格な保存/validation、局所 invalidation、Undo/Redo、既存 Color picker 内の `Picker / Palette`、追加・copy適用・rename・drag reorder・削除を実装した。managed `ColorValue` は f64/色空間を保ったまま保存・適用し、通常ClipをNodeへ展開しない。Linked Paint、Gradient、Pattern、group/tag UI は後続sliceで実装する。
+  - [ ] encoded-sRGBA8 境界用の旧 `PropertyValue::Color` は不可逆変換を避けるため Palette 対象外とし、authoring property を managed `ColorValue` へ統一してから同じ Palette 導線を有効化する。
   - 各 `AppearanceEntry` は stable ID、名前、visible/enabled、opacity、blend mode、local transform、対象、operation、parameter/automation を持ち、`Fill`、`Stroke`、`Effect`、`Group` を任意順・任意数で積める。
   - Fill は solid/linear gradient/radial gradient/freeform gradient/pattern、Stroke は width/alignment/join/cap/miter/dash/offset/arrowhead/width profile/brush を段階実装する。Drop Shadow、Inner/Outer Glow、Blur、Offset Path、Roughen、Warp 等は Fill/Stroke/Group/Shape 全体のどこへ適用するかを明示する。
   - Fill/Stroke の見た目は `Color` へ押し込めず、第一級の `Paint = Solid | Gradient | Pattern` として型付けする。Paint対応スウォッチは既存Color pickerの同じ導線から `Solid / Gradient / Pattern` を切り替え、単色だけを受けるparameterの型契約は勝手に広げない。
@@ -310,7 +312,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：Preview/Audio/Export parity を保証する。** Project linear RGBAF32 と encoded sRGBA8/plugin boundary、alpha、HDR/SDR、sample rate/channel layout、frame/sample rounding を明文化し、mosaic/diagonal_clip のような format mismatch を compile 時に診断/convert する。Preview と Export は同じ derived plan/effect/audio/scene semantics を使う。
 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
-  - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で既存 17 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Audio、Ensemble、Settings、Unsaved を含む）が全件通過した。
+  - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で 20 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。
   - Assets drag、Timeline move/trim/reorder/content zoom、Preview select/gizmo/text/path、Curve drag、Dope Sheet、Node add/connect/reconnect/property、Effect reorder、Ensemble、Audio playback、Unsaved dialog、Transition、Ripple を scenario 化する。
   - `python scripts/qa-runner.py --mode full --jobs 1` が clean release-like build で通り、panic/render/plugin error が 0 件になる。
 

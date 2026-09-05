@@ -75,6 +75,7 @@ FULL_SUITES = (
     SuiteSpec("preview", "qa-preview-authoring-e2e.py"),
     SuiteSpec("path-editor", "qa-path-editor-e2e.py", AUTHORING_PATH_FIXTURE),
     SuiteSpec("inspector-property-mode", "qa-inspector-property-mode-e2e.py"),
+    SuiteSpec("color-palette", "qa-color-palette-e2e.py"),
     SuiteSpec("inspector-effects", "qa-inspector-effects-e2e.py"),
     SuiteSpec("timeline-dopesheet", "qa-timeline-dopesheet-e2e.py"),
     SuiteSpec("curve-editor", "qa-curve-editor-e2e.py"),

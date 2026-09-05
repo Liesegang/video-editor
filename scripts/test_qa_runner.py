@@ -46,6 +46,7 @@ class QaRunnerTests(unittest.TestCase):
             "preview",
             "path-editor",
             "inspector-property-mode",
+            "color-palette",
             "inspector-effects",
             "timeline-dopesheet",
             "curve-editor",

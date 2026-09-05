@@ -45,6 +45,7 @@ impl ModuleSurfaceCapture {
 
 pub(super) struct ModuleNodeViewer<'a> {
     pub(super) definition: &'a ModuleDefinition,
+    pub(super) palette: &'a library::model::authoring::ProjectPalette,
     pub(super) plugins: &'a PluginManager,
     pub(super) property_context: ModulePropertyContext,
     pub(super) selected_nodes: &'a HashSet<Uuid>,
@@ -379,6 +380,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                         graph_connected,
                         self.property_context,
                         self.canvas_transform,
+                        self.palette,
                     );
                     self.capture_response(&response);
                     if let Some(action) = action {

@@ -7,8 +7,8 @@
 use egui::{Align2, FontId, Response, Sense, TextStyle, Ui};
 use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionAutomationOwner};
 use library::model::authoring::{
-    AttachmentId, AutomationTrack, MediaTime, ModuleInstanceId, PublishedParameterId,
-    TimelineItemId,
+    AttachmentId, AutomationTrack, MediaTime, ModuleInstanceId, ProjectPalette,
+    PublishedParameterId, TimelineItemId,
 };
 use library::model::property::{Property, PropertyDefinition, PropertyValue};
 
@@ -16,7 +16,7 @@ use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
     PropertyModeState,
 };
-use crate::ui::widgets::property_value_editor::property_value_editor;
+use crate::ui::widgets::property_value_editor::{property_value_editor, PropertyValueEditorSpec};
 
 const PROPERTY_LABEL_WIDTH: f32 = 112.0;
 
@@ -41,6 +41,7 @@ pub(super) struct PropertyRowResult {
 pub(super) fn property_row(
     ui: &mut Ui,
     value: &mut PropertyValue,
+    palette: &ProjectPalette,
     spec: PropertyRowSpec<'_>,
 ) -> PropertyRowResult {
     let mut result = PropertyRowResult {
@@ -62,9 +63,12 @@ pub(super) fn property_row(
             egui::Id::new(("inspector.property", spec.control_id)),
             &format!("inspector.property:{}", spec.control_id),
             value,
-            spec.definition,
-            spec.suffix,
-            spec.speed,
+            PropertyValueEditorSpec {
+                definition: spec.definition,
+                fallback_suffix: spec.suffix,
+                fallback_speed: spec.speed,
+                palette,
+            },
         );
         result.changed = value_edit.changed;
         result.finished = value_edit.finished;
@@ -99,15 +103,19 @@ pub(super) fn property_control(
     definition: Option<&PropertyDefinition>,
     suffix: &str,
     speed: f64,
+    palette: &ProjectPalette,
 ) -> bool {
     property_value_editor(
         ui,
         egui::Id::new(("inspector.property", control_id)),
         &format!("inspector.property:{control_id}"),
         value,
-        definition,
-        suffix,
-        speed,
+        PropertyValueEditorSpec {
+            definition,
+            fallback_suffix: suffix,
+            fallback_speed: speed,
+            palette,
+        },
     )
     .finished
 }
@@ -547,6 +555,7 @@ mod tests {
         let context = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0));
         let mut value = PropertyValue::Number(OrderedFloat(1.0));
+        let palette = ProjectPalette::default();
         let _frame_output = context.run(
             egui::RawInput {
                 screen_rect: Some(screen),
@@ -557,6 +566,7 @@ mod tests {
                     let _row_result = property_row(
                         ui,
                         &mut value,
+                        &palette,
                         PropertyRowSpec {
                             control_id: "test:opacity",
                             label: "Opacity",

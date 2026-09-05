@@ -53,7 +53,7 @@ pub(super) fn transition_inspector(
 
     participant_summary(ui, project, transition);
     ui.separator();
-    timing_controls(ui, state, service, transition);
+    timing_controls(ui, project, state, service, transition);
     module_controls(ui, project, state, service, transition);
 }
 
@@ -76,6 +76,7 @@ fn participant_summary(ui: &mut egui::Ui, project: &AuthoringProject, transition
 
 fn timing_controls(
     ui: &mut egui::Ui,
+    project: &AuthoringProject,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     transition: &Transition,
@@ -83,7 +84,7 @@ fn timing_controls(
     egui::CollapsingHeader::new("Timing")
         .default_open(true)
         .show(ui, |ui| {
-            duration_control(ui, state, service, transition);
+            duration_control(ui, project, state, service, transition);
             alignment_control(ui, state, service, transition);
             ui.horizontal(|ui| {
                 super::property_label(
@@ -98,6 +99,7 @@ fn timing_controls(
 
 fn duration_control(
     ui: &mut egui::Ui,
+    project: &AuthoringProject,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     transition: &Transition,
@@ -113,7 +115,8 @@ fn duration_control(
                 .property_values
                 .entry(draft_key)
                 .or_insert_with(|| model_value.clone());
-            let finished = super::property_control(ui, &control_id, value, None, " s", 0.01);
+            let finished =
+                super::property_control(ui, &control_id, value, None, " s", 0.01, &project.palette);
             (finished, value.clone())
         })
         .inner;
@@ -356,6 +359,7 @@ fn module_controls(
                         let row_result = super::property_row(
                             ui,
                             value,
+                            &project.palette,
                             super::PropertyRowSpec {
                                 control_id: &control_id,
                                 label: &parameter.name,

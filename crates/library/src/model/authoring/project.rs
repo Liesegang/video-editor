@@ -14,9 +14,9 @@ use super::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentProcessor, AttachmentStage,
     CompositionParameterTarget, InstanceLocator, InstancePath, MediaInputBinding, MediaOutputKind,
     MediaTime, ModuleDefinition, ModuleDefinitionId, ModuleDefinitionSharing, ModuleInstance,
-    ModuleInstanceId, ModuleInvocation, PublishedMediaInput, RationalRate, SourceRef, Timeline,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, Transition, TransitionId, property_value_type,
+    ModuleInstanceId, ModuleInvocation, ProjectPalette, PublishedMediaInput, RationalRate,
+    SourceRef, Timeline, TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack,
+    TimelineTrackId, TimelineTrackKind, Transition, TransitionId, property_value_type,
 };
 
 mod item_placement;
@@ -89,6 +89,7 @@ pub struct AuthoringProject {
     pub module_definitions: HashMap<ModuleDefinitionId, ModuleDefinition>,
     pub module_instances: HashMap<ModuleInstanceId, ModuleInstance>,
     pub attachments: HashMap<AttachmentId, Attachment>,
+    pub palette: ProjectPalette,
     pub assets: Vec<Asset>,
     pub(crate) color_management: RequestedColorManagementConfig,
     pub export: ExportConfig,
@@ -147,6 +148,7 @@ impl AuthoringProject {
             module_definitions: HashMap::new(),
             module_instances: HashMap::new(),
             attachments: HashMap::new(),
+            palette: ProjectPalette::default(),
             assets: Vec::new(),
             color_management: RequestedColorManagementConfig::default(),
             export: ExportConfig::default(),
@@ -217,6 +219,7 @@ impl AuthoringProject {
         validate_transitions(self, &placements)?;
         validate_transition_module_instance_overrides(self, &placements)?;
         self.validate_attachments(&placements)?;
+        self.palette.validate()?;
         self.validate_instance_ownership()?;
         self.validate_parent_cycles()?;
         self.validate_composition_cycles(&placements)?;

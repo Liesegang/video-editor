@@ -53,3 +53,5 @@ define_id!(ModuleOutputId);
 define_id!(PublishedSignalId);
 define_id!(PublishedActionId);
 define_id!(AttachmentId);
+define_id!(PaintDefinitionId);
+define_id!(PaletteGroupId);

@@ -13,6 +13,7 @@ mod interface;
 mod item;
 mod module;
 mod node_clip_conversion;
+mod palette;
 mod shape_path;
 mod text_ensemble;
 mod transition;
@@ -30,6 +31,8 @@ mod item_tests;
 mod module_presentation_tests;
 #[cfg(test)]
 mod node_clip_conversion_tests;
+#[cfg(test)]
+mod palette_tests;
 #[cfg(test)]
 mod transition_input_coverage_tests;
 #[cfg(test)]

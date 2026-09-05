@@ -1,6 +1,6 @@
 use super::{
-    AuthoringProject, InstancePath, MediaTime, ModuleDefinitionId, ModuleInstanceId, TimelineId,
-    TimelineItemId, TransitionId,
+    AuthoringProject, InstancePath, MediaTime, ModuleDefinitionId, ModuleInstanceId,
+    PaintDefinitionId, TimelineId, TimelineItemId, TransitionId,
 };
 
 const DEFAULT_UNDO_LIMIT: usize = 100;
@@ -53,6 +53,10 @@ pub enum ProjectInvalidation {
     ModuleInstance {
         instance_id: ModuleInstanceId,
     },
+    ProjectPalette,
+    PaintDefinition {
+        definition_id: PaintDefinitionId,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -61,13 +65,18 @@ pub struct ChangeSet {
     pub invalidations: Vec<ProjectInvalidation>,
 }
 
+struct HistoryEntry {
+    project: AuthoringProject,
+    invalidations: Vec<ProjectInvalidation>,
+}
+
 /// Non-persisted editing state. Every mutation is validated on an isolated
 /// candidate before replacing the authoritative Project.
 pub struct AuthoringSession {
     project: AuthoringProject,
     revision: ProjectRevision,
-    undo: Vec<AuthoringProject>,
-    redo: Vec<AuthoringProject>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
     undo_limit: usize,
 }
 
@@ -122,7 +131,10 @@ impl AuthoringSession {
             if self.undo.len() == self.undo_limit {
                 self.undo.remove(0);
             }
-            self.undo.push(previous);
+            self.undo.push(HistoryEntry {
+                project: previous,
+                invalidations: invalidations.clone(),
+            });
         }
         self.redo.clear();
         self.revision = next_revision;
@@ -140,13 +152,15 @@ impl AuthoringSession {
             return Ok(None);
         };
         let next_revision = self.revision.next()?;
-        previous.validate()?;
-        self.redo
-            .push(std::mem::replace(&mut self.project, previous));
+        previous.project.validate()?;
+        self.redo.push(HistoryEntry {
+            project: std::mem::replace(&mut self.project, previous.project),
+            invalidations: previous.invalidations.clone(),
+        });
         self.revision = next_revision;
         Ok(Some(ChangeSet {
             revision: self.revision,
-            invalidations: vec![ProjectInvalidation::ProjectStructure],
+            invalidations: previous.invalidations,
         }))
     }
 
@@ -155,18 +169,21 @@ impl AuthoringSession {
             return Ok(None);
         };
         let next_revision = self.revision.next()?;
-        next.validate()?;
-        let previous = std::mem::replace(&mut self.project, next);
+        next.project.validate()?;
+        let previous = std::mem::replace(&mut self.project, next.project);
         if self.undo_limit > 0 {
             if self.undo.len() == self.undo_limit {
                 self.undo.remove(0);
             }
-            self.undo.push(previous);
+            self.undo.push(HistoryEntry {
+                project: previous,
+                invalidations: next.invalidations.clone(),
+            });
         }
         self.revision = next_revision;
         Ok(Some(ChangeSet {
             revision: self.revision,
-            invalidations: vec![ProjectInvalidation::ProjectStructure],
+            invalidations: next.invalidations,
         }))
     }
 }

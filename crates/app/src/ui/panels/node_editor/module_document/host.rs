@@ -87,6 +87,7 @@ pub fn node_editor_panel(
     let actions = show_module_document(
         ui,
         definition,
+        &project.palette,
         &mut state.node_editor,
         plugins,
         property_context,

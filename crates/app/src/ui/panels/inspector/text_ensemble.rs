@@ -4,8 +4,8 @@ use library::editor::{
     TextEnsembleOperationKind, TimelineEditorService,
 };
 use library::model::authoring::{
-    text_ensemble_direct_contract_is_compatible, AuthoringProject, TextEnsembleOperation,
-    TimelineItem,
+    text_ensemble_direct_contract_is_compatible, AuthoringProject, ProjectPalette,
+    TextEnsembleOperation, TimelineItem,
 };
 use library::plugin::{
     OperationDescriptor, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
@@ -61,6 +61,7 @@ pub(super) fn text_ensemble_section(
                 for (phase_index, model_index) in phase_indices.iter().copied().enumerate() {
                     operation_entry(
                         ui,
+                        &project.palette,
                         state,
                         service,
                         plugins,
@@ -231,6 +232,7 @@ fn operation_catalog(
 )]
 fn operation_entry(
     ui: &mut egui::Ui,
+    palette: &ProjectPalette,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
@@ -338,6 +340,7 @@ fn operation_entry(
                 let result = super::property_row(
                     ui,
                     draft,
+                    palette,
                     super::PropertyRowSpec {
                         control_id: &control_id,
                         label: definition.label(),

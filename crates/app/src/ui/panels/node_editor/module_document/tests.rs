@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use egui_snarl::ui::SnarlViewer;
 use egui_snarl::{InPinId, OutPinId};
 use library::editor::ModuleNodeRequest;
-use library::model::authoring::{ModuleConnection, ModuleDefinitionSharing, TransitionMediaType};
+use library::model::authoring::{
+    ModuleConnection, ModuleDefinitionSharing, ProjectPalette, TransitionMediaType,
+};
 use library::model::frame::color::Color;
 use library::model::project::{
     PortDataType, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, SOUND_INPUT_PORT,
@@ -79,6 +81,7 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
     let context = egui::Context::default();
     let actions = std::cell::RefCell::new(Vec::new());
     let mut state = NodeEditorState::default();
+    let palette = ProjectPalette::default();
     drop(context.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -90,8 +93,14 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
         },
         |context| {
             egui::CentralPanel::default().show(context, |ui| {
-                *actions.borrow_mut() =
-                    show_module_document(ui, &definition, &mut state, &plugins, property_context());
+                *actions.borrow_mut() = show_module_document(
+                    ui,
+                    &definition,
+                    &palette,
+                    &mut state,
+                    &plugins,
+                    property_context(),
+                );
             });
         },
     ));
@@ -180,9 +189,11 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
     let mut actions = Vec::new();
     let mut transform = egui::emath::TSTransform::IDENTITY;
     let mut clip = egui::Rect::EVERYTHING;
+    let palette = ProjectPalette::default();
     {
         let mut viewer = ModuleNodeViewer {
             definition: &definition,
+            palette: &palette,
             plugins: &plugins,
             property_context: property_context(),
             selected_nodes: &selected,
@@ -209,8 +220,10 @@ fn production_snarl_consumes_the_authoritative_application_transform() {
     let authoritative = egui::emath::TSTransform::new(egui::vec2(240.0, -80.0), 0.375);
     let mut captured = egui::emath::TSTransform::IDENTITY;
     let mut clip = egui::Rect::EVERYTHING;
+    let palette = ProjectPalette::default();
     let mut viewer = ModuleNodeViewer {
         definition: &definition,
+        palette: &palette,
         plugins: &plugins,
         property_context: property_context(),
         selected_nodes: &selected,

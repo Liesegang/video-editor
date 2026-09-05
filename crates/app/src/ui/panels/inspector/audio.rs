@@ -40,6 +40,7 @@ pub(super) fn audio_section(
                 let result = super::property_row(
                     ui,
                     value,
+                    &project.palette,
                     super::PropertyRowSpec {
                         control_id: &format!("item:{}:gain", item.id),
                         label: "Gain",
