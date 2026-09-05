@@ -5,6 +5,12 @@ import os
 import pathlib
 
 from qa_curve_support import exercise_curve_key_live_preview
+from qa_tracking_geometry import (
+    assert_expanded_from_neutral,
+    assert_gizmo_parity,
+    exercise_moved_letter_selection,
+    observe_gizmos,
+)
 from qa_support import (
     AUTHORING_FIXTURE,
     QaClient,
@@ -392,6 +398,8 @@ def _fresh_process_parity(
     operation_id,
     key_signature,
     expected_previews,
+    neutral_gizmos,
+    expected_gizmos,
     timeout,
 ):
     port = free_port()
@@ -442,10 +450,29 @@ def _fresh_process_parity(
             and state["history"]["revision"] == loaded["history"]["revision"]
             else None,
         )
+        reloaded_gizmos = observe_gizmos(
+            client,
+            item_id,
+            [sample["seconds"] for sample in expected_gizmos],
+            loaded["history"]["revision"],
+            "reloaded Tracking Gizmo",
+        )
+        assert_gizmo_parity(
+            expected_gizmos, reloaded_gizmos, "reloaded Tracking Gizmo"
+        )
+        reloaded_selection = exercise_moved_letter_selection(
+            client,
+            item_id,
+            neutral_gizmos[-1],
+            reloaded_gizmos[-1],
+            "reloaded Tracking",
+        )
         capture = capture_viewport(client, _artifact_dir() / "capture.png")
         close = close_clean_native_app(client, process, "reloaded Tracking app", timeout)
     return {
         "previews": previews,
+        "gizmos": reloaded_gizmos,
+        "moved_letter_selection": reloaded_selection,
         "capture": capture,
         "close": close,
         "actions": client.evidence,
@@ -463,6 +490,13 @@ def run_suite(client):
     item_id = item["id"]
     client.click_component("timeline.item:" + item_id)
     authored = _set_multiline_text(client, item_id, "AB\nCD")
+    neutral_gizmos = observe_gizmos(
+        client,
+        item_id,
+        [1.5, 2.5],
+        authored["history"]["revision"],
+        "neutral Text Gizmo",
+    )
     baseline = seek_rendered(client, 1.5)
     baseline_hash = baseline["editor"]["preview"]["pixel_hash"]
 
@@ -641,6 +675,23 @@ def run_suite(client):
         [1.5, 2.5],
         direct_curve_drag["restored"]["history"]["revision"],
     )
+    direct_gizmos = observe_gizmos(
+        client,
+        item_id,
+        [1.5, 2.5],
+        direct_curve_drag["restored"]["history"]["revision"],
+        "direct Tracking Gizmo",
+    )
+    assert_expanded_from_neutral(
+        neutral_gizmos, direct_gizmos, "direct Tracking Gizmo"
+    )
+    direct_selection = exercise_moved_letter_selection(
+        client,
+        item_id,
+        neutral_gizmos[-1],
+        direct_gizmos[-1],
+        "direct Tracking",
+    )
 
     activate_dock_tab(client, TIMELINE_TAB, "Timeline", "Tracking promotion")
     bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
@@ -667,6 +718,21 @@ def run_suite(client):
     )
     if converted_previews != direct_previews:
         raise QaFailure("Tracking conversion changed multi-time Preview pixels")
+    converted_gizmos = observe_gizmos(
+        client,
+        item_id,
+        [1.5, 2.5],
+        converted["history"]["revision"],
+        "promoted Tracking Gizmo",
+    )
+    assert_gizmo_parity(direct_gizmos, converted_gizmos, "promoted Tracking Gizmo")
+    promoted_selection = exercise_moved_letter_selection(
+        client,
+        item_id,
+        neutral_gizmos[-1],
+        converted_gizmos[-1],
+        "promoted Tracking",
+    )
     module_target = {"kind": "module_parameter", "id": amount_parameter["id"]}
     converted_surfaces = _wait_automation_surfaces(
         client, item_id, module_target, [key["id"] for key in direct_keys]
@@ -781,6 +847,8 @@ def run_suite(client):
         operation_id,
         direct_signature,
         persisted_previews,
+        neutral_gizmos,
+        converted_gizmos,
         client.timeout,
     )
     return {
@@ -804,12 +872,17 @@ def run_suite(client):
             if key != "restored"
         },
         "direct_surfaces": direct_surfaces,
+        "neutral_gizmos": neutral_gizmos,
+        "direct_gizmos": direct_gizmos,
+        "direct_moved_letter_selection": direct_selection,
         "curve_capture": curve_capture,
         "instance_id": instance_id,
         "definition_id": definition["id"],
         "amount_parameter_id": amount_parameter["id"],
         "target_parameter_id": target_parameter["id"],
         "converted_surfaces": converted_surfaces,
+        "converted_gizmos": converted_gizmos,
+        "promoted_moved_letter_selection": promoted_selection,
         "promoted_curve_live": promoted_curve_live,
         "module_live_hash": module_held["editor"]["preview"]["pixel_hash"],
         "module_committed_hash": module_committed_render["editor"]["preview"][

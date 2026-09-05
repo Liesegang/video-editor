@@ -358,6 +358,28 @@ pub fn measure_ensemble_text_visual_bounds(
     Ok(visual_bounds.map(|bounds| bounds.expand(CONSERVATIVE_RASTER_OUTSET)))
 }
 
+/// Measure the local bounds of the Text body that crosses the Shape -> Image
+/// boundary. Direct Timeline Text and Text produced by a Module must use this
+/// same interpretation of Ensemble transforms and Appearance outsets.
+pub fn measure_text_visual_bounds(
+    text: &RuntimeTextShape,
+    styles: &[StyleConfig],
+    ensemble: Option<&EnsembleData>,
+    current_time: f32,
+) -> Result<Option<RuntimeBounds>, LibraryError> {
+    if text.elements.is_empty() {
+        return Ok(None);
+    }
+    match ensemble.filter(|ensemble| ensemble.enabled) {
+        Some(ensemble) => measure_ensemble_text_visual_bounds(text, styles, ensemble, current_time),
+        None => {
+            let outset = crate::core::rendering::text_layout::text_style_outset(styles)
+                + CONSERVATIVE_RASTER_OUTSET;
+            Ok(Some(text.block_bounds.expand(outset)))
+        }
+    }
+}
+
 pub(crate) fn measure_text_decorator_bounds(
     text: &RuntimeTextShape,
     transforms: &[TransformData],
@@ -651,13 +673,8 @@ impl RuntimeShape {
         };
         let content_bounds = match &self.geometry {
             RuntimeShapeGeometry::Text(text) => {
-                let bounds = if let Some(ensemble) = &ensemble {
-                    measure_ensemble_text_visual_bounds(text, &styles, ensemble, current_time)?
-                } else {
-                    let outset = crate::core::rendering::text_layout::text_style_outset(&styles)
-                        + CONSERVATIVE_RASTER_OUTSET;
-                    Some(text.block_bounds.expand(outset))
-                };
+                let bounds =
+                    measure_text_visual_bounds(text, &styles, ensemble.as_ref(), current_time)?;
                 bounds.map(|bounds| {
                     FrameBounds::new(bounds.left, bounds.top, bounds.width(), bounds.height())
                 })

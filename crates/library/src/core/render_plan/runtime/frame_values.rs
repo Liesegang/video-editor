@@ -91,6 +91,7 @@ pub(super) fn text_item_from_values(
     values: &HashMap<String, PropertyValue>,
     styles: Vec<StyleConfig>,
     ensemble: Option<crate::core::ensemble::EnsembleData>,
+    current_time: f32,
 ) -> Result<FrameItem, LibraryError> {
     let font = values
         .get("font_family")
@@ -112,13 +113,20 @@ pub(super) fn text_item_from_values(
         })
         .transpose()?
         .unwrap_or(crate::plugin::entity_converter::DEFAULT_TIMELINE_TEXT_SIZE);
-    let (content_width, content_height) =
-        crate::plugin::entity_converter::measure_text_size(text, &font, size as f32);
+    let runtime_text =
+        crate::core::rendering::text_layout::layout_runtime_text_shape(text, &font, size as f32);
+    let content_bounds = crate::model::frame::runtime_shape::measure_text_visual_bounds(
+        &runtime_text,
+        &styles,
+        ensemble.as_ref(),
+        current_time,
+    )?
+    .map(|bounds| FrameBounds::new(bounds.left, bounds.top, bounds.width(), bounds.height()));
     Ok(FrameItem::Object(FrameObject {
         source_node_id: source_id,
         spatial_transform_node_id: None,
         spatial_transform: Box::default(),
-        content_bounds: Some(FrameBounds::new(0.0, 0.0, content_width, content_height)),
+        content_bounds,
         content: FrameContent::Text {
             text: text.to_string(),
             font,

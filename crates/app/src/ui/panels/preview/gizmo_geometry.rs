@@ -254,17 +254,14 @@ fn object_bounds(object: &FrameObject) -> Option<egui::Rect> {
         return positive_rect(x, y, width, height);
     }
     match &object.content {
-        FrameContent::Text {
-            text, font, size, ..
-        } => {
-            let (width, height) =
-                library::plugin::entity_converter::measure_text_size(text, font, *size as f32);
-            positive_rect(0.0, 0.0, width, height)
-        }
         FrameContent::SkSL { resolution, .. } => {
             positive_rect(0.0, 0.0, resolution.0, resolution.1)
         }
-        FrameContent::Video { .. }
+        // Text bounds are evaluated together with its Ensemble and styles.
+        // None can mean that every glyph is invisible; measuring its original
+        // unanimated string here would resurrect a phantom selection target.
+        FrameContent::Text { .. }
+        | FrameContent::Video { .. }
         | FrameContent::Image { .. }
         | FrameContent::Shape { .. }
         | FrameContent::ParticleScene { .. } => None,
@@ -311,10 +308,22 @@ fn map_point(transform: Affine2D, x: f32, y: f32) -> Option<egui::Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::animation::EasingFunction;
+    use library::core::render_plan::{evaluate_render_plan_frame, RenderPlanCompiler};
+    use library::editor::{
+        AppearanceOperationFactory, AuthoringKeyframeTarget, AuthoringKeyframeUpdate,
+        AuthoringPropertyOwner, TextEnsembleOperationKind, TimelineEditorService,
+        TimelineSettingsUpdate,
+    };
+    use library::model::authoring::{
+        AuthoringProject, MediaTime, RationalRate, SourceRef, TimelineInterval,
+    };
     use library::model::frame::color::Color;
     use library::model::frame::entity::{FrameBounds, FrameGroup, FrameObject, StyleConfig};
     use library::model::frame::transform::{Position, Scale, Transform};
+    use library::model::property::{KeyframeId, PropertyValue};
     use library::model::BlendMode;
+    use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
     use uuid::Uuid;
 
@@ -491,6 +500,245 @@ mod tests {
         assert_eq!(
             hit_test_item(&frame, &selectable, egui::pos2(-30.0, 10.0)),
             None
+        );
+    }
+
+    #[test]
+    fn empty_text_never_gains_style_outset_bounds_before_or_after_promotion() {
+        let fixture = tracked_text();
+        let AuthoringPropertyOwner::TextEnsemble { operation_id, .. } = fixture.owner else {
+            panic!("Tracking fixture must own one Ensemble operation");
+        };
+        fixture
+            .service
+            .remove_text_ensemble_operation(fixture.item_id, operation_id)
+            .expect("plain Text without Ensemble");
+        fixture
+            .service
+            .set_text(fixture.item_id, String::new())
+            .expect("empty Text");
+        for promoted in [false, true] {
+            if promoted {
+                fixture
+                    .service
+                    .convert_source_to_node_clip(&fixture.plugins, fixture.item_id)
+                    .expect("promote empty Text");
+            }
+            let source = fixture.service.snapshot().expect("empty Text Project");
+            let frame = evaluated_frame(&source, &fixture.plugins, 30);
+            assert!(item_gizmo_geometry(&frame, fixture.item_id).is_none());
+            assert_eq!(
+                hit_test_item(
+                    &frame,
+                    &HashSet::from([fixture.item_id]),
+                    egui::pos2(0.0, 0.0)
+                ),
+                None
+            );
+        }
+    }
+
+    struct TrackedText {
+        service: TimelineEditorService,
+        plugins: PluginManager,
+        item_id: TimelineItemId,
+        owner: AuthoringPropertyOwner,
+        keyframe_id: KeyframeId,
+    }
+
+    fn seconds(value: i64) -> MediaTime {
+        MediaTime::new(value, 1).expect("whole-second test time")
+    }
+
+    fn tracked_text() -> TrackedText {
+        let plugins = PluginManager::default();
+        let service = TimelineEditorService::create_default("Evaluated text picking")
+            .expect("authoring service");
+        let project = service.snapshot().expect("default Project");
+        let timeline_id = project.root_timeline_id;
+        let track_id = project.timelines[&timeline_id].track_order[0];
+        service
+            .update_timeline_settings(
+                timeline_id,
+                TimelineSettingsUpdate {
+                    width: Some(320),
+                    height: Some(240),
+                    fps: Some(RationalRate::new(30, 1).expect("test frame rate")),
+                    ..Default::default()
+                },
+            )
+            .expect("test canvas");
+        let fill = AppearanceOperationFactory::create(&plugins, "fill").expect("Fill");
+        let (item_id, _) = service
+            .add_item(
+                track_id,
+                "Animated Tracking".to_string(),
+                SourceRef::Text {
+                    text: "AB\nCD".to_string(),
+                    appearance_operations: vec![fill],
+                    ensemble_operations: Vec::new(),
+                },
+                TimelineInterval::new(seconds(1), seconds(3)).expect("offset interval"),
+                0,
+            )
+            .expect("Text item");
+        let (operation_id, _) = service
+            .add_text_ensemble_operation_by_id(
+                &plugins,
+                item_id,
+                TextEnsembleOperationKind::Effector,
+                "tracking",
+            )
+            .expect("Tracking");
+        let owner = AuthoringPropertyOwner::TextEnsemble {
+            item_id,
+            operation_id,
+        };
+        service
+            .set_authored_property_keyframe_mode(
+                owner,
+                "amount".to_string(),
+                seconds(0),
+                PropertyValue::from(0.0),
+            )
+            .expect("initial Tracking key");
+        let (keyframe_id, _) = service
+            .upsert_authored_property_keyframe(
+                owner,
+                "amount".to_string(),
+                seconds(2),
+                PropertyValue::from(40.0),
+                Some(EasingFunction::Linear),
+            )
+            .expect("last Tracking key");
+        TrackedText {
+            service,
+            plugins,
+            item_id,
+            owner,
+            keyframe_id,
+        }
+    }
+
+    fn evaluated_frame(
+        project: &AuthoringProject,
+        plugins: &PluginManager,
+        time: u64,
+    ) -> FrameInfo {
+        let plan = RenderPlanCompiler::compile(project).expect("compile Frame plan");
+        evaluate_render_plan_frame(project, &plan, plugins, time, 1.0, None)
+            .expect("evaluated Frame geometry")
+    }
+
+    #[test]
+    fn tracking_gizmo_and_picking_follow_local_time_before_and_after_promotion() {
+        let fixture = tracked_text();
+        let project = fixture.service.snapshot().expect("direct Project");
+        let times = [30, 60, 90];
+        let frames = times.map(|time| evaluated_frame(&project, &fixture.plugins, time));
+        let geometries = frames
+            .each_ref()
+            .map(|frame| item_gizmo_geometry(frame, fixture.item_id).expect("animated Text Gizmo"));
+        for (geometry, amount) in geometries.iter().zip([0.0, 20.0, 40.0]) {
+            assert!(
+                (geometry.local_bounds.width() - geometries[0].local_bounds.width() - amount).abs()
+                    < 0.001,
+                "Line Tracking must expand the evaluated selection bounds by its local amount"
+            );
+            assert_eq!(geometry.local_bounds.min, geometries[0].local_bounds.min);
+            assert_eq!(
+                geometry.local_bounds.height(),
+                geometries[0].local_bounds.height()
+            );
+        }
+        let expanded = egui::Rect::from_points(&geometries[2].control_outline);
+        let moved_letter = egui::pos2(expanded.right() - 8.0, expanded.center().y);
+        let selectable = HashSet::from([fixture.item_id]);
+        assert_eq!(hit_test_item(&frames[0], &selectable, moved_letter), None);
+        assert_eq!(
+            hit_test_item(&frames[2], &selectable, moved_letter),
+            Some(fixture.item_id),
+            "Text moved by Tracking must remain selectable outside the original box"
+        );
+
+        fixture
+            .service
+            .convert_source_to_node_clip(&fixture.plugins, fixture.item_id)
+            .expect("explicit promotion");
+        let promoted = fixture.service.snapshot().expect("Node Clip Project");
+        for (time, expected) in times.into_iter().zip(&geometries) {
+            let frame = evaluated_frame(&promoted, &fixture.plugins, time);
+            assert_eq!(
+                item_gizmo_geometry(&frame, fixture.item_id).as_ref(),
+                Some(expected)
+            );
+        }
+        fixture.service.undo().expect("Undo promotion");
+        assert_eq!(
+            fixture.service.snapshot().expect("restored Project"),
+            project
+        );
+    }
+
+    #[test]
+    fn projected_tracking_geometry_matches_commit_and_undo() {
+        let fixture = tracked_text();
+        let source = fixture.service.snapshot().expect("direct Project");
+        let target = AuthoringKeyframeTarget::AuthoredProperty {
+            owner: fixture.owner,
+            key: "amount".to_string(),
+        };
+        let update = AuthoringKeyframeUpdate {
+            value: Some(PropertyValue::from(80.0)),
+            ..Default::default()
+        };
+        let projected = TimelineEditorService::project_keyframe_update(
+            &source,
+            &target,
+            fixture.keyframe_id,
+            update.clone(),
+        )
+        .expect("held key projection");
+        let stable_geometry = item_gizmo_geometry(
+            &evaluated_frame(&source, &fixture.plugins, 90),
+            fixture.item_id,
+        )
+        .expect("stable geometry");
+        let projected_geometry = item_gizmo_geometry(
+            &evaluated_frame(&projected, &fixture.plugins, 90),
+            fixture.item_id,
+        )
+        .expect("held geometry");
+        assert!(
+            (projected_geometry.local_bounds.width() - stable_geometry.local_bounds.width() - 40.0)
+                .abs()
+                < 0.001
+        );
+        assert_eq!(
+            fixture.service.snapshot().expect("unchanged Project"),
+            source
+        );
+        fixture
+            .service
+            .update_keyframe(&target, fixture.keyframe_id, update)
+            .expect("one release commit");
+        let committed = fixture.service.snapshot().expect("committed Project");
+        assert_eq!(
+            item_gizmo_geometry(
+                &evaluated_frame(&committed, &fixture.plugins, 90),
+                fixture.item_id
+            ),
+            Some(projected_geometry)
+        );
+        fixture.service.undo().expect("Undo key drag");
+        let restored = fixture.service.snapshot().expect("restored Project");
+        assert_eq!(restored, source);
+        assert_eq!(
+            item_gizmo_geometry(
+                &evaluated_frame(&restored, &fixture.plugins, 90),
+                fixture.item_id
+            ),
+            Some(stable_geometry)
         );
     }
 }

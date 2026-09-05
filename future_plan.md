@@ -240,7 +240,21 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
 
 - [ ] **部分実装：Preview の直接編集を production parity へ戻す。** 共通 viewport 上で grid/pan/zoom、object click selection、空白 click deselection、正しい geometry bounds の gizmo、move/scale/rotate を扱う。
   - 円、Shape、Text、Image、Video、Path、Nested Timeline の bounds は Composition 全体ではなく評価済み外形に一致する。
-  - [ ] Ensemble Trackingをキーフレーム評価した直接TextのGizmo外形を検証する。native QAの`20260906T-curve-live-preview-user-release-final-r3/text-tracking/tracking-curve.png`では、文字間隔が広がったB/Dが選択枠の外に見える。映像Previewの更新とGizmoの外形評価を区別し、既存の評価済みgeometryへ統一する。
+  - [x] 直接TextとNode Clip TextのGizmo外形を、既存のEnsemble変形とAppearance範囲を評価する共通処理へ統一した。
+    直接Textだけが静的な文字幅を使っていたため、Trackingで広がったB/Dが選択枠の外に残っていた。
+    両方のTextでclip-local timeを使い、Previewの選択枠とhit-testは評価済みFrameのboundsを参照する。
+    未評価の文字幅へ戻るUI側の再計算を削除し、空TextはStyleの余白から架空の選択領域を作らない。
+    実Projectからの3時点の外形、移動後の文字の選択、キーの一時投影と確定の一致、Undo、空Text、Fill/StrokeのみのTextを検証した。
+    透明背景への実描画でも、Trackingの3時点とFill/Strokeの可視画素が評価済みbounds内に収まることをNode Clip化の前後で確認した。
+    native QAでは通常Textの幅が112.939pxから217.439px（1.5秒）と295.022px（2.5秒）へ広がり、Node Clip化後と新プロセスでの再読込み後も両時刻のboundsが完全一致した。
+    3状態すべてでCanvasの空白をクリックして選択解除し、元の枠外へ移動したDをクリックして同じItemを選択でき、Projectと履歴は変化しない（`target/qa-runs/20260906T-tracking-gizmo-final/text-tracking`）。
+    修正前の幅不変を検出した記録は`20260906T-tracking-gizmo-red-21e5b76-r1`へ保持した。
+    最初の修正候補QAでは背景Solidを空白としてクリックしたため選択解除の検査が失敗し、既存Canvasとcontentの座標から余白を求めるよう修正した（`20260906T-tracking-gizmo-candidate-r1`）。
+    最終gateはworkspace全target 1,728 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 27 tests、828 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-tracking-gizmo-final.log`）。
+    通常release appのnative HTTP QAは25/25で、影を文字の背面へ描くAppearanceの実画面も再確認した（`target/qa-runs/20260906T-tracking-gizmo-final/appearance/drop-shadow.png`）。
+    50本のapp/suite logにERROR、panic、描画失敗はなく、QA appも終了した。
+    検証した`target/release/app.exe`のSHA-256は`3FE9AFD29ABE5A03A2C4653D4B5F0FDB155A6AF850609FD8A7F27985FB0858FE`。
+    全フォントの厳密な最小外形、RTL Tracking、60fps、Preview全機能の完成はこの検証に含めない。
   - X/Y translate と scale は独立編集でき、uniform lock を明示できる。3D 有効時は Z と X/Y/Z rotation を同じ transform で扱う。
   - [x] canonical `PathValue` と同じ Preview surface 上で point/Bezier handle を編集し、Undo/Redo と render refresh へ接続する Path Editor vertical slice、および native HTTP QA を実装した。
   - [ ] Preview 上の Text 直接編集を production 実装から復旧し、別 surface を作らない。

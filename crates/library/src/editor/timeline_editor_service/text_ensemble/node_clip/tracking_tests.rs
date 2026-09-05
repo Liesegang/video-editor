@@ -14,8 +14,10 @@ use crate::editor::timeline_editor_service::node_clip_conversion_tests::{
 use crate::model::authoring::{
     AuthoringProject, ModuleDefinitionSharing, ProjectDocument, SourceRef, TimelineInterval,
 };
-use crate::model::frame::entity::{FrameContent, FrameItem};
+use crate::model::frame::color::Color;
+use crate::model::frame::entity::{FrameBounds, FrameContent, FrameItem};
 use crate::model::project::property::KeyframeId;
+use crate::rendering::renderer::Affine2D;
 
 struct TrackingFixture {
     service: TimelineEditorService,
@@ -136,6 +138,136 @@ fn first_ensemble(items: &[FrameItem]) -> Option<&crate::core::ensemble::Ensembl
     None
 }
 
+fn first_text_bounds(items: &[FrameItem]) -> Option<FrameBounds> {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                if matches!(&object.content, FrameContent::Text { .. }) {
+                    return object.content_bounds;
+                }
+            }
+            FrameItem::Group(group) => {
+                if let Some(bounds) = first_text_bounds(&group.items) {
+                    return Some(bounds);
+                }
+            }
+            FrameItem::Transition(transition) => {
+                if let Some(bounds) = first_text_bounds(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| first_text_bounds(std::slice::from_ref(&transition.to.item)))
+                {
+                    return Some(bounds);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn text_bounds(
+    project: &AuthoringProject,
+    plugins: &PluginManager,
+    frame_number: u64,
+) -> FrameBounds {
+    let plan = RenderPlanCompiler::compile(project).expect("Text bounds RenderPlan");
+    let frame = evaluate_render_plan_frame(project, &plan, plugins, frame_number, 1.0, None)
+        .expect("evaluate Text bounds frame");
+    first_text_bounds(&frame.items).expect("Text FrameObject bounds")
+}
+
+fn first_text_canvas_bounds(items: &[FrameItem], parent: Affine2D) -> Option<(f64, f64, f64, f64)> {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                if !matches!(&object.content, FrameContent::Text { .. }) {
+                    continue;
+                }
+                let bounds = object.content_bounds?;
+                let (x, y, width, height) = bounds.as_tuple();
+                let transform = parent.compose(Affine2D::from(object.content.transform()));
+                let points = [
+                    transform.map_point(f64::from(x), f64::from(y)),
+                    transform.map_point(f64::from(x + width), f64::from(y)),
+                    transform.map_point(f64::from(x + width), f64::from(y + height)),
+                    transform.map_point(f64::from(x), f64::from(y + height)),
+                ];
+                let left = points.iter().map(|point| point.0).reduce(f64::min)?;
+                let top = points.iter().map(|point| point.1).reduce(f64::min)?;
+                let right = points.iter().map(|point| point.0).reduce(f64::max)?;
+                let bottom = points.iter().map(|point| point.1).reduce(f64::max)?;
+                return Some((left, top, right, bottom));
+            }
+            FrameItem::Group(group) => {
+                let transform = parent.compose(Affine2D::from(&group.transform));
+                if let Some(bounds) = first_text_canvas_bounds(&group.items, transform) {
+                    return Some(bounds);
+                }
+            }
+            FrameItem::Transition(transition) => {
+                if let Some(bounds) =
+                    first_text_canvas_bounds(std::slice::from_ref(&transition.from.item), parent)
+                        .or_else(|| {
+                            first_text_canvas_bounds(
+                                std::slice::from_ref(&transition.to.item),
+                                parent,
+                            )
+                        })
+                {
+                    return Some(bounds);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn assert_visible_text_pixels_are_inside_bounds(
+    project: &AuthoringProject,
+    plugins: Arc<PluginManager>,
+    frame_number: u64,
+) {
+    let mut transparent = project.clone();
+    let width = {
+        let timeline = transparent
+            .timelines
+            .get_mut(&transparent.root_timeline_id)
+            .expect("root Timeline");
+        timeline.background_color = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+        usize::try_from(timeline.width).expect("canvas width")
+    };
+    let plan = RenderPlanCompiler::compile(&transparent).expect("transparent RenderPlan");
+    let frame = evaluate_render_plan_frame(
+        &transparent,
+        &plan,
+        plugins.as_ref(),
+        frame_number,
+        1.0,
+        None,
+    )
+    .expect("transparent Text frame");
+    let (left, top, right, bottom) =
+        first_text_canvas_bounds(&frame.items, Affine2D::IDENTITY).expect("canvas Text bounds");
+    let pixels = rendered_pixels(&transparent, plugins, frame_number);
+    let mut visible_pixels = 0;
+    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        if pixel[3] == 0 {
+            continue;
+        }
+        visible_pixels += 1;
+        let x = (index % width) as f64;
+        let y = (index / width) as f64;
+        assert!(
+            x + 1.0 >= left && x <= right && y + 1.0 >= top && y <= bottom,
+            "visible pixel ({x}, {y}) escaped evaluated canvas bounds ({left}, {top})..({right}, {bottom})"
+        );
+    }
+    assert!(visible_pixels > 0, "Text fixture must paint visible pixels");
+}
+
 fn rendered_series(project: &AuthoringProject, plugins: Arc<PluginManager>) -> [Vec<u8>; 3] {
     [30, 45, 60].map(|frame| rendered_pixels(project, Arc::clone(&plugins), frame))
 }
@@ -183,6 +315,7 @@ fn keyframed_tracking_survives_node_clip_conversion_local_time_pixels_and_persis
     } = tracking_fixture();
     let before = service.snapshot().expect("direct Text snapshot");
     let before_pixels = rendered_series(&before, Arc::clone(&plugins));
+    let before_bounds = [30, 45, 60].map(|frame| text_bounds(&before, plugins.as_ref(), frame));
     assert_eq!(
         [30, 45, 60].map(|frame| tracking_amount(&before, plugins.as_ref(), frame).0),
         [0.0, 15.0, 30.0],
@@ -195,6 +328,17 @@ fn keyframed_tracking_survives_node_clip_conversion_local_time_pixels_and_persis
     );
     assert!(before_pixels[0] != before_pixels[1]);
     assert!(before_pixels[1] != before_pixels[2]);
+    let right_edges = before_bounds.map(|bounds| {
+        let (x, _, width, _) = bounds.as_tuple();
+        x + width
+    });
+    assert!(
+        right_edges[0] < right_edges[1] && right_edges[1] < right_edges[2],
+        "keyframed Tracking must expand the evaluated Text bounds: {right_edges:?}"
+    );
+    for frame in [30, 45, 60] {
+        assert_visible_text_pixels_are_inside_bounds(&before, Arc::clone(&plugins), frame);
+    }
 
     let conversion = service
         .convert_source_to_node_clip(plugins.as_ref(), item_id)
@@ -249,6 +393,14 @@ fn keyframed_tracking_survives_node_clip_conversion_local_time_pixels_and_persis
         before_pixels,
         "conversion changed Tracking Preview pixels"
     );
+    assert_eq!(
+        [30, 45, 60].map(|frame| text_bounds(&after, plugins.as_ref(), frame)),
+        before_bounds,
+        "conversion changed the evaluated Text bounds used by Preview Gizmos"
+    );
+    for frame in [30, 45, 60] {
+        assert_visible_text_pixels_are_inside_bounds(&after, Arc::clone(&plugins), frame);
+    }
 
     let encoded = ProjectDocument::new(after.as_ref().clone())
         .to_json()
@@ -273,6 +425,47 @@ fn keyframed_tracking_survives_node_clip_conversion_local_time_pixels_and_persis
         service.snapshot().expect("redo snapshot").as_ref(),
         after.as_ref()
     );
+}
+
+#[test]
+fn direct_text_without_ensemble_uses_the_same_styled_bounds_after_conversion() {
+    let plugins = Arc::new(PluginManager::default());
+    let (service, track_id) = small_service("Plain Text bounds conversion");
+    let fill = AppearanceOperationFactory::create(plugins.as_ref(), "fill").expect("Fill style");
+    let stroke =
+        AppearanceOperationFactory::create(plugins.as_ref(), "stroke").expect("Stroke style");
+    let (item_id, _) = service
+        .add_item(
+            track_id,
+            "Plain styled title".to_string(),
+            SourceRef::Text {
+                text: "Plain styled title".to_string(),
+                appearance_operations: vec![fill, stroke],
+                ensemble_operations: Vec::new(),
+            },
+            TimelineInterval::new(MediaTime::zero(), time(2)).expect("Text interval"),
+            0,
+        )
+        .expect("add plain Text item");
+    let before = service.snapshot().expect("direct Text snapshot");
+    let direct_bounds = text_bounds(&before, plugins.as_ref(), 0);
+    let (x, y, _, _) = direct_bounds.as_tuple();
+    assert!(
+        x < 0.0 && y < 0.0,
+        "Stroke outset must be represented in direct Text bounds: {direct_bounds:?}"
+    );
+    assert_visible_text_pixels_are_inside_bounds(&before, Arc::clone(&plugins), 0);
+
+    service
+        .convert_source_to_node_clip(plugins.as_ref(), item_id)
+        .expect("convert plain styled Text");
+    let converted = service.snapshot().expect("converted Text snapshot");
+    assert_eq!(
+        text_bounds(&converted, plugins.as_ref(), 0),
+        direct_bounds,
+        "plain styled Text bounds changed across explicit Node Clip conversion"
+    );
+    assert_visible_text_pixels_are_inside_bounds(&converted, Arc::clone(&plugins), 0);
 }
 
 #[test]

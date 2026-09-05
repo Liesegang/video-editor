@@ -492,7 +492,15 @@ impl AuthoringFrameEvaluator<'_> {
                     crate::model::project::EvalOutput::Produced(styles) => styles,
                     crate::model::project::EvalOutput::NoOutput => return Ok(None),
                 };
-                text_item_from_values(item.id.as_uuid(), &text, &values, styles, ensemble).map(Some)
+                text_item_from_values(
+                    item.id.as_uuid(),
+                    &text,
+                    &values,
+                    styles,
+                    ensemble,
+                    local_time.to_seconds_f64() as f32,
+                )
+                .map(Some)
             }
             SourceRef::Shape { shape } => {
                 let values =
