@@ -5,7 +5,7 @@ use crate::error::LibraryError;
 use log::{info, warn};
 use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Default)]
 pub struct FfmpegExportPlugin {
@@ -15,6 +15,17 @@ pub struct FfmpegExportPlugin {
 impl FfmpegExportPlugin {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn lock_sessions(&self) -> MutexGuard<'_, Vec<FfmpegSession>> {
+        match self.sessions.lock() {
+            Ok(sessions) => sessions,
+            Err(poisoned) => {
+                warn!("recovering FFmpeg session registry after an exporter callback panic");
+                self.sessions.clear_poison();
+                poisoned.into_inner()
+            }
+        }
     }
 }
 
@@ -71,10 +82,7 @@ impl ExportPlugin for FfmpegExportPlugin {
             )));
         }
 
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
+        let mut sessions = self.lock_sessions();
         if let Some(session) = sessions.iter_mut().find(|session| {
             session.job_id == settings.job_id()
                 && session.writable_path == destination.writable_path()
@@ -132,10 +140,7 @@ impl ExportPlugin for FfmpegExportPlugin {
         destination: &ExportDestination,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
+        let mut sessions = self.lock_sessions();
         if let Some(index) = sessions.iter().position(|session| {
             session.job_id == settings.job_id()
                 && session.writable_path == destination.writable_path()
@@ -149,6 +154,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                 )));
             }
             let session = sessions.remove(index);
+            drop(sessions);
             info!(
                 "Finishing ffmpeg export session for {}",
                 destination.logical_path()
@@ -183,6 +189,7 @@ impl ExportPlugin for FfmpegExportPlugin {
             )));
         }
         let session = sessions.remove(index);
+        drop(sessions);
         info!(
             "Finishing ffmpeg export session for {}",
             destination.logical_path()
@@ -368,9 +375,25 @@ mod tests {
     use crate::model::project::Project;
     use std::fs;
     use std::process::Output;
+    use std::sync::Arc;
     use uuid::Uuid;
 
     struct TestOutput(std::path::PathBuf);
+
+    #[test]
+    fn poisoned_session_registry_is_recovered_and_cleared() {
+        let plugin = Arc::new(FfmpegExportPlugin::new());
+        let worker_plugin = Arc::clone(&plugin);
+        let worker = std::thread::spawn(move || {
+            let _sessions = worker_plugin.sessions.lock().unwrap();
+            std::panic::panic_any("poison FFmpeg session registry".to_string());
+        });
+        assert!(worker.join().is_err());
+        assert!(plugin.sessions.is_poisoned());
+
+        drop(plugin.lock_sessions());
+        assert!(!plugin.sessions.is_poisoned());
+    }
 
     impl TestOutput {
         fn new(extension: &str) -> Self {

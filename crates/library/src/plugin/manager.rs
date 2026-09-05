@@ -215,6 +215,14 @@ impl PluginManager {
         inner.export_plugins.get(id).cloned()
     }
 
+    pub(crate) fn require_export_plugin(
+        &self,
+        id: &str,
+    ) -> Result<Arc<dyn ExportPlugin>, LibraryError> {
+        self.get_export_plugin(id)
+            .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{id}' not found")))
+    }
+
     /// Resolves an executable operation descriptor without making Project
     /// loading depend on plugin availability.
     pub fn operation_descriptor(
@@ -641,8 +649,7 @@ impl PluginManager {
         frame: &crate::plugin::ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
-        self.get_export_plugin(exporter_id)
-            .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
+        self.require_export_plugin(exporter_id)?
             .export_frame(destination, frame, settings)
     }
 
@@ -672,8 +679,7 @@ impl PluginManager {
         destination: &ExportDestination,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
-        self.get_export_plugin(exporter_id)
-            .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
+        self.require_export_plugin(exporter_id)?
             .finish_export(destination, settings)
     }
 

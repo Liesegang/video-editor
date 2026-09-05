@@ -1,11 +1,12 @@
+mod panic_guard;
 mod video_output;
+mod worker;
 
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
 
 use crate::cache::SharedCacheManager;
 use crate::core::audio::authoring::{
@@ -20,13 +21,17 @@ use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, InstancePath, TimelineId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
 use crate::model::frame::frame::FrameInfo;
-use crate::plugin::{ExportDestination, ExportFormat, ExportFrame, ExportSettings, PluginManager};
+use crate::plugin::{
+    ExportDestination, ExportFormat, ExportFrame, ExportPlugin, ExportSettings, PluginManager,
+};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::output_path_identity::output_path_identity;
 
 use super::{AuthoringExportResult, RenderRequestId, authoring_error_frame_info};
+use panic_guard::catch_export_panic;
 use video_output::AuthoringVideoOutput;
+pub(super) use worker::run_authoring_export_worker;
 
 pub(super) struct AuthoringPngExportRequest {
     pub(super) request_id: RenderRequestId,
@@ -362,17 +367,15 @@ fn write_authoring_png(
     frame: &crate::plugin::ExportFrame,
     settings: &ExportSettings,
 ) -> Result<(), LibraryError> {
+    let exporter = plugin_manager.require_export_plugin("png_export")?;
     let destination = ExportDestination::staged(output_path, output_path);
-    let write = plugin_manager.export_frame("png_export", &destination, frame, settings);
-    let finish = plugin_manager.finish_export("png_export", &destination, settings);
-    match (write, finish) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(write_error), Ok(())) => Err(write_error),
-        (Ok(()), Err(finish_error)) => Err(finish_error),
-        (Err(write_error), Err(finish_error)) => Err(LibraryError::Render(format!(
-            "PNG write failed: {write_error}; exporter finalization also failed: {finish_error}"
-        ))),
-    }
+    let (write, _) = catch_export_panic("authoring PNG exporter write", || {
+        exporter.export_frame(&destination, frame, settings)
+    });
+    let (finish, _) = catch_export_panic("authoring PNG exporter finalization", || {
+        exporter.finish_export(&destination, settings)
+    });
+    combine_export_and_finish(write, finish, "PNG write failed")
 }
 
 fn authoring_video_settings(
@@ -458,13 +461,14 @@ pub(super) fn authoring_video_frame_count(
 fn combine_export_and_finish(
     export: Result<(), LibraryError>,
     finish: Result<(), LibraryError>,
+    export_failure: &str,
 ) -> Result<(), LibraryError> {
     match (export, finish) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(export_error), Ok(())) => Err(export_error),
         (Ok(()), Err(finish_error)) => Err(finish_error),
         (Err(export_error), Err(finish_error)) => Err(LibraryError::Render(format!(
-            "video export failed: {export_error}; exporter finalization also failed: {finish_error}"
+            "{export_failure}: {export_error}; exporter finalization also failed: {finish_error}"
         ))),
     }
 }
@@ -820,7 +824,8 @@ fn run_authoring_video_export(
     let mut temporary_audio = None;
     let mut video_output = None;
     let mut destination_lease = None;
-    let output = (|| {
+    let mut exporter: Option<Arc<dyn ExportPlugin>> = None;
+    let (output, job_panicked) = catch_export_panic("authoring video export job", || {
         require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
         // Establish the complete export's renderer capability before creating
         // temporary audio or giving the exporter a chance to open the output.
@@ -833,6 +838,7 @@ fn run_authoring_video_export(
             plugin_manager,
             cache_manager,
         )?;
+        exporter = Some(plugin_manager.require_export_plugin("ffmpeg_export")?);
         // Exporter sessions end before host-side cleanup and publication.
         // Keep this logical destination reserved across that entire gap so a
         // second coordinator cannot publish over the same user-selected path.
@@ -870,28 +876,33 @@ fn run_authoring_video_export(
             let destination = video_output.as_ref().ok_or_else(|| {
                 LibraryError::Render("video export destination is unavailable".to_string())
             })?;
-            plugin_manager.export_frame(
-                "ffmpeg_export",
-                destination.destination(),
-                &frame,
-                &settings,
-            )?;
+            let exporter = exporter.as_ref().ok_or_else(|| {
+                LibraryError::Render("video exporter endpoint is unavailable".to_string())
+            })?;
+            exporter.export_frame(destination.destination(), &frame, &settings)?;
             frames_exported = frames_exported.checked_add(1).ok_or_else(|| {
                 LibraryError::Render("exported frame count overflowed".to_string())
             })?;
         }
         Ok(())
-    })();
-    let finish = match (exporter_attempted, video_output.as_ref()) {
-        (true, Some(destination)) => {
-            plugin_manager.finish_export("ffmpeg_export", destination.destination(), &settings)
-        }
-        (true, None) => Err(LibraryError::Render(
-            "video exporter was started without a destination".to_string(),
-        )),
-        (false, _) => Ok(()),
-    };
-    let output = combine_export_and_finish(output, finish);
+    });
+    let (finish, finish_panicked) =
+        match (exporter_attempted, video_output.as_ref(), exporter.as_ref()) {
+            (true, Some(destination), Some(exporter)) => {
+                catch_export_panic("authoring video exporter finalization", || {
+                    exporter.finish_export(destination.destination(), &settings)
+                })
+            }
+            (true, _, _) => (
+                Err(LibraryError::Render(
+                    "video exporter was started without its pinned endpoint or destination"
+                        .to_string(),
+                )),
+                false,
+            ),
+            (false, _, _) => (Ok(()), false),
+        };
+    let output = combine_export_and_finish(output, finish, "video export failed");
     let cleanup = temporary_audio
         .as_mut()
         .map_or(Ok(()), TemporaryAuthoringAudio::cleanup);
@@ -915,6 +926,9 @@ fn run_authoring_video_export(
         let cleanup = video_output.abort();
         output = combine_export_and_cleanup(output, cleanup, "staging cleanup also failed");
     }
+    if job_panicked || finish_panicked {
+        *renderer = None;
+    }
     let published = output.is_ok();
     drop(destination_lease);
     let frame_number = i64::try_from(frames_exported.saturating_sub(1)).unwrap_or(i64::MAX);
@@ -928,28 +942,5 @@ fn run_authoring_video_export(
         frames_exported,
         published,
         frame_count,
-    }
-}
-
-pub(super) fn run_authoring_export_worker(
-    receiver: Receiver<AuthoringExportRequest>,
-    result_sender: Sender<AuthoringExportResult>,
-    plugin_manager: Arc<PluginManager>,
-    cache_manager: SharedCacheManager,
-) {
-    let mut renderer: Option<AuthoringExportRenderer> = None;
-    while let Ok(request) = receiver.recv() {
-        let result = match request {
-            AuthoringExportRequest::Png(request) => {
-                run_authoring_png_export(request, &mut renderer, &plugin_manager, &cache_manager)
-            }
-            AuthoringExportRequest::Video(request) => {
-                run_authoring_video_export(request, &mut renderer, &plugin_manager, &cache_manager)
-            }
-            AuthoringExportRequest::Shutdown => break,
-        };
-        if result_sender.send(result).is_err() {
-            break;
-        }
     }
 }

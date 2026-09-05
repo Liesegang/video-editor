@@ -689,7 +689,7 @@ fn late_particle_video_fails_gpu_preflight_before_frame_zero() {
     assert_eq!(state.finishes, 0);
 }
 
-fn write_stereo_wave(path: &std::path::Path, frames: &[[f32; 2]]) {
+pub(super) fn write_stereo_wave(path: &std::path::Path, frames: &[[f32; 2]]) {
     use std::io::Write as _;
 
     let channels = 2_u16;
@@ -719,7 +719,11 @@ fn write_stereo_wave(path: &std::path::Path, frames: &[[f32; 2]]) {
     file.flush().unwrap();
 }
 
-fn add_audio_item(project: &mut AuthoringProject, path: &std::path::Path, source_frames: usize) {
+pub(super) fn add_audio_item(
+    project: &mut AuthoringProject,
+    path: &std::path::Path,
+    source_frames: usize,
+) {
     let mut asset = Asset::new("audio", path.to_str().unwrap(), AssetKind::Audio);
     asset.duration = Some(source_frames as f64 / 48_000.0);
     let asset_id = asset.id;

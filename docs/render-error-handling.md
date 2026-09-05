@@ -27,6 +27,9 @@ abort, independently of the encoder session, so another in-process coordinator
 cannot enter the finish-to-rename gap. Core records the initial filesystem
 identity of the destination and the reserved staging file and rejects either
 path if its directory entry changes during the job.
+Core also pins one exporter endpoint for the whole job. Replacing a registry
+entry while a callback is running affects the next job, never the remaining
+frames or finalization of the active job.
 The exporter closes and waits for its encoder, then Core cleans temporary
 Audio and synchronizes the staging file. While the reserved staging handle is
 still open, Core revalidates its non-empty regular-file identity, every source
@@ -35,11 +38,21 @@ atomically replaces the destination. Explicit output validation permits Windows
 UNC shares while retaining the automatic-media ban on network locators. Any
 earlier render, effect, frame-write, encoder,
 cleanup, validation, or publication failure preserves an existing destination
-and attempts to remove the staging file; a cleanup failure is included in the
-reported error rather than hidden. `frames_exported` counts frames accepted
+and attempts to remove the staging file. Once temporary Audio ownership has
+returned to the coordinator, a cleanup failure is included in the reported
+error rather than hidden; reporting cleanup failure during Audio preparation
+itself remains an E1 task. `frames_exported` counts frames accepted
 before a failure; `published` becomes true only after atomic replacement.
 Failed exports emit one terminal failure completion so the app can clear its
 pending state, but never emit a success or published update.
+
+An unwinding panic in the video job body is converted to an error before the
+same pinned exporter is finalized exactly once. Finalization has its own panic
+guard; Audio and staging cleanup still run, the renderer is discarded only
+after cleanup, and the worker remains available for the next request. An outer
+request guard supplies a terminal failure completion for residual panics. This
+does not claim recovery from `panic=abort`, OOM abort, FFI abort, process kill,
+or power loss.
 
 `RenderServer` is the sole production authoring export coordinator. The removed
 pre-v1 `editor::ExportService` direct-final-write path is not retained as a
