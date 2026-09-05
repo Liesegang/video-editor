@@ -11,9 +11,11 @@ use uuid::Uuid;
 use crate::core::ensemble::effectors::{EffectorElementContext, evaluate_configured_transform};
 use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData, TransformData};
 use crate::error::LibraryError;
-use crate::model::frame::draw_type::{DrawStyle, PathEffect};
+use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::effect::ImageEffect;
-use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
+use crate::model::frame::entity::{
+    FrameBounds, FrameContent, FrameObject, FramePathPart, StyleConfig,
+};
 use crate::model::frame::transform::Transform;
 use crate::model::path::PathValue;
 
@@ -104,17 +106,8 @@ pub fn measure_shape_visual_bounds(
 }
 
 fn shape_visual_outset(styles: &[StyleConfig], path_effects: &[PathEffect]) -> f32 {
-    let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
-        outset.max(config.style.visual_outset())
-    });
-    let effect_outset = path_effects.iter().fold(0.0_f32, |outset, effect| {
-        if let PathEffect::Discrete { deviation, .. } = effect {
-            outset.max(deviation.abs() as f32)
-        } else {
-            outset
-        }
-    });
-    style_outset + effect_outset
+    crate::model::frame::appearance::appearance_outsets(styles).visual
+        + crate::model::frame::appearance::path_effect_outset(path_effects)
 }
 
 /// One Unicode grapheme element. It may contain multiple Unicode scalars, and
@@ -188,9 +181,9 @@ pub struct RuntimePathPart {
     pub block_group_id: u64,
     pub line_group_id: u64,
     pub line_index: usize,
-    /// Target modulation retained as semantic metadata. Style currently
-    /// rasterizes the combined path; a later grouped Style boundary can apply
-    /// this per part without reconstructing glyph identity.
+    /// Target modulation retained as semantic metadata. The Style boundary
+    /// carries it into one grouped renderer object without reconstructing
+    /// glyph identity or multiplying individual Style opacities.
     pub opacity: f32,
 }
 
@@ -250,7 +243,7 @@ pub fn evaluate_text_element_transforms(
         .collect()
 }
 
-fn text_element_center(element: &RuntimeTextElement) -> skia_safe::Point {
+pub(crate) fn text_element_center(element: &RuntimeTextElement) -> skia_safe::Point {
     skia_safe::Point::new(
         element.bounds.left + element.advance / 2.0,
         (element.bounds.top + element.bounds.bottom) / 2.0,
@@ -264,7 +257,7 @@ fn bounds_center(bounds: RuntimeBounds) -> skia_safe::Point {
     )
 }
 
-fn transform_bounds(
+pub(crate) fn transform_bounds(
     bounds: RuntimeBounds,
     center: skia_safe::Point,
     transform: &TransformData,
@@ -316,7 +309,7 @@ pub fn measure_ensemble_text_visual_bounds(
     current_time: f32,
 ) -> Result<Option<RuntimeBounds>, LibraryError> {
     let transforms = evaluate_text_element_transforms(text, ensemble, current_time)?;
-    let style_outset = crate::core::rendering::text_layout::text_style_outset(styles);
+    let outsets = crate::model::frame::appearance::appearance_outsets(styles);
     let mut visual_bounds = text
         .elements
         .iter()
@@ -324,12 +317,13 @@ pub fn measure_ensemble_text_visual_bounds(
         .filter(|(_, transform)| transform.opacity > 0.0)
         .map(|(element, transform)| {
             transform_bounds(
-                element.bounds.expand(style_outset),
+                element.bounds.expand(outsets.body),
                 text_element_center(element),
                 transform,
             )
         })
-        .reduce(RuntimeBounds::union);
+        .reduce(RuntimeBounds::union)
+        .map(|bounds| bounds.expand((outsets.visual - outsets.body).max(0.0)));
 
     for decorator in &ensemble.decorator_configs {
         let DecoratorConfig::LegacyBackplate {
@@ -576,75 +570,29 @@ impl RuntimeShape {
         }
     }
 
-    /// Cross the Shape -> Image boundary. Geometry-only operations retain
-    /// per-part opacity until this point; Style materializes those parts as
-    /// independent objects only when their modulation differs from 1.0.
-    pub fn into_styled_objects(
+    /// Cross the Shape -> Image boundary as one composited vector object.
+    pub fn into_styled_object(
         self,
         style: StyleConfig,
         current_time: f32,
-    ) -> Result<Vec<FrameObject>, LibraryError> {
-        self.into_appearance_objects(vec![style], current_time)
+    ) -> Result<FrameObject, LibraryError> {
+        self.into_appearance_object(vec![style], current_time)
     }
 
     /// Cross the Shape -> Image boundary once with one ordered Appearance.
     /// All layer styles share the same composed content alpha and renderer
     /// phase ordering; evaluating each style as an independent Image would
     /// change shadow, glow, offset-fill, and partial-alpha semantics.
-    pub fn into_appearance_objects(
+    pub fn into_appearance_object(
         self,
         styles: Vec<StyleConfig>,
         current_time: f32,
-    ) -> Result<Vec<FrameObject>, LibraryError> {
+    ) -> Result<FrameObject, LibraryError> {
         if styles.is_empty() {
             return Err(LibraryError::Validation(
                 "Appearance Stack requires at least one Style".to_string(),
             ));
         }
-        let RuntimeShapeGeometry::Path(path) = &self.geometry else {
-            return self
-                .into_appearance_object(styles, current_time)
-                .map(|object| vec![object]);
-        };
-        if path.parts.is_empty()
-            || path
-                .parts
-                .iter()
-                .all(|part| (part.opacity - 1.0).abs() <= f32::EPSILON)
-        {
-            return self
-                .into_appearance_object(styles, current_time)
-                .map(|object| vec![object]);
-        }
-
-        let parts = path.parts.clone();
-        let path_effects = path.path_effects.clone();
-        parts
-            .into_iter()
-            .map(|part| {
-                let mut shape = self.clone();
-                shape.geometry = RuntimeShapeGeometry::Path(RuntimePathShape {
-                    path: part.path.clone(),
-                    canonical_path: part.canonical_path.clone(),
-                    bounds: part.bounds,
-                    path_effects: path_effects.clone(),
-                    parts: vec![part.clone()],
-                });
-                let styles = styles
-                    .iter()
-                    .map(|style| style_with_opacity(style, part.opacity))
-                    .collect();
-                shape.into_appearance_object(styles, current_time)
-            })
-            .collect()
-    }
-
-    /// Create one renderer object after any semantic part expansion above.
-    fn into_appearance_object(
-        self,
-        styles: Vec<StyleConfig>,
-        current_time: f32,
-    ) -> Result<FrameObject, LibraryError> {
         let source_node_id = self.source_id;
         let spatial_transform_node_id = self.spatial_transform_node_id;
         let ensemble = if self.effector_configs.is_empty() && self.decorator_configs.is_empty() {
@@ -674,8 +622,17 @@ impl RuntimeShape {
                 // `path.bounds` was measured from exact canonical Skia
                 // geometry when available. Re-parsing the SVG fallback here
                 // would silently turn weighted conics into ordinary quads.
+                // Grouped parts are authoritative once present, so their
+                // union also owns the declared bounds instead of trusting a
+                // potentially stale aggregate-path measurement.
+                let geometry_bounds = path
+                    .parts
+                    .iter()
+                    .map(|part| part.bounds)
+                    .reduce(RuntimeBounds::union)
+                    .unwrap_or(path.bounds);
                 let outset = shape_visual_outset(&styles, &path.path_effects);
-                let mut bounds = Some(path.bounds.expand(outset));
+                let mut bounds = Some(geometry_bounds.expand(outset));
                 if let Some(ensemble) = &ensemble
                     && let Some(decorator_bounds) =
                         measure_path_decorator_bounds(path, &ensemble.decorator_configs)?
@@ -703,6 +660,7 @@ impl RuntimeShape {
             RuntimeShapeGeometry::Path(path) => FrameContent::Shape {
                 path: path.path,
                 canonical_path: path.canonical_path,
+                parts: frame_path_parts(path.parts)?,
                 styles,
                 path_effects: path.path_effects,
                 effects: self.effects,
@@ -720,55 +678,26 @@ impl RuntimeShape {
     }
 }
 
-fn style_with_opacity(style: &StyleConfig, opacity: f32) -> StyleConfig {
-    let mut style = style.clone();
-    let opacity = opacity.clamp(0.0, 1.0);
-    match &mut style.style {
-        DrawStyle::Fill { color, .. } | DrawStyle::Stroke { color, .. } => {
-            color.a = (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8;
-        }
-        DrawStyle::DropShadow {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::ColorOverlay {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::GradientOverlay {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::PatternOverlay {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::InnerShadow {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::OuterGlow {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::InnerGlow {
-            opacity: style_opacity,
-            ..
-        }
-        | DrawStyle::Satin {
-            opacity: style_opacity,
-            ..
-        } => *style_opacity *= f64::from(opacity),
-        DrawStyle::BevelEmboss {
-            highlight_opacity,
-            shadow_opacity,
-            ..
-        } => {
-            *highlight_opacity *= f64::from(opacity);
-            *shadow_opacity *= f64::from(opacity);
-        }
+fn frame_path_parts(parts: Vec<RuntimePathPart>) -> Result<Vec<FramePathPart>, LibraryError> {
+    if parts.is_empty() || (parts.len() == 1 && (parts[0].opacity - 1.0).abs() <= f32::EPSILON) {
+        return Ok(Vec::new());
     }
-    style
+    parts
+        .into_iter()
+        .map(|part| {
+            if !part.opacity.is_finite() {
+                return Err(LibraryError::Validation(format!(
+                    "Runtime path part {} has non-finite opacity",
+                    part.stable_id
+                )));
+            }
+            Ok(FramePathPart {
+                path: part.path,
+                canonical_path: part.canonical_path,
+                opacity: ordered_float::OrderedFloat(part.opacity.clamp(0.0, 1.0)),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -778,6 +707,7 @@ mod tests {
     use crate::core::ensemble::types::{EffectorConfig, EnsembleData};
     use crate::core::rendering::path_geometry::to_skia_path;
     use crate::model::frame::color::Color;
+    use crate::model::frame::draw_type::DrawStyle;
     use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
 
     #[test]
@@ -840,6 +770,56 @@ mod tests {
             (mapped_center.y - (block_center.y - 7.0 + (first_center.y - block_center.y) * 0.5))
                 .abs()
                 < 0.01
+        );
+    }
+
+    #[test]
+    fn ensemble_decoration_outset_is_applied_after_element_scale() {
+        let text =
+            crate::core::rendering::text_layout::layout_runtime_text_shape("A", "Arial", 100.0);
+        let patch = TransformData {
+            translate: (0.0, 0.0),
+            rotate: 0.0,
+            scale: (0.1, 0.1),
+            opacity: 1.0,
+            color_override: None,
+        };
+        let ensemble = EnsembleData {
+            enabled: true,
+            effector_configs: Vec::new(),
+            decorator_configs: Vec::new(),
+            patches: std::collections::HashMap::from([(0, patch)]),
+        };
+        let styles = vec![
+            StyleConfig {
+                id: Uuid::new_v4(),
+                style: DrawStyle::Fill {
+                    color: Color::white(),
+                    offset: 0.0,
+                },
+            },
+            StyleConfig {
+                id: Uuid::new_v4(),
+                style: DrawStyle::DropShadow {
+                    color: Color::black(),
+                    opacity: 1.0,
+                    blend_mode: crate::model::BlendMode::Normal,
+                    angle: 0.0,
+                    distance: 50.0,
+                    spread: 0.0,
+                    size: 0.0,
+                },
+            },
+        ];
+        let transforms = evaluate_text_element_transforms(&text, &ensemble, 0.0).unwrap();
+        let scaled_body = transformed_text_element_bounds(&text.elements[0], &transforms[0]);
+        let visual = measure_ensemble_text_visual_bounds(&text, &styles, &ensemble, 0.0)
+            .unwrap()
+            .expect("scaled Ensemble text has visual bounds");
+
+        assert!(
+            visual.right >= scaled_body.right + 49.0,
+            "Drop Shadow decoration was incorrectly scaled with the glyph: body={scaled_body:?}, visual={visual:?}"
         );
     }
 
@@ -911,10 +891,7 @@ mod tests {
                 offset: 0.0,
             },
         };
-        let objects = shape.into_styled_objects(style, 0.0)?;
-        let object = objects
-            .first()
-            .ok_or_else(|| LibraryError::Render("styled conic produced no object".to_string()))?;
+        let object = shape.into_styled_object(style, 0.0)?;
         let bounds = object
             .content_bounds
             .ok_or_else(|| LibraryError::Render("styled conic has no bounds".to_string()))?;
@@ -922,6 +899,7 @@ mod tests {
         assert!((rendered_height - (direct_bounds.height() + 2.0)).abs() <= f32::EPSILON);
         let FrameContent::Shape {
             canonical_path: Some(rendered),
+            parts,
             ..
         } = &object.content
         else {
@@ -930,6 +908,10 @@ mod tests {
             ));
         };
         assert_eq!(rendered, &value);
+        assert!(matches!(
+            parts.as_slice(),
+            [FramePathPart { opacity, .. }] if opacity.into_inner() == 0.4
+        ));
         let FrameContent::Shape { styles, .. } = &object.content else {
             return Err(LibraryError::Render(
                 "styled conic changed content type".to_string(),
@@ -937,7 +919,7 @@ mod tests {
         };
         assert!(matches!(
             styles.first().map(|style| &style.style),
-            Some(DrawStyle::Fill { color, .. }) if color.a == 102
+            Some(DrawStyle::Fill { color, .. }) if color.a == 255
         ));
         Ok(())
     }

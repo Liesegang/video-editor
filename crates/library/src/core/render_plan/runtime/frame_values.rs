@@ -220,6 +220,7 @@ pub(super) fn shape_object(
         content: FrameContent::Shape {
             path,
             canonical_path,
+            parts: Vec::new(),
             styles,
             path_effects: Vec::new(),
             effects: Vec::new(),

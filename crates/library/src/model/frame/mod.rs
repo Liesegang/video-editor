@@ -1,5 +1,6 @@
 use crate::model::frame::frame::FrameInfo;
 
+pub mod appearance;
 pub mod color;
 pub mod draw_type;
 pub mod effect;

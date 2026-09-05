@@ -479,7 +479,7 @@ impl FrameEvaluator<'_> {
             EvalOutput::Produced(style) => style,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let objects = shape.into_styled_objects(style, scope.time as f32)?;
+        let object = shape.into_styled_object(style, scope.time as f32)?;
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Node,
@@ -490,7 +490,7 @@ impl FrameEvaluator<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
-            items: objects.into_iter().map(FrameItem::Object).collect(),
+            items: vec![FrameItem::Object(object)],
         })))
     }
 

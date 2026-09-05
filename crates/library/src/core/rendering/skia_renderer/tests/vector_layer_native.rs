@@ -52,6 +52,7 @@ fn backend_native_vector_draws_match_the_owned_output_boundary() {
             ShapeRasterRequest {
                 path_data: "M 0 0 L 9 0 L 9 7 L 0 7 Z",
                 canonical_path: None,
+                parts: &[],
                 styles: &styles,
                 path_effects: &[],
                 ensemble: None,
@@ -67,6 +68,7 @@ fn backend_native_vector_draws_match_the_owned_output_boundary() {
         .rasterize_shape_layer(ShapeRasterRequest {
             path_data: "M 0 0 L 9 0 L 9 7 L 0 7 Z",
             canonical_path: None,
+            parts: &[],
             styles: &styles,
             path_effects: &[],
             ensemble: None,
@@ -175,6 +177,7 @@ fn render_layered_gpu_vectors(native: bool) -> Option<Vec<[f32; 4]>> {
     let shape_request = ShapeRasterRequest {
         path_data: "M 0 0 L 52 0 L 52 31 L 0 31 Z",
         canonical_path: None,
+        parts: &[],
         styles: &styles,
         path_effects: &[],
         ensemble: None,
@@ -277,6 +280,7 @@ fn render_layer_mask_case(
             ShapeRasterRequest {
                 path_data: "M 20 20 L 44 20 L 44 44 L 20 44 Z",
                 canonical_path: None,
+                parts: &[],
                 styles,
                 path_effects: &[],
                 ensemble: None,
@@ -287,6 +291,38 @@ fn render_layer_mask_case(
         )
         .expect("draw layer-mask parity shape");
     working_pixels(&mut renderer)
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn layer_mask_white_fill() -> StyleConfig {
+    StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::Fill {
+            color: Color::white(),
+            offset: 0.0,
+        },
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn layer_mask_shadow(distance: f64, size: f64) -> StyleConfig {
+    StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::DropShadow {
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            angle: 180.0,
+            distance,
+            spread: 0.0,
+            size,
+        },
+    }
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
@@ -412,23 +448,6 @@ fn gpu_backend_native_vector_draws_preserve_layered_pixels() {
 #[test]
 #[ignore = "requires an idle desktop OpenGL GPU"]
 fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
-    let shadow = |distance, size| StyleConfig {
-        id: Uuid::new_v4(),
-        style: DrawStyle::DropShadow {
-            color: Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            opacity: 1.0,
-            blend_mode: BlendMode::Normal,
-            angle: 180.0,
-            distance,
-            spread: 0.0,
-            size,
-        },
-    };
     let stroke = StyleConfig {
         id: Uuid::new_v4(),
         style: DrawStyle::Stroke {
@@ -449,7 +468,7 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
     let baseline_cpu = render_layer_mask_case(std::slice::from_ref(&stroke), transform, false);
     let baseline_gpu = render_layer_mask_case(std::slice::from_ref(&stroke), transform, true);
 
-    let stroke_styles = [stroke, shadow(0.0, 0.0)];
+    let stroke_styles = [stroke, layer_mask_shadow(0.0, 0.0)];
     let stroke_cpu = render_layer_mask_case(&stroke_styles, transform, false);
     let stroke_gpu = render_layer_mask_case(&stroke_styles, transform, true);
     assert_gpu_layer_mask_near_outside_baseline_edges(
@@ -478,7 +497,7 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
                 offset: 0.0,
             },
         },
-        shadow(10.0, 0.0),
+        layer_mask_shadow(10.0, 0.0),
     ];
     let partial_cpu = render_layer_mask_case(&partial_styles, Affine2D::IDENTITY, false);
     let partial_gpu = render_layer_mask_case(&partial_styles, Affine2D::IDENTITY, true);
@@ -504,7 +523,7 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
                 offset: 0.0,
             },
         },
-        shadow(8.0, 6.0),
+        layer_mask_shadow(8.0, 6.0),
     ];
     let blurred_cpu = render_layer_mask_case(&blurred_styles, Affine2D::IDENTITY, false);
     let blurred_gpu = render_layer_mask_case(&blurred_styles, Affine2D::IDENTITY, true);
@@ -513,4 +532,42 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
         blurred_cpu[32 * 72 + 49][0] > 0.01 && blurred_gpu[32 * 72 + 49][0] > 0.01,
         "blurred Drop Shadow must remain visible outside the Fill on CPU and GPU"
     );
+
+    // Nonuniform scaling is deliberately chosen so the source and translated
+    // shadow boundaries still land on whole device pixels. This isolates GPU
+    // LayerMask transform parity from backend-specific subpixel AA coverage.
+    let nonuniform_transform = Affine2D::translate(-8.0, 18.0).compose(Affine2D::scale(1.5, 0.5));
+    let fill = layer_mask_white_fill();
+    let nonuniform_baseline_cpu =
+        render_layer_mask_case(std::slice::from_ref(&fill), nonuniform_transform, false);
+    let nonuniform_baseline_gpu =
+        render_layer_mask_case(std::slice::from_ref(&fill), nonuniform_transform, true);
+    let nonuniform_styles = [fill, layer_mask_shadow(10.0, 0.0)];
+    let nonuniform_cpu = render_layer_mask_case(&nonuniform_styles, nonuniform_transform, false);
+    let nonuniform_gpu = render_layer_mask_case(&nonuniform_styles, nonuniform_transform, true);
+    assert_gpu_layer_mask_near(&nonuniform_baseline_cpu, &nonuniform_baseline_gpu);
+    assert_gpu_layer_mask_near(&nonuniform_cpu, &nonuniform_gpu);
+    let (cast_x, cast_y) = nonuniform_transform.map_point(50.0, 32.0);
+    let cast = cast_y.round() as usize * 72 + cast_x.round() as usize;
+    assert!(
+        nonuniform_baseline_cpu[cast][3] <= 1.0e-6
+            && nonuniform_baseline_gpu[cast][3] <= 1.0e-6
+            && nonuniform_cpu[cast][0] > 0.1
+            && nonuniform_gpu[cast][0] > 0.1,
+        "nonuniform off-origin Drop Shadow must extend beyond the Fill on CPU and GPU"
+    );
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "known issue: fractional nonuniform transforms produce CPU/GPU blur-AA divergence"]
+fn gpu_layer_mask_fractional_nonuniform_blur_matches_cpu() {
+    let transform = Affine2D::translate(-6.0, 18.0).compose(Affine2D::scale(1.35, 0.55));
+    let fill = layer_mask_white_fill();
+    let baseline_cpu = render_layer_mask_case(std::slice::from_ref(&fill), transform, false);
+    let baseline_gpu = render_layer_mask_case(std::slice::from_ref(&fill), transform, true);
+    let styles = [fill, layer_mask_shadow(10.0, 2.0)];
+    let cpu = render_layer_mask_case(&styles, transform, false);
+    let gpu = render_layer_mask_case(&styles, transform, true);
+    assert_gpu_layer_mask_near_outside_baseline_edges(&cpu, &gpu, &baseline_cpu, &baseline_gpu);
 }

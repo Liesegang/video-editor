@@ -5,6 +5,7 @@ use skia_safe::{
     TileMode, color_filters, image_filters,
 };
 
+use super::super::vector_bounds::VectorLayerBounds;
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
 use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
@@ -13,30 +14,28 @@ use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
 pub(in crate::core::rendering::skia_renderer) struct LayerMask {
     picture: Picture,
     source: ImageFilter,
-    bounds: Rect,
-    style_bounds: Rect,
+    bounds: VectorLayerBounds,
 }
 
 impl LayerMask {
     pub(in crate::core::rendering::skia_renderer) fn record(
-        bounds: Rect,
-        style_bounds: Rect,
+        bounds: VectorLayerBounds,
         draw: impl FnOnce(&Canvas) -> Result<(), LibraryError>,
     ) -> Result<Self, LibraryError> {
         let mut recorder = PictureRecorder::new();
-        let canvas = recorder.begin_recording(bounds, false);
+        let canvas = recorder.begin_recording(bounds.content, false);
         draw(canvas)?;
         let picture = recorder
-            .finish_recording_as_picture(Some(&bounds))
+            .finish_recording_as_picture(Some(&bounds.content))
             .ok_or_else(|| LibraryError::Render("Cannot record vector layer mask".to_string()))?;
-        let source = image_filters::picture(picture.clone(), Some(&bounds)).ok_or_else(|| {
-            LibraryError::Render("Cannot create vector layer mask filter".to_string())
-        })?;
+        let source =
+            image_filters::picture(picture.clone(), Some(&bounds.content)).ok_or_else(|| {
+                LibraryError::Render("Cannot create vector layer mask filter".to_string())
+            })?;
         Ok(Self {
             picture,
             source,
             bounds,
-            style_bounds,
         })
     }
 
@@ -45,7 +44,11 @@ impl LayerMask {
     }
 
     pub(super) const fn style_bounds(&self) -> Rect {
-        self.style_bounds
+        self.bounds.geometry
+    }
+
+    pub(super) const fn visual_bounds(&self) -> Rect {
+        self.bounds.visual
     }
 
     pub(super) fn source(&self) -> ImageFilter {
@@ -55,7 +58,7 @@ impl LayerMask {
     pub(super) fn draw_filter(&self, canvas: &Canvas, filter: ImageFilter) {
         let mut paint = Paint::default();
         paint.set_image_filter(filter);
-        canvas.draw_rect(self.bounds, &paint);
+        canvas.draw_rect(self.bounds.visual, &paint);
     }
 
     pub(super) fn solid_tint(

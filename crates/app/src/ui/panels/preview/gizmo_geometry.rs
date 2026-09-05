@@ -355,6 +355,7 @@ mod tests {
             content: FrameContent::Shape {
                 path: String::new(),
                 canonical_path: None,
+                parts: Vec::new(),
                 styles: Vec::<StyleConfig>::new(),
                 path_effects: Vec::new(),
                 effects: Vec::new(),

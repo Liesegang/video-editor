@@ -61,6 +61,7 @@ struct CountingEffect {
 
 struct TexturePathRenderer {
     saw_texture_layer: bool,
+    shape_part_opacities: Vec<f32>,
     native_group_composites: usize,
     direct_text_draws: usize,
     direct_shape_draws: usize,
@@ -117,8 +118,13 @@ impl Renderer for TexturePathRenderer {
 
     fn rasterize_shape_layer(
         &mut self,
-        _request: ShapeRasterRequest<'_>,
+        request: ShapeRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
+        self.shape_part_opacities = request
+            .parts
+            .iter()
+            .map(|part| part.opacity.into_inner())
+            .collect();
         Ok(RenderOutput::Texture(
             crate::rendering::renderer::TextureInfo {
                 texture_id: 7,
@@ -504,6 +510,7 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
     .unwrap();
     let renderer = TexturePathRenderer {
         saw_texture_layer: false,
+        shape_part_opacities: Vec::new(),
         native_group_composites: 0,
         direct_text_draws: 0,
         direct_shape_draws: 0,
@@ -603,6 +610,7 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
     };
     let renderer = TexturePathRenderer {
         saw_texture_layer: false,
+        shape_part_opacities: Vec::new(),
         native_group_composites: 0,
         direct_text_draws: 0,
         direct_shape_draws: 0,

@@ -36,6 +36,8 @@ mod gpu_terminal;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/gpu_terminal_hdr.rs"]
 mod gpu_terminal_hdr;
+#[path = "tests/layer_style_bounds.rs"]
+mod layer_style_bounds;
 #[path = "tests/layer_styles.rs"]
 mod layer_styles;
 #[cfg(all(feature = "gl", target_os = "windows"))]
@@ -584,6 +586,7 @@ fn project_text_and_transformed_shape_rasterizers_keep_the_working_contract() {
         .rasterize_shape_layer(ShapeRasterRequest {
             path_data: "M 0 0 L 4 0 L 4 4 L 0 4 Z",
             canonical_path: None,
+            parts: &[],
             styles: &styles,
             path_effects: &[],
             ensemble: None,

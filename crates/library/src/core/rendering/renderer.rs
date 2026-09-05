@@ -269,6 +269,9 @@ pub struct ShapeRasterRequest<'a> {
     /// Exact native geometry when available. The SVG string remains only a
     /// legacy/fallback boundary and must not replace weighted conics.
     pub canonical_path: Option<&'a crate::model::path::PathValue>,
+    /// Ordered child paths whose composed body owns the layer-style mask.
+    /// Empty keeps the aggregate path fast path.
+    pub parts: &'a [crate::model::frame::entity::FramePathPart],
     pub styles: &'a [StyleConfig],
     pub path_effects: &'a [PathEffect],
     pub ensemble: Option<&'a crate::core::ensemble::EnsembleData>,

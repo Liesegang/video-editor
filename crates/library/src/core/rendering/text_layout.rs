@@ -53,13 +53,39 @@ pub fn measure_text_layout(text: &str, primary_font_name: &str, size: f32) -> Te
     }
 }
 
+/// Measure the exact local ink painted by the production Paragraph.
+///
+/// SkParagraph reports each glyph's bounds around its own origin. The run
+/// origin and glyph position are therefore both part of the final local
+/// rectangle. Logical selection boxes are deliberately not used here: a
+/// normalized layer style belongs to visible object ink, not whitespace or
+/// the Composition.
+pub(crate) fn measure_text_ink_bounds(text: &str, primary_font_name: &str, size: f32) -> Rect {
+    let mut paragraph = build_text_paragraph(text, primary_font_name, size, None);
+    let mut ink_bounds: Option<Rect> = None;
+    paragraph.extended_visit(|_, info| {
+        let Some(info) = info else {
+            return;
+        };
+        let origin = info.origin();
+        for (position, bounds) in info.positions().iter().zip(info.bounds()) {
+            if bounds.is_empty() {
+                continue;
+            }
+            let glyph_bounds = bounds.with_offset((origin.x + position.x, origin.y + position.y));
+            ink_bounds = Some(ink_bounds.map_or(glyph_bounds, |mut current| {
+                current.join(glyph_bounds);
+                current
+            }));
+        }
+    });
+    ink_bounds.unwrap_or_else(Rect::new_empty)
+}
+
 /// The authored style stack can paint outside the Paragraph's logical box.
 /// Return the largest symmetric expansion used by the actual text paints.
 pub fn text_style_outset(styles: &[StyleConfig]) -> f32 {
-    styles.iter().fold(0.0_f32, |outset, config| {
-        let style_outset = config.style.visual_outset();
-        outset.max(style_outset)
-    })
+    crate::model::frame::appearance::appearance_outsets(styles).visual
 }
 
 /// Resolve render-only Unicode grapheme metadata from the same Paragraph used
@@ -285,7 +311,7 @@ fn stable_text_group_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{layout_runtime_text_shape, measure_text_layout};
+    use super::{layout_runtime_text_shape, measure_text_ink_bounds, measure_text_layout};
 
     #[test]
     fn paragraph_metrics_and_character_layout_share_multiline_baselines() {
@@ -328,5 +354,15 @@ mod tests {
             clone.elements[2].element_group_id,
             shape.elements[2].element_group_id
         );
+    }
+
+    #[test]
+    fn paragraph_ink_bounds_exclude_surrounding_whitespace() {
+        let logical = measure_text_layout("  M  ", "Arial", 36.0);
+        let ink = measure_text_ink_bounds("  M  ", "Arial", 36.0);
+        assert!(!ink.is_empty());
+        assert!(ink.left > 0.0);
+        assert!(ink.right < logical.width);
+        assert!(ink.height() < logical.height);
     }
 }

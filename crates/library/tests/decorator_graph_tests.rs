@@ -281,6 +281,7 @@ fn rasterize_geometry(path: &str) -> Result<Image> {
     match renderer.rasterize_shape_layer(ShapeRasterRequest {
         path_data: path,
         canonical_path: None,
+        parts: &[],
         styles: std::slice::from_ref(&style),
         path_effects: &[],
         ensemble: None,
@@ -686,10 +687,7 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
             offset: 0.0,
         },
     };
-    let mut objects = target.into_styled_objects(style, 0.0)?;
-    let object = objects
-        .pop()
-        .context("legacy Backplate produced no object")?;
+    let object = target.into_styled_object(style, 0.0)?;
     let FrameContent::Shape {
         path,
         styles,
@@ -718,6 +716,7 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
     let RenderOutput::Image(image) = renderer.rasterize_shape_layer(ShapeRasterRequest {
         path_data: &path,
         canonical_path: None,
+        parts: &[],
         styles: &styles,
         path_effects: &path_effects,
         ensemble: Some(&ensemble),
@@ -736,7 +735,11 @@ fn legacy_v1_backplate_keeps_one_shape_paint_time_appearance() -> Result<()> {
 #[test]
 fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let (mut text, background) = runtime_shapes(&plugins)?;
+    let (mut text, mut background) = runtime_shapes(&plugins)?;
+    background.effects.push(ImageEffect {
+        effect_type: "grouped-opacity-fixture".to_string(),
+        properties: Default::default(),
+    });
     text.effector_configs.push(EffectorConfig::Opacity {
         target_opacity: 50.0,
         mode: OpacityMode::Set,
@@ -753,7 +756,7 @@ fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
         },
         0.0,
     )?;
-    let objects = output.into_styled_objects(
+    let object = output.into_styled_object(
         library::model::frame::entity::StyleConfig {
             id: Uuid::new_v4(),
             style: DrawStyle::Fill {
@@ -768,22 +771,32 @@ fn target_part_opacity_survives_until_style_rasterization() -> Result<()> {
         },
         0.0,
     )?;
-    assert_eq!(objects.len(), 3);
-    for object in objects {
-        let FrameContent::Shape { styles, .. } = object.content else {
-            bail!("Backplate Style did not rasterize Shape geometry")
-        };
-        assert!(matches!(
-            styles.as_slice(),
-            [library::model::frame::entity::StyleConfig {
-                style: DrawStyle::Fill {
-                    color: Color { a: 100, .. },
-                    ..
-                },
+    let FrameContent::Shape {
+        parts,
+        styles,
+        effects,
+        ..
+    } = object.content
+    else {
+        bail!("Backplate Style did not rasterize Shape geometry")
+    };
+    assert_eq!(parts.len(), 3, "all parts must share one renderer object");
+    assert!(parts.iter().all(|part| part.opacity == OrderedFloat(0.5)));
+    assert!(matches!(
+        styles.as_slice(),
+        [library::model::frame::entity::StyleConfig {
+            style: DrawStyle::Fill {
+                color: Color { a: 200, .. },
                 ..
-            }]
-        ));
-    }
+            },
+            ..
+        }]
+    ));
+    assert_eq!(
+        effects.len(),
+        1,
+        "the Image effect must not be cloned per part"
+    );
     Ok(())
 }
 

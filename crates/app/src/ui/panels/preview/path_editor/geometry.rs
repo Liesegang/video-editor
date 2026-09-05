@@ -93,6 +93,7 @@ mod tests {
             content: FrameContent::Shape {
                 path: String::new(),
                 canonical_path: Some(PathValue::empty(FillRule::NonZero)),
+                parts: Vec::new(),
                 styles: Vec::new(),
                 path_effects: Vec::new(),
                 effects: Vec::new(),

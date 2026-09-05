@@ -2,6 +2,7 @@ use super::*;
 use crate::model::frame::draw_type::{
     BevelDirection, BevelStyle, BevelTechnique, GradientStyle, GradientStyleStop, PatternStyle,
 };
+use crate::model::frame::entity::FramePathPart;
 use crate::model::property::{GradientGeometry, GradientSpread, PatternKind, Vec2};
 use ordered_float::OrderedFloat;
 
@@ -13,6 +14,14 @@ fn render_shape(styles: Vec<DrawStyle>) -> Vec<[f32; 4]> {
 }
 
 fn render_shape_with_transform(styles: Vec<DrawStyle>, transform: Affine2D) -> Vec<[f32; 4]> {
+    render_shape_with_parts(styles, transform, &[])
+}
+
+fn render_shape_with_parts(
+    styles: Vec<DrawStyle>,
+    transform: Affine2D,
+    parts: &[FramePathPart],
+) -> Vec<[f32; 4]> {
     let transparent = Color {
         r: 0,
         g: 0,
@@ -36,6 +45,7 @@ fn render_shape_with_transform(styles: Vec<DrawStyle>, transform: Affine2D) -> V
         .rasterize_shape_layer(ShapeRasterRequest {
             path_data: "M 20 20 L 44 20 L 44 44 L 20 44 Z",
             canonical_path: None,
+            parts,
             styles: &styles,
             path_effects: &[],
             ensemble: None,
@@ -46,6 +56,14 @@ fn render_shape_with_transform(styles: Vec<DrawStyle>, transform: Affine2D) -> V
         panic!("Project-linear rasterizer must return working pixels");
     };
     output.pixels().pixels().to_vec()
+}
+
+fn path_part(path: &str, opacity: f32) -> FramePathPart {
+    FramePathPart {
+        path: path.to_string(),
+        canonical_path: None,
+        opacity: OrderedFloat(opacity),
+    }
 }
 
 fn render_text(styles: Vec<DrawStyle>) -> Vec<[f32; 4]> {
@@ -109,6 +127,28 @@ fn pixel(pixels: &[[f32; 4]], x: usize, y: usize) -> [f32; 4] {
 
 fn non_transparent_count(pixels: &[[f32; 4]]) -> usize {
     pixels.iter().filter(|pixel| pixel[3] > 0.002).count()
+}
+
+fn alpha_bounds(pixels: &[[f32; 4]]) -> (usize, usize, usize, usize) {
+    let mut left = WIDTH;
+    let mut top = HEIGHT;
+    let mut right = 0;
+    let mut bottom = 0;
+    for (index, pixel) in pixels.iter().enumerate() {
+        if pixel[3] > 0.002 {
+            let x = index % WIDTH;
+            let y = index / WIDTH;
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+        }
+    }
+    assert!(
+        left <= right && top <= bottom,
+        "render has no visible alpha"
+    );
+    (left, top, right, bottom)
 }
 
 fn white_fill() -> DrawStyle {
@@ -332,6 +372,43 @@ fn bevel_emboss_produces_opposing_highlight_and_shadow_edges() {
 }
 
 #[test]
+fn derived_bevel_kernel_stays_within_its_reported_outset_for_every_technique() {
+    let body_bounds = alpha_bounds(&render_shape(vec![white_fill()]));
+    for technique in [
+        BevelTechnique::Smooth,
+        BevelTechnique::ChiselSoft,
+        BevelTechnique::ChiselHard,
+    ] {
+        let bevel = DrawStyle::BevelEmboss {
+            style: BevelStyle::OuterBevel,
+            technique,
+            depth: 0.0,
+            direction: BevelDirection::Up,
+            size: 12.0,
+            soften: 0.0,
+            angle: 135.0,
+            altitude: 90.0,
+            highlight_color: Color::white(),
+            highlight_opacity: 1.0,
+            highlight_blend_mode: BlendMode::Normal,
+            shadow_color: opaque(255, 0, 0),
+            shadow_opacity: 1.0,
+            shadow_blend_mode: BlendMode::Normal,
+        };
+        let outset = bevel.visual_outset().ceil() as usize;
+        assert!(outset > 0, "{technique:?} lost its derived kernel outset");
+        let styled_bounds = alpha_bounds(&render_shape(vec![white_fill(), bevel]));
+        assert!(
+            styled_bounds.0 >= body_bounds.0.saturating_sub(outset)
+                && styled_bounds.1 >= body_bounds.1.saturating_sub(outset)
+                && styled_bounds.2 <= (body_bounds.2 + outset).min(WIDTH - 1)
+                && styled_bounds.3 <= (body_bounds.3 + outset).min(HEIGHT - 1),
+            "{technique:?} rendered outside reported outset: body={body_bounds:?}, styled={styled_bounds:?}, outset={outset}"
+        );
+    }
+}
+
+#[test]
 fn text_uses_the_same_alpha_mask_style_renderer_as_shapes() {
     let fill = render_text(vec![white_fill()]);
     let styled = render_text(vec![
@@ -421,6 +498,34 @@ fn transformed_stroke_mask_preserves_its_hollow_center() {
 }
 
 #[test]
+fn off_origin_nonuniform_shape_shadow_preserves_unmasked_fill_and_stroke_silhouettes() {
+    let transform = Affine2D::translate(-6.0, 18.0).compose(Affine2D::scale(1.35, 0.55));
+    for (label, body) in [
+        ("Fill", white_fill()),
+        ("Stroke", stroke(Color::white(), 6.0)),
+    ] {
+        let baseline = render_shape_with_transform(vec![body.clone()], transform);
+        let styled = render_shape_with_transform(vec![body, red_shadow(10.0, 2.0)], transform);
+        let baseline_bounds = alpha_bounds(&baseline);
+        let styled_bounds = alpha_bounds(&styled);
+        assert!(
+            styled_bounds.2 > baseline_bounds.2,
+            "{label} shadow was clipped instead of extending its off-origin silhouette: baseline={baseline_bounds:?}, styled={styled_bounds:?}"
+        );
+        for (index, pixel) in baseline
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| pixel[3] > 0.99)
+        {
+            assert_eq!(
+                styled[index], *pixel,
+                "{label} shadow mask clipped or changed opaque body pixel {index}"
+            );
+        }
+    }
+}
+
+#[test]
 fn drop_shadow_is_always_composited_below_plain_and_ensemble_text() {
     for ensemble_enabled in [false, true] {
         let fill = render_text_with_ensemble(vec![white_fill()], ensemble_enabled);
@@ -472,6 +577,100 @@ fn ensemble_character_shadow_cannot_cover_an_earlier_character() {
             "a later character's offset shadow covered opaque text at pixel {index}"
         );
     }
+}
+
+#[test]
+fn grouped_path_opacity_is_applied_once_before_one_shared_shadow_phase() {
+    let parts = vec![
+        path_part("M 12 20 L 36 20 L 36 44 L 12 44 Z", 1.0),
+        path_part("M 38 20 L 62 20 L 62 44 L 38 44 Z", 0.5),
+    ];
+    let fill = render_shape_with_parts(vec![white_fill()], Affine2D::IDENTITY, &parts);
+    let left_cast_shadow = DrawStyle::DropShadow {
+        color: Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+        angle: 180.0,
+        distance: 12.0,
+        spread: 0.0,
+        size: 0.0,
+    };
+    let styled = render_shape_with_parts(
+        vec![white_fill(), left_cast_shadow],
+        Affine2D::IDENTITY,
+        &parts,
+    );
+    for (index, body) in fill.iter().enumerate().filter(|(_, pixel)| pixel[3] > 0.99) {
+        assert_eq!(
+            styled[index], *body,
+            "the second part's shadow covered the first part body at pixel {index}"
+        );
+    }
+
+    let partial = vec![path_part("M 20 20 L 44 20 L 44 44 L 20 44 Z", 0.5)];
+    let cast = render_shape_with_parts(
+        vec![white_fill(), red_shadow(10.0, 0.0)],
+        Affine2D::IDENTITY,
+        &partial,
+    );
+    assert!(
+        (pixel(&cast, 50, 32)[3] - 0.5).abs() < 0.02,
+        "part opacity was multiplied into both content alpha and shadow opacity"
+    );
+}
+
+#[test]
+fn overlapping_partial_parts_share_body_alpha_without_reapplying_paint_opacity() {
+    let parts = [
+        path_part("M 12 20 L 32 20 L 32 44 L 12 44 Z", 0.5),
+        path_part("M 24 20 L 44 20 L 44 44 L 24 44 Z", 0.5),
+    ];
+    // Each part contains two opaque paints. Its 0.5 opacity must wrap their
+    // complete body, rather than turn each paint into a separate 0.5 layer.
+    let pixels = render_shape_with_parts(
+        vec![white_fill(), white_fill(), red_shadow(36.0, 0.0)],
+        Affine2D::IDENTITY,
+        &parts,
+    );
+    for (x, expected) in [(18, 0.5), (28, 0.75), (54, 0.5), (64, 0.75)] {
+        let actual = pixel(&pixels, x, 32)[3];
+        assert!(
+            (actual - expected).abs() < 2.0e-3,
+            "grouped body/shadow opacity at x={x}: actual={actual}, expected={expected}"
+        );
+    }
+    assert!(pixel(&pixels, 28, 32)[1] > 0.7, "the body remains white");
+    assert!(
+        pixel(&pixels, 64, 32)[1] < 1.0e-6,
+        "the cast shadow remains red"
+    );
+}
+
+#[test]
+fn grouped_open_strokes_keep_zero_height_geometry_in_the_shared_mask_bounds() {
+    let parts = vec![
+        path_part("M 12 20 L 60 20", 1.0),
+        path_part("M 12 44 L 60 44", 0.5),
+    ];
+    let rendered = render_shape_with_parts(
+        vec![stroke(Color::white(), 4.0), red_shadow(0.0, 0.0)],
+        Affine2D::IDENTITY,
+        &parts,
+    );
+
+    assert!(
+        pixel(&rendered, 32, 20)[3] > 0.98,
+        "first zero-height path was dropped from grouped mask bounds"
+    );
+    assert!(
+        (pixel(&rendered, 32, 44)[3] - 0.75).abs() < 0.03,
+        "second zero-height path was dropped or lost its child opacity before shadow composition"
+    );
 }
 
 #[test]

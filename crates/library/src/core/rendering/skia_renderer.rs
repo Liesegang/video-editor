@@ -2,7 +2,6 @@ use crate::cache::SharedCacheManager;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
-use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::SkSLColorDomain;
 use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
@@ -35,10 +34,12 @@ mod particle;
 mod terminal;
 #[cfg(feature = "gl")]
 mod terminal_compute;
+mod vector_bounds;
 mod vector_layers;
+mod vector_path_body;
 
 use output_compositing::build_transform_matrix;
-use paint::{PaintFactory, StrokeRenderConfig};
+use paint::PaintFactory;
 
 const SKSL_STRAIGHT_TO_PREMULTIPLIED: &str = r#"
 uniform shader straight_input;

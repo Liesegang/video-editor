@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-05
-- Updated: 2026-09-06（共通 alpha mask と型付き Style 合成）
+- Updated: 2026-09-06（共通 alpha mask、Path part の透明度、描画範囲）
 - Owners: Core Model / Renderer / Motion UX（担当者未指定）
 - Depends on: ADR 0001、ADR 0007
 
@@ -246,6 +246,32 @@ Fill/Strokeを含まないstyle専用描画ではgeometryのsilhouetteを使う�
 記録はlocal座標を保ち、影の距離やblurの大きさにも本体と同じ変形を適用する。
 描画範囲を制限するboundsと、Gradientの座標を決めるboundsは分ける。
 Fill/Strokeだけのレイヤーには、mask用の描画記録を追加しない。
+
+複数のPath partを持つShapeも、一つの本体として合成する。
+各partの透明度は、そのpartのFill/Stroke全体へ一回だけ適用し、合成した本体から影を生成する。
+Styleの透明度を書き換えたり、partごとのFrameObjectへ分割したりすると、影の透明度の二重適用や描画順の逆転を起こす。
+このため、評価済みのpartを既存のShape描画要求へ保持し、レイヤーのEffectも合成後に一回だけ適用する。
+これは実行時の描画データであり、二つ目の編集モデルではない。
+
+### 外形と描画範囲
+
+グラデーションの座標と、ぼかし処理に必要な余白は別の用途を持つ。
+同じ矩形を使うと、影の大きさやCompositionの解像度を変えただけで本体のグラデーションが変化する。
+そこで、既存rendererで解決したgeometryから次の三つの範囲を求める。
+
+| 範囲 | 用途 |
+| --- | --- |
+| geometry | 装飾前のPathまたは文字のink。Gradient Overlayの0→1の座標基準。 |
+| content | Fill/Stroke、Path effect、輪郭のAAを含む本体。maskの描画記録の範囲。 |
+| visual | contentに影や光彩の余白を加えた範囲。filterの描画とstyle合成用saveLayerの範囲。 |
+
+通常Textのinkは、描画に使うSkParagraphのglyph boundsから求める。
+Ensembleでは、文字ごとの本体を変形してから範囲を合併し、その外側へレイヤースタイルの余白を加える。
+Strokeのmiterとcap、およびBevelのblur kernelも範囲の計算へ反映する。
+合成段階と余白の計算はmodelとrendererで共有し、独立した定数を追加しない。
+
+この処理はstyleごとのscratch領域を制限するが、最上位の出力Surfaceを部分領域へ置き換えるものではない。
+4Kの多数レイヤーでの割当量とlatency、および製品全体の60 fpsは、別の実測gateで判定する。
 
 ### 明示的なNode Clip昇格
 

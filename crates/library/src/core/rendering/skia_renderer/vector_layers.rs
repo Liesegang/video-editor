@@ -4,6 +4,8 @@
 //! the effect path can still cross the owned [`RenderOutput`] boundary while
 //! the common no-effect path keeps the transient Skia surface native.
 
+use super::vector_bounds::VectorLayerBounds;
+use super::vector_path_body::PathBody;
 use super::*;
 
 impl SkiaRenderer {
@@ -98,19 +100,10 @@ impl SkiaRenderer {
             transform,
             ..
         } = request;
-        let bounds = local_layer_bounds(
-            transform,
-            self.current_target_dimensions(),
-            max_style_outset(styles),
-        );
         let has_content = has_content_styles(styles);
         let mask = if layer_styles::has_mask_styles(styles) {
             Some(layer_styles::LayerMask::record(
-                bounds,
-                skia_safe::Rect::from_wh(
-                    self.current_target_dimensions().0 as f32,
-                    self.current_target_dimensions().1 as f32,
-                ),
+                VectorLayerBounds::text(text, font_name, size as f32, styles),
                 |canvas| {
                     if has_content {
                         draw_text_body(
@@ -223,19 +216,10 @@ impl SkiaRenderer {
         let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
         let character_transforms =
             evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
-        let bounds = local_layer_bounds(
-            transform,
-            self.current_target_dimensions(),
-            max_style_outset(styles),
-        );
         let has_content = has_content_styles(styles);
         let mask = if layer_styles::has_mask_styles(styles) {
             Some(layer_styles::LayerMask::record(
-                bounds,
-                skia_safe::Rect::from_wh(
-                    self.current_target_dimensions().0 as f32,
-                    self.current_target_dimensions().1 as f32,
-                ),
+                VectorLayerBounds::ensemble(&runtime_text, &character_transforms, &font, styles),
                 |canvas| {
                     if has_content {
                         draw_ensemble_text_body(
@@ -314,30 +298,22 @@ impl SkiaRenderer {
         let ShapeRasterRequest {
             path_data,
             canonical_path,
+            parts,
             styles,
             path_effects,
             ensemble,
             transform,
         } = request;
-        let path = super::super::path_geometry::resolve_renderer_path(canonical_path, path_data)?;
-        let bounds = local_layer_bounds(
-            transform,
-            self.current_target_dimensions(),
-            max_style_outset(styles),
-        );
+        let body = PathBody::resolve(canonical_path, path_data, parts)?;
         let has_content = has_content_styles(styles);
         let mask = if layer_styles::has_mask_styles(styles) {
             Some(layer_styles::LayerMask::record(
-                bounds,
-                skia_safe::Rect::from_wh(
-                    self.current_target_dimensions().0 as f32,
-                    self.current_target_dimensions().1 as f32,
-                ),
+                VectorLayerBounds::path(body.bounds(), styles, path_effects),
                 |canvas| {
                     if has_content {
-                        draw_shape_body(&self.surface_contract, canvas, &path, path_effects, styles)
+                        body.draw_body(&self.surface_contract, canvas, path_effects, styles)
                     } else {
-                        draw_shape_silhouette(&self.surface_contract, canvas, &path, path_effects)
+                        body.draw_silhouette(&self.surface_contract, canvas, path_effects)
                     }
                 },
             )?)
@@ -355,7 +331,7 @@ impl SkiaRenderer {
             {
                 legacy_backplate::draw_path_backplates(
                     canvas,
-                    &path,
+                    body.aggregate_path(),
                     &ensemble.decorator_configs,
                     &self.surface_contract,
                 )?;
@@ -377,7 +353,7 @@ impl SkiaRenderer {
                     mask,
                 )?;
             } else {
-                draw_shape_body(&self.surface_contract, canvas, &path, path_effects, styles)?;
+                body.draw_body(&self.surface_contract, canvas, path_effects, styles)?;
             }
             canvas.restore();
         }
@@ -427,10 +403,7 @@ fn draw_text_body(
     styles: &[crate::model::frame::entity::StyleConfig],
 ) -> Result<(), LibraryError> {
     for config in styles {
-        if !matches!(
-            config.style,
-            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
-        ) {
+        if config.style.composite_phase() != layer_styles::CompositePhase::Body {
             continue;
         }
         let paint = PaintFactory::new(contract).text_paint(&config.style, 1.0, None)?;
@@ -464,10 +437,7 @@ fn draw_ensemble_text_body(
     styles: &[crate::model::frame::entity::StyleConfig],
 ) -> Result<(), LibraryError> {
     for config in styles {
-        if !matches!(
-            config.style,
-            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
-        ) {
+        if config.style.composite_phase() != layer_styles::CompositePhase::Body {
             continue;
         }
         for (character, transform) in runtime_text.elements.iter().zip(transforms) {
@@ -536,120 +506,8 @@ fn draw_ensemble_text_silhouette(
     Ok(())
 }
 
-fn draw_shape_body(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    path: &skia_safe::Path,
-    path_effects: &[crate::model::frame::draw_type::PathEffect],
-    styles: &[crate::model::frame::entity::StyleConfig],
-) -> Result<(), LibraryError> {
-    for config in styles {
-        match &config.style {
-            DrawStyle::Fill { color, offset } => PaintFactory::new(contract).draw_shape_fill(
-                canvas,
-                path,
-                color,
-                path_effects,
-                *offset,
-            )?,
-            DrawStyle::Stroke {
-                color,
-                width,
-                offset,
-                cap,
-                join,
-                miter,
-                dash_array,
-                dash_offset,
-            } => PaintFactory::new(contract).draw_shape_stroke(
-                canvas,
-                path,
-                path_effects,
-                StrokeRenderConfig {
-                    color,
-                    width: *width,
-                    offset: *offset,
-                    cap,
-                    join,
-                    miter: *miter,
-                    dash_array,
-                    dash_offset: *dash_offset,
-                },
-            )?,
-            DrawStyle::ColorOverlay { .. }
-            | DrawStyle::GradientOverlay { .. }
-            | DrawStyle::PatternOverlay { .. }
-            | DrawStyle::DropShadow { .. }
-            | DrawStyle::InnerShadow { .. }
-            | DrawStyle::OuterGlow { .. }
-            | DrawStyle::InnerGlow { .. }
-            | DrawStyle::Satin { .. }
-            | DrawStyle::BevelEmboss { .. } => {}
-        }
-    }
-    Ok(())
-}
-
-fn draw_shape_silhouette(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    path: &skia_safe::Path,
-    path_effects: &[crate::model::frame::draw_type::PathEffect],
-) -> Result<(), LibraryError> {
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    skia_working_surface::set_paint_authored_color(&mut paint, contract, &Color::white(), 1.0)?;
-    paint::apply_path_effects(path_effects, path, &mut paint)?;
-    canvas.draw_path(path, &paint);
-    Ok(())
-}
-
 fn has_content_styles(styles: &[crate::model::frame::entity::StyleConfig]) -> bool {
-    styles.iter().any(|config| {
-        matches!(
-            config.style,
-            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
-        )
-    })
-}
-
-fn max_style_outset(styles: &[crate::model::frame::entity::StyleConfig]) -> f32 {
     styles
         .iter()
-        .map(|config| config.style.visual_outset())
-        .fold(0.0, f32::max)
-}
-
-fn local_layer_bounds(transform: Affine2D, dimensions: (u32, u32), outset: f32) -> skia_safe::Rect {
-    let device = [
-        (0.0, 0.0),
-        (f64::from(dimensions.0), 0.0),
-        (0.0, f64::from(dimensions.1)),
-        (f64::from(dimensions.0), f64::from(dimensions.1)),
-    ];
-    let mapped = transform
-        .inverse()
-        .map(|inverse| device.map(|(x, y)| inverse.map_point(x, y)))
-        .unwrap_or(device);
-    let left = mapped
-        .iter()
-        .map(|point| point.0)
-        .fold(f64::INFINITY, f64::min) as f32
-        - outset;
-    let top = mapped
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::INFINITY, f64::min) as f32
-        - outset;
-    let right = mapped
-        .iter()
-        .map(|point| point.0)
-        .fold(f64::NEG_INFINITY, f64::max) as f32
-        + outset;
-    let bottom = mapped
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::NEG_INFINITY, f64::max) as f32
-        + outset;
-    skia_safe::Rect::new(left, top, right, bottom)
+        .any(|config| config.style.composite_phase() == layer_styles::CompositePhase::Body)
 }

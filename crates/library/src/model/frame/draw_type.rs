@@ -39,6 +39,53 @@ pub enum BevelTechnique {
     ChiselSoft,
 }
 
+/// Geometry shared by Bevel bounds calculation and its alpha-mask renderer.
+///
+/// `edge_size` is the complete one-sided kernel reach: the layer-style mask
+/// divides it between morphology and Gaussian blur according to `edge_spread`.
+/// Keeping that contract here prevents Preview bounds from using only the
+/// authored soften value while the renderer derives an additional kernel from
+/// the Bevel size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BevelRenderGeometry {
+    pub(crate) offset_distance: f64,
+    pub(crate) edge_size: f64,
+    pub(crate) edge_spread: f64,
+    pub(crate) inside: bool,
+}
+
+impl BevelRenderGeometry {
+    pub(crate) fn new(
+        style: BevelStyle,
+        technique: BevelTechnique,
+        depth: f64,
+        size: f64,
+        soften: f64,
+    ) -> Self {
+        let size = size.max(0.0);
+        let soften = soften.max(0.0);
+        let (edge_size, edge_spread) = match technique {
+            BevelTechnique::Smooth => (soften.max(size * 0.25), 0.0),
+            BevelTechnique::ChiselSoft => (soften.max(size * 0.08), 0.5),
+            BevelTechnique::ChiselHard => (soften.max(0.01), 1.0),
+        };
+        Self {
+            offset_distance: size * depth.max(0.0),
+            edge_size,
+            edge_spread,
+            inside: matches!(style, BevelStyle::InnerBevel | BevelStyle::PillowEmboss),
+        }
+    }
+
+    pub(crate) fn visual_outset(self) -> f32 {
+        if self.inside {
+            0.0
+        } else {
+            (self.offset_distance + self.edge_size) as f32
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum BevelDirection {
     #[default]
@@ -607,9 +654,14 @@ impl DrawStyle {
     pub fn visual_outset(&self) -> f32 {
         match self {
             Self::Fill { offset, .. } => offset.max(0.0) as f32,
-            Self::Stroke { width, offset, .. } if *width > 0.0 => {
-                (width / 2.0 + offset).max(0.0) as f32
-            }
+            Self::Stroke {
+                width,
+                offset,
+                cap,
+                join,
+                miter,
+                ..
+            } if *width > 0.0 => stroke_visual_outset(*width, *offset, cap, join, *miter),
             Self::Stroke { .. }
             | Self::ColorOverlay { .. }
             | Self::GradientOverlay { .. }
@@ -632,21 +684,38 @@ impl DrawStyle {
             }
             Self::BevelEmboss {
                 style,
+                technique,
                 depth,
                 size,
                 soften,
                 ..
-            } => match style {
-                BevelStyle::InnerBevel => 0.0,
-                BevelStyle::OuterBevel
-                | BevelStyle::Emboss
-                | BevelStyle::PillowEmboss
-                | BevelStyle::StrokeEmboss => {
-                    (size.max(0.0) * depth.max(0.0) + soften.max(0.0)) as f32
-                }
-            },
+            } => {
+                BevelRenderGeometry::new(*style, *technique, *depth, *size, *soften).visual_outset()
+            }
         }
     }
+}
+
+fn stroke_visual_outset(
+    width: f64,
+    offset: f64,
+    cap: &CapType,
+    join: &JoinType,
+    miter_limit: f64,
+) -> f32 {
+    // Shape strokes clip negative offsets to the source silhouette, while
+    // Text strokes reduce their effective width by the same amount. This
+    // radius therefore conservatively covers both production paint paths.
+    let radius = (width / 2.0 + offset).max(0.0);
+    let join_multiplier = match join {
+        JoinType::Miter => miter_limit.max(1.0),
+        JoinType::Round | JoinType::Bevel => 1.0,
+    };
+    let cap_multiplier = match cap {
+        CapType::Square => std::f64::consts::SQRT_2,
+        CapType::Round | CapType::Butt => 1.0,
+    };
+    (radius * join_multiplier.max(cap_multiplier)) as f32
 }
 
 /// Unit space used by a Trim Path operation.
@@ -782,3 +851,78 @@ impl PartialEq for PathEffect {
     }
 }
 impl Eq for PathEffect {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stroke_with_bounds_policy(
+        width: f64,
+        offset: f64,
+        cap: CapType,
+        join: JoinType,
+        miter: f64,
+    ) -> DrawStyle {
+        DrawStyle::Stroke {
+            color: Color::white(),
+            width,
+            offset,
+            cap,
+            join,
+            miter,
+            dash_array: Vec::new(),
+            dash_offset: 0.0,
+        }
+    }
+
+    #[test]
+    fn stroke_outset_matches_miter_and_square_cap_inflation_without_expanding_other_joins() {
+        let round = stroke_with_bounds_policy(10.0, 2.0, CapType::Round, JoinType::Round, 100.0);
+        let bevel = stroke_with_bounds_policy(10.0, 2.0, CapType::Butt, JoinType::Bevel, 100.0);
+        let miter = stroke_with_bounds_policy(10.0, 2.0, CapType::Butt, JoinType::Miter, 4.0);
+        let square = stroke_with_bounds_policy(10.0, 2.0, CapType::Square, JoinType::Round, 100.0);
+        assert_eq!(round.visual_outset(), 7.0);
+        assert_eq!(bevel.visual_outset(), 7.0);
+        assert_eq!(miter.visual_outset(), 28.0);
+        assert!((square.visual_outset() - (7.0 * std::f32::consts::SQRT_2)).abs() < f32::EPSILON);
+
+        let inset_text_radius =
+            stroke_with_bounds_policy(10.0, -2.0, CapType::Butt, JoinType::Round, 4.0);
+        let disabled = stroke_with_bounds_policy(0.0, 20.0, CapType::Square, JoinType::Miter, 20.0);
+        assert_eq!(inset_text_radius.visual_outset(), 3.0);
+        assert_eq!(disabled.visual_outset(), 0.0);
+    }
+
+    #[test]
+    fn bevel_geometry_accounts_for_derived_kernel_when_soften_and_depth_are_zero() {
+        for (technique, expected_edge_size, expected_spread) in [
+            (BevelTechnique::Smooth, 3.0, 0.0),
+            (BevelTechnique::ChiselSoft, 0.96, 0.5),
+            (BevelTechnique::ChiselHard, 0.01, 1.0),
+        ] {
+            let geometry =
+                BevelRenderGeometry::new(BevelStyle::OuterBevel, technique, 0.0, 12.0, 0.0);
+            assert!((geometry.edge_size - expected_edge_size).abs() < f64::EPSILON);
+            assert!((geometry.edge_spread - expected_spread).abs() < f64::EPSILON);
+            assert!((geometry.visual_outset() - expected_edge_size as f32).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn only_bevel_techniques_rendered_inside_the_source_have_no_outset() {
+        for style in [BevelStyle::InnerBevel, BevelStyle::PillowEmboss] {
+            let geometry = BevelRenderGeometry::new(style, BevelTechnique::Smooth, 1.5, 12.0, 0.0);
+            assert!(geometry.inside);
+            assert_eq!(geometry.visual_outset(), 0.0);
+        }
+        for style in [
+            BevelStyle::OuterBevel,
+            BevelStyle::Emboss,
+            BevelStyle::StrokeEmboss,
+        ] {
+            let geometry = BevelRenderGeometry::new(style, BevelTechnique::Smooth, 1.5, 12.0, 0.0);
+            assert!(!geometry.inside);
+            assert_eq!(geometry.visual_outset(), 21.0);
+        }
+    }
+}

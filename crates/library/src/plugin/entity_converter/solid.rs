@@ -84,6 +84,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
             content: FrameContent::Shape {
                 path,
                 canonical_path: None,
+                parts: Vec::new(),
                 styles: vec![StyleConfig {
                     id: node.id,
                     style: DrawStyle::Fill { color, offset: 0.0 },

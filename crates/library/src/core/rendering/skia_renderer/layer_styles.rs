@@ -11,7 +11,8 @@ use crate::error::LibraryError;
 use crate::model::BlendMode;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{
-    BevelDirection, BevelStyle, BevelTechnique, DrawStyle, GradientStyle, PatternStyle,
+    BevelDirection, BevelRenderGeometry, BevelStyle, BevelTechnique, DrawStyle, GradientStyle,
+    PatternStyle,
 };
 use crate::model::frame::entity::StyleConfig;
 use crate::model::property::{GradientGeometry, GradientSpread, PatternKind};
@@ -20,32 +21,12 @@ use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
 
 pub(super) use mask::LayerMask;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum CompositePhase {
-    Underlay,
-    Overlay,
-}
-
-fn composite_phase(style: &DrawStyle) -> Option<CompositePhase> {
-    match style {
-        DrawStyle::DropShadow { .. } | DrawStyle::OuterGlow { .. } => {
-            Some(CompositePhase::Underlay)
-        }
-        DrawStyle::Fill { .. } | DrawStyle::Stroke { .. } => None,
-        DrawStyle::ColorOverlay { .. }
-        | DrawStyle::GradientOverlay { .. }
-        | DrawStyle::PatternOverlay { .. }
-        | DrawStyle::InnerShadow { .. }
-        | DrawStyle::InnerGlow { .. }
-        | DrawStyle::Satin { .. }
-        | DrawStyle::BevelEmboss { .. } => Some(CompositePhase::Overlay),
-    }
-}
+pub(super) use crate::model::frame::appearance::CompositePhase;
 
 pub(super) fn has_mask_styles(styles: &[StyleConfig]) -> bool {
     styles
         .iter()
-        .any(|config| composite_phase(&config.style).is_some())
+        .any(|config| config.style.composite_phase() != CompositePhase::Body)
 }
 
 pub(super) fn visit_phase(
@@ -54,7 +35,7 @@ pub(super) fn visit_phase(
     mut visit: impl FnMut(&StyleConfig) -> Result<(), LibraryError>,
 ) -> Result<(), LibraryError> {
     for config in styles {
-        if composite_phase(&config.style) == Some(phase) {
+        if config.style.composite_phase() == phase {
             visit(config)?;
         }
     }
@@ -279,44 +260,36 @@ impl<'a> LayerStyleRenderer<'a> {
         spec: BevelSpec<'_>,
     ) -> Result<(), LibraryError> {
         let strength = spec.altitude.to_radians().sin().abs() as f32;
-        let distance = spec.size.max(0.0) * spec.depth.max(0.0);
-        let shadow = shadow_offset(spec.angle, distance);
+        let geometry = BevelRenderGeometry::new(
+            spec.style,
+            spec.technique,
+            spec.depth,
+            spec.size,
+            spec.soften,
+        );
+        let shadow = shadow_offset(spec.angle, geometry.offset_distance);
         let (highlight_offset, shadow_offset) = match spec.direction {
             BevelDirection::Up => ((-shadow.0, -shadow.1), shadow),
             BevelDirection::Down => (shadow, (-shadow.0, -shadow.1)),
         };
-        let blur = match spec.technique {
-            BevelTechnique::Smooth => spec.soften.max(spec.size * 0.25),
-            BevelTechnique::ChiselSoft => spec.soften.max(spec.size * 0.08),
-            BevelTechnique::ChiselHard => spec.soften.max(0.01),
-        };
-        let spread = match spec.technique {
-            BevelTechnique::Smooth => 0.0,
-            BevelTechnique::ChiselSoft => 0.5,
-            BevelTechnique::ChiselHard => 1.0,
-        };
-        let inside = matches!(
-            spec.style,
-            BevelStyle::InnerBevel | BevelStyle::PillowEmboss
-        );
         for edge in [
             EdgeSpec {
                 color: spec.highlight_color,
                 opacity: spec.highlight_opacity as f32 * strength,
                 blend_mode: spec.highlight_blend_mode,
                 offset: highlight_offset,
-                size: blur,
-                spread,
-                inside,
+                size: geometry.edge_size,
+                spread: geometry.edge_spread,
+                inside: geometry.inside,
             },
             EdgeSpec {
                 color: spec.shadow_color,
                 opacity: spec.shadow_opacity as f32 * strength,
                 blend_mode: spec.shadow_blend_mode,
                 offset: shadow_offset,
-                size: blur,
-                spread,
-                inside,
+                size: geometry.edge_size,
+                spread: geometry.edge_spread,
+                inside: geometry.inside,
             },
         ] {
             self.edge(canvas, mask, edge)?;
@@ -334,7 +307,8 @@ impl<'a> LayerStyleRenderer<'a> {
         let mut composite = Paint::default();
         self.blend_runtime
             .configure_paint(&mut composite, blend_mode)?;
-        canvas.save_layer(&SaveLayerRec::default().paint(&composite));
+        let bounds = mask.visual_bounds();
+        canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&composite));
         mask.draw_filter(canvas, filter);
         canvas.restore();
         Ok(())

@@ -34,7 +34,7 @@ impl ModuleImageRuntime<'_> {
         let Some(style) = self.evaluate_style_config(node, operation)? else {
             return Ok(None);
         };
-        let objects = shape.into_styled_objects(style, self.local_time.to_seconds_f64() as f32)?;
+        let object = shape.into_styled_object(style, self.local_time.to_seconds_f64() as f32)?;
         Ok(Some(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Node,
@@ -45,7 +45,7 @@ impl ModuleImageRuntime<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
             effects: Vec::new(),
-            items: objects.into_iter().map(FrameItem::Object).collect(),
+            items: vec![FrameItem::Object(object)],
         })))
     }
 
@@ -122,8 +122,8 @@ impl ModuleImageRuntime<'_> {
         if styles.is_empty() {
             return Ok(None);
         }
-        let objects =
-            shape.into_appearance_objects(styles, self.local_time.to_seconds_f64() as f32)?;
+        let object =
+            shape.into_appearance_object(styles, self.local_time.to_seconds_f64() as f32)?;
         Ok(Some(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Node,
@@ -134,7 +134,7 @@ impl ModuleImageRuntime<'_> {
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
             effects: Vec::new(),
-            items: objects.into_iter().map(FrameItem::Object).collect(),
+            items: vec![FrameItem::Object(object)],
         })))
     }
 

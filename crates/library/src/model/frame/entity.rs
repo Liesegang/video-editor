@@ -35,6 +35,19 @@ pub struct StyleConfig {
     pub style: DrawStyle,
 }
 
+/// One ordered path child retained through the Shape -> Image boundary.
+///
+/// When `FrameContent::Shape::parts` is non-empty these paths, rather than the
+/// aggregate SVG fallback, are the authoritative raster geometry. `opacity`
+/// is child-layer opacity and must be applied exactly once to the complete
+/// Fill/Stroke body before the shared layer-style mask is evaluated.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FramePathPart {
+    pub path: String,
+    pub canonical_path: Option<crate::model::path::PathValue>,
+    pub opacity: OrderedFloat<f32>,
+}
+
 /// Declares the numeric color domain produced by an SkSL generator.
 ///
 /// Runtime shaders do not carry an ICC/OCIO profile themselves. Keeping this
@@ -84,6 +97,9 @@ pub enum FrameContent {
         /// presentation/fallback string, but rendering prefers this value.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         canonical_path: Option<crate::model::path::PathValue>,
+        /// Ordered child geometry with independently evaluated opacity. Empty
+        /// means the aggregate `path`/`canonical_path` pair is authoritative.
+        parts: Vec<FramePathPart>,
         styles: Vec<StyleConfig>,
         path_effects: Vec<PathEffect>,
         #[serde(default)]
@@ -171,6 +187,7 @@ impl Hash for FrameContent {
             FrameContent::Shape {
                 path,
                 canonical_path,
+                parts,
                 styles,
                 path_effects,
                 effects,
@@ -179,6 +196,7 @@ impl Hash for FrameContent {
             } => {
                 path.hash(state);
                 canonical_path.hash(state);
+                parts.hash(state);
                 styles.hash(state);
                 path_effects.hash(state);
                 effects.hash(state);
@@ -260,6 +278,7 @@ impl PartialEq for FrameContent {
                 FrameContent::Shape {
                     path: p1,
                     canonical_path: cp1,
+                    parts: ps1,
                     styles: st1,
                     path_effects: pe1,
                     effects: e1,
@@ -269,6 +288,7 @@ impl PartialEq for FrameContent {
                 FrameContent::Shape {
                     path: p2,
                     canonical_path: cp2,
+                    parts: ps2,
                     styles: st2,
                     path_effects: pe2,
                     effects: e2,
@@ -278,6 +298,7 @@ impl PartialEq for FrameContent {
             ) => {
                 p1 == p2
                     && cp1 == cp2
+                    && ps1 == ps2
                     && st1 == st2
                     && pe1 == pe2
                     && e1 == e2

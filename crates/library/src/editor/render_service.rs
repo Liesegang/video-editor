@@ -587,6 +587,7 @@ impl<T: Renderer> RenderService<T> {
             FrameContent::Shape {
                 path,
                 canonical_path,
+                parts,
                 styles,
                 path_effects,
                 effects,
@@ -597,6 +598,7 @@ impl<T: Renderer> RenderService<T> {
                 let request = ShapeRasterRequest {
                     path_data: path,
                     canonical_path: canonical_path.as_ref(),
+                    parts,
                     styles,
                     path_effects,
                     ensemble: ensemble.as_ref(),
