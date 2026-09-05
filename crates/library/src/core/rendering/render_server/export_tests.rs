@@ -349,7 +349,7 @@ fn authoring_particle_png_export_reports_unsupported_gpu_without_writing() {
     let timeline_id = project.root_timeline_id;
     let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
     let output = TemporaryPng::new();
-    let server = RenderServer::new(
+    let server = RenderServer::new_with_cpu_preview(
         Arc::new(PluginManager::default()),
         Arc::new(CacheManager::new()),
     );
@@ -478,7 +478,7 @@ fn authoring_png_export_is_full_frame_and_independent_from_preview() {
     let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
     let output = TemporaryPng::new();
     let output_path = output.0.to_string_lossy().into_owned();
-    let server = RenderServer::new(
+    let server = RenderServer::new_with_cpu_preview(
         Arc::new(PluginManager::default()),
         Arc::new(CacheManager::new()),
     );
@@ -549,7 +549,7 @@ fn authoring_png_export_refuses_to_overwrite_an_asset() {
     ));
     let timeline_id = project.root_timeline_id;
     let plan = RenderPlanCompiler::compile(&project).unwrap();
-    let server = RenderServer::new(
+    let server = RenderServer::new_with_cpu_preview(
         Arc::new(PluginManager::default()),
         Arc::new(CacheManager::new()),
     );
@@ -611,7 +611,7 @@ fn authoring_video_export_streams_the_complete_timeline_then_finishes() {
     plugins.register_export_plugin(Arc::new(MockVideoExporter {
         state: Arc::clone(&state),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
     let output_path = std::env::temp_dir()
         .join(format!("ruvie-authoring-video-{}.mp4", Uuid::new_v4()))
         .to_string_lossy()
@@ -663,7 +663,7 @@ fn late_particle_video_fails_gpu_preflight_before_frame_zero() {
     plugins.register_export_plugin(Arc::new(MockVideoExporter {
         state: Arc::clone(&state),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
     let output_path = std::env::temp_dir()
         .join(format!("late-particle-{}.mp4", Uuid::new_v4()))
         .to_string_lossy()
@@ -774,7 +774,7 @@ fn authoring_video_export_binds_exact_timeline_audio_then_cleans_it_up() {
     plugins.register_export_plugin(Arc::new(MockVideoExporter {
         state: Arc::clone(&state),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
     let output_path = directory
         .path()
         .join("with-audio.mp4")
@@ -836,7 +836,7 @@ fn authoring_audio_failure_stops_before_video_frame_zero() {
     plugins.register_export_plugin(Arc::new(MockVideoExporter {
         state: Arc::clone(&state),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
     let output_path = std::env::temp_dir()
         .join(format!("broken-audio-{}.mp4", Uuid::new_v4()))
         .to_string_lossy()
@@ -889,7 +889,7 @@ fn authoring_video_export_never_opens_an_asset_as_its_destination() {
     plugins.register_export_plugin(Arc::new(MockVideoExporter {
         state: Arc::clone(&state),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
 
     assert!(server.send_authoring_video_export_request(
         RenderRequestId::new(48),

@@ -44,6 +44,18 @@ pub struct RenderServer {
     export_handle: Option<thread::JoinHandle<()>>,
 }
 
+#[derive(Clone, Copy)]
+struct PreviewRasterPolicy {
+    use_gpu: bool,
+}
+
+impl PreviewRasterPolicy {
+    const GPU_PREFERRED: Self = Self { use_gpu: true };
+
+    #[cfg(test)]
+    const CPU_ONLY: Self = Self { use_gpu: false };
+}
+
 struct AuthoringRenderRequest {
     request_id: RenderRequestId,
     project: Arc<AuthoringProject>,
@@ -143,6 +155,30 @@ fn authoring_error_frame_info(
 
 impl RenderServer {
     pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
+        Self::new_with_preview_raster_policy(
+            plugin_manager,
+            cache_manager,
+            PreviewRasterPolicy::GPU_PREFERRED,
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_cpu_preview(
+        plugin_manager: Arc<PluginManager>,
+        cache_manager: SharedCacheManager,
+    ) -> Self {
+        Self::new_with_preview_raster_policy(
+            plugin_manager,
+            cache_manager,
+            PreviewRasterPolicy::CPU_ONLY,
+        )
+    }
+
+    fn new_with_preview_raster_policy(
+        plugin_manager: Arc<PluginManager>,
+        cache_manager: SharedCacheManager,
+        preview_raster_policy: PreviewRasterPolicy,
+    ) -> Self {
         let preview_mailbox = Arc::new(PreviewMailbox::new());
         let worker_mailbox = Arc::clone(&preview_mailbox);
         let (tx_authoring_result, rx_authoring_result) = channel::<RenderResult>();
@@ -176,7 +212,7 @@ impl RenderServer {
                 1920,
                 1080,
                 current_background_color.clone(),
-                true,
+                preview_raster_policy.use_gpu,
                 None,
                 None,
             );
@@ -714,7 +750,7 @@ mod tests {
             },
         );
         let plan = RenderPlanCompiler::compile(&project).unwrap();
-        let server = RenderServer::new(
+        let server = RenderServer::new_with_cpu_preview(
             Arc::new(PluginManager::default()),
             Arc::new(CacheManager::new()),
         );
@@ -739,7 +775,7 @@ mod tests {
             (3, 2)
         );
         let RenderOutput::Image(image) = rendered.output.unwrap() else {
-            panic!("CPU fallback must return an image");
+            panic!("the Preview worker must return a terminal image");
         };
         assert_eq!((image.width, image.height), (3, 2));
     }

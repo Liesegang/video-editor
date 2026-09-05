@@ -282,7 +282,7 @@ fn png_cancellation_obeys_its_direct_write_publication_boundary() {
     let path = directory.path().join("frame.png");
     let project = export_project();
     let plan = Arc::new(RenderPlanCompiler::compile(&project).unwrap());
-    let server = RenderServer::new(
+    let server = RenderServer::new_with_cpu_preview(
         Arc::new(PluginManager::default()),
         Arc::new(CacheManager::new()),
     );

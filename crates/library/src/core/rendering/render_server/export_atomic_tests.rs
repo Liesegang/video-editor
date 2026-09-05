@@ -298,7 +298,7 @@ fn export_server_for_project_with_plugins(
         probe: Arc::clone(&probe),
         replacement: None,
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
     (server, project, plan, probe)
 }
 
@@ -554,7 +554,7 @@ fn active_video_job_pins_one_exporter_across_registry_replacement() {
             calls: Arc::clone(&replacement_calls),
         }),
     }));
-    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let server = RenderServer::new_with_cpu_preview(plugins, Arc::new(CacheManager::new()));
 
     let result = request_export(&server, &project, &plan, 9_200, &final_path);
     result.output.unwrap();
