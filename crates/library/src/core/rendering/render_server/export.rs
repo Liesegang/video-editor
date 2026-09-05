@@ -21,6 +21,8 @@ use crate::plugin::{
 };
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
+#[cfg(test)]
+pub(super) use crate::util::atomic_file::AtomicSyncTestControl;
 use crate::util::output_path_identity::output_path_identity;
 
 use super::{AuthoringExportResult, RenderRequestId, authoring_error_frame_info};
@@ -50,6 +52,8 @@ pub(super) struct AuthoringVideoExportRequest {
     pub(super) output_path: String,
     #[cfg(test)]
     pub(super) temporary_audio_test_control: Arc<TemporaryAudioTestControl>,
+    #[cfg(test)]
+    pub(super) atomic_sync_test_control: Arc<AtomicSyncTestControl>,
 }
 
 pub(super) enum AuthoringExportRequest {
@@ -677,7 +681,11 @@ fn run_authoring_video_export(
         // Keep this logical destination reserved across that entire gap so a
         // second coordinator cannot publish over the same user-selected path.
         destination_lease = Some(plugin_manager.reserve_export_destination(&request.output_path)?);
-        video_output = Some(AuthoringVideoOutput::begin(&request.output_path)?);
+        let output = AuthoringVideoOutput::begin(&request.output_path)?;
+        #[cfg(test)]
+        let output =
+            output.with_sync_test_control(Arc::clone(&request.atomic_sync_test_control))?;
+        video_output = Some(output);
         let audio_preparation = prepare_authoring_audio(
             request.project.as_ref(),
             request.timeline_id,

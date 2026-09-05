@@ -9,8 +9,57 @@ use std::ffi::OsString;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use crate::util::local_file::{DirectRegularFile, validate_explicit_output_path};
+
+/// Instance-local observation and one-shot fault control for the shared
+/// staging-file synchronization boundary.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct AtomicSyncTestControl {
+    sync_failures_remaining: AtomicUsize,
+    sync_attempts: AtomicUsize,
+    injected_sync_failures: AtomicUsize,
+}
+
+#[cfg(test)]
+impl AtomicSyncTestControl {
+    pub(crate) fn fail_next_sync(&self) -> io::Result<()> {
+        self.sync_failures_remaining
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| ())
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "an atomic staging sync failure is already armed",
+                )
+            })
+    }
+
+    fn before_sync(&self, staging: &Path) -> io::Result<()> {
+        self.sync_attempts.fetch_add(1, Ordering::SeqCst);
+        if self.sync_failures_remaining.swap(0, Ordering::SeqCst) == 0 {
+            return Ok(());
+        }
+        self.injected_sync_failures.fetch_add(1, Ordering::SeqCst);
+        Err(io::Error::other(format!(
+            "injected atomic staging sync_all failure for '{}'",
+            staging.display()
+        )))
+    }
+
+    pub(crate) fn observation(&self) -> (usize, usize) {
+        (
+            self.sync_attempts.load(Ordering::SeqCst),
+            self.injected_sync_failures.load(Ordering::SeqCst),
+        )
+    }
+}
 
 /// One staged write to a single file destination.
 ///
@@ -24,6 +73,8 @@ pub(crate) struct AtomicFileTransaction {
     staging: PathBuf,
     staging_file: Option<File>,
     active: bool,
+    #[cfg(test)]
+    sync_test_control: Option<Arc<AtomicSyncTestControl>>,
 }
 
 impl AtomicFileTransaction {
@@ -66,7 +117,14 @@ impl AtomicFileTransaction {
             staging,
             staging_file: Some(staging_file),
             active: true,
+            #[cfg(test)]
+            sync_test_control: None,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sync_test_control(&mut self, control: Arc<AtomicSyncTestControl>) {
+        self.sync_test_control = Some(control);
     }
 
     pub(crate) fn staging_path(&self) -> &Path {
@@ -111,10 +169,7 @@ impl AtomicFileTransaction {
     {
         let result = (|| {
             self.staging_metadata()?;
-            self.staging_file
-                .as_ref()
-                .ok_or_else(closed_error)?
-                .sync_all()?;
+            self.sync_staging()?;
             self.staging_metadata()?;
             validate(&self)?;
             self.staging_metadata()?;
@@ -137,6 +192,17 @@ impl AtomicFileTransaction {
                 )),
             },
         }
+    }
+
+    fn sync_staging(&self) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(control) = &self.sync_test_control {
+            control.before_sync(&self.staging)?;
+        }
+        self.staging_file
+            .as_ref()
+            .ok_or_else(closed_error)?
+            .sync_all()
     }
 
     /// Discard the staged file without changing the destination.
@@ -247,9 +313,10 @@ fn replace_file(staging: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AtomicFileTransaction, atomic_write};
+    use super::{AtomicFileTransaction, AtomicSyncTestControl, atomic_write};
     use std::fs;
     use std::io::Write;
+    use std::sync::Arc;
 
     #[test]
     fn commit_replaces_an_existing_destination_and_removes_staging() {
@@ -279,6 +346,95 @@ mod tests {
         atomic_write(&destination, b"new document").unwrap();
 
         assert_eq!(fs::read(destination).unwrap(), b"new document");
+    }
+
+    #[test]
+    fn injected_sync_failure_preserves_destination_cleans_stage_and_is_one_shot() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("project.ruvie");
+        let sentinel = b"previous project";
+        fs::write(&destination, sentinel).unwrap();
+        let control = Arc::new(AtomicSyncTestControl::default());
+        control.fail_next_sync().unwrap();
+
+        let mut failed = AtomicFileTransaction::begin(&destination).unwrap();
+        let failed_staging = failed.staging_path().to_path_buf();
+        failed.set_sync_test_control(Arc::clone(&control));
+        failed
+            .staging_file_mut()
+            .unwrap()
+            .write_all(b"unpublished project")
+            .unwrap();
+        let error = failed.commit().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected atomic staging sync_all")
+        );
+        assert_eq!(fs::read(&destination).unwrap(), sentinel);
+        assert!(!failed_staging.exists());
+        assert_eq!(control.observation(), (1, 1));
+
+        let mut retry = AtomicFileTransaction::begin(&destination).unwrap();
+        let retry_staging = retry.staging_path().to_path_buf();
+        retry.set_sync_test_control(Arc::clone(&control));
+        retry
+            .staging_file_mut()
+            .unwrap()
+            .write_all(b"published project")
+            .unwrap();
+        retry.commit().unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"published project");
+        assert!(!retry_staging.exists());
+        assert_eq!(control.observation(), (2, 1));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_delete_share_denial_blocks_real_replace_and_retry_recovers() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("project.ruvie");
+        let sentinel = b"previous project";
+        fs::write(&destination, sentinel).unwrap();
+        let mut transaction = AtomicFileTransaction::begin(&destination).unwrap();
+        let staging = transaction.staging_path().to_path_buf();
+        transaction
+            .staging_file_mut()
+            .unwrap()
+            .write_all(b"blocked project")
+            .unwrap();
+        let destination_lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&destination)
+            .unwrap();
+
+        let error = transaction.commit().unwrap_err();
+
+        let raw_os_error = error.raw_os_error();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            matches!(
+                raw_os_error,
+                Some(code)
+                    if code == ERROR_ACCESS_DENIED as i32
+                        || code == ERROR_SHARING_VIOLATION as i32
+            ),
+            "unexpected MoveFileExW error: {error}"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), sentinel);
+        assert!(!staging.exists());
+
+        drop(destination_lock);
+        atomic_write(&destination, b"published project").unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"published project");
     }
 
     #[test]

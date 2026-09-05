@@ -1,7 +1,11 @@
 use crate::error::LibraryError;
 use crate::plugin::ExportDestination;
 use crate::util::atomic_file::AtomicFileTransaction;
+#[cfg(test)]
+use crate::util::atomic_file::AtomicSyncTestControl;
 use crate::util::output_path_identity::{OutputPathIdentity, output_path_identity};
+#[cfg(test)]
+use std::sync::Arc;
 
 /// Owns one host-controlled video staging artifact until it is either
 /// published or explicitly discarded.
@@ -41,6 +45,18 @@ impl AuthoringVideoOutput {
 
     pub(super) fn destination(&self) -> &ExportDestination {
         &self.destination
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_sync_test_control(
+        mut self,
+        control: Arc<AtomicSyncTestControl>,
+    ) -> Result<Self, LibraryError> {
+        self.transaction
+            .as_mut()
+            .ok_or_else(Self::missing_transaction)?
+            .set_sync_test_control(control);
+        Ok(self)
     }
 
     pub(super) fn publish<F>(mut self, validate_domain: F) -> Result<(), LibraryError>

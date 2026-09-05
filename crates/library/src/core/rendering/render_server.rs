@@ -18,7 +18,7 @@ mod export;
 mod preview_mailbox;
 
 #[cfg(test)]
-use export::TemporaryAudioTestControl;
+use export::{AtomicSyncTestControl, TemporaryAudioTestControl};
 use export::{
     AuthoringExportRequest, AuthoringPngExportRequest, AuthoringVideoExportRequest,
     run_authoring_export_worker,
@@ -32,6 +32,8 @@ pub struct RenderServer {
     rx_authoring_export_result: Receiver<AuthoringExportResult>,
     #[cfg(test)]
     temporary_audio_test_control: Arc<TemporaryAudioTestControl>,
+    #[cfg(test)]
+    atomic_sync_test_control: Arc<AtomicSyncTestControl>,
     handle: Option<thread::JoinHandle<()>>,
     export_handle: Option<thread::JoinHandle<()>>,
 }
@@ -143,6 +145,8 @@ impl RenderServer {
             channel::<AuthoringExportResult>();
         #[cfg(test)]
         let temporary_audio_test_control = Arc::new(TemporaryAudioTestControl::default());
+        #[cfg(test)]
+        let atomic_sync_test_control = Arc::new(AtomicSyncTestControl::default());
         let export_plugin_manager = Arc::clone(&plugin_manager);
         let export_cache_manager = Arc::clone(&cache_manager);
         let export_handle = thread::spawn(move || {
@@ -337,6 +341,8 @@ impl RenderServer {
             rx_authoring_export_result,
             #[cfg(test)]
             temporary_audio_test_control,
+            #[cfg(test)]
+            atomic_sync_test_control,
             handle: Some(handle),
             export_handle: Some(export_handle),
         }
@@ -516,6 +522,8 @@ impl RenderServer {
                 output_path,
                 #[cfg(test)]
                 temporary_audio_test_control: Arc::clone(&self.temporary_audio_test_control),
+                #[cfg(test)]
+                atomic_sync_test_control: Arc::clone(&self.atomic_sync_test_control),
             })) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
@@ -565,6 +573,18 @@ impl RenderServer {
         &self,
     ) -> (Vec<std::path::PathBuf>, usize, usize, usize) {
         self.temporary_audio_test_control.observation()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_atomic_file_sync(&self) -> Result<(), LibraryError> {
+        self.atomic_sync_test_control
+            .fail_next_sync()
+            .map_err(|error| LibraryError::Runtime(error.to_string()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn atomic_sync_test_observation(&self) -> (usize, usize) {
+        self.atomic_sync_test_control.observation()
     }
 }
 

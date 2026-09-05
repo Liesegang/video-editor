@@ -88,11 +88,26 @@ compatibility API. Project save and production authoring video Export reuse the
 same atomic-file primitive instead of carrying separate platform replacement
 implementations.
 
+The shared primitive also owns the only staging `sync_all` operation. Its
+instance-local test control can fail exactly that boundary without adding a
+second RenderServer publication implementation. Regression tests let a valid
+two-frame export and its pinned exporter finalization finish, inject the sync
+failure, then verify one failed completion, `published = false`, an unchanged
+destination, no sibling staging file, and a successful retry on the same
+worker. On Windows a separate test keeps the destination open with read/write
+sharing but deliberately omits delete sharing. Initial and final identity
+checks therefore still succeed, while the real
+`MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` replacement is rejected with
+`ERROR_ACCESS_DENIED` or `ERROR_SHARING_VIOLATION`; releasing that handle makes
+the same-path retry succeed. These checks cover publication visibility, not
+parent-directory synchronization or power-loss durability.
+
 The focused regression checks are:
 
 ```sh
 cargo test -p library core::rendering -- --nocapture
 cargo test -p library util::atomic_file -- --nocapture
+cargo test -p library publication_failure_tests -- --nocapture
 cargo test -p app failed_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
 cargo test -p app unpublished_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
 cargo test -p app retry_after_failed_export_clears_only_the_previous_export_error -- --nocapture
