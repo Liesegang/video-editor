@@ -24,6 +24,7 @@
 - pre-v1 のため、廃止モデル向け reader、writer、migrator、双方向同期、互換 evaluator を追加しない。
 - 既存 production 実装を実際の責務境界で拡張する。コピー、別名実装、薄い adapter による二重化を禁止する。
 - UI、model、service、runtime、renderer、persistence、test、tooling の全層で DRY を守り、各 source/test/QA ファイルは 1,000 行未満に保つ。
+- 一つの検証可能な vertical slice ごとに、対象 unit test、`cargo check`、`git diff --check`、必要な native HTTP QA を通して main へ commit/push する。milestone 完了時は復旧 tag を追加する。
 
 ## 依存順
 
@@ -67,8 +68,6 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - `new`、`legacy`、`timeline_first`、意味のない `v2` を恒久 module 名にしない。
   - repository automation に `.ps1` を commit しない。
   - `Node Editor` と `Curve Editor` の名称と責務を混同しない。
-
-- [ ] **未実装：小さく commit/push する運用を固定する。** 一つの検証可能な vertical slice ごとに commit し、対象 unit test、`cargo check`、`git diff --check` が green になった時点で main へ push する。UI slice は対象 native HTTP QA も green にしてから push し、長時間の未 push 差分を作らない。milestone 完了時は復旧 tag を追加する。
 
 ## M1: Timeline ownership、階層 RenderPlan、限定 Node Clip
 
@@ -121,7 +120,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：Preview の直接編集を production parity へ戻す。** 共通 viewport 上で grid/pan/zoom、object click selection、空白 click deselection、正しい geometry bounds の gizmo、move/scale/rotate を扱う。
   - 円、Shape、Text、Image、Video、Path、Nested Timeline の bounds は Composition 全体ではなく評価済み外形に一致する。
   - X/Y translate と scale は独立編集でき、uniform lock を明示できる。3D 有効時は Z と X/Y/Z rotation を同じ transform で扱う。
-  - Preview 上の Text 編集と SVG/Path editor を既存 production 実装から復旧し、別 surface を作らない。
+  - [x] canonical `PathValue` と同じ Preview surface 上で point/Bezier handle を編集し、Undo/Redo と render refresh へ接続する Path Editor vertical slice、および native HTTP QA を実装した。
+  - [ ] Preview 上の Text 直接編集を production 実装から復旧し、別 surface を作らない。
+  - [ ] 完全な SVG document の import/edit は Path geometry、group、transform、Paint、Mask、symbol/use、text、external resource の対応範囲を ADR で固定し、既存 Path Editor と Appearance Stack へ段階的に接続する。
   - Preview click、drag、gizmo 操作を native HTTP QA で実行し、pixels/state/error log を検証する。
 
 - [ ] **部分実装：Curve Editor/Dope Sheet を本物の keyframe editor にする。** keyframe の文字列表ではなく curve、point、Bezier handle、segment interpolation を描画し、drag で time/value/tangent を編集する。
@@ -143,23 +144,23 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Text Ensemble の既存機能、target、X/Y translate/scale、rotation、stagger/easing を復旧し、Timeline/Node Clip の同じ値へ反映する。
 
 - [ ] **部分実装：Shape Layer の Appearance を Illustrator 相当の第一級スタックにする。** 通常の Shape Clip は現在単一 Fill に限られるため、geometry と分離した Timeline 所有の `AppearanceStack` を導入し、簡単な装飾のために Node Editor を開かせない。
-  - [x] Slice A として Project 所有の `ProjectPalette`、stable `PaintDefinitionId`、Solid `PaintDefinition`、厳格な保存/validation、局所 invalidation、Undo/Redo、既存 Color picker 内の `Picker / Palette`、追加・copy適用・rename・drag reorder・削除を実装した。managed `ColorValue` は f64/色空間を保ったまま保存・適用し、通常ClipをNodeへ展開しない。Linked Paint、Gradient、Pattern、group/tag UI は後続sliceで実装する。
-  - [ ] encoded-sRGBA8 境界用の旧 `PropertyValue::Color` は不可逆変換を避けるため Palette 対象外とし、authoring property を managed `ColorValue` へ統一してから同じ Palette 導線を有効化する。
-  - 各 `AppearanceEntry` は stable ID、名前、visible/enabled、opacity、blend mode、local transform、対象、operation、parameter/automation を持ち、`Fill`、`Stroke`、`Effect`、`Group` を任意順・任意数で積める。
-  - Fill は solid/linear gradient/radial gradient/freeform gradient/pattern、Stroke は width/alignment/join/cap/miter/dash/offset/arrowhead/width profile/brush を段階実装する。Drop Shadow、Inner/Outer Glow、Blur、Offset Path、Roughen、Warp 等は Fill/Stroke/Group/Shape 全体のどこへ適用するかを明示する。
-  - Fill/Stroke の見た目は `Color` へ押し込めず、第一級の `Paint = Solid | Gradient | Pattern` として型付けする。Paint対応スウォッチは既存Color pickerの同じ導線から `Solid / Gradient / Pattern` を切り替え、単色だけを受けるparameterの型契約は勝手に広げない。
-  - `Gradient` は stable ID、Linear/Radial/Conic/Freeform種別、stable stop ID、position、managed color、opacity、midpoint/interpolation、spread、gradient transformを保持する。stop追加・削除・並べ替え、Canvas上の方向/中心/半径編集、Inspector/Curve Editorのautomationを同じ値へ接続する。
-  - 通常のGradient編集はそのAppearance instanceだけを変更する。再利用swatch/presetは明示的な共有 `PaintDefinition` とinstance override/detachを持ち、共有定義を編集するときだけ影響instance数を表示する。補間とcompositeはProject working-linear color spaceで行い、Preview/Exportのterminal変換と混同しない。
-  - Color Palette は Project に stable swatch ID、名前、順序、group/tag、`PaintDefinition` を保存し、SolidだけでなくGradient/Patternも同じswatch gridへ置ける。built-in/user libraryからProjectへ取り込む操作と、Project内で再現可能な保存データを分ける。
-  - 共通Paint pickerには `Picker / Palette` を同じpopup内で切り替える導線を置き、現在値の追加、検索、group、複製、drag reorder、rename、削除、import/exportを提供する。色ボタンとは別の一時的なPalette panelや上部ボタンを増やさない。
-  - swatch適用は `Copy` と明示的な `Linked` を区別する。Linked swatchの編集時は影響Appearance数を表示して一つのtransactionで更新し、missing/削除時もresolved Paintを保持して黙って透明や黒へ変えない。managed `ColorValue` を8-bit表示色へ不可逆変換しない。
-  - Paletteの保存/load、Undo/Redo、linked update、Solid/Gradient選択、drag reorder、広色域/HDR値保持をunit testとnative HTTP QAで検証する。
-  - 対象は `WholeShape | Group(stable_id) | Subpath(stable_id)` とし、Path 編集後も対応を保つ。対象が消えた場合は黙って別要素へ掛けず、orphan/conflict として Inspector に残す。
-  - Inspector は既存 Effect Stack の property row、keyframe mode、drag/drop、insertion preview、icon/context menu を共通 primitive として再利用し、entry の複製、group化、enable/bypass、削除、drag reorder を一つの Undo で行う。
-  - Timeline/Dope Sheet/Curve Editor が entry parameter の時間を所有する。RenderPlan は Appearance を局所的な Shape branch/style/effect/composite passへ派生 compileし、Appearance数に比例したユーザー向けNodeを自動生成しない。
-  - 明示的に Shape Clip を Node Clip へ昇格した場合だけ、Appearance の順序、stable identity、properties、automation、blend を有限の Shape branch + Style/Effect + Merge へ等価変換する。変換前後の image golden と一回 Undo を必須にする。
-  - Appearance preset と共有 Definition の適用はinstance値と定義編集を区別し、通常の色・線幅変更はその Shape instanceだけへ反映する。共有変更時だけ影響instance数を明示する。
-  - 既存 `DrawStyle`、Fill/Stroke descriptor、semantic Style stack の順序・identity保持テスト、Effect Stack UIを移植元として使い、旧Project graphをadapterで並行接続しない。
+  - [x] **Slice A：Solid Project Palette。** Project 所有の `ProjectPalette`、stable `PaintDefinitionId`、Solid `PaintDefinition`、厳格な保存/validation、局所 invalidation、Undo/Redo、既存 Color picker 内の `Picker / Palette`、追加・copy適用・rename・drag reorder・削除を実装した。Inspector と production Node Editor は同じ picker を使い、managed `ColorValue` の f64/色空間を保持したまま適用する。通常 Clip は Node へ展開しない。
+  - [ ] **Slice B：authoring color を managed `ColorValue` へ統一する。** encoded-sRGBA8 境界用の旧 `PropertyValue::Color` は不可逆変換を避けるため Palette 対象外とし、移行後に同じ Palette 導線を有効化する。
+  - [ ] **Slice C：Gradient を第一級 Paint として実装する。** Fill/Stroke の見た目を `Color` へ押し込めず、`Paint = Solid | Gradient | Pattern` として型付けする。単色だけを受ける parameter の契約は勝手に広げない。
+    - `Gradient` は stable ID、Linear/Radial/Conic/Freeform 種別、stable stop ID、position、managed color、opacity、midpoint/interpolation、spread、gradient transform を保持する。
+    - stop の追加・削除・並べ替え、Canvas 上の方向/中心/半径編集、Inspector/Curve Editor の automation を同じ値へ接続する。
+    - 通常編集はその Appearance instance だけを変更する。補間と composite は Project working-linear color space で行い、Preview/Export の terminal 変換と混同しない。
+  - [ ] **Slice D：Palette の共有とライブラリ機能を完成する。** Solid に加えて Gradient/Pattern を同じ swatch grid へ置き、group/tag、検索、複製、import/export、built-in/user library から Project への取り込みを実装する。色ボタンとは別の一時的な Palette panel や上部ボタンは増やさない。
+    - swatch 適用は `Copy` と明示的な `Linked` を区別する。Linked 編集時は影響 instance 数を表示して一 transaction で更新し、missing/削除時も resolved Paint を保持して黙って透明や黒へ変えない。
+    - 保存/load、Undo/Redo、linked update、Solid/Gradient 選択、drag reorder、広色域/HDR 値保持を unit test と native HTTP QA で検証する。
+  - [ ] **Slice E：`AppearanceStack` を実装する。** 各 `AppearanceEntry` は stable ID、名前、visible/enabled、opacity、blend mode、local transform、対象、operation、parameter/automation を持ち、`Fill`、`Stroke`、`Effect`、`Group` を任意順・任意数で積める。
+    - Fill は solid/linear gradient/radial gradient/freeform gradient/pattern、Stroke は width/alignment/join/cap/miter/dash/offset/arrowhead/width profile/brush を段階実装する。Drop Shadow、Inner/Outer Glow、Blur、Offset Path、Roughen、Warp は適用対象を明示する。
+    - 対象は `WholeShape | Group(stable_id) | Subpath(stable_id)` とし、Path 編集後も対応を保つ。対象が消えた場合は別要素へ掛けず、orphan/conflict として Inspector に残す。
+    - Inspector は既存 Effect Stack の property row、keyframe mode、drag/drop、insertion preview、icon/context menu を共通利用し、複製、group 化、enable/bypass、削除、drag reorder を一つの Undo で行う。
+    - Timeline/Dope Sheet/Curve Editor が parameter の時間を所有し、RenderPlan は局所的な Shape branch/style/effect/composite pass へ派生 compile する。Appearance 数に比例したユーザー向け Node は生成しない。
+    - 明示的に Shape Clip を Node Clip へ昇格した場合だけ、順序、stable identity、properties、automation、blend を有限の Shape branch + Style/Effect + Merge へ等価変換し、image golden と一回 Undo を検証する。
+    - preset と共有 Definition は instance 値と定義編集を区別し、通常の色・線幅変更はその Shape instance だけへ反映する。共有変更時だけ影響 instance 数を明示する。
+    - 既存 `DrawStyle`、Fill/Stroke descriptor、semantic Style stack、Effect Stack UI を移植元として使い、旧 Project graph を adapter で並行接続しない。
 
 - [ ] **部分実装：panel/window UX を production parity へ戻す。** View menu から任意 panel を開閉でき、dock/float/reorder/resize を保存できる。Beginner/Edit/Motion/Audio/Data/Logic/Diagnostics は機能モードではなく初期 panel layout preset とし、preset 適用後も自由に並べ替えられる。
 
@@ -176,21 +177,21 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - linked Audio/Video と sync lock を尊重し、無関係な上段 Clip を動かさない。
   - J/K/L、frame step、jump-to-edit、in/out、loop と keyboard-only trim を native QA する。
 
-- [ ] **部分実装：Transition を Timeline の第一級モデルとして実装する。** Timeline 所有の型付き authoring model、atomic edit API、validation、局所 invalidation、階層型 RenderPlan、Image/Audio の実レンダリング、Inspector、有限な Transition Module の production Node Editor 編集、Published input/parameter/automation、Nested InstancePath ごとの override、Inspector/Dope Sheet/Curve Editor authoring、必須追加 input の atomic 割当 UI、非 Normal Blend Mode の合成意味論、native HTTP QA は実装済み。preset の drag/drop、再利用 Transition Template の作成・管理、Timeline handle、source handle 診断、ripple/roll 等との編集 tool 連携、追加 built-in preset、広い format/rate 条件の golden は残る。
-  - Transition は `from_item`、`to_item`、edit point/interval、duration/alignment、processor reference、parameters/automation を Timeline が所有する。
-  - 使い方は Transition preset を二 Clip の edit point へ drag/drop、または edit point の右クリック `Add Transition` とする。Timeline 上の handle で duration/alignment、Inspector/Curve Editor で値/easing を編集する。場当たり的な上部ボタンは追加しない。
-  - Cross Dissolve、Dip to Color、Wipe、Audio Crossfade を built-in baseline とし、同じ typed transition contract を plugin から追加できる。
-  - Transition processor は built-in/pluginに加え、明示的な有限 `Transition ModuleDefinition` としてNode Editorで作成できる。Image系は保護された `A: Image`、`B: Image`、`Progress: Number(0..1)` と一つの `Image Output`、Audio系は同型のAudio portsを必須interfaceとし、内部Node UUIDをTimelineから参照しない。
-  - Timeline上の各Transitionは共有Definitionに対する一つのModuleInstance/invocationとinstance parameter/automationだけを持つ。同じDefinitionを多数配置しても一度だけcompileし、`Edit Transition Logic` を明示したときだけ既存production Node Editorを開く。from/to ClipやTimeline全体をNodeへ展開しない。
-  - Transition Moduleがmatte、displacement source、Signal等を追加利用する場合もPublished Media/Parameter/SignalとInstancePathを通し、任意の外部Node UUIDや暗黙のlayer番号へbindしない。
-  - RenderPlan は from/to の二入力と normalized progress を一 invocation に compile し、Clip を Node 化しない。
-  - trim、ripple、roll、split、delete が Transition を deterministic に preserve/resize/remove し、dangling reference を作らない。
-  - adjacent、intentional overlap、Nested Timeline、different frame/audio formats、reverse/rate-stretch を golden image/audio と native QA で検証する。
+- [ ] **部分実装：Transition を Timeline の第一級モデルとして完成する。** Transition の時間と配置は Timeline が所有し、処理だけを built-in、plugin、または有限な Transition Module として差し替える。
+  - [x] `from_item`、`to_item`、edit point/interval、duration/alignment、processor reference、parameters/automation を持つ型付き authoring model、atomic edit API、validation、局所 invalidation、階層型 RenderPlan、Image/Audio の実レンダリングを実装した。
+  - [x] Image 用の保護された `A: Image`、`B: Image`、`Progress: Number(0..1)` と、一つの共通 Output terminal が持つ `Image` 型入力を境界にした `Transition ModuleDefinition` を実装した。Audio も同じ Output terminal の `Audio` 型入力を使う。共有 Definition は一度だけ compile し、各 Transition は Module Instance、InstancePath、parameter/automation だけを持つ。
+  - [x] `Edit Transition Logic` を明示したときだけ既存 production Node Editor を開き、from/to Clip や Timeline 全体を Node へ展開しない。追加の matte、displacement、Signal も Published Media/Parameter/Signal と InstancePath だけを通す。
+  - [x] Inspector、Dope Sheet、Curve Editor から Published Parameter と automation を編集し、必須追加 input を一 transaction で割り当て、非 Normal Blend Mode を含む実レンダリングと native HTTP QA を通した。
+  - [ ] Transition preset を二 Clip の edit point へ drag/drop、または edit point の右クリック `Add Transition` で追加する production UI を実装する。Timeline handle で duration/alignment を編集し、source handle 不足を診断する。場当たり的な上部ボタンは追加しない。
+  - [ ] Cross Dissolve、Dip to Color、Wipe、Audio Crossfade を built-in baseline とし、Transition Template の作成、保存、検索、再利用、plugin 登録を同じ typed contract へ接続する。
+  - [ ] trim、ripple、roll、split、delete が Transition を deterministic に preserve/resize/remove し、dangling reference を作らないよう編集 tool と統合する。
+  - [ ] adjacent、intentional overlap、Nested Timeline、異なる image/audio format、reverse、rate-stretch を golden image/audio と native QA で検証する。
 
 ## M4: Audio、音楽時間、MIDI、DTM
 
 - [ ] **部分実装：Audio Output と playback を一つの runtime に統合する。** protected Module Output の visible `Audio` input と Node Clip Audio の targeted native playback QA は存在するが、generic Module audio evaluation は未完成。
   - UI 用語は `Sound` ではなく `Audio` に統一し、pre-v1 の内部 ID/型も一度だけ整理する。
+  - 基本の gain/pan/mute/solo/mix は Inspector と mixer を主導線にする。高度な Audio Node/Port と共通 Output terminal は、必要な Clip/Track/Bus/Master Module だけを同じ production Node Editor で編集する。
   - Media、Audio Mix、Effect/Instrument Module、Nested Timeline、embedded Video audio、Attachment、published Audio input を同じ RenderPlan audio route/effective-value evaluator で処理する。
   - image evaluation は Audio binding を含んでも失敗せず、Image+Audio を一つの Node Clip が同時に出力できる。
   - waveform cache と playback session を再利用し、短い playback window ごとに RenderPlan compile/decode cache を作り直さない。
@@ -275,11 +276,16 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - GL/Ganesh state、barrier、resource lifetime、device loss を一境界で管理し、Preview と Export が同じ RenderPlan command を使う。
   - scene source が複数でも Composition ごとの camera/depth 関係を保ち、Clip ごとに独立 flatten しない。
 
-- [ ] **部分実装：GPU Particle の最初の executable slice を製品機能にする。** Emitter → Initialize → Gravity → Drag → Sprite Renderer → Output、fixed 1/120 s、seed、checkpoint、最大 capacity、per-instance state、shared compiled pipeline は存在する。
-  - Assets/context menu から Particle Node Clip を正式に作成し、curated Inspector と同じ Definition を production Node Editor で編集する。
-  - simulation parameter の Timeline keyframe/expression/published input を step boundary で deterministic に sample する。
-  - Point、Box/Sphere/Mesh emitter、velocity/lifetime/size/color over life、Vortex/Field/Turbulence、collision、sprite/mesh/ribbon renderer を同じ typed `ParticleSystem` graph と runtime に追加する。
-  - real GPU native QA、seek/reverse/repeat/export parity、OOM/device unsupported diagnostics、60 fps benchmark を通す。
+- [ ] **部分実装：GPU Particle の最初の executable slice を製品機能にする。** Emitter → Initialize → Gravity → Drag → Sprite Renderer → Output の bounded Node Clip、fixed 1/120 s、seed、checkpoint、最大 capacity、per-instance state、shared compiled pipeline までは存在する。通常 Clip や Timeline は Node 化しない。
+  - [x] Particle Node Clip factory、6 nodes/5 connections/11 Published Parameters、階層 RenderPlan の `ParticleSceneFrame`、既存 `SceneRuntime` への Preview 実行経路を実装した。
+  - [ ] **現在の最優先 blocker：実 GPU の可視出力を直す。** opt-in test `gpu_particle_seek_and_independent_renderer_are_deterministic` は RTX 3090 上で compute/SSBO の active particle 240 件まで進むが、particle FBO が全面透明のため失敗する。`SceneRuntime::draw_particles` の GL state、point sprite、FBO draw/readback 境界を既存 renderer 内で修正し、失敗後の GL teardown も停止せず終了させる。
+  - [ ] Preview と Export に同じ Particle scene semantics を通す。現在の Export worker は GPU 無効固定のため Particle を出力できない。新しい renderer や CPU particle simulator を増やさず、既存 `SkiaRenderer + SceneRuntime` の独立 GPU session、明示的な unsupported 診断、1-frame PNG golden を実装する。
+  - [ ] Assets の Node Clips セクションと右クリックから Particle Node Clip を正式に作成し、Timeline への drag/drop を一 transaction、一 Undo で処理する。上部に一時ボタンを追加しない。
+  - [ ] curated Inspector は native descriptor の hard range、step、単位、automation capability を表示する。fixed-step sampling 未実装の simulation parameter に keyframe/expression を作らせず、Sprite Color など実行可能な frame-local parameter だけを許可する。UI だけでなく authoring service でも同じ capability を検証する。
+  - [ ] production Node Editor の作成メニューに、runtime status が Implemented の Particle node だけを出す。削除後も同じ Emitter/Initialize/Force/Renderer を再作成・再接続でき、DesignNeeded placeholder は利用可能に見せない。
+  - [ ] simulation parameter の Timeline keyframe、expression、Published input を step boundary で deterministic に sample する。Preview、seek、reverse、repeat、Export が同じ schedule を使う。
+  - [ ] Point、Box/Sphere/Mesh emitter、velocity/lifetime/size/color over life、Vortex/Field/Turbulence、collision、sprite/mesh/ribbon renderer を同じ typed `ParticleSystem` graph と runtime に追加する。
+  - [ ] real GPU native QA、seek/reverse/repeat/export parity、OOM/device unsupported diagnostics、60 fps benchmark を必須 suite として通す。
 
 - [ ] **未実装：Plexus-style proximity geometry を Particle/point-cloud の上に実装する。** 別 simulator を作らず、GPU spatial hash/grid、neighbor search、max distance/max neighbors、stable edge identity と Point/Line/Triangle renderer node を追加する。
   - animated particle/model vertices を入力でき、distance/color/width/opacity を Published Parameter と Timeline keyframe で制御できる。
@@ -313,6 +319,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
   - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で 20 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。
+  - [ ] 上記 20 suite は ignored の実 GPU Particle test を含まない。対応 GPU を持つ runner では ignored のままにせず、非透明 pixel、deterministic seek、独立 renderer、正常 teardown、Preview/Export parity を必須検査にする。
   - Assets drag、Timeline move/trim/reorder/content zoom、Preview select/gizmo/text/path、Curve drag、Dope Sheet、Node add/connect/reconnect/property、Effect reorder、Ensemble、Audio playback、Unsaved dialog、Transition、Ripple を scenario 化する。
   - `python scripts/qa-runner.py --mode full --jobs 1` が clean release-like build で通り、panic/render/plugin error が 0 件になる。
 
