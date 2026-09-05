@@ -111,12 +111,15 @@ impl ColorTransformBackend for LegacySrgbV1ColorTransform {
     fn extract_gpu_transform(
         &self,
         request: &ColorTransformRequest,
-        _language: GpuShaderLanguage,
+        language: GpuShaderLanguage,
     ) -> Result<GpuColorTransform, ColorManagementError> {
-        let _ = self.validate_request(request)?;
-        Err(ColorManagementError::GpuTransformUnavailable {
-            backend_id: self.backend_id().to_string(),
-        })
+        let transform = self.validate_request(request)?;
+        let identity = CompiledTransformIdentity::new(
+            self.build(),
+            self.processor_cache_key(request)?,
+            transform.program_id(),
+        )?;
+        crate::gpu_standard::extract_standard_gpu_transform(transform, identity, language)
     }
 }
 

@@ -17,10 +17,12 @@ use skia_safe::{
 
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
+#[cfg(feature = "gl")]
+use crate::rendering::gl_resources::SavedGlState;
 use crate::rendering::renderer::{RenderOutput, WorkingSurfaceContract};
 #[cfg(feature = "gl")]
 use crate::rendering::scene_runtime::{SceneTexture, SceneTextureFormat};
-use crate::rendering::skia_utils;
+use crate::rendering::skia_utils::{self, GpuContext};
 
 const F32_COMPONENT_BYTES: usize = std::mem::size_of::<f32>();
 const RGBA_COMPONENTS: usize = 4;
@@ -122,6 +124,7 @@ pub(super) fn snapshot_surface(
 pub(super) fn managed_working_to_skia_image(
     image: &ManagedLinearWorkingImage,
     contract: &WorkingSurfaceContract,
+    gpu_context: Option<&mut GpuContext>,
 ) -> Result<Image, LibraryError> {
     if image.identity() != contract.identity() {
         return Err(LibraryError::Render(format!(
@@ -130,7 +133,194 @@ pub(super) fn managed_working_to_skia_image(
             contract.identity()
         )));
     }
+    #[cfg(feature = "gl")]
+    if let Some(gpu_context) = gpu_context {
+        return upload_linear_working_to_gpu_image(image.pixels(), gpu_context);
+    }
+    #[cfg(not(feature = "gl"))]
+    let _ = gpu_context;
     linear_working_to_skia_image(image.pixels())
+}
+
+/// Upload Project-linear pixels without asking Skia to convert premultiplied
+/// RGBAF32 into the device texture format. Skia's raster-to-texture conversion
+/// clamps premultiplied channels to `[0, alpha]`, which destroys legitimate
+/// scene-linear negative and super-white values before compositing. The
+/// renderer's existing GL owner uploads the f32 payload without a gamut
+/// conversion (the driver may store it as f16), then transfers texture
+/// ownership to Ganesh for ordinary sampling and blending.
+#[cfg(feature = "gl")]
+fn upload_linear_working_to_gpu_image(
+    image: &LinearWorkingImage,
+    gpu_context: &mut GpuContext,
+) -> Result<Image, LibraryError> {
+    use glow::HasContext;
+
+    validate_working_surface_payload(image.width(), image.height())?;
+    let upload = working_upload_format(&gpu_context.direct_context)?;
+
+    // Finish Ganesh commands before raw GL changes state on the same context.
+    gpu_context.direct_context.flush_and_submit();
+    let gl = gpu_context.create_glow_context();
+    let saved = SavedGlState::capture(&gl);
+    let uploaded = (|| {
+        // SAFETY: this queries the current renderer-owned context.
+        let max_texture_size =
+            u32::try_from(unsafe { gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) }).map_err(
+                |_| LibraryError::Render("OpenGL reported an invalid texture limit".to_string()),
+            )?;
+        if image.width() > max_texture_size || image.height() > max_texture_size {
+            return Err(LibraryError::Render(format!(
+                "Project-linear upload {}x{} exceeds OpenGL texture limit {max_texture_size}",
+                image.width(),
+                image.height()
+            )));
+        }
+        // SAFETY: the renderer activated and exclusively borrows this GL
+        // owner. `image` remains alive for the synchronous TexImage call.
+        let texture = unsafe { gl.create_texture() }.map_err(|error| {
+            LibraryError::Render(format!(
+                "Cannot create Project-linear upload texture: {error}"
+            ))
+        })?;
+        // SAFETY: `texture` is a fresh name owned by this scope; the f32 byte
+        // slice has the exact RGBA/width/height layout validated above. A PBO
+        // is explicitly unbound so the slice is interpreted as client data.
+        unsafe {
+            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                upload.gl_internal_format() as i32,
+                image.width() as i32,
+                image.height() as i32,
+                0,
+                glow::RGBA,
+                glow::FLOAT,
+                glow::PixelUnpackData::Slice(Some(cast_slice(image.pixels()))),
+            );
+        }
+        // SAFETY: the upload above is complete on this current context. On
+        // failure this scope still owns the fresh texture and deletes it.
+        let upload_error = unsafe { gl.get_error() };
+        if upload_error != glow::NO_ERROR {
+            // SAFETY: adoption has not happened, so this error path still
+            // uniquely owns the fresh texture on the current context.
+            unsafe { gl.delete_texture(texture) };
+            return Err(LibraryError::Render(format!(
+                "Project-linear floating upload failed with OpenGL error {upload_error:#x}"
+            )));
+        }
+
+        let texture_info = gpu::gl::TextureInfo {
+            target: glow::TEXTURE_2D,
+            id: texture.0.get(),
+            format: upload.gl_internal_format(),
+            protected: gpu::Protected::No,
+        };
+        // SAFETY: the descriptor matches the immutable storage allocated
+        // above and is used immediately by this context's Ganesh owner.
+        let backend = unsafe {
+            gpu::backend_textures::make_gl(
+                (image.width() as i32, image.height() as i32),
+                gpu::Mipmapped::No,
+                texture_info,
+                "Project-linear floating upload",
+            )
+        };
+        match gpu::images::adopt_texture_from(
+            &mut gpu_context.direct_context,
+            &backend,
+            gpu::SurfaceOrigin::TopLeft,
+            upload.color_type(),
+            AlphaType::Premul,
+            working_color_space(),
+        ) {
+            Some(image) => Ok(image),
+            None => {
+                // Ownership transfers only when Ganesh returns an Image.
+                // SAFETY: this error path still uniquely owns `texture`.
+                unsafe { gl.delete_texture(texture) };
+                Err(LibraryError::Render(
+                    "Ganesh could not adopt the Project-linear floating upload texture".to_string(),
+                ))
+            }
+        }
+    })();
+    saved.restore(&gl);
+    gpu_context.direct_context.reset(None);
+    uploaded
+}
+
+#[cfg(feature = "gl")]
+enum WorkingUploadFormat {
+    RgbaF32,
+    RgbaF16,
+}
+
+#[cfg(feature = "gl")]
+impl WorkingUploadFormat {
+    fn color_type(&self) -> ColorType {
+        match self {
+            Self::RgbaF32 => ColorType::RGBAF32,
+            Self::RgbaF16 => ColorType::RGBAF16,
+        }
+    }
+
+    fn gl_internal_format(&self) -> u32 {
+        match self {
+            Self::RgbaF32 => glow::RGBA32F,
+            Self::RgbaF16 => glow::RGBA16F,
+        }
+    }
+}
+
+#[cfg(feature = "gl")]
+fn working_upload_format(
+    context: &gpu::DirectContext,
+) -> Result<WorkingUploadFormat, LibraryError> {
+    for (color_type, gl_format) in [
+        (ColorType::RGBAF32, glow::RGBA32F),
+        (ColorType::RGBAF16, glow::RGBA16F),
+    ] {
+        if context
+            .default_backend_format(color_type, gpu::Renderable::No)
+            .as_gl_format_enum()
+            != gl_format
+        {
+            continue;
+        }
+        if color_type == ColorType::RGBAF32 {
+            return Ok(WorkingUploadFormat::RgbaF32);
+        }
+        return Ok(WorkingUploadFormat::RgbaF16);
+    }
+    Err(LibraryError::Render(
+        "OpenGL cannot sample a floating texture required to preserve Project-linear extended values"
+            .to_string(),
+    ))
 }
 
 pub(super) fn surface_to_managed_working(

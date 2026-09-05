@@ -9,6 +9,8 @@ use crate::{
     standard_spaces::{CompiledStandardTransform, StandardColorSpaceId},
 };
 
+use crate::gpu::{GpuColorTransform, GpuShaderLanguage};
+
 pub use crate::standard_spaces::{LINEAR_SRGB_SPACE_ID, SRGB_SPACE_ID};
 
 /// Stable identity of the immutable program compiled for a CPU processor.
@@ -56,27 +58,6 @@ impl CompiledTransformIdentity {
     pub fn backend_program_cache_id(&self) -> &str {
         &self.backend_program_cache_id
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GpuShaderLanguage {
-    SkSl,
-    Glsl,
-    Wgsl,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct GpuLut3d {
-    pub edge_length: u32,
-    pub rgba_f32: Vec<[f32; 4]>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct GpuColorTransform {
-    pub language: GpuShaderLanguage,
-    pub source: String,
-    pub entry_point: String,
-    pub luts: Vec<GpuLut3d>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -486,26 +467,21 @@ impl ColorTransformBackend for BuiltinColorTransform {
         request: &ColorTransformRequest,
     ) -> Result<Box<dyn CpuColorProcessor>, ColorManagementError> {
         let transform = self.validate_request(request)?;
-        let program_id = transform.program_id();
+        let identity = self.compiled_identity(request, &transform)?;
         Ok(Box::new(BuiltinCpuProcessor {
             transform,
-            identity: CompiledTransformIdentity::new(
-                self.build(),
-                self.processor_cache_key(request)?,
-                program_id,
-            )?,
+            identity,
         }))
     }
 
     fn extract_gpu_transform(
         &self,
         request: &ColorTransformRequest,
-        _language: GpuShaderLanguage,
+        language: GpuShaderLanguage,
     ) -> Result<GpuColorTransform, ColorManagementError> {
-        let _ = self.validate_request(request)?;
-        Err(ColorManagementError::GpuTransformUnavailable {
-            backend_id: self.backend_id().to_string(),
-        })
+        let transform = self.validate_request(request)?;
+        let identity = self.compiled_identity(request, &transform)?;
+        crate::gpu_standard::extract_standard_gpu_transform(transform, identity, language)
     }
 
     fn validate_color_space_context(
@@ -519,6 +495,20 @@ impl ColorTransformBackend for BuiltinColorTransform {
             }
         })?;
         crate::standard_hdr::validate_standard_space_context(standard_space.metadata(), context)
+    }
+}
+
+impl BuiltinColorTransform {
+    fn compiled_identity(
+        &self,
+        request: &ColorTransformRequest,
+        transform: &CompiledStandardTransform,
+    ) -> Result<CompiledTransformIdentity, ColorManagementError> {
+        CompiledTransformIdentity::new(
+            self.build(),
+            self.processor_cache_key(request)?,
+            transform.program_id(),
+        )
     }
 }
 

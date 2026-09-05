@@ -30,6 +30,12 @@ use ruvie_color_management::{
 };
 use uuid::Uuid;
 
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/gpu_terminal.rs"]
+mod gpu_terminal;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/gpu_terminal_hdr.rs"]
+mod gpu_terminal_hdr;
 #[path = "tests/render_target.rs"]
 mod render_target;
 #[path = "tests/vector_layer_native.rs"]

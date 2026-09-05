@@ -505,6 +505,15 @@ pub trait Renderer {
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError>;
+    /// Apply a complete Project-authorized terminal chain while working pixels
+    /// remain backend-native. `None` means unsupported, with no frame mutation;
+    /// execution failures are errors, never an invitation to ignore color.
+    fn finalize_gpu_terminal(
+        &mut self,
+        _chain: &ruvie_color_management::GpuTerminalChain,
+    ) -> Result<Option<Image>, LibraryError> {
+        Ok(None)
+    }
     fn clear(&mut self) -> Result<(), LibraryError>;
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
         None

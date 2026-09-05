@@ -199,21 +199,14 @@ impl<T: Renderer> RenderService<T> {
             .for_project(project, managed_destination)?;
         self.renderer
             .use_project_linear_surface(pipeline.working_surface_contract())?;
-        let output = self.render_with_authority(
+        self.render_with_authority(
             frame_info,
             &RenderColorAuthority::Managed {
                 assets: &project.assets,
                 pipeline: pipeline.as_ref(),
             },
         )?;
-        let RenderOutput::Working(working) = output else {
-            return Err(LibraryError::Render(
-                "Project renderer did not retain the typed linear RGBAF32 root output".to_string(),
-            ));
-        };
-        measure_debug("RenderService::terminal_color", || {
-            pipeline.terminal_image(&working).map(RenderOutput::Image)
-        })
+        self.finalize_managed_frame(pipeline.as_ref())
     }
 
     /// Rasterize an authoring Timeline frame under the project
@@ -227,17 +220,31 @@ impl<T: Renderer> RenderService<T> {
         destination: RenderDestination,
     ) -> Result<RenderOutput, LibraryError> {
         let pipeline = self.prepare_authoring_color_pipeline(project, destination)?;
-        let output = self.render_with_authority(
+        self.render_with_authority(
             frame_info,
             &RenderColorAuthority::Managed {
                 assets: &project.assets,
                 pipeline: pipeline.as_ref(),
             },
         )?;
+        self.finalize_managed_frame(pipeline.as_ref())
+    }
+
+    fn finalize_managed_frame(
+        &mut self,
+        pipeline: &ProjectColorPipeline,
+    ) -> Result<RenderOutput, LibraryError> {
+        if let Some(chain) = pipeline.gpu_terminal_chain()
+            && let Some(image) = measure_debug("RenderService::gpu_terminal_color", || {
+                self.renderer.finalize_gpu_terminal(chain)
+            })?
+        {
+            return Ok(RenderOutput::Image(image));
+        }
+        let output = measure_debug("RenderService::finalize", || self.renderer.finalize())?;
         let RenderOutput::Working(working) = output else {
             return Err(LibraryError::Render(
-                "Authoring renderer did not retain the typed linear RGBAF32 root output"
-                    .to_string(),
+                "Project renderer did not retain the typed linear RGBAF32 root output".to_string(),
             ));
         };
         measure_debug("RenderService::terminal_color", || {
@@ -282,14 +289,15 @@ impl<T: Renderer> RenderService<T> {
         frame_info: &FrameInfo,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         self.renderer.use_unmanaged_srgba8_surface()?;
-        self.render_with_authority(frame_info, &RenderColorAuthority::UnmanagedAbi)
+        self.render_with_authority(frame_info, &RenderColorAuthority::UnmanagedAbi)?;
+        measure_debug("RenderService::finalize", || self.renderer.finalize())
     }
 
     fn render_with_authority(
         &mut self,
         frame_info: &FrameInfo,
         color_authority: &RenderColorAuthority<'_>,
-    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+    ) -> Result<(), LibraryError> {
         self.clear()?;
         let object_count = frame_info.object_count();
         let _timer = ScopedTimer::debug(format!(
@@ -303,7 +311,7 @@ impl<T: Renderer> RenderService<T> {
             frame_info.now_time.into_inner(),
             color_authority,
         )?;
-        measure_debug("RenderService::finalize", || self.renderer.finalize())
+        Ok(())
     }
 
     fn render_items(

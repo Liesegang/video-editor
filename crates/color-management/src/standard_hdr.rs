@@ -10,7 +10,19 @@ pub const PQ_LINEARIZATION_POLICY_CONTEXT_KEY: &str = "RUVIE_PQ_LINEARIZATION_PO
 /// Treat PQ as reference-white-relative display luminance, not recovered scene light.
 pub const RELATIVE_DISPLAY_LUMINANCE_PQ_POLICY: &str = "relative-display-luminance";
 
-const ST2084_MAX_NITS: f64 = 10_000.0;
+pub(crate) const ST2084_MAX_NITS: f64 = 10_000.0;
+pub(crate) const ST2084_M1: f64 = 2610.0 / 16_384.0;
+pub(crate) const ST2084_M2: f64 = (2523.0 / 4096.0) * 128.0;
+pub(crate) const ST2084_C1: f64 = 3424.0 / 4096.0;
+pub(crate) const ST2084_C2: f64 = (2413.0 / 4096.0) * 32.0;
+pub(crate) const ST2084_C3: f64 = (2392.0 / 4096.0) * 32.0;
+pub(crate) const HLG_A: f64 = 0.178_832_77;
+pub(crate) const HLG_B: f64 = 0.284_668_92;
+pub(crate) const HLG_C: f64 = 0.559_910_73;
+pub(crate) const HLG_SIGNAL_BREAKPOINT: f64 = 0.5;
+pub(crate) const HLG_SCENE_BREAKPOINT: f64 = 1.0 / 12.0;
+pub(crate) const HLG_LINEAR_FACTOR: f64 = 3.0;
+pub(crate) const HLG_NONLINEAR_FACTOR: f64 = 12.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct HdrTransformContext {
@@ -93,6 +105,10 @@ impl HdrTransformContext {
         } else {
             ""
         }
+    }
+
+    pub(crate) const fn pq_reference_white_nits(self) -> Option<f64> {
+        self.pq_reference_white_nits
     }
 }
 
@@ -226,39 +242,27 @@ fn internal_context_error() -> ColorManagementError {
 }
 
 fn st2084_to_nits(code: f64) -> Result<f64, ColorManagementError> {
-    const M1: f64 = 2610.0 / 16_384.0;
-    const M2: f64 = (2523.0 / 4096.0) * 128.0;
-    const C1: f64 = 3424.0 / 4096.0;
-    const C2: f64 = (2413.0 / 4096.0) * 32.0;
-    const C3: f64 = (2392.0 / 4096.0) * 32.0;
-
     if !(0.0..=1.0).contains(&code) {
         return Err(ColorManagementError::InvalidTransferDomain {
             transfer: "ST 2084 PQ",
             reason: "encoded value must be between 0 and 1 inclusive",
         });
     }
-    let magnitude = code.powf(1.0 / M2);
-    let denominator = C2 - C3 * magnitude;
-    let normalized = ((magnitude - C1).max(0.0) / denominator).powf(1.0 / M1);
+    let magnitude = code.powf(1.0 / ST2084_M2);
+    let denominator = ST2084_C2 - ST2084_C3 * magnitude;
+    let normalized = ((magnitude - ST2084_C1).max(0.0) / denominator).powf(1.0 / ST2084_M1);
     Ok(ST2084_MAX_NITS * normalized)
 }
 
 fn nits_to_st2084(nits: f64) -> Result<f64, ColorManagementError> {
-    const M1: f64 = 2610.0 / 16_384.0;
-    const M2: f64 = (2523.0 / 4096.0) * 128.0;
-    const C1: f64 = 3424.0 / 4096.0;
-    const C2: f64 = (2413.0 / 4096.0) * 32.0;
-    const C3: f64 = (2392.0 / 4096.0) * 32.0;
-
     if !(0.0..=ST2084_MAX_NITS).contains(&nits) {
         return Err(ColorManagementError::InvalidTransferDomain {
             transfer: "ST 2084 PQ",
             reason: "absolute luminance must be between 0 and 10000 nits inclusive",
         });
     }
-    let normalized = (nits / ST2084_MAX_NITS).powf(M1);
-    Ok(((C1 + C2 * normalized) / (1.0 + C3 * normalized)).powf(M2))
+    let normalized = (nits / ST2084_MAX_NITS).powf(ST2084_M1);
+    Ok(((ST2084_C1 + ST2084_C2 * normalized) / (1.0 + ST2084_C3 * normalized)).powf(ST2084_M2))
 }
 
 fn hlg_inverse_oetf(signal: f64) -> f64 {
@@ -266,26 +270,20 @@ fn hlg_inverse_oetf(signal: f64) -> f64 {
     // deliberately uses an odd-symmetric extension and leaves >1 headroom
     // unclipped so grading and graph math do not destroy recoverable values.
     signed_transfer(signal, |magnitude| {
-        const A: f64 = 0.178_832_77;
-        const B: f64 = 0.284_668_92;
-        const C: f64 = 0.559_910_73;
-        if magnitude <= 0.5 {
-            magnitude * magnitude / 3.0
+        if magnitude <= HLG_SIGNAL_BREAKPOINT {
+            magnitude * magnitude / HLG_LINEAR_FACTOR
         } else {
-            (((magnitude - C) / A).exp() + B) / 12.0
+            (((magnitude - HLG_C) / HLG_A).exp() + HLG_B) / HLG_NONLINEAR_FACTOR
         }
     })
 }
 
 fn hlg_oetf(scene: f64) -> f64 {
     signed_transfer(scene, |magnitude| {
-        const A: f64 = 0.178_832_77;
-        const B: f64 = 0.284_668_92;
-        const C: f64 = 0.559_910_73;
-        if magnitude <= 1.0 / 12.0 {
-            (3.0 * magnitude).sqrt()
+        if magnitude <= HLG_SCENE_BREAKPOINT {
+            (HLG_LINEAR_FACTOR * magnitude).sqrt()
         } else {
-            A * (12.0 * magnitude - B).ln() + C
+            HLG_A * (HLG_NONLINEAR_FACTOR * magnitude - HLG_B).ln() + HLG_C
         }
     })
 }

@@ -607,6 +607,15 @@ fn production_named_ocio_preview_chains_view_output_to_bound_srgb_surface() {
         project
             .set_color_management(config)
             .expect("complete exact custom color config");
+        let preview_pipeline = super::managed_color_backend::ProjectColorPipeline::for_project(
+            &project,
+            super::managed_color_backend::ManagedRenderDestination::Preview,
+        )
+        .expect("named OCIO Preview pipeline");
+        assert!(
+            preview_pipeline.gpu_terminal_chain().is_none(),
+            "a named OCIO Preview must not expose a partial GPU terminal until every stage has an exact extractor"
+        );
 
         let (mut service, _) = service(std::iter::empty::<(String, Payload)>());
         let mut authored_frame = frame(Vec::new());

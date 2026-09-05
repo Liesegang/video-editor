@@ -318,6 +318,18 @@ impl CompiledStandardTransform {
         }
     }
 
+    pub(crate) const fn source(&self) -> StandardColorSpaceMetadata {
+        self.source
+    }
+
+    pub(crate) const fn destination(&self) -> StandardColorSpaceMetadata {
+        self.destination
+    }
+
+    pub(crate) const fn hdr_context(&self) -> HdrTransformContext {
+        self.hdr_context
+    }
+
     fn validate_boundary(&self) -> Result<(), ColorManagementError> {
         let valid = match self.purpose {
             TransformPurpose::Explicit => true,
@@ -349,20 +361,8 @@ impl CompiledStandardTransform {
 fn decode_sdr(transfer: StandardTransfer, value: f64) -> f64 {
     match transfer {
         StandardTransfer::Linear => value,
-        StandardTransfer::Srgb => signed_transfer(value, |magnitude| {
-            if magnitude <= 0.040_45 {
-                magnitude / 12.92
-            } else {
-                ((magnitude + 0.055) / 1.055).powf(2.4)
-            }
-        }),
-        StandardTransfer::Bt709 => signed_transfer(value, |magnitude| {
-            if magnitude <= 0.081 {
-                magnitude / 4.5
-            } else {
-                ((magnitude + 0.099) / 1.099).powf(1.0 / 0.45)
-            }
-        }),
+        StandardTransfer::Srgb => decode_piecewise(value, SRGB_TRANSFER),
+        StandardTransfer::Bt709 => decode_piecewise(value, BT709_TRANSFER),
         StandardTransfer::Bt2020Exact => decode_bt2020(value, BT2020_EXACT),
         StandardTransfer::Bt2020TenBit => decode_bt2020(value, BT2020_10_BIT),
         StandardTransfer::Bt2020TwelveBit => decode_bt2020(value, BT2020_12_BIT),
@@ -373,20 +373,8 @@ fn decode_sdr(transfer: StandardTransfer, value: f64) -> f64 {
 fn encode_sdr(transfer: StandardTransfer, value: f64) -> f64 {
     match transfer {
         StandardTransfer::Linear => value,
-        StandardTransfer::Srgb => signed_transfer(value, |magnitude| {
-            if magnitude <= 0.003_130_8 {
-                magnitude * 12.92
-            } else {
-                1.055 * magnitude.powf(1.0 / 2.4) - 0.055
-            }
-        }),
-        StandardTransfer::Bt709 => signed_transfer(value, |magnitude| {
-            if magnitude <= 0.018 {
-                magnitude * 4.5
-            } else {
-                1.099 * magnitude.powf(0.45) - 0.099
-            }
-        }),
+        StandardTransfer::Srgb => encode_piecewise(value, SRGB_TRANSFER),
+        StandardTransfer::Bt709 => encode_piecewise(value, BT709_TRANSFER),
         StandardTransfer::Bt2020Exact => encode_bt2020(value, BT2020_EXACT),
         StandardTransfer::Bt2020TenBit => encode_bt2020(value, BT2020_10_BIT),
         StandardTransfer::Bt2020TwelveBit => encode_bt2020(value, BT2020_12_BIT),
@@ -395,30 +383,86 @@ fn encode_sdr(transfer: StandardTransfer, value: f64) -> f64 {
 }
 
 #[derive(Clone, Copy)]
-struct Bt2020TransferCoefficients {
-    alpha: f64,
-    beta: f64,
+pub(crate) struct Bt2020TransferCoefficients {
+    pub(crate) alpha: f64,
+    pub(crate) beta: f64,
 }
 
-const BT2020_EXACT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
+#[derive(Clone, Copy)]
+pub(crate) struct SdrPowerTransferCoefficients {
+    pub(crate) encoded_threshold: f64,
+    pub(crate) linear_threshold: f64,
+    pub(crate) linear_slope: f64,
+    pub(crate) nonlinear_scale: f64,
+    pub(crate) nonlinear_offset: f64,
+    pub(crate) decode_exponent: f64,
+    pub(crate) encode_exponent: f64,
+}
+
+pub(crate) const SRGB_TRANSFER: SdrPowerTransferCoefficients = SdrPowerTransferCoefficients {
+    encoded_threshold: 0.040_45,
+    linear_threshold: 0.003_130_8,
+    linear_slope: 12.92,
+    nonlinear_scale: 1.055,
+    nonlinear_offset: 0.055,
+    decode_exponent: 2.4,
+    encode_exponent: 1.0 / 2.4,
+};
+
+pub(crate) const BT709_TRANSFER: SdrPowerTransferCoefficients = SdrPowerTransferCoefficients {
+    encoded_threshold: 0.081,
+    linear_threshold: 0.018,
+    linear_slope: 4.5,
+    nonlinear_scale: 1.099,
+    nonlinear_offset: 0.099,
+    decode_exponent: 1.0 / 0.45,
+    encode_exponent: 0.45,
+};
+
+fn decode_piecewise(value: f64, coefficients: SdrPowerTransferCoefficients) -> f64 {
+    signed_transfer(value, |magnitude| {
+        if magnitude <= coefficients.encoded_threshold {
+            magnitude / coefficients.linear_slope
+        } else {
+            ((magnitude + coefficients.nonlinear_offset) / coefficients.nonlinear_scale)
+                .powf(coefficients.decode_exponent)
+        }
+    })
+}
+
+fn encode_piecewise(value: f64, coefficients: SdrPowerTransferCoefficients) -> f64 {
+    signed_transfer(value, |magnitude| {
+        if magnitude <= coefficients.linear_threshold {
+            magnitude * coefficients.linear_slope
+        } else {
+            coefficients.nonlinear_scale * magnitude.powf(coefficients.encode_exponent)
+                - coefficients.nonlinear_offset
+        }
+    })
+}
+
+pub(crate) const BT2020_EXACT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
     alpha: 1.099_296_826_809_44,
     beta: 0.018_053_968_510_807,
 };
-const BT2020_10_BIT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
+pub(crate) const BT2020_10_BIT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
     alpha: 1.099,
     beta: 0.018,
 };
-const BT2020_12_BIT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
+pub(crate) const BT2020_12_BIT: Bt2020TransferCoefficients = Bt2020TransferCoefficients {
     alpha: 1.0993,
     beta: 0.0181,
 };
+pub(crate) const BT2020_LINEAR_SLOPE: f64 = 4.5;
+pub(crate) const BT2020_ENCODE_EXPONENT: f64 = 0.45;
 
 fn decode_bt2020(value: f64, coefficients: Bt2020TransferCoefficients) -> f64 {
     signed_transfer(value, |magnitude| {
-        if magnitude < coefficients.beta * 4.5 {
-            magnitude / 4.5
+        if magnitude < coefficients.beta * BT2020_LINEAR_SLOPE {
+            magnitude / BT2020_LINEAR_SLOPE
         } else {
-            ((magnitude + coefficients.alpha - 1.0) / coefficients.alpha).powf(1.0 / 0.45)
+            ((magnitude + coefficients.alpha - 1.0) / coefficients.alpha)
+                .powf(1.0 / BT2020_ENCODE_EXPONENT)
         }
     })
 }
@@ -426,9 +470,9 @@ fn decode_bt2020(value: f64, coefficients: Bt2020TransferCoefficients) -> f64 {
 fn encode_bt2020(value: f64, coefficients: Bt2020TransferCoefficients) -> f64 {
     signed_transfer(value, |magnitude| {
         if magnitude < coefficients.beta {
-            magnitude * 4.5
+            magnitude * BT2020_LINEAR_SLOPE
         } else {
-            coefficients.alpha * magnitude.powf(0.45) - (coefficients.alpha - 1.0)
+            coefficients.alpha * magnitude.powf(BT2020_ENCODE_EXPONENT) - (coefficients.alpha - 1.0)
         }
     })
 }
@@ -460,7 +504,7 @@ fn multiply_matrix(matrix: [[f64; 3]; 3], value: [f64; 3]) -> [f64; 3] {
     matrix.map(|row| row[0] * value[0] + row[1] * value[1] + row[2] * value[2])
 }
 
-fn to_xyz_matrix(primaries: StandardPrimaries) -> [[f64; 3]; 3] {
+pub(crate) fn to_xyz_matrix(primaries: StandardPrimaries) -> [[f64; 3]; 3] {
     match primaries {
         StandardPrimaries::Bt709 => [
             [
@@ -512,7 +556,7 @@ fn to_xyz_matrix(primaries: StandardPrimaries) -> [[f64; 3]; 3] {
     }
 }
 
-fn from_xyz_matrix(primaries: StandardPrimaries) -> [[f64; 3]; 3] {
+pub(crate) fn from_xyz_matrix(primaries: StandardPrimaries) -> [[f64; 3]; 3] {
     match primaries {
         StandardPrimaries::Bt709 => [
             [12_831.0 / 3_959.0, -329.0 / 214.0, -1_974.0 / 3_959.0],

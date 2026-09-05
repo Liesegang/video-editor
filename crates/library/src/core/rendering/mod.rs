@@ -1,6 +1,8 @@
 mod blend;
 #[cfg(test)]
 mod blend_tests;
+#[cfg(feature = "gl")]
+pub(crate) mod gl_resources;
 pub(crate) mod managed_color_backend;
 pub(crate) mod managed_color_source;
 pub(crate) mod media_color_ingress;

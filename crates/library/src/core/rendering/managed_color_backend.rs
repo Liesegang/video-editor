@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
-    CpuColorProcessor, DisplayViewSurfaceProcessor, LegacySrgbV1ColorTransform,
-    ManagedLinearWorkingImage, PQ_LINEARIZATION_POLICY_CONTEXT_KEY,
-    REFERENCE_WHITE_NITS_CONTEXT_KEY, RELATIVE_DISPLAY_LUMINANCE_PQ_POLICY, VerifiedSourceSpace,
-    WorkingColorIdentity,
+    CpuColorProcessor, DisplayViewSurfaceProcessor, GpuColorTransform, GpuShaderLanguage,
+    GpuTerminalChain, LegacySrgbV1ColorTransform, ManagedLinearWorkingImage,
+    PQ_LINEARIZATION_POLICY_CONTEXT_KEY, REFERENCE_WHITE_NITS_CONTEXT_KEY,
+    RELATIVE_DISPLAY_LUMINANCE_PQ_POLICY, VerifiedSourceSpace, WorkingColorIdentity,
 };
 
 use crate::error::LibraryError;
@@ -39,6 +39,7 @@ pub(crate) struct ProjectColorPipeline {
     working: WorkingColorIdentity,
     authoring_srgb: VerifiedSourceSpace,
     terminal: ProjectTerminal,
+    gpu_terminal: Option<GpuTerminalChain>,
     working_surface: WorkingSurfaceContract,
     source_processors: Mutex<HashMap<VerifiedSourceSpace, Arc<dyn CpuColorProcessor>>>,
 }
@@ -113,13 +114,14 @@ impl ProjectColorPipeline {
             .map_err(color_error)?;
         let working = WorkingColorIdentity::from_verified(intent.cache_identity(), verified)
             .map_err(color_error)?;
-        let terminal = create_terminal(
+        let (terminal, gpu_terminal) = create_terminal(
             backend.as_ref(),
             &intent,
             destination,
             &working_space,
             &srgb_surface_space,
             &context,
+            &working,
         )?;
         let working_surface = WorkingSurfaceContract::new(
             working.clone(),
@@ -141,6 +143,7 @@ impl ProjectColorPipeline {
             working,
             authoring_srgb,
             terminal,
+            gpu_terminal,
             working_surface,
             source_processors: Mutex::new(HashMap::new()),
         })
@@ -212,6 +215,10 @@ impl ProjectColorPipeline {
             image.pixels().height(),
             rgba,
         ))
+    }
+
+    pub(crate) fn gpu_terminal_chain(&self) -> Option<&GpuTerminalChain> {
+        self.gpu_terminal.as_ref()
     }
 
     pub(crate) fn working_surface_contract(&self) -> WorkingSurfaceContract {
@@ -587,17 +594,21 @@ fn create_terminal(
     working_space: &str,
     srgb_surface_space: &str,
     context: &ColorContext,
-) -> Result<ProjectTerminal, LibraryError> {
+    working: &WorkingColorIdentity,
+) -> Result<(ProjectTerminal, Option<GpuTerminalChain>), LibraryError> {
     let first_request = terminal_request(intent, destination, working_space, context);
     let first = backend
         .create_cpu_processor(&first_request)
         .map_err(color_error)?;
+    let first_gpu = matching_gpu_stage(backend, &first_request, first.as_ref())?;
     if destination != ManagedRenderDestination::Preview {
-        return Ok(ProjectTerminal::Direct(first));
+        let gpu = terminal_gpu_chain(working, first_gpu.into_iter().collect())?;
+        return Ok((ProjectTerminal::Direct(first), gpu));
     }
     let preview = intent.config().preview();
     let Some(_) = preview.view() else {
-        return Ok(ProjectTerminal::Direct(first));
+        let gpu = terminal_gpu_chain(working, first_gpu.into_iter().collect())?;
+        return Ok((ProjectTerminal::Direct(first), gpu));
     };
     let view_output_space = preview.view_output_color_space().ok_or_else(|| {
         LibraryError::Render("named OCIO Preview has no exact view output binding".to_string())
@@ -608,8 +619,52 @@ fn create_terminal(
     let surface = backend
         .create_cpu_processor(&surface_request)
         .map_err(color_error)?;
-    DisplayViewSurfaceProcessor::new(first, view_output_space, srgb_surface_space, surface)
-        .map(ProjectTerminal::NamedView)
+    let surface_gpu = if first_gpu.is_some() {
+        matching_gpu_stage(backend, &surface_request, surface.as_ref())?
+    } else {
+        None
+    };
+    let gpu = match (first_gpu, surface_gpu) {
+        (Some(first), Some(surface)) => terminal_gpu_chain(working, vec![first, surface])?,
+        _ => None,
+    };
+    let cpu =
+        DisplayViewSurfaceProcessor::new(first, view_output_space, srgb_surface_space, surface)
+            .map(ProjectTerminal::NamedView)
+            .map_err(color_error)?;
+    Ok((cpu, gpu))
+}
+
+fn matching_gpu_stage(
+    backend: &dyn ColorTransformBackend,
+    request: &ColorTransformRequest,
+    cpu: &dyn CpuColorProcessor,
+) -> Result<Option<GpuColorTransform>, LibraryError> {
+    match backend.extract_gpu_transform(request, GpuShaderLanguage::Glsl) {
+        Ok(gpu) => {
+            if gpu.compiled_transform_identity() != cpu.compiled_transform_identity() {
+                return Err(LibraryError::Render(
+                    "GPU color stage does not identify the authoritative CPU processor".to_string(),
+                ));
+            }
+            Ok(Some(gpu))
+        }
+        Err(ruvie_color_management::ColorManagementError::GpuTransformUnavailable { .. }) => {
+            Ok(None)
+        }
+        Err(error) => Err(color_error(error)),
+    }
+}
+
+fn terminal_gpu_chain(
+    working: &WorkingColorIdentity,
+    stages: Vec<GpuColorTransform>,
+) -> Result<Option<GpuTerminalChain>, LibraryError> {
+    if stages.is_empty() {
+        return Ok(None);
+    }
+    GpuTerminalChain::new(working.clone(), stages)
+        .map(Some)
         .map_err(color_error)
 }
 
@@ -708,5 +763,26 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(pipeline.lock_source_processors().len(), 1);
+    }
+
+    #[test]
+    fn builtin_terminal_exposes_only_a_complete_exact_gpu_chain() {
+        let project = Project::new("GPU terminal chain");
+        for destination in [
+            ManagedRenderDestination::Preview,
+            ManagedRenderDestination::Export,
+        ] {
+            let pipeline = ProjectColorPipeline::for_project(&project, destination).unwrap();
+            let chain = pipeline
+                .gpu_terminal_chain()
+                .expect("built-in direct terminal has an analytic GLSL transform");
+            assert_eq!(chain.working_identity(), &pipeline.working);
+            assert_eq!(chain.language(), GpuShaderLanguage::Glsl);
+            assert_eq!(chain.stages().len(), 1);
+            assert_eq!(
+                chain.stages()[0].input_color_space(),
+                pipeline.working.working_space()
+            );
+        }
     }
 }

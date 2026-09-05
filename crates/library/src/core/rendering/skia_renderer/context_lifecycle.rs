@@ -75,6 +75,7 @@ impl SkiaRenderer {
         #[cfg(feature = "gl")]
         {
             self.scene_runtime = None;
+            self.terminal_compute = None;
         }
         self.group_surfaces.clear();
         self.retained_group_surfaces.clear();
@@ -98,6 +99,9 @@ impl SkiaRenderer {
                 .gpu_context
                 .as_ref()
                 .map(|context| SceneRuntime::new(context.create_glow_context()));
+            self.terminal_compute = self.gpu_context.as_ref().and_then(|context| {
+                super::terminal_compute::TerminalCompute::new(context.create_glow_context())
+            });
         }
         Ok(())
     }

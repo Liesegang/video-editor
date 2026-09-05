@@ -14,6 +14,8 @@
 
 mod contract;
 mod exact_color_config_file;
+mod gpu;
+mod gpu_standard;
 mod image;
 mod legacy_srgb_v1;
 #[cfg(feature = "opencolorio")]
@@ -36,6 +38,10 @@ pub use contract::{
 };
 pub use exact_color_config_file::{
     ExactColorConfigFile, ExactColorConfigFileError, MAX_EXACT_COLOR_CONFIG_BYTES,
+};
+pub use gpu::{
+    GpuColorTransform, GpuInvalidPixelPolicy, GpuLut3d, GpuShaderLanguage, GpuTerminalChain,
+    GpuTransformPixelContract,
 };
 pub use image::{LinearWorkingImage, LinearWorkingImageError};
 pub use legacy_srgb_v1::LegacySrgbV1ColorTransform;
@@ -62,7 +68,7 @@ pub use standard_spaces::{
 };
 pub use transform::{
     BuiltinColorTransform, ColorManagementError, ColorTransformBackend, CompiledTransformIdentity,
-    CpuColorProcessor, GpuColorTransform, GpuLut3d, GpuShaderLanguage,
+    CpuColorProcessor,
 };
 pub use verified_space::{
     ColorLinearity, ColorReferenceSpace, ColorSpaceInfo, VerifiedSourceSpace, VerifiedWorkingSpace,

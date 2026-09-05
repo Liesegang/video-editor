@@ -53,7 +53,11 @@ impl SkiaRenderer {
                             .to_string(),
                     )
                 })?;
-                skia_working_surface::managed_working_to_skia_image(image, contract)
+                skia_working_surface::managed_working_to_skia_image(
+                    image,
+                    contract,
+                    self.gpu_context.as_mut(),
+                )
             }
             RenderOutput::Texture(info) => {
                 if self.surface_contract.working().is_some() {

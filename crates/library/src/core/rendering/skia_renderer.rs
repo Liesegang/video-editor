@@ -31,6 +31,9 @@ mod legacy_backplate;
 mod output_compositing;
 mod paint;
 mod particle;
+mod terminal;
+#[cfg(feature = "gl")]
+mod terminal_compute;
 mod vector_layers;
 
 use output_compositing::build_transform_matrix;
@@ -58,10 +61,13 @@ pub struct SkiaRenderer {
     sksl_straight_to_premultiplied: Option<skia_safe::RuntimeEffect>,
     #[cfg(feature = "gl")]
     scene_runtime: Option<SceneRuntime>,
+    #[cfg(feature = "gl")]
+    terminal_compute: Option<terminal_compute::TerminalCompute>,
     gpu_context: Option<GpuContext>,
     require_gpu_surfaces: bool,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
+    last_terminal_was_gpu: bool,
 }
 
 struct GroupSurface {
@@ -71,6 +77,12 @@ struct GroupSurface {
 }
 
 impl SkiaRenderer {
+    /// Whether the most recently completed frame used the Project-authorized
+    /// GPU terminal stage. Probes must distinguish this from GPU raster alone.
+    pub fn last_terminal_was_gpu(&self) -> bool {
+        self.last_terminal_was_gpu
+    }
+
     /// Report whether the active root render target is backed by a GPU
     /// texture. Performance probes use this to reject a silent raster-surface
     /// fallback even when a nominal OpenGL context exists.
@@ -185,10 +197,15 @@ impl SkiaRenderer {
             sksl_straight_to_premultiplied: None,
             #[cfg(feature = "gl")]
             scene_runtime,
+            #[cfg(feature = "gl")]
+            terminal_compute: gpu_context.as_ref().and_then(|context| {
+                terminal_compute::TerminalCompute::new(context.create_glow_context())
+            }),
             gpu_context,
             require_gpu_surfaces: false,
             sharing_handle: None,
             sharing_hwnd: None,
+            last_terminal_was_gpu: false,
         };
         renderer.clear().map_err(|error| {
             LibraryError::Render(format!("Failed to clear render target: {error}"))
@@ -619,22 +636,14 @@ impl Renderer for SkiaRenderer {
     }
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError> {
+        self.last_terminal_was_gpu = false;
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::finalize {}x{}",
             self.width, self.height
         ));
         self.activate_graphics_context()?;
 
-        if !self.group_surfaces.is_empty() {
-            return Err(LibraryError::Render(
-                "Cannot finalize with unfinished frame groups".to_string(),
-            ));
-        }
-        if !self.retained_group_surfaces.is_empty() {
-            return Err(LibraryError::Render(
-                "Cannot finalize with unconsumed retained render layers".to_string(),
-            ));
-        }
+        self.validate_finalization()?;
 
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
@@ -668,6 +677,7 @@ impl Renderer for SkiaRenderer {
     }
 
     fn clear(&mut self) -> Result<(), LibraryError> {
+        self.last_terminal_was_gpu = false;
         let _timer = ScopedTimer::debug("SkiaRenderer::clear");
         self.activate_graphics_context()?;
         self.group_surfaces.clear();
@@ -677,6 +687,16 @@ impl Renderer for SkiaRenderer {
             &self.surface_contract,
             &self.background_color,
         )
+    }
+
+    fn finalize_gpu_terminal(
+        &mut self,
+        chain: &ruvie_color_management::GpuTerminalChain,
+    ) -> Result<Option<Image>, LibraryError> {
+        self.last_terminal_was_gpu = false;
+        let result = self.finalize_terminal_image(chain)?;
+        self.last_terminal_was_gpu = result.is_some();
+        Ok(result)
     }
 
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {

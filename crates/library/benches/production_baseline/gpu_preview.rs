@@ -1,4 +1,4 @@
-//! Opt-in measurements of the actual Preview renderer, including CPU termination.
+//! Opt-in measurements of the actual Preview renderer and terminal color stage.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -92,11 +92,14 @@ pub fn run(
         if !service.renderer.is_gpu_backed()? {
             return Err("--gpu-preview requires a GPU-backed Project working surface; raster fallback rejected".into());
         }
+        if !service.renderer.last_terminal_was_gpu() {
+            return Err("--gpu-preview expected the built-in Project GPU terminal stage; CPU termination rejected".into());
+        }
         metrics.push(measure(
             MetricDefinition {
                 name: &format!("gpu_preview_raster_and_termination_{width}x{height}"),
                 category: "preview",
-                description: "Warm OpenGL Preview raster, working-pixel readback and CPU display termination; excludes UI upload",
+                description: "Warm OpenGL Preview raster, GPU terminal color and RGBA8 readback; excludes UI upload",
                 production_path: "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
                 fixture: &fixture_name,
                 operations_per_sample: 3,

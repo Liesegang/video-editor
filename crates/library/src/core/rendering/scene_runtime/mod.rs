@@ -6,6 +6,7 @@ mod shaders;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
+use crate::rendering::gl_resources::SavedGlState;
 use glow::HasContext;
 use sha2::{Digest, Sha256};
 
@@ -20,7 +21,7 @@ use crate::rendering::renderer::Affine2D;
 pub(crate) use gl_backend::SceneTextureFormat;
 use gl_backend::{
     PARTICLE_STRIDE_BYTES, PARTICLE_VERTICES_PER_SPRITE, PARTICLE_WORKGROUP_SIZE, ParticlePipeline,
-    SavedGlState, SceneTarget, probe_capabilities,
+    SceneTarget, probe_capabilities,
 };
 
 #[derive(Clone, Copy, Debug)]
