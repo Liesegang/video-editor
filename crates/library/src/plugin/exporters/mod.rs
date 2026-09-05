@@ -71,7 +71,10 @@ pub struct ExportDestination {
 }
 
 impl ExportDestination {
-    pub fn staged(logical_path: impl Into<String>, writable_path: impl Into<String>) -> Self {
+    pub(crate) fn staged(
+        logical_path: impl Into<String>,
+        writable_path: impl Into<String>,
+    ) -> Self {
         Self {
             logical_path: logical_path.into(),
             writable_path: writable_path.into(),
@@ -246,10 +249,6 @@ impl ExportSettings {
 
     pub const fn job_id(&self) -> ExportJobId {
         self.job_id
-    }
-
-    pub(crate) fn begin_new_job(&mut self) {
-        self.job_id = ExportJobId::new();
     }
 
     /// Select an executable only from trusted application configuration.

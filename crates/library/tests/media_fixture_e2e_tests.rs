@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use library::SkiaRenderer;
 use library::cache::CacheManager;
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
-use library::editor::{ExportService, ProjectModel, RenderDestination, RenderService};
+use library::editor::{ProjectModel, RenderDestination, RenderService};
 use library::framing::get_frame_from_project;
 use library::model::asset::{
     SourceColorAssumption, SourceColorDescription, SourceColorPrimaries, SourceColorRange,
@@ -343,24 +343,6 @@ fn collect_content_kinds(items: &[FrameItem], kinds: &mut HashSet<&'static str>)
     }
 }
 
-struct TestDirectory(PathBuf);
-
-impl TestDirectory {
-    fn new() -> Result<Self> {
-        let path = std::env::temp_dir().join(format!("video-editor-media-e2e-{}", Uuid::new_v4()));
-        fs::create_dir(&path)?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0) {
-            eprintln!("failed to remove media E2E test directory: {error}");
-        }
-    }
-}
-
 #[test]
 fn manifest_and_hash_list_cover_every_tiny_fixture() -> Result<()> {
     let directory = fixture_dir();
@@ -542,7 +524,7 @@ fn imported_frame_count_is_persisted_and_bounds_padded_video_before_render() -> 
 }
 
 #[test]
-fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_pixels()
+fn mixed_media_preview_and_export_render_have_identical_first_middle_late_and_last_pixels()
 -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let (project, _) = mixed_media_project(&plugins)?;
@@ -581,7 +563,6 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
         "animated source must produce distinct first/middle/late/last composites: {preview_hash_values:?}"
     );
 
-    let output = TestDirectory::new()?;
     let settings = ExportSettings::from_project(&project, &project.compositions[0])?;
     let project_model = ProjectModel::new(Arc::new(project), 0)?;
     let renderer = SkiaRenderer::new(12, 8, Color::black(), false, None, None)?;
@@ -590,47 +571,15 @@ fn mixed_media_preview_and_png_export_have_identical_first_middle_late_and_last_
         Arc::clone(&plugins),
         Arc::new(CacheManager::new()),
     );
-    let stem = output.0.join("frame_{frame:03}");
-    let stem = stem.to_str().context("export path must be UTF-8")?;
-    let plan = ExportService::verify_plan(&project_model, &settings, 0..72, stem)?;
-    let mut exporter = ExportService::new(
-        Arc::clone(&plugins),
-        "png_export".into(),
-        Arc::new(settings),
-        plan,
-        2,
-    )?;
-    let export_result = (|| -> Result<()> {
-        for frame_number in frame_numbers {
-            exporter.render_range(
-                &mut render_service,
-                &project_model,
-                frame_number..frame_number + 1,
-            )?;
-        }
-        Ok(())
-    })();
-    let shutdown_result = exporter.shutdown();
-    export_result.context("PNG frames must export")?;
-    shutdown_result.context("PNG exporter must shut down cleanly")?;
-
-    let loader = NativeImageLoader::new();
-    let cache = CacheManager::new();
     for (frame_number, preview) in frame_numbers.into_iter().zip(previews) {
-        let exported_path = output.0.join(format!("frame_{frame_number:03}.png"));
-        let exported = loader
-            .load(
-                &LoadRequest::Image {
-                    path: exported_path.to_string_lossy().into_owned(),
-                },
-                &cache,
-            )?
-            .into_rgba8()?;
+        let exported = render_service
+            .render_export_frame(&project_model, settings.frame_time(frame_number)?)?;
+        let exported = exported.image();
         assert_eq!((exported.width, exported.height), (12, 8));
         assert_eq!(
-            rgba_hash(&exported),
+            rgba_hash(exported),
             rgba_hash(&preview),
-            "Preview and PNG export diverged at frame {frame_number}"
+            "Preview and export render diverged at frame {frame_number}"
         );
         assert_eq!(exported.data, preview.data);
     }

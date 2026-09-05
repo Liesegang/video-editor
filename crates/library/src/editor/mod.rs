@@ -11,7 +11,6 @@ mod authoring_qa_fixture;
 mod authoring_waveform_service;
 pub mod color_service;
 pub mod editor_service;
-pub mod export_service;
 pub mod handlers;
 pub mod ocio_shim;
 mod particle_node_clip;
@@ -38,7 +37,6 @@ pub use authoring_qa_fixture::{
 pub use authoring_waveform_service::AuthoringWaveformService;
 pub use color_service::ColorSpaceManager as ColorService;
 pub use editor_service::EditorService;
-pub use export_service::ExportService;
 pub use handlers::clip_handler::ClipBundle;
 pub use handlers::keyframe_handler::KeyframeBatchUpdate;
 pub use handlers::property_ops::PropertyOwner;

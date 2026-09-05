@@ -331,7 +331,7 @@ fn authoring_export_dimensions(frame_info: &FrameInfo) -> Result<(u32, u32), Lib
     Ok((width, height))
 }
 
-fn require_safe_authoring_output(
+pub(super) fn require_safe_authoring_output(
     project: &AuthoringProject,
     output_path: &str,
 ) -> Result<(), LibraryError> {

@@ -515,8 +515,9 @@ mod tests {
         let (frame, mut owner_settings) = frame_and_settings("yuv420p");
         owner_settings.codec = "libx264".to_string();
         owner_settings.container = "mp4".to_string();
-        let mut contender_settings = owner_settings.clone();
-        contender_settings.begin_new_job();
+        let (_, mut contender_settings) = frame_and_settings("yuv420p");
+        contender_settings.codec = "libx264".to_string();
+        contender_settings.container = "mp4".to_string();
         assert_ne!(owner_settings.job_id(), contender_settings.job_id());
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("shared.mp4");

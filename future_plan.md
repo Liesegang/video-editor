@@ -90,7 +90,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - repository automation に `.ps1` を commit しない。
   - `Node Editor` と `Curve Editor` の名称と責務を混同しない。
 
-- [ ] **未着手：production app から参照されない公開 `editor::ExportService` を削除する。** pre-v1 では旧 Export coordinator を互換 API として温存しない。残る integration test が検証している source-alias、lifecycle、連番 path の契約を現行 authoring RenderServer または責務別 utility の test へ移し、`editor` の public export と final path への直接書込みを同じ commit で除去する。E1 の production 経路を二つ目の coordinator へ逆移植しない。
+- [x] **production app から参照されない公開 `editor::ExportService` を削除した。** pre-v1 の旧 Export coordinator、public re-export、final path への直接書込みを互換 API として温存せず除去した。画素一致は `RenderService`、source-alias と lifecycle は現行 authoring `RenderServer` または責務別 utility の test へ移し、連番 path/template の旧経路専用契約は削除した。`RenderServer` が唯一の production authoring export coordinator である。
 
 ## M1: Timeline ownership、階層 RenderPlan、限定 Node Clip
 
@@ -392,14 +392,19 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - [x] destination が未存在の場合に正常作成し、既存 sentinel がある場合は成功時だけ置換する production worker test を通す。
   - [ ] renderer、effect、N frame 目の write、encoder finish、Audio cleanup、出力未生成、sync/replace の各 failure を注入し、既存 destination が byte-for-byte 不変、sibling staging が 0 件であることを検証する。Exporter session を開始した場合だけ `finish` は正確に一回、preflight 失敗では 0 回とする。
     - [x] N frame 目の write、encoder finish、出力未生成、reserved staging entry 差替え、destination entry 差替え、通常の replace failure は既存 destination 保持と staging cleanup を検証した。
-    - [ ] renderer/effect、Audio cleanup、`sync_all` の production worker failure injection、Windows の共有違反による replace failure、cancellation、worker panic、app close 中の cleanup を追加する。
+    - [ ] **P0: worker panic を terminal failure に封じ込める。** job 本体と Exporter `finish` の panic でも、開始済み session は `finish` を正確に一回試行し、Audio/staging/destination lease を cleanup して、`published = false` の completion を正確に一回返す。worker は次の request を処理でき、app の pending 表示が永久に残らない。frame 途中の panic と `finish` panic を production worker test で再現する。
+    - [ ] **renderer/effect failure を実 production plugin 境界で検証する。** 実 Attachment Effect と実 Asset Loader を選択 frame で失敗させ、既存 destination 不変、staging 0、attempt 前後に応じた `finish` 回数、失敗 completion、次 request の成功を確認する。テスト専用の並行 renderer service は作らない。
+    - [ ] **Audio temporary cleanup を結果へ合成する。** 一時 Audio 作成後の全 error path で明示 cleanup し、主失敗と cleanup 失敗の両方を terminal result に残す。Drop は最終 fallback に限り、private/test-only の remove operation で cleanup failure と retry を deterministic に検証する。
+    - [ ] **`sync_all` と Windows sharing violation を owner 境界で検証する。** `atomic_file` の一つの同期処理へ narrow private/test-only failure seam を置き、RenderServer の二重 publication 実装は作らない。Windows では destination を delete-share なしで保持して実 `MoveFileExW` を失敗させ、sentinel 不変、staging 0、`published = false` を確認する。
+    - [ ] **export cancellation を request contract にする。** frame 0 前、frame 評価前、render/write 間で同じ token を確認し、cancel 前に Exporter 未試行なら `finish = 0`、一度でも試行済みなら `finish = 1` とする。どちらも明示的な Cancelled completion、`published = false`、destination 不変、staging/Audio 0 を満たす。
+    - [ ] **Quit/New/Open を cancellation と cleanup に統合する。** 実行中 Export を追跡したまま cancel し、terminal cleanup 完了前に window close、service 差替え、次 export を許可しない。`RenderServer::Drop` は shutdown cancellation と同期 join を通常終了時の最終保証にし、長時間/gated Export 中の Quit/New/Open を native HTTP QA する。
   - [x] `frames_exported` と `published` を別の結果状態として定義し、commit failure を成功表示しない。
   - [ ] 実 FFmpeg 成果物を再 decode/`ffprobe` し、frame/audio metadata、duration、timing と Preview/RenderPlan 基準を検証する。
     - [x] production Ctrl+E から 360 frame/12秒の H.264 640×360 BT.709 と、一つの AAC 48 kHz stereo stream を生成し、video/audio/container の start 0・duration 12秒、先頭/中間映像の非黒、先頭1秒音声の非無音を実 decode で検証した。
     - [ ] decoded video/audio を同じ frame/sample range の Preview/RenderPlan 基準値と数値比較する。
   - [x] `RUVIE_QA_EXPORT_PATH` を known fixture 限定で解決し、production の File > Export/shortcut → worker → status 更新を native HTTP QA する。File dialog を迂回する別 Export endpoint を作らない。full QA は release app、smoke は debug app を使用する。
-  - E1 の現契約は atomic visibility と、報告された失敗時に既存 destination を保持することまでとする。電源断 durability は未完了であり、保証する前に Unix の rename 後 parent directory `fsync`、Windows の write-through/共有違反、実 filesystem ごとの crash test を追加する。
-  - Non-goals: resumable export、複数成果物の一括 transaction、process kill 後の aged orphan cleanup、production app から未参照の公開旧 `ExportService` への互換実装。旧 service 自体の削除と test 移行は M0 の独立 cleanup とする。
+  - E1 の現契約は atomic visibility と、報告された失敗時に既存 destination を保持することまでとする。最終 identity 検査から path-based replace までの間に別 process が destination を差し替える競合を conditional replace で防ぐ契約ではない。電源断 durability も未完了であり、より強い保証を宣言する前に OS/filesystem ごとの conditional replacement、Unix の rename 後 parent directory `fsync`、Windows の write-through/共有違反、実 filesystem ごとの crash test を追加する。
+  - Non-goals: resumable export、複数成果物の一括 transaction、process kill 後の aged orphan cleanup。production app から未参照だった公開旧 `ExportService` は M0 cleanup で削除済みであり、互換実装は追加しない。
 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
   - [x] 2026-09-04、`python scripts/qa-runner.py --mode full --jobs 1` で 21 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Particle System、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。

@@ -38,14 +38,14 @@ cleanup, validation, or publication failure preserves an existing destination
 and attempts to remove the staging file; a cleanup failure is included in the
 reported error rather than hidden. `frames_exported` counts frames accepted
 before a failure; `published` becomes true only after atomic replacement.
-Failed exports never emit a completion update.
+Failed exports emit one terminal failure completion so the app can clear its
+pending state, but never emit a success or published update.
 
-The public pre-v1 `editor::ExportService` has no production app call sites, but
-still contains a legacy direct-final-write coordinator. It is not an owner of
-the production authoring transaction and is scheduled for deletion rather than
-compatibility maintenance. Project save and production authoring video Export
-reuse the same atomic-file primitive instead of carrying separate platform
-replacement implementations.
+`RenderServer` is the sole production authoring export coordinator. The removed
+pre-v1 `editor::ExportService` direct-final-write path is not retained as a
+compatibility API. Project save and production authoring video Export reuse the
+same atomic-file primitive instead of carrying separate platform replacement
+implementations.
 
 The focused regression checks are:
 

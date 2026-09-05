@@ -1,6 +1,8 @@
 use std::fs;
 use std::hint::black_box;
 use std::sync::Arc;
+use std::sync::mpsc::TryRecvError;
+use std::time::{Duration, Instant};
 
 use library::core::audio::authoring::AuthoringAudioMixer;
 use library::core::cache::CacheManager;
@@ -12,8 +14,8 @@ use library::editor::{
 use library::model::authoring::{AuthoringProject, ProjectFileStore};
 use library::model::frame::color::Color;
 use library::model::project::property::PropertyValue;
-use library::plugin::{ExportDestination, PluginManager};
-use library::{ExportSettings, SkiaRenderer};
+use library::plugin::PluginManager;
+use library::{RenderRequestId, RenderServer, SkiaRenderer};
 
 use crate::BenchResult;
 use crate::fixtures::FixtureSet;
@@ -378,18 +380,10 @@ fn single_frame_png_export(
     plugins: &Arc<PluginManager>,
     configuration: RunConfiguration,
 ) -> BenchResult<MetricResult> {
-    let plan = RenderPlanCompiler::compile(&fixtures.preview_project)?;
-    let timeline = fixtures
-        .preview_project
-        .timelines
-        .get(&fixtures.preview_project.root_timeline_id)
-        .ok_or("preview fixture root Timeline is missing")?;
-    let mut settings = ExportSettings::from_authoring_project(&fixtures.preview_project, timeline)?;
-    settings.container = "png".to_string();
-    settings.codec = "png".to_string();
-    settings.pixel_format = "rgba".to_string();
-    settings.parameters.retain(|name, _| name == "compression");
-    let mut renderer = cpu_render_service(&fixtures.preview_project, Arc::clone(plugins))?;
+    let project = Arc::new(fixtures.preview_project.clone());
+    let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref())?);
+    let timeline_id = project.root_timeline_id;
+    let server = RenderServer::new(Arc::clone(plugins), Arc::new(CacheManager::new()));
     let directory = tempfile::tempdir()?;
     let mut iteration = 0_u64;
     measure(
@@ -397,30 +391,43 @@ fn single_frame_png_export(
             name: "single_frame_png_export",
             category: "export",
             description: "Evaluate, CPU-raster, color-terminate, and write one authoring frame as PNG",
-            production_path: "evaluate_render_plan_frame -> RenderService::render_authoring_export_frame -> PluginManager::export_frame(png_export)",
+            production_path: "RenderServer authoring PNG worker -> RenderService::render_authoring_export_frame -> png_export",
             fixture: "preview",
             operations_per_sample: 1,
         },
         configuration,
         || {
-            let frame = evaluate_render_plan_frame(
-                &fixtures.preview_project,
-                &plan,
-                plugins.as_ref(),
-                0,
-                1.0,
-                None,
-            )?;
-            let export_frame =
-                renderer.render_authoring_export_frame(&fixtures.preview_project, &frame)?;
             let output_path = directory.path().join(format!("frame-{iteration}.png"));
             iteration += 1;
-            let output = output_path
-                .to_str()
-                .ok_or("temporary PNG path is not valid UTF-8")?;
-            let destination = ExportDestination::staged(output, output);
-            plugins.export_frame("png_export", &destination, &export_frame, &settings)?;
-            plugins.finish_export("png_export", &destination, &settings)?;
+            if !server.send_authoring_png_export_request(
+                RenderRequestId::new(iteration),
+                Arc::clone(&project),
+                Arc::clone(&plan),
+                timeline_id,
+                0,
+                output_path.to_string_lossy().into_owned(),
+            ) {
+                return Err("production PNG export worker rejected the benchmark request".into());
+            }
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let completed = loop {
+                match server.poll_authoring_export_result() {
+                    Ok(completed) => break completed,
+                    Err(TryRecvError::Empty) if Instant::now() < deadline => {
+                        std::thread::yield_now();
+                    }
+                    Err(TryRecvError::Empty) => {
+                        return Err("production PNG export benchmark timed out".into());
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        return Err("production PNG export worker disconnected".into());
+                    }
+                }
+            };
+            completed.output?;
+            if !completed.published {
+                return Err("production PNG export completed without publishing".into());
+            }
             black_box(fs::metadata(output_path)?.len());
             Ok(())
         },

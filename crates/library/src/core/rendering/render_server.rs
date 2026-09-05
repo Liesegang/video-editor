@@ -566,6 +566,9 @@ impl Drop for RenderServer {
 mod export_atomic_tests;
 
 #[cfg(test)]
+mod export_source_alias_tests;
+
+#[cfg(test)]
 mod export_tests;
 
 #[cfg(test)]

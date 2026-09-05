@@ -3,15 +3,13 @@ mod shape_graph;
 mod support;
 
 use anyhow::{Context, Result, anyhow, bail};
-use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use library::cache::CacheManager;
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::{EffectorConfig, EnsembleData};
 use library::editor::project_service::GeneratorNodeRequest;
-use library::editor::{ExportService, ProjectModel, ProjectService};
+use library::editor::{ProjectModel, ProjectService};
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
@@ -25,7 +23,7 @@ use library::model::project::{
 };
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
-use library::plugin::{ExportSettings, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager};
+use library::plugin::{ExportSettings, PluginManager};
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, TextRasterRequest};
 use library::{RenderDestination, RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
@@ -250,58 +248,20 @@ fn colored_centroid(image: &Image) -> Option<(f64, f64)> {
     (count > 0).then_some((x_total as f64 / count as f64, y_total as f64 / count as f64))
 }
 
-struct TempDirectory(PathBuf);
-
-impl TempDirectory {
-    fn new() -> Result<Self> {
-        let path = std::env::temp_dir().join(format!("creative-render-{}", Uuid::new_v4()));
-        fs::create_dir(&path)?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for TempDirectory {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0) {
-            eprintln!("failed to remove creative render temp directory: {error}");
-        }
-    }
-}
-
-fn assert_preview_matches_export(
+fn assert_preview_matches_export_render(
     project: &Project,
     frame_number: u64,
     plugins: &Arc<PluginManager>,
 ) -> Result<()> {
     let expected = preview(project, frame_number, plugins)?;
-    let directory = TempDirectory::new()?;
-    let stem = directory.0.join("frame");
     let model = ProjectModel::new(Arc::new(project.clone()), 0)?;
     let renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None)?;
     let mut render_service =
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
     let settings = ExportSettings::from_project(model.project().as_ref(), model.composition())?;
-    let stem = stem
-        .to_str()
-        .context("temporary export path must be UTF-8")?;
-    let plan = ExportService::verify_plan(&model, &settings, frame_number..frame_number + 1, stem)?;
-    let mut exporter = ExportService::new(
-        Arc::clone(plugins),
-        "png_export".to_string(),
-        Arc::new(settings),
-        plan,
-        1,
-    )?;
-    let render_result =
-        exporter.render_range(&mut render_service, &model, frame_number..frame_number + 1);
-    let shutdown_result = exporter.shutdown();
-    render_result.context("PNG export must render the requested frame")?;
-    shutdown_result.context("PNG exporter must shut down cleanly")?;
-
-    let path = format!("{stem}_{frame_number:03}.png");
-    let exported = NativeImageLoader::new()
-        .load(&LoadRequest::Image { path }, &CacheManager::new())?
-        .into_rgba8()?;
+    let exported =
+        render_service.render_export_frame(&model, settings.frame_time(frame_number)?)?;
+    let exported = exported.image();
     assert_eq!((exported.width, exported.height), (WIDTH, HEIGHT));
     assert_eq!(exported.data, expected.data);
     Ok(())
@@ -426,7 +386,7 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Re
     );
 
     assert_round_trip(&ensemble_project, 0, &plugins)?;
-    assert_preview_matches_export(&project, 0, &plugins)?;
+    assert_preview_matches_export_render(&project, 0, &plugins)?;
     Ok(())
 }
 
@@ -565,12 +525,12 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     }
 
     assert_round_trip(&project, 0, &plugins)?;
-    assert_preview_matches_export(&project, 0, &plugins)?;
+    assert_preview_matches_export_render(&project, 0, &plugins)?;
     Ok(())
 }
 
 #[test]
-fn sksl_converter_uses_runtime_time_and_matches_png_export() -> Result<()> {
+fn sksl_converter_uses_runtime_time_and_matches_export_render() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let shader = r#"
 half4 main(float2 fragCoord) {
@@ -644,7 +604,7 @@ half4 main(float2 fragCoord) {
     );
 
     assert_round_trip(&project, 9, &plugins)?;
-    assert_preview_matches_export(&project, 9, &plugins)?;
+    assert_preview_matches_export_render(&project, 9, &plugins)?;
     Ok(())
 }
 
@@ -801,7 +761,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() -> 
     drop(locked);
 
     assert_round_trip(&randomized, 10, &plugins)?;
-    assert_preview_matches_export(&project, 10, &plugins)?;
+    assert_preview_matches_export_render(&project, 10, &plugins)?;
     Ok(())
 }
 
