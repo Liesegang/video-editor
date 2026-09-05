@@ -44,6 +44,16 @@ M3 + M4 + M5 + M6 + M7
 
 M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 の基本編集を壊した状態で先へ進めません。
 
+## 直近の実装順
+
+1. **GPU Particle の最小製品導線を閉じる。** Assets の Node Clips から Timeline へドラッグし、同じ有限な Module Definition を Inspector と production Node Editor の両方で編集し、実 GPU Preview、seek、独立 renderer、Export、Undo/Redo、native HTTP QA を通す。通常 Clip と Timeline 全体は Node 化しない。
+2. **M2 の production editor 回帰をゼロにする。** 上記導線を既存 Assets、Timeline、Preview、Inspector、Node Editor、共通 property/media picker、pan/zoom/grid 上へ統合し、専用の並行 UI や重複 resolver を残さない。full native QA と source-size/DRY gate を再実行する。
+3. **Transition の配置・編集 tool を完成する。** 実装済みの有限な Transition Module を、edit point への drag/drop、右クリック、Timeline handle、trim/ripple/roll と結合する。二つの Clip や Timeline 全体を Node へ展開しない。
+4. **Audio と musical time を先に一つの transport へ統合する。** Audio Output、waveform、playback/export parity、Tempo/拍子/Marker を固めてから MIDI Clip、piano roll、VST3、DAW routing へ進む。
+5. **同じ SceneRuntime を 3D へ拡張する。** Timeline 3D transform と Camera Item、scene-neutral model、FBX、拡張 Particle、Plexus の順に実装し、別 renderer/device や Inspector 専用データモデルを作らない。
+
+各項目は途中の型やメニュー項目では完了にせず、利用者が到達する production UI、実行結果、保存、Undo/Redo、対象 native QA が同じ commit で揃った時点で次へ進みます。
+
 ---
 
 ## M0: Baseline、復旧点、リポジトリ構造
