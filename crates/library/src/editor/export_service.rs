@@ -4,7 +4,8 @@ use crate::editor::render_service::RenderService;
 use crate::error::LibraryError;
 use crate::model::project::Project;
 use crate::plugin::{
-    ExportColorAuthority, ExportFormat, ExportFrame, ExportSettings, PluginManager,
+    ExportColorAuthority, ExportDestination, ExportFormat, ExportFrame, ExportSettings,
+    PluginManager,
 };
 use crate::util::output_path_identity::{OutputPathIdentity, output_path_identity};
 use crate::util::timing::{ScopedTimer, measure_info};
@@ -306,9 +307,10 @@ impl ExportService {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .record(&task.output_path);
+                let destination = ExportDestination::staged(&task.output_path, &task.output_path);
                 if let Err(err) = worker_plugins.export_frame(
                     &task.exporter_id,
-                    &task.output_path,
+                    &destination,
                     &task.frame,
                     &task.export_settings,
                 ) {
@@ -527,10 +529,12 @@ impl ExportService {
             .take_paths();
         let mut first_error = None;
         for path in paths {
-            if let Err(error) =
-                self.plugin_manager
-                    .finish_export(&self.exporter_id, &path, &self.export_settings)
-                && first_error.is_none()
+            let destination = ExportDestination::staged(&path, &path);
+            if let Err(error) = self.plugin_manager.finish_export(
+                &self.exporter_id,
+                &destination,
+                &self.export_settings,
+            ) && first_error.is_none()
             {
                 first_error = Some(error);
             }
@@ -630,7 +634,9 @@ mod tests {
     use crate::error::LibraryError;
     use crate::model::frame::Image;
     use crate::model::project::{Composition, Project};
-    use crate::plugin::{ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager};
+    use crate::plugin::{
+        ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager,
+    };
     use std::sync::{Arc, Mutex};
 
     struct RecordingExporter {
@@ -659,22 +665,23 @@ mod tests {
     impl ExportPlugin for RecordingExporter {
         fn export_frame(
             &self,
-            path: &str,
+            destination: &ExportDestination,
             _frame: &ExportFrame,
             _settings: &ExportSettings,
         ) -> Result<(), LibraryError> {
             self.events
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(format!("export:{path}"));
+                .push(format!("export:{}", destination.logical_path()));
             Ok(())
         }
 
         fn finish_export(
             &self,
-            path: &str,
+            destination: &ExportDestination,
             _settings: &ExportSettings,
         ) -> Result<(), LibraryError> {
+            let path = destination.logical_path();
             self.events
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

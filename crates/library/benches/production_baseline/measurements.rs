@@ -12,7 +12,7 @@ use library::editor::{
 use library::model::authoring::{AuthoringProject, ProjectFileStore};
 use library::model::frame::color::Color;
 use library::model::project::property::PropertyValue;
-use library::plugin::PluginManager;
+use library::plugin::{ExportDestination, PluginManager};
 use library::{ExportSettings, SkiaRenderer};
 
 use crate::BenchResult;
@@ -418,8 +418,9 @@ fn single_frame_png_export(
             let output = output_path
                 .to_str()
                 .ok_or("temporary PNG path is not valid UTF-8")?;
-            plugins.export_frame("png_export", output, &export_frame, &settings)?;
-            plugins.finish_export("png_export", output, &settings)?;
+            let destination = ExportDestination::staged(output, output);
+            plugins.export_frame("png_export", &destination, &export_frame, &settings)?;
+            plugins.finish_export("png_export", &destination, &settings)?;
             black_box(fs::metadata(output_path)?.len());
             Ok(())
         },

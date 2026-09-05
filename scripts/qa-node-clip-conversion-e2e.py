@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Convert one Text clip source to a bounded Node Clip through native UI."""
 
-from qa_support import QaFailure, component_center, component_point, item_by_name, run_suite_main
+from qa_support import (
+    QaFailure,
+    component_center,
+    component_point,
+    item_by_name,
+    run_suite_main,
+)
 
 
 def _component(snapshot, component_id):
@@ -98,16 +104,28 @@ def _plugin_component(node):
     return (content.get("data") or {}).get("component_id")
 
 
-def _preview_for_revision(client, revision):
-    state = client.state()
-    preview = state["editor"]["preview"]
+def _preview_for_revision(client, revision, frame):
+    component = _component(client.component_snapshot(), "preview.canvas")
+    preview = (component or {}).get("metadata") or {}
     if (
         preview.get("rendered_revision") == revision
+        and preview.get("rendered_frame") == frame
         and preview.get("nontransparent_pixels", 0) > 0
         and preview.get("pixel_hash") is not None
-        and state["editor"].get("error") is None
+        and preview.get("render_in_flight_request") is None
+        and preview.get("render_desired_pending") is False
     ):
-        return state
+        state = client.state()
+        state_preview = state["editor"]["preview"]
+        if (
+            state["history"]["revision"] == revision
+            and state["editor"]["timeline"]["current_frame"] == frame
+            and state_preview.get("rendered_revision") == revision
+            and state_preview.get("rendered_frame") == frame
+            and state_preview.get("pixel_hash") == preview.get("pixel_hash")
+            and state["editor"].get("error") is None
+        ):
+            return state
     return None
 
 
@@ -160,9 +178,19 @@ def run_suite(client):
             "coordinate_space": "points",
         },
     )
+    seeked = client.wait_until(
+        "Timeline seek publication",
+        lambda: state
+        if (state := client.state())["editor"]["timeline"]["current_frame"]
+        != moved["editor"]["timeline"]["current_frame"]
+        else None,
+    )
+    expected_frame = seeked["editor"]["timeline"]["current_frame"]
     before = client.wait_until(
         "pre-conversion Preview",
-        lambda: _preview_for_revision(client, moved["history"]["revision"]),
+        lambda: _preview_for_revision(
+            client, moved["history"]["revision"], expected_frame
+        ),
         timeout=30.0,
     )
     project_before = before["project"]
@@ -249,11 +277,16 @@ def run_suite(client):
 
     rendered_after = client.wait_until(
         "converted Preview publication",
-        lambda: _preview_for_revision(client, revision_before + 1),
+        lambda: _preview_for_revision(client, revision_before + 1, expected_frame),
         timeout=30.0,
     )
-    if rendered_after["editor"]["preview"]["pixel_hash"] != preview_hash:
-        raise QaFailure("Node Clip conversion changed Preview pixels")
+    rendered_hash = rendered_after["editor"]["preview"]["pixel_hash"]
+    if rendered_hash != preview_hash:
+        raise QaFailure(
+            "Node Clip conversion changed Preview pixels: before={}, after={}".format(
+                preview_hash, rendered_hash
+            )
+        )
 
     client.key("z", True, command=True)
     client.key("z", False, command=True)
@@ -264,8 +297,12 @@ def run_suite(client):
     restored_preview = client.wait_until(
         "Preview after conversion Undo",
         lambda: state
-        if (state := client.state())["editor"]["preview"].get("pixel_hash") == preview_hash
-        and state["editor"]["preview"].get("nontransparent_pixels", 0) > 0
+        if (
+            (state := _preview_for_revision(
+                client, undone["history"]["revision"], expected_frame
+            ))
+            and state["editor"]["preview"].get("pixel_hash") == preview_hash
+        )
         else None,
         timeout=30.0,
     )
@@ -283,6 +320,7 @@ def run_suite(client):
             "pre_effect_node": tile_nodes[0],
         },
         "preview_hash": preview_hash,
+        "rendered_frame": rendered_after["editor"]["preview"]["rendered_frame"],
         "rendered_revision": rendered_after["editor"]["preview"]["rendered_revision"],
         "undo_revision": restored_preview["history"]["revision"],
         "node_editor_canvas": metadata,

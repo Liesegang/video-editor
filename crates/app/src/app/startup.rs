@@ -11,6 +11,7 @@ use library::LibraryError;
 
 const QA_FIXTURE_ENV: &str = "RUVIE_QA_FIXTURE";
 pub(super) const QA_PROJECT_PATH_ENV: &str = "RUVIE_QA_PROJECT_PATH";
+pub(super) const QA_EXPORT_PATH_ENV: &str = "RUVIE_QA_EXPORT_PATH";
 const QA_OPEN_EXISTING_PROJECT_ENV: &str = "RUVIE_QA_OPEN_EXISTING_PROJECT";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +164,39 @@ pub(super) fn qa_project_path() -> Result<Option<PathBuf>, LibraryError> {
     optional_project_path(path.as_deref())
 }
 
+/// Optional destination selected by native QA in place of the platform file
+/// picker. The returned path still enters the production Export command and
+/// worker; this function provides no alternate export endpoint.
+pub(super) fn qa_export_path() -> Result<Option<PathBuf>, LibraryError> {
+    qa_scoped_path(
+        unicode_environment_value(QA_FIXTURE_ENV)?.as_deref(),
+        std::env::var_os(QA_EXPORT_PATH_ENV).as_deref(),
+        QA_EXPORT_PATH_ENV,
+    )
+}
+
+fn qa_scoped_path(
+    fixture_name: Option<&str>,
+    path: Option<&OsStr>,
+    path_environment: &str,
+) -> Result<Option<PathBuf>, LibraryError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let fixture_name = fixture_name.ok_or_else(|| {
+        LibraryError::Validation(format!(
+            "{path_environment} is available only with a known {QA_FIXTURE_ENV}"
+        ))
+    })?;
+    known_qa_fixture(fixture_name)?;
+    if path.is_empty() {
+        return Err(LibraryError::Validation(format!(
+            "{path_environment} must not be empty"
+        )));
+    }
+    Ok(Some(PathBuf::from(path)))
+}
+
 fn install_qa_project_path(
     service: &TimelineEditorService,
     path: Option<&Path>,
@@ -255,5 +289,46 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("must be '1' or unset"));
+    }
+
+    #[test]
+    fn qa_export_path_is_available_only_to_a_known_fixture() {
+        assert_eq!(
+            qa_scoped_path(
+                Some(AUTHORING_E2E_FIXTURE),
+                Some(OsStr::new("render.mp4")),
+                QA_EXPORT_PATH_ENV,
+            )
+            .unwrap(),
+            Some(PathBuf::from("render.mp4"))
+        );
+        assert_eq!(
+            qa_scoped_path(None, None, QA_EXPORT_PATH_ENV).unwrap(),
+            None
+        );
+
+        let missing_fixture =
+            qa_scoped_path(None, Some(OsStr::new("render.mp4")), QA_EXPORT_PATH_ENV)
+                .unwrap_err()
+                .to_string();
+        assert!(missing_fixture.contains(QA_FIXTURE_ENV));
+
+        let unknown_fixture = qa_scoped_path(
+            Some("unknown"),
+            Some(OsStr::new("render.mp4")),
+            QA_EXPORT_PATH_ENV,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unknown_fixture.contains("Unknown authoring QA fixture"));
+
+        let empty = qa_scoped_path(
+            Some(AUTHORING_PATH_E2E_FIXTURE),
+            Some(OsStr::new("")),
+            QA_EXPORT_PATH_ENV,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(empty.contains("must not be empty"));
     }
 }

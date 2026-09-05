@@ -22,23 +22,29 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub trait ExportPlugin: Plugin {
-    /// Write one frame for `settings.job_id()`. Stateful implementations must
-    /// reject another job that resolves to the same destination instead of
-    /// sharing a writer or relying on destructive encoder overwrite flags.
+    /// Write one frame to the host-controlled writable path for
+    /// `settings.job_id()`. Stateful implementations must reject another job
+    /// whose logical path resolves to the same destination instead of sharing
+    /// a writer or relying on destructive encoder overwrite flags.
     fn export_frame(
         &self,
-        path: &str,
+        destination: &ExportDestination,
         frame: &ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError>;
 
-    /// Release all path-scoped exporter resources after the save queue has
-    /// drained. `ExportService` calls this exactly once for every distinct
-    /// output path whose `export_frame` call was attempted, including paths
-    /// whose write failed. `settings.job_id()` identifies the owning job, so a
-    /// stale caller must never finalize a newer job's destination. This is not
-    /// called for paths that were only planned but never attempted.
-    fn finish_export(&self, _path: &str, _settings: &ExportSettings) -> Result<(), LibraryError> {
+    /// Release all path-scoped exporter resources after the host export
+    /// coordinator has drained its frame queue. The coordinator calls this
+    /// exactly once for every distinct logical output whose `export_frame`
+    /// call was attempted, including jobs whose staging write failed.
+    /// `settings.job_id()` identifies the owning job, so a stale caller must
+    /// never finalize a newer job's destination. This is not called for
+    /// outputs that were only planned but never attempted.
+    fn finish_export(
+        &self,
+        _destination: &ExportDestination,
+        _settings: &ExportSettings,
+    ) -> Result<(), LibraryError> {
         Ok(())
     }
 
@@ -48,6 +54,36 @@ pub trait ExportPlugin: Plugin {
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Export
+    }
+}
+
+/// Host-owned paths for one exporter invocation.
+///
+/// `logical_path` is the user-selected destination and remains authoritative
+/// for ownership, exclusion, and diagnostics. `writable_path` is a
+/// host-controlled staging file. Exporters must write only to the latter; the
+/// host publishes it to the logical destination after the complete job has
+/// succeeded.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ExportDestination {
+    logical_path: String,
+    writable_path: String,
+}
+
+impl ExportDestination {
+    pub fn staged(logical_path: impl Into<String>, writable_path: impl Into<String>) -> Self {
+        Self {
+            logical_path: logical_path.into(),
+            writable_path: writable_path.into(),
+        }
+    }
+
+    pub fn logical_path(&self) -> &str {
+        &self.logical_path
+    }
+
+    pub fn writable_path(&self) -> &str {
+        &self.writable_path
     }
 }
 

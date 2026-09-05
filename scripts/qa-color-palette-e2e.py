@@ -30,10 +30,6 @@ def _ensure_timeline(client):
     if "timeline.ruler" in component_ids:
         return
     activate_dock_tab(client, TIMELINE_TAB_ID, "Timeline", "Color Palette")
-    # The native click sequencer intentionally compresses gestures. Leave the
-    # platform double-click interval before selecting a Node Clip, whose real
-    # double-click action opens the Node Editor.
-    time.sleep(0.6)
     client.wait_component_settled("timeline.ruler")
 
 
@@ -322,6 +318,10 @@ def _exercise_node_editor_palette(
         ),
     )
     _ensure_timeline(client)
+    # This clip was selected earlier in the same fast release-build scenario.
+    # Let egui's preceding click series expire so the two injected clicks are
+    # observed as a double-click rather than the tail of a triple-click.
+    time.sleep(0.6)
     client.double_click_component("timeline.item:" + item_id)
     client.wait_component(NODE_EDITOR_TAB_ID)
     client.click_component(NODE_EDITOR_TAB_ID)

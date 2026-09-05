@@ -19,14 +19,40 @@ frame. Preview behavior is:
 - unrelated modal errors are preserved.
 
 Export progress uses explicit progress, complete, and failed terminal updates.
-Initialization failures report that no output was written. Failures after
-rendering starts report that partial output may remain and include its path in
-the export dialog. Failed exports never emit a completion update.
+Production authoring video Export never opens the user-selected destination
+while work is in progress. Core reserves a same-directory staging file and
+passes exporters an explicit logical destination plus writable staging path.
+The logical destination is leased from before staging creation until publish or
+abort, independently of the encoder session, so another in-process coordinator
+cannot enter the finish-to-rename gap. Core records the initial filesystem
+identity of the destination and the reserved staging file and rejects either
+path if its directory entry changes during the job.
+The exporter closes and waits for its encoder, then Core cleans temporary
+Audio and synchronizes the staging file. While the reserved staging handle is
+still open, Core revalidates its non-empty regular-file identity, every source
+alias, and the final destination identity; it then closes the handle and
+atomically replaces the destination. Explicit output validation permits Windows
+UNC shares while retaining the automatic-media ban on network locators. Any
+earlier render, effect, frame-write, encoder,
+cleanup, validation, or publication failure preserves an existing destination
+and attempts to remove the staging file; a cleanup failure is included in the
+reported error rather than hidden. `frames_exported` counts frames accepted
+before a failure; `published` becomes true only after atomic replacement.
+Failed exports never emit a completion update.
+
+The public pre-v1 `editor::ExportService` has no production app call sites, but
+still contains a legacy direct-final-write coordinator. It is not an owner of
+the production authoring transaction and is scheduled for deletion rather than
+compatibility maintenance. Project save and production authoring video Export
+reuse the same atomic-file primitive instead of carrying separate platform
+replacement implementations.
 
 The focused regression checks are:
 
 ```sh
 cargo test -p library core::rendering -- --nocapture
+cargo test -p library util::atomic_file -- --nocapture
 cargo test -p app render_error_invalidates_stale_output -- --nocapture
 cargo test -p app failed_export_update_stops_progress -- --nocapture
+python scripts/qa-runner.py --mode full --jobs 1
 ```

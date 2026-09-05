@@ -83,6 +83,12 @@ pub struct AuthoringExportResult {
     pub frame_info: FrameInfo,
     /// Frames accepted by the exporter before the request completed.
     pub frames_exported: u64,
+    /// Whether the completed artifact was published at `output_path`.
+    ///
+    /// Video export sets this only after atomic publication. It remains false
+    /// when frames reached the exporter but rendering, finalization, cleanup,
+    /// validation, sync, or publication later failed.
+    pub published: bool,
     /// Total frames selected by the immutable export request.
     pub frame_count: u64,
 }
@@ -555,6 +561,9 @@ impl Drop for RenderServer {
         crate::util::thread::join_in_background("render-shutdown-reaper", workers);
     }
 }
+
+#[cfg(test)]
+mod export_atomic_tests;
 
 #[cfg(test)]
 mod export_tests;

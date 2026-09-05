@@ -1,3 +1,5 @@
+mod video_output;
+
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -18,12 +20,13 @@ use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, InstancePath, TimelineId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
 use crate::model::frame::frame::FrameInfo;
-use crate::plugin::{ExportFormat, ExportFrame, ExportSettings, PluginManager};
+use crate::plugin::{ExportDestination, ExportFormat, ExportFrame, ExportSettings, PluginManager};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::output_path_identity::output_path_identity;
 
 use super::{AuthoringExportResult, RenderRequestId, authoring_error_frame_info};
+use video_output::AuthoringVideoOutput;
 
 pub(super) struct AuthoringPngExportRequest {
     pub(super) request_id: RenderRequestId,
@@ -359,8 +362,9 @@ fn write_authoring_png(
     frame: &crate::plugin::ExportFrame,
     settings: &ExportSettings,
 ) -> Result<(), LibraryError> {
-    let write = plugin_manager.export_frame("png_export", output_path, frame, settings);
-    let finish = plugin_manager.finish_export("png_export", output_path, settings);
+    let destination = ExportDestination::staged(output_path, output_path);
+    let write = plugin_manager.export_frame("png_export", &destination, frame, settings);
+    let finish = plugin_manager.finish_export("png_export", &destination, settings);
     match (write, finish) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(write_error), Ok(())) => Err(write_error),
@@ -638,13 +642,14 @@ fn prepare_authoring_audio(
 fn combine_export_and_cleanup(
     export: Result<(), LibraryError>,
     cleanup: Result<(), LibraryError>,
+    cleanup_failure: &str,
 ) -> Result<(), LibraryError> {
     match (export, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(export_error), Ok(())) => Err(export_error),
         (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
         (Err(export_error), Err(cleanup_error)) => Err(LibraryError::Render(format!(
-            "video export failed: {export_error}; temporary audio cleanup also failed: {cleanup_error}"
+            "video export failed: {export_error}; {cleanup_failure}: {cleanup_error}"
         ))),
     }
 }
@@ -681,6 +686,7 @@ fn run_authoring_png_export(
                     None,
                 ),
                 frames_exported: 0,
+                published: false,
                 frame_count: 1,
             };
         }
@@ -726,6 +732,7 @@ fn run_authoring_png_export(
         )
     })();
     let frames_exported = u64::from(output.is_ok());
+    let published = output.is_ok();
     AuthoringExportResult {
         request_id: request.request_id,
         timeline_id: request.timeline_id,
@@ -734,6 +741,7 @@ fn run_authoring_png_export(
         output,
         frame_info,
         frames_exported,
+        published,
         frame_count: 1,
     }
 }
@@ -758,6 +766,7 @@ fn run_authoring_video_export(
                     output: Err(error),
                     frame_info,
                     frames_exported: 0,
+                    published: false,
                     frame_count: 0,
                 };
             }
@@ -777,6 +786,7 @@ fn run_authoring_video_export(
                 output: Err(error),
                 frame_info,
                 frames_exported: 0,
+                published: false,
                 frame_count,
             };
         }
@@ -799,6 +809,7 @@ fn run_authoring_video_export(
                 output: Err(error),
                 frame_info,
                 frames_exported: 0,
+                published: false,
                 frame_count,
             };
         }
@@ -807,6 +818,8 @@ fn run_authoring_video_export(
     let mut frames_exported = 0_u64;
     let mut exporter_attempted = false;
     let mut temporary_audio = None;
+    let mut video_output = None;
+    let mut destination_lease = None;
     let output = (|| {
         require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
         // Establish the complete export's renderer capability before creating
@@ -820,6 +833,11 @@ fn run_authoring_video_export(
             plugin_manager,
             cache_manager,
         )?;
+        // Exporter sessions end before host-side cleanup and publication.
+        // Keep this logical destination reserved across that entire gap so a
+        // second coordinator cannot publish over the same user-selected path.
+        destination_lease = Some(plugin_manager.reserve_export_destination(&request.output_path)?);
+        video_output = Some(AuthoringVideoOutput::begin(&request.output_path)?);
         temporary_audio = prepare_authoring_audio(
             request.project.as_ref(),
             request.timeline_id,
@@ -849,9 +867,12 @@ fn run_authoring_video_export(
             // alias can change while a long export is running.
             require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
             exporter_attempted = true;
+            let destination = video_output.as_ref().ok_or_else(|| {
+                LibraryError::Render("video export destination is unavailable".to_string())
+            })?;
             plugin_manager.export_frame(
                 "ffmpeg_export",
-                &request.output_path,
+                destination.destination(),
                 &frame,
                 &settings,
             )?;
@@ -861,16 +882,41 @@ fn run_authoring_video_export(
         }
         Ok(())
     })();
-    let finish = if exporter_attempted {
-        plugin_manager.finish_export("ffmpeg_export", &request.output_path, &settings)
-    } else {
-        Ok(())
+    let finish = match (exporter_attempted, video_output.as_ref()) {
+        (true, Some(destination)) => {
+            plugin_manager.finish_export("ffmpeg_export", destination.destination(), &settings)
+        }
+        (true, None) => Err(LibraryError::Render(
+            "video exporter was started without a destination".to_string(),
+        )),
+        (false, _) => Ok(()),
     };
     let output = combine_export_and_finish(output, finish);
     let cleanup = temporary_audio
         .as_mut()
         .map_or(Ok(()), TemporaryAuthoringAudio::cleanup);
-    let output = combine_export_and_cleanup(output, cleanup);
+    let mut output =
+        combine_export_and_cleanup(output, cleanup, "temporary audio cleanup also failed");
+    if output.is_ok() {
+        output = video_output
+            .take()
+            .ok_or_else(|| {
+                LibraryError::Render("video export staging transaction is unavailable".to_string())
+            })
+            .and_then(|video_output| {
+                video_output.publish(|| {
+                    require_safe_authoring_output(request.project.as_ref(), &request.output_path)
+                })
+            });
+    }
+    if output.is_err()
+        && let Some(video_output) = video_output.take()
+    {
+        let cleanup = video_output.abort();
+        output = combine_export_and_cleanup(output, cleanup, "staging cleanup also failed");
+    }
+    let published = output.is_ok();
+    drop(destination_lease);
     let frame_number = i64::try_from(frames_exported.saturating_sub(1)).unwrap_or(i64::MAX);
     AuthoringExportResult {
         request_id: request.request_id,
@@ -880,6 +926,7 @@ fn run_authoring_video_export(
         output,
         frame_info,
         frames_exported,
+        published,
         frame_count,
     }
 }

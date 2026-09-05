@@ -172,6 +172,11 @@ python3 scripts/qa-runner.py --mode smoke
 python3 scripts/qa-runner.py --mode full
 ```
 
+Smoke builds the debug app for short iteration. Full builds and runs the
+release app so renderer, encoder, and realtime timing are validated with the
+same optimized code path users receive; `--app-binary ... --no-build` may be
+used to reuse an already built binary.
+
 The full run covers these production-reachable workflows:
 
 - imported Asset rows remain distinct and drag into Timeline without a button;

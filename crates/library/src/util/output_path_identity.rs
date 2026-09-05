@@ -42,6 +42,10 @@ impl OutputPathIdentity {
             .ok()
             .and_then(|metadata| existing_file_identity(&self.resolved_path, &metadata));
     }
+
+    pub(crate) fn resolved_path(&self) -> &Path {
+        &self.resolved_path
+    }
 }
 
 /// Resolve a path without opening its final destination.

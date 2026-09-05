@@ -4,6 +4,7 @@ mod bundled;
 mod dynamic_loading;
 mod effects;
 mod ensemble_operations;
+mod export_destination_lease;
 mod registration;
 mod runtime_plugins;
 mod shape_operations;
@@ -22,7 +23,7 @@ use crate::util::local_file::DirectRegularFile;
 use crate::plugin::PluginCategory;
 use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
-use crate::plugin::exporters::{ExportPlugin, ExportSettings};
+use crate::plugin::exporters::{ExportDestination, ExportPlugin, ExportSettings};
 use crate::plugin::loaders::{
     AssetMetadata, LoadPluginError, LoadRepository, LoadRequest, LoadResponse,
 };
@@ -37,6 +38,9 @@ use crate::plugin::{
     SHAPE_TRANSFORM_COMPONENT_ID, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
     TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY,
 };
+
+pub(crate) use export_destination_lease::ExportDestinationLease;
+use export_destination_lease::ExportDestinationLeaseRegistry;
 
 fn materialize_validated_operation_properties(
     context: &crate::plugin::FrameEvaluationContext,
@@ -132,6 +136,7 @@ pub struct PluginManager {
     inner: RwLock<PluginRegistry>,
     bundled_operations: bundled::BundledOperationInventory,
     render_revision: AtomicU64,
+    export_destination_leases: ExportDestinationLeaseRegistry,
 }
 
 impl PluginManager {
@@ -152,6 +157,7 @@ impl PluginManager {
             }),
             bundled_operations: bundled::BundledOperationInventory::default(),
             render_revision: AtomicU64::new(1),
+            export_destination_leases: ExportDestinationLeaseRegistry::default(),
         }
     }
 
@@ -631,13 +637,25 @@ impl PluginManager {
     pub fn export_frame(
         &self,
         exporter_id: &str,
-        path: &str,
+        destination: &ExportDestination,
         frame: &crate::plugin::ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         self.get_export_plugin(exporter_id)
             .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
-            .export_frame(path, frame, settings)
+            .export_frame(destination, frame, settings)
+    }
+
+    /// Exclusively reserve a user-visible export destination for one host job.
+    ///
+    /// The returned RAII lease must live through staging publication or abort.
+    /// Exporter session ownership is separate and cannot substitute for this
+    /// logical-destination reservation.
+    pub(crate) fn reserve_export_destination(
+        &self,
+        logical_path: &str,
+    ) -> Result<ExportDestinationLease, LibraryError> {
+        self.export_destination_leases.reserve(logical_path)
     }
 
     pub fn get_export_plugin_properties(
@@ -651,12 +669,12 @@ impl PluginManager {
     pub fn finish_export(
         &self,
         exporter_id: &str,
-        path: &str,
+        destination: &ExportDestination,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         self.get_export_plugin(exporter_id)
             .ok_or_else(|| LibraryError::Plugin(format!("Exporter '{exporter_id}' not found")))?
-            .finish_export(path, settings)
+            .finish_export(destination, settings)
     }
 
     pub fn get_property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {

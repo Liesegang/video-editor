@@ -1,4 +1,6 @@
-use super::super::{ExportFormat, ExportFrame, ExportPlugin, ExportSettings, Plugin};
+use super::super::{
+    ExportDestination, ExportFormat, ExportFrame, ExportPlugin, ExportSettings, Plugin,
+};
 use crate::error::LibraryError;
 use png::{
     BitDepth, ColorType, Compression, Encoder, ScaledFloat, SourceChromaticities,
@@ -37,7 +39,7 @@ impl Plugin for PngExportPlugin {
 impl ExportPlugin for PngExportPlugin {
     fn export_frame(
         &self,
-        path: &str,
+        destination: &ExportDestination,
         frame: &ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
@@ -55,7 +57,12 @@ impl ExportPlugin for PngExportPlugin {
             )));
         }
         let image = frame.image();
-        let file = File::create(path)?;
+        let file = File::create(destination.writable_path()).map_err(|error| {
+            LibraryError::Render(format!(
+                "cannot create PNG export destination '{}': {error}",
+                destination.logical_path()
+            ))
+        })?;
         let writer = BufWriter::new(file);
         let mut encoder = Encoder::new(writer, image.width, image.height);
         encoder.set_color(ColorType::Rgba);
@@ -142,6 +149,11 @@ mod tests {
         .unwrap()
     }
 
+    fn destination(path: &std::path::Path) -> ExportDestination {
+        let path = path.to_string_lossy().into_owned();
+        ExportDestination::staged(&path, &path)
+    }
+
     #[test]
     fn encoded_png_carries_normative_srgb_chunk() {
         let project = Project::new("tagged PNG");
@@ -151,7 +163,7 @@ mod tests {
         let path = TestPng::new();
 
         PngExportPlugin::new()
-            .export_frame(path.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination(&path.0), &frame, &settings)
             .unwrap();
 
         let bytes = fs::read(&path.0).unwrap();
@@ -177,6 +189,26 @@ mod tests {
     }
 
     #[test]
+    fn png_writes_only_to_the_host_staging_path() {
+        let project = Project::new("staged PNG");
+        let frame = test_frame(&project);
+        let mut settings = ExportSettings::for_dimensions(2, 1, 24.0);
+        settings.bind_project_color_authority(&project).unwrap();
+        let logical = TestPng::new();
+        let writable = TestPng::new();
+        fs::write(&logical.0, b"existing destination").unwrap();
+        let destination =
+            ExportDestination::staged(logical.0.to_string_lossy(), writable.0.to_string_lossy());
+
+        PngExportPlugin::new()
+            .export_frame(&destination, &frame, &settings)
+            .unwrap();
+
+        assert_eq!(fs::read(&logical.0).unwrap(), b"existing destination");
+        assert!(fs::read(&writable.0).unwrap().starts_with(b"\x89PNG"));
+    }
+
+    #[test]
     fn unbound_settings_are_rejected_instead_of_assuming_srgb() {
         let project = Project::new("unbound PNG");
         let frame = test_frame(&project);
@@ -184,7 +216,7 @@ mod tests {
         let path = TestPng::new();
 
         let error = PngExportPlugin::new()
-            .export_frame(path.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination(&path.0), &frame, &settings)
             .unwrap_err();
         assert!(
             error
@@ -203,7 +235,7 @@ mod tests {
         let path = TestPng::new();
 
         let error = PngExportPlugin::new()
-            .export_frame(path.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination(&path.0), &frame, &settings)
             .unwrap_err();
         assert!(error.to_string().contains("implicit resizing is forbidden"));
         assert!(!path.0.exists());

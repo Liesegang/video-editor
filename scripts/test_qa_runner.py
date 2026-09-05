@@ -34,6 +34,7 @@ PARTICLE = load("ruvie_qa_particle", "qa-particle-node-clip-e2e.py")
 PARTICLE_PERSISTENCE = load(
     "ruvie_qa_particle_persistence", "qa-particle-persistence-e2e.py"
 )
+VIDEO_EXPORT = load("ruvie_qa_video_export", "qa-video-export-e2e.py")
 
 
 class QaRunnerTests(unittest.TestCase):
@@ -60,12 +61,13 @@ class QaRunnerTests(unittest.TestCase):
             "node-clip-conversion",
             "audio-playback",
             "text-ensemble",
+            "video-export",
         ]
         full = RUNNER.suite_specs("full")
         self.assertEqual([suite.name for suite in full], expected)
         self.assertEqual(
             [suite.name for suite in full if suite.fixture == "authoring_audio_e2e"],
-            ["timeline-content-zoom", "audio-playback"],
+            ["timeline-content-zoom", "audio-playback", "video-export"],
         )
         self.assertEqual(
             [suite.name for suite in full if suite.fixture == "authoring_path_e2e"],
@@ -74,6 +76,9 @@ class QaRunnerTests(unittest.TestCase):
         unsaved = next(suite for suite in full if suite.name == "unsaved-changes")
         self.assertTrue(unsaved.project_file)
         self.assertTrue(unsaved.expects_exit)
+        video_export = next(suite for suite in full if suite.name == "video-export")
+        self.assertTrue(video_export.export_file)
+        self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)
         self.assertEqual([suite.name for suite in RUNNER.suite_specs("smoke")], ["smoke"])
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("blend")
@@ -237,6 +242,101 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(environment["RUVIE_QA_PORT"], "43124")
         self.assertEqual(environment["RUVIE_QA_FIXTURE"], SUPPORT.AUTHORING_FIXTURE)
 
+    def test_video_export_metadata_validation_requires_the_delivery_contract(self):
+        valid = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 640,
+                    "height": 360,
+                    "pix_fmt": "yuv420p",
+                    "color_range": "tv",
+                    "color_space": "bt709",
+                    "color_transfer": "bt709",
+                    "color_primaries": "bt709",
+                    "avg_frame_rate": "30/1",
+                    "nb_read_frames": "360",
+                    "start_time": "0.000000",
+                    "duration": "12.000000",
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                    "start_time": "0.000000",
+                    "duration": "12.000000",
+                },
+            ],
+            "format": {
+                "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+                "duration": "12.000000",
+            },
+        }
+        VIDEO_EXPORT._validate_probe(valid, 640, 360, 30, 360, 12.0)
+        with self.assertRaises(VIDEO_EXPORT.QaFailure):
+            VIDEO_EXPORT._validate_probe(
+                {
+                    **valid,
+                    "streams": [
+                        {**valid["streams"][0], "color_space": "unknown"},
+                        valid["streams"][1],
+                    ],
+                },
+                640,
+                360,
+                30,
+                360,
+                12.0,
+            )
+        with self.assertRaises(VIDEO_EXPORT.QaFailure):
+            VIDEO_EXPORT._validate_probe(
+                {**valid, "streams": [valid["streams"][0]]},
+                640,
+                360,
+                30,
+                360,
+                12.0,
+            )
+        with self.assertRaises(VIDEO_EXPORT.QaFailure):
+            VIDEO_EXPORT._validate_probe(
+                {
+                    **valid,
+                    "streams": [
+                        valid["streams"][0],
+                        {**valid["streams"][1], "duration": "10.0"},
+                    ],
+                },
+                640,
+                360,
+                30,
+                360,
+                12.0,
+            )
+
+    def test_video_export_sibling_diff_ignores_preexisting_runner_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "app.log").write_text("", encoding="utf-8")
+            before = VIDEO_EXPORT._directory_entries(root)
+            (root / "export.mp4").write_bytes(b"output")
+            self.assertEqual(
+                VIDEO_EXPORT._new_unexpected_siblings(
+                    before, VIDEO_EXPORT._directory_entries(root), root / "export.mp4"
+                ),
+                [],
+            )
+            staged = root / ".private-staging-name"
+            staged.write_bytes(b"partial")
+            self.assertEqual(
+                VIDEO_EXPORT._new_unexpected_siblings(
+                    before, VIDEO_EXPORT._directory_entries(root), root / "export.mp4"
+                ),
+                [staged.resolve()],
+            )
+
     def test_process_cleanup_is_cross_platform(self):
         process = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -291,11 +391,54 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(client.clicked, ["dock.tab:node_editor"])
         self.assertEqual(client.asserted_timeout, 0.75)
 
+    def test_terminal_component_click_queues_without_polling_a_closing_endpoint(self):
+        client = SUPPORT.QaClient("http://127.0.0.1:1")
+        component = {
+            "id": "unsaved.discard",
+            "rect_points": {"center_x": 120.0, "center_y": 80.0},
+        }
+        with mock.patch.object(
+            client, "wait_component", return_value=({"frame": 9}, component)
+        ), mock.patch.object(
+            client,
+            "request",
+            return_value={"queued": True, "action_id": 27},
+        ) as request:
+            action_id, snapshot, selected, point = (
+                client.queue_terminal_click_component("unsaved.discard")
+            )
+
+        self.assertEqual(action_id, 27)
+        self.assertEqual(snapshot, {"frame": 9})
+        self.assertIs(selected, component)
+        self.assertEqual(point, {"x": 120.0, "y": 80.0})
+        request.assert_called_once_with(
+            "/v1/input/click",
+            {
+                "x": 120.0,
+                "y": 80.0,
+                "button": "primary",
+                "coordinate_space": "points",
+            },
+            method="POST",
+        )
+        self.assertEqual(client.evidence[-1]["phase"], "queued_for_terminal_action")
+
     def test_positive_jobs_rejects_zero(self):
         self.assertEqual(RUNNER.parse_args(["--jobs", "2"]).jobs, 2)
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 RUNNER.parse_args(["--jobs", "0"])
+
+    def test_full_qa_uses_the_release_binary_and_locked_release_build(self):
+        self.assertEqual(RUNNER.build_profile("smoke"), "debug")
+        self.assertEqual(RUNNER.build_profile("full"), "release")
+        self.assertIn("debug", RUNNER.default_app_binary("smoke").parts)
+        self.assertIn("release", RUNNER.default_app_binary("full").parts)
+        self.assertEqual(
+            RUNNER.app_build_command("full"),
+            ["cargo", "build", "-p", "app", "--locked", "--release"],
+        )
 
 
 if __name__ == "__main__":

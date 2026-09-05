@@ -15,11 +15,14 @@ use crate::model::frame::color::Color;
 use crate::model::project::asset::{Asset, AssetKind};
 use crate::model::project::property::PropertyMap;
 use crate::model::project::{IMAGE_INPUT_PORT, PortDataType};
-use crate::plugin::{ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager};
+use crate::plugin::{
+    ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager,
+};
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use crate::rendering::renderer::RenderOutput;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -410,11 +413,15 @@ impl Plugin for MockVideoExporter {
 impl ExportPlugin for MockVideoExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        destination: &ExportDestination,
         frame: &ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         settings.require_matching_color_authority(frame)?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(destination.writable_path())?
+            .write_all(b"frame")?;
         let mut state = self
             .state
             .lock()
@@ -442,7 +449,11 @@ impl ExportPlugin for MockVideoExporter {
         Ok(())
     }
 
-    fn finish_export(&self, _path: &str, _settings: &ExportSettings) -> Result<(), LibraryError> {
+    fn finish_export(
+        &self,
+        _destination: &ExportDestination,
+        _settings: &ExportSettings,
+    ) -> Result<(), LibraryError> {
         self.state
             .lock()
             .map_err(|_| LibraryError::Runtime("Mock video state lock poisoned".to_string()))?

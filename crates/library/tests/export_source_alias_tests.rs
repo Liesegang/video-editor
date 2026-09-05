@@ -6,7 +6,9 @@ use library::model::project::{
     ColorConfigIdentity, ColorManagementConfig, Composition, ExportColorConfig, PreviewColorConfig,
     PreviewSurfaceEncoding, Project,
 };
-use library::plugin::{ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager};
+use library::plugin::{
+    ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager,
+};
 use library::{LibraryError, SkiaRenderer};
 use std::path::Path;
 use std::sync::Arc;
@@ -135,7 +137,7 @@ impl Plugin for CountingExporter {
 impl ExportPlugin for CountingExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        _destination: &ExportDestination,
         _frame: &ExportFrame,
         _settings: &ExportSettings,
     ) -> std::result::Result<(), LibraryError> {

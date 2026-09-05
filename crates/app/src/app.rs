@@ -5,6 +5,7 @@
 //! graph-backed Project is intentionally absent from this entry point.
 
 mod audio_playback;
+mod export;
 pub(crate) mod guarded_action;
 mod project_palette;
 mod startup;
@@ -20,7 +21,6 @@ use egui_phosphor::regular as icons;
 use library::editor::TimelineEditorService;
 use library::model::authoring::{AuthoringProject, ProjectRevision};
 use library::plugin::PluginManager;
-use library::RenderRequestId;
 use library::{LibraryError, RenderServer};
 use log::warn;
 
@@ -35,6 +35,7 @@ use crate::ui::media_preview::AuthoringMediaPreviewService;
 use crate::ui::panels::preview::AuthoringPreviewRuntime;
 
 use self::audio_playback::{PlaybackClock, TimelineAudioRuntime};
+use self::export::AuthoringExportRuntime;
 use self::guarded_action::{GuardedActionState, GuardedProjectAction, UnsavedChoice};
 use self::startup::{qa_project_path, startup_service};
 use self::timeline_runtime::{
@@ -74,12 +75,6 @@ enum WorkspacePreset {
 enum AppAction {
     Command(CommandId),
     Workspace(WorkspacePreset),
-}
-
-#[derive(Default)]
-struct AuthoringExportRuntime {
-    pending: Option<(RenderRequestId, String)>,
-    next_request: u64,
 }
 
 impl RuViEApp {
@@ -135,10 +130,7 @@ impl RuViEApp {
             audio,
             media_previews,
             preview_runtime: AuthoringPreviewRuntime::default(),
-            export_runtime: AuthoringExportRuntime {
-                next_request: 1_u64 << 62,
-                ..AuthoringExportRuntime::default()
-            },
+            export_runtime: AuthoringExportRuntime::for_app(),
             command_registry,
             command_palette: CommandPalette::new(),
             settings_dialog,
@@ -355,10 +347,7 @@ impl RuViEApp {
         initialize_timeline_view(&project, &mut self.state);
         self.audio.stop().map_err(LibraryError::Runtime)?;
         self.preview_runtime = AuthoringPreviewRuntime::default();
-        self.export_runtime = AuthoringExportRuntime {
-            next_request: 1_u64 << 62,
-            ..AuthoringExportRuntime::default()
-        };
+        self.export_runtime = AuthoringExportRuntime::for_app();
         self.saved_revision = Some(self.service.revision()?);
         self.state.status = path.map_or_else(
             || "New Project".to_string(),
@@ -415,83 +404,6 @@ impl RuViEApp {
             self.state.status = "Clip deleted".to_string();
         }
         Ok(())
-    }
-
-    fn export_active_timeline_video(&mut self) -> Result<(), LibraryError> {
-        if self.export_runtime.pending.is_some() {
-            return Err(LibraryError::Validation(
-                "An export is already in progress".to_string(),
-            ));
-        }
-        let (_, project, plan) = self
-            .preview_runtime
-            .snapshot_and_plan(&self.service)
-            .map_err(LibraryError::Render)?;
-        let timeline = project
-            .timelines
-            .get(&self.state.active_timeline_id)
-            .ok_or_else(|| {
-                LibraryError::Validation("The active Timeline no longer exists".to_string())
-            })?;
-        let file_name = format!("{}.mp4", timeline.name.replace(['/', '\\'], "-"));
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MP4 Video", &["mp4"])
-            .add_filter("Matroska Video", &["mkv"])
-            .set_file_name(file_name)
-            .save_file()
-        else {
-            return Ok(());
-        };
-        let output_path = path.to_str().map(str::to_owned).ok_or_else(|| {
-            LibraryError::Validation("Export path is not valid Unicode".to_string())
-        })?;
-        let request_id = RenderRequestId::new(self.export_runtime.next_request);
-        self.export_runtime.next_request = self.export_runtime.next_request.wrapping_add(1);
-        if !self
-            .render_server
-            .send_authoring_video_export_request_at_instance(
-                request_id,
-                project,
-                plan,
-                self.state.active_timeline_id,
-                self.state.active_instance_path.clone(),
-                output_path.clone(),
-            )
-        {
-            return Err(LibraryError::Runtime(
-                "Export worker is busy; try again after the current export finishes".to_string(),
-            ));
-        }
-        self.export_runtime.pending = Some((request_id, output_path.clone()));
-        self.state.status = format!("Exporting {output_path}");
-        Ok(())
-    }
-
-    fn poll_export(&mut self, context: &egui::Context) {
-        while let Ok(result) = self.render_server.poll_authoring_export_result() {
-            let expected = self
-                .export_runtime
-                .pending
-                .as_ref()
-                .is_some_and(|(request_id, _)| *request_id == result.request_id);
-            if !expected {
-                continue;
-            }
-            self.export_runtime.pending = None;
-            match result.output {
-                Ok(()) => {
-                    self.state.error = None;
-                    self.state.status = format!(
-                        "Exported {} frames to {}",
-                        result.frames_exported, result.output_path
-                    );
-                }
-                Err(error) => self.state.error = Some(format!("Export failed: {error}")),
-            }
-        }
-        if self.export_runtime.pending.is_some() {
-            context.request_repaint_after(std::time::Duration::from_millis(50));
-        }
     }
 
     fn reconcile(&mut self) -> Result<(), LibraryError> {

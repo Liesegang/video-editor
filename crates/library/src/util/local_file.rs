@@ -1,17 +1,17 @@
-//! Race-resistant opening for automatically consumed local media.
+//! Race-resistant opening for regular files under distinct locator policies.
 //!
 //! Project documents can contain arbitrary strings. Automatic Preview/audio
 //! paths must therefore reject URL-like locators and filesystem objects that
 //! can block or act like devices before any decoder or third-party plugin sees
-//! them. Explicit import/relink policy belongs to the editor layer and must not
-//! be inferred from this helper.
+//! them. Explicit user-selected output paths may name a Windows network share,
+//! but still reject device namespaces, alternate streams, links, and non-files.
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// An opened direct local regular file whose final path component was not a
-/// symlink when opened.
+/// An opened regular file whose final path component was not a symlink when
+/// opened and whose directory entry matches the retained handle.
 ///
 /// Keeping the handle alive lets callers validate before plugin dispatch and
 /// closes the FIFO/device blocking class on Unix. Name-based plugin APIs still
@@ -19,6 +19,28 @@ use std::path::{Path, PathBuf};
 pub(crate) struct DirectRegularFile {
     file: File,
     canonical_path: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+enum RegularFileLocatorPolicy {
+    AutomaticMedia,
+    ExplicitOutput,
+}
+
+impl RegularFileLocatorPolicy {
+    fn subject(self) -> &'static str {
+        match self {
+            Self::AutomaticMedia => "automatic media",
+            Self::ExplicitOutput => "explicit output",
+        }
+    }
+
+    fn requirement(self) -> &'static str {
+        match self {
+            Self::AutomaticMedia => "a direct local regular file",
+            Self::ExplicitOutput => "a direct regular file",
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -30,18 +52,21 @@ pub(crate) struct WindowsFileIdentity {
 
 impl DirectRegularFile {
     pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        let path = path.as_ref();
-        // Classify locators before Windows' colon/ADS validation so a URL is
-        // rejected for the same reason on every platform.
-        reject_uri_scheme(path)?;
-        #[cfg(windows)]
-        {
-            reject_unsafe_windows_prefix(path)?;
-            reject_windows_reserved_components(path)?;
-        }
+        Self::open_with_policy(path.as_ref(), RegularFileLocatorPolicy::AutomaticMedia)
+    }
+
+    /// Open a host-reserved output file without applying the automatic-media
+    /// ban on Windows UNC shares. The common no-follow and identity checks are
+    /// deliberately identical to [`Self::open`].
+    pub(crate) fn open_explicit_output(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with_policy(path.as_ref(), RegularFileLocatorPolicy::ExplicitOutput)
+    }
+
+    fn open_with_policy(path: &Path, policy: RegularFileLocatorPolicy) -> io::Result<Self> {
+        validate_locator(path, policy)?;
 
         let before = std::fs::symlink_metadata(path)?;
-        require_regular_nonsymlink(path, &before)?;
+        require_regular_nonsymlink(path, &before, policy)?;
 
         let mut options = OpenOptions::new();
         options.read(true);
@@ -58,15 +83,23 @@ impl DirectRegularFile {
         }
         let file = options.open(path)?;
         let opened = file.metadata()?;
-        require_regular_nonsymlink(path, &opened)?;
+        require_regular_nonsymlink(path, &opened, policy)?;
         if !same_file(&before, &opened) {
-            return Err(rejected(path, "the path changed while it was being opened"));
+            return Err(rejected(
+                path,
+                policy,
+                "the path changed while it was being opened",
+            ));
         }
 
         let after = std::fs::symlink_metadata(path)?;
-        require_regular_nonsymlink(path, &after)?;
+        require_regular_nonsymlink(path, &after, policy)?;
         if !same_file(&opened, &after) {
-            return Err(rejected(path, "the path changed after it was opened"));
+            return Err(rejected(
+                path,
+                policy,
+                "the path changed after it was opened",
+            ));
         }
 
         let canonical_path = path.canonicalize()?;
@@ -74,11 +107,12 @@ impl DirectRegularFile {
         if !same_file(&opened, &canonical_metadata) {
             return Err(rejected(
                 path,
+                policy,
                 "the canonical target changed while it was being verified",
             ));
         }
         #[cfg(windows)]
-        verify_windows_identity(path, &canonical_path, &file)?;
+        verify_windows_identity(path, &canonical_path, &file, policy)?;
 
         Ok(Self {
             file,
@@ -104,8 +138,47 @@ impl DirectRegularFile {
     }
 }
 
+/// Validate a user-selected output locator before creating its sibling stage.
+/// This is intentionally policy-only and performs no network I/O.
+pub(crate) fn validate_explicit_output_path(path: &Path) -> io::Result<()> {
+    validate_locator(path, RegularFileLocatorPolicy::ExplicitOutput)
+}
+
+fn validate_locator(path: &Path, policy: RegularFileLocatorPolicy) -> io::Result<()> {
+    match policy {
+        RegularFileLocatorPolicy::AutomaticMedia => {
+            // Classify locators before Windows' colon/ADS validation so a URL
+            // is rejected for the same reason on every platform.
+            reject_uri_scheme(path)?;
+            #[cfg(windows)]
+            reject_automatic_windows_prefix(path)?;
+        }
+        RegularFileLocatorPolicy::ExplicitOutput => {
+            #[cfg(windows)]
+            reject_explicit_output_windows_prefix(path)?;
+        }
+    }
+    #[cfg(windows)]
+    reject_windows_reserved_components(path, policy)?;
+    Ok(())
+}
+
+/// Compare two open handles using the strongest stable file identity exposed
+/// by the current platform.
 #[cfg(windows)]
-fn reject_unsafe_windows_prefix(path: &Path) -> io::Result<()> {
+pub(crate) fn file_handles_share_identity(left: &File, right: &File) -> io::Result<bool> {
+    Ok(windows_file_identity(left)? == windows_file_identity(right)?)
+}
+
+/// Compare two open handles using the strongest stable file identity exposed
+/// by the current platform.
+#[cfg(not(windows))]
+pub(crate) fn file_handles_share_identity(left: &File, right: &File) -> io::Result<bool> {
+    Ok(same_file(&left.metadata()?, &right.metadata()?))
+}
+
+#[cfg(windows)]
+fn reject_automatic_windows_prefix(path: &Path) -> io::Result<()> {
     use std::path::{Component, Prefix};
 
     let Some(Component::Prefix(component)) = path.components().next() else {
@@ -118,13 +191,37 @@ fn reject_unsafe_windows_prefix(path: &Path) -> io::Result<()> {
         | Prefix::DeviceNS(_)
         | Prefix::Verbatim(_) => Err(rejected(
             path,
+            RegularFileLocatorPolicy::AutomaticMedia,
             "UNC, network, device-namespace, and generic verbatim paths are not accepted",
         )),
     }
 }
 
 #[cfg(windows)]
-fn reject_windows_reserved_components(path: &Path) -> io::Result<()> {
+fn reject_explicit_output_windows_prefix(path: &Path) -> io::Result<()> {
+    use std::path::{Component, Prefix};
+
+    let Some(Component::Prefix(component)) = path.components().next() else {
+        return Ok(());
+    };
+    match component.kind() {
+        Prefix::Disk(_)
+        | Prefix::VerbatimDisk(_)
+        | Prefix::UNC(_, _)
+        | Prefix::VerbatimUNC(_, _) => Ok(()),
+        Prefix::DeviceNS(_) | Prefix::Verbatim(_) => Err(rejected(
+            path,
+            RegularFileLocatorPolicy::ExplicitOutput,
+            "device-namespace and generic verbatim paths are not accepted",
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn reject_windows_reserved_components(
+    path: &Path,
+    policy: RegularFileLocatorPolicy,
+) -> io::Result<()> {
     use std::path::Component;
 
     for component in path.components() {
@@ -135,12 +232,14 @@ fn reject_windows_reserved_components(path: &Path) -> io::Result<()> {
         if name.contains(':') {
             return Err(rejected(
                 path,
+                policy,
                 "NTFS alternate-data-stream components are not accepted",
             ));
         }
         if is_windows_reserved_component(&name) {
             return Err(rejected(
                 path,
+                policy,
                 "Windows reserved DOS/console device names are not accepted",
             ));
         }
@@ -180,6 +279,7 @@ fn reject_uri_scheme(path: &Path) -> io::Result<()> {
     if has_uri_scheme(locator) {
         return Err(rejected(
             path,
+            RegularFileLocatorPolicy::AutomaticMedia,
             "URL and URI-scheme locators are not local files",
         ));
     }
@@ -209,22 +309,31 @@ fn has_uri_scheme(locator: &str) -> bool {
         && prefix.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
-fn require_regular_nonsymlink(path: &Path, metadata: &Metadata) -> io::Result<()> {
+fn require_regular_nonsymlink(
+    path: &Path,
+    metadata: &Metadata,
+    policy: RegularFileLocatorPolicy,
+) -> io::Result<()> {
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
-        return Err(rejected(path, "symbolic links are not accepted"));
+        return Err(rejected(path, policy, "symbolic links are not accepted"));
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(rejected(path, "Windows reparse points are not accepted"));
+            return Err(rejected(
+                path,
+                policy,
+                "Windows reparse points are not accepted",
+            ));
         }
     }
     if !file_type.is_file() {
         return Err(rejected(
             path,
+            policy,
             "directories, FIFOs, sockets, and devices are not accepted",
         ));
     }
@@ -238,7 +347,12 @@ fn same_file(left: &Metadata, right: &Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn verify_windows_identity(path: &Path, canonical_path: &Path, opened: &File) -> io::Result<()> {
+fn verify_windows_identity(
+    path: &Path,
+    canonical_path: &Path,
+    opened: &File,
+    policy: RegularFileLocatorPolicy,
+) -> io::Result<()> {
     let expected = windows_file_identity(opened)?;
     for candidate_path in [path, canonical_path] {
         let mut options = OpenOptions::new();
@@ -247,10 +361,11 @@ fn verify_windows_identity(path: &Path, canonical_path: &Path, opened: &File) ->
         use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         let candidate = options.open(candidate_path)?;
-        require_regular_nonsymlink(candidate_path, &candidate.metadata()?)?;
+        require_regular_nonsymlink(candidate_path, &candidate.metadata()?, policy)?;
         if windows_file_identity(&candidate)? != expected {
             return Err(rejected(
                 path,
+                policy,
                 "the Windows volume/file identity changed during verification",
             ));
         }
@@ -271,7 +386,7 @@ pub(crate) fn windows_file_identity(file: &File) -> io::Result<WindowsFileIdenti
     if handle_type != FILE_TYPE_DISK {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "automatic media requires a disk-file handle on Windows",
+            "regular file identity requires a disk-file handle on Windows",
         ));
     }
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
@@ -297,11 +412,13 @@ fn same_file(left: &Metadata, right: &Metadata) -> bool {
         && left.modified().ok() == right.modified().ok()
 }
 
-fn rejected(path: &Path, reason: &str) -> io::Error {
+fn rejected(path: &Path, policy: RegularFileLocatorPolicy, reason: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "automatic media requires a direct local regular file at {:?}: {reason}",
+            "{} requires {} at {:?}: {reason}",
+            policy.subject(),
+            policy.requirement(),
             path
         ),
     )
@@ -333,17 +450,25 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_network_and_device_prefixes_are_rejected_before_filesystem_access() {
+    fn windows_prefix_policy_distinguishes_automatic_media_from_explicit_output() {
+        for locator in [r"\\server\share\clip.mp4", r"\\?\UNC\server\share\clip.mp4"] {
+            let path = Path::new(locator);
+            assert!(reject_automatic_windows_prefix(path).is_err());
+            assert!(reject_explicit_output_windows_prefix(path).is_ok());
+        }
         for locator in [
-            r"\\server\share\clip.mp4",
-            r"\\?\UNC\server\share\clip.mp4",
             r"\\.\pipe\ruvie-test",
             r"\\?\Volume{00000000-0000-0000-0000-000000000000}\clip.mp4",
         ] {
-            assert!(reject_unsafe_windows_prefix(Path::new(locator)).is_err());
+            let path = Path::new(locator);
+            assert!(reject_automatic_windows_prefix(path).is_err());
+            assert!(reject_explicit_output_windows_prefix(path).is_err());
         }
-        assert!(reject_unsafe_windows_prefix(Path::new(r"C:\media\clip.mp4")).is_ok());
-        assert!(reject_unsafe_windows_prefix(Path::new(r"\\?\C:\media\clip.mp4")).is_ok());
+        for locator in [r"C:\media\clip.mp4", r"\\?\C:\media\clip.mp4"] {
+            let path = Path::new(locator);
+            assert!(reject_automatic_windows_prefix(path).is_ok());
+            assert!(reject_explicit_output_windows_prefix(path).is_ok());
+        }
     }
 
     #[cfg(windows)]
@@ -361,8 +486,19 @@ mod tests {
             r"C:\media\CLOCK$.wav",
             r"C:\media\clip.mp4:payload",
         ] {
-            assert!(reject_windows_reserved_components(Path::new(locator)).is_err());
+            for policy in [
+                RegularFileLocatorPolicy::AutomaticMedia,
+                RegularFileLocatorPolicy::ExplicitOutput,
+            ] {
+                assert!(reject_windows_reserved_components(Path::new(locator), policy).is_err());
+            }
         }
-        assert!(reject_windows_reserved_components(Path::new(r"C:\media\compact1.wav")).is_ok());
+        assert!(
+            reject_windows_reserved_components(
+                Path::new(r"C:\media\compact1.wav"),
+                RegularFileLocatorPolicy::ExplicitOutput,
+            )
+            .is_ok()
+        );
     }
 }

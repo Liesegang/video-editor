@@ -5,12 +5,14 @@ use std::sync::Arc;
 use ordered_float::OrderedFloat;
 
 use crate::cache::CacheManager;
-use crate::core::render_plan::{RenderPlanCompiler, evaluate_render_plan_frame};
+use crate::core::render_plan::{RenderPlanCache, RenderPlanCompiler, evaluate_render_plan_frame};
 use crate::editor::{
     AuthoringNodeFactory, ModuleNodeRequest, RenderDestination, RenderService,
-    TextEnsembleOperationKind,
+    TextEnsembleOperationKind, build_authoring_e2e_fixture,
 };
-use crate::model::authoring::{ModuleDefinitionSharing, ModulePortAddress, ShapeKind, ShapeSource};
+use crate::model::authoring::{
+    AttachmentProcessor, ModuleDefinitionSharing, ModulePortAddress, ShapeKind, ShapeSource,
+};
 use crate::model::frame::draw_type::{PathEffect, TrimPathUnits};
 use crate::model::frame::entity::{FrameContent, FrameItem, FrameObject};
 use crate::model::node::{GeneratorContent, NodeContent};
@@ -341,6 +343,74 @@ fn text_source_ensemble_and_pre_effect_convert_with_pixel_parity_and_one_undo() 
 
     service.undo().unwrap().expect("one conversion transaction");
     assert_eq!(service.snapshot().unwrap().as_ref(), before.as_ref());
+}
+
+#[test]
+fn qa_text_tile_conversion_keeps_full_scene_pixels() {
+    let plugins = Arc::new(PluginManager::default());
+    let media = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test_data/e2e_media");
+    let fixture = build_authoring_e2e_fixture(&media, plugins.as_ref()).unwrap();
+    let project = fixture.service.snapshot().unwrap();
+    let tile_id = project
+        .attachments
+        .values()
+        .find_map(|attachment| match &attachment.processor {
+            AttachmentProcessor::BuiltinEffect(effect)
+                if effect.operation.component_id == "tile" =>
+            {
+                Some(attachment.id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    drop(project);
+    fixture
+        .service
+        .move_attachment(tile_id, AttachmentStage::ItemPreTransform, 0)
+        .unwrap();
+    let before = fixture.service.snapshot().unwrap();
+    let mut plan_cache = RenderPlanCache::default();
+    let (before_plan, _) = plan_cache.compile(&before).unwrap();
+    let before_frame =
+        evaluate_render_plan_frame(&before, &before_plan, plugins.as_ref(), 102, 1.0, None)
+            .unwrap();
+    let cache = Arc::new(CacheManager::new());
+    let renderer = SkiaRenderer::new(
+        640,
+        360,
+        before.timelines[&before.root_timeline_id]
+            .background_color
+            .clone(),
+        true,
+        None,
+        Some(Arc::clone(&cache)),
+    )
+    .unwrap();
+    let mut render_service = RenderService::new(renderer, Arc::clone(&plugins), cache);
+    let RenderOutput::Image(before_image) = render_service
+        .render_authoring_frame(&before, &before_frame, RenderDestination::Preview)
+        .unwrap()
+    else {
+        panic!("Preview must be an Image");
+    };
+    fixture
+        .service
+        .convert_source_to_node_clip(plugins.as_ref(), fixture.info.text_item_id)
+        .unwrap();
+    let after = fixture.service.snapshot().unwrap();
+    let (after_plan, _) = plan_cache.compile(&after).unwrap();
+    let after_frame =
+        evaluate_render_plan_frame(&after, &after_plan, plugins.as_ref(), 102, 1.0, None).unwrap();
+    let RenderOutput::Image(after_image) = render_service
+        .render_authoring_frame(&after, &after_frame, RenderDestination::Preview)
+        .unwrap()
+    else {
+        panic!("Preview must be an Image");
+    };
+    assert_eq!(
+        after_image.data, before_image.data,
+        "conversion changed full scene pixels"
+    );
 }
 
 #[test]

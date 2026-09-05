@@ -1,4 +1,4 @@
-use super::super::{ExportFrame, ExportPlugin, ExportSettings, Plugin};
+use super::super::{ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin};
 use super::ffmpeg_command::{FfmpegCommand, FfmpegDeliveryPolicy};
 use super::ffmpeg_destination;
 use crate::error::LibraryError;
@@ -6,7 +6,6 @@ use log::{info, warn};
 use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-// use skia_safe::M44; // Removed, as it's not directly used here
 
 #[derive(Default)]
 pub struct FfmpegExportPlugin {
@@ -40,7 +39,7 @@ impl Plugin for FfmpegExportPlugin {
 impl ExportPlugin for FfmpegExportPlugin {
     fn export_frame(
         &self,
-        path: &str,
+        destination: &ExportDestination,
         frame: &ExportFrame,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
@@ -57,8 +56,8 @@ impl ExportPlugin for FfmpegExportPlugin {
                 image.data[pixel_index * 4 + 3]
             )));
         }
-        let command = FfmpegCommand::build(path, settings, policy)?;
-        let destination = ffmpeg_destination::identity(path)?;
+        let command = FfmpegCommand::build(destination.writable_path(), settings, policy)?;
+        let logical_identity = ffmpeg_destination::identity(destination.logical_path())?;
         if image.width != settings.width {
             return Err(LibraryError::Render(format!(
                 "FFmpeg exporter frame width {} does not match {}; implicit resizing is forbidden",
@@ -76,23 +75,37 @@ impl ExportPlugin for FfmpegExportPlugin {
             .sessions
             .lock()
             .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
+        if let Some(session) = sessions.iter_mut().find(|session| {
+            session.job_id == settings.job_id()
+                && session.writable_path == destination.writable_path()
+        }) {
+            if session.logical_path != destination.logical_path() || session.command != command {
+                return Err(LibraryError::Render(format!(
+                    "FFmpeg export settings or destination changed while logical destination '{}' was active",
+                    destination.logical_path()
+                )));
+            }
+            return session.write_frame(&image.data);
+        }
         for session in sessions.iter_mut() {
-            session.destination.refresh_existing_file();
+            session.logical_destination.refresh_existing_file();
         }
         if let Some(session) = sessions
             .iter_mut()
-            .find(|session| session.destination.aliases(&destination))
+            .find(|session| session.logical_destination.aliases(&logical_identity))
         {
             if session.job_id != settings.job_id() {
                 return Err(LibraryError::Render(format!(
-                    "FFmpeg destination '{path}' is busy in export job {}; job {} must wait until it is finalized",
+                    "FFmpeg destination '{}' is busy in export job {}; job {} must wait until it is finalized",
+                    destination.logical_path(),
                     session.job_id,
                     settings.job_id()
                 )));
             }
-            if session.command != command {
+            if session.writable_path != destination.writable_path() || session.command != command {
                 return Err(LibraryError::Render(format!(
-                    "FFmpeg export settings changed while session '{path}' was active"
+                    "FFmpeg export settings or staging destination changed while logical destination '{}' was active",
+                    destination.logical_path()
                 )));
             }
             session.write_frame(&image.data)
@@ -101,38 +114,79 @@ impl ExportPlugin for FfmpegExportPlugin {
                 "Starting ffmpeg export session: codec={} container={} pixel_format={}",
                 settings.codec, settings.container, settings.pixel_format
             );
-            let mut session = FfmpegSession::spawn(command, settings.job_id(), destination)?;
+            let mut session = FfmpegSession::spawn(
+                command,
+                settings.job_id(),
+                logical_identity,
+                destination.logical_path().to_string(),
+                destination.writable_path().to_string(),
+            )?;
             session.write_frame(&image.data)?;
             sessions.push(session);
             Ok(())
         }
     }
 
-    fn finish_export(&self, path: &str, settings: &ExportSettings) -> Result<(), LibraryError> {
-        let destination = ffmpeg_destination::identity(path)?;
+    fn finish_export(
+        &self,
+        destination: &ExportDestination,
+        settings: &ExportSettings,
+    ) -> Result<(), LibraryError> {
         let mut sessions = self
             .sessions
             .lock()
             .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
+        if let Some(index) = sessions.iter().position(|session| {
+            session.job_id == settings.job_id()
+                && session.writable_path == destination.writable_path()
+        }) {
+            if sessions[index].logical_path != destination.logical_path() {
+                return Err(LibraryError::Render(format!(
+                    "export job {} cannot change its logical FFmpeg destination from '{}' to '{}'",
+                    settings.job_id(),
+                    sessions[index].logical_path,
+                    destination.logical_path()
+                )));
+            }
+            let session = sessions.remove(index);
+            info!(
+                "Finishing ffmpeg export session for {}",
+                destination.logical_path()
+            );
+            return session.finish();
+        }
+
+        let logical_identity = ffmpeg_destination::identity(destination.logical_path())?;
         for session in sessions.iter_mut() {
-            session.destination.refresh_existing_file();
+            session.logical_destination.refresh_existing_file();
         }
         let Some(index) = sessions
             .iter()
-            .position(|session| session.destination.aliases(&destination))
+            .position(|session| session.logical_destination.aliases(&logical_identity))
         else {
             return Ok(());
         };
         let session = &sessions[index];
         if session.job_id != settings.job_id() {
             return Err(LibraryError::Render(format!(
-                "export job {} cannot finalize FFmpeg destination '{path}' owned by job {}",
+                "export job {} cannot finalize FFmpeg destination '{}' owned by job {}",
                 settings.job_id(),
+                destination.logical_path(),
                 session.job_id
             )));
         }
+        if session.writable_path != destination.writable_path() {
+            return Err(LibraryError::Render(format!(
+                "export job {} cannot change the FFmpeg staging destination while logical destination '{}' is active",
+                settings.job_id(),
+                destination.logical_path()
+            )));
+        }
         let session = sessions.remove(index);
-        info!("Finishing ffmpeg export session for {path}");
+        info!(
+            "Finishing ffmpeg export session for {}",
+            destination.logical_path()
+        );
         session.finish()
     }
 
@@ -229,7 +283,9 @@ impl ExportPlugin for FfmpegExportPlugin {
 struct FfmpegSession {
     command: FfmpegCommand,
     job_id: crate::plugin::ExportJobId,
-    destination: ffmpeg_destination::DestinationIdentity,
+    logical_destination: ffmpeg_destination::DestinationIdentity,
+    logical_path: String,
+    writable_path: String,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
 }
@@ -238,7 +294,9 @@ impl FfmpegSession {
     fn spawn(
         command: FfmpegCommand,
         job_id: crate::plugin::ExportJobId,
-        destination: ffmpeg_destination::DestinationIdentity,
+        logical_destination: ffmpeg_destination::DestinationIdentity,
+        logical_path: String,
+        writable_path: String,
     ) -> Result<Self, LibraryError> {
         let mut cmd = Command::new(&command.binary);
         cmd.args(&command.args)
@@ -254,7 +312,9 @@ impl FfmpegSession {
         Ok(Self {
             command,
             job_id,
-            destination,
+            logical_destination,
+            logical_path,
+            writable_path,
             child: Some(child),
             stdin: Some(stdin),
         })
@@ -374,6 +434,11 @@ mod tests {
         (frame, settings)
     }
 
+    fn direct_destination(path: &std::path::Path) -> ExportDestination {
+        let path = path.to_string_lossy().into_owned();
+        ExportDestination::staged(&path, &path)
+    }
+
     fn run_probe(path: &std::path::Path) -> Output {
         Command::new("ffprobe")
             .args([
@@ -402,13 +467,12 @@ mod tests {
         settings.container = "matroska".to_string();
         let output = TestOutput::new("mkv");
         let plugin = FfmpegExportPlugin::new();
+        let destination = direct_destination(&output.0);
 
         plugin
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination, &frame, &settings)
             .unwrap();
-        plugin
-            .finish_export(output.0.to_str().unwrap(), &settings)
-            .unwrap();
+        plugin.finish_export(&destination, &settings).unwrap();
 
         let probe = run_probe(&output.0);
         assert!(
@@ -435,7 +499,7 @@ mod tests {
         let output = TestOutput::new("mp4");
 
         let error = FfmpegExportPlugin::new()
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&direct_destination(&output.0), &frame, &settings)
             .unwrap_err();
         assert!(error.to_string().contains("no verified"));
         assert!(error.to_string().contains("libx264/mp4/rgba"));
@@ -457,30 +521,71 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("shared.mp4");
         let alias = directory.path().join("hard-link-alias.mp4");
+        let owner_stage = directory.path().join("owner-stage.mp4");
+        let contender_stage = directory.path().join("contender-stage.mp4");
         fs::write(&output, b"pre-existing user output").unwrap();
         fs::hard_link(&output, &alias).unwrap();
         let owner_path = output.to_str().unwrap();
         let contender_path = alias.to_str().unwrap();
+        let owner_destination =
+            ExportDestination::staged(owner_path, owner_stage.to_str().unwrap());
+        let contender_destination =
+            ExportDestination::staged(contender_path, contender_stage.to_str().unwrap());
         let plugin = FfmpegExportPlugin::new();
 
         plugin
-            .export_frame(owner_path, &frame, &owner_settings)
+            .export_frame(&owner_destination, &frame, &owner_settings)
             .unwrap();
+
+        let same_job_changed_logical =
+            ExportDestination::staged(contender_path, owner_stage.to_str().unwrap());
+        let changed_logical_error = plugin
+            .export_frame(&same_job_changed_logical, &frame, &owner_settings)
+            .unwrap_err();
+        assert!(
+            changed_logical_error
+                .to_string()
+                .contains("destination changed")
+        );
+        let changed_finish_error = plugin
+            .finish_export(&same_job_changed_logical, &owner_settings)
+            .unwrap_err();
+        assert!(
+            changed_finish_error
+                .to_string()
+                .contains("cannot change its logical FFmpeg destination")
+        );
+
         let write_error = plugin
-            .export_frame(contender_path, &frame, &contender_settings)
+            .export_frame(&contender_destination, &frame, &contender_settings)
             .unwrap_err();
         assert!(write_error.to_string().contains("is busy in export job"));
+        assert!(write_error.to_string().contains(contender_path));
+        assert!(!write_error.to_string().contains("contender-stage"));
 
         let finish_error = plugin
-            .finish_export(contender_path, &contender_settings)
+            .finish_export(&contender_destination, &contender_settings)
             .unwrap_err();
         assert!(finish_error.to_string().contains("cannot finalize"));
 
+        let mismatched_stage =
+            ExportDestination::staged(owner_path, contender_stage.to_str().unwrap());
+        let stage_error = plugin
+            .finish_export(&mismatched_stage, &owner_settings)
+            .unwrap_err();
+        assert!(stage_error.to_string().contains("staging destination"));
+        assert!(stage_error.to_string().contains(owner_path));
+        assert!(!stage_error.to_string().contains("contender-stage"));
+
         plugin
-            .export_frame(owner_path, &frame, &owner_settings)
+            .export_frame(&owner_destination, &frame, &owner_settings)
             .unwrap();
-        plugin.finish_export(owner_path, &owner_settings).unwrap();
-        assert!(output.exists());
+        plugin
+            .finish_export(&owner_destination, &owner_settings)
+            .unwrap();
+        assert_eq!(fs::read(output).unwrap(), b"pre-existing user output");
+        assert!(owner_stage.exists());
+        assert!(!contender_stage.exists());
     }
 
     #[test]
@@ -492,7 +597,7 @@ mod tests {
         let output = TestOutput::new("mp4");
 
         let error = FfmpegExportPlugin::new()
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&direct_destination(&output.0), &frame, &settings)
             .unwrap_err();
         assert!(error.to_string().contains("implicit resizing is forbidden"));
         assert!(!output.0.exists());
@@ -512,7 +617,7 @@ mod tests {
         let output = TestOutput::new("mp4");
 
         let error = FfmpegExportPlugin::new()
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&direct_destination(&output.0), &frame, &settings)
             .unwrap_err();
         assert!(error.to_string().contains("has no alpha channel"));
         assert!(error.to_string().contains("alpha 128"));
@@ -530,13 +635,12 @@ mod tests {
         settings.container = "matroska".to_string();
         let output = TestOutput::new("mkv");
         let plugin = FfmpegExportPlugin::new();
+        let destination = direct_destination(&output.0);
 
         plugin
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination, &frame, &settings)
             .unwrap();
-        plugin
-            .finish_export(output.0.to_str().unwrap(), &settings)
-            .unwrap();
+        plugin.finish_export(&destination, &settings).unwrap();
 
         let probe = run_probe(&output.0);
         assert!(
@@ -586,13 +690,12 @@ mod tests {
         settings.pixel_format = "yuv420p".to_string();
         let output = TestOutput::new("mp4");
         let plugin = FfmpegExportPlugin::new();
+        let destination = direct_destination(&output.0);
 
         plugin
-            .export_frame(output.0.to_str().unwrap(), &frame, &settings)
+            .export_frame(&destination, &frame, &settings)
             .unwrap();
-        plugin
-            .finish_export(output.0.to_str().unwrap(), &settings)
-            .unwrap();
+        plugin.finish_export(&destination, &settings).unwrap();
 
         let probe = run_probe(&output.0);
         assert!(

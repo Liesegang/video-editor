@@ -324,6 +324,11 @@ fn key_press_is_injected_as_a_real_egui_event() {
 }
 
 #[test]
+fn export_shortcut_key_maps_to_egui_e() {
+    assert_eq!(egui::Key::from(QaKey::E), egui::Key::E);
+}
+
+#[test]
 fn key_step_exposes_its_modifiers_through_raw_input() {
     let steps = build_steps(
         InputCommand {

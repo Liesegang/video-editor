@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, MediaTime, RationalRate};
 use crate::model::frame::Image;
-use crate::plugin::{ExportFrame, ExportPlugin, ExportSettings, Plugin};
+use crate::plugin::{ExportDestination, ExportFrame, ExportPlugin, ExportSettings, Plugin};
 
 use super::PluginManager;
 
@@ -36,7 +36,7 @@ impl Plugin for NoopExporter {
 impl ExportPlugin for NoopExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        _destination: &ExportDestination,
         _frame: &ExportFrame,
         _settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
@@ -74,7 +74,7 @@ impl Plugin for ReentrantIdentityExporter {
 impl ExportPlugin for ReentrantIdentityExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        _destination: &ExportDestination,
         _frame: &ExportFrame,
         _settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
@@ -107,14 +107,18 @@ impl Plugin for ReentrantFinishExporter {
 impl ExportPlugin for ReentrantFinishExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        _destination: &ExportDestination,
         _frame: &ExportFrame,
         _settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         Ok(())
     }
 
-    fn finish_export(&self, _path: &str, _settings: &ExportSettings) -> Result<(), LibraryError> {
+    fn finish_export(
+        &self,
+        _destination: &ExportDestination,
+        _settings: &ExportSettings,
+    ) -> Result<(), LibraryError> {
         let manager = self.manager.upgrade().ok_or_else(|| {
             LibraryError::Plugin("test PluginManager was dropped during callback".to_string())
         })?;
@@ -149,7 +153,7 @@ impl Plugin for BlockingExporter {
 impl ExportPlugin for BlockingExporter {
     fn export_frame(
         &self,
-        _path: &str,
+        _destination: &ExportDestination,
         _frame: &ExportFrame,
         _settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
@@ -227,8 +231,9 @@ fn exporter_callback_can_replace_its_endpoint_reentrantly() -> Result<(), Box<dy
     let worker_manager = Arc::clone(&manager);
     let worker = std::thread::spawn(move || {
         let settings = ExportSettings::for_dimensions(1, 1, 30.0);
+        let destination = ExportDestination::staged("unused", "unused");
         let result = worker_manager
-            .finish_export(EXPORTER_ID, "unused", &settings)
+            .finish_export(EXPORTER_ID, &destination, &settings)
             .map_err(|error| error.to_string());
         completed_tx.send(result).map_err(|error| error.to_string())
     });
@@ -259,7 +264,8 @@ fn concurrent_registration_completes_while_export_callback_is_running()
     let (frame, settings) = export_fixture()?;
     let callback_manager = Arc::clone(&manager);
     let callback = std::thread::spawn(move || {
-        callback_manager.export_frame(EXPORTER_ID, "unused", &frame, &settings)
+        let destination = ExportDestination::staged("unused", "unused");
+        callback_manager.export_frame(EXPORTER_ID, &destination, &frame, &settings)
     });
     entered_rx.recv_timeout(CALLBACK_TIMEOUT)?;
 

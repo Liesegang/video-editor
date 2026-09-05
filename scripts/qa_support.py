@@ -163,6 +163,13 @@ class QaClient:
     def component_snapshot(self):
         return self.request("/v1/components")
 
+    def queue_input(self, action: str, payload: dict) -> int:
+        queued = self.request("/v1/input/" + action, payload, method="POST")
+        action_id = queued.get("action_id")
+        if queued.get("queued") is not True or not isinstance(action_id, int):
+            raise QaFailure("{} input was not queued: {!r}".format(action, queued))
+        return action_id
+
     def component(self, component_id: str):
         snapshot = self.component_snapshot()
         component = next(
@@ -208,8 +215,7 @@ class QaClient:
 
     def inject(self, action: str, payload: dict):
         before = self.component_snapshot()["frame"]
-        queued = self.request("/v1/input/" + action, payload, method="POST")
-        action_id = queued["action_id"]
+        action_id = self.queue_input(action, payload)
 
         def completed():
             status = self.request("/v1/actions/{}".format(action_id))
@@ -237,6 +243,26 @@ class QaClient:
         point = component_center(component)
         self.inject("click", {**point, "button": button, "coordinate_space": "points"})
         return snapshot, component, point
+
+    def queue_terminal_click_component(
+        self, component_id: str, button: str = "primary"
+    ):
+        """Queue a click whose successful action is expected to stop the QA endpoint."""
+
+        snapshot, component = self.wait_component(component_id)
+        point = component_center(component)
+        payload = {**point, "button": button, "coordinate_space": "points"}
+        action_id = self.queue_input("click", payload)
+        self.evidence.append(
+            {
+                "action": "click",
+                "action_id": action_id,
+                "phase": "queued_for_terminal_action",
+                "completed_frame": None,
+                "payload": payload,
+            }
+        )
+        return action_id, snapshot, component, point
     def double_click_component(self, component_id: str):
         snapshot, component = self.wait_component(component_id)
         point = component_center(component)

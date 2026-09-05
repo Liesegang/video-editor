@@ -38,6 +38,7 @@ SUITE_OUTPUT_NAMES = (
     "failure-state.json",
     "failure-components.json",
     "project.ruvie",
+    "export.mp4",
 )
 
 
@@ -47,6 +48,7 @@ class SuiteSpec:
     script: str
     fixture: str = AUTHORING_FIXTURE
     project_file: bool = False
+    export_file: bool = False
     expects_exit: bool = False
 
 
@@ -84,6 +86,12 @@ FULL_SUITES = (
     SuiteSpec("node-clip-conversion", "qa-node-clip-conversion-e2e.py"),
     SuiteSpec("audio-playback", "qa-audio-playback-e2e.py", AUTHORING_AUDIO_FIXTURE),
     SuiteSpec("text-ensemble", "qa-text-ensemble-e2e.py"),
+    SuiteSpec(
+        "video-export",
+        "qa-video-export-e2e.py",
+        AUTHORING_AUDIO_FIXTURE,
+        export_file=True,
+    ),
 )
 
 
@@ -151,12 +159,23 @@ def capture_file_matches_metadata(path: pathlib.Path, metadata) -> bool:
     )
 
 
-def default_app_binary() -> pathlib.Path:
+def build_profile(mode: str) -> str:
+    return "release" if mode == "full" else "debug"
+
+
+def app_build_command(mode: str) -> list[str]:
+    command = ["cargo", "build", "-p", "app", "--locked"]
+    if build_profile(mode) == "release":
+        command.append("--release")
+    return command
+
+
+def default_app_binary(mode: str) -> pathlib.Path:
     configured = os.environ.get("CARGO_TARGET_DIR")
     target = pathlib.Path(configured) if configured else REPOSITORY_ROOT / "target"
     if not target.is_absolute():
         target = REPOSITORY_ROOT / target
-    return target / "debug" / ("app.exe" if os.name == "nt" else "app")
+    return target / build_profile(mode) / ("app.exe" if os.name == "nt" else "app")
 
 
 class ProcessRegistry:
@@ -265,6 +284,8 @@ def run_one_suite(
     )
     if spec.project_file:
         environment["RUVIE_QA_PROJECT_PATH"] = str((suite_dir / "project.ruvie").resolve())
+    if spec.export_file:
+        environment["RUVIE_QA_EXPORT_PATH"] = str((suite_dir / "export.mp4").resolve())
     started = time.monotonic()
     result = {
         "name": spec.name,
@@ -443,7 +464,11 @@ def main(argv=None) -> int:
     if not artifact_root.is_absolute():
         artifact_root = REPOSITORY_ROOT / artifact_root
     artifact_root.mkdir(parents=True, exist_ok=True)
-    app_binary = pathlib.Path(args.app_binary) if args.app_binary else default_app_binary()
+    app_binary = (
+        pathlib.Path(args.app_binary)
+        if args.app_binary
+        else default_app_binary(args.mode)
+    )
     if not app_binary.is_absolute():
         app_binary = REPOSITORY_ROOT / app_binary
     registry = ProcessRegistry()
@@ -460,7 +485,7 @@ def main(argv=None) -> int:
             build.update({"ok": True, "return_code": None, "duration_seconds": 0.0})
         else:
             code, timed_out, duration = run_logged(
-                ["cargo", "build", "-p", "app", "--locked"],
+                app_build_command(args.mode),
                 artifact_root / "build.log",
                 args.build_timeout,
                 registry,

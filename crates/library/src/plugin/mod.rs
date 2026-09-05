@@ -50,8 +50,8 @@ pub use decorators::DecoratorPlugin;
 pub use effectors::EffectorPlugin;
 pub use effects::{EffectColorDomain, EffectDefinition, EffectPlugin, EffectRepository};
 pub use exporters::{
-    ExportColorAuthority, ExportFormat, ExportFrame, ExportJobId, ExportPlugin, ExportRepository,
-    ExportSettings,
+    ExportColorAuthority, ExportDestination, ExportFormat, ExportFrame, ExportJobId, ExportPlugin,
+    ExportRepository, ExportSettings,
 };
 pub use loaders::{
     AppliedYuvChromaLocation, AppliedYuvToRgb, AssetMetadata, ConfigOwnedColorSpace,

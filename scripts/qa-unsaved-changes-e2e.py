@@ -264,7 +264,9 @@ def run_suite(client):
     client.inject("close-request", {})
     quit_dialog = _wait_dialog(client, "quit")
     quit_started = time.monotonic()
-    client.click_component("unsaved.discard")
+    # Do not poll the action endpoint after this click: successful Discard
+    # closes the native app and its QA server in the same UI frame.
+    client.queue_terminal_click_component("unsaved.discard")
     closed_at = wait_endpoint_closed(client, description="Discard Quit")
 
     return {
