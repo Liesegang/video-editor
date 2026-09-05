@@ -180,5 +180,19 @@ fn equality_hash_and_serde_share_the_validated_value_semantics()
     let decoded: ColorValue = serde_json::from_str(&encoded)?;
     assert_eq!(decoded, positive_zero);
     assert_eq!(hash(&decoded), hash(&positive_zero));
+
+    let byte_derived = ColorValue::from_straight_srgba8(&Color {
+        r: 240,
+        g: 64,
+        b: 16,
+        a: 255,
+    });
+    let encoded = serde_json::to_string(&byte_derived)?;
+    let decoded: ColorValue = serde_json::from_str(&encoded)?;
+    assert_eq!(
+        decoded.rgba().map(f64::to_bits),
+        byte_derived.rgba().map(f64::to_bits),
+        "Project JSON must preserve the exact authored binary64 color"
+    );
     Ok(())
 }

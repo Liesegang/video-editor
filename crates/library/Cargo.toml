@@ -18,7 +18,7 @@ ruvie-color-management = { version = "0.1.0", path = "../color-management" }
 ruvie-plugin-api = { version = "0.1.0", path = "../plugin-api" }
 ruvie-python-runtime = { version = "0.1.0", path = "../python-runtime" }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 ffmpeg-next = "8.1.0"
 image = { version = "0.25.10", default-features = false, features = [
     "bmp",
