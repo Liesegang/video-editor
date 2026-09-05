@@ -51,12 +51,17 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 ### 現行 UI の退行復旧（2026-09-05、新機能より優先）
 
 - [ ] Node 本体・header の右クリックから削除・状態編集を使え、Delete/Backspace が縮小表示でも動くようにする。既存 Snarl の node-menu hook と共通 interaction を拡張し、別の context-menu surface を作らない。必須 Output/host boundary のみ保護し、その理由を表示する。通常 Node と接続の削除、一回 Undo、公開 parameter/instance override がある場合の整合性を service と native HTTP QA で検証する。
+  - [x] 削除 service を選択単位の一つの transaction にし、Published Interface、instance override、Timeline automation、media binding の依存整理を共通化した。private/COW/shared、複数 Node の Undo/Redo、必須 Output を含む不正な batch の原子的拒否を 6 件で検証し、`3526bfc` を main へ push 済み。
+  - UI の追加検証は `target/qa-runs/20260906T-node-batch-overview/node-editor` で PASS。body 右クリック、Delete、公開 parameter を持つ Source の削除、複数選択の一回 Undo、Output 保護、縮小 overview の Backspace を含む。UI 側の統合変更は後続 commit の gate に残す。
 - [ ] 選択 edge の通常描画・ハイライト・hit-test・切断・再接続 handle を共通 wire geometry へ統一し、拡大縮小後も実画面上で一致することを確認する。
 - [ ] Track header の Eye で映像の表示を切り替え、Audio は維持する。header drag では展開中の Clip/property を含む Track block の実配置を押下中から予告し、release 時だけ一回の並べ替えを commit する。Clip の時間配置不変、Escape、Undo、画素の変化を確認する。
 - [ ] Assets と Timeline の footer は共通 panel allocation を使い、panel 外への漏れ・不要な scrollbar・縦位置の不揃いを修正する。Preview toolbar も既存 tool 群を整列し、頂点種類は右クリックから選べるようにする。
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
 - [ ] Path/Vector は既存正本を拡張し、線分への頂点追加、Pen 新規描画、Rectangle/Ellipse の drag 作成、頂点の Corner/Smooth/Symmetric を右クリックで編集する。既存 Path の移動だけで Illustrator 相当の完成扱いにせず、M2 の全 Vector 要件を継続する。
 - [ ] Ensemble Tracking（文字間隔）を bundled descriptor と共通 runtime へ追加し、Target・keyframe・明示 Node Clip 化前後・実画素を検証する。Step Delay は clip-local time の描画テストだけで修正済みとせず、native UI で発生条件を再現して解消する。
+  - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。不動作は再現していない。一方、neutral Ensemble と空 stack の文字描画差（文字単位描画と SkParagraph の差）は残っており、別の描画回帰として解消する。
+- [ ] Drop Shadow が文字本体の上へ描かれる不具合を修正する。Shape / Text / Ensemble Text 共通で影・外側光彩を背面、本体を中間、Overlay / Inner 系を前面に描く。同一 phase 内の順序を維持し、後続文字の影が先行文字を覆わないこと、角度 120° の右下方向、透明度、Node Clip 化前後を実画素と native QA で確認する。
+- [ ] 共通数値スクラブは欄の外で pointer を離しても、capture した control だけを一度確定する。Appearance Distance の 28 px drag が一時値と Preview だけを変え、履歴に保存されない不具合を再現済み。scalar/vector/timing/Paint が同じ確定処理を使い、実 UI と Undo まで検証する。
 - [x] 共通 Color Picker / Palette のドラッグが背後の Node 移動・接続・canvas pan/zoom へ漏れないようにした。背後の Output header と hue control を重ねて popup 外へドラッグし、色だけが変わり Node 位置・選択・pan/zoom が変わらないことを native QA で確認した（`target/qa-runs/20260905T-popup-drag-2/color-palette`）。共通 Node surface / viewport の回帰テストも追加した。
 - [x] Inspector の空白での通常左ドラッグによるスクロールを無効化した。ホイールとスクロールバーは維持し、native QA で実際にホイールでスクロールした後の空白ドラッグが offset を変えないことと数値・色編集を確認した（`target/qa-runs/20260905T-scroll-4/inspector-source`）。
 - [x] Timeline Clip の両端 trim を復旧した。drag threshold 通過後の座標ではなく press origin から移動／左右 trim を分類する。狭い Clip と画面外の端の単体テストに加え、両端の長さ変更・兄弟 Clip 不変・描画 geometry・Undo を native QA で確認した（`target/qa-runs/20260905T-trim-scroll/timeline-edit`）。
