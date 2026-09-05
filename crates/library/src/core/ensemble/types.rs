@@ -1,6 +1,5 @@
 use crate::model::frame::color::Color;
-use skia_safe::{Font, Point, Rect, Size};
-use std::collections::HashMap;
+use skia_safe::Point;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransformData {
@@ -64,50 +63,6 @@ impl TransformData {
 }
 
 #[derive(Debug, Clone)]
-pub struct EnsembleChar {
-    pub glyph_id: u16,
-    pub base_pos: Point,
-    pub size: Size,
-    pub transform: TransformData,
-}
-
-impl EnsembleChar {
-    pub fn new(glyph_id: u16, base_pos: Point, size: Size) -> Self {
-        Self {
-            glyph_id,
-            base_pos,
-            size,
-            transform: TransformData::identity(),
-        }
-    }
-
-    pub fn center(&self) -> Point {
-        Point::new(
-            self.base_pos.x + self.size.width / 2.0,
-            self.base_pos.y + self.size.height / 2.0,
-        )
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EnsembleLine {
-    pub chars: Vec<EnsembleChar>,
-    pub base_bounds: Rect,
-}
-
-impl EnsembleLine {
-    pub fn new(chars: Vec<EnsembleChar>, base_bounds: Rect) -> Self {
-        Self { chars, base_bounds }
-    }
-
-    pub fn reset_transforms(&mut self) {
-        for ch in &mut self.chars {
-            ch.transform = TransformData::identity();
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct EffectorContext {
     pub time: f32,
     /// Operation-local sequence index. Step Delay uses the target's authored
@@ -123,70 +78,6 @@ pub struct EffectorContext {
     pub line_group_id: u64,
     pub line_index: usize,
     pub char_center: Point,
-}
-
-pub struct EnsembleText {
-    pub raw_content: String,
-    pub font: Font,
-    pub base_color: Color,
-    pub lines: Vec<EnsembleLine>,
-
-    // Procedural Layer
-    pub effectors: Vec<super::target::EffectorEntry>,
-
-    // Patch Layer
-    pub patches: HashMap<usize, TransformData>,
-
-    // Decoration
-    pub decorators: Vec<Box<dyn super::decorators::Decorator>>,
-}
-
-impl EnsembleText {
-    pub fn new(raw_content: String, font: Font, base_color: Color) -> Self {
-        Self {
-            raw_content,
-            font,
-            base_color,
-            lines: Vec::new(),
-            effectors: Vec::new(),
-            patches: HashMap::new(),
-            decorators: Vec::new(),
-        }
-    }
-
-    pub fn add_effector(&mut self, effector: Box<dyn super::effectors::Effector>) {
-        self.effectors.push(super::target::EffectorEntry::new(
-            effector,
-            super::target::EffectorTarget::default(),
-        ));
-    }
-
-    pub fn add_effector_with_target(
-        &mut self,
-        effector: Box<dyn super::effectors::Effector>,
-        target: super::target::EffectorTarget,
-    ) {
-        self.effectors
-            .push(super::target::EffectorEntry::new(effector, target));
-    }
-
-    pub fn add_decorator(&mut self, decorator: Box<dyn super::decorators::Decorator>) {
-        self.decorators.push(decorator);
-    }
-
-    pub fn add_patch(&mut self, index: usize, transform: TransformData) {
-        self.patches.insert(index, transform);
-    }
-
-    pub fn reset_all_transforms(&mut self) {
-        for line in &mut self.lines {
-            line.reset_transforms();
-        }
-    }
-
-    pub fn total_char_count(&self) -> usize {
-        self.lines.iter().map(|line| line.chars.len()).sum()
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -285,6 +176,18 @@ pub enum EffectorConfig {
         amount: f32,
         target: super::target::EffectorTarget,
     },
+}
+
+impl EffectorConfig {
+    pub fn target(&self) -> super::target::EffectorTarget {
+        match self {
+            Self::Transform { target, .. }
+            | Self::StepDelay { target, .. }
+            | Self::Opacity { target, .. }
+            | Self::Randomize { target, .. }
+            | Self::Tracking { target, .. } => *target,
+        }
+    }
 }
 
 impl PartialEq for EffectorConfig {
@@ -610,13 +513,5 @@ mod tests {
         assert_eq!(combined.scale, (1.0, 1.5));
         assert_eq!(combined.opacity, 0.4);
         assert!(combined.color_override.is_some());
-    }
-
-    #[test]
-    fn test_ensemble_char_center() {
-        let ch = EnsembleChar::new(42, Point::new(10.0, 20.0), Size::new(8.0, 12.0));
-        let center = ch.center();
-        assert_eq!(center.x, 14.0);
-        assert_eq!(center.y, 26.0);
     }
 }

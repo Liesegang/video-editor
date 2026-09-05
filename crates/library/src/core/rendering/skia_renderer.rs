@@ -3,7 +3,6 @@ use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::entity::SkSLColorDomain;
-use crate::model::frame::runtime_shape::evaluate_text_element_transforms;
 use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
     Affine2D, ParticleRasterRequest, RenderOutput, Renderer, RetainedRenderLayer,
@@ -16,7 +15,6 @@ use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, image_to_skia,
 };
 use crate::rendering::skia_working_surface::{self, SkiaSurfaceContract};
-use crate::rendering::text_layout::{build_text_paragraph, layout_runtime_text_shape};
 use crate::util::timing::ScopedTimer;
 use log::debug;
 
@@ -38,9 +36,9 @@ mod vector_bounds;
 mod vector_layers;
 mod vector_path_body;
 mod vector_surface;
+mod vector_text_body;
 
 use output_compositing::build_transform_matrix;
-use paint::PaintFactory;
 use vector_surface::VectorSurfaceMode;
 
 const SKSL_STRAIGHT_TO_PREMULTIPLIED: &str = r#"

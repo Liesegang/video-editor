@@ -9,14 +9,3 @@ pub enum EffectorTarget {
     Char,  // 文字ごと（各文字独立、index=0固定）
     Parts, // パーツ/パスごと（将来実装）
 }
-
-pub struct EffectorEntry {
-    pub effector: Box<dyn super::effectors::Effector>,
-    pub target: EffectorTarget,
-}
-
-impl EffectorEntry {
-    pub fn new(effector: Box<dyn super::effectors::Effector>, target: EffectorTarget) -> Self {
-        Self { effector, target }
-    }
-}

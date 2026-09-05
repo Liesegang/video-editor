@@ -318,10 +318,9 @@ def run_suite(client):
     )
     late_plain_hash = late_without_step["editor"]["preview"]["pixel_hash"]
 
-    # Any enabled Ensemble currently uses the production per-grapheme draw
-    # path, while an empty stack uses SkParagraph. Compare the completed Step
-    # Delay with a neutral Ensemble operation at this exact frame so shaping
-    # differences cannot masquerade as a Step Delay failure.
+    # Compare the completed Step Delay, an explicit neutral operation, and no
+    # Ensemble at the exact same frame. Merely enabling the Ensemble pipeline
+    # must not change Paragraph shaping, glyph placement, or pixels.
     _open_and_choose(
         client,
         item_id,
@@ -347,6 +346,13 @@ def run_suite(client):
         30.0,
     )
     late_neutral_hash = neutral_rendered["editor"]["preview"]["pixel_hash"]
+    if late_neutral_hash != late_plain_hash:
+        raise QaFailure(
+            "neutral Ensemble changed the plain Text Preview: "
+            "neutral={}, no_ensemble={}".format(
+                late_neutral_hash, late_plain_hash
+            )
+        )
     if late_step_hash != late_neutral_hash:
         raise QaFailure(
             "Step Delay did not converge to a neutral Ensemble after completion: "

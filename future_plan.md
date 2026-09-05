@@ -65,7 +65,18 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
 - [ ] Path/Vector は既存正本を拡張し、線分への頂点追加、Pen 新規描画、Rectangle/Ellipse の drag 作成、頂点の Corner/Smooth/Symmetric を右クリックで編集する。既存 Path の移動だけで Illustrator 相当の完成扱いにせず、M2 の全 Vector 要件を継続する。
 - [ ] Ensemble Tracking（文字間隔）を bundled descriptor と共通 runtime へ追加し、Target・keyframe・明示 Node Clip 化前後・実画素を検証する。Step Delay は clip-local time の描画テストだけで修正済みとせず、native UI で発生条件を再現して解消する。
-  - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。不動作は再現していない。一方、neutral Ensemble と空 stack の文字描画差（文字単位描画と SkParagraph の差）は残っており、別の描画回帰として解消する。
+  - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。この時点で残った neutral Ensemble と空 stack の文字描画差は、次項で修正した。
+  - [x] 通常 Text と Ensemble を、同じ SkParagraph の実描画用 glyph、Font、位置、行原点を使う一つの本体描画へ統合した。
+    文字ごとの `draw_str` と未使用の Ensemble 専用 Char/Line/Text モデルを削除し、変形と bounds も既存 affine 計算へ統一した。
+    合字にまたがる書記素は一つの不可分な要素として Tracking、Step Delay、patch の対象にする。
+    英字、日本語、結合文字、絵文字、RTL、複数行、分数倍率を独立した Paragraph 直接描画と比較し、neutral、disabled、Fill/Stroke/Shadow、部分移動、合字全体の移動、空 Text の不正 target 拒否を含む 13 件の描画テストが通過した。
+    実 UI の local 2.1667 秒で、空 stack、neutral Transform、完了済み Step Delay の Preview hash はすべて `2809221955039228731` と一致し、途中の変化と Undo による復元も確認した（`target/qa-runs/20260906T-shaped-text-final-r2/text-ensemble/evidence.json`）。
+  - この統合後の workspace 全 target は 1,695 passed / 0 failed / 17 ignored、実 GPU 比較は 3/3 が通過した。
+    strict Clippy、fmt、QA runner 26 tests、814 files の 1,000 行制限も通過した（`target/qa-workspace-test-20260906-shaped-text-verified.log`）。
+    最終 release app の native HTTP QA は 24/24 で、Appearance の Node Clip 変換、保存と新プロセスでの再読込み、Preview、Export を含む（`target/qa-runs/20260906T-shaped-text-final-r2`）。
+    初回は Dope Sheet QA が Inspector のスクロール中に隣の Sigma Y を押して停止したため、既存の component 安定待ちを使用するようテストを修正した。
+    初回の記録は `target/qa-runs/20260906T-shaped-text-final` に保持し、検査条件や描画の許容差は緩めていない。
+    最終 run の実画面を確認し、app/suite log に ERROR/panic/Failed to render はなく、QA app は終了済み。
 - [ ] Drop Shadow が文字本体の上へ描かれる不具合を修正する。Shape / Text / Ensemble Text 共通で影・外側光彩を背面、本体を中間、Overlay / Inner 系を前面に描く。同一 phase 内の順序を維持し、後続文字の影が先行文字を覆わないこと、角度 120° の右下方向、透明度、Node Clip 化前後を実画素と native QA で確認する。
   - [x] 作業ツリーの共通 renderer で描画順と本体 alpha mask を修正し、CPU working-linear 描画テスト 12件を通した。Stroke-only の空洞、Fill offset、半透明・透明 Fill、非等方変形、隣接文字の影を検証済み。Picture と source filter は1回構築して共有し、Fill/Stroke-only の直接描画経路は維持する。GPU のキャッシュ効果や 60 fps は未計測。
   - [x] 明示 Node Clip 変換を型付き Style 出力と Appearance Stack に統一した。Stroke-only + Shadow、Fill offset + Shadow、半透明 Fill + Shadow の変換前後の画素一致を 3件で検証した。汎用 Image Merge の意味と単独 Style の Image 出力は変更しない。

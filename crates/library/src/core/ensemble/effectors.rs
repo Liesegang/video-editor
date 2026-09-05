@@ -29,13 +29,7 @@ pub fn evaluate_configured_transform(
 ) -> Result<TransformData, LibraryError> {
     let mut transform = TransformData::identity();
     for config in configs {
-        let target = match config {
-            EffectorConfig::Transform { target, .. }
-            | EffectorConfig::StepDelay { target, .. }
-            | EffectorConfig::Opacity { target, .. }
-            | EffectorConfig::Randomize { target, .. }
-            | EffectorConfig::Tracking { target, .. } => *target,
-        };
+        let target = config.target();
         let (
             group_index,
             group_total,

@@ -89,184 +89,45 @@ impl SkiaRenderer {
             request.size,
             request.ensemble.is_some()
         ));
-        if let Some(ensemble_data) = request.ensemble
-            && ensemble_data.enabled
-        {
-            return self.create_ensemble_text_layer_surface(request, ensemble_data, mode);
-        }
-
-        let TextRasterRequest {
-            text,
-            size,
-            font_name,
-            styles,
-            transform,
-            ..
-        } = request;
-        let has_content = has_content_styles(styles);
-        let bounds = VectorLayerBounds::text(text, font_name, size as f32, styles);
-        let mask = if layer_styles::has_mask_styles(styles) {
-            Some(layer_styles::LayerMask::record(bounds, |canvas| {
-                if has_content {
-                    draw_text_body(
-                        &self.surface_contract,
-                        canvas,
-                        text,
-                        font_name,
-                        size as f32,
-                        styles,
-                    )
-                } else {
-                    draw_text_silhouette(
-                        &self.surface_contract,
-                        canvas,
-                        text,
-                        font_name,
-                        size as f32,
-                    )
-                }
-            })?)
-        } else {
-            None
-        };
-        let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
-        {
-            let canvas: &Canvas = layer.surface.canvas();
-            canvas.save();
-            canvas.concat(&build_transform_matrix(&transform));
-            if let Some(mask) = &mask {
-                self.draw_mask_style_phase(
-                    canvas,
-                    styles,
-                    layer_styles::CompositePhase::Underlay,
-                    mask,
-                )?;
-                if has_content {
-                    mask.draw_content(canvas);
-                }
-                self.draw_mask_style_phase(
-                    canvas,
-                    styles,
-                    layer_styles::CompositePhase::Overlay,
-                    mask,
-                )?;
-            } else {
-                draw_text_body(
-                    &self.surface_contract,
-                    canvas,
-                    text,
-                    font_name,
-                    size as f32,
-                    styles,
-                )?;
-            }
-            canvas.restore();
-        }
-        Ok(layer)
-    }
-
-    fn create_ensemble_text_layer_surface(
-        &mut self,
-        request: TextRasterRequest<'_>,
-        ensemble_data: &crate::core::ensemble::EnsembleData,
-        mode: VectorSurfaceMode,
-    ) -> Result<NativeLayer, LibraryError> {
-        use crate::core::ensemble::target::EffectorTarget;
-        use crate::core::ensemble::types::EffectorConfig;
-
-        let TextRasterRequest {
-            text,
-            size,
-            font_name,
-            styles,
-            transform,
-            current_time,
-            ..
-        } = request;
-        let current_time = current_time as f32;
-        log::debug!(
-            "Ensemble rendering: {} effectors, {} decorators",
-            ensemble_data.effector_configs.len(),
-            ensemble_data.decorator_configs.len()
-        );
-        for config in &ensemble_data.effector_configs {
-            let target = match config {
-                EffectorConfig::Transform { target, .. }
-                | EffectorConfig::StepDelay { target, .. }
-                | EffectorConfig::Opacity { target, .. }
-                | EffectorConfig::Randomize { target, .. }
-                | EffectorConfig::Tracking { target, .. } => target,
-            };
-            if *target == EffectorTarget::Parts {
-                return Err(LibraryError::Render(
-                    "Ensemble EffectorTarget::Parts is not supported".to_string(),
-                ));
-            }
-        }
-
-        let font_mgr = skia_safe::FontMgr::default();
-        let typeface = font_mgr
-            .match_family_style(font_name, skia_safe::FontStyle::default())
-            .or_else(|| font_mgr.legacy_make_typeface(None, skia_safe::FontStyle::default()))
-            .ok_or_else(|| {
-                LibraryError::Render(format!(
-                    "No usable font was found for Ensemble text family {font_name:?}"
-                ))
-            })?;
-        let font = skia_safe::Font::from_typeface(typeface, size as f32);
-        let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
-        let character_transforms =
-            evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
-        let has_content = has_content_styles(styles);
-        let bounds = VectorLayerBounds::ensemble(
-            &runtime_text,
-            &character_transforms,
-            &font,
-            styles,
-            &ensemble_data.decorator_configs,
+        let body = super::vector_text_body::TextBody::resolve(
+            request.text,
+            request.font_name,
+            request.size as f32,
+            request.ensemble,
+            request.current_time as f32,
         )?;
-        let mask = if layer_styles::has_mask_styles(styles) {
+        let decorators = request
+            .ensemble
+            .filter(|ensemble| ensemble.enabled)
+            .map_or(&[][..], |ensemble| ensemble.decorator_configs.as_slice());
+        let has_content = has_content_styles(request.styles);
+        let bounds = VectorLayerBounds::text_body(&body, request.styles, decorators)?;
+        let mask = if layer_styles::has_mask_styles(request.styles) {
             Some(layer_styles::LayerMask::record(bounds, |canvas| {
                 if has_content {
-                    draw_ensemble_text_body(
-                        &self.surface_contract,
-                        canvas,
-                        &runtime_text,
-                        &character_transforms,
-                        &font,
-                        styles,
-                    )
+                    body.draw_body(&self.surface_contract, canvas, request.styles)
                 } else {
-                    draw_ensemble_text_silhouette(
-                        &self.surface_contract,
-                        canvas,
-                        &runtime_text,
-                        &character_transforms,
-                        &font,
-                    )
+                    body.draw_silhouette(&self.surface_contract, canvas)
                 }
             })?)
         } else {
             None
         };
-
-        let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
-        {
-            let canvas: &Canvas = layer.surface.canvas();
-            canvas.save();
-            canvas.concat(&build_transform_matrix(&transform));
-
+        let mut layer = self.create_vector_surface(mode, bounds.visual, request.transform)?;
+        let canvas: &Canvas = layer.surface.canvas();
+        with_restored_canvas(canvas, |canvas| -> Result<(), LibraryError> {
+            canvas.concat(&build_transform_matrix(&request.transform));
             legacy_backplate::draw_text_backplates(
                 canvas,
-                &runtime_text,
-                &character_transforms,
-                &ensemble_data.decorator_configs,
+                &body.layout.metadata,
+                &body.transforms,
+                decorators,
                 &self.surface_contract,
             )?;
             if let Some(mask) = &mask {
                 self.draw_mask_style_phase(
                     canvas,
-                    styles,
+                    request.styles,
                     layer_styles::CompositePhase::Underlay,
                     mask,
                 )?;
@@ -275,22 +136,15 @@ impl SkiaRenderer {
                 }
                 self.draw_mask_style_phase(
                     canvas,
-                    styles,
+                    request.styles,
                     layer_styles::CompositePhase::Overlay,
                     mask,
                 )?;
             } else {
-                draw_ensemble_text_body(
-                    &self.surface_contract,
-                    canvas,
-                    &runtime_text,
-                    &character_transforms,
-                    &font,
-                    styles,
-                )?;
+                body.draw_body(&self.surface_contract, canvas, request.styles)?;
             }
-            canvas.restore();
-        }
+            Ok(())
+        })?;
         Ok(layer)
     }
 
@@ -407,118 +261,6 @@ impl SkiaRenderer {
         drop(layer);
         result
     }
-}
-
-fn draw_text_body(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    text: &str,
-    font_name: &str,
-    size: f32,
-    styles: &[crate::model::frame::entity::StyleConfig],
-) -> Result<(), LibraryError> {
-    for config in styles {
-        if config.style.composite_phase() != layer_styles::CompositePhase::Body {
-            continue;
-        }
-        let paint = PaintFactory::new(contract).text_paint(&config.style, 1.0, None)?;
-        let paragraph = build_text_paragraph(text, font_name, size, Some(&paint));
-        paragraph.paint(canvas, (0.0, 0.0));
-    }
-    Ok(())
-}
-
-fn draw_text_silhouette(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    text: &str,
-    font_name: &str,
-    size: f32,
-) -> Result<(), LibraryError> {
-    let mut paint = Paint::default();
-    skia_working_surface::set_paint_authored_color(&mut paint, contract, &Color::white(), 1.0)?;
-    paint.set_anti_alias(true);
-    let paragraph = build_text_paragraph(text, font_name, size, Some(&paint));
-    paragraph.paint(canvas, (0.0, 0.0));
-    Ok(())
-}
-
-fn draw_ensemble_text_body(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    runtime_text: &crate::model::frame::runtime_shape::RuntimeTextShape,
-    transforms: &[crate::core::ensemble::TransformData],
-    font: &skia_safe::Font,
-    styles: &[crate::model::frame::entity::StyleConfig],
-) -> Result<(), LibraryError> {
-    for config in styles {
-        if config.style.composite_phase() != layer_styles::CompositePhase::Body {
-            continue;
-        }
-        for (character, transform) in runtime_text.elements.iter().zip(transforms) {
-            let center = Point::new(
-                character.bounds.left + character.advance / 2.0,
-                (character.bounds.top + character.bounds.bottom) / 2.0,
-            );
-            canvas.save();
-            canvas.translate((center.x, center.y));
-            canvas.translate(transform.translate);
-            canvas.rotate(transform.rotate, None);
-            canvas.scale(transform.scale);
-            canvas.translate((-center.x, -center.y));
-            let paint = PaintFactory::new(contract).text_paint(
-                &config.style,
-                transform.opacity,
-                transform.color_override.as_ref(),
-            )?;
-            // TODO: draw SkParagraph shaping runs with source mapping.
-            canvas.draw_str(
-                &character.source,
-                (character.bounds.left, character.baseline),
-                font,
-                &paint,
-            );
-            canvas.restore();
-        }
-    }
-    Ok(())
-}
-
-fn draw_ensemble_text_silhouette(
-    contract: &SkiaSurfaceContract,
-    canvas: &Canvas,
-    runtime_text: &crate::model::frame::runtime_shape::RuntimeTextShape,
-    transforms: &[crate::core::ensemble::TransformData],
-    font: &skia_safe::Font,
-) -> Result<(), LibraryError> {
-    for (character, transform) in runtime_text.elements.iter().zip(transforms) {
-        let center = Point::new(
-            character.bounds.left + character.advance / 2.0,
-            (character.bounds.top + character.bounds.bottom) / 2.0,
-        );
-        canvas.save();
-        canvas.translate((center.x, center.y));
-        canvas.translate(transform.translate);
-        canvas.rotate(transform.rotate, None);
-        canvas.scale(transform.scale);
-        canvas.translate((-center.x, -center.y));
-        let mut paint = Paint::default();
-        skia_working_surface::set_paint_authored_color(
-            &mut paint,
-            contract,
-            &Color::white(),
-            transform.opacity,
-        )?;
-        paint.set_anti_alias(true);
-        canvas.draw_str(
-            &character.source,
-            (character.bounds.left, character.baseline),
-            font,
-            &paint,
-        );
-        canvas.restore();
-    }
-    Ok(())
 }
 
 fn has_content_styles(styles: &[crate::model::frame::entity::StyleConfig]) -> bool {

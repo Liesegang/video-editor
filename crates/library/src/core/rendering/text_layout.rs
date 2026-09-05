@@ -10,10 +10,29 @@ use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimeLine, RuntimeTextElement, RuntimeTextShape,
 };
 
+mod shaped_runs;
+
+pub(crate) use shaped_runs::ShapedTextLayout;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextLayoutMetrics {
     pub width: f32,
     pub height: f32,
+}
+
+#[derive(Clone)]
+struct ElementSource {
+    source: String,
+    utf8_range: std::ops::Range<usize>,
+    utf16_range: std::ops::Range<usize>,
+    line_index: usize,
+    line_element_index: usize,
+}
+
+#[derive(Clone)]
+struct LineSource {
+    utf8_range: std::ops::Range<usize>,
+    utf16_range: std::ops::Range<usize>,
 }
 
 /// Build the Paragraph used by both measurement and standard text painting.
@@ -53,67 +72,34 @@ pub fn measure_text_layout(text: &str, primary_font_name: &str, size: f32) -> Te
     }
 }
 
-/// Measure the exact local ink painted by the production Paragraph.
-///
-/// SkParagraph reports each glyph's bounds around its own origin. The run
-/// origin and glyph position are therefore both part of the final local
-/// rectangle. Logical selection boxes are deliberately not used here: a
-/// normalized layer style belongs to visible object ink, not whitespace or
-/// the Composition.
-pub(crate) fn measure_text_ink_bounds(text: &str, primary_font_name: &str, size: f32) -> Rect {
-    let mut paragraph = build_text_paragraph(text, primary_font_name, size, None);
-    let mut ink_bounds: Option<Rect> = None;
-    paragraph.extended_visit(|_, info| {
-        let Some(info) = info else {
-            return;
-        };
-        let origin = info.origin();
-        for (position, bounds) in info.positions().iter().zip(info.bounds()) {
-            if bounds.is_empty() {
-                continue;
-            }
-            let glyph_bounds = bounds.with_offset((origin.x + position.x, origin.y + position.y));
-            ink_bounds = Some(ink_bounds.map_or(glyph_bounds, |mut current| {
-                current.join(glyph_bounds);
-                current
-            }));
-        }
-    });
-    ink_bounds.unwrap_or_else(Rect::new_empty)
-}
-
 /// The authored style stack can paint outside the Paragraph's logical box.
 /// Return the largest symmetric expansion used by the actual text paints.
 pub fn text_style_outset(styles: &[StyleConfig]) -> f32 {
     crate::model::frame::appearance::appearance_outsets(styles).visual
 }
 
-/// Resolve render-only Unicode grapheme metadata from the same Paragraph used
-/// by normal text painting. Glyph IDs/outlines remain SkParagraph-owned: this
-/// function does not pretend that a grapheme and a shaped glyph are 1:1.
+/// Resolve render-only text-element metadata from the production shaping owner.
+///
+/// Elements start at Unicode grapheme boundaries, then adjacent graphemes
+/// crossed by one SkParagraph shaping cluster are kept atomic. This preserves
+/// contextual shaping without pretending that a grapheme and a glyph are 1:1.
 pub(crate) fn layout_runtime_text_shape(
     text: &str,
     primary_font_name: &str,
     size: f32,
 ) -> RuntimeTextShape {
-    let paragraph = build_text_paragraph(text, primary_font_name, size, None);
+    ShapedTextLayout::new(text, primary_font_name, size).metadata
+}
+
+pub(super) fn runtime_text_shape_from_paragraph(
+    paragraph: &Paragraph,
+    text: &str,
+    primary_font_name: &str,
+    size: f32,
+    glyph_source_starts: &[usize],
+) -> RuntimeTextShape {
     let lines = paragraph.get_line_metrics();
-    #[derive(Clone)]
-    struct ElementSource<'a> {
-        source: &'a str,
-        utf8_range: std::ops::Range<usize>,
-        utf16_range: std::ops::Range<usize>,
-        line_index: usize,
-        line_element_index: usize,
-    }
-
-    #[derive(Clone)]
-    struct LineSource {
-        utf8_range: std::ops::Range<usize>,
-        utf16_range: std::ops::Range<usize>,
-    }
-
-    let mut sources = Vec::new();
+    let mut grapheme_sources = Vec::new();
     let mut line_sources = Vec::new();
     let mut line_index = 0_usize;
     let mut line_element_index = 0_usize;
@@ -136,8 +122,8 @@ pub(crate) fn layout_runtime_text_shape(
             line_utf16_start = utf16_end;
             continue;
         }
-        sources.push(ElementSource {
-            source: grapheme,
+        grapheme_sources.push(ElementSource {
+            source: grapheme.to_string(),
             utf8_range: utf8_start..utf8_end,
             utf16_range: utf16_start..utf16_end,
             line_index,
@@ -149,6 +135,9 @@ pub(crate) fn layout_runtime_text_shape(
         utf8_range: line_utf8_start..text.len(),
         utf16_range: line_utf16_start..utf16_index,
     });
+
+    let cluster_spans = resolved_cluster_spans(paragraph, glyph_source_starts, text);
+    let sources = merge_sources_crossed_by_clusters(grapheme_sources, &cluster_spans);
 
     let block_group_id = stable_text_group_id(
         0x42,
@@ -218,7 +207,7 @@ pub(crate) fn layout_runtime_text_shape(
             source.line_element_index,
         );
         elements.push(RuntimeTextElement {
-            source: source.source.to_string(),
+            source: source.source,
             utf8_range: source.utf8_range,
             utf16_range: source.utf16_range,
             line_index: source.line_index,
@@ -283,6 +272,115 @@ pub(crate) fn layout_runtime_text_shape(
     }
 }
 
+fn resolved_cluster_spans(
+    paragraph: &Paragraph,
+    glyph_source_starts: &[usize],
+    text: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let mut spans = glyph_source_starts
+        .iter()
+        .copied()
+        .filter(|start| *start < text.len() && text.is_char_boundary(*start))
+        .filter_map(|start| paragraph.get_glyph_cluster_at(start))
+        .map(|cluster| cluster.text_range.start..cluster.text_range.end)
+        .filter(|span| {
+            span.start < span.end
+                && span.end <= text.len()
+                && text.is_char_boundary(span.start)
+                && text.is_char_boundary(span.end)
+        })
+        .collect::<Vec<_>>();
+    spans.sort_unstable_by_key(|span| (span.start, span.end));
+    spans.dedup();
+
+    // A fallback run may contribute another glyph slice for the same logical
+    // cluster. Coalesce overlap, but never merge merely adjacent clusters.
+    let mut disjoint: Vec<std::ops::Range<usize>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        if let Some(last) = disjoint.last_mut()
+            && span.start < last.end
+        {
+            last.end = last.end.max(span.end);
+            continue;
+        }
+        disjoint.push(span);
+    }
+    disjoint
+}
+
+fn merge_sources_crossed_by_clusters(
+    mut sources: Vec<ElementSource>,
+    cluster_spans: &[std::ops::Range<usize>],
+) -> Vec<ElementSource> {
+    let mut merged = Vec::with_capacity(sources.len());
+    let mut source_index = 0_usize;
+    let mut cluster_index = 0_usize;
+    let mut line_index = usize::MAX;
+    let mut line_element_index = 0_usize;
+
+    while source_index < sources.len() {
+        let first = &sources[source_index];
+        while cluster_index < cluster_spans.len()
+            && cluster_spans[cluster_index].end <= first.utf8_range.start
+        {
+            cluster_index += 1;
+        }
+
+        let component_start = first.utf8_range.start;
+        let mut component_end = first.utf8_range.end;
+        let mut last_index = source_index;
+        let mut span_index = cluster_index;
+        loop {
+            let previous_end = component_end;
+            while let Some(span) = cluster_spans.get(span_index) {
+                if span.start >= component_end {
+                    break;
+                }
+                if component_start < span.end {
+                    component_end = component_end.max(span.end);
+                }
+                span_index += 1;
+            }
+            while let Some(next) = sources.get(last_index + 1) {
+                if next.line_index != first.line_index || next.utf8_range.start >= component_end {
+                    break;
+                }
+                last_index += 1;
+                component_end = component_end.max(next.utf8_range.end);
+            }
+            if component_end == previous_end {
+                break;
+            }
+        }
+        cluster_index = span_index;
+        let last = &sources[last_index];
+        if line_index != first.line_index {
+            line_index = first.line_index;
+            line_element_index = 0;
+        }
+        let utf8_range = first.utf8_range.start..last.utf8_range.end;
+        let utf16_range = first.utf16_range.start..last.utf16_range.end;
+        let source_line_index = first.line_index;
+        // Most elements are already atomic. Move their owned source into the
+        // result instead of allocating a second String for every grapheme.
+        let mut source = std::mem::take(&mut sources[source_index].source);
+        for next in &sources[source_index + 1..last_index + 1] {
+            source.push_str(&next.source);
+        }
+        merged.push(ElementSource {
+            source,
+            utf8_range,
+            utf16_range,
+            line_index: source_line_index,
+            line_element_index,
+        });
+        line_element_index += 1;
+        source_index = last_index + 1;
+    }
+
+    merged
+}
+
 fn stable_text_group_id(
     kind: u8,
     utf8_range: std::ops::Range<usize>,
@@ -311,7 +409,10 @@ fn stable_text_group_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{layout_runtime_text_shape, measure_text_ink_bounds, measure_text_layout};
+    use super::{
+        ElementSource, layout_runtime_text_shape, measure_text_layout,
+        merge_sources_crossed_by_clusters,
+    };
 
     #[test]
     fn paragraph_metrics_and_character_layout_share_multiline_baselines() {
@@ -357,12 +458,39 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_ink_bounds_exclude_surrounding_whitespace() {
-        let logical = measure_text_layout("  M  ", "Arial", 36.0);
-        let ink = measure_text_ink_bounds("  M  ", "Arial", 36.0);
-        assert!(!ink.is_empty());
-        assert!(ink.left > 0.0);
-        assert!(ink.right < logical.width);
-        assert!(ink.height() < logical.height);
+    fn cluster_and_grapheme_overlaps_form_one_transitive_atomic_component() {
+        let text = "abcdef";
+        let sources = vec![
+            ElementSource {
+                source: "abc".to_string(),
+                utf8_range: 0..3,
+                utf16_range: 0..3,
+                line_index: 0,
+                line_element_index: 0,
+            },
+            ElementSource {
+                source: "de".to_string(),
+                utf8_range: 3..5,
+                utf16_range: 3..5,
+                line_index: 0,
+                line_element_index: 1,
+            },
+            ElementSource {
+                source: "f".to_string(),
+                utf8_range: 5..6,
+                utf16_range: 5..6,
+                line_index: 0,
+                line_element_index: 2,
+            },
+        ];
+        let clusters = vec![0..1, 1..4, 4..6];
+
+        let merged = merge_sources_crossed_by_clusters(sources, &clusters);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, text);
+        assert_eq!(merged[0].utf8_range, 0..6);
+        assert_eq!(merged[0].utf16_range, 0..6);
+        assert_eq!(merged[0].line_element_index, 0);
     }
 }

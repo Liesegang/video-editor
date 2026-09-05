@@ -203,7 +203,7 @@ def visible_inspector_control(client, component_id):
     component = inside_panel()
     for _ in range(8):
         if component is not None:
-            return component
+            return client.wait_component_settled(component_id)[1]
         client.scroll_component("inspector.scroll_area", 0.0, -360.0)
         component = inside_panel()
     raise QaFailure("could not bring {} into the Inspector viewport".format(component_id))

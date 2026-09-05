@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-05
-- Updated: 2026-09-06（共通 alpha mask、Path part の透明度、描画範囲）
+- Updated: 2026-09-06（共通 alpha mask、描画範囲、Text の組版共有）
 - Owners: Core Model / Renderer / Motion UX（担当者未指定）
 - Depends on: ADR 0001、ADR 0007
 
@@ -252,6 +252,30 @@ Fill/Strokeだけのレイヤーには、mask用の描画記録を追加しな�
 Styleの透明度を書き換えたり、partごとのFrameObjectへ分割したりすると、影の透明度の二重適用や描画順の逆転を起こす。
 このため、評価済みのpartを既存のShape描画要求へ保持し、レイヤーのEffectも合成後に一回だけ適用する。
 これは実行時の描画データであり、二つ目の編集モデルではない。
+
+### Textの組版とEnsemble
+
+通常TextとEnsemble Textは、一つのSkParagraphから得た字形を同じ描画処理で使う。
+文字列全体を組版した後、Paragraphの描画用TextBlobから実際のFont、glyph ID、位置、行原点、UTF-8の対応範囲を取得する。
+Ensembleはこの字形の変形と色を変更し、切り出した文字列を別のFontで組版し直さない。
+このため、何も変化させないTransformや完了後のStep Delayだけで字詰めや代替フォントが変わる二経路を持たない。
+
+EnsembleのChar単位は、Unicodeの書記素を字形のcluster境界に合わせた**不可分な文字要素**とする。
+一つの合字が複数の書記素にまたがる場合は、その全範囲を一要素として扱う。
+結合文字や絵文字の途中を独立して移動したり、合字の後半に指定された変更を黙って無視したりしない。
+要素は論理的なUTF-8/UTF-16範囲と行内順序を持ち、描画は元の視覚的なrun順序を維持する。
+Tracking、Step Delay、手動patchはこの同じ要素を対象にする。
+
+本体描画はStyleの順序を外側に、連続する字形のrunを内側にして行う。
+同じ変形と色を持つ隣接字形はまとめて描くが、Fontや字形の位置は変更しない。
+通常Textだけを別の描画関数へ逃がすidentity判定は設けない。
+本体alphaと影も、この共通描画を使う。
+字形の描画と外形計算は既存のTransformから得た同じaffineを使用する。
+
+Fontとglyphを含む組版結果はrender-localな派生値とする。
+Projectに二つ目の文字モデルを保存せず、使われていないEnsemble専用のChar/Line/Textモデルは削除する。
+検証には通常Textとneutral Ensembleの比較に加え、独立してParagraphを直接描くテストを残す。
+二つの新経路が同じ誤りを持っていても、相互比較だけでは検出できないためである。
 
 ### 外形と描画範囲
 

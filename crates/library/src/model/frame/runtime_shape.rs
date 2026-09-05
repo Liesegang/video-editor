@@ -16,8 +16,9 @@ use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::entity::{
     FrameBounds, FrameContent, FrameObject, FramePathPart, StyleConfig,
 };
-use crate::model::frame::transform::Transform;
+use crate::model::frame::transform::{Position, Scale, Transform};
 use crate::model::path::PathValue;
+use crate::rendering::renderer::Affine2D;
 
 mod backplate;
 
@@ -110,13 +111,10 @@ fn shape_visual_outset(styles: &[StyleConfig], path_effects: &[PathEffect]) -> f
         + crate::model::frame::appearance::path_effect_outset(path_effects)
 }
 
-/// One Unicode grapheme element. It may contain multiple Unicode scalars, and
-/// deliberately does not claim to expose shaped glyph IDs or outlines. The
-/// normal non-Ensemble raster path shapes the whole source with SkParagraph.
-/// The current Ensemble path re-renders each grapheme with `Font::draw_str`,
-/// so it does not preserve ligatures or contextual shaping across elements.
-/// TODO: carry real SkParagraph shaping-run/source mapping before applying
-/// per-element transforms to complex scripts.
+/// One atomic shaped element in logical source order. Graphemes crossed by a
+/// shaping cluster (for example a ligature) form one element and animate
+/// together. Its exact source ranges identify the whole element; font and
+/// glyph resources stay render-local, and rendering never reshapes its source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeTextElement {
     /// Exact source slice represented by this element.
@@ -203,6 +201,15 @@ pub fn evaluate_text_element_transforms(
     ensemble: &EnsembleData,
     current_time: f32,
 ) -> Result<Vec<TransformData>, LibraryError> {
+    if ensemble
+        .effector_configs
+        .iter()
+        .any(|config| config.target() == crate::core::ensemble::target::EffectorTarget::Parts)
+    {
+        return Err(LibraryError::Render(
+            "Ensemble EffectorTarget::Parts is not supported".to_string(),
+        ));
+    }
     text.elements
         .iter()
         .map(|element| {
@@ -257,13 +264,32 @@ fn bounds_center(bounds: RuntimeBounds) -> skia_safe::Point {
     )
 }
 
+/// The same authored transform convention drives glyph paint and its bounds.
+pub(crate) fn text_element_affine(center: skia_safe::Point, transform: &TransformData) -> Affine2D {
+    Affine2D::from(&Transform {
+        position: Position {
+            x: f64::from(center.x) + f64::from(transform.translate.0),
+            y: f64::from(center.y) + f64::from(transform.translate.1),
+        },
+        anchor: Position {
+            x: f64::from(center.x),
+            y: f64::from(center.y),
+        },
+        scale: Scale {
+            x: f64::from(transform.scale.0),
+            y: f64::from(transform.scale.1),
+        },
+        rotation: f64::from(transform.rotate),
+        opacity: f64::from(transform.opacity),
+    })
+}
+
 pub(crate) fn transform_bounds(
     bounds: RuntimeBounds,
     center: skia_safe::Point,
     transform: &TransformData,
 ) -> RuntimeBounds {
-    let radians = transform.rotate.to_radians();
-    let (sin, cos) = radians.sin_cos();
+    let affine = text_element_affine(center, transform);
     let mut transformed: Option<RuntimeBounds> = None;
     for (x, y) in [
         (bounds.left, bounds.top),
@@ -271,11 +297,8 @@ pub(crate) fn transform_bounds(
         (bounds.right, bounds.bottom),
         (bounds.left, bounds.bottom),
     ] {
-        let x = (x - center.x) * transform.scale.0;
-        let y = (y - center.y) * transform.scale.1;
-        let mapped_x = center.x + transform.translate.0 + x * cos - y * sin;
-        let mapped_y = center.y + transform.translate.1 + x * sin + y * cos;
-        let point = RuntimeBounds::new(mapped_x, mapped_y, mapped_x, mapped_y);
+        let (x, y) = affine.map_point(f64::from(x), f64::from(y));
+        let point = RuntimeBounds::new(x as f32, y as f32, x as f32, y as f32);
         transformed = Some(transformed.map_or(point, |current| current.union(point)));
     }
     transformed.unwrap_or_default()

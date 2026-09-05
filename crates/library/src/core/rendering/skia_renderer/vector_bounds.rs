@@ -1,18 +1,15 @@
 //! Tight local bounds for normalized vector-layer styles.
 
-use skia_safe::{Font, Rect};
+use skia_safe::Rect;
 
-use crate::core::ensemble::TransformData;
 use crate::core::ensemble::types::DecoratorConfig;
 use crate::error::LibraryError;
 use crate::model::frame::appearance::{AppearanceOutsets, appearance_outsets, path_effect_outset};
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
-    RuntimeBounds, RuntimeTextShape, measure_path_decorator_bounds, measure_text_decorator_bounds,
-    text_element_center, transform_bounds,
+    RuntimeBounds, measure_path_decorator_bounds, measure_text_decorator_bounds,
 };
-use crate::rendering::text_layout::measure_text_ink_bounds;
 
 const ANTIALIAS_OUTSET: f32 = 1.0;
 
@@ -28,60 +25,26 @@ pub(super) struct VectorLayerBounds {
 }
 
 impl VectorLayerBounds {
-    pub(super) fn text(text: &str, font_name: &str, size: f32, styles: &[StyleConfig]) -> Self {
-        let geometry = measure_text_ink_bounds(text, font_name, size);
-        if geometry.is_empty() {
-            return Self::empty();
-        }
-        Self::from_untransformed_geometry(geometry, appearance_outsets(styles), 0.0)
-    }
-
-    pub(super) fn ensemble(
-        text: &RuntimeTextShape,
-        transforms: &[TransformData],
-        font: &Font,
+    pub(super) fn text_body(
+        body: &super::vector_text_body::TextBody,
         styles: &[StyleConfig],
         decorators: &[DecoratorConfig],
     ) -> Result<Self, LibraryError> {
         let outsets = appearance_outsets(styles);
-        let mut geometry = None;
-        let mut content = None;
-        for (element, transform) in text.elements.iter().zip(transforms) {
-            if transform.opacity <= 0.0 {
-                continue;
-            }
-            let (_, ink) = font.measure_str(&element.source, None);
-            if ink.is_empty() {
-                continue;
-            }
-            let ink = RuntimeBounds::new(
-                ink.left + element.bounds.left,
-                ink.top + element.baseline,
-                ink.right + element.bounds.left,
-                ink.bottom + element.baseline,
-            );
-            let center = text_element_center(element);
-            let transformed_ink = transform_bounds(ink, center, transform);
-            geometry = Some(union_runtime(geometry, transformed_ink));
-            let transformed_body = transform_bounds(ink.expand(outsets.body), center, transform);
-            content = Some(union_runtime(content, transformed_body));
-        }
-
-        let Some(geometry) = geometry else {
-            return Ok(Self::empty()
-                .with_decorators(measure_text_decorator_bounds(text, transforms, decorators)?));
+        let decorators =
+            measure_text_decorator_bounds(&body.layout.metadata, &body.transforms, decorators)?;
+        let Some((geometry, content)) = body.local_bounds(outsets.body) else {
+            return Ok(Self::empty().with_decorators(decorators));
         };
-        // Stroke support follows the element transform, but antialiasing is a
-        // device-pixel concern. Reserve it after the transformed union so a
-        // strongly scaled-down glyph still cannot clip its edge coverage.
-        let content = expand(runtime_rect(content.unwrap_or(geometry)), ANTIALIAS_OUTSET);
-        let decoration = (outsets.visual - outsets.body).max(0.0);
+        // Stroke follows element transforms; antialiasing support is reserved
+        // after their union so a strongly scaled-down glyph cannot be clipped.
+        let content = expand(runtime_rect(content), ANTIALIAS_OUTSET);
         Ok(Self {
             geometry: runtime_rect(geometry),
             content,
-            visual: expand(content, decoration),
+            visual: expand(content, (outsets.visual - outsets.body).max(0.0)),
         }
-        .with_decorators(measure_text_decorator_bounds(text, transforms, decorators)?))
+        .with_decorators(decorators))
     }
 
     pub(super) fn path(
@@ -137,10 +100,6 @@ fn expand(bounds: Rect, amount: f32) -> Rect {
     bounds.with_outset((amount, amount))
 }
 
-fn union_runtime(current: Option<RuntimeBounds>, next: RuntimeBounds) -> RuntimeBounds {
-    current.map_or(next, |current| current.union(next))
-}
-
 fn runtime_rect(bounds: RuntimeBounds) -> Rect {
     Rect::new(bounds.left, bounds.top, bounds.right, bounds.bottom)
 }
@@ -169,6 +128,19 @@ mod tests {
     use crate::model::frame::entity::StyleConfig;
     use skia_safe::Rect;
     use uuid::Uuid;
+
+    #[test]
+    fn text_ink_bounds_exclude_surrounding_whitespace() {
+        let body =
+            super::super::vector_text_body::TextBody::resolve("  M  ", "Arial", 36.0, None, 0.0)
+                .expect("shape Text");
+        let logical = crate::rendering::text_layout::measure_text_layout("  M  ", "Arial", 36.0);
+        let bounds = VectorLayerBounds::text_body(&body, &[], &[]).expect("Text bounds");
+        assert!(!bounds.geometry.is_empty());
+        assert!(bounds.geometry.left > 0.0);
+        assert!(bounds.geometry.right < logical.width);
+        assert!(bounds.geometry.height() < logical.height);
+    }
 
     #[test]
     fn small_path_bounds_stay_tight_and_finite() {
