@@ -50,10 +50,16 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 ### 現行 UI の退行復旧（2026-09-05、新機能より優先）
 
-- [ ] Node 本体・header の右クリックから削除・状態編集を使え、Delete/Backspace が縮小表示でも動くようにする。既存 Snarl の node-menu hook と共通 interaction を拡張し、別の context-menu surface を作らない。必須 Output/host boundary のみ保護し、その理由を表示する。通常 Node と接続の削除、一回 Undo、公開 parameter/instance override がある場合の整合性を service と native HTTP QA で検証する。
+2026-09-06 の統合実装を `e3eb841` として main へ push した。
+Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict Clippy、fmt、805 ファイルの 1,000 行制限検査も通過した。
+最新 release build の native HTTP QA は全 24 シナリオが成功した（`target/qa-runs/20260906T-integrated-authoring-final`）。
+同 run の app/suite log に error、panic、描画失敗はない。
+これは検証済みの編集操作と描画の記録であり、以下の未完了項目や 60 fps、全ペルソナの受入完了を意味しない。
+
+- [x] Node 本体・header の右クリックから削除・状態編集を使え、Delete/Backspace が縮小表示でも動くようにする。既存 Snarl の node-menu hook と共通 interaction を拡張し、別の context-menu surface を作らない。必須 Output/host boundary のみ保護し、その理由を表示する。通常 Node と接続の削除、一回 Undo、公開 parameter/instance override がある場合の整合性を service と native HTTP QA で検証する。
   - [x] 削除 service を選択単位の一つの transaction にし、Published Interface、instance override、Timeline automation、media binding の依存整理を共通化した。private/COW/shared、複数 Node の Undo/Redo、必須 Output を含む不正な batch の原子的拒否を 6 件で検証し、`3526bfc` を main へ push 済み。
-  - UI の追加検証は `target/qa-runs/20260906T-node-batch-overview/node-editor` で PASS。body 右クリック、Delete、公開 parameter を持つ Source の削除、複数選択の一回 Undo、Output 保護、縮小 overview の Backspace を含む。UI 側の統合変更は後続 commit の gate に残す。
-- [ ] 選択 edge の通常描画・ハイライト・hit-test・切断・再接続 handle を共通 wire geometry へ統一し、拡大縮小後も実画面上で一致することを確認する。
+  - UI の追加検証は `target/qa-runs/20260906T-integrated-authoring-final/node-editor` で PASS。body 右クリック、Delete、公開 parameter を持つ Source の削除、複数選択の一回 Undo、Output 保護、縮小 overview の Backspace を含む。非対応 Node の bypass は model validation が原子的に拒否し、COW と履歴を保つ。既存の型保持 bypass と disabled は維持する。
+- [x] 選択 edge の通常描画・ハイライト・hit-test・切断・再接続 handle を共通 wire geometry へ統一し、拡大縮小後も実画面上で一致することを確認する。
 - [ ] Track header の Eye で映像の表示を切り替え、Audio は維持する。header drag では展開中の Clip/property を含む Track block の実配置を押下中から予告し、release 時だけ一回の並べ替えを commit する。Clip の時間配置不変、Escape、Undo、画素の変化を確認する。
 - [ ] Assets と Timeline の footer は共通 panel allocation を使い、panel 外への漏れ・不要な scrollbar・縦位置の不揃いを修正する。Preview toolbar も既存 tool 群を整列し、頂点種類は右クリックから選べるようにする。
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
@@ -62,15 +68,20 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。不動作は再現していない。一方、neutral Ensemble と空 stack の文字描画差（文字単位描画と SkParagraph の差）は残っており、別の描画回帰として解消する。
 - [ ] Drop Shadow が文字本体の上へ描かれる不具合を修正する。Shape / Text / Ensemble Text 共通で影・外側光彩を背面、本体を中間、Overlay / Inner 系を前面に描く。同一 phase 内の順序を維持し、後続文字の影が先行文字を覆わないこと、角度 120° の右下方向、透明度、Node Clip 化前後を実画素と native QA で確認する。
   - [x] 作業ツリーの共通 renderer で描画順と本体 alpha mask を修正し、CPU working-linear 描画テスト 12件を通した。Stroke-only の空洞、Fill offset、半透明・透明 Fill、非等方変形、隣接文字の影を検証済み。Picture と source filter は1回構築して共有し、Fill/Stroke-only の直接描画経路は維持する。GPU のキャッシュ効果や 60 fps は未計測。
-  - [ ] 明示 Node Clip 変換が Style を独立 Image branch にする経路について、Stroke-only + Shadow と半透明 Fill の画素一致を追加検証する。opaque Fill の parity だけで完了とせず、汎用 Image Merge の意味を変える特例を入れない。
-  - [ ] 最新 renderer の実 GPU parity と native QA を再実行する。Appearance の保存→通常終了→新プロセス起動→同一 Project/Style ID/画素の再読込み QA は追加済みで、実行待ち。
+  - [x] 明示 Node Clip 変換を型付き Style 出力と Appearance Stack に統一した。Stroke-only + Shadow、Fill offset + Shadow、半透明 Fill + Shadow の変換前後の画素一致を 3件で検証した。汎用 Image Merge の意味と単独 Style の Image 出力は変更しない。
+  - [ ] Backplate などの複数 Path part に異なる opacity がある場合も、一つの本体 mask から影を生成する。現状は part ごとの FrameObject 分割で影の opacity が二重適用され、後続 part の影が先行 part の本体を覆う可能性がある。path のグループを既存 model/renderer で保持し、重なった半透明 part の回帰テストで検証する。
+  - [x] 実 GPU surface と CPU の parity を、Stroke 空洞、半透明 Fill、blur を含む Shadow、平行移動で検証した。既存 Stroke の AA 差を独立した baseline で分離し、非 AA 部分は working RGBAF32 の 0.002 以下、空洞は 0.000001 以下で比較した。GPU の非等方変形と性能の証明は別 gate に残す。
+  - [x] Appearance の保存→通常終了→新プロセス起動→同一 Project/Style ID/画素の再読込み QA を完走した。direct/converted/fresh-process の各 3 地点の画素、Style ID・値・順序、保存ファイルの SHA が一致し、両プロセスは通常終了した（`target/qa-runs/20260906T-integrated-authoring-final/appearance`）。最初の実行で検出した色成分の 1 ULP の差は、JSON parser の `float_roundtrip` を有効化して修正し、binary64 の完全一致を回帰テストで確認した（`ab03bb0`）。QA の完全一致検証は緩めていない。
+  - [ ] 小さな Text/Shape の影でも全フレーム範囲へ filter と saveLayer を適用するコストを解消する。既存 geometry bounds と style outset を raster request へ渡し、実際の描画範囲だけを処理する。4K の小文字・多数 layer の割当量と latency を比較する。
+  - [ ] Gradient Overlay の既定 0→1 を Composition 全体ではなく、style outset を含まない本体の範囲へ正規化する。画面外 cull 用 bounds と Gradient 用 bounds を混同せず、異なる Composition サイズ、原点外配置、変形した Text/Shape/Ensemble で検証する。
+  - [ ] Outer Bevel/Emboss の bounds と実 renderer の blur kernel を共通の計算へ統一する。size > 0、depth = 0、soften = 0 でも実画素を Gizmo/hit bounds が含むことを検証する。
 - [ ] scalar/vector/timing/Paint の数値確定処理を共通化し、既存 DragValue の capture をそのまま使う。Appearance Distance の 28 px drag は実モデルに 7.2、履歴 revision 2 として確定済みだった。QA が Property の discriminator `type` を `evaluator` と誤読した失敗を修正し、推測で追加した二重 capture は除去した。領域外 release と Undo を含む native QA を継続する。
 - [x] 共通 Color Picker / Palette のドラッグが背後の Node 移動・接続・canvas pan/zoom へ漏れないようにした。背後の Output header と hue control を重ねて popup 外へドラッグし、色だけが変わり Node 位置・選択・pan/zoom が変わらないことを native QA で確認した（`target/qa-runs/20260905T-popup-drag-2/color-palette`）。共通 Node surface / viewport の回帰テストも追加した。
 - [x] Inspector の空白での通常左ドラッグによるスクロールを無効化した。ホイールとスクロールバーは維持し、native QA で実際にホイールでスクロールした後の空白ドラッグが offset を変えないことと数値・色編集を確認した（`target/qa-runs/20260905T-scroll-4/inspector-source`）。
 - [x] Timeline Clip の両端 trim を復旧した。drag threshold 通過後の座標ではなく press origin から移動／左右 trim を分類する。狭い Clip と画面外の端の単体テストに加え、両端の長さ変更・兄弟 Clip 不変・描画 geometry・Undo を native QA で確認した（`target/qa-runs/20260905T-trim-scroll/timeline-edit`）。
 - [ ] Text の明示 Node Clip 化前後で Content / Font / Font Size / Fill と Ensemble の編集能力を維持する。共通 descriptor と元の Ensemble UI を使い、認識可能な Text chain では構造操作を一つの graph transaction / Undo にする。
-- [ ] Node Editor に Assets の Image / Video / Audio を drag-and-drop で追加し、Asset identity と既存 media factory/runtime を共有する。
-  - Image の native drag/drop、同一 Asset 参照、Timeline 不変、1回の Undo を確認した（`target/qa-runs/20260906T-node-asset-drop`）。Audio/Video は stream 選択と出力 port の契約を検証中。stream index の `None` をメディア種別と誤認しない。
+- [x] Node Editor に Assets の Image / Video / Audio を drag-and-drop で追加し、Asset identity と既存 media factory/runtime を共有する。
+  - Image / Audio / Video の native drag/drop、同一 Asset 参照、選択した stream と出力 port、Timeline 不変、1回の Undo を確認した（`target/qa-runs/20260906T-integrated-authoring-final/node-editor`）。出力種別は明示し、stream index の `None` は選択した出力の既定 stream とする。
 - [ ] Node parameter の時計から Timeline 所有の keyframe を編集できるようにし、Inspector / Curve Editor と同じ automation を表示・編集する。
 - [x] Node header の enabled / bypass 操作を復旧し、状態表示だけのチェックマークにしない。native QA で bypass による画素変化と resume 後の元画素への一致を確認した。
 - [ ] Node header 全域の drag、選択しても動かない pin geometry、接続中 wire preview、marquee selection rectangle を共通 Node Editor surface で修正する。
