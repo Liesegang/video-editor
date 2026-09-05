@@ -1,4 +1,4 @@
-use eframe::egui::Ui;
+use eframe::egui::{DragValue, TextEdit, Ui};
 use library::animation::EasingFunction;
 
 #[derive(Clone, Copy)]
@@ -218,4 +218,88 @@ pub fn show_easing_menu(
             },
         );
     });
+}
+
+/// Exact variant label for edit surfaces where the selected family matters.
+pub fn easing_name(easing: &EasingFunction) -> &'static str {
+    match easing {
+        EasingFunction::Linear => "Linear",
+        EasingFunction::Constant => "Constant",
+        EasingFunction::EaseInSine => "Ease In Sine",
+        EasingFunction::EaseOutSine => "Ease Out Sine",
+        EasingFunction::EaseInOutSine => "Ease In Out Sine",
+        EasingFunction::EaseInQuad => "Ease In Quad",
+        EasingFunction::EaseOutQuad => "Ease Out Quad",
+        EasingFunction::EaseInOutQuad => "Ease In Out Quad",
+        EasingFunction::EaseInCubic => "Ease In Cubic",
+        EasingFunction::EaseOutCubic => "Ease Out Cubic",
+        EasingFunction::EaseInOutCubic => "Ease In Out Cubic",
+        EasingFunction::EaseInQuart => "Ease In Quart",
+        EasingFunction::EaseOutQuart => "Ease Out Quart",
+        EasingFunction::EaseInOutQuart => "Ease In Out Quart",
+        EasingFunction::EaseInQuint => "Ease In Quint",
+        EasingFunction::EaseOutQuint => "Ease Out Quint",
+        EasingFunction::EaseInOutQuint => "Ease In Out Quint",
+        EasingFunction::EaseInExpo => "Ease In Expo",
+        EasingFunction::EaseOutExpo => "Ease Out Expo",
+        EasingFunction::EaseInOutExpo => "Ease In Out Expo",
+        EasingFunction::EaseInCirc => "Ease In Circ",
+        EasingFunction::EaseOutCirc => "Ease Out Circ",
+        EasingFunction::EaseInOutCirc => "Ease In Out Circ",
+        EasingFunction::EaseInBack { .. } => "Ease In Back",
+        EasingFunction::EaseOutBack { .. } => "Ease Out Back",
+        EasingFunction::EaseInOutBack { .. } => "Ease In Out Back",
+        EasingFunction::EaseInElastic { .. } => "Ease In Elastic",
+        EasingFunction::EaseOutElastic { .. } => "Ease Out Elastic",
+        EasingFunction::EaseInOutElastic { .. } => "Ease In Out Elastic",
+        EasingFunction::EaseInBounce { .. } => "Ease In Bounce",
+        EasingFunction::EaseOutBounce { .. } => "Ease Out Bounce",
+        EasingFunction::EaseInOutBounce { .. } => "Ease In Out Bounce",
+        EasingFunction::SimpleBezier { .. } | EasingFunction::Bezier { .. } => "Custom Bezier",
+        EasingFunction::Expression { .. } => "Expression",
+    }
+}
+
+/// Edit the parameters carried by nontrivial easing variants. The caller
+/// owns transaction boundaries; this shared control only edits its draft.
+pub fn show_easing_parameters(ui: &mut Ui, easing: &mut EasingFunction) {
+    match easing {
+        EasingFunction::EaseInBack { c1 }
+        | EasingFunction::EaseOutBack { c1 }
+        | EasingFunction::EaseInOutBack { c1 } => {
+            if !c1.is_finite() {
+                *c1 = 1.70158;
+            }
+            ui.label("Overshoot");
+            ui.add(DragValue::new(c1).speed(0.01));
+        }
+        EasingFunction::EaseInElastic { period }
+        | EasingFunction::EaseOutElastic { period }
+        | EasingFunction::EaseInOutElastic { period } => {
+            if !period.is_finite() || *period <= 0.0 {
+                *period = 3.0;
+            }
+            ui.label("Period");
+            ui.add(DragValue::new(period).speed(0.01).range(0.1..=100.0));
+        }
+        EasingFunction::EaseInBounce { n1, d1 }
+        | EasingFunction::EaseOutBounce { n1, d1 }
+        | EasingFunction::EaseInOutBounce { n1, d1 } => {
+            if !n1.is_finite() || *n1 <= 0.0 {
+                *n1 = 7.5625;
+            }
+            if !d1.is_finite() || *d1 <= 0.0 {
+                *d1 = 2.75;
+            }
+            ui.label("Amplitude");
+            ui.add(DragValue::new(n1).speed(0.01).range(0.001..=10_000.0));
+            ui.label("Duration factor");
+            ui.add(DragValue::new(d1).speed(0.01).range(0.001..=10_000.0));
+        }
+        EasingFunction::Expression { text } => {
+            ui.label("Expression (t is 0.0 to 1.0)");
+            ui.add(TextEdit::multiline(text).code_editor().desired_rows(3));
+        }
+        _ => {}
+    }
 }

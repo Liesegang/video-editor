@@ -2,7 +2,7 @@ use egui::{
     Align, Color32, Id, Layout, Popup, PopupCloseBehavior, PopupKind, Rect, Response, Sense, Stroke,
 };
 use egui_phosphor::regular as icons;
-use library::model::authoring::{PaintDefinition, PaintDefinitionId, ProjectPalette};
+use library::model::authoring::{Paint, PaintDefinition, PaintDefinitionId, ProjectPalette};
 use library::model::property::ColorValue;
 
 use super::PaletteUiIntent;
@@ -79,7 +79,11 @@ pub(super) fn show_palette(
     let mut swatches = Vec::new();
     let mut context_geometry = None;
     let mut context_owns_click = false;
-    let definitions = palette.ungrouped_definitions().collect::<Vec<_>>();
+    let definitions = palette
+        .ungrouped_definitions()
+        .enumerate()
+        .filter(|(_, definition)| matches!(definition.paint, Paint::Solid(_)))
+        .collect::<Vec<_>>();
 
     ui.add_space(4.0);
     if definitions.is_empty() {
@@ -92,7 +96,9 @@ pub(super) fn show_palette(
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                    for (index, definition) in definitions.iter().enumerate() {
+                    for (visible_index, (palette_index, definition)) in
+                        definitions.iter().enumerate()
+                    {
                         let response = swatch(ui, definition);
                         swatches.push((definition.id, response.rect));
                         response.dnd_set_drag_payload(PaletteDragPayload {
@@ -101,7 +107,7 @@ pub(super) fn show_palette(
 
                         let dragging = egui::DragAndDrop::payload::<PaletteDragPayload>(ui.ctx())
                             .is_some_and(|payload| payload.definition_id == definition.id);
-                        register_swatch_qa(ui, definition, &response, dragging, index);
+                        register_swatch_qa(ui, definition, &response, dragging, visible_index);
 
                         if response.clicked() {
                             selected = palette.solid_color(definition.id);
@@ -117,7 +123,14 @@ pub(super) fn show_palette(
                                     .unwrap_or(response.rect.center()),
                             });
                         }
-                        reorder_target(ui, palette, definition, index, &response, &mut intent);
+                        reorder_target(
+                            ui,
+                            palette,
+                            definition,
+                            *palette_index,
+                            &response,
+                            &mut intent,
+                        );
                     }
                 });
             });
@@ -245,7 +258,9 @@ fn swatch(ui: &mut egui::Ui, definition: &PaintDefinition) -> Response {
 }
 
 fn display_color(definition: &PaintDefinition) -> Option<Color32> {
-    let library::model::authoring::Paint::Solid(color) = &definition.paint;
+    let Paint::Solid(color) = &definition.paint else {
+        return None;
+    };
     let [red, green, blue, alpha] = library::color_management::to_display_srgb(color).ok()?;
     Some(Color32::from_rgba_unmultiplied(
         channel(red),

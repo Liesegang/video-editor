@@ -24,11 +24,12 @@ use crate::model::frame::color::Color;
 use crate::model::node::Node;
 use crate::model::path::{FillRule, PathContour, PathPoint, PathSegment, PathValue};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
-use crate::model::property::{ColorValue, PropertyValue, Vec2};
+use crate::model::property::{ColorValue, Property, PropertyValue, Vec2};
 use crate::plugin::PluginManager;
 
 use super::{
-    AuthoringPropertyOwner, ModuleItemPlacement, ModuleNodeRequest, TimelineEditorService,
+    AppearanceOperationFactory, AuthoringPropertyOwner, ModuleItemPlacement, ModuleNodeRequest,
+    TimelineEditorService,
 };
 
 pub const AUTHORING_E2E_FIXTURE: &str = "authoring_e2e";
@@ -146,6 +147,7 @@ pub fn build_authoring_e2e_fixture(
         "QA Text".to_string(),
         SourceRef::Text {
             text: "Authoring QA".to_string(),
+            appearance_operations: vec![default_fill(plugins, None)?],
             ensemble_operations: Vec::new(),
         },
         interval(1, 7)?,
@@ -342,6 +344,7 @@ pub fn build_authoring_audio_e2e_fixture(
             shape: ShapeSource {
                 shape_kind: ShapeKind::Rectangle,
                 parameters: HashMap::new(),
+                appearance_operations: vec![default_fill(plugins, None)?],
             },
         },
         interval(0, 3)?,
@@ -416,8 +419,8 @@ pub fn build_authoring_path_e2e_fixture(
                     ("path".to_string(), PropertyValue::Path(path)),
                     ("width".to_string(), PropertyValue::from(160.0)),
                     ("height".to_string(), PropertyValue::from(90.0)),
-                    ("color".to_string(), color_value(rgba8(255, 185, 45, 255))),
                 ]),
+                appearance_operations: vec![default_fill(plugins, Some(rgba8(255, 185, 45, 255)))?],
             },
         },
         interval(0, 3)?,
@@ -574,6 +577,18 @@ fn vec2_value(x: f64, y: f64) -> PropertyValue {
 
 fn color_value(color: Color) -> PropertyValue {
     PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color))
+}
+
+fn default_fill(
+    plugins: &PluginManager,
+    color: Option<Color>,
+) -> Result<crate::model::authoring::AppearanceOperation, LibraryError> {
+    let mut fill = AppearanceOperationFactory::create(plugins, "fill")?;
+    if let Some(color) = color {
+        fill.properties
+            .set("color".to_string(), Property::constant(color_value(color)));
+    }
+    Ok(fill)
 }
 
 fn rgba8(r: u8, g: u8, b: u8, a: u8) -> Color {

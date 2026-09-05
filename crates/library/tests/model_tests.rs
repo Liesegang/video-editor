@@ -11,7 +11,8 @@ use library::model::project::{
 };
 use library::model::property::{Property, PropertyMap, PropertyValue, Vec2, Vec3, Vec4};
 use library::model::{
-    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent, Track,
+    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, MediaOutputSelection, Node,
+    NodeContent, Track,
 };
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -111,10 +112,27 @@ fn every_vector_arity_roundtrips_without_collapsing_to_vec2() -> Result<()> {
 }
 
 #[test]
+fn media_output_selection_is_required_pre_v1_state() -> Result<()> {
+    let asset_id = Uuid::new_v4();
+    let missing_output_selection = serde_json::json!({
+        "asset_id": asset_id,
+        "stream_index": 0,
+        "audio_stream_index": 2
+    });
+    let error = match serde_json::from_value::<MediaContent>(missing_output_selection) {
+        Ok(_) => bail!("MediaContent without output_selection unexpectedly decoded"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("output_selection"));
+    Ok(())
+}
+
+#[test]
 fn media_audio_stream_selection_is_required_pre_v1_state() -> Result<()> {
     let asset_id = Uuid::new_v4();
     let missing_audio_stream = serde_json::json!({
         "asset_id": asset_id,
+        "output_selection": "image_and_audio",
         "stream_index": 0
     });
     let error = match serde_json::from_value::<MediaContent>(missing_audio_stream) {
@@ -125,9 +143,11 @@ fn media_audio_stream_selection_is_required_pre_v1_state() -> Result<()> {
 
     let media = serde_json::from_value::<MediaContent>(serde_json::json!({
         "asset_id": asset_id,
+        "output_selection": "image_and_audio",
         "stream_index": 0,
         "audio_stream_index": 2
     }))?;
+    assert_eq!(media.output_selection, MediaOutputSelection::ImageAndAudio);
     assert_eq!(media.stream_index, Some(0));
     assert_eq!(media.audio_stream_index, Some(2));
     Ok(())

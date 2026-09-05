@@ -152,6 +152,7 @@ fn sound_analysis_drives_numeric_property_wire_and_preserves_spectrum_identity()
         "tone",
         MediaContent {
             asset_id: asset.id,
+            output_selection: crate::model::MediaOutputSelection::Audio,
             stream_index: None,
             audio_stream_index: None,
         },
@@ -415,6 +416,7 @@ fn analysis_window_uses_composition_time_before_clip_stretch_and_explicit_fmod()
         "ramp",
         MediaContent {
             asset_id: asset.id,
+            output_selection: crate::model::MediaOutputSelection::Audio,
             stream_index: None,
             audio_stream_index: None,
         },
@@ -537,6 +539,7 @@ fn off_grid_analysis_time_uses_actual_clip_activity_not_quantized_window_center(
         "tone",
         MediaContent {
             asset_id: asset.id,
+            output_selection: crate::model::MediaOutputSelection::Audio,
             stream_index: None,
             audio_stream_index: None,
         },
@@ -619,6 +622,7 @@ fn sound_rms_changes_a_real_image_transform_property_with_audio_level() {
         "two levels",
         MediaContent {
             asset_id: asset.id,
+            output_selection: crate::model::MediaOutputSelection::Audio,
             stream_index: None,
             audio_stream_index: None,
         },

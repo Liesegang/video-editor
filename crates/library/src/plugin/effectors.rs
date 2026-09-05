@@ -8,21 +8,30 @@ use crate::plugin::{
 use uuid::Uuid;
 
 fn target_property() -> PropertyDefinition {
+    target_property_with_default("Block")
+}
+
+fn target_property_with_default(default: &str) -> PropertyDefinition {
     PropertyDefinition::new(
         "target",
         PropertyUiType::Dropdown {
             options: vec!["Block".to_string(), "Line".to_string(), "Char".to_string()],
         },
         "Target",
-        PropertyValue::String("Block".to_string()),
+        PropertyValue::String(default.to_string()),
     )
 }
 
 fn evaluate_target(context: &EvaluatedOperation<'_>) -> EffectorTarget {
+    evaluate_target_or(context, EffectorTarget::Block)
+}
+
+fn evaluate_target_or(context: &EvaluatedOperation<'_>, default: EffectorTarget) -> EffectorTarget {
     match context.string("target").as_deref() {
         Some("Line") => EffectorTarget::Line,
         Some("Char") => EffectorTarget::Char,
-        _ => EffectorTarget::Block,
+        Some("Block") => EffectorTarget::Block,
+        _ => default,
     }
 }
 
@@ -429,6 +438,61 @@ impl EffectorPlugin for OpacityEffectorPlugin {
     }
 }
 
+/// Horizontal character spacing applied after text layout. This stays an
+/// Ensemble Effector so the same descriptor is authorable inline on Text and
+/// as a Node in a promoted Node Clip.
+pub struct TrackingEffectorPlugin;
+
+impl Plugin for TrackingEffectorPlugin {
+    fn id(&self) -> &'static str {
+        "tracking"
+    }
+
+    fn name(&self) -> String {
+        "Tracking".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Built-in".to_string()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl EffectorPlugin for TrackingEffectorPlugin {
+    fn properties(&self) -> Vec<PropertyDefinition> {
+        vec![
+            PropertyDefinition::new(
+                "amount",
+                PropertyUiType::Float {
+                    min: -500.0,
+                    max: 500.0,
+                    step: 1.0,
+                    suffix: "px".into(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                "Tracking",
+                PropertyValue::from(0.0),
+            ),
+            target_property_with_default("Line"),
+        ]
+    }
+
+    fn evaluate_source(
+        &self,
+        context: &EvaluatedOperation<'_>,
+        _source_id: Uuid,
+    ) -> Option<EffectorConfig> {
+        Some(EffectorConfig::Tracking {
+            amount: context.number("amount").unwrap_or(0.0) as f32,
+            target: evaluate_target_or(context, EffectorTarget::Line),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -482,5 +546,32 @@ mod tests {
             let context = EvaluatedOperation::new(&values, 0.0, 30.0, (1920, 1080));
             assert_eq!(evaluate_target(&context), expected);
         }
+    }
+
+    #[test]
+    fn tracking_descriptor_and_evaluation_share_amount_and_target() {
+        let descriptor = TrackingEffectorPlugin.descriptor().unwrap();
+        assert_eq!(descriptor.component_id(), "tracking");
+        assert_eq!(descriptor.properties().len(), 2);
+        assert_eq!(
+            descriptor.properties()[1].default_value(),
+            &PropertyValue::String("Line".to_string())
+        );
+
+        let values = HashMap::from([
+            ("amount".to_string(), PropertyValue::from(24.0)),
+            (
+                "target".to_string(),
+                PropertyValue::String("Line".to_string()),
+            ),
+        ]);
+        let context = EvaluatedOperation::new(&values, 0.0, 30.0, (1920, 1080));
+        assert!(matches!(
+            TrackingEffectorPlugin.evaluate_source(&context, Uuid::new_v4()),
+            Some(EffectorConfig::Tracking {
+                amount: 24.0,
+                target: EffectorTarget::Line,
+            })
+        ));
     }
 }

@@ -19,9 +19,9 @@ use library::model::property::{
 };
 use library::model::{Clip, GeneratorContent, Node, NodeContent};
 use library::plugin::{
-    FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin, PluginManager,
-    ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin, property_port_key,
-    property_ui_type_to_port_data_type,
+    EvaluatedOperation, FrameEvaluationContext, OperationDescriptor, OperationDescriptorError,
+    Plugin, PluginManager, ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
+    property_port_key, property_ui_type_to_port_data_type,
 };
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -129,12 +129,13 @@ fn draw_styles(
     Ok(styles)
 }
 
-fn style_kinds(styles: &[DrawStyle]) -> Vec<&'static str> {
+fn style_kinds(styles: &[DrawStyle]) -> AnyResult<Vec<&'static str>> {
     styles
         .iter()
         .map(|style| match style {
-            DrawStyle::Fill { .. } => "fill",
-            DrawStyle::Stroke { .. } => "stroke",
+            DrawStyle::Fill { .. } => Ok("fill"),
+            DrawStyle::Stroke { .. } => Ok("stroke"),
+            unexpected => bail!("Fill/Stroke fixture produced another style: {unexpected:?}"),
         })
         .collect()
 }
@@ -446,13 +447,13 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
 
     let expected_project = project_with_graph(shape.clone(), 0.0, 2.0)?;
     let expected = draw_styles(&expected_project, &Arc::new(PluginManager::default()), 0)?;
-    assert_eq!(style_kinds(&expected), vec!["fill", "stroke"]);
+    assert_eq!(style_kinds(&expected)?, vec!["fill", "stroke"]);
 
     let mut reversed_storage = shape.clone();
     reversed_storage.connections.reverse();
     let reversed_project = project_with_graph(reversed_storage, 0.0, 2.0)?;
     let rendered = draw_styles(&reversed_project, &Arc::new(PluginManager::default()), 0)?;
-    assert_eq!(style_kinds(&rendered), vec!["fill", "stroke"]);
+    assert_eq!(style_kinds(&rendered)?, vec!["fill", "stroke"]);
 
     let mut swapped_order = shape;
     for connection in &mut swapped_order.connections {
@@ -462,7 +463,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
     }
     let swapped_project = project_with_graph(swapped_order, 0.0, 2.0)?;
     let rendered = draw_styles(&swapped_project, &Arc::new(PluginManager::default()), 0)?;
-    assert_eq!(style_kinds(&rendered), vec!["stroke", "fill"]);
+    assert_eq!(style_kinds(&rendered)?, vec!["stroke", "fill"]);
     Ok(())
 }
 
@@ -512,7 +513,7 @@ fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() -> Any
         .context("create Text graph")?;
     let graph_text_project = project_with_graph(graph_text, 0.0, 2.0)?;
     assert_eq!(
-        style_kinds(&draw_styles(&graph_text_project, &plugins, 0)?),
+        style_kinds(&draw_styles(&graph_text_project, &plugins, 0)?)?,
         vec!["fill"]
     );
 
@@ -521,7 +522,7 @@ fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() -> Any
         .context("create Shape graph")?;
     let graph_shape_project = project_with_graph(graph_shape, 0.0, 2.0)?;
     assert_eq!(
-        style_kinds(&draw_styles(&graph_shape_project, &plugins, 0)?),
+        style_kinds(&draw_styles(&graph_shape_project, &plugins, 0)?)?,
         vec!["fill", "stroke"]
     );
     Ok(())
@@ -808,12 +809,10 @@ impl StylePlugin for CountingStylePlugin {
         OperationDescriptor::style("counting", "Counting", Vec::new())
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        _context: &FrameEvaluationContext,
+        _context: &EvaluatedOperation<'_>,
         source_id: Uuid,
-        _properties: &PropertyMap,
-        _eval_time: f64,
     ) -> Option<StyleConfig> {
         self.evaluations.fetch_add(1, Ordering::SeqCst);
         Some(StyleConfig {

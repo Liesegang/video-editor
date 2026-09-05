@@ -20,6 +20,14 @@ pub const PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS: u64 = 32 * 1024 * 1024;
 pub const PARTICLE_CHECKPOINT_INTERVAL_STEPS: u64 = 240;
 pub const PARTICLE_MAX_CHECKPOINTS: usize = 8;
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticleEmitterShape {
+    Point,
+    Box,
+    Sphere,
+}
+
 pub(crate) fn validate_particle_size_range(size_min: f64, size_max: f64) -> Result<(), String> {
     if size_min <= 0.0 || size_min > size_max || size_max > 512.0 {
         return Err("Particle size range must be positive, ordered, and at most 512px".to_string());
@@ -64,6 +72,11 @@ pub struct ParticleSceneParameters {
     pub emission_rate: ordered_float::OrderedFloat<f32>,
     pub lifetime_seconds: ordered_float::OrderedFloat<f32>,
     pub seed: u32,
+    pub emitter_shape: ParticleEmitterShape,
+    pub emitter_position: Vec3,
+    pub emitter_radius: ordered_float::OrderedFloat<f32>,
+    pub emitter_size: Vec3,
+    pub emitter_surface_only: bool,
     pub velocity_min: Vec3,
     pub velocity_max: Vec3,
     pub gravity: Vec3,
@@ -84,6 +97,7 @@ impl ParticleSceneParameters {
             self.emission_rate.into_inner(),
             self.lifetime_seconds.into_inner(),
             self.drag.into_inner(),
+            self.emitter_radius.into_inner(),
             self.size_min.into_inner(),
             self.size_max.into_inner(),
         ]
@@ -98,6 +112,12 @@ impl ParticleSceneParameters {
             self.gravity.x.into_inner() as f32,
             self.gravity.y.into_inner() as f32,
             self.gravity.z.into_inner() as f32,
+            self.emitter_position.x.into_inner() as f32,
+            self.emitter_position.y.into_inner() as f32,
+            self.emitter_position.z.into_inner() as f32,
+            self.emitter_size.x.into_inner() as f32,
+            self.emitter_size.y.into_inner() as f32,
+            self.emitter_size.z.into_inner() as f32,
         ]);
         if !finite.into_iter().all(f32::is_finite) {
             return Err("Particle parameters must be finite".to_string());
@@ -116,6 +136,19 @@ impl ParticleSceneParameters {
         )?;
         if !(0.0..=100.0).contains(&self.drag.into_inner()) {
             return Err("Particle drag must be between 0 and 100".to_string());
+        }
+        if !(0.0..=1_000_000.0).contains(&self.emitter_radius.into_inner()) {
+            return Err("Particle emitter radius must be between 0 and 1000000px".to_string());
+        }
+        if [
+            self.emitter_size.x.into_inner(),
+            self.emitter_size.y.into_inner(),
+            self.emitter_size.z.into_inner(),
+        ]
+        .into_iter()
+        .any(|component| component < 0.0)
+        {
+            return Err("Particle emitter size components must be non-negative".to_string());
         }
         validate_particle_size_range(
             f64::from(self.size_min.into_inner()),

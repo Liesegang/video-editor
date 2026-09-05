@@ -107,6 +107,7 @@ impl ProjectManager {
                 file_path: file_path.to_string(),
                 stream_index: None,
                 audio_stream_index: None,
+                outputs: crate::model::MediaOutputSelection::ImageAndAudio,
             },
             u64::from(canvas_width),
             u64::from(canvas_height),

@@ -20,10 +20,10 @@ fn seconds(value: i64) -> MediaTime {
 #[test]
 fn factory_builds_one_private_typed_chain_and_mandatory_output() {
     let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
-    assert_eq!(result.definition.graph.nodes.len(), 6);
-    assert_eq!(result.definition.graph.connections.len(), 5);
+    assert_eq!(result.definition.graph.nodes.len(), 7);
+    assert_eq!(result.definition.graph.connections.len(), 6);
     assert_eq!(result.definition.outputs().count(), 1);
-    assert_eq!(result.definition.interface.parameters.len(), 11);
+    assert_eq!(result.definition.interface.parameters.len(), 16);
     assert_eq!(result.definition.sharing, ModuleDefinitionSharing::Private);
     result
         .definition
@@ -35,6 +35,7 @@ fn factory_builds_one_private_typed_chain_and_mandatory_output() {
 fn only_the_executable_particle_slice_is_enabled_in_the_catalog() {
     for catalog_id in [
         "native.particle.emitter",
+        "native.particle.shape-location",
         "native.particle.initialize",
         "native.particle.gravity-force",
         "native.particle.drag-force",
@@ -63,6 +64,11 @@ fn particle_published_parameter_capabilities_follow_their_native_target_ports() 
         particle.parameters.emission_rate,
         particle.parameters.lifetime,
         particle.parameters.seed,
+        particle.parameters.emitter_shape,
+        particle.parameters.emitter_position,
+        particle.parameters.emitter_radius,
+        particle.parameters.emitter_size,
+        particle.parameters.emitter_surface_only,
         particle.parameters.velocity_min,
         particle.parameters.velocity_max,
         particle.parameters.size_min,
@@ -313,6 +319,19 @@ fn service_rejects_invalid_native_particle_properties_atomically() {
         })
         .expect("Particle Emitter")
         .id;
+    let shape_location_id = before.module_definitions[&created.definition_id]
+        .graph
+        .nodes
+        .values()
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == "native.particle.shape-location"
+            )
+        })
+        .expect("Emitter Shape")
+        .id;
     let revision = service.revision().expect("revision");
 
     let error = service
@@ -324,6 +343,22 @@ fn service_rejects_invalid_native_particle_properties_atomically() {
         )
         .expect_err("typed descriptor must reject the edit");
     assert!(error.to_string().contains("Property 'rate' expects"));
+    assert_eq!(service.revision().expect("unchanged revision"), revision);
+    assert_eq!(service.snapshot().expect("unchanged project"), before);
+
+    let error = service
+        .set_instance_module_node_property(
+            created.instance_id,
+            shape_location_id,
+            "shape".to_string(),
+            Property::constant(PropertyValue::String("Cone".to_string())),
+        )
+        .expect_err("unsupported emitter shape must fail before mutation");
+    assert!(
+        error
+            .to_string()
+            .contains("dropdown value \"Cone\" is not an option")
+    );
     assert_eq!(service.revision().expect("unchanged revision"), revision);
     assert_eq!(service.snapshot().expect("unchanged project"), before);
 }

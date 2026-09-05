@@ -42,6 +42,7 @@ pub enum QaKey {
     Escape,
     Enter,
     Backspace,
+    Delete,
 }
 
 impl From<QaKey> for egui::Key {
@@ -62,6 +63,7 @@ impl From<QaKey> for egui::Key {
             QaKey::Escape => Self::Escape,
             QaKey::Enter => Self::Enter,
             QaKey::Backspace => Self::Backspace,
+            QaKey::Delete => Self::Delete,
         }
     }
 }

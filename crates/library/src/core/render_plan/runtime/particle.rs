@@ -2,12 +2,12 @@
 
 use ordered_float::OrderedFloat;
 
-use super::frame_values::{required_color, required_number, transparent};
+use super::frame_values::{required_color, required_number, required_string, transparent};
 use super::*;
 use crate::core::render_plan::CompiledParticleDefinition;
 use crate::model::authoring::ModuleOutputId;
 use crate::model::frame::particle::{
-    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+    ParticleEmitterShape, ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
 };
 use crate::model::property::Vec3;
 
@@ -20,6 +20,10 @@ impl ModuleImageRuntime<'_> {
         let emitter = self.particle_node_values(particle.emitter_node_id)?;
         let initialize = particle
             .initialize_node_id
+            .map(|node_id| self.particle_node_values(node_id))
+            .transpose()?;
+        let shape_location = particle
+            .shape_location_node_id
             .map(|node_id| self.particle_node_values(node_id))
             .transpose()?;
         let gravity = particle
@@ -51,16 +55,42 @@ impl ModuleImageRuntime<'_> {
                 "lifetime",
             )?,
             seed,
+            emitter_shape: optional_emitter_shape(shape_location.as_ref())?,
+            emitter_position: optional_vec3(
+                shape_location.as_ref(),
+                "position",
+                "Emitter Shape",
+                neutral_vec3(),
+            )?,
+            emitter_radius: optional_f32(
+                shape_location.as_ref(),
+                "radius",
+                "Emitter Shape",
+                0.0,
+                "emitter radius",
+            )?,
+            emitter_size: optional_vec3(
+                shape_location.as_ref(),
+                "size",
+                "Emitter Shape",
+                neutral_vec3(),
+            )?,
+            emitter_surface_only: optional_bool(
+                shape_location.as_ref(),
+                "surface_only",
+                "Emitter Shape",
+                false,
+            )?,
             velocity_min: optional_vec3(
                 initialize.as_ref(),
                 "velocity_min",
-                "Initialize Particle",
+                "Birth Attributes",
                 neutral_vec3(),
             )?,
             velocity_max: optional_vec3(
                 initialize.as_ref(),
                 "velocity_max",
-                "Initialize Particle",
+                "Birth Attributes",
                 neutral_vec3(),
             )?,
             gravity: optional_vec3(gravity.as_ref(), "force", "Gravity Force", neutral_vec3())?,
@@ -68,14 +98,14 @@ impl ModuleImageRuntime<'_> {
             size_min: optional_f32(
                 initialize.as_ref(),
                 "size_min",
-                "Initialize Particle",
+                "Birth Attributes",
                 1.0,
                 "minimum size",
             )?,
             size_max: optional_f32(
                 initialize.as_ref(),
                 "size_max",
-                "Initialize Particle",
+                "Birth Attributes",
                 1.0,
                 "maximum size",
             )?,
@@ -149,6 +179,40 @@ fn neutral_vec3() -> Vec3 {
         x: OrderedFloat(0.0),
         y: OrderedFloat(0.0),
         z: OrderedFloat(0.0),
+    }
+}
+
+fn optional_emitter_shape(
+    values: Option<&HashMap<String, PropertyValue>>,
+) -> Result<ParticleEmitterShape, LibraryError> {
+    let Some(values) = values else {
+        return Ok(ParticleEmitterShape::Point);
+    };
+    match required_string(values, "shape", "Emitter Shape")?.as_str() {
+        "Point" => Ok(ParticleEmitterShape::Point),
+        "Box" => Ok(ParticleEmitterShape::Box),
+        "Sphere" => Ok(ParticleEmitterShape::Sphere),
+        value => Err(LibraryError::Validation(format!(
+            "Emitter Shape has unknown shape '{value}'"
+        ))),
+    }
+}
+
+fn optional_bool(
+    values: Option<&HashMap<String, PropertyValue>>,
+    key: &str,
+    owner: &str,
+    neutral: bool,
+) -> Result<bool, LibraryError> {
+    let Some(values) = values else {
+        return Ok(neutral);
+    };
+    match values.get(key) {
+        Some(PropertyValue::Boolean(value)) => Ok(*value),
+        _ => Err(frame_values::type_error(
+            &format!("{owner} {key}"),
+            "Boolean",
+        )),
     }
 }
 

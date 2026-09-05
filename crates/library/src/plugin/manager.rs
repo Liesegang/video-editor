@@ -10,6 +10,7 @@ mod registration;
 mod render_failure_injection;
 mod runtime_plugins;
 mod shape_operations;
+mod style_operations;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

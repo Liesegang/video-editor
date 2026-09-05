@@ -5,7 +5,8 @@
 
 use library::editor::TimelineEditorService;
 use library::model::authoring::{
-    AuthoringProject, ModuleDefinition, ModuleInvocation, TimelineItem,
+    AuthoringProject, ModuleDefinition, ModuleInstance, ModuleInvocation, PublishedParameter,
+    TimelineItem,
 };
 use library::plugin::PluginManager;
 
@@ -20,6 +21,16 @@ use super::property_authoring::{
     PropertyRowSpec,
 };
 use super::{item_local_time, mode_action_label, value_provenance};
+
+pub(super) struct ModuleParameterContext<'a> {
+    pub(super) project: &'a AuthoringProject,
+    pub(super) service: &'a TimelineEditorService,
+    pub(super) plugins: &'a PluginManager,
+    pub(super) item: &'a TimelineItem,
+    pub(super) invocation: &'a ModuleInvocation,
+    pub(super) instance: &'a ModuleInstance,
+    pub(super) definition: &'a ModuleDefinition,
+}
 
 pub(super) fn module_parameters(
     ui: &mut egui::Ui,
@@ -36,6 +47,40 @@ pub(super) fn module_parameters(
     let Some(definition) = project.module_definitions.get(&instance.definition_id) else {
         return;
     };
+    let structured_ensemble = match service.node_clip_text_ensemble_stack(item.id) {
+        Ok(stack) => stack,
+        Err(error) => {
+            state.error = Some(error.to_string());
+            None
+        }
+    };
+    let structured_appearance = match service.node_clip_appearance_stack(item.id) {
+        Ok(stack) => stack,
+        Err(error) => {
+            state.error = Some(error.to_string());
+            None
+        }
+    };
+    let structured_parameter_ids = structured_ensemble
+        .iter()
+        .flat_map(|stack| &stack.operations)
+        .flat_map(|operation| operation.parameter_ids.iter().copied())
+        .chain(
+            structured_appearance
+                .iter()
+                .flat_map(|stack| &stack.operations)
+                .flat_map(|operation| operation.parameter_ids.iter().copied()),
+        )
+        .collect::<std::collections::HashSet<_>>();
+    let context = ModuleParameterContext {
+        project,
+        service,
+        plugins,
+        item,
+        invocation,
+        instance,
+        definition,
+    };
     ui.separator();
     egui::CollapsingHeader::new("Node Clip parameters")
         .default_open(true)
@@ -43,112 +88,135 @@ pub(super) fn module_parameters(
             if definition.interface.parameters.is_empty() {
                 ui.weak("Publish a Node input to expose a reusable control here.");
             }
-            for parameter in &definition.interface.parameters {
-                let key = format!("module:{}", parameter.id);
-                let base_value = instance
-                    .parameter_overrides
-                    .get(&parameter.id)
-                    .cloned()
-                    .unwrap_or_else(|| parameter.default_value.clone());
-                let local_time = item_local_time(project, state, item);
-                let local_seconds = local_time
-                    .as_ref()
-                    .map_or(0.0, |time| time.to_seconds_f64());
-                let automation = invocation.automation_tracks.get(&parameter.id);
-                let initial = automation
-                    .and_then(|track| {
-                        local_time
-                            .as_ref()
-                            .ok()
-                            .and_then(|time| track.evaluate_at(*time).ok())
-                    })
-                    .unwrap_or(base_value);
-                let model_value = initial.clone();
-                let mode_state = automation.map_or_else(
-                    || PropertyModeState::constant(local_seconds),
-                    |track| {
-                        PropertyModeState::from_keyframe_times(
-                            local_seconds,
-                            track
-                                .keyframes
-                                .iter()
-                                .map(|keyframe| keyframe.time.to_seconds_f64()),
-                        )
-                    },
-                );
-                let property_definition =
-                    published_parameter_definition(plugins, definition, parameter);
-                let (allow_keyframe, keyframe_disabled_reason) =
-                    published_parameter_keyframe_capability(definition, parameter.id);
-                let (finished, mode_action, edited_value) = {
-                    let value = state
-                        .inspector
-                        .property_values
-                        .entry(key)
-                        .or_insert(initial);
-                    let result = property_row(
-                        ui,
-                        value,
-                        &project.palette,
-                        PropertyRowSpec {
-                            control_id: &format!(
-                                "module_instance:{}:{}",
-                                instance.id, parameter.id
-                            ),
-                            label: &parameter.name,
-                            definition: property_definition.as_ref(),
-                            suffix: "",
-                            speed: 0.1,
-                            mode_state,
-                            allow_keyframe,
-                            keyframe_disabled_reason,
-                            allow_expression: false,
-                        },
-                    );
-                    (result.finished, result.mode_action, value.clone())
-                };
-                if finished && edited_value != model_value {
-                    let result = local_time.clone().and_then(|time| {
-                        commit_module_parameter_value(
-                            service,
-                            item.id,
-                            instance.id,
-                            parameter.id,
-                            automation,
-                            edited_value.clone(),
-                            time,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    }
-                }
-                if let Some(action) = mode_action {
-                    let result = local_time.clone().and_then(|time| {
-                        apply_module_parameter_mode_action(
-                            service,
-                            item.id,
-                            parameter.id,
-                            automation,
-                            edited_value,
-                            time,
-                            action,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    } else {
-                        state.status = format!("{}: {}", parameter.name, mode_action_label(action));
-                    }
-                }
-                value_provenance(
-                    ui,
-                    automation.is_some(),
-                    instance.parameter_overrides.contains_key(&parameter.id),
-                );
+            for parameter in definition
+                .interface
+                .parameters
+                .iter()
+                .filter(|parameter| !structured_parameter_ids.contains(&parameter.id))
+            {
+                published_parameter_row(ui, state, &context, parameter);
             }
         });
+    if let Some(stack) = structured_appearance.as_ref() {
+        super::appearance::node_clip_appearance_section(ui, state, &context, stack);
+    }
+    if let Some(stack) = structured_ensemble.as_ref() {
+        super::text_ensemble::node_clip_text_ensemble_section(ui, state, &context, stack);
+    }
     module_media_inputs(ui, project, state, service, item, invocation, definition);
+}
+
+pub(super) fn published_parameter_row(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    context: &ModuleParameterContext<'_>,
+    parameter: &PublishedParameter,
+) {
+    let key = format!("module:{}", parameter.id);
+    let base_value = context
+        .instance
+        .parameter_overrides
+        .get(&parameter.id)
+        .cloned()
+        .unwrap_or_else(|| parameter.default_value.clone());
+    let local_time = item_local_time(context.project, state, context.item);
+    let local_seconds = local_time
+        .as_ref()
+        .map_or(0.0, |time| time.to_seconds_f64());
+    let automation = context.invocation.automation_tracks.get(&parameter.id);
+    let initial = automation
+        .and_then(|track| {
+            local_time
+                .as_ref()
+                .ok()
+                .and_then(|time| track.evaluate_at(*time).ok())
+        })
+        .unwrap_or(base_value);
+    let model_value = initial.clone();
+    let mode_state = automation.map_or_else(
+        || PropertyModeState::constant(local_seconds),
+        |track| {
+            PropertyModeState::from_keyframe_times(
+                local_seconds,
+                track
+                    .keyframes
+                    .iter()
+                    .map(|keyframe| keyframe.time.to_seconds_f64()),
+            )
+        },
+    );
+    let property_definition =
+        published_parameter_definition(context.plugins, context.definition, parameter);
+    let (allow_keyframe, keyframe_disabled_reason) =
+        published_parameter_keyframe_capability(context.definition, parameter.id);
+    let (finished, mode_action, edited_value) = {
+        let value = state
+            .inspector
+            .property_values
+            .entry(key)
+            .or_insert(initial);
+        let result = property_row(
+            ui,
+            value,
+            &context.project.palette,
+            PropertyRowSpec {
+                control_id: &format!("module_instance:{}:{}", context.instance.id, parameter.id),
+                label: &parameter.name,
+                definition: property_definition.as_ref(),
+                suffix: "",
+                speed: 0.1,
+                mode_state,
+                allow_keyframe,
+                keyframe_disabled_reason,
+                allow_expression: false,
+            },
+        );
+        (result.finished, result.mode_action, value.clone())
+    };
+    if finished && edited_value != model_value {
+        let result = match &local_time {
+            Ok(time) => commit_module_parameter_value(
+                context.service,
+                context.item.id,
+                context.instance.id,
+                parameter.id,
+                automation,
+                edited_value.clone(),
+                *time,
+            ),
+            Err(error) => Err(error.clone()),
+        };
+        if let Err(error) = result {
+            state.error = Some(error);
+        }
+    }
+    if let Some(action) = mode_action {
+        let result = match &local_time {
+            Ok(time) => apply_module_parameter_mode_action(
+                context.service,
+                context.item.id,
+                parameter.id,
+                automation,
+                edited_value,
+                *time,
+                action,
+            ),
+            Err(error) => Err(error.clone()),
+        };
+        if let Err(error) = result {
+            state.error = Some(error);
+        } else {
+            state.status = format!("{}: {}", parameter.name, mode_action_label(action));
+        }
+    }
+    value_provenance(
+        ui,
+        automation.is_some(),
+        context
+            .instance
+            .parameter_overrides
+            .contains_key(&parameter.id),
+    );
 }
 
 fn published_parameter_definition(

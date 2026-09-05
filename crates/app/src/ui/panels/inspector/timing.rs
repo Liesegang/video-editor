@@ -2,7 +2,7 @@ use library::editor::TimelineEditorService;
 use library::model::authoring::{MediaTime, TimelineInterval, TimelineItem};
 
 use crate::state::authoring::AuthoringUiState;
-use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
+use crate::ui::widgets::property_drag_value::{numeric_edit_finished, FloatDragValueConfig};
 
 pub(super) fn timing_section(
     ui: &mut egui::Ui,
@@ -51,7 +51,7 @@ fn commit_start(
     item: &TimelineItem,
     response: &egui::Response,
 ) {
-    if !numeric_finished(response)
+    if !numeric_edit_finished(response)
         || state.inspector.start_seconds == item.interval.start.to_seconds_f64()
     {
         return;
@@ -72,7 +72,7 @@ fn commit_duration(
     item: &TimelineItem,
     response: &egui::Response,
 ) {
-    if !numeric_finished(response)
+    if !numeric_edit_finished(response)
         || state.inspector.duration_seconds == item.interval.duration.to_seconds_f64()
     {
         return;
@@ -101,15 +101,6 @@ fn seconds_drag_config(minimum: f64) -> FloatDragValueConfig {
         hard_min: Some(minimum),
         hard_max: None,
     }
-}
-
-fn numeric_finished(response: &egui::Response) -> bool {
-    response.drag_stopped()
-        || response.lost_focus()
-        || (response.has_focus()
-            && response
-                .ctx
-                .input(|input| input.key_pressed(egui::Key::Enter)))
 }
 
 #[cfg(test)]

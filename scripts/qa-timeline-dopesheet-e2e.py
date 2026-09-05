@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from qa_support import QaFailure, activate_dock_tab, run_suite_main
+from qa_support import QaFailure, activate_dock_tab, bring_timeline_component, run_suite_main
 
 
 FIXTURE = "authoring_e2e"
@@ -128,16 +128,6 @@ def pulse_timeline(client):
             "coordinate_space": "points",
         },
     )
-
-
-def bring_timeline_component(client, component_id, direction):
-    for _ in range(10):
-        client.state()
-        component = component_by_id(client.component_snapshot(), component_id)
-        if component is not None:
-            return component
-        client.scroll_component("timeline.canvas", 0.0, direction)
-    raise QaFailure("could not bring {} into the Timeline viewport".format(component_id))
 
 
 def wait_lane(client, item_id, target):

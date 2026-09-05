@@ -115,7 +115,11 @@ pub(super) fn node_editor_snarl_style_for(style: &egui::Style) -> SnarlStyle {
         collapsible: Some(false),
         pin_placement: Some(PinPlacement::Edge),
         pin_size: Some(PORT_SOCKET_SIZE),
-        wire_width: Some(3.0),
+        // Authored wires are painted by node-editor-ui from the same
+        // WireDescriptor curves used for selection, hit testing, and QA.
+        // Snarl remains the Node/pin layout authority, but its private wire
+        // geometry must stay invisible to avoid a second physical curve.
+        wire_width: Some(0.0),
         wire_style: Some(WireStyle::Bezier3),
         wire_layer: Some(WireLayer::BehindNodes),
         wire_frame_size: Some(72.0),
@@ -159,6 +163,7 @@ mod tests {
         );
         assert_eq!(navigation.zoom_policy, ZoomPolicy::Uniform);
         assert_eq!(navigation.zoom_axes, pan_zoom_ui::AxisMask::BOTH);
+        assert_eq!(style.wire_width, Some(0.0));
         assert_eq!(node_editor_grid_config().min_screen_spacing, 52.0);
         let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_800.0, 1_200.0));
         for scale in [NODE_EDITOR_MIN_SCALE, 0.01, 0.1, 1.0, NODE_EDITOR_MAX_SCALE] {

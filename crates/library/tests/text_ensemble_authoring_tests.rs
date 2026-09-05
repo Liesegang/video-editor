@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use library::SkiaRenderer;
+use library::animation::EasingFunction;
 use library::core::cache::CacheManager;
 use library::core::ensemble::BackplateTarget;
 use library::core::ensemble::decorators::BackplateShape;
@@ -9,9 +10,9 @@ use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::{DecoratorConfig, EffectorConfig};
 use library::core::render_plan::{RenderPlanCompiler, evaluate_render_plan_frame};
 use library::editor::{
-    AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
-    RenderDestination, RenderService, TextEnsembleOperationKind, TimelineEditorService,
-    build_authoring_e2e_fixture,
+    AppearanceOperationFactory, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
+    AuthoringPropertyValueUpdate, RenderDestination, RenderService, TextEnsembleOperationKind,
+    TimelineEditorService, build_authoring_e2e_fixture,
 };
 use library::model::authoring::{
     AuthoringProject, MediaTime, ProjectDocument, RationalRate, SourceRef, TimelineInterval,
@@ -102,6 +103,9 @@ fn seconds(value: i64) -> MediaTime {
 }
 
 fn text_service() -> Result<(TimelineEditorService, TimelineItemId), String> {
+    let plugins = PluginManager::default();
+    let fill = AppearanceOperationFactory::create(&plugins, "fill")
+        .map_err(|error| format!("Text Ensemble fixture Fill: {error}"))?;
     let project = AuthoringProject::new(
         "Text Ensemble",
         320,
@@ -124,6 +128,7 @@ fn text_service() -> Result<(TimelineEditorService, TimelineItemId), String> {
             "Animated text".to_string(),
             SourceRef::Text {
                 text: "Ensemble".to_string(),
+                appearance_operations: vec![fill],
                 ensemble_operations: Vec::new(),
             },
             TimelineInterval::new(seconds(0), seconds(4))?,
@@ -131,6 +136,24 @@ fn text_service() -> Result<(TimelineEditorService, TimelineItemId), String> {
         )
         .map_err(|error| error.to_string())?;
     Ok((service, item_id))
+}
+
+fn assert_pixel_data_differs(actual: &[u8], baseline: &[u8], context: &str) {
+    assert_eq!(
+        actual.len(),
+        baseline.len(),
+        "{context}: rendered image byte lengths differ"
+    );
+    let changed_bytes = actual
+        .iter()
+        .zip(baseline)
+        .filter(|(actual, baseline)| actual != baseline)
+        .count();
+    assert!(
+        changed_bytes > 0,
+        "{context}: no rendered image bytes changed ({} compared)",
+        actual.len()
+    );
 }
 
 fn text_operations(
@@ -502,11 +525,164 @@ fn timeline_frame_uses_production_effector_and_decorator_evaluators() {
         else {
             panic!("authoring render must terminate to an Image");
         };
-        assert_ne!(
-            ensemble.data, baseline.data,
-            "{destination:?} must rasterize the evaluated Ensemble"
+        assert_pixel_data_differs(
+            &ensemble.data,
+            &baseline.data,
+            &format!("{destination:?} must rasterize the evaluated Ensemble"),
         );
     }
+}
+
+#[test]
+fn direct_text_tracking_uses_descriptor_keyframes_and_changes_preview_pixels() {
+    let plugins = Arc::new(PluginManager::default());
+    let (service, item_id) = text_service().expect("valid Text Ensemble fixture");
+    service
+        .set_text(item_id, "ABCD".to_string())
+        .expect("four-character Text");
+    let (tracking_id, _) = service
+        .add_text_ensemble_operation_by_id(
+            plugins.as_ref(),
+            item_id,
+            TextEnsembleOperationKind::Effector,
+            "tracking",
+        )
+        .unwrap();
+    let owner = AuthoringPropertyOwner::TextEnsemble {
+        item_id,
+        operation_id: tracking_id,
+    };
+    service
+        .set_authored_property_keyframe_mode(owner, "amount".to_string(), seconds(0), 0.0.into())
+        .unwrap();
+    service
+        .upsert_authored_property_keyframe(
+            owner,
+            "amount".to_string(),
+            seconds(1),
+            30.0.into(),
+            Some(EasingFunction::Linear),
+        )
+        .unwrap();
+
+    let project = service.snapshot().unwrap();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let start =
+        evaluate_render_plan_frame(&project, &plan, plugins.as_ref(), 0, 1.0, None).unwrap();
+    let middle =
+        evaluate_render_plan_frame(&project, &plan, plugins.as_ref(), 15, 1.0, None).unwrap();
+    assert!(matches!(
+        find_text_ensemble(&start.items)
+            .expect("Text must reach frame IR")
+            .effector_configs
+            .as_slice(),
+        [EffectorConfig::Tracking {
+            amount: 0.0,
+            target: EffectorTarget::Line,
+        }]
+    ));
+    assert!(matches!(
+        find_text_ensemble(&middle.items)
+            .expect("Text must reach frame IR")
+            .effector_configs
+            .as_slice(),
+        [EffectorConfig::Tracking {
+            amount,
+            target: EffectorTarget::Line,
+        }] if (*amount - 15.0).abs() < f32::EPSILON
+    ));
+
+    let cache = Arc::new(CacheManager::new());
+    let renderer = SkiaRenderer::new(
+        320,
+        180,
+        Color::black(),
+        false,
+        None,
+        Some(Arc::clone(&cache)),
+    )
+    .unwrap();
+    let mut renderer = RenderService::new(renderer, Arc::clone(&plugins), cache);
+    let RenderOutput::Image(start) = renderer
+        .render_authoring_frame(&project, &start, RenderDestination::Preview)
+        .unwrap()
+    else {
+        panic!("Tracking start must render to an Image");
+    };
+    let RenderOutput::Image(middle) = renderer
+        .render_authoring_frame(&project, &middle, RenderDestination::Preview)
+        .unwrap()
+    else {
+        panic!("Tracking middle must render to an Image");
+    };
+    assert_pixel_data_differs(
+        &middle.data,
+        &start.data,
+        "Tracking keyframe must change Preview pixels",
+    );
+}
+
+#[test]
+fn direct_text_step_delay_changes_pixels_during_clip_local_playback() {
+    let plugins = Arc::new(PluginManager::default());
+    let (service, item_id) = text_service().expect("valid Text Ensemble fixture");
+    service
+        .set_text(item_id, "ABCD".to_string())
+        .expect("four-character Text");
+    let (delay_id, _) = service
+        .add_text_ensemble_operation_by_id(
+            plugins.as_ref(),
+            item_id,
+            TextEnsembleOperationKind::Effector,
+            "step_delay",
+        )
+        .unwrap();
+    for (key, value) in [
+        ("delay", PropertyValue::from(0.2)),
+        ("duration", PropertyValue::from(0.2)),
+        ("from_opacity", PropertyValue::from(0.0)),
+        ("to_opacity", PropertyValue::from(100.0)),
+    ] {
+        service
+            .set_text_ensemble_property(plugins.as_ref(), item_id, delay_id, key, seconds(0), value)
+            .unwrap();
+    }
+
+    let project = service.snapshot().unwrap();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let frames = [0, 4, 10].map(|frame| {
+        evaluate_render_plan_frame(&project, &plan, plugins.as_ref(), frame, 1.0, None).unwrap()
+    });
+    let cache = Arc::new(CacheManager::new());
+    let renderer = SkiaRenderer::new(
+        320,
+        180,
+        Color::black(),
+        false,
+        None,
+        Some(Arc::clone(&cache)),
+    )
+    .unwrap();
+    let mut renderer = RenderService::new(renderer, Arc::clone(&plugins), cache);
+    let images = frames.map(|frame| {
+        let RenderOutput::Image(image) = renderer
+            .render_authoring_frame(&project, &frame, RenderDestination::Preview)
+            .unwrap()
+        else {
+            panic!("Step Delay must render to an Image");
+        };
+        image
+    });
+    assert_pixel_data_differs(
+        &images[1].data,
+        &images[0].data,
+        "Step Delay frame 4 must differ from frame 0",
+    );
+    assert_pixel_data_differs(
+        &images[2].data,
+        &images[1].data,
+        "Step Delay frame 10 must differ from frame 4",
+    );
 }
 
 #[test]
@@ -607,9 +783,21 @@ fn transform_controls_reach_frame_ir_with_independent_axes_rotation_and_target()
         };
         rendered_targets.push(image.data);
     }
-    assert_ne!(rendered_targets[0], rendered_targets[1]);
-    assert_ne!(rendered_targets[1], rendered_targets[2]);
-    assert_ne!(rendered_targets[0], rendered_targets[2]);
+    assert_pixel_data_differs(
+        &rendered_targets[1],
+        &rendered_targets[0],
+        "Line target must differ from Block target",
+    );
+    assert_pixel_data_differs(
+        &rendered_targets[2],
+        &rendered_targets[1],
+        "Char target must differ from Line target",
+    );
+    assert_pixel_data_differs(
+        &rendered_targets[2],
+        &rendered_targets[0],
+        "Char target must differ from Block target",
+    );
 }
 
 #[test]
@@ -778,9 +966,10 @@ fn authoring_fixture_preview_pixels_reflect_opacity_effector() {
     else {
         panic!("authoring render must terminate to an Image");
     };
-    assert!(
-        edited.data != baseline.data,
-        "authoring_e2e Preview pixels must reflect the Opacity Effector"
+    assert_pixel_data_differs(
+        &edited.data,
+        &baseline.data,
+        "authoring_e2e Preview pixels must reflect the Opacity Effector",
     );
 }
 

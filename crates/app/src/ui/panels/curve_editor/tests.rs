@@ -30,6 +30,7 @@ fn curve_projection_and_edit_deltas_use_the_canvas_transform() {
     assert_near(point.y, 110.0);
     assert_near(transform.delta_time(20.0) as f32, 1.0);
     assert_near(transform.delta_value(20.0) as f32, -0.4);
+    assert_near(transform.time_at_screen_x(90.0).unwrap() as f32, 2.5);
 }
 
 #[test]

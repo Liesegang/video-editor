@@ -208,6 +208,7 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
             file_path: fixture("h264_24.mp4"),
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         12,
         8,

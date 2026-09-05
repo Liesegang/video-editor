@@ -1,10 +1,47 @@
 use super::*;
 
 use crate::model::authoring::{Paint, ProjectDocument};
-use crate::model::property::{ColorSpaceRef, ColorValue};
+use crate::model::property::{ColorSpaceRef, ColorValue, PatternKind, PatternValue, Vec2};
+use ordered_float::OrderedFloat;
 
 fn managed_color(rgba: [f64; 4]) -> ColorValue {
     ColorValue::new(ColorSpaceRef::new("acescg").unwrap(), rgba).unwrap()
+}
+
+fn point(x: f64, y: f64) -> Vec2 {
+    Vec2 {
+        x: OrderedFloat(x),
+        y: OrderedFloat(y),
+    }
+}
+
+#[test]
+fn palette_generic_command_preserves_typed_pattern_and_undo() {
+    let service = TimelineEditorService::create_default("pattern palette").unwrap();
+    let pattern = PatternValue::new(
+        PatternKind::Dots,
+        managed_color([1.0, 0.5, 0.0, 1.0]),
+        managed_color([0.0, 0.0, 0.0, 0.25]),
+        point(24.0, 12.0),
+        point(3.0, 4.0),
+        30.0,
+        0.4,
+    )
+    .unwrap();
+    let (definition_id, changes) = service
+        .add_paint_definition("Dots".to_string(), Paint::Pattern(pattern.clone()))
+        .unwrap();
+
+    assert_eq!(
+        changes.invalidations,
+        vec![ProjectInvalidation::ProjectPalette]
+    );
+    assert_eq!(
+        service.snapshot().unwrap().palette.definitions[&definition_id].paint,
+        Paint::Pattern(pattern)
+    );
+    service.undo().unwrap().expect("undo pattern add");
+    assert!(service.snapshot().unwrap().palette.definitions.is_empty());
 }
 
 #[test]

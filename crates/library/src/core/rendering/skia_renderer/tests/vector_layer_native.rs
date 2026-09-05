@@ -244,6 +244,150 @@ fn render_layered_gpu_vectors(native: bool) -> Option<Vec<[f32; 4]>> {
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
+fn render_layer_mask_case(
+    styles: &[StyleConfig],
+    transform: Affine2D,
+    use_gpu: bool,
+) -> Vec<[f32; 4]> {
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let context = use_gpu.then(|| {
+        create_gpu_context(None, None).expect("actual OpenGL context required for GPU parity")
+    });
+    let mut renderer = SkiaRenderer::new(72, 72, transparent, use_gpu, context, None)
+        .expect("layer-mask parity renderer");
+    renderer
+        .use_project_linear_surface(working_contract("gpu-layer-mask-parity"))
+        .expect("Project working surface");
+    if use_gpu {
+        assert!(
+            renderer
+                .is_gpu_backed()
+                .expect("query root surface backing"),
+            "test must not silently use a CPU raster surface"
+        );
+    }
+    renderer.clear().expect("clear Project surface");
+    renderer
+        .draw_shape_layer(
+            ShapeRasterRequest {
+                path_data: "M 20 20 L 44 20 L 44 44 L 20 44 Z",
+                canonical_path: None,
+                styles,
+                path_effects: &[],
+                ensemble: None,
+                transform,
+            },
+            1.0,
+            BlendMode::Normal,
+        )
+        .expect("draw layer-mask parity shape");
+    working_pixels(&mut renderer)
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn assert_gpu_layer_mask_near(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) {
+    assert_eq!(cpu.len(), gpu.len());
+    let mut max_difference = 0.0_f32;
+    let mut max_index = 0;
+    let mut max_channel = 0;
+    let mut differing_channels = 0;
+    let mut difference_sum = 0.0_f32;
+    for (index, (cpu, gpu)) in cpu.iter().zip(gpu).enumerate() {
+        for channel in 0..4 {
+            let difference = (cpu[channel] - gpu[channel]).abs();
+            difference_sum += difference;
+            if difference > 2.0e-3 {
+                differing_channels += 1;
+            }
+            if difference > max_difference {
+                max_difference = difference;
+                max_index = index;
+                max_channel = channel;
+            }
+            // Both surfaces are premultiplied project-linear RGBAF32. The
+            // tolerance permits GPU coverage/filter rounding, but remains
+            // below one 8-bit alpha step so a visible mask error cannot pass.
+        }
+    }
+    assert!(
+        max_difference <= 2.0e-3,
+        "GPU layer-mask max difference={max_difference} at pixel {max_index} channel {max_channel}: CPU={:?} GPU={:?}; differing channels={differing_channels}, sum={difference_sum}",
+        cpu[max_index],
+        gpu[max_index]
+    );
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn assert_gpu_layer_mask_near_outside_baseline_edges(
+    cpu: &[[f32; 4]],
+    gpu: &[[f32; 4]],
+    baseline_cpu: &[[f32; 4]],
+    baseline_gpu: &[[f32; 4]],
+) {
+    assert_eq!(cpu.len(), gpu.len());
+    assert_eq!(cpu.len(), baseline_cpu.len());
+    assert_eq!(cpu.len(), baseline_gpu.len());
+    let is_partial_coverage = |alpha: f32| alpha > 2.0e-3 && alpha < 1.0 - 2.0e-3;
+    let coverage_edges = baseline_cpu
+        .iter()
+        .zip(baseline_gpu)
+        .map(|(cpu, gpu)| is_partial_coverage(cpu[3]) || is_partial_coverage(gpu[3]))
+        .collect::<Vec<_>>();
+    assert!(
+        coverage_edges.iter().any(|edge| *edge),
+        "opaque baseline must identify the backend-specific AA contour"
+    );
+    for (index, (cpu, gpu)) in cpu.iter().zip(gpu).enumerate() {
+        if coverage_edges[index] {
+            continue;
+        }
+        for channel in 0..4 {
+            assert!(
+                (cpu[channel] - gpu[channel]).abs() <= 2.0e-3,
+                "non-contour GPU layer-mask pixel {index} channel {channel}: CPU={cpu:?} GPU={gpu:?}"
+            );
+        }
+    }
+
+    // CPU and GPU Skia use different AA coverage on the narrow baseline
+    // contour. Compare its conserved position and channel energy separately,
+    // without relaxing tolerance for the mask interior, hole, or shadow.
+    let alpha_bounds = |pixels: &[[f32; 4]]| {
+        let mut bounds: Option<(usize, usize, usize, usize)> = None;
+        for (index, pixel) in pixels.iter().enumerate() {
+            if pixel[3] <= 2.0e-3 {
+                continue;
+            }
+            let point = (index % 72, index / 72);
+            bounds = Some(match bounds {
+                None => (point.0, point.1, point.0, point.1),
+                Some((min_x, min_y, max_x, max_y)) => (
+                    min_x.min(point.0),
+                    min_y.min(point.1),
+                    max_x.max(point.0),
+                    max_y.max(point.1),
+                ),
+            });
+        }
+        bounds
+    };
+    assert_eq!(alpha_bounds(cpu), alpha_bounds(gpu));
+    for channel in 0..4 {
+        let cpu_sum = cpu.iter().map(|pixel| pixel[channel]).sum::<f32>();
+        let gpu_sum = gpu.iter().map(|pixel| pixel[channel]).sum::<f32>();
+        assert!(
+            (cpu_sum - gpu_sum).abs() <= cpu_sum.abs().max(1.0) * 5.0e-3,
+            "GPU layer-mask channel {channel} energy differs: CPU={cpu_sum} GPU={gpu_sum}"
+        );
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[test]
 #[ignore = "requires an idle desktop OpenGL GPU"]
 fn gpu_backend_native_vector_draws_preserve_layered_pixels() {
@@ -262,4 +406,111 @@ fn gpu_backend_native_vector_draws_preserve_layered_pixels() {
             );
         }
     }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL GPU"]
+fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
+    let shadow = |distance, size| StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::DropShadow {
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            angle: 180.0,
+            distance,
+            spread: 0.0,
+            size,
+        },
+    };
+    let stroke = StyleConfig {
+        id: Uuid::new_v4(),
+        style: DrawStyle::Stroke {
+            color: Color::white(),
+            width: 4.0,
+            offset: 0.0,
+            cap: Default::default(),
+            join: Default::default(),
+            miter: 4.0,
+            dash_array: Vec::new(),
+            dash_offset: 0.0,
+        },
+    };
+    // Keep boundaries on whole device pixels. CPU and GPU rasterizers are
+    // allowed to choose different subpixel coverage, which is orthogonal to
+    // the transformed LayerMask/filter parity asserted here.
+    let transform = Affine2D::translate(8.0, 6.0);
+    let baseline_cpu = render_layer_mask_case(std::slice::from_ref(&stroke), transform, false);
+    let baseline_gpu = render_layer_mask_case(std::slice::from_ref(&stroke), transform, true);
+
+    let stroke_styles = [stroke, shadow(0.0, 0.0)];
+    let stroke_cpu = render_layer_mask_case(&stroke_styles, transform, false);
+    let stroke_gpu = render_layer_mask_case(&stroke_styles, transform, true);
+    assert_gpu_layer_mask_near_outside_baseline_edges(
+        &stroke_cpu,
+        &stroke_gpu,
+        &baseline_cpu,
+        &baseline_gpu,
+    );
+    let (center_x, center_y) = transform.map_point(32.0, 32.0);
+    let center = center_y as usize * 72 + center_x as usize;
+    assert!(
+        stroke_cpu[center][3] <= 1.0e-6 && stroke_gpu[center][3] <= 1.0e-6,
+        "the transformed Stroke-only mask must retain its transparent center"
+    );
+
+    let partial_styles = [
+        StyleConfig {
+            id: Uuid::new_v4(),
+            style: DrawStyle::Fill {
+                color: Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 128,
+                },
+                offset: 0.0,
+            },
+        },
+        shadow(10.0, 0.0),
+    ];
+    let partial_cpu = render_layer_mask_case(&partial_styles, Affine2D::IDENTITY, false);
+    let partial_gpu = render_layer_mask_case(&partial_styles, Affine2D::IDENTITY, true);
+    assert_gpu_layer_mask_near(&partial_cpu, &partial_gpu);
+    let cast = 32 * 72 + 50;
+    let expected_alpha = 128.0 / 255.0;
+    assert!(
+        (partial_cpu[cast][3] - expected_alpha).abs() < 0.02
+            && (partial_gpu[cast][3] - expected_alpha).abs() < 0.02,
+        "Drop Shadow must preserve the composed Fill alpha on CPU and GPU"
+    );
+    let outside = 8 * 72 + 8;
+    assert!(
+        partial_cpu[outside][3] <= 1.0e-6 && partial_gpu[outside][3] <= 1.0e-6,
+        "transparent pixels outside the mask must remain transparent"
+    );
+
+    let blurred_styles = [
+        StyleConfig {
+            id: Uuid::new_v4(),
+            style: DrawStyle::Fill {
+                color: Color::white(),
+                offset: 0.0,
+            },
+        },
+        shadow(8.0, 6.0),
+    ];
+    let blurred_cpu = render_layer_mask_case(&blurred_styles, Affine2D::IDENTITY, false);
+    let blurred_gpu = render_layer_mask_case(&blurred_styles, Affine2D::IDENTITY, true);
+    assert_gpu_layer_mask_near(&blurred_cpu, &blurred_gpu);
+    assert!(
+        blurred_cpu[32 * 72 + 49][0] > 0.01 && blurred_gpu[32 * 72 + 49][0] > 0.01,
+        "blurred Drop Shadow must remain visible outside the Fill on CPU and GPU"
+    );
 }

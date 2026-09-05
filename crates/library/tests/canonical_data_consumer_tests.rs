@@ -401,6 +401,7 @@ fn canonical_colors_use_the_explicit_renderer_transform_or_fail_closed() -> Resu
                 .style;
             let actual = match style {
                 DrawStyle::Fill { color, .. } | DrawStyle::Stroke { color, .. } => color,
+                unexpected => anyhow::bail!("Solid-color style fixture produced {unexpected:?}"),
             };
             assert_eq!(
                 *actual, expected,

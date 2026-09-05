@@ -5,6 +5,7 @@
 //! exact-time commands; it never edits or synchronizes the legacy graph-backed
 //! Project.
 
+mod appearance;
 mod attachment;
 mod authoring;
 mod composition;
@@ -12,6 +13,8 @@ mod edit_plan;
 mod interface;
 mod item;
 mod module;
+mod module_asset;
+mod module_structure;
 mod node_clip_conversion;
 mod palette;
 mod shape_path;
@@ -22,19 +25,27 @@ mod transition_module_controls;
 mod transition_parameter_automation;
 
 #[cfg(test)]
+mod appearance_tests;
+#[cfg(test)]
 mod attachment_tests;
 #[cfg(test)]
 mod edit_plan_tests;
 #[cfg(test)]
 mod item_tests;
 #[cfg(test)]
+mod module_asset_tests;
+#[cfg(test)]
 mod module_presentation_tests;
 #[cfg(test)]
 mod module_removal_tests;
 #[cfg(test)]
+mod module_state_tests;
+#[cfg(test)]
 mod node_clip_conversion_tests;
 #[cfg(test)]
 mod palette_tests;
+#[cfg(test)]
+mod track_tests;
 #[cfg(test)]
 mod transition_input_coverage_tests;
 #[cfg(test)]
@@ -50,6 +61,7 @@ use attachment::normalize_all_attachment_orders;
 use module::remove_instance_and_private_definition;
 
 pub use crate::model::authoring::TimelineEditPlanningIndex;
+pub use appearance::{NodeClipAppearanceEntry, NodeClipAppearanceStack};
 pub use authoring::{
     AuthoringKeyframeUpdate, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
     AuthoringPropertyValueUpdate, TimelineSettingsUpdate,
@@ -59,6 +71,7 @@ pub use edit_plan::{
     TimelineEditRequest, TimelineItemEditState, plan_timeline_edit, project_edit_plan,
 };
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
+pub use text_ensemble::{NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack};
 pub use transition::TransitionPlacement;
 
 use std::collections::HashMap;
@@ -75,9 +88,9 @@ use crate::model::authoring::{
     InstancePath, MediaInputBinding, MediaTime, ModuleConnectionId, ModuleDefinition,
     ModuleDefinitionId, ModuleInstance, ModuleInstanceId, ModuleInvocation, ModuleOutputId,
     ProjectDocument, ProjectFileStore, ProjectInvalidation, ProjectRevision, PublishedMediaInputId,
-    PublishedParameterId, RationalRate, SourceRef, TimeMap, Timeline, TimelineId, TimelineInterval,
-    TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, TransitionId,
-    ordered_track_item_ids, track_item_ids_after_placement,
+    PublishedParameterId, RationalRate, SourceRef, TRACK_VISIBILITY_PROPERTY, TimeMap, Timeline,
+    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
+    TimelineTrackKind, TransitionId, ordered_track_item_ids, track_item_ids_after_placement,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::Node;
@@ -204,6 +217,16 @@ pub struct ModuleItemPlacement {
     pub layer: i64,
     pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
     pub input_bindings: HashMap<PublishedMediaInputId, MediaInputBinding>,
+}
+
+/// Placement for a newly-created private generator Node Clip. The Output
+/// identity is created with the Module and therefore is not UI input.
+#[derive(Clone, Debug)]
+pub struct GeneratorNodeClipPlacement {
+    pub track_id: TimelineTrackId,
+    pub name: String,
+    pub interval: TimelineInterval,
+    pub layer: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -513,6 +536,28 @@ impl TimelineEditorService {
         interval: TimelineInterval,
         layer: i64,
     ) -> Result<(TimelineItemId, ChangeSet), LibraryError> {
+        self.add_item_with_authored_properties(
+            track_id,
+            name,
+            source,
+            interval,
+            layer,
+            PropertyMap::new(),
+        )
+    }
+
+    /// Adds one ordinary item with its initial placement properties in the
+    /// same history transaction. Canvas creation gestures use this boundary
+    /// so creation never requires a second corrective transform edit.
+    pub fn add_item_with_authored_properties(
+        &self,
+        track_id: TimelineTrackId,
+        name: String,
+        source: SourceRef,
+        interval: TimelineInterval,
+        layer: i64,
+        authored_properties: PropertyMap,
+    ) -> Result<(TimelineItemId, ChangeSet), LibraryError> {
         if matches!(source, SourceRef::Module(_)) {
             return Err(LibraryError::Validation(
                 "Use place_module_item to create a Node Clip".to_string(),
@@ -537,7 +582,7 @@ impl TimelineEditorService {
                             layer,
                             parent: None,
                             blend_mode: BlendMode::Normal,
-                            authored_properties: PropertyMap::new(),
+                            authored_properties,
                         },
                     );
                     place_item_at_layer(project, item_id, track_id, layer)?;

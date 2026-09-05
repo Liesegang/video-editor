@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Verify the Inspector exposes every Effect and its shared value controls."""
 
-from qa_support import QaFailure, component_center, item_by_name, run_suite_main
+from qa_support import (
+    QaFailure,
+    component_center,
+    item_by_name,
+    rendered_preview_state,
+    run_suite_main,
+    seek_timeline_seconds,
+)
 
 
 def _effect_components(client):
@@ -338,6 +345,102 @@ def run_suite(client):
             before_state["project"], other_id
         ):
             raise QaFailure("editing one Effect mutated sibling {}".format(other_id))
+
+    # Exercise the production category browser and its flat searchable result
+    # without adding a parallel Effect picker surface.
+    seek_timeline_seconds(client, 3.0)
+
+    def baseline_rendered():
+        state = rendered_preview_state(client, final["history"]["revision"])
+        return (
+            state
+            if state is not None
+            and state["editor"]["preview"].get("rendered_frame") == 90
+            else None
+        )
+
+    baseline_render = client.wait_until(
+        "Effect Add baseline Preview", baseline_rendered, timeout=30.0
+    )
+    add_id = "inspector.effects.add:item_post_transform"
+    _bring_into_inspector(client, add_id, 480.0)
+    client.click_component(add_id)
+    client.wait_component_settled("inspector.effect.add_search")
+    category_snapshot = client.component_snapshot()
+    categories = [
+        component
+        for component in category_snapshot["components"]
+        if component.get("type") == "searchable_menu_category"
+        and _visible(component)
+        and component.get("enabled") is True
+    ]
+    if not categories:
+        raise QaFailure("Add Effect menu exposed no browsable plugin categories")
+    category = categories[0]
+    category_metadata = category.get("metadata") or {}
+    category_path = category_metadata.get("category_path")
+    if not category_path or category_metadata.get("inline") is not True:
+        raise QaFailure("Add Effect category metadata is not authoritative")
+    client.click_component(category["id"])
+
+    def category_opened():
+        component = _component(client.component_snapshot(), category["id"])
+        metadata = (component or {}).get("metadata") or {}
+        return component if metadata.get("open") is True else None
+
+    client.wait_until("inline Add Effect category expansion", category_opened)
+    client.click_component("inspector.effect.add_search")
+    client.inject("text", {"text": "diagonal clip"})
+    choice_id = "inspector.effect.add_choice:diagonal_clip"
+    _, choice = client.wait_component_settled(choice_id)
+    choice_metadata = choice.get("metadata") or {}
+    if (
+        choice_metadata.get("label") != "Diagonal Clip"
+        or not choice_metadata.get("category")
+    ):
+        raise QaFailure("search result lost its plugin label or category")
+    before_add = client.state()
+    before_attachment_ids = set(before_add["project"]["attachments"])
+    client.click_component(choice_id)
+
+    def effect_added():
+        state = client.state()
+        created = set(state["project"]["attachments"]) - before_attachment_ids
+        if (
+            len(created) != 1
+            or state["history"]["revision"]
+            != before_add["history"]["revision"] + 1
+        ):
+            return None
+        attachment = state["project"]["attachments"][next(iter(created))]
+        processor = attachment.get("processor") or {}
+        operation = (processor.get("value") or {}).get("operation") or {}
+        if (
+            attachment.get("stage") != "item_post_transform"
+            or (attachment.get("owner") or {}).get("item_id") != text_item["id"]
+            or operation.get("component_id") != "diagonal_clip"
+        ):
+            raise QaFailure("Add Effect search attached the wrong processor or owner")
+        return state, attachment
+
+    added_state, added_attachment = client.wait_until(
+        "searched Effect attachment", effect_added
+    )
+
+    def added_rendered():
+        state = rendered_preview_state(client, added_state["history"]["revision"])
+        return (
+            state
+            if state is not None
+            and state["editor"]["preview"].get("rendered_frame") == 90
+            and state["editor"]["preview"].get("pixel_hash")
+            != baseline_render["editor"]["preview"].get("pixel_hash")
+            else None
+        )
+
+    added_render = client.wait_until(
+        "searched Effect Preview result", added_rendered, timeout=30.0
+    )
     return {
         "suite": "inspector-effects",
         "item_id": text_item["id"],
@@ -347,7 +450,14 @@ def run_suite(client):
         "edited_control": control["id"],
         "same_stage_drag_preview": reorder_preview,
         "cross_stage_drag_preview": cross_stage_preview,
-        "history": final["history"],
+        "add_menu": {
+            "category": category_metadata,
+            "choice": choice_metadata,
+            "attachment_id": added_attachment["id"],
+            "preview_before": baseline_render["editor"]["preview"]["pixel_hash"],
+            "preview_after": added_render["editor"]["preview"]["pixel_hash"],
+        },
+        "history": added_state["history"],
         "actions": client.evidence,
     }
 

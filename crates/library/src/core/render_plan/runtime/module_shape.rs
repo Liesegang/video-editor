@@ -9,6 +9,7 @@ use super::frame_values::{required_number, required_string};
 use super::*;
 use crate::model::authoring::text_ensemble_direct_contract_is_compatible;
 use crate::model::frame::runtime_shape::RuntimeShape;
+use crate::model::node::{ELLIPSE_SHAPE_CATALOG_ID, RECTANGLE_SHAPE_CATALOG_ID};
 use crate::model::project::{
     BACKGROUND_SHAPE_INPUT_PORT, EvalOutput, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
@@ -24,30 +25,14 @@ impl ModuleImageRuntime<'_> {
         node: &CompiledNode,
         operation: &crate::model::node::PluginOperationContent,
     ) -> Result<Option<FrameItem>, LibraryError> {
-        let descriptor = self.plugins.operation_descriptor(
-            &operation.category,
-            &operation.component_id,
-            &operation.operation,
-        )?;
-        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
-            return Ok(None);
-        }
         let Some(source) = self.single_shape_source(node.id, SHAPE_INPUT_PORT)? else {
             return Ok(None);
         };
         let Some(shape) = self.evaluate_shape_output(&source)? else {
             return Ok(None);
         };
-        let values = self.node_values(node)?;
-        let Some(style) = crate::plugin::styles::builtin_style_from_values(
-            &operation.component_id,
-            node.id,
-            &values,
-        ) else {
-            return Err(LibraryError::Render(format!(
-                "Style Module Node {} uses unsupported or invalid built-in values",
-                node.id
-            )));
+        let Some(style) = self.evaluate_style_config(node, operation)? else {
+            return Ok(None);
         };
         let objects = shape.into_styled_objects(style, self.local_time.to_seconds_f64() as f32)?;
         Ok(Some(FrameItem::Group(FrameGroup {
@@ -64,7 +49,126 @@ impl ModuleImageRuntime<'_> {
         })))
     }
 
-    fn evaluate_shape_output(
+    pub(super) fn appearance_stack_image(
+        &mut self,
+        node: &CompiledNode,
+    ) -> Result<Option<FrameItem>, LibraryError> {
+        let Some(shape_source) = self.single_shape_source(node.id, SHAPE_INPUT_PORT)? else {
+            return Ok(None);
+        };
+        let Some(shape) = self.evaluate_shape_output(&shape_source)? else {
+            return Ok(None);
+        };
+        let target = ModulePortAddress {
+            node_id: node.id,
+            port: crate::model::project::APPEARANCE_STYLES_PORT.to_string(),
+        };
+        let mut sources = self
+            .definition
+            .connections
+            .iter()
+            .filter(|connection| connection.to == target)
+            .map(|connection| (connection.order, connection.id, connection.from.clone()))
+            .collect::<Vec<_>>();
+        sources.sort_by_key(|(order, id, _)| (*order, *id));
+
+        let mut styles = Vec::with_capacity(sources.len());
+        for (_, _, source) in sources {
+            if source.port != crate::model::project::STYLE_OUTPUT_PORT {
+                return Err(LibraryError::Validation(format!(
+                    "Appearance Stack {} received a non-Style output {}:{}",
+                    node.id, source.node_id, source.port
+                )));
+            }
+            let style_node = self
+                .definition
+                .nodes
+                .get(&source.node_id)
+                .cloned()
+                .ok_or_else(|| {
+                    LibraryError::Validation(format!(
+                        "Appearance Stack {} reaches missing Style Node {}",
+                        node.id, source.node_id
+                    ))
+                })?;
+            if !style_node.enabled {
+                continue;
+            }
+            if style_node.bypassed {
+                return Err(LibraryError::Validation(format!(
+                    "Style Node {} cannot bypass a Style value",
+                    style_node.id
+                )));
+            }
+            let NodeContent::PluginOperation(operation) = &style_node.content else {
+                return Err(LibraryError::Validation(format!(
+                    "Appearance Stack {} input {} is not a Style operation",
+                    node.id, style_node.id
+                )));
+            };
+            if operation.category != STYLE_CATEGORY
+                || operation.operation != STYLE_APPLY_OPERATION
+                || operation.component_id == IMAGE_OPACITY_STYLE_COMPONENT_ID
+            {
+                return Err(LibraryError::Validation(format!(
+                    "Appearance Stack {} input {} has an incompatible operation contract",
+                    node.id, style_node.id
+                )));
+            }
+            if let Some(style) = self.evaluate_style_config(&style_node, operation)? {
+                styles.push(style);
+            }
+        }
+        if styles.is_empty() {
+            return Ok(None);
+        }
+        let objects =
+            shape.into_appearance_objects(styles, self.local_time.to_seconds_f64() as f32)?;
+        Ok(Some(FrameItem::Group(FrameGroup {
+            source_id: node.id,
+            kind: FrameGroupKind::Node,
+            width: self.width,
+            height: self.height,
+            background_color: transparent(),
+            transform: Transform::default(),
+            blend_mode: node.blend_mode,
+            effect_time: OrderedFloat(self.local_time.to_seconds_f64()),
+            effects: Vec::new(),
+            items: objects.into_iter().map(FrameItem::Object).collect(),
+        })))
+    }
+
+    fn evaluate_style_config(
+        &mut self,
+        node: &CompiledNode,
+        operation: &crate::model::node::PluginOperationContent,
+    ) -> Result<Option<StyleConfig>, LibraryError> {
+        let descriptor = self.plugins.operation_descriptor(
+            &operation.category,
+            &operation.component_id,
+            &operation.operation,
+        )?;
+        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
+            return Ok(None);
+        }
+        let values = self.node_values(node)?;
+        match self.plugins.evaluate_style_operation_values(
+            &operation.component_id,
+            node.id,
+            &values,
+            self.local_time.to_seconds_f64(),
+            self.evaluation_fps,
+            (self.width, self.height),
+        ) {
+            EvalOutput::Produced(style) => Ok(Some(style)),
+            EvalOutput::NoOutput => Err(LibraryError::Render(format!(
+                "Style Module Node {} produced no Style for component '{}'",
+                node.id, operation.component_id
+            ))),
+        }
+    }
+
+    pub(super) fn evaluate_shape_output(
         &mut self,
         source: &ModulePortAddress,
     ) -> Result<Option<RuntimeShape>, LibraryError> {
@@ -138,6 +242,27 @@ impl ModuleImageRuntime<'_> {
                     )));
                 };
                 crate::plugin::entity_converter::runtime_path_shape(node.id, path.clone())
+            }
+            NodeContent::NativeOperation(operation)
+                if matches!(
+                    operation.catalog_id.as_str(),
+                    RECTANGLE_SHAPE_CATALOG_ID | ELLIPSE_SHAPE_CATALOG_ID
+                ) =>
+            {
+                let values = self.node_values(&node)?;
+                let width = required_number(&values, "width", "Primitive Shape")?;
+                let height = required_number(&values, "height", "Primitive Shape")?;
+                let kind = if operation.catalog_id == RECTANGLE_SHAPE_CATALOG_ID {
+                    crate::model::authoring::ShapeKind::Rectangle
+                } else {
+                    crate::model::authoring::ShapeKind::Ellipse
+                };
+                let path_data = crate::plugin::entity_converter::primitive_shape_path_data(
+                    kind, width, height,
+                )?;
+                let path = crate::model::path::parse_legacy_svg_path_data(&path_data)
+                    .map_err(|error| LibraryError::Render(error.to_string()))?;
+                crate::plugin::entity_converter::runtime_path_shape(node.id, path)
             }
             NodeContent::PluginOperation(operation)
                 if operation.category == EFFECTOR_CATEGORY
@@ -316,7 +441,7 @@ impl ModuleImageRuntime<'_> {
         }
     }
 
-    fn single_shape_source(
+    pub(super) fn single_shape_source(
         &self,
         node_id: uuid::Uuid,
         port: &str,

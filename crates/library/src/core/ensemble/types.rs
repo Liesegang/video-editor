@@ -281,6 +281,10 @@ pub enum EffectorConfig {
         seed: u64,
         target: super::target::EffectorTarget,
     },
+    Tracking {
+        amount: f32,
+        target: super::target::EffectorTarget,
+    },
 }
 
 impl PartialEq for EffectorConfig {
@@ -366,6 +370,16 @@ impl PartialEq for EffectorConfig {
                     && sd1 == sd2
                     && tg1 == tg2
             }
+            (
+                EffectorConfig::Tracking {
+                    amount: a1,
+                    target: tg1,
+                },
+                EffectorConfig::Tracking {
+                    amount: a2,
+                    target: tg2,
+                },
+            ) => OrderedFloat(*a1) == OrderedFloat(*a2) && tg1 == tg2,
             _ => false,
         }
     }
@@ -425,6 +439,10 @@ impl std::hash::Hash for EffectorConfig {
                 OrderedFloat(scale_range.0).hash(state);
                 OrderedFloat(scale_range.1).hash(state);
                 seed.hash(state);
+                target.hash(state);
+            }
+            EffectorConfig::Tracking { amount, target } => {
+                OrderedFloat(*amount).hash(state);
                 target.hash(state);
             }
         }

@@ -23,7 +23,7 @@ use crate::command::CommandId;
 pub struct NodeEditorState {
     pub panel_rect: Option<egui::Rect>,
     pub focus_requested: bool,
-    pub pending_layout_command: Option<CommandId>,
+    pub pending_command: Option<CommandId>,
     pub active_document: Option<NodeEditorDocument>,
     pub surface_interaction:
         node_editor_ui::InteractionState<Uuid, ModuleEditorPortId, ModuleConnectionId, Uuid>,
@@ -31,6 +31,7 @@ pub struct NodeEditorState {
     pub primary_node: Option<Uuid>,
     pub selected_connection: Option<ModuleConnectionId>,
     pub create_menu: Option<ModuleCreateMenuState>,
+    pub wire_menu: Option<ModuleWireMenuState>,
     pub node_drag_offsets: HashMap<Uuid, egui::Vec2>,
     /// Authoritative Node Editor camera. The production Snarl surface consumes
     /// this value, but never owns or feeds back a second navigation state.
@@ -48,13 +49,14 @@ impl Default for NodeEditorState {
         Self {
             panel_rect: None,
             focus_requested: false,
-            pending_layout_command: None,
+            pending_command: None,
             active_document: None,
             surface_interaction: node_editor_ui::InteractionState::default(),
             selected_nodes: HashSet::new(),
             primary_node: None,
             selected_connection: None,
             create_menu: None,
+            wire_menu: None,
             node_drag_offsets: HashMap::new(),
             canvas: CanvasState::uniform(egui::Vec2::ZERO, 1.0),
             fit_requested: false,
@@ -66,14 +68,15 @@ impl Default for NodeEditorState {
 impl NodeEditorState {
     pub fn request_document(&mut self, document: NodeEditorDocument) {
         if self.active_document.as_ref() != Some(&document) {
-            // A layout command is scoped to the document that was active when
+            // A command is scoped to the document that was active when
             // it was requested. Never apply it later to a newly opened Module.
-            self.pending_layout_command = None;
+            self.pending_command = None;
             self.surface_interaction.cancel();
             self.selected_nodes.clear();
             self.primary_node = None;
             self.selected_connection = None;
             self.create_menu = None;
+            self.wire_menu = None;
             self.node_drag_offsets.clear();
             self.canvas = CanvasState::uniform(egui::Vec2::ZERO, 1.0);
             self.fit_requested = true;
@@ -175,6 +178,13 @@ pub struct ModuleCreateMenuState {
     pub open_time: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ModuleWireMenuState {
+    pub connection_id: ModuleConnectionId,
+    pub position: egui::Pos2,
+    pub open_time: f64,
+}
+
 impl ModuleCreateMenuState {
     pub const fn new(position: egui::Pos2, open_time: f64) -> Self {
         Self {
@@ -191,10 +201,15 @@ mod tests {
     #[test]
     fn switching_documents_clears_only_transient_module_interaction() {
         let mut state = NodeEditorState {
-            pending_layout_command: Some(CommandId::NodeEditorCleanLayoutAll),
+            pending_command: Some(CommandId::NodeEditorCleanLayoutAll),
             ..NodeEditorState::default()
         };
         state.selected_nodes.insert(Uuid::new_v4());
+        state.wire_menu = Some(ModuleWireMenuState {
+            connection_id: ModuleConnectionId::new(),
+            position: egui::pos2(80.0, 90.0),
+            open_time: 1.0,
+        });
         state.canvas = CanvasState::uniform(egui::vec2(10.0, 20.0), 0.75);
         state.direct_gesture_transform = Some(egui::emath::TSTransform::IDENTITY);
         let document = NodeEditorDocument::ModuleDefinition {
@@ -207,7 +222,8 @@ mod tests {
         };
         state.request_document(document.clone());
         assert!(state.selected_nodes.is_empty());
-        assert_eq!(state.pending_layout_command, None);
+        assert!(state.wire_menu.is_none());
+        assert_eq!(state.pending_command, None);
         assert_eq!(state.canvas, CanvasState::uniform(egui::Vec2::ZERO, 1.0));
         assert!(state.fit_requested);
         assert_eq!(state.direct_gesture_transform, None);

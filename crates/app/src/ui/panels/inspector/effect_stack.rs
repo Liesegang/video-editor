@@ -17,6 +17,9 @@ use library::plugin::PluginManager;
 
 use crate::state::authoring::AuthoringUiState;
 use crate::state::node_editor::{ModuleEditorHost, NodeEditorDocument};
+use crate::ui::widgets::searchable_context_menu::{
+    searchable_menu_button, show_searchable_items_with_qa, SearchableItem,
+};
 
 use super::{property_control, property_label, property_row, PropertyRowSpec};
 
@@ -35,6 +38,13 @@ struct EffectStackResources<'a> {
 struct StackPosition {
     index: usize,
     len: usize,
+}
+
+#[derive(Clone)]
+enum AddEffect {
+    Builtin(String),
+    Custom,
+    Template(ModuleDefinitionId, ModuleOutputId),
 }
 
 pub(super) fn effect_stack(
@@ -76,9 +86,10 @@ pub(super) fn effect_stack(
                     .strong(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let add = ui.menu_button(egui::RichText::new(icons::PLUS).size(15.0), |ui| {
-                    add_stage_menu(ui, project, state, service, plugins, &owner, *stage)
-                });
+                let add =
+                    searchable_menu_button(ui, egui::RichText::new(icons::PLUS).size(15.0), |ui| {
+                        add_stage_menu(ui, project, state, service, plugins, &owner, *stage)
+                    });
                 crate::qa::register_component_with_metadata(
                     format!("inspector.effects.add:{}", drag_drop::stage_id(*stage)),
                     "effect_stack_add",
@@ -201,63 +212,50 @@ fn add_stage_menu(
         .collect::<Vec<_>>();
     effects.sort_by(|left, right| left.2.cmp(&right.2).then(left.1.cmp(&right.1)));
 
-    ui.weak("Built-in Effects");
-    if effects.is_empty() {
-        ui.weak("No compatible built-in effects");
-    }
-    let mut current_category = String::new();
+    let mut choices = Vec::new();
     for (effect_id, name, category) in effects {
-        if current_category != category {
-            if !current_category.is_empty() {
-                ui.separator();
-            }
-            current_category.clone_from(&category);
-            ui.weak(&category);
-        }
-        if ui.button(name).clicked() {
-            match service.add_builtin_effect_by_id(plugins, owner.clone(), stage, &effect_id) {
-                Ok(_) => state.status = format!("Added Effect at {}", stage_label(stage)),
-                Err(error) => state.error = Some(error.to_string()),
-            }
-            ui.close();
-        }
+        let mut choice = SearchableItem::new(name, AddEffect::Builtin(effect_id.clone()));
+        choice.category = Some(category);
+        choice.keywords.push(effect_id.clone());
+        choice.qa_id = Some(format!("inspector.effect.add_choice:{effect_id}"));
+        choices.push(choice);
     }
-
-    ui.separator();
-    ui.weak("Custom Effects");
-    if media_type == PortDataType::Image
-        && ui
-            .button(format!("{} New Custom Effect", icons::SHARE_NETWORK))
-            .on_hover_text("Create a custom Effect and edit its processing in the Node Editor")
-            .clicked()
-    {
-        create_and_open_node_effect(state, service, owner.clone(), stage);
+    if media_type == PortDataType::Image {
+        let mut choice = SearchableItem::new("New Custom Effect", AddEffect::Custom);
+        choice.category = Some("Custom".to_string());
+        choice.keywords = vec!["node".to_string(), "module".to_string()];
+        choices.push(choice);
+    }
+    for (definition_id, output_id, label) in compatible_module_outputs(project, media_type) {
+        let mut choice = SearchableItem::new(label, AddEffect::Template(definition_id, output_id));
+        choice.category = Some("Module Templates".to_string());
+        choices.push(choice);
+    }
+    if let Some(choice) = show_searchable_items_with_qa(
+        ui,
+        &format!("inspector.effect.add_menu:{owner:?}:{stage:?}"),
+        Some("inspector.effect.add_search"),
+        &choices,
+    ) {
+        match choice {
+            AddEffect::Builtin(effect_id) => {
+                match service.add_builtin_effect_by_id(plugins, owner.clone(), stage, &effect_id) {
+                    Ok(_) => state.status = format!("Added Effect at {}", stage_label(stage)),
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
+            AddEffect::Custom => create_and_open_node_effect(state, service, owner.clone(), stage),
+            AddEffect::Template(definition_id, output_id) => attach_and_open_module(
+                state,
+                service,
+                owner.clone(),
+                stage,
+                definition_id,
+                output_id,
+            ),
+        }
         ui.close();
-        return;
     }
-
-    let compatible = compatible_module_outputs(project, media_type);
-    if compatible.is_empty() {
-        if media_type == PortDataType::Audio {
-            ui.weak("No compatible audio Module templates");
-        }
-        return;
-    }
-    ui.menu_button("From Module Template", |ui| {
-        for (definition_id, output_id, label) in &compatible {
-            if ui.button(label).clicked() {
-                attach_and_open_module(
-                    state,
-                    service,
-                    owner.clone(),
-                    stage,
-                    *definition_id,
-                    *output_id,
-                );
-                ui.close();
-            }
-        }
-    });
 }
 
 fn effect_entry(

@@ -85,6 +85,11 @@ fn add_media_node(
         "audio",
         MediaContent {
             asset_id: asset.id,
+            output_selection: if is_video {
+                crate::model::MediaOutputSelection::ImageAndAudio
+            } else {
+                crate::model::MediaOutputSelection::Audio
+            },
             stream_index: is_video.then_some(0),
             audio_stream_index,
         },
@@ -705,6 +710,7 @@ fn source_window_uses_clip_local_time_and_explicit_audio_stream() {
         "audio stream two",
         MediaContent {
             asset_id,
+            output_selection: crate::model::MediaOutputSelection::ImageAndAudio,
             stream_index: Some(0),
             audio_stream_index: Some(2),
         },
@@ -746,6 +752,7 @@ fn visual_stream_is_never_reused_as_embedded_audio_selection() {
     audio.stream_index = Some(2);
     let mut media = MediaContent {
         asset_id: video.id,
+        output_selection: crate::model::MediaOutputSelection::ImageAndAudio,
         stream_index: Some(0),
         audio_stream_index: None,
     };

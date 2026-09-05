@@ -25,6 +25,10 @@ pub enum PropertyUiType {
     /// Canonical multi-contour graph path. Editing uses an explicit canonical
     /// import boundary rather than treating SVG text as authoritative state.
     Path,
+    /// Managed multi-stop gradient with stable geometry and spread behavior.
+    Gradient,
+    /// Managed procedural pattern with stable geometry and two authored colors.
+    Pattern,
     Color,
     Text,
     MultilineText,
@@ -67,7 +71,10 @@ impl PropertyUiType {
     /// Whether the registered Python Expression evaluator can produce this
     /// property's authoritative value type today.
     pub const fn supports_expression(&self) -> bool {
-        !matches!(self, Self::ColorValue | Self::Path)
+        !matches!(
+            self,
+            Self::ColorValue | Self::Path | Self::Gradient | Self::Pattern
+        )
     }
 
     pub fn vec2(suffix: impl Into<String>) -> Self {

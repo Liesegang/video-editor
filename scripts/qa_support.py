@@ -25,6 +25,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parent.parent
 AUTHORING_FIXTURE = "authoring_e2e"
 AUTHORING_AUDIO_FIXTURE = "authoring_audio_e2e"
 AUTHORING_PATH_FIXTURE = "authoring_path_e2e"
+QA_APP_BINARY_ENV = "RUVIE_QA_APP_BINARY"
 
 
 class QaFailure(RuntimeError):
@@ -47,6 +48,19 @@ def repository_git_commit() -> str | None:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def project_file_evidence(path: pathlib.Path, description: str) -> dict:
+    """Return stable evidence for one non-empty persisted Project file."""
+
+    content = path.read_bytes()
+    if not content:
+        raise QaFailure(description + " is empty")
+    return {
+        "path": str(path.resolve()),
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
 
 
 def process_group_options() -> dict:
@@ -104,6 +118,42 @@ def wait_endpoint_closed(
     raise QaFailure(
         "{} did not close within {:.1f}s".format(description, timeout)
     )
+
+
+def request_clean_native_close(
+    client: "QaClient", label: str, timeout: float
+) -> dict:
+    """Request the production close path and wait for its endpoint to close."""
+
+    started = time.monotonic()
+    queued = client.request("/v1/input/close-request", {}, method="POST")
+    if queued.get("queued") is not True or queued.get("action_id") is None:
+        raise QaFailure("{} native close request was not queued".format(label))
+    wait_endpoint_closed(client, timeout=timeout, description=label)
+    return {
+        "action_id": queued["action_id"],
+        "seconds": time.monotonic() - started,
+    }
+
+
+def close_clean_native_app(
+    client: "QaClient",
+    process: subprocess.Popen,
+    label: str,
+    timeout: float,
+) -> dict:
+    """Close one native QA app through production UI and verify process exit."""
+
+    closed = request_clean_native_close(client, label, timeout)
+    try:
+        exit_code = process.wait(timeout=min(timeout, 10.0))
+    except subprocess.TimeoutExpired as error:
+        raise QaFailure(
+            "{} endpoint closed but its process did not exit".format(label)
+        ) from error
+    if exit_code != 0:
+        raise QaFailure("{} exited with code {}".format(label, exit_code))
+    return {**closed, "exit_code": exit_code}
 
 
 def _json_request(base_url: str, path: str, data=None, method: str | None = None):
@@ -393,6 +443,21 @@ def component_point(component: dict, fraction_x: float, fraction_y: float) -> di
     }
 
 
+def bring_timeline_component(client: QaClient, component_id: str, direction: float):
+    """Reveal an offscreen Timeline row through ordinary wheel navigation."""
+    for _ in range(10):
+        client.state()
+        component = next(
+            (component for component in client.component_snapshot()["components"]
+             if component.get("id") == component_id and component.get("visible")),
+            None,
+        )
+        if component is not None:
+            return component
+        client.scroll_component("timeline.canvas", 0.0, direction)
+    raise QaFailure("could not bring {} into the Timeline viewport".format(component_id))
+
+
 def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
     """Seek through the production Timeline ruler and wait for its exact frame."""
     state = client.state()
@@ -434,6 +499,101 @@ def rendered_preview_state(client: QaClient, revision: int):
     ):
         return state
     return None
+
+
+def settled_preview_state(client: QaClient, revision: int, frame: int):
+    """Return matching Project/UI Preview state after the render queue is idle."""
+    component = next(
+        (
+            item
+            for item in client.component_snapshot()["components"]
+            if item.get("id") == "preview.canvas"
+        ),
+        None,
+    )
+    preview = (component or {}).get("metadata") or {}
+    if (
+        preview.get("rendered_revision") != revision
+        or preview.get("rendered_frame") != frame
+        or preview.get("nontransparent_pixels", 0) <= 0
+        or preview.get("pixel_hash") is None
+        or preview.get("render_in_flight_request") is not None
+        or preview.get("render_desired_pending") is not False
+    ):
+        return None
+    state = client.state()
+    state_preview = state["editor"]["preview"]
+    if (
+        state["history"]["revision"] == revision
+        and state["editor"]["timeline"]["current_frame"] == frame
+        and state_preview.get("rendered_revision") == revision
+        and state_preview.get("rendered_frame") == frame
+        and state_preview.get("pixel_hash") == preview.get("pixel_hash")
+        and state["editor"].get("error") is None
+    ):
+        return state
+    return None
+
+
+def convert_timeline_item_to_node_clip(client: QaClient, item_id: str, revision: int):
+    """Invoke the production Timeline conversion action and await its atomic edit."""
+    client.click_component("timeline.item:" + item_id, button="secondary")
+    menu_id = "timeline.item.convert_source_to_node_clip:" + item_id
+    client.wait_component(menu_id)
+    client.click_component(menu_id)
+
+    def converted():
+        state = client.state()
+        source = state["project"]["items"][item_id]["source"]
+        document = state["editor"]["node_editor"]["document"]
+        if (
+            source.get("kind") == "module"
+            and state["history"]["revision"] == revision + 1
+            and document
+            and document.get("kind") == "module_definition"
+            and document.get("host") == "node_clip"
+        ):
+            return state
+        return None
+
+    return client.wait_until("bounded Node Clip conversion", converted)
+
+
+def create_basic_timeline_clip(client: QaClient, kind: str, expected_name: str):
+    """Create one production basic clip from the Timeline context menu."""
+    before = client.state()
+    before_ids = set(before["project"]["items"])
+    _, canvas = client.wait_component_settled("timeline.canvas")
+    rect = canvas["rect_points"]
+    client.inject(
+        "click",
+        {
+            "x": float(rect["max_x"]) - 6.0,
+            "y": float(rect["max_y"]) - 6.0,
+            "button": "secondary",
+            "coordinate_space": "points",
+        },
+    )
+    client.wait_component("timeline.menu.new_clip")
+    client.click_component("timeline.menu.new_clip")
+    choice_id = "timeline.menu.new_clip." + kind
+    _, choice = client.wait_component_settled(choice_id)
+    metadata = choice.get("metadata") or {}
+    if metadata.get("clip_kind") != kind or metadata.get("label") != expected_name:
+        raise QaFailure("basic clip menu metadata is not authoritative")
+    client.click_component(choice_id)
+
+    def created():
+        state = client.state()
+        new_ids = set(state["project"]["items"]) - before_ids
+        if len(new_ids) != 1 or state["history"]["revision"] != before["history"]["revision"] + 1:
+            return None
+        item = state["project"]["items"][next(iter(new_ids))]
+        if item["name"] != expected_name:
+            raise QaFailure("created basic clip has the wrong name")
+        return state, item
+
+    return client.wait_until("created {} clip".format(expected_name), created)
 
 
 def activate_dock_tab(
@@ -538,8 +698,14 @@ def spawned_authoring_app(
             environment[name] = value
     environment["RUVIE_QA_PORT"] = str(port)
     environment.setdefault("RUVIE_QA_FIXTURE", AUTHORING_FIXTURE)
+    configured_binary = environment.get(QA_APP_BINARY_ENV)
+    command = (
+        [configured_binary]
+        if configured_binary
+        else ["cargo", "run", "-p", "app", "--locked"]
+    )
     process = subprocess.Popen(
-        ["cargo", "run", "-p", "app", "--locked"],
+        command,
         cwd=REPOSITORY_ROOT,
         env=environment,
         **process_group_options(),

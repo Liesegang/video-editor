@@ -19,6 +19,7 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
             "Ordinary clip".to_string(),
             SourceRef::Text {
                 text: "ordinary".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             TimelineInterval::new(
@@ -33,12 +34,12 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
 
     let item_id = place_payload(
         before.as_ref(),
-        timeline_id,
         AuthoringLibraryDrag::NewParticleNodeClip,
         track_id,
         1,
         MediaTime::new(4, 1).expect("placement start"),
         &service,
+        &library::plugin::PluginManager::default(),
     )
     .expect("Particle placement");
     let after = service.snapshot().expect("after Particle placement");
@@ -69,9 +70,9 @@ fn particle_library_drag_uses_the_authoritative_private_module_factory() {
     let instance = &after.module_instances[&invocation.instance_id];
     let definition = &after.module_definitions[&instance.definition_id];
     assert_eq!(definition.sharing, ModuleDefinitionSharing::Private);
-    assert_eq!(definition.graph.nodes.len(), 6);
-    assert_eq!(definition.graph.connections.len(), 5);
-    assert_eq!(definition.interface.parameters.len(), 11);
+    assert_eq!(definition.graph.nodes.len(), 7);
+    assert_eq!(definition.graph.connections.len(), 6);
+    assert_eq!(definition.interface.parameters.len(), 16);
 
     service.undo().expect("undo").expect("one creation edit");
     assert_eq!(

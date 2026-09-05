@@ -54,6 +54,24 @@ pub fn get_click_action<T>(modifiers: &Modifiers, hovered_item: Option<T>) -> Cl
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum BoxAction<T> {
+    Replace(Vec<T>),
+    Add(Vec<T>),
+    Remove(Vec<T>),
+}
+
+/// Resolve marquee selection with the same modifiers as object clicks.
+/// Ctrl/Cmd marquee extends selection, matching the production Timeline
+/// behavior restored from before the authoring-model migration.
+pub fn get_box_action<T>(modifiers: &Modifiers, items_in_box: Vec<T>) -> BoxAction<T> {
+    match SelectionAction::from_modifiers(modifiers) {
+        SelectionAction::Replace => BoxAction::Replace(items_in_box),
+        SelectionAction::Add | SelectionAction::Toggle => BoxAction::Add(items_in_box),
+        SelectionAction::Remove => BoxAction::Remove(items_in_box),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +111,43 @@ mod tests {
                 ClickAction::Toggle(7)
             );
         }
+    }
+
+    #[test]
+    fn marquee_uses_replace_add_and_remove_modifier_contract() {
+        assert_eq!(
+            get_box_action(&Modifiers::NONE, vec![1, 2]),
+            BoxAction::Replace(vec![1, 2])
+        );
+        for modifiers in [
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                command: true,
+                ..Modifiers::NONE
+            },
+        ] {
+            assert_eq!(
+                get_box_action(&modifiers, vec![1, 2]),
+                BoxAction::Add(vec![1, 2])
+            );
+        }
+        assert_eq!(
+            get_box_action(
+                &Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+                vec![1, 2],
+            ),
+            BoxAction::Remove(vec![1, 2])
+        );
     }
 }

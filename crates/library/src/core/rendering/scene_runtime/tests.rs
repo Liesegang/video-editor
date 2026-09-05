@@ -2,6 +2,7 @@ use ordered_float::OrderedFloat;
 
 use super::*;
 use crate::model::frame::color::Color;
+use crate::model::frame::particle::ParticleEmitterShape;
 
 fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
     Vec3 {
@@ -17,6 +18,11 @@ fn parameters() -> ParticleSceneParameters {
         emission_rate: OrderedFloat(120.0),
         lifetime_seconds: OrderedFloat(4.0),
         seed: 7,
+        emitter_shape: ParticleEmitterShape::Point,
+        emitter_position: vec3(0.0, 0.0, 0.0),
+        emitter_radius: OrderedFloat(0.0),
+        emitter_size: vec3(0.0, 0.0, 0.0),
+        emitter_surface_only: false,
         velocity_min: vec3(-1.0, -2.0, -3.0),
         velocity_max: vec3(1.0, 2.0, 3.0),
         gravity: vec3(0.0, 180.0, 0.0),
@@ -66,6 +72,14 @@ fn render_only_color_does_not_invalidate_simulation_history() {
     assert_ne!(
         stable_parameter_hash(&first),
         stable_parameter_hash(&changed_force)
+    );
+
+    let mut changed_emitter_shape = first.clone();
+    changed_emitter_shape.emitter_shape = ParticleEmitterShape::Sphere;
+    assert_ne!(
+        stable_parameter_hash(&first),
+        stable_parameter_hash(&changed_emitter_shape),
+        "birth-position changes must restart derived simulation state"
     );
 }
 

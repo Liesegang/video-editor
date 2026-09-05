@@ -14,7 +14,7 @@ mod transient;
 
 pub(crate) use hit::wire_selection_target;
 pub(crate) use layout_swipe_preflight::layout_swipe_wants_pointer;
-pub(crate) use lifecycle::interact;
+pub(crate) use lifecycle::{cancel_gesture, interact};
 
 /// A mutation request against the host's authoritative graph.
 ///
@@ -60,6 +60,11 @@ pub enum EditorOutput<NodeId, PortId, WireId, GroupId> {
     },
     Disconnect {
         wire: WireId,
+    },
+    /// Requests the host's native context menu for one authored wire.
+    WireContextMenu {
+        wire: WireId,
+        screen_position: Pos2,
     },
     Delete {
         items: Vec<ItemId<NodeId, GroupId, WireId>>,
@@ -212,6 +217,26 @@ pub(super) enum Gesture<NodeId, PortId, WireId, GroupId> {
         current: Pos2,
         transform: egui::emath::TSTransform,
     },
+    /// Plain right-click on one authored wire. The disconnect is committed on
+    /// release, so host context menus can still own right-clicks on Nodes.
+    WireSecondary {
+        wire: WireId,
+        start: Pos2,
+        current: Pos2,
+        transform: egui::emath::TSTransform,
+    },
+    /// Blender-compatible Cut Links gesture (Ctrl + right-button drag).
+    CutWires {
+        points: Vec<Pos2>,
+        transform: egui::emath::TSTransform,
+    },
+    /// Node Wrangler-style Lazy Connect (Alt + right-button drag).
+    LazyConnect {
+        from_node: NodeId,
+        start: Pos2,
+        current: Pos2,
+        transform: egui::emath::TSTransform,
+    },
     Resize {
         group: GroupId,
         initial_rect: Rect,
@@ -230,6 +255,9 @@ impl<NodeId, PortId, WireId, GroupId> Gesture<NodeId, PortId, WireId, GroupId> {
             | Self::Move { transform, .. }
             | Self::Connect { transform, .. }
             | Self::Reconnect { transform, .. }
+            | Self::WireSecondary { transform, .. }
+            | Self::CutWires { transform, .. }
+            | Self::LazyConnect { transform, .. }
             | Self::Resize { transform, .. } => *transform,
             Self::LayoutSwipe(gesture) => gesture.transform(),
         }

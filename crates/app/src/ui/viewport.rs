@@ -89,7 +89,8 @@ impl<'a> ViewportController<'a> {
         };
         let response = self.ui.interact(rect, self.id, sense);
         let pointer_delta = self.ui.input(|input| input.pointer.delta());
-        let hovered = self.ui.rect_contains_pointer(rect);
+        let popup_open = egui::Popup::is_any_open(self.ui.ctx());
+        let hovered = self.ui.rect_contains_pointer(rect) && !popup_open;
         // A child canvas such as egui-snarl may become the final response
         // owner after this adapter runs. Explicit navigation chords are still
         // unambiguous, so passthrough mode samples their held buttons directly
@@ -97,12 +98,12 @@ impl<'a> ViewportController<'a> {
         let primary_drag = if self.direct_manipulation_passthrough {
             hovered && self.ui.input(|input| input.pointer.primary_down())
         } else {
-            response.dragged_by(egui::PointerButton::Primary)
+            !popup_open && response.dragged_by(egui::PointerButton::Primary)
         };
         let middle_drag = if self.direct_manipulation_passthrough {
             hovered && middle_down
         } else {
-            response.dragged_by(egui::PointerButton::Middle)
+            !popup_open && response.dragged_by(egui::PointerButton::Middle)
         };
         let primary_pan =
             (key_active || self.pan_tool_active) && primary_drag && !self.zoom_tool_active;
@@ -268,6 +269,64 @@ mod tests {
         let world_after = state.0.world_at(egui::pos2(anchor.x, anchor.y));
         assert_near(world_after.x, world_before.x);
         assert_near(world_after.y, world_before.y);
+        assert_eq!(state.0.zoom, egui::Vec2::splat(3.0));
+    }
+
+    #[test]
+    fn open_popup_blocks_background_wheel_pinch_and_middle_drag() {
+        let context = egui::Context::default();
+        let pointer = VIEWPORT.center();
+        let initial = CanvasState::uniform(egui::vec2(-12.0, 8.0), 2.0);
+        let mut state = TestViewportState(initial);
+        warm_pointer(&context, &mut state, pointer);
+        let popup_id = egui::Id::new("color-popup-navigation-test");
+        egui::Popup::open_id(&context, popup_id);
+        for (frame, events) in [
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(4.0, -30.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::Zoom(1.5)],
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Middle,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(pointer + egui::vec2(30.0, 20.0))],
+            vec![egui::Event::PointerButton {
+                pos: pointer + egui::vec2(30.0, 20.0),
+                button: egui::PointerButton::Middle,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // The adapter test has no popup renderer to refresh the open state.
+            egui::Popup::open_id(&context, popup_id);
+            assert!(!run_frame(
+                &context,
+                &mut state,
+                NavigationConfig::default(),
+                frame + 1,
+                egui::Modifiers::NONE,
+                events,
+            ));
+            assert_eq!(state.0.pan, initial.pan);
+            assert_eq!(state.0.zoom, initial.zoom);
+        }
+        egui::Popup::close_id(&context, popup_id);
+        assert!(run_frame(
+            &context,
+            &mut state,
+            NavigationConfig::default(),
+            6,
+            egui::Modifiers::NONE,
+            vec![egui::Event::Zoom(1.5)],
+        ));
         assert_eq!(state.0.zoom, egui::Vec2::splat(3.0));
     }
 }

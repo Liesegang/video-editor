@@ -24,8 +24,8 @@ pub use crate::model::NodeGraphBundle;
 pub use asset_preview::load_asset_preview_frame;
 pub use audio_service::AudioService;
 pub use authoring_factory::{
-    AuthoringNodeFactory, BuiltinEffectFactory, ModuleNodeRequest, TextEnsembleOperationFactory,
-    TextEnsembleOperationKind,
+    AppearanceOperationFactory, AuthoringNodeFactory, BuiltinEffectFactory, ModuleNodeRequest,
+    TextEnsembleOperationFactory, TextEnsembleOperationKind,
 };
 pub use authoring_qa_fixture::{
     AUTHORING_AUDIO_E2E_FIXTURE, AUTHORING_E2E_AUDIO, AUTHORING_E2E_FIXTURE, AUTHORING_E2E_IMAGE,
@@ -50,10 +50,12 @@ pub use render_service::{RenderDestination, RenderService};
 pub use timeline_editor_service::{
     AuthoringKeyframeUpdate, AuthoringPropertyOwner, AuthoringPropertyValueTarget,
     AuthoringPropertyValueUpdate, EditPlan, EditPlanValidationScope, EditProjection,
-    ModuleAttachmentPlacement, ModuleInputHost, ModuleInterfaceCommand, ModuleInterfaceEditImpact,
-    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodePresentationUpdate,
-    NodeClipConversionResult, PreparedModuleDefinitionEdit, SharedModuleEdit, TimelineEditError,
-    TimelineEditOperation, TimelineEditPlanningIndex, TimelineEditRequest, TimelineEditorService,
-    TimelineItemDependency, TimelineItemEditState, TimelineSettingsUpdate,
-    TransitionAutomationOwner, TransitionPlacement, plan_timeline_edit, project_edit_plan,
+    GeneratorNodeClipPlacement, ModuleAttachmentPlacement, ModuleInputHost, ModuleInterfaceCommand,
+    ModuleInterfaceEditImpact, ModuleInterfaceEditResult, ModuleItemPlacement,
+    ModuleNodePresentationUpdate, NodeClipAppearanceEntry, NodeClipAppearanceStack,
+    NodeClipConversionResult, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack,
+    PreparedModuleDefinitionEdit, SharedModuleEdit, TimelineEditError, TimelineEditOperation,
+    TimelineEditPlanningIndex, TimelineEditRequest, TimelineEditorService, TimelineItemDependency,
+    TimelineItemEditState, TimelineSettingsUpdate, TransitionAutomationOwner, TransitionPlacement,
+    plan_timeline_edit, project_edit_plan,
 };

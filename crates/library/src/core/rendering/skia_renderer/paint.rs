@@ -114,6 +114,17 @@ impl<'a> PaintFactory<'a> {
                 }
                 Ok(paint)
             }
+            DrawStyle::DropShadow { .. }
+            | DrawStyle::ColorOverlay { .. }
+            | DrawStyle::GradientOverlay { .. }
+            | DrawStyle::PatternOverlay { .. }
+            | DrawStyle::InnerShadow { .. }
+            | DrawStyle::OuterGlow { .. }
+            | DrawStyle::InnerGlow { .. }
+            | DrawStyle::Satin { .. }
+            | DrawStyle::BevelEmboss { .. } => Err(LibraryError::Render(
+                "alpha-mask layer styles must be painted through LayerStyleRenderer".to_string(),
+            )),
         }
     }
 
@@ -394,7 +405,7 @@ fn convert_path_effect(
     }
 }
 
-fn apply_path_effects(
+pub(super) fn apply_path_effects(
     path_effects: &[PathEffect],
     path: &Path,
     paint: &mut Paint,

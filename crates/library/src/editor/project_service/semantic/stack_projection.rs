@@ -872,6 +872,8 @@ fn inferred_definition(key: &str, property: &Property) -> Option<PropertyDefinit
         PropertyValue::ColorValue(_) => PropertyUiType::ColorValue,
         PropertyValue::Color(_) => PropertyUiType::Color,
         PropertyValue::Path(_) => PropertyUiType::Path,
+        PropertyValue::Gradient(_) => PropertyUiType::Gradient,
+        PropertyValue::Pattern(_) => PropertyUiType::Pattern,
         PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => {
             return None;
         }

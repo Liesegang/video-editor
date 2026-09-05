@@ -3,7 +3,7 @@
 //! or canonical descriptor rather than maintaining panel-local copies.
 
 use library::model::property::PropertyDefinition;
-use library::model::{Node, NodeContent};
+use library::model::{GeneratorContent, Node, NodeContent};
 use library::plugin::PluginManager;
 
 pub(crate) fn published_parameter_keyframe_capability(
@@ -67,9 +67,31 @@ pub(crate) fn node_property_definition(
                 .into_iter()
                 .find(|definition| definition.name() == property_name);
         }
+        NodeContent::Generator(generator) => {
+            let converter_kind = match generator {
+                GeneratorContent::Shape => "shape",
+                GeneratorContent::Text => "text",
+                GeneratorContent::Solid => "solid",
+                GeneratorContent::SkSL => "sksl",
+            };
+            let width = node
+                .properties()
+                .get_f64("width")
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map_or(1, |value| value.ceil() as u64);
+            let height = node
+                .properties()
+                .get_f64("height")
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map_or(1, |value| value.ceil() as u64);
+            return plugins
+                .get_entity_converter(converter_kind)?
+                .get_property_definitions(width, height, width, height)
+                .into_iter()
+                .find(|definition| definition.name() == property_name);
+        }
         NodeContent::ModuleOutput(_)
         | NodeContent::Media(_)
-        | NodeContent::Generator(_)
         | NodeContent::CompositionInstance(_)
         | NodeContent::Merge
         | NodeContent::SoundMerge => return None,
@@ -87,6 +109,34 @@ mod tests {
     #[test]
     fn direct_and_graph_text_operations_use_their_exact_contract_metadata() {
         let plugins = PluginManager::default();
+        let text = library::editor::AuthoringNodeFactory::create(
+            &plugins,
+            library::editor::ModuleNodeRequest::Text {
+                text: "Two\nlines".to_string(),
+                font: library::plugin::entity_converter::DEFAULT_TEXT_FONT_FAMILY.to_string(),
+            },
+            640,
+            360,
+        )
+        .expect("Text Generator");
+        assert!(matches!(
+            node_property_definition(&plugins, &text, "text")
+                .as_ref()
+                .map(PropertyDefinition::ui_type),
+            Some(library::model::property::PropertyUiType::MultilineText)
+        ));
+        assert!(matches!(
+            node_property_definition(&plugins, &text, "font_family")
+                .as_ref()
+                .map(PropertyDefinition::ui_type),
+            Some(library::model::property::PropertyUiType::Font)
+        ));
+        assert!(matches!(
+            node_property_definition(&plugins, &text, "size")
+                .as_ref()
+                .map(PropertyDefinition::ui_type),
+            Some(library::model::property::PropertyUiType::Float { .. })
+        ));
         let inline = plugins
             .create_text_ensemble_operation_node(library::plugin::DECORATOR_CATEGORY, "backplate")
             .expect("inline Backplate node");

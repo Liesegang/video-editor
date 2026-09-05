@@ -84,12 +84,13 @@ pub(super) fn navigate(
     content_rect: Rect,
     state: &mut AuthoringUiState,
     row_count: usize,
-) {
+) -> Option<(egui::Response, bool)> {
     if state.timeline.item_gesture.is_some()
+        || state.timeline.track_gesture.is_some()
         || state.timeline.keyframe_gesture.is_some()
-        || state.timeline.library_drag.is_some()
+        || state.library_drag.is_some()
     {
-        return;
+        return None;
     }
 
     let metrics = TimelineRowMetrics::from_view(&state.timeline);
@@ -116,7 +117,9 @@ pub(super) fn navigate(
     )
     .with_config(config)
     .with_screen_origin(content_rect.min);
-    let _ = controller.interact_with_rect(content_rect, &mut viewport, &mut handled_pan);
+    let (_, response) =
+        controller.interact_with_rect(content_rect, &mut viewport, &mut handled_pan);
+    Some((response, handled_pan))
 }
 
 /// Apply explicit View Scale controls through the same navigation policy,

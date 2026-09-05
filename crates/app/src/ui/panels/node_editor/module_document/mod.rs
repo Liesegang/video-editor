@@ -7,6 +7,7 @@
 
 use eframe::egui;
 use library::editor::{ModuleInterfaceCommand, TimelineEditorService};
+use library::model::asset::Asset;
 use library::model::authoring::{
     AuthoringProject, ModuleConnectionId, ModuleDefinition, ModuleInputPortOwnership,
     ModuleInstanceId, ModuleNodePortContract, ModulePortAddress,
@@ -73,6 +74,10 @@ enum ModuleEditorAction {
     },
     CreateNode {
         request: ModuleNodeCreateRequest,
+        graph_position: egui::Pos2,
+    },
+    CreateAssetNode {
+        asset_id: Uuid,
         graph_position: egui::Pos2,
     },
     EditInterface(ModuleInterfaceCommand),
@@ -170,7 +175,10 @@ fn translate_surface_outputs(
                 let mut connections = Vec::new();
                 for item in items {
                     match item {
-                        ItemId::Node(node_id) if !is_module_output_node(definition, node_id) => {
+                        ItemId::Node(node_id)
+                            if !is_module_output_node(definition, node_id)
+                                && !definition.is_protected_host_boundary_node(node_id) =>
+                        {
                             nodes.push(node_id);
                         }
                         ItemId::Node(_) => {}
@@ -193,6 +201,7 @@ fn translate_surface_outputs(
             EditorOutput::Disconnect { wire } => {
                 actions.push(ModuleEditorAction::Disconnect(wire));
             }
+            EditorOutput::WireContextMenu { .. } => {}
             EditorOutput::Connect { from, to }
                 if from.direction == PortDirection::Output
                     && to.direction == PortDirection::Input =>

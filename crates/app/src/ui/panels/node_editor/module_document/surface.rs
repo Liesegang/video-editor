@@ -10,13 +10,14 @@ use node_editor_ui::{
     ReconnectEndpoint, TypeKey, WireDescriptor,
 };
 
-use super::context_menu::show_module_create_menu;
+use super::context_menu::{show_module_create_menu, show_module_wire_menu};
 use super::interface::port_interface_actions;
 use super::viewer::{ModuleNodeViewer, ModuleSurfaceCapture};
 use super::*;
 use crate::ui::panels::node_editor::{
     node_editor_details_visible, node_editor_navigation_config, node_editor_snarl_style_for,
-    NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE, PORT_ROW_HEIGHT,
+    node_palette_for_node, pin_color, NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE,
+    PORT_ROW_HEIGHT,
 };
 use crate::ui::viewport::{ViewportController, ViewportState};
 
@@ -56,6 +57,7 @@ pub(super) fn fit_module_document_canvas(
 pub(super) fn show_module_document(
     ui: &mut egui::Ui,
     definition: &ModuleDefinition,
+    assets: &[Asset],
     palette: &library::model::authoring::ProjectPalette,
     state: &mut NodeEditorState,
     plugins: &PluginManager,
@@ -66,13 +68,20 @@ pub(super) fn show_module_document(
         return Vec::new();
     }
 
+    // Capture ownership before body widgets can close their popup. A click
+    // that dismisses an overlay must not become a background graph gesture.
+    let popup_was_open = egui::Popup::is_any_open(ui.ctx());
+    let overlay_was_open =
+        popup_was_open || state.create_menu.is_some() || state.wire_menu.is_some();
     release_finished_direct_gesture(ui, state);
-    retain_press_time_transform(ui, state, viewport);
+    if !overlay_was_open {
+        retain_press_time_transform(ui, state, viewport);
+    }
     let locked_transform = state
         .surface_interaction
         .locked_transform()
         .or(state.direct_gesture_transform);
-    if locked_transform.is_none() {
+    if locked_transform.is_none() && !overlay_was_open {
         let mut handled_pan = false;
         let mut controller = ViewportController::new(
             ui,
@@ -95,6 +104,7 @@ pub(super) fn show_module_document(
     {
         let mut viewer = ModuleNodeViewer {
             definition,
+            assets,
             palette,
             plugins,
             property_context,
@@ -109,10 +119,11 @@ pub(super) fn show_module_document(
         snarl.show(&mut viewer, &style, ("node_editor", definition.id), ui);
     }
 
-    let capture = capture
+    let mut capture = capture
         .lock()
         .map(|mut capture| std::mem::take(&mut *capture))
         .unwrap_or_default();
+    let wire_paint_slot = capture.wire_paint_slot.take();
     let projection = ModuleSurfaceProjection::new(
         definition,
         capture,
@@ -121,24 +132,63 @@ pub(super) fn show_module_document(
         state,
         ui.ctx().pointer_latest_pos(),
     );
-    let options = if node_editor_details_visible(transform.scaling) {
-        InteractionOptions {
-            delete: true,
-            connect: true,
-            disconnect: true,
-            ..InteractionOptions::SELECTION_AND_MOVE
-        }
-    } else {
-        InteractionOptions::OVERVIEW_SELECTION
-    };
-    let outputs = Editor::interact(
-        ui,
-        &projection.frame(),
-        &mut state.surface_interaction,
-        options,
-        projection.pointer_owned,
+    if let Some((wire_painter, wire_shape_idx)) = wire_paint_slot {
+        wire_painter.set(
+            wire_shape_idx,
+            egui::Shape::Vec(Editor::wire_shapes(
+                &projection.frame(),
+                egui::emath::TSTransform::IDENTITY,
+                3.0,
+                egui::Stroke::new(6.0, egui::Color32::from_rgb(105, 165, 255)),
+            )),
+        );
+    }
+    let options = module_interaction_options(transform.scaling);
+    let overlay_layer = egui::LayerId::new(
+        egui::Order::Foreground,
+        ui.make_persistent_id(("node_editor_transients", definition.id)),
     );
-    actions.extend(translate_surface_outputs(definition, outputs, state));
+    let overlay_painter = ui.ctx().layer_painter(overlay_layer);
+    let popup_owns_pointer = overlay_was_open || egui::Popup::is_any_open(ui.ctx());
+    let outputs = if popup_owns_pointer {
+        Editor::cancel_interaction(ui, &mut state.surface_interaction)
+    } else {
+        Editor::interact(
+            ui,
+            &overlay_painter,
+            &projection.frame(),
+            &mut state.surface_interaction,
+            options,
+            projection.pointer_owned,
+        )
+    };
+    let mut mutation_outputs = Vec::with_capacity(outputs.len());
+    let mut opened_wire_menu = false;
+    for output in outputs {
+        if let node_editor_ui::EditorOutput::WireContextMenu {
+            wire,
+            screen_position,
+        } = output
+        {
+            state.selected_nodes.clear();
+            state.primary_node = None;
+            state.selected_connection = Some(wire);
+            state.wire_menu = Some(crate::state::node_editor::ModuleWireMenuState {
+                connection_id: wire,
+                position: screen_position,
+                open_time: ui.input(|input| input.time),
+            });
+            state.create_menu = None;
+            opened_wire_menu = true;
+        } else {
+            mutation_outputs.push(output);
+        }
+    }
+    actions.extend(translate_surface_outputs(
+        definition,
+        mutation_outputs,
+        state,
+    ));
     actions.extend(port_interface_actions(
         ui,
         definition,
@@ -147,29 +197,52 @@ pub(super) fn show_module_document(
         viewport,
     ));
     register_wire_interaction_qa(&projection);
-    if let Some((request, graph_position)) = show_module_create_menu(
-        ui,
-        state,
-        plugins,
-        definition,
-        viewport,
-        transform,
-        &projection.node_rects,
-    ) {
-        actions.push(ModuleEditorAction::CreateNode {
-            request,
-            graph_position,
-        });
+    let wire_menu_was_open = state.wire_menu.is_some();
+    if let Some(connection_id) = show_module_wire_menu(ui, state) {
+        actions.push(ModuleEditorAction::Disconnect(connection_id));
+    }
+    if !opened_wire_menu && !wire_menu_was_open && !popup_was_open {
+        if let Some((request, graph_position)) = show_module_create_menu(
+            ui,
+            state,
+            plugins,
+            definition,
+            viewport,
+            transform,
+            &projection.node_rects,
+        ) {
+            actions.push(ModuleEditorAction::CreateNode {
+                request,
+                graph_position,
+            });
+        }
     }
 
     register_canvas_qa(
         definition,
         viewport,
         transform,
-        projection.pointer_owned,
+        projection.pointer_owned || popup_owns_pointer,
         options.connect,
     );
     actions
+}
+
+pub(super) fn module_interaction_options(scale: f32) -> InteractionOptions {
+    if node_editor_details_visible(scale) {
+        InteractionOptions {
+            delete: true,
+            connect: true,
+            disconnect: true,
+            ..InteractionOptions::SELECTION_AND_MOVE
+        }
+    } else {
+        // Zoom hides port editing, not basic object commands.
+        InteractionOptions {
+            delete: true,
+            ..InteractionOptions::OVERVIEW_SELECTION
+        }
+    }
 }
 
 fn register_wire_interaction_qa(projection: &ModuleSurfaceProjection<'_>) {
@@ -198,6 +271,7 @@ fn register_wire_interaction_qa(projection: &ModuleSurfaceProjection<'_>) {
                     "to_node_id": wire.to.address.node_id,
                     "to_port": wire.to.address.port,
                     "interaction_geometry": "node-editor-ui",
+                    "paint_geometry": "node-editor-ui",
                 })),
             );
         }
@@ -233,7 +307,7 @@ fn interaction_rect(center: egui::Pos2, radius: f32, viewport: egui::Rect) -> eg
     egui::Rect::from_center_size(center, egui::Vec2::splat(radius * 2.0)).intersect(viewport)
 }
 
-fn node_editor_canvas_transform(
+pub(super) fn node_editor_canvas_transform(
     viewport: egui::Rect,
     canvas: pan_zoom_ui::CanvasState,
 ) -> egui::emath::TSTransform {
@@ -371,7 +445,7 @@ impl<'a> ModuleSurfaceProjection<'a> {
             .filter_map(|node_id| {
                 let node = definition.graph.nodes.get(node_id)?;
                 let rect = *capture.node_rects.get(node_id)?;
-                let header_rect = capture
+                let header_content_rect = capture
                     .header_rects
                     .get(node_id)
                     .copied()
@@ -381,6 +455,17 @@ impl<'a> ModuleSurfaceProjection<'a> {
                             egui::vec2(rect.width(), PORT_ROW_HEIGHT.min(rect.height())),
                         )
                     });
+                let visual = Editor::node_visual_style(
+                    node_palette_for_node(Some(node)),
+                    !node.enabled,
+                    state.selected_nodes.contains(node_id),
+                    transform.scaling,
+                );
+                let header_rect = node_header_hit_rect(
+                    rect,
+                    header_content_rect,
+                    Editor::node_header_frame(visual),
+                );
                 Some(NodeDescriptor {
                     id: *node_id,
                     title: node.name.as_str(),
@@ -419,7 +504,7 @@ impl<'a> ModuleSurfaceProjection<'a> {
             .collect::<Vec<_>>();
         let centers = port_visuals
             .iter()
-            .map(|port| (port.id.clone(), port.center))
+            .map(|port| (port.id.clone(), (port.center, port.data_type)))
             .collect::<HashMap<_, _>>();
         let wires = definition
             .graph
@@ -434,8 +519,8 @@ impl<'a> ModuleSurfaceProjection<'a> {
                     address: connection.to.clone(),
                     direction: PortDirection::Input,
                 };
-                let from = *centers.get(&from_id)?;
-                let to = *centers.get(&to_id)?;
+                let (from, data_type) = *centers.get(&from_id)?;
+                let (to, _) = *centers.get(&to_id)?;
                 let handle = ((to.x - from.x).abs() * 0.5).max(48.0);
                 Some(WireDescriptor {
                     id: connection.id,
@@ -447,6 +532,7 @@ impl<'a> ModuleSurfaceProjection<'a> {
                         to - egui::vec2(handle, 0.0),
                         to,
                     ),
+                    color: pin_color(data_type),
                     editable: true,
                 })
             })
@@ -500,6 +586,21 @@ impl<'a> ModuleSurfaceProjection<'a> {
             },
         }
     }
+}
+
+pub(super) fn node_header_hit_rect(
+    node_rect: egui::Rect,
+    header_content_rect: egui::Rect,
+    header_frame: egui::Frame,
+) -> egui::Rect {
+    let painted_header = header_content_rect + header_frame.total_margin();
+    egui::Rect::from_min_max(
+        node_rect.min,
+        egui::pos2(
+            node_rect.right(),
+            painted_header.bottom().min(node_rect.bottom()),
+        ),
+    )
 }
 
 pub(super) fn module_port_is_connectable(definition: &ModuleDefinition, port: &PortVisual) -> bool {

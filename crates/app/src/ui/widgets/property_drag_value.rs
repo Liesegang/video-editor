@@ -1,5 +1,16 @@
 use library::model::property::{PropertyDefinition, PropertyUiType};
 
+/// Shared numeric commit policy. Pointer capture stays owned by egui's
+/// original DragValue; panels do not maintain another gesture state.
+pub(crate) fn numeric_edit_finished(response: &egui::Response) -> bool {
+    response.drag_stopped()
+        || response.lost_focus()
+        || (response.has_focus()
+            && response
+                .ctx
+                .input(|input| input.key_pressed(egui::Key::Enter)))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FloatDragValueConfig {
     pub speed: f64,
@@ -132,6 +143,57 @@ impl IntegerDragValueConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_scrub_finishes_once_when_released_outside_its_control() {
+        let context = egui::Context::default();
+        let mut value = 5.0;
+        let mut control = egui::Rect::NOTHING;
+        let mut finish_count = 0;
+        for phase in 0..6 {
+            let point = if phase < 3 {
+                control.center()
+            } else {
+                egui::pos2(control.right() + 50.0, control.center().y)
+            };
+            let mut events = Vec::new();
+            if phase > 0 {
+                events.push(egui::Event::PointerMoved(point));
+            }
+            if phase == 2 || phase == 4 {
+                events.push(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: phase == 2,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            drop(context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    time: Some(phase as f64 * 0.1),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let response = ui.add(egui::DragValue::new(&mut value).speed(0.1));
+                        control = response.rect;
+                        let finished = numeric_edit_finished(&response);
+                        finish_count += usize::from(finished);
+                        if phase == 3 {
+                            assert!(!finished, "scrub must remain transient while held outside");
+                        }
+                    });
+                },
+            ));
+        }
+        assert!(value > 5.0, "the real numeric widget must edit its draft");
+        assert_eq!(finish_count, 1);
+    }
 
     #[test]
     fn hard_bounds_and_unit_transform_come_only_from_property_metadata() {

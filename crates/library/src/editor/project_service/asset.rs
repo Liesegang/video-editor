@@ -528,6 +528,7 @@ mod tests {
                     file_path: "fixture.mp4".to_string(),
                     stream_index: None,
                     audio_stream_index: None,
+                    outputs: crate::model::MediaOutputSelection::ImageAndAudio,
                 },
                 1920,
                 1080,

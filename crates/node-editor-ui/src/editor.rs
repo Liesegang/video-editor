@@ -4,8 +4,8 @@ use egui::{Color32, CornerRadius, Pos2, Stroke, StrokeKind, Vec2};
 
 use crate::{
     chrome, interaction, EditorOutput, GraphFrame, GroupChrome, InteractionOptions,
-    InteractionState, ItemId, NodeDescriptor, NodeHeader, NodePalette, NodeVisualStyle,
-    PortDirection, PortLabel, PortVisualStyle,
+    InteractionState, ItemId, NodeDescriptor, NodeHeader, NodeHeaderResponse, NodePalette,
+    NodeVisualStyle, PortDirection, PortLabel, PortVisualStyle,
 };
 
 /// Host extension point for domain-specific controls inside a generic Node.
@@ -141,7 +141,7 @@ impl Editor {
     }
 
     /// Render generic header content inside a host-owned Node layout.
-    pub fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> egui::Response {
+    pub fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> NodeHeaderResponse {
         chrome::show_node_header(ui, header)
     }
 
@@ -181,10 +181,16 @@ impl Editor {
         Key: Copy + Eq,
         Renderer: NodeBodyRenderer<NodeId>,
     {
+        let popup_was_open = egui::Popup::is_any_open(ui.ctx());
         let details_visible = config.details_visible(frame.transform.scaling);
         let body_pointer_owned = paint(ui, frame, renderer, config, details_visible);
+        if popup_was_open {
+            return Self::cancel_interaction(ui, state);
+        }
+        let overlay_painter = ui.painter().clone();
         interaction::interact(
             ui,
+            &overlay_painter,
             frame,
             state,
             if details_visible {
@@ -201,6 +207,7 @@ impl Editor {
     /// adapter; it does not create a second interaction implementation.
     pub fn interact<NodeId, PortId, WireId, GroupId, Key>(
         ui: &mut egui::Ui,
+        overlay_painter: &egui::Painter,
         frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
         state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
         options: InteractionOptions,
@@ -213,7 +220,22 @@ impl Editor {
         GroupId: Clone + Eq,
         Key: Copy + Eq,
     {
-        interaction::interact(ui, frame, state, options, pointer_blocked)
+        interaction::interact(ui, overlay_painter, frame, state, options, pointer_blocked)
+    }
+
+    /// Give an overlay exclusive input ownership for this frame, preserving
+    /// cancellation intents so the host can discard its transient movement.
+    /// Hosts must also call this on an overlay's click-to-dismiss frame.
+    pub fn cancel_interaction<NodeId, PortId, WireId, GroupId>(
+        ui: &egui::Ui,
+        state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
+    ) -> Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>
+    where
+        NodeId: Clone,
+    {
+        let mut outputs = Vec::new();
+        interaction::cancel_gesture(state, ui.ctx().pointer_latest_pos(), &mut outputs);
+        outputs
     }
 
     /// Whether hold-A directional layout owns this frame's primary press.
@@ -247,6 +269,57 @@ impl Editor {
         GroupId: Clone + Eq,
     {
         interaction::wire_selection_target(frame, wire_id)
+    }
+
+    /// Build the complete authored-wire paint batch from the same curves used
+    /// by hit testing, reconnect handles, and host QA targets.
+    ///
+    /// `coordinate_transform` maps graph coordinates into the target
+    /// painter's coordinate space. A host painting into an already-transformed
+    /// canvas layer passes identity; the standalone editor passes the frame's
+    /// screen transform.
+    pub fn wire_shapes<NodeId, PortId, WireId, GroupId, Key>(
+        frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+        coordinate_transform: egui::emath::TSTransform,
+        normal_width: f32,
+        selected_stroke: Stroke,
+    ) -> Vec<egui::Shape>
+    where
+        NodeId: Clone + Eq,
+        WireId: Clone + Eq,
+        GroupId: Clone + Eq,
+    {
+        let normal_width = normal_width.max(0.0);
+        let selected_width = selected_stroke.width.max(normal_width + 3.0);
+        let mut shapes = Vec::with_capacity(frame.wires.len() * 2);
+        for wire in frame.wires {
+            let points = wire.curve.transformed(coordinate_transform).points();
+            let selected = frame
+                .selection
+                .items
+                .contains(&ItemId::Wire(wire.id.clone()));
+            if selected {
+                shapes.push(
+                    egui::epaint::CubicBezierShape::from_points_stroke(
+                        points,
+                        false,
+                        Color32::TRANSPARENT,
+                        Stroke::new(selected_width, selected_stroke.color),
+                    )
+                    .into(),
+                );
+            }
+            shapes.push(
+                egui::epaint::CubicBezierShape::from_points_stroke(
+                    points,
+                    false,
+                    Color32::TRANSPARENT,
+                    Stroke::new(normal_width, wire.color),
+                )
+                .into(),
+            );
+        }
+        shapes
     }
 }
 
@@ -306,21 +379,12 @@ where
         }
     }
 
-    for wire in frame.wires {
-        let selected = frame
-            .selection
-            .items
-            .contains(&ItemId::Wire(wire.id.clone()));
-        let stroke = if selected {
-            config.selected_stroke
-        } else {
-            config.wire_stroke
-        };
-        let points = (0..=24)
-            .map(|sample| frame.screen_position(wire.curve.point(sample as f32 / 24.0)))
-            .collect::<Vec<_>>();
-        painter.add(egui::Shape::line(points, stroke));
-    }
+    painter.extend(Editor::wire_shapes(
+        frame,
+        frame.transform,
+        config.wire_stroke.width,
+        config.selected_stroke,
+    ));
 
     let mut body_pointer_owned = false;
     for node in frame.nodes {
@@ -388,11 +452,8 @@ where
     let visual = NodeVisualStyle {
         body_fill: config.node_fill,
         header_fill: config.node_header_fill,
-        outer_stroke: if selected {
-            config.selected_stroke
-        } else {
-            config.normal_stroke
-        },
+        outer_stroke: config.normal_stroke,
+        highlight_stroke: selected.then_some(config.selected_stroke),
         highlight_state: if selected { "selected" } else { "none" },
         highlight_screen_width: if selected {
             config.selected_stroke.width * frame.transform.scaling
@@ -407,6 +468,9 @@ where
         visual.outer_stroke,
         StrokeKind::Inside,
     );
+    if let Some(stroke) = visual.highlight_stroke {
+        painter.rect_stroke(rect, CornerRadius::same(7), stroke, StrokeKind::Inside);
+    }
     let header = frame
         .screen_rect(node.header_rect)
         .intersect(rect)
@@ -428,6 +492,7 @@ where
                         }),
                         leading: None,
                         trailing: None,
+                        trailing_interactive: false,
                         accent: ui.visuals().weak_text_color(),
                         min_width: (header.width() - 16.0).max(0.0),
                         title_width: (header.width() - 24.0).max(0.0),
@@ -452,4 +517,60 @@ where
             .owns_pointer();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AuthoritativeSelection, CubicBezier, ItemId, WireDescriptor};
+
+    #[test]
+    fn normal_and_selected_wire_strokes_share_the_descriptor_curve() {
+        let curve = CubicBezier::new(
+            egui::pos2(10.0, 20.0),
+            egui::pos2(90.0, 20.0),
+            egui::pos2(130.0, 140.0),
+            egui::pos2(210.0, 140.0),
+        );
+        let wires = [WireDescriptor {
+            id: 7_u8,
+            from: 1_u8,
+            to: 2_u8,
+            curve,
+            color: Color32::from_rgb(120, 180, 240),
+            editable: true,
+        }];
+        let selection = [ItemId::Wire(7_u8)];
+        let frame: GraphFrame<'_, u8, u8, u8, u8, u8> = GraphFrame {
+            viewport: egui::Rect::EVERYTHING,
+            transform: egui::emath::TSTransform::IDENTITY,
+            nodes: &[],
+            ports: &[],
+            wires: &wires,
+            groups: &[],
+            ports_compatible: |source: &u8, target: &u8| source == target,
+            selection_order: &[],
+            selection: AuthoritativeSelection {
+                items: &selection,
+                primary: Some(ItemId::Wire(7_u8)),
+            },
+        };
+        let transform = egui::emath::TSTransform::new(egui::vec2(30.0, -5.0), 1.5);
+
+        let shapes = Editor::wire_shapes(
+            &frame,
+            transform,
+            3.0,
+            Stroke::new(6.0, Color32::LIGHT_BLUE),
+        );
+
+        assert_eq!(shapes.len(), 2);
+        let expected = curve.transformed(transform).points();
+        for shape in shapes {
+            let egui::Shape::CubicBezier(shape) = shape else {
+                panic!("wire painter emitted a non-Bezier shape");
+            };
+            assert_eq!(shape.points, expected);
+        }
+    }
 }

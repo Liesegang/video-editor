@@ -20,12 +20,15 @@ mod video;
 pub use crate::model::frame::runtime_shape::measure_shape_visual_bounds;
 pub use image::ImageEntityConverterPlugin;
 pub use shape::ShapeEntityConverterPlugin;
-pub(crate) use shape::runtime_path_shape;
+pub(crate) use shape::{primitive_shape_path_data, runtime_path_shape};
 pub use sksl::SkSLEntityConverterPlugin;
 pub use solid::SolidEntityConverterPlugin;
-pub use text::TextEntityConverterPlugin;
 pub use text::measure_text_size;
 pub(crate) use text::runtime_text_shape;
+pub use text::{
+    DEFAULT_TEXT_FONT_FAMILY, DEFAULT_TEXT_NODE_SIZE, DEFAULT_TIMELINE_TEXT_SIZE,
+    TextEntityConverterPlugin, timeline_text_property_definitions,
+};
 pub use video::VideoEntityConverterPlugin;
 
 /// Render-only typed values resolved from canonical Project connections.

@@ -132,6 +132,7 @@ pub fn media_project_with_asset(asset: Asset) -> Result<(Project, uuid::Uuid)> {
             file_path,
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::ImageAndAudio,
         },
         12,
         8,

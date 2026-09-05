@@ -64,10 +64,7 @@ fn container_ports() -> Vec<PortDefinition> {
     ports
 }
 
-fn node_ports(
-    node: &crate::model::Node,
-    media_kind: Option<&crate::model::asset::AssetKind>,
-) -> Vec<PortDefinition> {
+fn node_ports(node: &crate::model::Node, media_asset_exists: bool) -> Vec<PortDefinition> {
     let mut ports = Vec::new();
     let time_input = || PortDefinition::input(TIME_PORT, "Time", PortDataType::Number);
     let image_output = || {
@@ -113,16 +110,13 @@ fn node_ports(
                 );
             }
         }
-        NodeContent::Media(_) => {
+        NodeContent::Media(media) => {
             ports.push(time_input());
-            match media_kind {
-                Some(crate::model::asset::AssetKind::Video) => {
-                    ports.push(image_output());
-                    ports.push(audio_output());
-                }
-                Some(crate::model::asset::AssetKind::Image) => ports.push(image_output()),
-                Some(crate::model::asset::AssetKind::Audio) => ports.push(audio_output()),
-                _ => {}
+            if media_asset_exists && media.has_image_output() {
+                ports.push(image_output());
+            }
+            if media_asset_exists && media.has_audio_output() {
+                ports.push(audio_output());
             }
         }
         NodeContent::CompositionInstance(_) => {
@@ -231,6 +225,8 @@ fn property_value_data_type(value: &crate::model::property::PropertyValue) -> Po
         PropertyValue::Vec3(_) => PortDataType::Vec3,
         PropertyValue::Vec4(_) => PortDataType::Vec4,
         PropertyValue::Path(_) => PortDataType::Path,
+        PropertyValue::Gradient(_) => PortDataType::Gradient,
+        PropertyValue::Pattern(_) => PortDataType::Pattern,
         PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => {
             PortDataType::Any
         }
@@ -263,13 +259,13 @@ impl Project {
             PortOwner::Node(id) => self
                 .get_node(id)
                 .map(|node| {
-                    let media_kind = match node.content() {
+                    let media_asset_exists = match node.content() {
                         NodeContent::Media(media) => {
-                            self.get_asset(media.asset_id).map(|asset| &asset.kind)
+                            self.assets.iter().any(|asset| asset.id == media.asset_id)
                         }
-                        _ => None,
+                        _ => true,
                     };
-                    node_ports(node, media_kind)
+                    node_ports(node, media_asset_exists)
                 })
                 .unwrap_or_default(),
             _ => Vec::new(),

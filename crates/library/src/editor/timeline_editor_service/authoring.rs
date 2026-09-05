@@ -21,6 +21,10 @@ pub enum AuthoringPropertyOwner {
         item_id: TimelineItemId,
         operation_id: uuid::Uuid,
     },
+    Appearance {
+        item_id: TimelineItemId,
+        operation_id: uuid::Uuid,
+    },
 }
 
 /// The existing authored evaluator that one direct-manipulation value edit
@@ -141,6 +145,40 @@ impl TimelineEditorService {
                     }
                     let moved = timeline.track_order.remove(old_index);
                     timeline.track_order.insert(new_index, moved);
+                    Ok(())
+                },
+            )
+            .map(|(_, changes)| changes)
+            .map_err(LibraryError::Validation)
+    }
+
+    /// Enables or disables only a Track's visual contribution in one
+    /// undoable authored transaction. Audio and AudioVisual sound output are
+    /// intentionally not muted by this control.
+    pub fn set_track_visual_enabled(
+        &self,
+        track_id: TimelineTrackId,
+        enabled: bool,
+    ) -> Result<ChangeSet, LibraryError> {
+        let mut session = self.write_session()?;
+        let timeline_id = timeline_for_track(session.project(), track_id)?;
+        session
+            .transact(
+                vec![ProjectInvalidation::TimelineStructure { timeline_id }],
+                |project| {
+                    let properties = &mut project
+                        .tracks
+                        .get_mut(&track_id)
+                        .ok_or_else(|| format!("Missing Timeline Track {track_id}"))?
+                        .authored_properties;
+                    if enabled {
+                        properties.remove(TRACK_VISIBILITY_PROPERTY);
+                    } else {
+                        properties.set(
+                            TRACK_VISIBILITY_PROPERTY.to_string(),
+                            Property::constant(PropertyValue::Boolean(false)),
+                        );
+                    }
                     Ok(())
                 },
             )
@@ -550,6 +588,20 @@ fn authored_properties_mut(
                 .map(|operation| &mut operation.properties)
                 .ok_or_else(|| format!("Missing Text Ensemble operation {operation_id}"))
         }
+        AuthoringPropertyOwner::Appearance {
+            item_id,
+            operation_id,
+        } => {
+            let item = project
+                .items
+                .get_mut(&item_id)
+                .ok_or_else(|| format!("Missing Timeline item {item_id}"))?;
+            super::appearance::appearance_operations_mut(item, item_id)?
+                .iter_mut()
+                .find(|operation| operation.id == operation_id)
+                .map(|operation| &mut operation.properties)
+                .ok_or_else(|| format!("Missing Appearance operation {operation_id}"))
+        }
     }
 }
 
@@ -579,5 +631,9 @@ fn property_owner_invalidations(
                 item_id,
             }]
         }
+        AuthoringPropertyOwner::Appearance { item_id, .. } => vec![ProjectInvalidation::Item {
+            timeline_id: timeline_for_item(project, item_id)?,
+            item_id,
+        }],
     })
 }

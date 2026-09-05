@@ -15,7 +15,11 @@ pub struct NodePalette {
 pub struct NodeVisualStyle {
     pub body_fill: Color32,
     pub header_fill: Color32,
+    /// Layout-stable shell stroke. Selection must not change this width,
+    /// because host layouts commonly place edge ports from the frame bounds.
     pub outer_stroke: Stroke,
+    /// Paint-only selection outline, expressed in graph units.
+    pub highlight_stroke: Option<Stroke>,
     pub highlight_state: &'static str,
     pub highlight_screen_width: f32,
 }
@@ -34,6 +38,10 @@ pub struct NodeHeader<'a> {
     pub title_color: Option<Color32>,
     pub leading: Option<HeaderGlyph<'a>>,
     pub trailing: Option<HeaderGlyph<'a>>,
+    /// Give the trailing status glyph its own click target. The containing
+    /// header keeps its full layout width and remains the movement surface
+    /// everywhere outside this compact control.
+    pub trailing_interactive: bool,
     pub accent: Color32,
     pub min_width: f32,
     pub title_width: f32,
@@ -90,19 +98,6 @@ pub(crate) fn node_visual_style(
     } else {
         palette.header
     };
-    if selected {
-        return NodeVisualStyle {
-            body_fill,
-            header_fill: mix_color(base_header, SELECTED_OUTLINE, 0.48),
-            outer_stroke: Stroke::new(
-                screen_stroke_width(SELECTED_OUTLINE_SCREEN_WIDTH, scale),
-                SELECTED_OUTLINE,
-            ),
-            highlight_state: "selected",
-            highlight_screen_width: SELECTED_OUTLINE_SCREEN_WIDTH,
-        };
-    }
-
     let stroke_color = if inactive {
         palette.accent.gamma_multiply(0.48)
     } else {
@@ -115,11 +110,31 @@ pub(crate) fn node_visual_style(
     };
     NodeVisualStyle {
         body_fill,
-        header_fill: base_header,
+        header_fill: if selected {
+            mix_color(base_header, SELECTED_OUTLINE, 0.48)
+        } else {
+            base_header
+        },
         outer_stroke: Stroke::new(stroke_width, stroke_color),
-        highlight_state: "none",
-        highlight_screen_width: stroke_width * scale.max(f32::EPSILON),
+        highlight_stroke: selected.then(|| {
+            Stroke::new(
+                screen_stroke_width(SELECTED_OUTLINE_SCREEN_WIDTH, scale),
+                SELECTED_OUTLINE,
+            )
+        }),
+        highlight_state: if selected { "selected" } else { "none" },
+        highlight_screen_width: if selected {
+            SELECTED_OUTLINE_SCREEN_WIDTH
+        } else {
+            stroke_width * scale.max(f32::EPSILON)
+        },
     }
+}
+
+/// Header geometry plus the optional shared status-control response.
+pub struct NodeHeaderResponse {
+    pub response: egui::Response,
+    pub trailing: Option<egui::Response>,
 }
 
 pub(crate) fn node_frame(style: NodeVisualStyle) -> egui::Frame {
@@ -142,16 +157,19 @@ pub(crate) fn node_header_frame(style: NodeVisualStyle) -> egui::Frame {
         .fill(style.header_fill)
 }
 
-pub(crate) fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> egui::Response {
+pub(crate) fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> NodeHeaderResponse {
     ui.set_min_width(header.min_width);
     if !header.details_visible {
-        return ui.allocate_response(
-            egui::vec2(header.min_width, header.row_height),
-            egui::Sense::hover(),
-        );
+        return NodeHeaderResponse {
+            response: ui.allocate_response(
+                egui::vec2(header.min_width, header.row_height),
+                egui::Sense::hover(),
+            ),
+            trailing: None,
+        };
     }
 
-    ui.horizontal(|ui| {
+    let inner = ui.horizontal(|ui| {
         if let Some(icon) = header.leading {
             ui.add(
                 egui::Label::new(
@@ -173,14 +191,21 @@ pub(crate) fn show_node_header(ui: &mut egui::Ui, header: NodeHeader<'_>) -> egu
         )
         .on_hover_text(header.title);
         if let Some(status) = header.trailing {
-            ui.add(
-                egui::Label::new(egui::RichText::new(status.glyph).color(header.accent))
-                    .selectable(false),
-            )
-            .on_hover_text(status.tooltip);
+            let text = egui::RichText::new(status.glyph).color(header.accent);
+            let response = if header.trailing_interactive {
+                ui.add(egui::Label::new(text).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+            } else {
+                ui.add(egui::Label::new(text).selectable(false))
+            };
+            return Some(response.on_hover_text(status.tooltip));
         }
-    })
-    .response
+        None
+    });
+    NodeHeaderResponse {
+        response: inner.response,
+        trailing: inner.inner,
+    }
 }
 
 pub(crate) fn show_port_label(ui: &mut egui::Ui, label: PortLabel<'_>) -> egui::Response {
@@ -287,11 +312,19 @@ mod tests {
     #[test]
     fn selected_outline_stays_three_screen_points_at_every_lod() {
         for scale in [0.0065, 0.18, 1.0, 1.25] {
+            let normal = node_visual_style(palette(), false, false, scale);
             let selected = node_visual_style(palette(), false, true, scale);
             assert_eq!(selected.highlight_state, "selected");
             assert!((selected.highlight_screen_width - 3.0).abs() < f32::EPSILON);
-            assert!((selected.outer_stroke.width * scale - 3.0).abs() < 0.001);
-            assert_eq!(selected.outer_stroke.color, SELECTED_OUTLINE);
+            assert_eq!(selected.outer_stroke, normal.outer_stroke);
+            let highlight = selected.highlight_stroke.expect("selection highlight");
+            assert!((highlight.width * scale - 3.0).abs() < 0.001);
+            assert_eq!(highlight.color, SELECTED_OUTLINE);
+            assert_eq!(
+                node_frame(selected).total_margin(),
+                node_frame(normal).total_margin(),
+                "selection must not move edge ports through Frame margins"
+            );
         }
     }
 
@@ -301,7 +334,8 @@ mod tests {
         let selected_inactive = node_visual_style(palette(), true, true, 1.0);
         assert_eq!(selected_inactive.body_fill, inactive.body_fill);
         assert_ne!(selected_inactive.header_fill, inactive.header_fill);
-        assert_ne!(selected_inactive.outer_stroke, inactive.outer_stroke);
+        assert_eq!(selected_inactive.outer_stroke, inactive.outer_stroke);
+        assert!(selected_inactive.highlight_stroke.is_some());
         assert_eq!(selected_inactive.highlight_state, "selected");
     }
 

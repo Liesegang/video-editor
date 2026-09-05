@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import pathlib
 import subprocess
 import sys
-import time
 import uuid
 
 from qa_support import (
@@ -18,12 +16,13 @@ from qa_support import (
     QaClient,
     QaFailure,
     activate_dock_tab,
+    close_clean_native_app,
     free_port,
     media_seconds,
+    project_file_evidence,
     repository_git_commit,
     seek_timeline_seconds,
     spawned_authoring_app,
-    wait_endpoint_closed,
 )
 
 
@@ -64,41 +63,9 @@ def _load_particle_qa():
 PARTICLE_QA = _load_particle_qa()
 
 
-def _file_evidence(path: pathlib.Path) -> dict:
-    content = path.read_bytes()
-    if not content:
-        raise QaFailure("saved Particle Project is empty")
-    return {
-        "path": str(path),
-        "bytes": len(content),
-        "sha256": hashlib.sha256(content).hexdigest(),
-    }
-
-
 def _command_save(client: QaClient) -> None:
     client.key("s", True, command=True)
     client.key("s", False, command=True)
-
-
-def _close_clean_native_app(
-    client: QaClient, process: subprocess.Popen, label: str, timeout: float
-) -> dict:
-    started = time.monotonic()
-    queued = client.request("/v1/input/close-request", {}, method="POST")
-    if queued.get("queued") is not True or queued.get("action_id") is None:
-        raise QaFailure("{} native close request was not queued".format(label))
-    wait_endpoint_closed(client, timeout=timeout, description=label)
-    try:
-        exit_code = process.wait(timeout=min(timeout, 10.0))
-    except subprocess.TimeoutExpired as error:
-        raise QaFailure("{} endpoint closed but its process did not exit".format(label)) from error
-    if exit_code != 0:
-        raise QaFailure("{} exited with code {}".format(label, exit_code))
-    return {
-        "action_id": queued["action_id"],
-        "exit_code": exit_code,
-        "seconds": time.monotonic() - started,
-    }
 
 
 def _preview_at_active_particle_frame(client: QaClient, item: dict, revision: int):
@@ -128,7 +95,9 @@ def _first_process(project_path: pathlib.Path, timeout: float, run_id: str) -> d
     with spawned_authoring_app(port, environment) as process:
         client = QaClient("http://127.0.0.1:{}".format(port), timeout)
         client.wait_health()
-        initial_file = _file_evidence(project_path)
+        initial_file = project_file_evidence(
+            project_path, "initial Particle Project"
+        )
 
         # This is the authoritative production interaction path: Assets drag,
         # typed Inspector editing, Undo/Redo, Preview, and production Node Editor.
@@ -150,7 +119,9 @@ def _first_process(project_path: pathlib.Path, timeout: float, run_id: str) -> d
             saved_state = client.state()
             if saved_state["editor"].get("status") != "Project saved":
                 return None
-            file_state = _file_evidence(project_path)
+            file_state = project_file_evidence(
+                project_path, "saved Particle Project"
+            )
             if file_state["sha256"] == initial_file["sha256"]:
                 return None
             return saved_state, file_state
@@ -159,7 +130,7 @@ def _first_process(project_path: pathlib.Path, timeout: float, run_id: str) -> d
             "Particle Project save reaching disk", saved_to_disk, timeout=timeout
         )
         saved_project = saved_state["project"]
-        close = _close_clean_native_app(client, process, "saved Particle app", timeout)
+        close = close_clean_native_app(client, process, "saved Particle app", timeout)
 
     return {
         "authoring": authoring,
@@ -234,9 +205,13 @@ def _second_process(
                 )
             )
 
-        close = _close_clean_native_app(client, process, "reloaded Particle app", timeout)
+        close = close_clean_native_app(
+            client, process, "reloaded Particle app", timeout
+        )
 
-    file_after_reload = _file_evidence(project_path)
+    file_after_reload = project_file_evidence(
+        project_path, "reloaded Particle Project"
+    )
     if file_after_reload["sha256"] != expected["saved_file"]["sha256"]:
         raise QaFailure("opening and closing the saved Particle Project changed its file")
     return {

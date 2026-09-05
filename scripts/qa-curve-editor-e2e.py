@@ -135,6 +135,28 @@ def run_suite(client):
     open_curve_editor(client)
     client.wait_component_settled(CANVAS_ID)
 
+    _, ruler = client.wait_component_settled("curve_editor.ruler")
+    before_scrub_frame = client.state()["frame"]
+    ruler_rect = ruler["rect_points"]
+    ruler_point = {
+        "x": ruler_rect["min_x"] + ruler_rect["width"] * 0.37,
+        "y": ruler_rect["center_y"],
+    }
+    client.inject(
+        "click",
+        {
+            **ruler_point,
+            "button": "primary",
+            "coordinate_space": "points",
+        },
+    )
+    scrubbed = client.wait_until(
+        "Curve ruler scrub updates shared Timeline frame",
+        lambda: state
+        if (state := client.state())["frame"] != before_scrub_frame
+        else None,
+    )
+
     keys = property_keyframes(client.state()["project"], item_id)
     keyframe = max(keys, key=lambda candidate: float(candidate["time"]))
     keyframe_id = keyframe["id"]
@@ -174,6 +196,38 @@ def run_suite(client):
     )
     if eased["history"]["revision"] != before_easing["history"]["revision"] + 1:
         raise QaFailure("Curve easing update did not commit exactly one authoring command")
+
+    _, editable_key = wait_position_key(client, item_id, keyframe_id)
+    before_dialog = client.state()
+    before_dialog_key = keyframe_by_id(before_dialog["project"], item_id, keyframe_id)
+    client.click_component(editable_key["id"], button="secondary")
+    edit_key_id = "curve_editor.keyframe_menu.edit:{}:x".format(keyframe_id)
+    client.wait_component(edit_key_id)
+    client.click_component(edit_key_id)
+    client.wait_component("curve_editor.keyframe_dialog.value")
+    client.wait_until(
+        "Curve Edit Keyframe dialog open",
+        lambda: state
+        if (state := client.state())["editor"]["curve_editor"][
+            "keyframe_editor_active"
+        ]
+        else None,
+    )
+    client.drag_component_by(
+        "curve_editor.keyframe_dialog.value", 24.0, 0.0, steps=8
+    )
+    client.click_component("curve_editor.keyframe_dialog.apply")
+    dialog_applied = wait_keyframe(
+        client,
+        item_id,
+        keyframe_id,
+        lambda value: value["value"]["x"] != before_dialog_key["value"]["x"],
+        "Edit Keyframe dialog value mutation",
+    )
+    if dialog_applied["history"]["revision"] != before_dialog["history"]["revision"] + 1:
+        raise QaFailure("Edit Keyframe dialog did not commit exactly one authoring command")
+    if dialog_applied["editor"]["curve_editor"]["keyframe_editor_active"]:
+        raise QaFailure("Edit Keyframe dialog remained active after Apply")
 
     before_navigation, _ = assert_canvas_metadata_matches_state(
         client, "pre-navigation canonical transform"
@@ -305,6 +359,12 @@ def run_suite(client):
         "final_frame": final["frame"],
         "item_id": item_id,
         "keyframe_id": keyframe_id,
+        "ruler_scrub": {
+            "point": ruler_point,
+            "before_frame": before_scrub_frame,
+            "after_frame": scrubbed["frame"],
+        },
+        "keyframe_dialog_history": dialog_applied["history"],
         "curve_editor": final_curve,
         "canvas_metadata": final_metadata,
         "extreme_vertical_zoom": {

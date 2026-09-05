@@ -209,12 +209,12 @@ pub enum SearchNavigation {
 /// close automatically when the user clicks outside it.
 pub fn searchable_menu_button<R>(
     ui: &mut Ui,
-    label: impl Into<String>,
+    label: impl Into<egui::WidgetText>,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     let config = egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    let (response, contents) = egui::containers::menu::MenuButton::new(label.into())
+    let (response, contents) = egui::containers::menu::MenuButton::new(label)
         .config(config)
         .ui(ui, add_contents);
     egui::InnerResponse::new(contents.map(|contents| contents.inner), response)

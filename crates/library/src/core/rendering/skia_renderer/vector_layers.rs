@@ -98,20 +98,74 @@ impl SkiaRenderer {
             transform,
             ..
         } = request;
+        let bounds = local_layer_bounds(
+            transform,
+            self.current_target_dimensions(),
+            max_style_outset(styles),
+        );
+        let has_content = has_content_styles(styles);
+        let mask = if layer_styles::has_mask_styles(styles) {
+            Some(layer_styles::LayerMask::record(
+                bounds,
+                skia_safe::Rect::from_wh(
+                    self.current_target_dimensions().0 as f32,
+                    self.current_target_dimensions().1 as f32,
+                ),
+                |canvas| {
+                    if has_content {
+                        draw_text_body(
+                            &self.surface_contract,
+                            canvas,
+                            text,
+                            font_name,
+                            size as f32,
+                            styles,
+                        )
+                    } else {
+                        draw_text_silhouette(
+                            &self.surface_contract,
+                            canvas,
+                            text,
+                            font_name,
+                            size as f32,
+                        )
+                    }
+                },
+            )?)
+        } else {
+            None
+        };
         let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::TRANSPARENT);
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
-            for config in styles {
-                let paint = PaintFactory::new(&self.surface_contract).text_paint(
-                    &config.style,
-                    1.0,
-                    None,
+            if let Some(mask) = &mask {
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Underlay,
+                    mask,
                 )?;
-                let paragraph = build_text_paragraph(text, font_name, size as f32, Some(&paint));
-                paragraph.paint(canvas, (0.0, 0.0));
+                if has_content {
+                    mask.draw_content(canvas);
+                }
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Overlay,
+                    mask,
+                )?;
+            } else {
+                draw_text_body(
+                    &self.surface_contract,
+                    canvas,
+                    text,
+                    font_name,
+                    size as f32,
+                    styles,
+                )?;
             }
             canvas.restore();
         }
@@ -146,7 +200,8 @@ impl SkiaRenderer {
                 EffectorConfig::Transform { target, .. }
                 | EffectorConfig::StepDelay { target, .. }
                 | EffectorConfig::Opacity { target, .. }
-                | EffectorConfig::Randomize { target, .. } => target,
+                | EffectorConfig::Randomize { target, .. }
+                | EffectorConfig::Tracking { target, .. } => target,
             };
             if *target == EffectorTarget::Parts {
                 return Err(LibraryError::Render(
@@ -155,26 +210,63 @@ impl SkiaRenderer {
             }
         }
 
+        let font_mgr = skia_safe::FontMgr::default();
+        let typeface = font_mgr
+            .match_family_style(font_name, skia_safe::FontStyle::default())
+            .or_else(|| font_mgr.legacy_make_typeface(None, skia_safe::FontStyle::default()))
+            .ok_or_else(|| {
+                LibraryError::Render(format!(
+                    "No usable font was found for Ensemble text family {font_name:?}"
+                ))
+            })?;
+        let font = skia_safe::Font::from_typeface(typeface, size as f32);
+        let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
+        let character_transforms =
+            evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
+        let bounds = local_layer_bounds(
+            transform,
+            self.current_target_dimensions(),
+            max_style_outset(styles),
+        );
+        let has_content = has_content_styles(styles);
+        let mask = if layer_styles::has_mask_styles(styles) {
+            Some(layer_styles::LayerMask::record(
+                bounds,
+                skia_safe::Rect::from_wh(
+                    self.current_target_dimensions().0 as f32,
+                    self.current_target_dimensions().1 as f32,
+                ),
+                |canvas| {
+                    if has_content {
+                        draw_ensemble_text_body(
+                            &self.surface_contract,
+                            canvas,
+                            &runtime_text,
+                            &character_transforms,
+                            &font,
+                            styles,
+                        )
+                    } else {
+                        draw_ensemble_text_silhouette(
+                            &self.surface_contract,
+                            canvas,
+                            &runtime_text,
+                            &character_transforms,
+                            &font,
+                        )
+                    }
+                },
+            )?)
+        } else {
+            None
+        };
+
         let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::TRANSPARENT);
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
-
-            let font_mgr = skia_safe::FontMgr::default();
-            let typeface = font_mgr
-                .match_family_style(font_name, skia_safe::FontStyle::default())
-                .or_else(|| font_mgr.legacy_make_typeface(None, skia_safe::FontStyle::default()))
-                .ok_or_else(|| {
-                    LibraryError::Render(format!(
-                        "No usable font was found for Ensemble text family {font_name:?}"
-                    ))
-                })?;
-            let font = skia_safe::Font::from_typeface(typeface, size as f32);
-            let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
-            let character_transforms =
-                evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
 
             legacy_backplate::draw_text_backplates(
                 canvas,
@@ -183,34 +275,31 @@ impl SkiaRenderer {
                 &ensemble_data.decorator_configs,
                 &self.surface_contract,
             )?;
-            for (character, character_transform) in
-                runtime_text.elements.iter().zip(&character_transforms)
-            {
-                let center = Point::new(
-                    character.bounds.left + character.advance / 2.0,
-                    (character.bounds.top + character.bounds.bottom) / 2.0,
-                );
-                canvas.save();
-                canvas.translate((center.x, center.y));
-                canvas.translate(character_transform.translate);
-                canvas.rotate(character_transform.rotate, None);
-                canvas.scale(character_transform.scale);
-                canvas.translate((-center.x, -center.y));
-                for config in styles {
-                    let paint = PaintFactory::new(&self.surface_contract).text_paint(
-                        &config.style,
-                        character_transform.opacity,
-                        character_transform.color_override.as_ref(),
-                    )?;
-                    // TODO: draw SkParagraph shaping runs with source mapping.
-                    canvas.draw_str(
-                        &character.source,
-                        (character.bounds.left, character.baseline),
-                        &font,
-                        &paint,
-                    );
+            if let Some(mask) = &mask {
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Underlay,
+                    mask,
+                )?;
+                if has_content {
+                    mask.draw_content(canvas);
                 }
-                canvas.restore();
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Overlay,
+                    mask,
+                )?;
+            } else {
+                draw_ensemble_text_body(
+                    &self.surface_contract,
+                    canvas,
+                    &runtime_text,
+                    &character_transforms,
+                    &font,
+                    styles,
+                )?;
             }
             canvas.restore();
         }
@@ -230,12 +319,35 @@ impl SkiaRenderer {
             ensemble,
             transform,
         } = request;
+        let path = super::super::path_geometry::resolve_renderer_path(canonical_path, path_data)?;
+        let bounds = local_layer_bounds(
+            transform,
+            self.current_target_dimensions(),
+            max_style_outset(styles),
+        );
+        let has_content = has_content_styles(styles);
+        let mask = if layer_styles::has_mask_styles(styles) {
+            Some(layer_styles::LayerMask::record(
+                bounds,
+                skia_safe::Rect::from_wh(
+                    self.current_target_dimensions().0 as f32,
+                    self.current_target_dimensions().1 as f32,
+                ),
+                |canvas| {
+                    if has_content {
+                        draw_shape_body(&self.surface_contract, canvas, &path, path_effects, styles)
+                    } else {
+                        draw_shape_silhouette(&self.surface_contract, canvas, &path, path_effects)
+                    }
+                },
+            )?)
+        } else {
+            None
+        };
         let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::TRANSPARENT);
-            let path =
-                super::super::path_geometry::resolve_renderer_path(canonical_path, path_data)?;
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
             if let Some(ensemble) = ensemble
@@ -248,48 +360,41 @@ impl SkiaRenderer {
                     &self.surface_contract,
                 )?;
             }
-            for config in styles {
-                match &config.style {
-                    DrawStyle::Fill { color, offset } => {
-                        PaintFactory::new(&self.surface_contract).draw_shape_fill(
-                            canvas,
-                            &path,
-                            color,
-                            path_effects,
-                            *offset,
-                        )?;
-                    }
-                    DrawStyle::Stroke {
-                        color,
-                        width,
-                        offset,
-                        cap,
-                        join,
-                        miter,
-                        dash_array,
-                        dash_offset,
-                    } => {
-                        PaintFactory::new(&self.surface_contract).draw_shape_stroke(
-                            canvas,
-                            &path,
-                            path_effects,
-                            StrokeRenderConfig {
-                                color,
-                                width: *width,
-                                offset: *offset,
-                                cap,
-                                join,
-                                miter: *miter,
-                                dash_array,
-                                dash_offset: *dash_offset,
-                            },
-                        )?;
-                    }
+            if let Some(mask) = &mask {
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Underlay,
+                    mask,
+                )?;
+                if has_content {
+                    mask.draw_content(canvas);
                 }
+                self.draw_mask_style_phase(
+                    canvas,
+                    styles,
+                    layer_styles::CompositePhase::Overlay,
+                    mask,
+                )?;
+            } else {
+                draw_shape_body(&self.surface_contract, canvas, &path, path_effects, styles)?;
             }
             canvas.restore();
         }
         Ok(layer)
+    }
+
+    fn draw_mask_style_phase(
+        &mut self,
+        canvas: &Canvas,
+        styles: &[crate::model::frame::entity::StyleConfig],
+        phase: layer_styles::CompositePhase,
+        mask: &layer_styles::LayerMask,
+    ) -> Result<(), LibraryError> {
+        layer_styles::visit_phase(styles, phase, |config| {
+            layer_styles::LayerStyleRenderer::new(&self.surface_contract, &mut self.blend_runtime)
+                .draw(canvas, &config.style, mask)
+        })
     }
 
     pub(super) fn draw_native_layer_surface(
@@ -311,4 +416,240 @@ impl SkiaRenderer {
         drop(layer);
         result
     }
+}
+
+fn draw_text_body(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    text: &str,
+    font_name: &str,
+    size: f32,
+    styles: &[crate::model::frame::entity::StyleConfig],
+) -> Result<(), LibraryError> {
+    for config in styles {
+        if !matches!(
+            config.style,
+            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
+        ) {
+            continue;
+        }
+        let paint = PaintFactory::new(contract).text_paint(&config.style, 1.0, None)?;
+        let paragraph = build_text_paragraph(text, font_name, size, Some(&paint));
+        paragraph.paint(canvas, (0.0, 0.0));
+    }
+    Ok(())
+}
+
+fn draw_text_silhouette(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    text: &str,
+    font_name: &str,
+    size: f32,
+) -> Result<(), LibraryError> {
+    let mut paint = Paint::default();
+    skia_working_surface::set_paint_authored_color(&mut paint, contract, &Color::white(), 1.0)?;
+    paint.set_anti_alias(true);
+    let paragraph = build_text_paragraph(text, font_name, size, Some(&paint));
+    paragraph.paint(canvas, (0.0, 0.0));
+    Ok(())
+}
+
+fn draw_ensemble_text_body(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    runtime_text: &crate::model::frame::runtime_shape::RuntimeTextShape,
+    transforms: &[crate::core::ensemble::TransformData],
+    font: &skia_safe::Font,
+    styles: &[crate::model::frame::entity::StyleConfig],
+) -> Result<(), LibraryError> {
+    for config in styles {
+        if !matches!(
+            config.style,
+            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
+        ) {
+            continue;
+        }
+        for (character, transform) in runtime_text.elements.iter().zip(transforms) {
+            let center = Point::new(
+                character.bounds.left + character.advance / 2.0,
+                (character.bounds.top + character.bounds.bottom) / 2.0,
+            );
+            canvas.save();
+            canvas.translate((center.x, center.y));
+            canvas.translate(transform.translate);
+            canvas.rotate(transform.rotate, None);
+            canvas.scale(transform.scale);
+            canvas.translate((-center.x, -center.y));
+            let paint = PaintFactory::new(contract).text_paint(
+                &config.style,
+                transform.opacity,
+                transform.color_override.as_ref(),
+            )?;
+            // TODO: draw SkParagraph shaping runs with source mapping.
+            canvas.draw_str(
+                &character.source,
+                (character.bounds.left, character.baseline),
+                font,
+                &paint,
+            );
+            canvas.restore();
+        }
+    }
+    Ok(())
+}
+
+fn draw_ensemble_text_silhouette(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    runtime_text: &crate::model::frame::runtime_shape::RuntimeTextShape,
+    transforms: &[crate::core::ensemble::TransformData],
+    font: &skia_safe::Font,
+) -> Result<(), LibraryError> {
+    for (character, transform) in runtime_text.elements.iter().zip(transforms) {
+        let center = Point::new(
+            character.bounds.left + character.advance / 2.0,
+            (character.bounds.top + character.bounds.bottom) / 2.0,
+        );
+        canvas.save();
+        canvas.translate((center.x, center.y));
+        canvas.translate(transform.translate);
+        canvas.rotate(transform.rotate, None);
+        canvas.scale(transform.scale);
+        canvas.translate((-center.x, -center.y));
+        let mut paint = Paint::default();
+        skia_working_surface::set_paint_authored_color(
+            &mut paint,
+            contract,
+            &Color::white(),
+            transform.opacity,
+        )?;
+        paint.set_anti_alias(true);
+        canvas.draw_str(
+            &character.source,
+            (character.bounds.left, character.baseline),
+            font,
+            &paint,
+        );
+        canvas.restore();
+    }
+    Ok(())
+}
+
+fn draw_shape_body(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    path: &skia_safe::Path,
+    path_effects: &[crate::model::frame::draw_type::PathEffect],
+    styles: &[crate::model::frame::entity::StyleConfig],
+) -> Result<(), LibraryError> {
+    for config in styles {
+        match &config.style {
+            DrawStyle::Fill { color, offset } => PaintFactory::new(contract).draw_shape_fill(
+                canvas,
+                path,
+                color,
+                path_effects,
+                *offset,
+            )?,
+            DrawStyle::Stroke {
+                color,
+                width,
+                offset,
+                cap,
+                join,
+                miter,
+                dash_array,
+                dash_offset,
+            } => PaintFactory::new(contract).draw_shape_stroke(
+                canvas,
+                path,
+                path_effects,
+                StrokeRenderConfig {
+                    color,
+                    width: *width,
+                    offset: *offset,
+                    cap,
+                    join,
+                    miter: *miter,
+                    dash_array,
+                    dash_offset: *dash_offset,
+                },
+            )?,
+            DrawStyle::ColorOverlay { .. }
+            | DrawStyle::GradientOverlay { .. }
+            | DrawStyle::PatternOverlay { .. }
+            | DrawStyle::DropShadow { .. }
+            | DrawStyle::InnerShadow { .. }
+            | DrawStyle::OuterGlow { .. }
+            | DrawStyle::InnerGlow { .. }
+            | DrawStyle::Satin { .. }
+            | DrawStyle::BevelEmboss { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn draw_shape_silhouette(
+    contract: &SkiaSurfaceContract,
+    canvas: &Canvas,
+    path: &skia_safe::Path,
+    path_effects: &[crate::model::frame::draw_type::PathEffect],
+) -> Result<(), LibraryError> {
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    skia_working_surface::set_paint_authored_color(&mut paint, contract, &Color::white(), 1.0)?;
+    paint::apply_path_effects(path_effects, path, &mut paint)?;
+    canvas.draw_path(path, &paint);
+    Ok(())
+}
+
+fn has_content_styles(styles: &[crate::model::frame::entity::StyleConfig]) -> bool {
+    styles.iter().any(|config| {
+        matches!(
+            config.style,
+            DrawStyle::Fill { .. } | DrawStyle::Stroke { .. }
+        )
+    })
+}
+
+fn max_style_outset(styles: &[crate::model::frame::entity::StyleConfig]) -> f32 {
+    styles
+        .iter()
+        .map(|config| config.style.visual_outset())
+        .fold(0.0, f32::max)
+}
+
+fn local_layer_bounds(transform: Affine2D, dimensions: (u32, u32), outset: f32) -> skia_safe::Rect {
+    let device = [
+        (0.0, 0.0),
+        (f64::from(dimensions.0), 0.0),
+        (0.0, f64::from(dimensions.1)),
+        (f64::from(dimensions.0), f64::from(dimensions.1)),
+    ];
+    let mapped = transform
+        .inverse()
+        .map(|inverse| device.map(|(x, y)| inverse.map_point(x, y)))
+        .unwrap_or(device);
+    let left = mapped
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min) as f32
+        - outset;
+    let top = mapped
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min) as f32
+        - outset;
+    let right = mapped
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max) as f32
+        + outset;
+    let bottom = mapped
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max) as f32
+        + outset;
+    skia_safe::Rect::new(left, top, right, bottom)
 }

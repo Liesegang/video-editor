@@ -3,8 +3,20 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use crate::model::frame::entity::StyleConfig;
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
+use crate::plugin::{
+    EvaluatedOperation, OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory,
+};
 use uuid::Uuid;
+
+mod layer_effects;
+mod overlays;
+pub use layer_effects::{
+    BevelEmbossStylePlugin, DropShadowStylePlugin, InnerGlowStylePlugin, InnerShadowStylePlugin,
+    OuterGlowStylePlugin, SatinStylePlugin,
+};
+pub use overlays::{
+    ColorOverlayStylePlugin, GradientOverlayStylePlugin, PatternOverlayStylePlugin,
+};
 
 pub fn image_opacity_property_definitions() -> Vec<PropertyDefinition> {
     vec![PropertyDefinition::new(
@@ -37,14 +49,38 @@ pub trait StylePlugin: Plugin {
         }
     }
 
-    /// Evaluates one explicit Style operation Node from its direct properties.
+    /// Executes one Style from descriptor-validated values sampled by either
+    /// a graph or the direct Timeline authoring runtime.
+    fn evaluate_values(
+        &self,
+        context: &EvaluatedOperation<'_>,
+        source_id: Uuid,
+    ) -> Option<StyleConfig>;
+
+    /// Evaluates one explicit graph Style operation. Property sampling stays
+    /// at the graph boundary; execution is shared with Timeline appearance.
     fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
         source_id: Uuid,
         properties: &PropertyMap,
         eval_time: f64,
-    ) -> Option<StyleConfig>;
+    ) -> Option<StyleConfig> {
+        let descriptor = self.descriptor().ok()?;
+        let values = context.evaluate_operation_properties(
+            descriptor.properties(),
+            properties,
+            eval_time,
+            &format!("Style {}", self.id()),
+        )?;
+        let evaluated = EvaluatedOperation::new(
+            &values,
+            eval_time,
+            context.evaluation_fps(),
+            context.evaluation_resolution(),
+        );
+        self.evaluate_values(&evaluated, source_id)
+    }
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Style
@@ -79,12 +115,10 @@ impl StylePlugin for ImageOpacityStylePlugin {
         OperationDescriptor::image_opacity_style(image_opacity_property_definitions())
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        _context: &FrameEvaluationContext,
+        _context: &EvaluatedOperation<'_>,
         _source_id: Uuid,
-        _properties: &PropertyMap,
-        _eval_time: f64,
     ) -> Option<StyleConfig> {
         // Image Opacity is evaluated by the typed Image -> Image frame path.
         None
@@ -257,20 +291,12 @@ impl StylePlugin for FillStylePlugin {
         )
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<StyleConfig> {
-        let values = context.evaluate_operation_properties(
-            self.descriptor().ok()?.properties(),
-            properties,
-            eval_time,
-            "Fill",
-        )?;
-        builtin_style_from_values(self.id(), source_id, &values)
+        builtin_style_from_values(self.id(), source_id, context.properties())
     }
 }
 
@@ -402,19 +428,11 @@ impl StylePlugin for StrokeStylePlugin {
         )
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         source_id: Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<StyleConfig> {
-        let values = context.evaluate_operation_properties(
-            self.descriptor().ok()?.properties(),
-            properties,
-            eval_time,
-            "Stroke",
-        )?;
-        builtin_style_from_values(self.id(), source_id, &values)
+        builtin_style_from_values(self.id(), source_id, context.properties())
     }
 }

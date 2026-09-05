@@ -23,6 +23,11 @@ pub struct ParticlePublishedParameters {
     pub emission_rate: PublishedParameterId,
     pub lifetime: PublishedParameterId,
     pub seed: PublishedParameterId,
+    pub emitter_shape: PublishedParameterId,
+    pub emitter_position: PublishedParameterId,
+    pub emitter_radius: PublishedParameterId,
+    pub emitter_size: PublishedParameterId,
+    pub emitter_surface_only: PublishedParameterId,
     pub velocity_min: PublishedParameterId,
     pub velocity_max: PublishedParameterId,
     pub size_min: PublishedParameterId,
@@ -78,29 +83,35 @@ impl ParticleNodeClipFactory {
         let mut emitter = Node::new_catalog_node(ParticleNodeRole::Emitter.catalog_id())
             .map_err(LibraryError::Validation)?;
         emitter.ui_position = [0.0, 140.0];
+        let mut shape_location =
+            Node::new_catalog_node(ParticleNodeRole::ShapeLocation.catalog_id())
+                .map_err(LibraryError::Validation)?;
+        shape_location.ui_position = [240.0, 140.0];
         let mut initialize = Node::new_catalog_node(ParticleNodeRole::Initialize.catalog_id())
             .map_err(LibraryError::Validation)?;
-        initialize.ui_position = [280.0, 140.0];
+        initialize.ui_position = [480.0, 140.0];
         let mut gravity = Node::new_catalog_node(ParticleNodeRole::Gravity.catalog_id())
             .map_err(LibraryError::Validation)?;
-        gravity.ui_position = [560.0, 70.0];
+        gravity.ui_position = [720.0, 140.0];
         let mut drag = Node::new_catalog_node(ParticleNodeRole::Drag.catalog_id())
             .map_err(LibraryError::Validation)?;
-        drag.ui_position = [560.0, 260.0];
+        drag.ui_position = [960.0, 140.0];
         let mut renderer = Node::new_catalog_node(ParticleNodeRole::SpriteRenderer.catalog_id())
             .map_err(LibraryError::Validation)?;
-        renderer.ui_position = [840.0, 140.0];
+        renderer.ui_position = [1_200.0, 140.0];
         if let Some(output) = definition.graph.nodes.get_mut(&output_node_id) {
-            output.ui_position = [1_120.0, 140.0];
+            output.ui_position = [1_440.0, 140.0];
         }
 
         let emitter_id = emitter.id;
+        let shape_location_id = shape_location.id;
         let initialize_id = initialize.id;
         let gravity_id = gravity.id;
         let drag_id = drag.id;
         let renderer_id = renderer.id;
         definition.graph.nodes.extend([
             (emitter_id, emitter),
+            (shape_location_id, shape_location),
             (initialize_id, initialize),
             (gravity_id, gravity),
             (drag_id, drag),
@@ -109,6 +120,12 @@ impl ParticleNodeClipFactory {
         definition.graph.connections = vec![
             connection(
                 emitter_id,
+                PARTICLE_SYSTEM_PORT,
+                shape_location_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                shape_location_id,
                 PARTICLE_SYSTEM_PORT,
                 initialize_id,
                 PARTICLE_SYSTEM_PORT,
@@ -167,32 +184,67 @@ impl ParticleNodeClipFactory {
             "Seed",
             PortDataType::Integer,
         )?;
+        let emitter_shape = publish(
+            &mut definition,
+            shape_location_id,
+            "shape",
+            "Emitter Shape",
+            PortDataType::String,
+        )?;
+        let emitter_position = publish(
+            &mut definition,
+            shape_location_id,
+            "position",
+            "Emitter Position",
+            PortDataType::Vec3,
+        )?;
+        let emitter_radius = publish(
+            &mut definition,
+            shape_location_id,
+            "radius",
+            "Emitter Radius",
+            PortDataType::Number,
+        )?;
+        let emitter_size = publish(
+            &mut definition,
+            shape_location_id,
+            "size",
+            "Emitter Size",
+            PortDataType::Vec3,
+        )?;
+        let emitter_surface_only = publish(
+            &mut definition,
+            shape_location_id,
+            "surface_only",
+            "Emitter Surface Only",
+            PortDataType::Boolean,
+        )?;
         let velocity_min = publish(
             &mut definition,
             initialize_id,
             "velocity_min",
-            "Velocity Min",
+            "Birth Velocity Min",
             PortDataType::Vec3,
         )?;
         let velocity_max = publish(
             &mut definition,
             initialize_id,
             "velocity_max",
-            "Velocity Max",
+            "Birth Velocity Max",
             PortDataType::Vec3,
         )?;
         let size_min = publish(
             &mut definition,
             initialize_id,
             "size_min",
-            "Size Min",
+            "Birth Size Min",
             PortDataType::Number,
         )?;
         let size_max = publish(
             &mut definition,
             initialize_id,
             "size_max",
-            "Size Max",
+            "Birth Size Max",
             PortDataType::Number,
         )?;
         let gravity_parameter = publish(
@@ -228,6 +280,11 @@ impl ParticleNodeClipFactory {
                 emission_rate,
                 lifetime,
                 seed,
+                emitter_shape,
+                emitter_position,
+                emitter_radius,
+                emitter_size,
+                emitter_surface_only,
                 velocity_min,
                 velocity_max,
                 size_min,

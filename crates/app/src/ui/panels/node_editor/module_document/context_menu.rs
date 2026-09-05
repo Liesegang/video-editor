@@ -23,7 +23,7 @@ pub(super) fn show_module_create_menu(
     });
     update_for_secondary_click(
         &mut state.create_menu,
-        secondary_clicked,
+        secondary_clicked && !egui::Popup::is_any_open(ui.ctx()),
         pointer_position,
         viewport,
         node_rects,
@@ -77,11 +77,58 @@ pub(super) fn show_module_create_menu(
     selected
 }
 
+pub(super) fn show_module_wire_menu(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+) -> Option<ModuleConnectionId> {
+    let context = state.wire_menu.as_ref()?;
+    let position = context.position;
+    let connection_id = context.connection_id;
+    let open_time = context.open_time;
+    let popup =
+        searchable_popup_placement(position, egui::vec2(252.0, 88.0), ui.ctx().content_rect());
+    let menu_id = format!("node_editor_wire_menu:{connection_id}");
+    let mut disconnect = false;
+    let response = egui::Area::new(egui::Id::new("node_editor_wire_context_menu"))
+        .order(egui::Order::Foreground)
+        .pivot(popup.pivot)
+        .fixed_pos(popup.area_anchor)
+        .constrain(false)
+        .show(ui.ctx(), |ui| {
+            show_searchable_popup_frame(ui, popup, |ui| {
+                let button = ui.add(
+                    egui::Button::new(format!("{} Disconnect", egui_phosphor::regular::PLUG))
+                        .shortcut_text("Del"),
+                );
+                crate::qa::register_component_with_metadata(
+                    "node_editor.wire_menu.disconnect",
+                    "menu_item",
+                    button.rect,
+                    true,
+                    Some(serde_json::json!({"connection_id": connection_id})),
+                );
+                disconnect = button.clicked();
+                ui.separator();
+                ui.weak("Ctrl + Right-drag   Cut Links");
+                ui.weak("Alt + Right-drag    Lazy Connect");
+            })
+        });
+    let root_rect = response.inner.response.rect;
+    register_searchable_popup_qa("node_editor.wire_menu", position, popup, root_rect);
+    let clicked_outside = ui
+        .input(|input| input.pointer.any_click() && input.time - open_time > 0.2)
+        && searchable_menu_click_is_outside(ui.ctx(), &menu_id, root_rect);
+    if disconnect || clicked_outside || ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        state.wire_menu = None;
+    }
+    disconnect.then_some(connection_id)
+}
+
 /// Place a new Node around the invocation point while keeping its initial
 /// controls reachable. The mature Snarl surface can measure a more precise
 /// size on the next frame; this conservative footprint prevents a context
 /// menu near an edge from creating every output port off-screen.
-fn visible_creation_position(
+pub(super) fn visible_creation_position(
     pointer: egui::Pos2,
     viewport: egui::Rect,
     transform: egui::emath::TSTransform,

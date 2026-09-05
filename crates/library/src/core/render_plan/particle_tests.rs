@@ -16,7 +16,7 @@ use crate::model::authoring::{
 };
 use crate::model::authoring::{ModuleConnection, ModuleConnectionId};
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
-use crate::model::frame::particle::ParticleSceneFrame;
+use crate::model::frame::particle::{ParticleEmitterShape, ParticleSceneFrame};
 use crate::model::node::{Node, NodeContent};
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT};
@@ -341,6 +341,11 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
         y: OrderedFloat(240.0),
         z: OrderedFloat(-30.0),
     };
+    let expected_emitter_position = crate::model::property::Vec3 {
+        x: OrderedFloat(48.0),
+        y: OrderedFloat(-12.0),
+        z: OrderedFloat(7.0),
+    };
     let gravity = PropertyValue::Vec3(expected_gravity);
     let color = crate::model::frame::color::Color {
         r: 240,
@@ -353,6 +358,34 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
         .unwrap();
     service
         .set_module_parameter(created.instance_id, created.parameters.gravity, gravity)
+        .unwrap();
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.emitter_shape,
+            PropertyValue::String("Sphere".to_string()),
+        )
+        .unwrap();
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.emitter_position,
+            PropertyValue::Vec3(expected_emitter_position),
+        )
+        .unwrap();
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.emitter_radius,
+            PropertyValue::Number(OrderedFloat(84.0)),
+        )
+        .unwrap();
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.emitter_surface_only,
+            PropertyValue::Boolean(true),
+        )
         .unwrap();
     service
         .set_module_parameter(
@@ -374,6 +407,10 @@ fn authored_particle_clip_parameters_reach_the_scene_command() {
     let scene = scenes[0];
     assert_eq!(scene.target_step, 120);
     assert_eq!(scene.parameters.emission_rate, OrderedFloat(360.0));
+    assert_eq!(scene.parameters.emitter_shape, ParticleEmitterShape::Sphere);
+    assert_eq!(scene.parameters.emitter_position, expected_emitter_position);
+    assert_eq!(scene.parameters.emitter_radius, OrderedFloat(84.0));
+    assert!(scene.parameters.emitter_surface_only);
     assert_eq!(scene.parameters.gravity, expected_gravity);
     assert_eq!(scene.parameters.color, color);
 }
@@ -413,6 +450,9 @@ fn particle_sprite_renderer_preserves_its_authored_blend_mode() {
 fn implemented_particle_modifiers_are_optional_in_canonical_order() {
     let mut fixture = particle_fixture(1);
     let (renderer_id, _) = particle_renderer_and_output(&fixture);
+    let emitter_id = particle_node_id(&fixture, "native.particle.emitter");
+    let shape_location_id = particle_node_id(&fixture, "native.particle.shape-location");
+    let initialize_id = particle_node_id(&fixture, "native.particle.initialize");
     let gravity_id = particle_node_id(&fixture, "native.particle.gravity-force");
     let drag_id = particle_node_id(&fixture, "native.particle.drag-force");
     let definition = fixture
@@ -421,15 +461,15 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
         .get_mut(&fixture.definition_id)
         .unwrap();
     definition.graph.connections.retain(|connection| {
-        connection.from.node_id != drag_id && connection.to.node_id != drag_id
+        connection.from.node_id != drag_id
+            && connection.to.node_id != drag_id
+            && connection.from.node_id != shape_location_id
+            && connection.to.node_id != shape_location_id
     });
-    definition.graph.connections.push(connection(
-        gravity_id,
-        "particles",
-        renderer_id,
-        "particles",
-        0,
-    ));
+    definition.graph.connections.extend([
+        connection(emitter_id, "particles", initialize_id, "particles", 0),
+        connection(gravity_id, "particles", renderer_id, "particles", 0),
+    ]);
     definition.topology_revision += 1;
 
     fixture
@@ -439,6 +479,7 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
     let plan = RenderPlanCompiler::compile(&fixture.project).expect("compiled reduced chain");
     let particle =
         &plan.module_definitions[&fixture.definition_id].particle_renderers[&renderer_id];
+    assert_eq!(particle.shape_location_node_id, None);
     assert_eq!(particle.drag_node_id, None);
     let frame = evaluate_render_plan_frame(
         &fixture.project,
@@ -449,10 +490,10 @@ fn implemented_particle_modifiers_are_optional_in_canonical_order() {
         None,
     )
     .unwrap();
-    assert_eq!(
-        particle_scenes(&frame.items)[0].parameters.drag,
-        OrderedFloat(0.0)
-    );
+    let parameters = &particle_scenes(&frame.items)[0].parameters;
+    assert_eq!(parameters.emitter_shape, ParticleEmitterShape::Point);
+    assert_eq!(parameters.emitter_position, zero_vec3());
+    assert_eq!(parameters.drag, OrderedFloat(0.0));
 }
 
 #[test]
@@ -650,7 +691,7 @@ fn disabling_any_particle_stage_compiles_to_no_image() {
 }
 
 #[test]
-fn bypassing_particle_endpoints_compiles_to_no_image() {
+fn particle_endpoints_reject_unsupported_bypass_during_model_validation() {
     for catalog_id in ["native.particle.emitter", "native.particle.sprite-renderer"] {
         let mut fixture = particle_fixture(1);
         let node_id = particle_node_id(&fixture, catalog_id);
@@ -662,24 +703,18 @@ fn bypassing_particle_endpoints_compiles_to_no_image() {
         definition.graph.nodes.get_mut(&node_id).unwrap().bypassed = true;
         definition.topology_revision += 1;
 
-        let plan = RenderPlanCompiler::compile(&fixture.project)
-            .unwrap_or_else(|error| panic!("bypassed {catalog_id} must compile: {error}"));
+        let error = fixture
+            .project
+            .validate()
+            .expect_err("unsupported Particle endpoint bypass must fail model validation");
         assert!(
-            plan.module_definitions[&fixture.definition_id]
-                .particle_renderers
-                .is_empty(),
-            "{catalog_id}"
+            error.contains(&node_id.to_string()),
+            "{catalog_id}: {error}"
         );
-        let frame = evaluate_render_plan_frame(
-            &fixture.project,
-            &plan,
-            &PluginManager::default(),
-            30,
-            1.0,
-            None,
-        )
-        .unwrap_or_else(|error| panic!("bypassed {catalog_id} must evaluate: {error}"));
-        assert!(particle_scenes(&frame.items).is_empty(), "{catalog_id}");
+        assert!(
+            error.contains("cannot be bypassed"),
+            "{catalog_id}: {error}"
+        );
     }
 }
 

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-05
+- Updated: 2026-09-06（共通 alpha mask と型付き Style 合成）
 - Owners: Core Model / Renderer / Motion UX（担当者未指定）
 - Depends on: ADR 0001、ADR 0007
 
@@ -24,6 +25,8 @@ Shapeの見た目はTimelineから直接編集でき、必要な場合だけ有�
 Shapeのgeometryとappearanceを分離する。
 
 通常の Shape Clip では、`ShapeSource` がgeometryを、Timeline-owned `AppearanceStack` が直接編集された見た目とautomationを所有する。
+
+Text Clipにも同じ所有権を適用し、文字内容とlayoutからAppearanceを分離する。
 
 Projectは再利用可能な `PaintDefinition` とPalette順序を所有する。
 
@@ -220,11 +223,50 @@ GPU rendererはGradient/Patternをretained resourceとして扱い、frameごと
 
 CPUとGPUは同じworking-linear補間、premultiplication、blend順を満たす。
 
+### 本体alphaとレイヤースタイルの合成順
+
+Drop Shadowの元になるalphaは、FillとStrokeを合成した本体から作る。
+生のgeometryを一律に塗ったmaskでは、Strokeだけの図形の空洞が埋まり、Fillのoffsetや透明度も反映されない。
+Shape、Text、Ensemble Textは、同じrenderer内の本体描画とmask処理を使う。
+
+その上で、各レイヤースタイルを次の順に合成する。
+同じ段階に属するstyle同士は、ユーザーが指定した順序を維持する。
+
+| 段階 | 描画対象 |
+| --- | --- |
+| 背面 | Drop Shadow、Outer Glow |
+| 本体 | Fill、Stroke |
+| 前面 | Color/Gradient/Pattern Overlay、Inner Shadow/Glow、Satin、Bevel/Emboss |
+
+Ensembleでは、変形後の全文字を本体として扱ってから影を合成する。
+文字ごとに影と本体を交互に描くと、後続文字の影が先行文字を覆うためである。
+Fill/Strokeを含まないstyle専用描画ではgeometryのsilhouetteを使うが、明示的に透明なFillを置いた場合はその透明alphaを維持する。
+
+本体の描画記録とmaskのsource filterは、同じレイヤー内のstyleへ共有する。
+記録はlocal座標を保ち、影の距離やblurの大きさにも本体と同じ変形を適用する。
+描画範囲を制限するboundsと、Gradientの座標を決めるboundsは分ける。
+Fill/Strokeだけのレイヤーには、mask用の描画記録を追加しない。
+
 ### 明示的なNode Clip昇格
 
 `Convert Shape Appearance to Node Clip` は、現在のAppearanceを有限graphへ一度だけ変換する。
 
-変換結果はShape branch、Style/Effect operation、ordered Merge、一つのOutput terminalから成る。
+変換結果はShape branch、Style operation、一つのAppearance Stack node、必要なEffect operation、一つのOutput terminalから成る。
+Styleが一つの場合も同じ構造を使う。
+
+この合成には、画像から区別できる**Style値**を導入する。
+Style値はdescriptorで評価した描画設定であり、Shapeの画像でも、別途永続化する編集モデルでもない。
+
+| 出力またはnode | 入力と意味 |
+| --- | --- |
+| Style operationの`style`出力 | parameterからStyle値を返す。Shape入力は使わない。 |
+| Style operationの`image`出力 | Shape入力へ単独のstyleを適用して画像を返す。 |
+| Appearance Stack node | 一つのShape入力と順序付きのStyle入力を受け、共通rendererで本体と装飾を合成する。 |
+
+通常のImageはStyle入力へ接続できない。
+単独Styleの画像出力は、そのstyleだけで描画する用途として維持する。
+しかし複数styleを個別のImageへ変換してから汎用Image Mergeへ渡すと、本体alphaを共有できず、影や半透明Fillの画素が変わる。
+そのため、汎用Image Mergeの意味を変えたり、変換元のmetadataから合成方法を切り替えたりして等価性を補わない。
 
 通常ShapeやTimeline全体をNodeへ展開しない。
 
@@ -238,7 +280,7 @@ CPUとGPUは同じworking-linear補間、premultiplication、blend順を満た�
 
 ### Plugin boundary
 
-Appearance processor descriptorは、入力Shape/Image、出力Shape/Image、parameter contract、CPU/GPU capability、color boundary、determinismを宣言する。
+Appearance processor descriptorは、入力と出力のShape/Style/Image型、parameter contract、CPU/GPU capability、color boundary、determinismを宣言する。
 
 PluginはAppearanceStackやProjectを直接変更しない。
 
@@ -290,6 +332,8 @@ Appearanceからbounded Module graphへの等価変換、golden、one Undo、共
 - Color pickerを開閉しただけではmanaged f64値を変更しない。
 - GradientのCPU/GPU PreviewとExportが許容差内で一致する。
 - Node Clip昇格前後のpixels、entry順、blend、animationが一致する。
+- Stroke-onlyとDrop Shadow、offset FillとDrop Shadow、半透明FillとDrop Shadowの組合せでも、Node Clip昇格前後の画素が一致する。
+- GPUの輪郭AA差はstyleを付けない基準描画から独立に判定する。輪郭以外の画素、透明な空洞、shadow alphaの検証を緩めるために使わない。
 - PaletteとAppearanceの基本操作をproduction native HTTP QAで実座標から操作する。
 
 ## Rejected alternatives

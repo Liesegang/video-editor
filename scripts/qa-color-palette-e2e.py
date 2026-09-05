@@ -280,6 +280,113 @@ def _key_value(project, item_id, parameter_id, key_index):
     return keys[key_index]["value"]
 
 
+def _exercise_picker_drag_isolation(client, property_id, edited_node_id):
+    """Place a real Node header under the picker, then drag across its edge."""
+    client.click_component("color_picker.tab.picker")
+    _, canvas = client.wait_component_settled(NODE_EDITOR_CANVAS_ID)
+    canvas_rect = canvas["rect_points"]
+    field_id = None
+    start = None
+    for candidate in ("color_picker.saturation_value", "color_picker.hue", "color_picker.alpha"):
+        _, field = client.wait_component_settled(candidate)
+        field_rect = field["rect_points"]
+        left = max(float(field_rect["min_x"]), float(canvas_rect["min_x"])) + 4.0
+        right = min(float(field_rect["max_x"]), float(canvas_rect["max_x"])) - 4.0
+        top = max(float(field_rect["min_y"]), float(canvas_rect["min_y"])) + 4.0
+        bottom = min(float(field_rect["max_y"]), float(canvas_rect["max_y"])) - 4.0
+        if right > left and bottom > top:
+            field_id = candidate
+            start = {"x": (left + right) / 2.0, "y": (top + bottom) / 2.0}
+            break
+    if field_id is None:
+        raise QaFailure("picker does not overlap the Node canvas for drag isolation QA")
+    client.click_component(property_id)
+    client.wait_until(
+        "closed Picker before placing the underlying Node",
+        lambda: not _component(client.component_snapshot(), "color_picker.saturation_value"),
+    )
+    _, _, definition = _active_module_definition(client.state())
+    underlying_id = next(
+        node_id for node_id, node in definition["graph"]["nodes"].items()
+        if str((node.get("content") or {}).get("type", "")).replace("_", "").lower()
+        == "moduleoutput"
+    )
+    header_id = "node_editor.node_header:" + underlying_id
+    _, header = client.wait_component_settled(header_id)
+    client.drag(component_center(header), start, steps=12)
+    _, placed = client.wait_component_settled(header_id)
+    placed_rect = placed["rect_points"]
+    if not (float(placed_rect["min_x"]) < start["x"] < float(placed_rect["max_x"])
+            and float(placed_rect["min_y"]) < start["y"] < float(placed_rect["max_y"])):
+        raise QaFailure("underlying Node header did not reach the Picker drag origin")
+    client.click_component(property_id)
+    _, field = client.wait_component_settled(field_id)
+    before = client.state()
+    _, definition_id, definition = _active_module_definition(before)
+    positions = {
+        node_id: node["ui_position"] for node_id, node in definition["graph"]["nodes"].items()
+    }
+    before_color = _node_property_value(definition, edited_node_id, "color")
+    before_editor = before["editor"]["node_editor"]
+    # Begin precisely over the underlying header and continue outside the
+    # picker field. The slider owns this entire gesture, including its tail.
+    end = {"x": float(field["rect_points"]["min_x"]) - 45.0,
+           "y": start["y"] - 16.0}
+    client.drag(start, end, steps=16)
+    client.scroll_component(field_id, 0.0, -60.0,
+                            modifiers={"command": True})
+    during = client.state()
+    during_definition = during["project"]["module_definitions"][definition_id]
+    actual_positions = {
+        node_id: node["ui_position"]
+        for node_id, node in during_definition["graph"]["nodes"].items()
+    }
+    if actual_positions != positions:
+        raise QaFailure("color picker drag moved a Node behind the popup")
+    for key in ("pan", "zoom", "selected_node_count", "selected_connection"):
+        if during["editor"]["node_editor"][key] != before_editor[key]:
+            raise QaFailure("color picker input leaked into Node Editor " + key)
+    if during["editor"]["node_editor"]["gesture_active"]:
+        raise QaFailure("color picker drag left a background graph gesture active")
+    client.click_component(property_id)
+
+    def committed():
+        state = client.state()
+        current_definition = state["project"]["module_definitions"][definition_id]
+        color = _node_property_value(current_definition, edited_node_id, "color")
+        return state if color != before_color else None
+
+    after = client.wait_until("color edit committed without moving background Nodes", committed)
+    after_definition = after["project"]["module_definitions"][definition_id]
+    if {node_id: node["ui_position"] for node_id, node in
+            after_definition["graph"]["nodes"].items()} != positions:
+        raise QaFailure("closing the picker committed an unintended Node move")
+    # Also dismiss by clicking a different Node, not the original color
+    # button. That click belongs to the popup, including batched press/release.
+    other_id = next(node_id for node_id in positions
+                    if node_id not in (edited_node_id, underlying_id))
+    client.click_component(property_id)
+    client.wait_component_settled(field_id)
+
+    def selected_headers():
+        return sorted(component["id"] for component in client.component_snapshot()["components"]
+                      if component["id"].startswith("node_editor.node_header:")
+                      and (component.get("metadata") or {}).get("selected"))
+
+    selection_before_close = selected_headers()
+    client.click_component("node_editor.node_header:" + other_id)
+    client.wait_until("picker dismissed by outside Node click",
+                      lambda: not _component(client.component_snapshot(), field_id))
+    if selected_headers() != selection_before_close:
+        raise QaFailure("click-to-dismiss selected a different Node behind the picker")
+    return {"underlying_node_id": underlying_id, "field_id": field_id,
+            "start": start, "end": end,
+            "node_positions_unchanged": True, "canvas_unchanged": True,
+            "outside_dismissal_preserved_selection": True,
+            "color_before": before_color,
+            "color_after": _node_property_value(after_definition, edited_node_id, "color")}
+
+
 def _exercise_node_editor_palette(
     client,
     before,
@@ -484,6 +591,8 @@ def _exercise_node_editor_palette(
         expected_hash=expected_hash,
     )
 
+    picker_drag_isolation = _exercise_picker_drag_isolation(client, property_id, node_id)
+
     return {
         "definition_id": definition_id,
         "instance_id": instance_id,
@@ -495,6 +604,7 @@ def _exercise_node_editor_palette(
         "applied_revision": applied_revision,
         "topology_revision": applied_definition["topology_revision"],
         "canvas": canvas_metadata,
+        "picker_drag_isolation": picker_drag_isolation,
     }
 
 

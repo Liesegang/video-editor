@@ -1,5 +1,6 @@
 use library::model::authoring::{
-    AuthoringProject, MediaTime, RationalRate, TimelineId, TimelineItemId, TimelineTrackId,
+    AuthoringProject, MediaTime, RationalRate, TimelineId, TimelineInterval, TimelineItemId,
+    TimelineTrackId,
 };
 
 use crate::state::authoring::AuthoringTimelineView;
@@ -97,7 +98,7 @@ impl TimelineRowMetrics {
     }
 }
 
-pub(super) fn next_layer(project: &AuthoringProject, track_id: TimelineTrackId) -> i64 {
+pub(crate) fn next_layer(project: &AuthoringProject, track_id: TimelineTrackId) -> i64 {
     project
         .items
         .values()
@@ -105,6 +106,56 @@ pub(super) fn next_layer(project: &AuthoringProject, track_id: TimelineTrackId) 
         .map(|item| item.layer)
         .max()
         .map_or(0, |layer| layer.saturating_add(1))
+}
+
+/// Authoritative, un-clipped screen geometry shared by clip painting and hit
+/// testing. `row_rect` is already projected by the Timeline canvas. Consumers
+/// clip this rectangle only when painting or registering a visible response.
+pub(super) fn clip_rect(
+    interval: TimelineInterval,
+    layer: i64,
+    row_rect: egui::Rect,
+    view: &AuthoringTimelineView,
+    summary: bool,
+) -> egui::Rect {
+    let x = super::viewport::seconds_to_screen_x(
+        interval.start.to_seconds_f64() as f32,
+        row_rect,
+        view,
+    );
+    let width =
+        (interval.duration.to_seconds_f64() as f32 * view.pixels_per_second).max(MIN_CLIP_WIDTH);
+    let vertical_inset = if summary {
+        3.0 + layer.rem_euclid(3) as f32
+    } else {
+        3.0
+    };
+    egui::Rect::from_min_size(
+        egui::Pos2::new(x, row_rect.top() + vertical_inset),
+        egui::Vec2::new(width, row_rect.height() - vertical_inset - 3.0),
+    )
+}
+
+/// Visible, non-overlapping drag targets for a clip's start and end edges.
+///
+/// The targets are derived from the un-clipped clip rectangle so a viewport
+/// boundary can never masquerade as a trim handle for an off-screen edge.
+pub(super) fn trim_edge_rects(
+    clip_rect: egui::Rect,
+    content_rect: egui::Rect,
+) -> (egui::Rect, egui::Rect) {
+    let handle_width = EDGE_WIDTH.min(clip_rect.width() * 0.5);
+    let start = egui::Rect::from_min_max(
+        clip_rect.min,
+        egui::Pos2::new(clip_rect.left() + handle_width, clip_rect.bottom()),
+    )
+    .intersect(content_rect);
+    let end = egui::Rect::from_min_max(
+        egui::Pos2::new(clip_rect.right() - handle_width, clip_rect.top()),
+        clip_rect.max,
+    )
+    .intersect(content_rect);
+    (start, end)
 }
 
 pub(super) fn snap_seconds(

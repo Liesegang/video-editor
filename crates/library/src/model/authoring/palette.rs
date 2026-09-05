@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::property::ColorValue;
+use crate::model::property::{ColorValue, GradientValue, PatternValue};
 
 use super::{PaintDefinitionId, PaletteGroupId};
 
-/// A reusable authored paint. Gradient and Pattern variants are introduced by
-/// later Appearance slices; Solid retains the complete managed ColorValue.
+/// A reusable authored paint. Every variant retains managed colors and exact
+/// typed geometry; Palette selection never flattens a Gradient or Pattern to
+/// a representative Solid swatch.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(
     tag = "kind",
@@ -17,6 +18,8 @@ use super::{PaintDefinitionId, PaletteGroupId};
 )]
 pub enum Paint {
     Solid(ColorValue),
+    Gradient(GradientValue),
+    Pattern(PatternValue),
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -102,8 +105,9 @@ impl ProjectPalette {
     pub fn solid_color(&self, definition_id: PaintDefinitionId) -> Option<ColorValue> {
         self.definitions
             .get(&definition_id)
-            .map(|definition| match &definition.paint {
-                Paint::Solid(color) => color.clone(),
+            .and_then(|definition| match &definition.paint {
+                Paint::Solid(color) => Some(color.clone()),
+                Paint::Gradient(_) | Paint::Pattern(_) => None,
             })
     }
 }
@@ -207,14 +211,15 @@ mod tests {
     #[test]
     fn solid_color_accessor_preserves_managed_components() {
         let definition = definition();
-        let expected = match &definition.paint {
-            Paint::Solid(color) => color.clone(),
-        };
+        let expected = definition.paint.clone();
         let palette = ProjectPalette {
             definitions: HashMap::from([(definition.id, definition.clone())]),
             groups: Vec::new(),
             ungrouped_order: vec![definition.id],
         };
-        assert_eq!(palette.solid_color(definition.id), Some(expected));
+        assert_eq!(
+            palette.solid_color(definition.id).map(Paint::Solid),
+            Some(expected)
+        );
     }
 }

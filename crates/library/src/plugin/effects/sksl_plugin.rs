@@ -585,7 +585,9 @@ impl EffectPlugin for SkslEffectPlugin {
                         PropertyUiType::Text
                         | PropertyUiType::MultilineText
                         | PropertyUiType::Font
-                        | PropertyUiType::Dropdown { .. } => PropertyValue::String(String::new()),
+                        | PropertyUiType::Dropdown { .. }
+                        | PropertyUiType::Gradient
+                        | PropertyUiType::Pattern => PropertyValue::String(String::new()),
                     },
                 };
 

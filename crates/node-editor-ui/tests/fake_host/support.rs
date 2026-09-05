@@ -98,6 +98,7 @@ impl FakeGraph {
                 pos2(370.0, 170.0),
                 pos2(430.0, 170.0),
             ),
+            color: egui::Color32::from_rgb(145, 151, 170),
             editable: true,
         }];
         Self {
@@ -166,9 +167,18 @@ impl NodeBodyRenderer<u8> for DragValueBodyRenderer<'_> {
 }
 
 pub(super) fn pointer_button(position: Pos2, pressed: bool, modifiers: Modifiers) -> Event {
+    pointer_button_with(position, egui::PointerButton::Primary, pressed, modifiers)
+}
+
+pub(super) fn pointer_button_with(
+    position: Pos2,
+    button: egui::PointerButton,
+    pressed: bool,
+    modifiers: Modifiers,
+) -> Event {
     Event::PointerButton {
         pos: position,
-        button: egui::PointerButton::Primary,
+        button,
         pressed,
         modifiers,
     }
@@ -267,8 +277,10 @@ pub(super) fn run_interaction_frame_with(
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(context, |ui| {
+                    let overlay_painter = ui.painter().clone();
                     outputs.borrow_mut().extend(Editor::interact(
                         ui,
+                        &overlay_painter,
                         &graph.frame(selected, primary),
                         state,
                         options,

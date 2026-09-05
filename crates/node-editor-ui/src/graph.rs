@@ -107,6 +107,9 @@ pub struct WireDescriptor<PortId, WireId> {
     pub from: PortId,
     pub to: PortId,
     pub curve: CubicBezier,
+    /// Normal authored-wire color. Shape, selection, hit testing, and QA all
+    /// continue to derive from `curve`; color is presentation only.
+    pub color: egui::Color32,
     pub editable: bool,
 }
 

@@ -5,7 +5,6 @@ use skia_safe::textlayout::{
 use skia_safe::{FontMgr, Paint, Rect};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimeLine, RuntimeTextElement, RuntimeTextShape,
@@ -58,10 +57,7 @@ pub fn measure_text_layout(text: &str, primary_font_name: &str, size: f32) -> Te
 /// Return the largest symmetric expansion used by the actual text paints.
 pub fn text_style_outset(styles: &[StyleConfig]) -> f32 {
     styles.iter().fold(0.0_f32, |outset, config| {
-        let style_outset = match &config.style {
-            DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
-            DrawStyle::Stroke { width, offset, .. } => (width / 2.0 + offset).max(0.0) as f32,
-        };
+        let style_outset = config.style.visual_outset();
         outset.max(style_outset)
     })
 }

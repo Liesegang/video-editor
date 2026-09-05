@@ -84,14 +84,35 @@ pub fn node_editor_panel(
         &host,
     );
     let canvas_size = property_context.resolution;
-    let actions = show_module_document(
+    let canvas_rect = ui.available_rect_before_wrap();
+    let mut actions = show_module_document(
         ui,
         definition,
+        &project.assets,
         &project.palette,
         &mut state.node_editor,
         plugins,
         property_context,
     );
+    if state.node_editor.pending_command == Some(crate::command::CommandId::Delete) {
+        state.node_editor.pending_command = None;
+        let items = state
+            .node_editor
+            .selected_nodes
+            .iter()
+            .copied()
+            .map(ItemId::Node)
+            .chain(state.node_editor.selected_connection.map(ItemId::Wire))
+            .collect();
+        actions.extend(translate_surface_outputs(
+            definition,
+            vec![EditorOutput::Delete { items }],
+            &mut state.node_editor,
+        ));
+    }
+    if let Some(action) = library_asset_drop_action(ui, state, canvas_rect) {
+        actions.push(action);
+    }
     apply_module_actions(
         actions,
         definition,
@@ -101,6 +122,58 @@ pub fn node_editor_panel(
         service,
         plugins,
     );
+}
+
+fn library_asset_drop_action(
+    ui: &egui::Ui,
+    state: &mut AuthoringUiState,
+    canvas_rect: egui::Rect,
+) -> Option<ModuleEditorAction> {
+    let payload =
+        egui::DragAndDrop::payload::<crate::state::authoring::AuthoringLibraryDrag>(ui.ctx())?;
+    let crate::state::authoring::AuthoringLibraryDrag::Asset(asset_id) = *payload else {
+        return None;
+    };
+    let pointer = ui.ctx().pointer_latest_pos()?;
+    if !canvas_rect.contains(pointer) {
+        return None;
+    }
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+    ui.painter().rect_stroke(
+        canvas_rect.shrink(2.0),
+        0.0,
+        egui::Stroke::new(2.0, egui::Color32::from_rgb(86, 177, 255)),
+        egui::StrokeKind::Inside,
+    );
+    crate::qa::register_component_with_metadata(
+        "node_editor.asset_drop_target",
+        "node_editor_asset_drop_target",
+        canvas_rect,
+        true,
+        Some(serde_json::json!({
+            "asset_id": asset_id,
+            "accepts": "media_asset",
+        })),
+    );
+    if !ui.input(|input| input.pointer.any_released()) {
+        return None;
+    }
+    let dropped =
+        egui::DragAndDrop::take_payload::<crate::state::authoring::AuthoringLibraryDrag>(ui.ctx())?;
+    let crate::state::authoring::AuthoringLibraryDrag::Asset(asset_id) = *dropped else {
+        return None;
+    };
+    state.library_drag = None;
+    let transform =
+        super::surface::node_editor_canvas_transform(canvas_rect, state.node_editor.canvas);
+    Some(ModuleEditorAction::CreateAssetNode {
+        asset_id,
+        graph_position: super::context_menu::visible_creation_position(
+            pointer,
+            canvas_rect,
+            transform,
+        ),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,9 +448,13 @@ fn apply_pending_layout(
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
 ) -> bool {
-    let Some(command) = state.node_editor.pending_layout_command.take() else {
+    let Some(command) = state.node_editor.pending_command else {
         return false;
     };
+    if command == crate::command::CommandId::Delete {
+        return false;
+    }
+    state.node_editor.pending_command = None;
     if !command.is_node_editor_layout() {
         state.error = Some("The requested command is not a Module layout command".to_string());
         return false;
@@ -507,28 +584,8 @@ fn apply_module_actions(
                         .or_insert(egui::Vec2::ZERO) += delta;
                 }
             }
-            ModuleEditorAction::FinishMove { outcome: _ } => {
-                let offsets = std::mem::take(&mut state.node_editor.node_drag_offsets);
-                for (node_id, offset) in offsets {
-                    let Some(node) = definition.graph.nodes.get(&node_id) else {
-                        continue;
-                    };
-                    match service.set_instance_module_node_presentation(
-                        instance_id,
-                        node_id,
-                        [
-                            node.ui_position[0] + offset.x,
-                            node.ui_position[1] + offset.y,
-                        ],
-                        node.ui_size,
-                        node.ui_collapsed,
-                    ) {
-                        Ok((definition_id, _)) => {
-                            set_active_definition(&mut state.node_editor, definition_id);
-                        }
-                        Err(error) => state.error = Some(error.to_string()),
-                    }
-                }
+            ModuleEditorAction::FinishMove { outcome } => {
+                finish_node_move(outcome, definition, instance_id, state, service)
             }
             ModuleEditorAction::Connect { from, to } => {
                 let order = definition
@@ -570,17 +627,23 @@ fn apply_module_actions(
                 }
             }
             ModuleEditorAction::DeleteNodes(node_ids) => {
-                for node_id in node_ids {
-                    match service.remove_instance_module_node(instance_id, node_id) {
-                        Ok((definition_id, _)) => {
-                            set_active_definition(&mut state.node_editor, definition_id);
-                            state.node_editor.selected_nodes.remove(&node_id);
-                            if state.node_editor.primary_node == Some(node_id) {
-                                state.node_editor.primary_node = None;
-                            }
+                match service.remove_instance_module_nodes(instance_id, node_ids.clone()) {
+                    Ok((_, definition_id, _)) => {
+                        set_active_definition(&mut state.node_editor, definition_id);
+                        state
+                            .node_editor
+                            .selected_nodes
+                            .retain(|id| !node_ids.contains(id));
+                        if state
+                            .node_editor
+                            .primary_node
+                            .is_some_and(|id| node_ids.contains(&id))
+                        {
+                            state.node_editor.primary_node = None;
                         }
-                        Err(error) => state.error = Some(error.to_string()),
+                        state.node_editor.selected_connection = None;
                     }
+                    Err(error) => state.error = Some(error.to_string()),
                 }
             }
             ModuleEditorAction::DeleteConnections(connection_ids) => {
@@ -650,6 +713,28 @@ fn apply_module_actions(
                     Err(error) => state.error = Some(error.to_string()),
                 }
             }
+            ModuleEditorAction::CreateAssetNode {
+                asset_id,
+                graph_position,
+            } => {
+                match service.add_asset_to_instance_module(
+                    instance_id,
+                    asset_id,
+                    [graph_position.x, graph_position.y],
+                    plugins,
+                    canvas_size.0,
+                    canvas_size.1,
+                ) {
+                    Ok((node_id, definition_id, _)) => {
+                        set_active_definition(&mut state.node_editor, definition_id);
+                        state.node_editor.selected_nodes = HashSet::from([node_id]);
+                        state.node_editor.primary_node = Some(node_id);
+                        state.node_editor.selected_connection = None;
+                        state.status = "Added Asset to Node Editor".to_string();
+                    }
+                    Err(error) => state.error = Some(error.to_string()),
+                }
+            }
             ModuleEditorAction::EditInterface(command) => {
                 match service.edit_instance_module_interface(instance_id, command) {
                     Ok((_, definition_id, _)) => {
@@ -659,6 +744,39 @@ fn apply_module_actions(
                     Err(error) => state.error = Some(error.to_string()),
                 }
             }
+        }
+    }
+}
+
+pub(super) fn finish_node_move(
+    outcome: MoveEndOutcome,
+    definition: &ModuleDefinition,
+    instance_id: ModuleInstanceId,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+) {
+    let offsets = std::mem::take(&mut state.node_editor.node_drag_offsets);
+    if outcome == MoveEndOutcome::Cancelled {
+        return;
+    }
+    for (node_id, offset) in offsets {
+        let Some(node) = definition.graph.nodes.get(&node_id) else {
+            continue;
+        };
+        match service.set_instance_module_node_presentation(
+            instance_id,
+            node_id,
+            [
+                node.ui_position[0] + offset.x,
+                node.ui_position[1] + offset.y,
+            ],
+            node.ui_size,
+            node.ui_collapsed,
+        ) {
+            Ok((definition_id, _)) => {
+                set_active_definition(&mut state.node_editor, definition_id);
+            }
+            Err(error) => state.error = Some(error.to_string()),
         }
     }
 }

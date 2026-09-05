@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::path::{FillRule, PathPoint, PathSegment, PathValue};
 
-use super::{ColorValue, PropertyUiType};
+use super::{ColorValue, GradientValue, PatternValue, PropertyUiType};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +77,8 @@ pub enum PropertyValue {
     Color(Color),
     // Tagged structured scalars stay distinct from arbitrary authored maps.
     Path(PathValue),
+    Gradient(GradientValue),
+    Pattern(PatternValue),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
     /// JSON scalar that has no lossless graph-value representation.
@@ -144,6 +146,18 @@ impl<'de> Deserialize<'de> for PropertyValue {
             }
             return Ok(Self::from(value));
         }
+        if super::paint::has_gradient_value_tag_json(&value) {
+            if let Ok(gradient) = serde_json::from_value(value.clone()) {
+                return Ok(Self::Gradient(gradient));
+            }
+            return Ok(Self::OpaqueJson(value));
+        }
+        if super::paint::has_pattern_value_tag_json(&value) {
+            if let Ok(pattern) = serde_json::from_value(value.clone()) {
+                return Ok(Self::Pattern(pattern));
+            }
+            return Ok(Self::OpaqueJson(value));
+        }
         serde_json::from_value::<UntaggedPropertyValue>(value)
             .map(Self::from)
             .map_err(D::Error::custom)
@@ -164,6 +178,8 @@ impl Hash for PropertyValue {
             PropertyValue::ColorValue(c) => c.hash(state),
             PropertyValue::Color(c) => c.hash(state),
             PropertyValue::Path(path) => path.hash(state),
+            PropertyValue::Gradient(gradient) => gradient.hash(state),
+            PropertyValue::Pattern(pattern) => pattern.hash(state),
             PropertyValue::Array(arr) => arr.hash(state),
             PropertyValue::Map(map) => {
                 let mut entries: Vec<_> = map.iter().collect();
@@ -192,6 +208,8 @@ impl PropertyValue {
             self,
             Self::ColorValue(_)
                 | Self::Path(_)
+                | Self::Gradient(_)
+                | Self::Pattern(_)
                 | Self::Array(_)
                 | Self::Map(_)
                 | Self::OpaqueJson(_)
@@ -216,6 +234,8 @@ impl PropertyValue {
             PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
             PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
             PropertyValue::Path(_) => matches!(ui_type, PropertyUiType::Path),
+            PropertyValue::Gradient(_) => matches!(ui_type, PropertyUiType::Gradient),
+            PropertyValue::Pattern(_) => matches!(ui_type, PropertyUiType::Pattern),
             PropertyValue::Array(_) | PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => false,
         }
     }
@@ -276,9 +296,19 @@ impl From<serde_json::Value> for PropertyValue {
                     return PropertyValue::ColorValue(color);
                 }
                 if crate::model::path::is_tagged_path_value_json(&object)
-                    && let Ok(path) = serde_json::from_value(object)
+                    && let Ok(path) = serde_json::from_value(object.clone())
                 {
                     return PropertyValue::Path(path);
+                }
+                if super::paint::has_gradient_value_tag_json(&object)
+                    && let Ok(gradient) = serde_json::from_value(object.clone())
+                {
+                    return PropertyValue::Gradient(gradient);
+                }
+                if super::paint::has_pattern_value_tag_json(&object)
+                    && let Ok(pattern) = serde_json::from_value(object)
+                {
+                    return PropertyValue::Pattern(pattern);
                 }
 
                 // Try to infer specific types
@@ -360,6 +390,10 @@ impl From<serde_json::Value> for PropertyValue {
 }
 
 impl From<&PropertyValue> for serde_json::Value {
+    #[expect(
+        clippy::expect_used,
+        reason = "validated typed Gradient and Pattern values serialize without fallible map keys or non-finite numbers"
+    )]
     fn from(value: &PropertyValue) -> Self {
         match value {
             // Preserve the authored numeric variant. Encoding Number(1.0) as
@@ -391,6 +425,12 @@ impl From<&PropertyValue> for serde_json::Value {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
             PropertyValue::Path(path) => path_json_value(path),
+            PropertyValue::Gradient(gradient) => {
+                serde_json::to_value(gradient).expect("GradientValue serialization is infallible")
+            }
+            PropertyValue::Pattern(pattern) => {
+                serde_json::to_value(pattern).expect("PatternValue serialization is infallible")
+            }
             PropertyValue::Array(arr) => {
                 serde_json::Value::Array(arr.iter().map(|v| v.into()).collect())
             }
@@ -609,6 +649,24 @@ impl TryGetProperty<PathValue> for PathValue {
     fn try_get(p: &PropertyValue) -> Option<PathValue> {
         match p {
             PropertyValue::Path(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl TryGetProperty<GradientValue> for GradientValue {
+    fn try_get(p: &PropertyValue) -> Option<GradientValue> {
+        match p {
+            PropertyValue::Gradient(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl TryGetProperty<PatternValue> for PatternValue {
+    fn try_get(p: &PropertyValue) -> Option<PatternValue> {
+        match p {
+            PropertyValue::Pattern(value) => Some(value.clone()),
             _ => None,
         }
     }

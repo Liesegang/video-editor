@@ -32,6 +32,7 @@ fn video_converter_preserves_clip_local_source_time_and_stream() -> Result<()> {
             file_path: "test.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         1920,
         1080,

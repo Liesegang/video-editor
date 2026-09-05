@@ -20,6 +20,7 @@ use library::core::render_plan::{RenderPlan, RenderPlanCache};
 use library::editor::TimelineEditorService;
 use library::model::authoring::{AuthoringProject, InstancePath, ProjectRevision, TimelineId};
 use library::model::frame::frame::Region;
+use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
 use library::{RenderRequestId, RenderResult, RenderServer};
 use ordered_float::OrderedFloat;
@@ -416,6 +417,7 @@ pub fn preview_panel(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
+    plugins: &PluginManager,
     render_server: &RenderServer,
     runtime: &mut AuthoringPreviewRuntime,
 ) {
@@ -434,13 +436,7 @@ pub fn preview_panel(
         egui::Rect::from_min_max(egui::pos2(available.min.x, viewport.max.y), available.max);
 
     let snapshot = runtime.snapshot_and_plan(service);
-    let path_tool_enabled = snapshot
-        .as_ref()
-        .is_ok_and(|(_, project, _)| path_editor::selected_path_is_editable(project, state));
-    let text_tool_enabled = snapshot
-        .as_ref()
-        .is_ok_and(|(_, project, _)| text_editor::selected_text_is_editable(project, state));
-    toolbar(ui, top_bar, state, text_tool_enabled, path_tool_enabled);
+    toolbar(ui, top_bar, state);
     let (revision, project, plan, timeline) = match snapshot {
         Ok((revision, project, plan)) => {
             let timeline = project.timelines.get(&state.active_timeline_id).cloned();
@@ -592,15 +588,39 @@ pub fn preview_panel(
         project.as_ref(),
         state,
     );
-    text_editor::text_editor_overlay(
+    let created_text = text_editor::handle_tool_click(
         ui,
-        viewport,
+        &viewport_response,
+        content_rect,
         canvas_transform,
-        revision,
         displayed_edit_frame,
+        revision,
         project.as_ref(),
         state,
         service,
+        plugins,
+    );
+    if !created_text {
+        text_editor::text_editor_overlay(
+            ui,
+            viewport,
+            canvas_transform,
+            revision,
+            displayed_edit_frame,
+            project.as_ref(),
+            state,
+            service,
+        );
+    }
+    path_editor::creation_overlay(
+        ui,
+        &viewport_response,
+        viewport,
+        canvas_transform,
+        project.as_ref(),
+        state,
+        service,
+        plugins,
     );
     path_editor::path_editor_overlay(
         ui,

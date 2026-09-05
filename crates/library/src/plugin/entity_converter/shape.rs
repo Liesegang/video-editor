@@ -4,6 +4,39 @@ use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimePathPart, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
 };
 
+/// Produces the canonical local-space contour for a parameterized Timeline or
+/// Module primitive. Both authoring surfaces must use this exact geometry so
+/// promoting a Clip to a Node Clip cannot change its pixels or gizmo bounds.
+pub(crate) fn primitive_shape_path_data(
+    kind: crate::model::authoring::ShapeKind,
+    width: f64,
+    height: f64,
+) -> Result<String, crate::error::LibraryError> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err(crate::error::LibraryError::Validation(
+            "Primitive Shape width and height must be positive and finite".to_string(),
+        ));
+    }
+    match kind {
+        crate::model::authoring::ShapeKind::Rectangle => {
+            Ok(format!("M 0 0 H {width} V {height} H 0 Z"))
+        }
+        crate::model::authoring::ShapeKind::Ellipse => Ok(format!(
+            "M {width} {} A {} {} 0 1 1 0 {} A {} {} 0 1 1 {width} {} Z",
+            height / 2.0,
+            width / 2.0,
+            height / 2.0,
+            height / 2.0,
+            width / 2.0,
+            height / 2.0,
+            height / 2.0
+        )),
+        crate::model::authoring::ShapeKind::Path => Err(crate::error::LibraryError::Validation(
+            "A free Path is not a parameterized primitive".to_string(),
+        )),
+    }
+}
+
 #[derive(Default)]
 pub struct ShapeEntityConverterPlugin;
 

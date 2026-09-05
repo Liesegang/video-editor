@@ -1,14 +1,19 @@
+mod clip_menu;
 mod content;
 mod documents;
 mod dope_sheet;
-mod geometry;
+pub(crate) mod geometry;
 mod interaction;
 mod painting;
 mod rows;
+mod selection;
+mod tracks;
 mod transition_assignment;
 mod transitions;
 mod viewport;
 
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 mod particle_clip_tests;
 #[cfg(test)]
@@ -31,18 +36,23 @@ use crate::state::authoring::{
 };
 use crate::ui::media_preview::AuthoringMediaPreviewService;
 
+use clip_menu::background_context_menu;
 use content::{paint_item_content, ItemContentContext};
 use geometry::{
-    format_time, TimelineRowMetrics, EDGE_WIDTH, MIN_CLIP_WIDTH, RULER_HEIGHT, SIDEBAR_WIDTH,
+    clip_rect as timeline_clip_rect, format_time, trim_edge_rects, TimelineRowMetrics,
+    RULER_HEIGHT, SIDEBAR_WIDTH,
 };
 use interaction::{
-    background_context_menu, finish_item_gesture, handle_library_drop, run_item_actions,
+    finish_item_gesture, handle_library_drop, item_gesture_kind, run_item_actions,
     timeline_row_projection, update_item_projection, TimelineRowProjection,
 };
 use painting::{draw_ruler, item_colors, item_icon, open_icon, paint_background};
 use rows::{display_rows, DisplayRow, RowKind};
 use rows::{draw_rows, property_row_items};
-use viewport::{navigate, seconds_to_screen_x};
+use selection::{
+    apply_item_click_selection, handle_marquee_selection, prepare_item_drag_selection,
+};
+use viewport::navigate;
 
 #[derive(Clone, Copy)]
 enum DeferredItemAction {
@@ -82,18 +92,9 @@ pub fn timeline_panel(
     timeline_header(ui, project, timeline.name.as_str(), state);
     ui.separator();
 
-    let transport_height = 39.0;
-    let available = ui.available_rect_before_wrap();
-    let canvas_rect = Rect::from_min_max(
-        available.min,
-        Pos2::new(
-            available.max.x,
-            (available.max.y - transport_height).max(available.min.y),
-        ),
-    );
-    let transport_rect =
-        Rect::from_min_max(Pos2::new(available.min.x, canvas_rect.max.y), available.max);
-    ui.allocate_rect(available, Sense::hover());
+    let regions = crate::ui::panel_layout::allocate_panel_with_footer(ui, 33.0);
+    let canvas_rect = regions.body;
+    let transport_rect = regions.footer;
 
     let content_rect = Rect::from_min_max(
         Pos2::new(
@@ -129,6 +130,9 @@ pub fn timeline_panel(
         &property_items,
         state.active_instance_path.as_ref(),
     );
+    tracks::update_projection(ui, project, state, &rows, content_rect);
+    let rows = tracks::project_rows(rows, state.timeline.track_gesture.as_ref());
+    tracks::register_projection_qa(&rows, state.timeline.track_gesture.as_ref(), sidebar_rect);
     let row_projection = timeline_row_projection(
         project,
         &rows,
@@ -140,7 +144,7 @@ pub fn timeline_panel(
         .as_ref()
         .map_or(rows.len(), TimelineRowProjection::visible_row_count);
 
-    navigate(ui, content_rect, state, visible_row_count);
+    let navigation = navigate(ui, content_rect, state, visible_row_count);
     let timeline_canvas = viewport::canvas_state(&state.timeline);
     let row_metrics = TimelineRowMetrics::from_view(&state.timeline);
     crate::qa::register_component_with_metadata(
@@ -198,12 +202,12 @@ pub fn timeline_panel(
 
     let mut actions = Vec::new();
     background_context_menu(
-        ui,
         project,
         timeline.id,
         state,
         service,
-        sidebar_rect.union(content_rect),
+        plugins,
+        navigation.as_ref().map(|(response, _)| response),
     );
     draw_rows(
         ui,
@@ -218,16 +222,10 @@ pub fn timeline_panel(
         waveform,
         media_previews,
     );
-    handle_library_drop(
-        ui,
-        project,
-        timeline.id,
-        state,
-        service,
-        &rows,
-        content_rect,
-    );
+    handle_marquee_selection(ui, project, state, &rows, content_rect, navigation);
+    handle_library_drop(ui, project, state, service, plugins, &rows, content_rect);
     finish_item_gesture(ui, state, service);
+    tracks::finish_gesture(ui, project, state, service);
     dope_sheet::finish_keyframe_gesture(ui, state, service);
     run_item_actions(project, state, service, plugins, actions);
     transport(
@@ -320,22 +318,7 @@ fn draw_item(
 ) {
     let projected = projected_gesture_for_item(state.timeline.item_gesture.as_ref(), item.id);
     let interval = projected.map_or(item.interval, |gesture| gesture.projected_interval);
-    let x = seconds_to_screen_x(
-        interval.start.to_seconds_f64() as f32,
-        row_rect,
-        &state.timeline,
-    );
-    let width = (interval.duration.to_seconds_f64() as f32 * state.timeline.pixels_per_second)
-        .max(MIN_CLIP_WIDTH);
-    let vertical_inset = if summary {
-        3.0 + (item.layer.rem_euclid(3) as f32)
-    } else {
-        3.0
-    };
-    let clip_rect = Rect::from_min_size(
-        Pos2::new(x, row_rect.top() + vertical_inset),
-        Vec2::new(width, row_rect.height() - vertical_inset - 3.0),
-    );
+    let clip_rect = timeline_clip_rect(interval, item.layer, row_rect, &state.timeline, summary);
     let visible_clip_rect = clip_rect.intersect(content_rect);
     if !visible_clip_rect.is_positive() {
         return;
@@ -367,34 +350,61 @@ fn draw_item(
             "display_mode": state.timeline.item_display_mode(item.id, item.track_id).qa_name(),
         })),
     );
+    let (trim_start_rect, trim_end_rect) = trim_edge_rects(clip_rect, content_rect);
+    for (edge, rect) in [("start", trim_start_rect), ("end", trim_end_rect)] {
+        if rect.is_positive() {
+            crate::qa::register_component_with_metadata(
+                format!("timeline.item.trim_{edge}:{}", item.id),
+                "timeline_clip_trim_edge",
+                rect,
+                true,
+                Some(serde_json::json!({
+                    "item_id": item.id,
+                    "edge": edge,
+                    "start_seconds": interval.start.to_seconds_f64(),
+                    "duration_seconds": interval.duration.to_seconds_f64(),
+                })),
+            );
+        }
+    }
+    if response.hovered()
+        && ui
+            .input(|input| input.pointer.hover_pos())
+            .is_some_and(|pointer| {
+                !matches!(
+                    item_gesture_kind(clip_rect, pointer),
+                    TimelineGestureKind::Move
+                )
+            })
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
     if response.clicked() {
-        state.selection.replace(AuthoringSelection::Item(item.id));
+        apply_item_click_selection(state, item.id, ui.input(|input| input.modifiers));
     }
     if response.double_clicked() {
         actions.push(DeferredItemAction::Open(item.id));
     }
     if response.drag_started() && state.timeline.item_gesture.is_none() {
-        if let Some(pointer) = response.interact_pointer_pos() {
-            let kind = if pointer.x <= clip_rect.left() + EDGE_WIDTH {
-                TimelineGestureKind::TrimStart
-            } else if pointer.x >= clip_rect.right() - EDGE_WIDTH {
-                TimelineGestureKind::TrimEnd
-            } else {
-                TimelineGestureKind::Move
-            };
-            state.selection.replace(AuthoringSelection::Item(item.id));
-            state.timeline.item_gesture = Some(TimelineItemGesture {
-                item_id: item.id,
-                kind,
-                pointer_origin: pointer,
-                original_track_id: item.track_id,
-                original_layer: item.layer,
-                original_interval: item.interval,
-                projected_track_id: item.track_id,
-                projected_layer: item.layer,
-                projected_interval: item.interval,
-            });
-            ui.ctx().request_repaint();
+        if let Some(pointer) = ui
+            .input(|input| input.pointer.press_origin())
+            .or_else(|| response.interact_pointer_pos())
+        {
+            let kind = item_gesture_kind(clip_rect, pointer);
+            if prepare_item_drag_selection(state, item.id, ui.input(|input| input.modifiers)) {
+                state.timeline.item_gesture = Some(TimelineItemGesture {
+                    item_id: item.id,
+                    kind,
+                    pointer_origin: pointer,
+                    original_track_id: item.track_id,
+                    original_layer: item.layer,
+                    original_interval: item.interval,
+                    projected_track_id: item.track_id,
+                    projected_layer: item.layer,
+                    projected_interval: item.interval,
+                });
+                ui.ctx().request_repaint();
+            }
         }
     }
     response.context_menu(|ui| {
@@ -528,9 +538,9 @@ fn transport(
 ) {
     ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
     ui.scope_builder(
-        egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(8.0, 4.0))),
+        egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(8.0, 0.0))),
         |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_centered(|ui| {
                 if ui
                     .small_button(icons::SKIP_BACK)
                     .on_hover_text("Go to start")
@@ -665,4 +675,5 @@ fn transport(
             });
         },
     );
+    crate::qa::register_component("timeline.footer", "panel_footer", rect);
 }

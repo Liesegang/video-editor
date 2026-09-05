@@ -97,6 +97,8 @@ pub(super) fn property_views(
                     )));
                 }
                 PropertyValue::Path(_)
+                | PropertyValue::Gradient(_)
+                | PropertyValue::Pattern(_)
                 | PropertyValue::Array(_)
                 | PropertyValue::Map(_)
                 | PropertyValue::OpaqueJson(_) => {
@@ -180,8 +182,12 @@ pub(super) fn property_value_to_wire(
                 a: value.a,
             })
         }
-        PropertyValue::Path(_) | PropertyValue::Array(_) | PropertyValue::Map(_) => {
-            Err("path, array, and map values are not supported by ABI v1")
+        PropertyValue::Path(_)
+        | PropertyValue::Gradient(_)
+        | PropertyValue::Pattern(_)
+        | PropertyValue::Array(_)
+        | PropertyValue::Map(_) => {
+            Err("path, paint, array, and map values are not supported by ABI v1")
         }
         PropertyValue::OpaqueJson(_) => Err("opaque JSON values are not supported by ABI v1"),
     }
@@ -312,7 +318,7 @@ mod tests {
         let path = PropertyValue::Path(PathValue::empty(FillRule::NonZero));
         assert_eq!(
             property_value_to_wire(&path).unwrap_err(),
-            "path, array, and map values are not supported by ABI v1"
+            "path, paint, array, and map values are not supported by ABI v1"
         );
 
         let error = property_views(&[("geometry".to_string(), path)]).unwrap_err();

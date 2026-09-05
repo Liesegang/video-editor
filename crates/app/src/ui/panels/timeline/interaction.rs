@@ -1,16 +1,22 @@
 use std::collections::{HashMap, HashSet};
 
-use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind};
-use egui_phosphor::regular as icons;
-use library::editor::{ModuleItemPlacement, ParticleNodeClipPlacement, TimelineEditorService};
+use egui::{Color32, Pos2, Rect, Stroke, StrokeKind};
+use library::editor::{
+    GeneratorNodeClipPlacement, ModuleItemPlacement, ParticleNodeClipPlacement,
+    TimelineEditorService,
+};
 use library::model::asset::AssetKind;
 use library::model::authoring::{
     ordered_track_item_ids, track_item_ids_after_placement, AuthoringProject, CompositionInstance,
-    DurationPolicy, MediaTime, ModuleDefinition, ModuleDefinitionSharing, SourceRef, TimelineId,
-    TimelineInterval, TimelineItemId, TimelineTrackId, TimelineTrackKind, TransitionProcessor,
+    DurationPolicy, MediaTime, ModuleDefinition, ModuleDefinitionSharing, SourceRef,
+    TimelineInterval, TimelineItemId, TimelineTrackId, TransitionProcessor,
 };
 use library::plugin::PluginManager;
 
+use super::geometry::{next_layer, snap_seconds, TimelineRowMetrics, EDGE_WIDTH};
+use super::rows::property_row_items;
+use super::viewport::screen_x_to_seconds;
+use super::{display_rows, DeferredItemAction, DisplayRow, RowKind};
 use crate::state::authoring::{
     AuthoringLibraryDrag, AuthoringSelection, AuthoringUiState, AutomationLaneId,
     TimelineGestureKind, TimelineItemGesture,
@@ -18,10 +24,17 @@ use crate::state::authoring::{
 use crate::state::node_editor::{ModuleEditorHost, NodeEditorDocument};
 use crate::ui::panels::node_editor::open_transition_document;
 
-use super::geometry::{next_layer, snap_seconds, TimelineRowMetrics};
-use super::rows::property_row_items;
-use super::viewport::screen_x_to_seconds;
-use super::{display_rows, DeferredItemAction, DisplayRow, RowKind};
+pub(super) fn item_gesture_kind(clip_rect: Rect, press_origin: Pos2) -> TimelineGestureKind {
+    let start_distance = (press_origin.x - clip_rect.left()).abs();
+    let end_distance = (press_origin.x - clip_rect.right()).abs();
+    if start_distance <= EDGE_WIDTH && start_distance <= end_distance {
+        TimelineGestureKind::TrimStart
+    } else if end_distance <= EDGE_WIDTH {
+        TimelineGestureKind::TrimEnd
+    } else {
+        TimelineGestureKind::Move
+    }
+}
 
 /// Pure row mapping for a pending item move. The authoritative Project stays
 /// untouched until release; every visible Track header, expanded Clip row,
@@ -161,6 +174,22 @@ pub(super) fn update_item_projection(
         return;
     };
     let row_target = row_target_at(project, state, pointer.y, content_top, dragged_item_id);
+    let minimum_move_start = state
+        .selection
+        .iter()
+        .filter_map(|selection| match selection {
+            AuthoringSelection::Item(item_id) => project.items.get(&item_id),
+            _ => None,
+        })
+        .map(|item| item.interval.start.to_seconds_f64())
+        .reduce(f64::min)
+        .and_then(|minimum| {
+            project
+                .items
+                .get(&dragged_item_id)
+                .map(|primary| (primary.interval.start.to_seconds_f64() - minimum).max(0.0))
+        })
+        .unwrap_or(0.0);
     let Some(gesture) = state.timeline.item_gesture.as_mut() else {
         return;
     };
@@ -173,8 +202,8 @@ pub(super) fn update_item_projection(
         .unwrap_or(1.0 / 30.0);
     match gesture.kind {
         TimelineGestureKind::Move => {
-            let seconds =
-                (gesture.original_interval.start.to_seconds_f64() + delta_seconds).max(0.0);
+            let seconds = (gesture.original_interval.start.to_seconds_f64() + delta_seconds)
+                .max(minimum_move_start);
             let snapped = snap_seconds(
                 project,
                 active_timeline_id,
@@ -184,7 +213,10 @@ pub(super) fn update_item_projection(
                 pixels_per_second,
             );
             if let Ok(start) = MediaTime::from_seconds_f64(snapped, 1_000_000) {
-                gesture.projected_interval.start = start;
+                gesture.projected_interval.start = start.max(
+                    MediaTime::from_seconds_f64(minimum_move_start, 1_000_000)
+                        .unwrap_or(MediaTime::zero()),
+                );
             }
             if let Some((track_id, layer)) = row_target {
                 gesture.projected_track_id = track_id;
@@ -246,6 +278,9 @@ fn row_target_at(
     }
 
     let item_count = ordered_track_item_ids(project, track_id, None).len();
+    if item_count == 0 {
+        return Some((track_id, 0));
+    }
     let markers = clip_insertion_markers(
         &rows,
         track_id,
@@ -343,7 +378,7 @@ fn destination_layer_for_insertion_slot(
     i64::try_from(destination).ok()
 }
 
-fn destination_index_after_removal(
+pub(super) fn destination_index_after_removal(
     source_index: usize,
     insertion_slot: usize,
     item_count: usize,
@@ -386,12 +421,32 @@ pub(super) fn finish_item_gesture(
         return;
     }
     let result = match gesture.kind {
-        TimelineGestureKind::Move => service.move_item(
-            gesture.item_id,
-            gesture.projected_track_id,
-            gesture.projected_interval.start,
-            gesture.projected_layer,
-        ),
+        TimelineGestureKind::Move => {
+            let selected_items = state
+                .selection
+                .iter()
+                .filter_map(|selection| match selection {
+                    AuthoringSelection::Item(item_id) => Some(item_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if selected_items.len() > 1 && selected_items.contains(&gesture.item_id) {
+                service.move_items(
+                    &selected_items,
+                    gesture.item_id,
+                    gesture.projected_track_id,
+                    gesture.projected_interval.start,
+                    gesture.projected_layer,
+                )
+            } else {
+                service.move_item(
+                    gesture.item_id,
+                    gesture.projected_track_id,
+                    gesture.projected_interval.start,
+                    gesture.projected_layer,
+                )
+            }
+        }
         TimelineGestureKind::TrimStart | TimelineGestureKind::TrimEnd => {
             service.trim_item(gesture.item_id, gesture.projected_interval)
         }
@@ -404,13 +459,13 @@ pub(super) fn finish_item_gesture(
 pub(super) fn handle_library_drop(
     ui: &egui::Ui,
     project: &AuthoringProject,
-    timeline_id: TimelineId,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
+    plugins: &PluginManager,
     rows: &[DisplayRow],
     content_rect: Rect,
 ) {
-    let Some(payload) = state.timeline.library_drag else {
+    let Some(payload) = state.library_drag else {
         return;
     };
     let pointer = ui.ctx().pointer_latest_pos();
@@ -430,13 +485,13 @@ pub(super) fn handle_library_drop(
     let released = ui.input(|input| input.pointer.primary_released());
     let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
     if cancelled || (released && !over) {
-        state.timeline.library_drag = None;
+        state.library_drag = None;
         return;
     }
     if !released || !over {
         return;
     }
-    state.timeline.library_drag = None;
+    state.library_drag = None;
     let Some(pointer) = pointer else {
         return;
     };
@@ -446,15 +501,7 @@ pub(super) fn handle_library_drop(
     };
     let start = MediaTime::from_seconds_f64(f64::from(seconds.max(0.0)), 1_000_000)
         .unwrap_or_else(|_| MediaTime::zero());
-    let result = place_payload(
-        project,
-        timeline_id,
-        payload,
-        track_id,
-        layer,
-        start,
-        service,
-    );
+    let result = place_payload(project, payload, track_id, layer, start, service, plugins);
     match result {
         Ok(item_id) => {
             state.timeline.expanded_tracks.insert(track_id);
@@ -467,13 +514,18 @@ pub(super) fn handle_library_drop(
 
 pub(super) fn place_payload(
     project: &AuthoringProject,
-    timeline_id: TimelineId,
     payload: AuthoringLibraryDrag,
     track_id: TimelineTrackId,
     layer: i64,
     start: MediaTime,
     service: &TimelineEditorService,
+    plugins: &PluginManager,
 ) -> Result<TimelineItemId, String> {
+    let timeline_id = project
+        .tracks
+        .get(&track_id)
+        .map(|track| track.timeline_id)
+        .ok_or_else(|| format!("Missing destination Track {track_id}"))?;
     match payload {
         AuthoringLibraryDrag::Asset(asset_id) => {
             let asset = project
@@ -559,6 +611,29 @@ pub(super) fn place_payload(
             })
             .map(|creation| creation.item_id)
             .map_err(|error| error.to_string()),
+        AuthoringLibraryDrag::NewShaderNodeClip => service
+            .create_generator_node_clip(
+                plugins,
+                library::editor::ModuleNodeRequest::SkSL {
+                    shader: library::editor::project_service::DEFAULT_SKSL_SHADER.to_string(),
+                },
+                GeneratorNodeClipPlacement {
+                    track_id,
+                    name: "SkSL Shader".to_string(),
+                    interval: TimelineInterval::new(start, MediaTime::new(5, 1)?)?,
+                    layer,
+                },
+                project
+                    .timelines
+                    .get(&timeline_id)
+                    .map_or(1920, |timeline| timeline.width),
+                project
+                    .timelines
+                    .get(&timeline_id)
+                    .map_or(1080, |timeline| timeline.height),
+            )
+            .map(|(item_id, _, _, _)| item_id)
+            .map_err(|error| error.to_string()),
     }
 }
 
@@ -580,7 +655,7 @@ fn module_placement(
     })
 }
 
-fn drop_target(
+pub(super) fn drop_target(
     project: &AuthoringProject,
     rows: &[DisplayRow],
     state: &AuthoringUiState,
@@ -721,241 +796,6 @@ pub(super) fn run_item_actions(
         };
         if let Err(error) = result {
             state.error = Some(error.to_string());
-        }
-    }
-}
-
-pub(super) fn background_context_menu(
-    ui: &mut egui::Ui,
-    project: &AuthoringProject,
-    timeline_id: TimelineId,
-    state: &mut AuthoringUiState,
-    service: &TimelineEditorService,
-    rect: Rect,
-) {
-    let response = ui.interact(
-        rect,
-        ui.id().with("timeline-background-menu"),
-        Sense::click(),
-    );
-    response.context_menu(|ui| {
-        ui.menu_button(format!("{} New Clip", icons::PLUS), |ui| {
-            for (label, icon, kind) in [
-                ("Text", icons::TEXT_T, BasicClipKind::Text),
-                ("Rectangle", icons::SQUARE, BasicClipKind::Rectangle),
-                ("Ellipse", icons::CIRCLE, BasicClipKind::Ellipse),
-                ("Path", icons::BEZIER_CURVE, BasicClipKind::Path),
-                ("Solid", icons::PALETTE, BasicClipKind::Solid),
-            ] {
-                if ui.button(format!("{icon} {label}")).clicked() {
-                    match create_basic_clip(project, timeline_id, state, service, kind) {
-                        Ok(item_id) => {
-                            state.selection.replace(AuthoringSelection::Item(item_id));
-                            state.status = format!("Created {label} clip");
-                        }
-                        Err(error) => state.error = Some(error),
-                    }
-                    ui.close();
-                }
-            }
-        });
-        ui.separator();
-        if ui.button(format!("{} Add Track", icons::PLUS)).clicked() {
-            match service.add_track(
-                timeline_id,
-                "Video".to_string(),
-                TimelineTrackKind::AudioVisual,
-            ) {
-                Ok((track_id, _)) => {
-                    state.timeline.expanded_tracks.insert(track_id);
-                    state.selection.replace(AuthoringSelection::Track(track_id));
-                    state.status = "Created Track".to_string();
-                }
-                Err(error) => {
-                    log::error!("Cannot add Timeline Track: {error}");
-                    state.error = Some(error.to_string());
-                }
-            }
-            ui.close();
-        }
-    });
-}
-
-#[derive(Clone, Copy)]
-enum BasicClipKind {
-    Text,
-    Rectangle,
-    Ellipse,
-    Path,
-    Solid,
-}
-
-fn create_basic_clip(
-    project: &AuthoringProject,
-    timeline_id: TimelineId,
-    state: &AuthoringUiState,
-    service: &TimelineEditorService,
-    kind: BasicClipKind,
-) -> Result<TimelineItemId, String> {
-    let timeline = project
-        .timelines
-        .get(&timeline_id)
-        .ok_or_else(|| format!("Missing Timeline {timeline_id}"))?;
-    let selected_track = state
-        .selection
-        .primary()
-        .and_then(|selection| match selection {
-            AuthoringSelection::Track(track_id) => Some(track_id),
-            AuthoringSelection::Item(item_id) => {
-                project.items.get(&item_id).map(|item| item.track_id)
-            }
-            _ => None,
-        });
-    let track_id = selected_track
-        .filter(|track_id| {
-            project
-                .tracks
-                .get(track_id)
-                .is_some_and(|track| track.timeline_id == timeline_id)
-        })
-        .or_else(|| timeline.track_order.first().copied())
-        .ok_or_else(|| "Add a Track before creating a clip".to_string())?;
-    let start = MediaTime::from_frame_index(state.timeline.current_frame, timeline.fps)?;
-    let duration = MediaTime::new(5, 1)?;
-    let (name, source) = match kind {
-        BasicClipKind::Text => (
-            "Text",
-            SourceRef::Text {
-                text: "Text".to_string(),
-                ensemble_operations: Vec::new(),
-            },
-        ),
-        BasicClipKind::Rectangle => (
-            "Rectangle",
-            SourceRef::Shape {
-                shape: library::model::authoring::ShapeSource {
-                    shape_kind: library::model::authoring::ShapeKind::Rectangle,
-                    parameters: HashMap::new(),
-                },
-            },
-        ),
-        BasicClipKind::Ellipse => (
-            "Ellipse",
-            SourceRef::Shape {
-                shape: library::model::authoring::ShapeSource {
-                    shape_kind: library::model::authoring::ShapeKind::Ellipse,
-                    parameters: HashMap::new(),
-                },
-            },
-        ),
-        BasicClipKind::Path => {
-            let path = library::model::path::PathValue::new(
-                library::model::path::FillRule::NonZero,
-                vec![library::model::path::PathContour::new(
-                    library::model::path::PathPoint::new(0.0, 0.0),
-                    vec![
-                        library::model::path::PathSegment::line(
-                            library::model::path::PathPoint::new(160.0, 0.0),
-                        ),
-                        library::model::path::PathSegment::line(
-                            library::model::path::PathPoint::new(160.0, 90.0),
-                        ),
-                        library::model::path::PathSegment::line(
-                            library::model::path::PathPoint::new(0.0, 90.0),
-                        ),
-                    ],
-                    true,
-                )],
-            )
-            .map_err(|error| error.to_string())?;
-            (
-                "Path",
-                SourceRef::Shape {
-                    shape: library::model::authoring::ShapeSource {
-                        shape_kind: library::model::authoring::ShapeKind::Path,
-                        parameters: HashMap::from([
-                            (
-                                "path".to_string(),
-                                library::model::property::PropertyValue::Path(path),
-                            ),
-                            (
-                                "width".to_string(),
-                                library::model::property::PropertyValue::from(160.0),
-                            ),
-                            (
-                                "height".to_string(),
-                                library::model::property::PropertyValue::from(90.0),
-                            ),
-                        ]),
-                    },
-                },
-            )
-        }
-        BasicClipKind::Solid => (
-            "Solid",
-            SourceRef::Solid {
-                color: library::model::frame::color::Color::black(),
-            },
-        ),
-    };
-    service
-        .add_item(
-            track_id,
-            name.to_string(),
-            source,
-            TimelineInterval::new(start, duration)?,
-            next_layer(project, track_id),
-        )
-        .map(|(item_id, _)| item_id)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::state::authoring::AuthoringUiState;
-
-    use super::super::display_rows;
-    use super::super::geometry::TimelineRowMetrics;
-    use super::super::tests::fixture;
-    use super::{destination_index_after_removal, drop_target};
-
-    #[test]
-    fn removal_adjustment_keeps_adjacent_slots_stable() {
-        assert_eq!(destination_index_after_removal(2, 0, 4), Some(0));
-        assert_eq!(destination_index_after_removal(0, 3, 4), Some(2));
-        assert_eq!(destination_index_after_removal(1, 1, 4), Some(1));
-        assert_eq!(destination_index_after_removal(1, 2, 4), Some(1));
-        assert_eq!(destination_index_after_removal(4, 0, 4), None);
-    }
-
-    #[test]
-    fn drop_hit_uses_scaled_rows_and_vertical_scroll() {
-        let (project, track_id, _) = fixture();
-        let mut state = AuthoringUiState::new(project.root_timeline_id);
-        state.timeline.expanded_tracks.insert(track_id);
-        state.timeline.vertical_zoom = 2.25;
-        state.timeline.vertical_scroll = 47.0;
-        let rows = display_rows(
-            &project,
-            project.root_timeline_id,
-            &state.timeline.expanded_tracks,
-            &state.timeline.expanded_items,
-            state.active_instance_path.as_ref(),
-        );
-        let metrics = TimelineRowMetrics::from_view(&state.timeline);
-        let first_row_top = 180.0;
-
-        for (row_index, row) in rows.iter().enumerate().skip(1) {
-            let super::super::RowKind::Clip { item_id, .. } = row.kind else {
-                panic!("expanded child must be a clip row");
-            };
-            let pointer_y =
-                first_row_top + row_index as f32 * metrics.stride() + metrics.row_height() / 2.0
-                    - state.timeline.vertical_scroll;
-            assert_eq!(
-                drop_target(&project, &rows, &state, pointer_y, first_row_top),
-                Some((track_id, project.items[&item_id].layer + 1))
-            );
         }
     }
 }

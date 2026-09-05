@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use egui::{Sense, Vec2};
+use egui::{Sense, UiBuilder, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringWaveformService, TimelineEditorService};
 use library::model::authoring::{
@@ -17,6 +17,7 @@ use library::plugin::PluginManager;
 
 use crate::state::authoring::{AssetBrowserViewMode, AuthoringSelection, AuthoringUiState};
 use crate::ui::media_preview::AuthoringMediaPreviewService;
+use crate::ui::panel_layout::allocate_panel_with_footer;
 
 const TOOLBAR_HEIGHT: f32 = 31.0;
 
@@ -34,31 +35,80 @@ pub fn assets_panel(
     assets_header(ui, state);
     ui.separator();
 
-    let content_height = (ui.available_height() - TOOLBAR_HEIGHT).max(0.0);
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), content_height),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            let scroll = if state.assets.view_mode == AssetBrowserViewMode::Table {
-                egui::ScrollArea::both()
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-            } else {
-                egui::ScrollArea::vertical()
-            };
-            scroll
-                .id_salt("assets.scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    views::project_library(ui, project, state, service, waveform, media_previews);
-                    let blank =
-                        ui.allocate_response(Vec2::new(ui.available_width(), 36.0), Sense::click());
-                    blank.context_menu(|ui| creation_menu(ui, project, state, service));
-                });
-        },
+    let regions = allocate_panel_with_footer(ui, TOOLBAR_HEIGHT);
+    let scroll = ui
+        .scope_builder(
+            UiBuilder::new()
+                .max_rect(regions.body)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+            |ui| {
+                let scroll = if state.assets.view_mode == AssetBrowserViewMode::Table {
+                    egui::ScrollArea::both()
+                } else {
+                    egui::ScrollArea::vertical()
+                }
+                .scroll_bar_visibility(
+                    egui::containers::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                );
+                scroll
+                    .id_salt("assets.scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        views::project_library(
+                            ui,
+                            project,
+                            state,
+                            service,
+                            waveform,
+                            media_previews,
+                        );
+                        let blank = ui.allocate_response(
+                            Vec2::new(ui.available_width(), 36.0),
+                            Sense::click(),
+                        );
+                        blank.context_menu(|ui| creation_menu(ui, project, state, service));
+                    })
+            },
+        )
+        .inner;
+
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(regions.footer)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| import_toolbar(ui, state, service, plugins),
     );
 
-    ui.separator();
-    import_toolbar(ui, state, service, plugins);
+    crate::qa::register_component("assets.footer", "panel_footer", regions.footer);
+    crate::qa::register_component_with_metadata(
+        "assets.layout",
+        "panel_layout",
+        regions.body.union(regions.footer),
+        true,
+        Some(serde_json::json!({
+            "body": rect_metadata(regions.body),
+            "footer": rect_metadata(regions.footer),
+            "footer_contained": regions.body.bottom() <= regions.footer.top(),
+            "content_width": scroll.content_size.x,
+            "content_height": scroll.content_size.y,
+            "viewport_width": scroll.inner_rect.width(),
+            "viewport_height": scroll.inner_rect.height(),
+            "horizontal_overflow": scroll.content_size.x > scroll.inner_rect.width() + 0.1,
+            "vertical_overflow": scroll.content_size.y > scroll.inner_rect.height() + 0.1,
+            "offset_x": scroll.state.offset.x,
+            "offset_y": scroll.state.offset.y,
+            "scrollbars": "visible_when_needed",
+        })),
+    );
+}
+
+fn rect_metadata(rect: egui::Rect) -> serde_json::Value {
+    serde_json::json!({
+        "min_x": rect.min.x,
+        "min_y": rect.min.y,
+        "max_x": rect.max.x,
+        "max_y": rect.max.y,
+    })
 }
 
 fn assets_header(ui: &mut egui::Ui, state: &mut AuthoringUiState) {

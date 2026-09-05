@@ -1,7 +1,7 @@
 use egui::{Pos2, Response, Ui};
 use egui_phosphor::regular as icons;
 use library::model::vector::{
-    move_handle, move_vertices, set_point_type, HandleType, PointType, VectorPath,
+    insert_vertex, move_handle, move_vertices, set_point_type, HandleType, PointType, VectorPath,
 };
 use library::rendering::renderer::Affine2D;
 use pan_zoom_ui::CanvasTransform;
@@ -12,6 +12,8 @@ const VERTEX_HIT_RADIUS: f32 = 12.0;
 const HANDLE_HIT_RADIUS: f32 = 10.0;
 const HANDLE_VISIBLE_EPSILON: f32 = 1.0e-3;
 const DRAG_THRESHOLD_POINTS: f32 = 2.0;
+const SEGMENT_HIT_RADIUS: f32 = 10.0;
+const SEGMENT_HIT_SAMPLES: usize = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HitTarget {
@@ -51,8 +53,8 @@ pub(super) struct PathEditorInteraction<'a> {
 impl PathEditorInteraction<'_> {
     pub fn handle(&mut self, ui: &Ui, response: &Response) -> InteractionResult {
         let mut result = InteractionResult::default();
-        let (mode_request, toolbar_owns_pointer) = self.point_mode_toolbar(ui, response);
-        result.captured |= toolbar_owns_pointer;
+        let popup_was_open = egui::Popup::is_any_open(ui.ctx());
+        let mode_request = self.point_mode_context_menus(ui);
         if let Some(point_type) = mode_request {
             let before = self.path.clone();
             let selected = sorted_selection(self.state, self.path.points.len());
@@ -60,6 +62,10 @@ impl PathEditorInteraction<'_> {
             result.changed = *self.path != before;
             result.commit_requested = result.changed;
             result.captured = true;
+        }
+        if popup_was_open || egui::Popup::is_any_open(ui.ctx()) {
+            result.captured = true;
+            return result;
         }
 
         let pointer = ui.input(|input| PointerFrame {
@@ -105,7 +111,25 @@ impl PathEditorInteraction<'_> {
             return result;
         };
 
-        if pointer.primary_pressed && !toolbar_owns_pointer && !pointer.space {
+        let insert_on_segment = response.double_clicked_by(egui::PointerButton::Primary)
+            && !pointer.space
+            && self.hit_target(pointer_position).is_none();
+        if insert_on_segment {
+            let inserted = self
+                .nearest_segment(pointer_position)
+                .and_then(|(segment_index, t)| insert_vertex(self.path, segment_index, t));
+            if let Some(inserted) = inserted {
+                self.state.selected_point_indices.clear();
+                self.state.selected_point_indices.insert(inserted);
+                self.state.focused_handle = Some((inserted, HandleType::Vertex));
+                result.changed = true;
+                result.commit_requested = true;
+                result.captured = true;
+                return result;
+            }
+        }
+
+        if pointer.primary_pressed && !pointer.space {
             if let Some(mut hit) = self.hit_target(pointer_position) {
                 update_point_selection(
                     self.state,
@@ -247,80 +271,92 @@ impl PathEditorInteraction<'_> {
             })
     }
 
-    fn point_mode_toolbar(&mut self, ui: &Ui, response: &Response) -> (Option<PointType>, bool) {
-        let selected = sorted_selection(self.state, self.path.points.len());
-        if selected.is_empty() {
-            return (None, false);
+    fn nearest_segment(&self, pointer: Pos2) -> Option<(usize, f32)> {
+        let segment_count = self.path.points.len().saturating_sub(1)
+            + usize::from(self.path.is_closed && self.path.points.len() > 1);
+        let mut nearest: Option<(f32, usize, f32)> = None;
+        for segment_index in 0..segment_count {
+            let next_index = (segment_index + 1) % self.path.points.len();
+            let start = &self.path.points[segment_index];
+            let end = &self.path.points[next_index];
+            let controls = [
+                start.position,
+                add(start.position, start.handle_out),
+                add(end.position, end.handle_in),
+                end.position,
+            ];
+            let mut previous = self.local_to_screen_point(cubic_point(controls, 0.0));
+            for sample in 1..=SEGMENT_HIT_SAMPLES {
+                let t1 = sample as f32 / SEGMENT_HIT_SAMPLES as f32;
+                let current = self.local_to_screen_point(cubic_point(controls, t1));
+                let (distance, along) = distance_to_segment(pointer, previous, current);
+                let t0 = (sample - 1) as f32 / SEGMENT_HIT_SAMPLES as f32;
+                let t = t0 + (t1 - t0) * along;
+                if nearest.is_none_or(|candidate| distance < candidate.0) {
+                    nearest = Some((distance, segment_index, t));
+                }
+                previous = current;
+            }
         }
-        let common_mode = selected
-            .first()
-            .map(|&index| self.path.points[index].point_type)
-            .filter(|mode| {
-                selected
-                    .iter()
-                    .all(|&index| self.path.points[index].point_type == *mode)
+        nearest
+            .filter(|candidate| candidate.0 <= SEGMENT_HIT_RADIUS)
+            .map(|(_, segment, t)| (segment, t.clamp(0.001, 0.999)))
+    }
+
+    fn point_mode_context_menus(&mut self, ui: &Ui) -> Option<PointType> {
+        let mut requested = None;
+        for point_index in 0..self.path.points.len() {
+            let center = self.local_to_screen_point(self.path.points[point_index].position);
+            let response = ui.interact(
+                egui::Rect::from_center_size(center, egui::Vec2::splat(VERTEX_HIT_RADIUS * 2.0)),
+                ui.make_persistent_id(("preview.path.vertex", point_index)),
+                egui::Sense::click(),
+            );
+            if response.secondary_clicked() {
+                update_point_selection(
+                    self.state,
+                    point_index,
+                    ui.input(|input| input.modifiers.shift),
+                    self.path.points.len(),
+                );
+            }
+            response.context_menu(|ui| {
+                let selected = sorted_selection(self.state, self.path.points.len());
+                for (mode, icon, label, id) in [
+                    (PointType::Corner, icons::SQUARE, "Corner / Cusp", "corner"),
+                    (PointType::Smooth, icons::CIRCLE, "Smooth", "smooth"),
+                    (
+                        PointType::Symmetric,
+                        icons::DIAMOND,
+                        "Symmetric",
+                        "symmetric",
+                    ),
+                ] {
+                    let active = selected
+                        .iter()
+                        .all(|&index| self.path.points[index].point_type == mode);
+                    let choice = ui.selectable_label(active, format!("{icon} {label}"));
+                    crate::qa::register_component_with_metadata(
+                        format!("preview.vector.mode.{id}"),
+                        "preview_path_point_mode",
+                        choice.rect,
+                        choice.enabled(),
+                        Some(serde_json::json!({
+                            "mode": id,
+                            "selected_point_indices": &selected,
+                            "active": active,
+                            "action": "set_selected_path_point_mode",
+                            "surface": "vertex_context_menu",
+                        })),
+                    );
+                    if choice.clicked() {
+                        requested = Some(mode);
+                        ui.close();
+                    }
+                }
             });
-        let area = egui::Area::new(egui::Id::new("preview.path.point_modes"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(response.rect.left_top() + egui::vec2(166.0, -31.0))
-            .show(ui.ctx(), |ui| {
-                egui::Frame::NONE
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.style_mut().spacing.item_spacing = egui::vec2(3.0, 0.0);
-                            let mut requested = None;
-                            for (mode, icon, label, id) in [
-                                (PointType::Corner, icons::SQUARE, "Corner / Cusp", "corner"),
-                                (PointType::Smooth, icons::CIRCLE, "Smooth", "smooth"),
-                                (
-                                    PointType::Symmetric,
-                                    icons::DIAMOND,
-                                    "Symmetric",
-                                    "symmetric",
-                                ),
-                            ] {
-                                let button = ui
-                                    .add(
-                                        egui::Button::new(egui::RichText::new(icon).size(16.0))
-                                            .selected(common_mode == Some(mode)),
-                                    )
-                                    .on_hover_text(label);
-                                crate::qa::register_component_with_metadata(
-                                    format!("preview.vector.mode.{id}"),
-                                    "preview_path_point_mode",
-                                    button.rect,
-                                    button.enabled(),
-                                    Some(serde_json::json!({
-                                        "mode": id,
-                                        "selected_point_indices": &selected,
-                                        "active": common_mode == Some(mode),
-                                        "action": "set_selected_path_point_mode",
-                                    })),
-                                );
-                                if button.clicked() {
-                                    requested = Some(mode);
-                                }
-                            }
-                            requested
-                        })
-                        .inner
-                    })
-                    .inner
-            });
-        crate::qa::register_component_with_metadata(
-            "preview.vector.point_modes",
-            "preview_path_point_mode_toolbar",
-            area.response.rect,
-            true,
-            Some(serde_json::json!({
-                "selected_point_indices": selected,
-                "action": "choose_path_point_mode",
-            })),
-        );
-        let owns_pointer = ui
-            .input(|input| input.pointer.hover_pos())
-            .is_some_and(|pointer| area.response.rect.contains(pointer));
-        (area.inner, owns_pointer)
+        }
+        requested
     }
 
     fn screen_to_local(&self, screen: Pos2, world_to_local: Affine2D) -> Option<Pos2> {
@@ -334,6 +370,46 @@ impl PathEditorInteraction<'_> {
         self.canvas
             .world_to_screen(Pos2::new(world_x as f32, world_y as f32))
     }
+
+    fn local_to_screen_point(&self, point: [f32; 2]) -> Pos2 {
+        self.local_to_screen(point[0], point[1])
+    }
+}
+
+fn cubic_point(points: [[f32; 2]; 4], t: f32) -> [f32; 2] {
+    let one_minus = 1.0 - t;
+    let weights = [
+        one_minus * one_minus * one_minus,
+        3.0 * one_minus * one_minus * t,
+        3.0 * one_minus * t * t,
+        t * t * t,
+    ];
+    [
+        points
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[0] * weight)
+            .sum(),
+        points
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[1] * weight)
+            .sum(),
+    ]
+}
+
+fn distance_to_segment(point: Pos2, start: Pos2, end: Pos2) -> (f32, f32) {
+    let segment = end - start;
+    let length_squared = segment.length_sq();
+    if length_squared <= f32::EPSILON {
+        return (point.distance(start), 0.0);
+    }
+    let along = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    (point.distance(start + segment * along), along)
+}
+
+fn add(left: [f32; 2], right: [f32; 2]) -> [f32; 2] {
+    [left[0] + right[0], left[1] + right[1]]
 }
 
 fn update_point_selection(

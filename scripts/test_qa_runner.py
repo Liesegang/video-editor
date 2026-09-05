@@ -38,6 +38,25 @@ VIDEO_EXPORT = load("ruvie_qa_video_export", "qa-video-export-e2e.py")
 
 
 class QaRunnerTests(unittest.TestCase):
+    def test_timeline_reveal_scrolls_until_the_row_is_visible(self):
+        client = mock.Mock()
+        row = {"id": "timeline.item:target", "visible": True}
+        client.component_snapshot.side_effect = [
+            {"components": [{**row, "visible": False}]},
+            {"components": [row]},
+        ]
+        self.assertEqual(
+            SUPPORT.bring_timeline_component(client, row["id"], -100.0), row
+        )
+        client.scroll_component.assert_called_once_with("timeline.canvas", 0.0, -100.0)
+
+    def test_timeline_reveal_cannot_succeed_for_an_absent_row(self):
+        client = mock.Mock()
+        client.component_snapshot.return_value = {"components": []}
+        with self.assertRaises(SUPPORT.QaFailure):
+            SUPPORT.bring_timeline_component(client, "timeline.item:absent", -100.0)
+        self.assertEqual(client.scroll_component.call_count, 10)
+
     def test_runner_targets_only_production_authoring_suites(self):
         expected = [
             "smoke",
@@ -53,7 +72,9 @@ class QaRunnerTests(unittest.TestCase):
             "preview",
             "path-editor",
             "inspector-property-mode",
+            "inspector-source",
             "color-palette",
+            "appearance",
             "inspector-effects",
             "timeline-dopesheet",
             "curve-editor",
@@ -67,7 +88,7 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual([suite.name for suite in full], expected)
         self.assertEqual(
             [suite.name for suite in full if suite.fixture == "authoring_audio_e2e"],
-            ["timeline-content-zoom", "audio-playback", "video-export"],
+            ["timeline-content-zoom", "node-editor", "audio-playback", "video-export"],
         )
         self.assertEqual(
             [suite.name for suite in full if suite.fixture == "authoring_path_e2e"],
@@ -76,6 +97,9 @@ class QaRunnerTests(unittest.TestCase):
         unsaved = next(suite for suite in full if suite.name == "unsaved-changes")
         self.assertTrue(unsaved.project_file)
         self.assertTrue(unsaved.expects_exit)
+        appearance = next(suite for suite in full if suite.name == "appearance")
+        self.assertTrue(appearance.project_file)
+        self.assertTrue(appearance.expects_exit)
         video_export = next(suite for suite in full if suite.name == "video-export")
         self.assertTrue(video_export.export_file)
         self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)
@@ -93,6 +117,7 @@ class QaRunnerTests(unittest.TestCase):
     def test_every_active_qa_file_stays_below_one_thousand_lines(self):
         files = [SCRIPTS / "qa-runner.py", SCRIPTS / "qa_support.py"]
         files.extend(SCRIPTS / suite.script for suite in RUNNER.suite_specs("full"))
+        files.append(SCRIPTS / "qa_appearance_persistence.py")
         files.append(SCRIPTS / "qa-particle-persistence-e2e.py")
         files.append(pathlib.Path(__file__))
         for path in files:
@@ -148,6 +173,24 @@ class QaRunnerTests(unittest.TestCase):
             self.assertTrue(RUNNER.capture_file_matches_metadata(path, metadata))
             path.write_bytes(b"stale screenshot")
             self.assertFalse(RUNNER.capture_file_matches_metadata(path, metadata))
+
+    def test_failed_exit_suite_does_not_wait_for_an_unrequested_close(self):
+        process = mock.Mock()
+        for exit_code in (None, 1):
+            process.poll.return_value = exit_code
+            self.assertEqual(
+                RUNNER.wait_for_suite_app_exit(process, False, 45.0), exit_code
+            )
+        process.wait.assert_not_called()
+
+    def test_successful_exit_suite_requires_real_process_completion(self):
+        process = mock.Mock()
+        process.wait.return_value = 0
+        self.assertEqual(RUNNER.wait_for_suite_app_exit(process, True, 45.0), 0)
+        process.wait.assert_called_once_with(timeout=45.0)
+        process.poll.assert_not_called()
+        process.wait.side_effect = subprocess.TimeoutExpired("qa-app", 45.0)
+        self.assertIsNone(RUNNER.wait_for_suite_app_exit(process, True, 45.0))
 
     def test_media_time_and_interval_helpers_use_exact_wire_values(self):
         self.assertEqual(SUPPORT.media_seconds({"value": 3, "timescale": 2}), 1.5)
@@ -227,7 +270,42 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(environment["RUVIE_QA_OPEN_EXISTING_PROJECT"], "1")
         self.assertEqual(environment["RUVIE_QA_PROJECT_PATH"], "saved.ruvie")
         self.assertEqual(environment["RUVIE_QA_PORT"], "43123")
+        self.assertEqual(
+            popen.call_args.args[0], ["cargo", "run", "-p", "app", "--locked"]
+        )
         terminate.assert_called_once_with(process)
+
+    def test_spawned_authoring_app_reuses_runner_selected_binary(self):
+        process = mock.Mock()
+        with (
+            mock.patch.dict(
+                SUPPORT.os.environ,
+                {SUPPORT.QA_APP_BINARY_ENV: "target/release/app.exe"},
+                clear=True,
+            ),
+            mock.patch.object(SUPPORT.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(SUPPORT, "terminate_process"),
+        ):
+            with SUPPORT.spawned_authoring_app(43125):
+                pass
+        self.assertEqual(popen.call_args.args[0], ["target/release/app.exe"])
+
+    def test_clean_native_close_uses_production_request_and_waits_for_exit(self):
+        client = mock.Mock()
+        client.request.return_value = {"queued": True, "action_id": 42}
+        process = mock.Mock()
+        process.wait.return_value = 0
+        with mock.patch.object(SUPPORT, "wait_endpoint_closed") as wait_closed:
+            result = SUPPORT.close_clean_native_app(client, process, "saved app", 7.0)
+        client.request.assert_called_once_with(
+            "/v1/input/close-request", {}, method="POST"
+        )
+        wait_closed.assert_called_once_with(
+            client, timeout=7.0, description="saved app"
+        )
+        process.wait.assert_called_once_with(timeout=7.0)
+        self.assertEqual(result["action_id"], 42)
+        self.assertEqual(result["exit_code"], 0)
 
     def test_spawned_authoring_app_one_argument_keeps_default_fixture(self):
         process = mock.Mock()

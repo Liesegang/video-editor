@@ -48,6 +48,7 @@ pub enum MediaNodeRequest {
         file_path: String,
         stream_index: Option<usize>,
         audio_stream_index: Option<usize>,
+        outputs: crate::model::MediaOutputSelection,
     },
     Image {
         asset_id: Uuid,

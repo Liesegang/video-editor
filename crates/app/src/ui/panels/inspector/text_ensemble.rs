@@ -25,6 +25,105 @@ struct AddOperation {
     label: String,
 }
 
+#[derive(Clone, Copy)]
+enum EnsembleOwner {
+    Direct(library::model::authoring::TimelineItemId),
+    NodeClip(library::model::authoring::TimelineItemId),
+}
+
+impl EnsembleOwner {
+    fn item_id(self) -> library::model::authoring::TimelineItemId {
+        match self {
+            Self::Direct(item_id) | Self::NodeClip(item_id) => item_id,
+        }
+    }
+
+    fn model_name(self) -> &'static str {
+        match self {
+            Self::Direct(_) => "timeline_text",
+            Self::NodeClip(_) => "module_graph",
+        }
+    }
+}
+
+trait EnsembleEntryKind {
+    fn ensemble_kind(&self) -> Option<TextEnsembleOperationKind>;
+}
+
+impl EnsembleEntryKind for TextEnsembleOperation {
+    fn ensemble_kind(&self) -> Option<TextEnsembleOperationKind> {
+        match self.operation.category.as_str() {
+            EFFECTOR_CATEGORY => Some(TextEnsembleOperationKind::Effector),
+            DECORATOR_CATEGORY => Some(TextEnsembleOperationKind::Decorator),
+            _ => None,
+        }
+    }
+}
+
+impl EnsembleEntryKind for library::editor::NodeClipTextEnsembleEntry {
+    fn ensemble_kind(&self) -> Option<TextEnsembleOperationKind> {
+        Some(self.kind)
+    }
+}
+
+fn ensemble_section<T: EnsembleEntryKind>(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+    plugins: &PluginManager,
+    owner: EnsembleOwner,
+    operations: &[T],
+    mut render_entry: impl FnMut(
+        &mut egui::Ui,
+        &mut AuthoringUiState,
+        usize,
+        usize,
+        usize,
+        Option<usize>,
+        Option<usize>,
+    ),
+) -> egui::Response {
+    ui.separator();
+    egui::CollapsingHeader::new("Text Ensemble")
+        .default_open(true)
+        .show(ui, |ui| {
+            add_menu(ui, state, service, plugins, owner);
+            if operations.is_empty() {
+                ui.weak("Add an Effector or Decorator to animate grouped text elements.");
+            }
+            for (kind, heading) in [
+                (TextEnsembleOperationKind::Effector, "Effectors"),
+                (TextEnsembleOperationKind::Decorator, "Decorators"),
+            ] {
+                let phase_indices = operations
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, operation)| {
+                        (operation.ensemble_kind() == Some(kind)).then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                if !phase_indices.is_empty() {
+                    ui.add_space(6.0);
+                    ui.strong(heading);
+                }
+                for (phase_index, model_index) in phase_indices.iter().copied().enumerate() {
+                    render_entry(
+                        ui,
+                        state,
+                        model_index,
+                        phase_index,
+                        phase_indices.len(),
+                        phase_index
+                            .checked_sub(1)
+                            .and_then(|index| phase_indices.get(index).copied()),
+                        phase_indices.get(phase_index + 1).copied(),
+                    );
+                }
+            }
+        })
+        .header_response
+}
+
 pub(super) fn text_ensemble_section(
     ui: &mut egui::Ui,
     project: &AuthoringProject,
@@ -34,55 +133,36 @@ pub(super) fn text_ensemble_section(
     item: &TimelineItem,
     operations: &[TextEnsembleOperation],
 ) {
-    ui.separator();
-    let response = egui::CollapsingHeader::new("Text Ensemble")
-        .default_open(true)
-        .show(ui, |ui| {
-            add_menu(ui, state, service, plugins, item);
-            if operations.is_empty() {
-                ui.weak("Add an Effector or Decorator to animate grouped text elements.");
-            }
-            let local_time = super::item_local_time(project, state, item).ok();
-            for (category, heading) in [
-                (EFFECTOR_CATEGORY, "Effectors"),
-                (DECORATOR_CATEGORY, "Decorators"),
-            ] {
-                let phase_indices = operations
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, operation)| {
-                        (operation.operation.category == category).then_some(index)
-                    })
-                    .collect::<Vec<_>>();
-                if !phase_indices.is_empty() {
-                    ui.add_space(6.0);
-                    ui.strong(heading);
-                }
-                for (phase_index, model_index) in phase_indices.iter().copied().enumerate() {
-                    operation_entry(
-                        ui,
-                        &project.palette,
-                        state,
-                        service,
-                        plugins,
-                        item,
-                        &operations[model_index],
-                        model_index,
-                        phase_index,
-                        phase_indices.len(),
-                        phase_index
-                            .checked_sub(1)
-                            .and_then(|index| phase_indices.get(index).copied()),
-                        phase_indices.get(phase_index + 1).copied(),
-                        local_time,
-                    );
-                }
-            }
-        });
+    let local_time = super::item_local_time(project, state, item).ok();
+    let response = ensemble_section(
+        ui,
+        state,
+        service,
+        plugins,
+        EnsembleOwner::Direct(item.id),
+        operations,
+        |ui, state, model_index, phase_index, phase_len, previous, next| {
+            operation_entry(
+                ui,
+                &project.palette,
+                state,
+                service,
+                plugins,
+                item,
+                &operations[model_index],
+                model_index,
+                phase_index,
+                phase_len,
+                previous,
+                next,
+                local_time,
+            );
+        },
+    );
     crate::qa::register_component_with_metadata(
         format!("inspector.text_ensemble:{}", item.id),
         "inspector_text_ensemble",
-        response.header_response.rect,
+        response.rect,
         true,
         Some(serde_json::json!({
             "item_id": item.id,
@@ -98,14 +178,62 @@ pub(super) fn text_ensemble_section(
     );
 }
 
+pub(super) fn node_clip_text_ensemble_section(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    context: &super::module_clip::ModuleParameterContext<'_>,
+    stack: &library::editor::NodeClipTextEnsembleStack,
+) {
+    let owner = EnsembleOwner::NodeClip(context.item.id);
+    let response = ensemble_section(
+        ui,
+        state,
+        context.service,
+        context.plugins,
+        owner,
+        &stack.operations,
+        |ui, state, model_index, phase_index, phase_len, previous, next| {
+            node_clip_operation_entry(
+                ui,
+                state,
+                context,
+                &stack.operations[model_index],
+                model_index,
+                phase_index,
+                phase_len,
+                previous,
+                next,
+            );
+        },
+    );
+    crate::qa::register_component_with_metadata(
+        format!("inspector.text_ensemble:{}", context.item.id),
+        "inspector_text_ensemble",
+        response.rect,
+        true,
+        Some(serde_json::json!({
+            "item_id": context.item.id,
+            "operation_count": stack.operations.len(),
+            "owner_model": EnsembleOwner::NodeClip(context.item.id).model_name(),
+            "operations": stack.operations.iter().map(|operation| serde_json::json!({
+                "id": operation.node_id,
+                "category": operation.category,
+                "component_id": operation.component_id,
+                "operation": operation.operation,
+            })).collect::<Vec<_>>(),
+        })),
+    );
+}
+
 fn add_menu(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
-    item: &TimelineItem,
+    owner: EnsembleOwner,
 ) {
-    let mut items = operation_catalog(plugins, item.id);
+    let item_id = owner.item_id();
+    let mut items = operation_catalog(plugins, item_id);
     let node_graph_decorators = plugins
         .get_available_decorators()
         .into_iter()
@@ -122,7 +250,7 @@ fn add_menu(
             .cmp(&right.category)
             .then_with(|| left.label.cmp(&right.label))
     });
-    let menu_id = format!("inspector.text_ensemble.menu:{}", item.id);
+    let menu_id = format!("inspector.text_ensemble.menu:{item_id}");
     let menu = searchable_menu_button(ui, format!("{} Add operation", icons::PLUS), |ui| {
         ui.set_min_width(290.0);
         ui.set_min_height(240.0_f32.min(ui.available_height().max(0.0)));
@@ -134,12 +262,13 @@ fn add_menu(
         );
     }
     crate::qa::register_component_with_metadata(
-        format!("inspector.text_ensemble.add_menu:{}", item.id),
+        format!("inspector.text_ensemble.add_menu:{item_id}"),
         "inspector_add_button",
         menu.response.rect,
         menu.response.enabled(),
         Some(serde_json::json!({
-            "item_id": item.id,
+            "item_id": item_id,
+            "owner_model": owner.model_name(),
             "descriptor_count": items.len(),
             "node_graph_decorator_count": node_graph_decorators,
             "descriptor_driven": true,
@@ -152,12 +281,25 @@ fn add_menu(
             TextEnsembleOperationKind::Effector => "Effector",
             TextEnsembleOperationKind::Decorator => "Decorator",
         };
-        match service.add_text_ensemble_operation_by_id(
-            plugins,
-            item.id,
-            selected.kind,
-            &selected.component_id,
-        ) {
+        let result = match owner {
+            EnsembleOwner::Direct(item_id) => service
+                .add_text_ensemble_operation_by_id(
+                    plugins,
+                    item_id,
+                    selected.kind,
+                    &selected.component_id,
+                )
+                .map(|_| ()),
+            EnsembleOwner::NodeClip(item_id) => service
+                .add_node_clip_text_ensemble_operation_by_id(
+                    plugins,
+                    item_id,
+                    selected.kind,
+                    &selected.component_id,
+                )
+                .map(|_| ()),
+        };
+        match result {
             Ok(_) => state.status = format!("Added Text {family} {}", selected.label),
             Err(error) => state.error = Some(error.to_string()),
         }
@@ -226,6 +368,117 @@ fn operation_catalog(
     .collect()
 }
 
+struct OperationCardSpec<'a> {
+    owner: EnsembleOwner,
+    operation_id: uuid::Uuid,
+    model_index: usize,
+    phase_index: usize,
+    phase_len: usize,
+    previous_model_index: Option<usize>,
+    next_model_index: Option<usize>,
+    category: &'a str,
+    component_id: &'a str,
+    operation: &'a str,
+    title: &'a str,
+    descriptor_available: bool,
+    property_keys: Vec<String>,
+}
+
+fn operation_card(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+    spec: OperationCardSpec<'_>,
+    content: impl FnOnce(&mut egui::Ui, &mut AuthoringUiState),
+) {
+    let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(operation_icon_for_category(spec.category)).weak());
+            ui.label(egui::RichText::new(spec.title).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let overflow = ui.menu_button(icons::DOTS_THREE, |ui| {
+                    operation_actions_menu(ui, state, service, spec.owner, spec.operation_id);
+                });
+                crate::qa::register_component_with_metadata(
+                    format!("inspector.text_ensemble.actions:{}", spec.operation_id),
+                    "inspector_overflow_button",
+                    overflow.response.rect,
+                    overflow.response.enabled(),
+                    Some(serde_json::json!({"action": "open_operation_actions"})),
+                );
+                action_button_enabled(
+                    ui,
+                    state,
+                    format!("inspector.text_ensemble.move_down:{}", spec.operation_id),
+                    icons::ARROW_DOWN,
+                    "Move later in this execution phase",
+                    spec.next_model_index.is_some(),
+                    || match spec.owner {
+                        EnsembleOwner::Direct(item_id) => service.reorder_text_ensemble_operation(
+                            item_id,
+                            spec.operation_id,
+                            spec.next_model_index.unwrap_or(spec.model_index),
+                        ),
+                        EnsembleOwner::NodeClip(item_id) => service
+                            .reorder_node_clip_text_ensemble_operation(
+                                item_id,
+                                spec.operation_id,
+                                spec.next_model_index.unwrap_or(spec.model_index),
+                            ),
+                    },
+                );
+                action_button_enabled(
+                    ui,
+                    state,
+                    format!("inspector.text_ensemble.move_up:{}", spec.operation_id),
+                    icons::ARROW_UP,
+                    "Move earlier in this execution phase",
+                    spec.previous_model_index.is_some(),
+                    || match spec.owner {
+                        EnsembleOwner::Direct(item_id) => service.reorder_text_ensemble_operation(
+                            item_id,
+                            spec.operation_id,
+                            spec.previous_model_index.unwrap_or(spec.model_index),
+                        ),
+                        EnsembleOwner::NodeClip(item_id) => service
+                            .reorder_node_clip_text_ensemble_operation(
+                                item_id,
+                                spec.operation_id,
+                                spec.previous_model_index.unwrap_or(spec.model_index),
+                            ),
+                    },
+                );
+            });
+        });
+        content(ui, state);
+    });
+    crate::qa::register_component_with_metadata(
+        format!("inspector.text_ensemble.operation:{}", spec.operation_id),
+        "inspector_text_ensemble_operation",
+        frame.response.rect,
+        spec.descriptor_available,
+        Some(serde_json::json!({
+            "item_id": spec.owner.item_id(),
+            "operation_id": spec.operation_id,
+            "index": spec.model_index,
+            "phase_index": spec.phase_index,
+            "phase_length": spec.phase_len,
+            "execution_phase": spec.category,
+            "category": spec.category,
+            "component_id": spec.component_id,
+            "operation": spec.operation,
+            "label": spec.title,
+            "owner_model": spec.owner.model_name(),
+            "descriptor_driven": spec.descriptor_available,
+            "property_keys": spec.property_keys,
+        })),
+    );
+    frame.response.context_menu(|ui| {
+        operation_actions_menu(ui, state, service, spec.owner, spec.operation_id);
+    });
+    ui.add_space(4.0);
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "one operation row needs its model, service, descriptor registry, and stack position"
@@ -255,232 +508,262 @@ fn operation_entry(
         operation.operation.component_id.as_str(),
         OperationDescriptor::label,
     );
-    let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(operation_icon(operation)).weak());
-            ui.label(egui::RichText::new(title).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let overflow = ui.menu_button(icons::DOTS_THREE, |ui| {
-                    operation_actions_menu(ui, state, service, item.id, operation.id);
-                });
-                crate::qa::register_component_with_metadata(
-                    format!("inspector.text_ensemble.actions:{}", operation.id),
-                    "inspector_overflow_button",
-                    overflow.response.rect,
-                    overflow.response.enabled(),
-                    Some(serde_json::json!({"action": "open_operation_actions"})),
-                );
-                action_button_enabled(
-                    ui,
-                    state,
-                    format!("inspector.text_ensemble.move_down:{}", operation.id),
-                    icons::ARROW_DOWN,
-                    "Move later in this execution phase",
-                    next_model_index.is_some(),
-                    || {
-                        service.reorder_text_ensemble_operation(
-                            item.id,
-                            operation.id,
-                            next_model_index.unwrap_or(model_index),
-                        )
-                    },
-                );
-                action_button_enabled(
-                    ui,
-                    state,
-                    format!("inspector.text_ensemble.move_up:{}", operation.id),
-                    icons::ARROW_UP,
-                    "Move earlier in this execution phase",
-                    previous_model_index.is_some(),
-                    || {
-                        service.reorder_text_ensemble_operation(
-                            item.id,
-                            operation.id,
-                            previous_model_index.unwrap_or(model_index),
-                        )
-                    },
-                );
-            });
-        });
-        let Some(descriptor) = descriptor.as_ref() else {
-            ui.weak("Plugin unavailable; authored values are preserved.");
-            return;
-        };
-        for definition in descriptor.properties() {
-            let Some(property) = operation.properties.get(definition.name()) else {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("Missing {}", definition.label()),
-                );
-                continue;
+    let property_keys = descriptor.as_ref().map_or_else(Vec::new, |descriptor| {
+        descriptor
+            .properties()
+            .iter()
+            .map(|definition| definition.name().to_string())
+            .collect()
+    });
+    operation_card(
+        ui,
+        state,
+        service,
+        OperationCardSpec {
+            owner: EnsembleOwner::Direct(item.id),
+            operation_id: operation.id,
+            model_index,
+            phase_index,
+            phase_len,
+            previous_model_index,
+            next_model_index,
+            category: &operation.operation.category,
+            component_id: &operation.operation.component_id,
+            operation: &operation.operation.operation,
+            title,
+            descriptor_available: descriptor.is_some(),
+            property_keys,
+        },
+        |ui, state| {
+            let Some(descriptor) = descriptor.as_ref() else {
+                ui.weak("Plugin unavailable; authored values are preserved.");
+                return;
             };
-            let draft_key = format!("ensemble:{}:{}", operation.id, definition.name());
-            let control_id = format!(
-                "text_ensemble:{}:{}:{}",
-                item.id,
-                operation.id,
-                definition.name()
-            );
-            let initial = local_time
-                .and_then(|time| property.evaluate_at(time.to_seconds_f64()).ok())
-                .or_else(|| property.value().cloned())
-                .unwrap_or_else(|| definition.default_value().clone());
-            let model_value = initial.clone();
-            let local_seconds = local_time.map_or(0.0, |time| time.to_seconds_f64());
-            let owner = AuthoringPropertyOwner::TextEnsemble {
-                item_id: item.id,
-                operation_id: operation.id,
-            };
-            let (changed, finished, mode_action, edited_value) = {
-                let draft = state
-                    .inspector
-                    .property_values
-                    .entry(draft_key)
-                    .or_insert(initial);
-                let result = super::property_row(
-                    ui,
-                    draft,
-                    palette,
-                    super::PropertyRowSpec {
-                        control_id: &control_id,
-                        label: definition.label(),
-                        definition: Some(definition),
-                        suffix: "",
-                        speed: 0.1,
-                        mode_state: PropertyModeState::from_property(
-                            Some(property),
-                            local_seconds,
-                            false,
-                        ),
-                        allow_keyframe: true,
-                        keyframe_disabled_reason: None,
-                        allow_expression: definition.default_value().supports_expression(),
-                    },
-                );
-                (
-                    result.changed,
-                    result.finished,
-                    result.mode_action,
-                    draft.clone(),
-                )
-            };
-            if changed {
-                if let Err(error) = definition.validate_value(&edited_value) {
-                    state.error = Some(error);
-                } else if let (Some(source_revision), Some(local_time)) =
-                    (state.inspector.synced_revision, local_time)
-                {
-                    if let Some(target) = direct_edit_target(property, local_time) {
-                        state.inspector.transient_property_edit = Some(TransientPropertyEdit {
-                            source_revision,
-                            owner,
-                            update: AuthoringPropertyValueUpdate {
-                                key: definition.name().to_string(),
-                                value: edited_value.clone(),
-                                target,
-                            },
-                        });
-                    }
-                }
-            }
-            if finished {
-                if state
-                    .inspector
-                    .transient_property_edit
-                    .as_ref()
-                    .is_some_and(|edit| edit.matches(owner, definition.name()))
-                {
-                    state.inspector.transient_property_edit = None;
-                }
-                let Some(local_time) = local_time else {
-                    state.error = Some("Text Ensemble has no valid clip-local time".to_string());
+            for definition in descriptor.properties() {
+                let Some(property) = operation.properties.get(definition.name()) else {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Missing {}", definition.label()),
+                    );
                     continue;
                 };
-                if edited_value != model_value {
-                    if let Err(error) = service.set_text_ensemble_property(
-                        plugins,
-                        item.id,
-                        operation.id,
-                        definition.name(),
-                        local_time,
-                        edited_value.clone(),
-                    ) {
-                        state.error = Some(error.to_string());
+                let draft_key = format!("ensemble:{}:{}", operation.id, definition.name());
+                let control_id = format!(
+                    "text_ensemble:{}:{}:{}",
+                    item.id,
+                    operation.id,
+                    definition.name()
+                );
+                let initial = local_time
+                    .and_then(|time| property.evaluate_at(time.to_seconds_f64()).ok())
+                    .or_else(|| property.value().cloned())
+                    .unwrap_or_else(|| definition.default_value().clone());
+                let model_value = initial.clone();
+                let local_seconds = local_time.map_or(0.0, |time| time.to_seconds_f64());
+                let owner = AuthoringPropertyOwner::TextEnsemble {
+                    item_id: item.id,
+                    operation_id: operation.id,
+                };
+                let (changed, finished, mode_action, edited_value) = {
+                    let draft = state
+                        .inspector
+                        .property_values
+                        .entry(draft_key)
+                        .or_insert(initial);
+                    let result = super::property_row(
+                        ui,
+                        draft,
+                        palette,
+                        super::PropertyRowSpec {
+                            control_id: &control_id,
+                            label: definition.label(),
+                            definition: Some(definition),
+                            suffix: "",
+                            speed: 0.1,
+                            mode_state: PropertyModeState::from_property(
+                                Some(property),
+                                local_seconds,
+                                false,
+                            ),
+                            allow_keyframe: true,
+                            keyframe_disabled_reason: None,
+                            allow_expression: definition.default_value().supports_expression(),
+                        },
+                    );
+                    (
+                        result.changed,
+                        result.finished,
+                        result.mode_action,
+                        draft.clone(),
+                    )
+                };
+                if changed {
+                    if let Err(error) = definition.validate_value(&edited_value) {
+                        state.error = Some(error);
+                    } else if let (Some(source_revision), Some(local_time)) =
+                        (state.inspector.synced_revision, local_time)
+                    {
+                        if let Some(target) = direct_edit_target(property, local_time) {
+                            state.inspector.transient_property_edit = Some(TransientPropertyEdit {
+                                source_revision,
+                                owner,
+                                update: AuthoringPropertyValueUpdate {
+                                    key: definition.name().to_string(),
+                                    value: edited_value.clone(),
+                                    target,
+                                },
+                            });
+                        }
                     }
                 }
-            }
-            if let Some(action) = mode_action {
-                state.inspector.transient_property_edit = None;
-                let result = local_time
-                    .ok_or_else(|| "Text Ensemble has no valid clip-local time".to_string())
-                    .and_then(|local_time| {
-                        super::property_authoring::apply_authored_mode_action(
-                            service,
-                            owner,
+                if finished {
+                    if state
+                        .inspector
+                        .transient_property_edit
+                        .as_ref()
+                        .is_some_and(|edit| edit.matches(owner, definition.name()))
+                    {
+                        state.inspector.transient_property_edit = None;
+                    }
+                    let Some(local_time) = local_time else {
+                        state.error =
+                            Some("Text Ensemble has no valid clip-local time".to_string());
+                        continue;
+                    };
+                    if edited_value != model_value {
+                        if let Err(error) = service.set_text_ensemble_property(
+                            plugins,
+                            item.id,
+                            operation.id,
                             definition.name(),
-                            Some(property),
-                            edited_value.clone(),
                             local_time,
-                            action,
-                        )
-                    });
-                if let Err(error) = result {
-                    state.error = Some(error);
-                } else {
-                    state.status = format!(
-                        "{}: {}",
-                        definition.label(),
-                        super::mode_action_label(action)
+                            edited_value.clone(),
+                        ) {
+                            state.error = Some(error.to_string());
+                        }
+                    }
+                }
+                if let Some(action) = mode_action {
+                    state.inspector.transient_property_edit = None;
+                    let result = local_time
+                        .ok_or_else(|| "Text Ensemble has no valid clip-local time".to_string())
+                        .and_then(|local_time| {
+                            super::property_authoring::apply_authored_mode_action(
+                                service,
+                                owner,
+                                definition.name(),
+                                Some(property),
+                                edited_value.clone(),
+                                local_time,
+                                action,
+                            )
+                        });
+                    if let Err(error) = result {
+                        state.error = Some(error);
+                    } else {
+                        state.status = format!(
+                            "{}: {}",
+                            definition.label(),
+                            super::mode_action_label(action)
+                        );
+                    }
+                }
+                if property.evaluator == "expression" {
+                    expression_source(
+                        ui,
+                        state,
+                        service,
+                        owner,
+                        definition.name(),
+                        property,
+                        &control_id,
                     );
                 }
+                super::value_provenance(ui, property.evaluator == "keyframe", false);
             }
-            if property.evaluator == "expression" {
-                expression_source(
-                    ui,
-                    state,
-                    service,
-                    owner,
-                    definition.name(),
-                    property,
-                    &control_id,
-                );
-            }
-            super::value_provenance(ui, property.evaluator == "keyframe", false);
-        }
-    });
-    crate::qa::register_component_with_metadata(
-        format!("inspector.text_ensemble.operation:{}", operation.id),
-        "inspector_text_ensemble_operation",
-        frame.response.rect,
-        descriptor.is_some(),
-        Some(serde_json::json!({
-            "item_id": item.id,
-            "operation_id": operation.id,
-            "index": model_index,
-            "phase_index": phase_index,
-            "phase_length": phase_len,
-            "execution_phase": operation.operation.category,
-            "category": operation.operation.category,
-            "component_id": operation.operation.component_id,
-            "operation": operation.operation.operation,
-            "label": title,
-            "descriptor_driven": descriptor.is_some(),
-            "property_keys": descriptor.as_ref().map(|descriptor| {
-                descriptor.properties().iter().map(|definition| definition.name()).collect::<Vec<_>>()
-            }).unwrap_or_default(),
-        })),
+        },
     );
-    frame.response.context_menu(|ui| {
-        operation_actions_menu(ui, state, service, item.id, operation.id);
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one structured Node Clip operation row needs its stack position and Module context"
+)]
+fn node_clip_operation_entry(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    context: &super::module_clip::ModuleParameterContext<'_>,
+    operation: &library::editor::NodeClipTextEnsembleEntry,
+    model_index: usize,
+    phase_index: usize,
+    phase_len: usize,
+    previous_model_index: Option<usize>,
+    next_model_index: Option<usize>,
+) {
+    let descriptor = context
+        .plugins
+        .text_ensemble_operation_descriptor(&operation.category, &operation.component_id)
+        .ok();
+    let title = descriptor
+        .as_ref()
+        .map_or(operation.component_id.as_str(), OperationDescriptor::label);
+    let owner = EnsembleOwner::NodeClip(context.item.id);
+    let property_keys = descriptor.as_ref().map_or_else(Vec::new, |descriptor| {
+        descriptor
+            .properties()
+            .iter()
+            .map(|definition| definition.name().to_string())
+            .collect()
     });
-    ui.add_space(4.0);
+    operation_card(
+        ui,
+        state,
+        context.service,
+        OperationCardSpec {
+            owner,
+            operation_id: operation.node_id,
+            model_index,
+            phase_index,
+            phase_len,
+            previous_model_index,
+            next_model_index,
+            category: &operation.category,
+            component_id: &operation.component_id,
+            operation: &operation.operation,
+            title,
+            descriptor_available: descriptor.is_some(),
+            property_keys,
+        },
+        |ui, state| {
+            if descriptor.is_none() {
+                ui.weak("Plugin unavailable; published values are preserved.");
+                return;
+            }
+            for parameter_id in &operation.parameter_ids {
+                let Some(parameter) = context
+                    .definition
+                    .interface
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.id == *parameter_id)
+                else {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Missing published parameter {parameter_id}"),
+                    );
+                    continue;
+                };
+                super::module_clip::published_parameter_row(ui, state, context, parameter);
+            }
+        },
+    );
 }
 
 fn operation_actions_menu(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
-    item_id: library::model::authoring::TimelineItemId,
+    owner: EnsembleOwner,
     operation_id: uuid::Uuid,
 ) {
     let remove = ui.button(format!("{} Remove operation", icons::TRASH));
@@ -492,7 +775,15 @@ fn operation_actions_menu(
         Some(serde_json::json!({"action": "remove_operation"})),
     );
     if remove.clicked() {
-        if let Err(error) = service.remove_text_ensemble_operation(item_id, operation_id) {
+        let result = match owner {
+            EnsembleOwner::Direct(item_id) => service
+                .remove_text_ensemble_operation(item_id, operation_id)
+                .map(|_| ()),
+            EnsembleOwner::NodeClip(item_id) => service
+                .remove_node_clip_text_ensemble_operation(item_id, operation_id)
+                .map(|_| ()),
+        };
+        if let Err(error) = result {
             state.error = Some(error.to_string());
         }
         ui.close();
@@ -525,8 +816,8 @@ fn action_button_enabled(
     }
 }
 
-fn operation_icon(operation: &TextEnsembleOperation) -> &'static str {
-    match operation.operation.category.as_str() {
+fn operation_icon_for_category(category: &str) -> &'static str {
+    match category {
         EFFECTOR_CATEGORY => icons::SPARKLE,
         DECORATOR_CATEGORY => icons::MAGIC_WAND,
         _ => icons::QUESTION,

@@ -38,6 +38,7 @@ pub(super) fn compile_particle_renderers(
 #[derive(Default)]
 struct ParticleStages {
     emitter: Option<uuid::Uuid>,
+    shape_location: Option<uuid::Uuid>,
     initialize: Option<uuid::Uuid>,
     gravity: Option<uuid::Uuid>,
     drag: Option<uuid::Uuid>,
@@ -67,6 +68,7 @@ fn compile_particle_chain(
         downstream_rank = role.execution_rank();
         let slot = match role {
             ParticleNodeRole::Emitter => &mut stages.emitter,
+            ParticleNodeRole::ShapeLocation => &mut stages.shape_location,
             ParticleNodeRole::Initialize => &mut stages.initialize,
             ParticleNodeRole::Gravity => &mut stages.gravity,
             ParticleNodeRole::Drag => &mut stages.drag,
@@ -89,6 +91,7 @@ fn compile_particle_chain(
     }
     Some(CompiledParticleDefinition {
         emitter_node_id: stages.emitter?,
+        shape_location_node_id: stages.shape_location,
         initialize_node_id: stages.initialize,
         gravity_node_id: stages.gravity,
         drag_node_id: stages.drag,
@@ -152,7 +155,7 @@ mod tests {
             .expect("particle executable");
         assert_eq!(particle.state_slot_id, particle.renderer_node_id);
         assert_eq!(compiled.particle_renderers.len(), 1);
-        assert_eq!(compiled.nodes.len(), 5);
+        assert_eq!(compiled.nodes.len(), 6);
     }
 
     #[test]

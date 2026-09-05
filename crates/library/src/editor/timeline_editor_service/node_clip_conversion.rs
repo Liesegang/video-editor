@@ -2,17 +2,33 @@
 
 use super::*;
 
+mod source_geometry;
+use source_geometry::{positive_shape_extent, shape_number, shape_path, validate_shape_parameters};
+mod appearance_source;
+mod text_source;
+
+#[cfg(test)]
+mod expression_tests;
+#[cfg(test)]
+mod source_property_tests;
+#[cfg(test)]
+mod text_property_tests;
+
 use crate::editor::authoring_factory::{AuthoringNodeFactory, ModuleNodeRequest};
 use crate::editor::project_service::MediaNodeRequest;
 use crate::model::authoring::{
-    AutomationKeyframe, ModuleConnection, ModuleDefinitionSharing, ModulePortAddress,
-    PublishedParameter, ShapeKind, ShapeSource, TextEnsembleOperation, property_value_type,
+    AppearanceOperation, AutomationKeyframe, ModuleConnection, ModuleDefinitionSharing,
+    ModulePortAddress, PublishedParameter, ShapeKind, ShapeSource, TextEnsembleOperation,
+    appearance_direct_contract_is_compatible, property_value_type,
+};
+use crate::model::node::{
+    APPEARANCE_STACK_CATALOG_ID, ELLIPSE_SHAPE_CATALOG_ID, RECTANGLE_SHAPE_CATALOG_ID,
 };
 use crate::model::node::{NodeContent, PluginOperationContent};
 use crate::model::project::asset::AssetKind;
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT,
+    APPEARANCE_STYLES_PORT, AUDIO_OUTPUT_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, STYLE_OUTPUT_PORT,
 };
 use crate::plugin::{
     EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, PROPERTY_PORT_PREFIX, STYLE_APPLY_OPERATION,
@@ -53,6 +69,7 @@ enum NodeClipSource<'a> {
     },
     Text {
         text: &'a String,
+        appearance_operations: &'a [AppearanceOperation],
         ensemble_operations: &'a [TextEnsembleOperation],
     },
     Shape(&'a ShapeSource),
@@ -67,9 +84,11 @@ impl<'a> NodeClipSource<'a> {
             }),
             SourceRef::Text {
                 text,
+                appearance_operations,
                 ensemble_operations,
             } => Ok(Self::Text {
                 text,
+                appearance_operations,
                 ensemble_operations,
             }),
             SourceRef::Shape { shape } => Ok(Self::Shape(shape)),
@@ -305,25 +324,33 @@ impl GraphBuilder<'_> {
             }
             NodeClipSource::Text {
                 text,
+                appearance_operations,
                 ensemble_operations,
             } => {
                 let mut node = AuthoringNodeFactory::create(
                     self.plugins,
                     ModuleNodeRequest::Text {
                         text: text.clone(),
-                        font: "Arial".to_string(),
+                        font: crate::plugin::entity_converter::DEFAULT_TEXT_FONT_FAMILY.to_string(),
                     },
                     width,
                     height,
                 )?;
                 node.set_property(
                     "size".to_string(),
-                    Property::constant(PropertyValue::from(48.0)),
+                    Property::constant(PropertyValue::from(
+                        crate::plugin::entity_converter::DEFAULT_TIMELINE_TEXT_SIZE,
+                    )),
                 )
                 .map_err(LibraryError::Validation)?;
                 let node_id = node.id;
                 self.push_source_node(node, SHAPE_OUTPUT_PORT)?;
-                self.publish_literal(node_id, "text", "Text", PropertyValue::String(text.clone()))?;
+                self.publish_literal(
+                    node_id,
+                    "text",
+                    "Content",
+                    PropertyValue::String(text.clone()),
+                )?;
                 self.publish_item_property(
                     item,
                     node_id,
@@ -343,46 +370,85 @@ impl GraphBuilder<'_> {
                 for operation in ensemble_operations {
                     self.add_ensemble_operation(operation)?;
                 }
-                let fill_id = self.add_fill_node()?;
-                self.publish_item_property(
-                    item,
-                    fill_id,
-                    &format!("{PROPERTY_PORT_PREFIX}color"),
-                    &["color"],
-                    "Color",
-                    removed_keys,
-                )?;
+                self.add_appearance_operations(appearance_operations)?;
             }
             NodeClipSource::Shape(shape) => {
                 validate_shape_parameters(shape)?;
-                let path = shape_path(shape)?;
-                let path_text = crate::model::path::write_legacy_svg_path_data(&path)
-                    .map_err(|error| LibraryError::Validation(error.to_string()))?;
-                let shape_width = positive_shape_extent(shape, "width", 100.0)?;
-                let shape_height = positive_shape_extent(shape, "height", 100.0)?;
-                let node = AuthoringNodeFactory::create(
-                    self.plugins,
-                    ModuleNodeRequest::Shape {
-                        path: path_text,
-                        width: shape_width,
-                        height: shape_height,
-                    },
-                    width,
-                    height,
-                )?;
+                let node = match shape.shape_kind {
+                    ShapeKind::Rectangle | ShapeKind::Ellipse => {
+                        let catalog_id = match shape.shape_kind {
+                            ShapeKind::Rectangle => RECTANGLE_SHAPE_CATALOG_ID,
+                            ShapeKind::Ellipse => ELLIPSE_SHAPE_CATALOG_ID,
+                            ShapeKind::Path => {
+                                return Err(LibraryError::Validation(
+                                    "A free Path cannot use a primitive Shape Node".to_string(),
+                                ));
+                            }
+                        };
+                        let mut node = AuthoringNodeFactory::create(
+                            self.plugins,
+                            ModuleNodeRequest::NativeCatalog {
+                                catalog_id: catalog_id.to_string(),
+                            },
+                            width,
+                            height,
+                        )?;
+                        for key in ["width", "height"] {
+                            node.set_property(
+                                key.to_string(),
+                                Property::constant(PropertyValue::from(shape_number(
+                                    shape, key, 100.0,
+                                )?)),
+                            )
+                            .map_err(LibraryError::Validation)?;
+                        }
+                        node
+                    }
+                    ShapeKind::Path => {
+                        let path = shape_path(shape)?;
+                        let path_text = crate::model::path::write_legacy_svg_path_data(&path)
+                            .map_err(|error| LibraryError::Validation(error.to_string()))?;
+                        let shape_width = positive_shape_extent(shape, "width", 100.0)?;
+                        let shape_height = positive_shape_extent(shape, "height", 100.0)?;
+                        AuthoringNodeFactory::create(
+                            self.plugins,
+                            ModuleNodeRequest::Shape {
+                                path: path_text,
+                                width: shape_width,
+                                height: shape_height,
+                            },
+                            width,
+                            height,
+                        )?
+                    }
+                };
                 let node_id = node.id;
                 self.push_source_node(node, SHAPE_OUTPUT_PORT)?;
-                self.publish_literal(node_id, "path", "Path", PropertyValue::Path(path))?;
-                let fill_id = self.add_fill_node()?;
-                let color = shape.parameters.get("color").cloned().unwrap_or_else(|| {
-                    PropertyValue::Color(crate::model::frame::color::Color::white())
-                });
-                self.publish_literal(
-                    fill_id,
-                    &format!("{PROPERTY_PORT_PREFIX}color"),
-                    "Color",
-                    color,
-                )?;
+                match shape.shape_kind {
+                    ShapeKind::Rectangle | ShapeKind::Ellipse => {
+                        self.publish_item_property(
+                            item,
+                            node_id,
+                            "width",
+                            &["width"],
+                            "Width",
+                            removed_keys,
+                        )?;
+                        self.publish_item_property(
+                            item,
+                            node_id,
+                            "height",
+                            &["height"],
+                            "Height",
+                            removed_keys,
+                        )?;
+                    }
+                    ShapeKind::Path => {
+                        let path = shape_path(shape)?;
+                        self.publish_literal(node_id, "path", "Path", PropertyValue::Path(path))?;
+                    }
+                }
+                self.add_appearance_operations(&shape.appearance_operations)?;
             }
             NodeClipSource::Solid(color) => {
                 let node = AuthoringNodeFactory::create(
@@ -395,13 +461,13 @@ impl GraphBuilder<'_> {
                 )?;
                 let node_id = node.id;
                 self.push_source_node(node, IMAGE_OUTPUT_PORT)?;
-                self.publish_literal(
+                self.publish_item_property(
+                    item,
                     node_id,
                     "color",
+                    &["color"],
                     "Color",
-                    PropertyValue::ColorValue(
-                        crate::model::property::ColorValue::from_straight_srgba8(color),
-                    ),
+                    removed_keys,
                 )?;
             }
         }
@@ -420,62 +486,6 @@ impl GraphBuilder<'_> {
             node_id,
             port: output_port.to_string(),
         });
-        Ok(())
-    }
-
-    fn add_fill_node(&mut self) -> Result<uuid::Uuid, LibraryError> {
-        let mut node = self.plugins.create_style_operation_node("fill")?;
-        let NodeContent::PluginOperation(operation) = node.content() else {
-            return Err(LibraryError::Validation(
-                "Fill factory did not create a Plugin operation Node".to_string(),
-            ));
-        };
-        if node.name != "Fill"
-            || operation.category != STYLE_CATEGORY
-            || operation.operation != STYLE_APPLY_OPERATION
-        {
-            return Err(LibraryError::Validation(
-                "Node Clip conversion requires the built-in Fill Style implementation".to_string(),
-            ));
-        }
-        let node_id = node.id;
-        self.position_node(&mut node);
-        self.connect_current_to(&node, SHAPE_INPUT_PORT, IMAGE_OUTPUT_PORT)?;
-        Ok(node_id)
-    }
-
-    fn add_ensemble_operation(
-        &mut self,
-        operation: &TextEnsembleOperation,
-    ) -> Result<(), LibraryError> {
-        let mut node = self.plugins.create_text_ensemble_operation_node(
-            &operation.operation.category,
-            &operation.operation.component_id,
-        )?;
-        let NodeContent::PluginOperation(content) = node.content() else {
-            return Err(LibraryError::Validation(format!(
-                "Text Ensemble operation {} did not create a Plugin Node",
-                operation.id
-            )));
-        };
-        if content.declared_ports != operation.declared_ports {
-            return Err(LibraryError::Validation(format!(
-                "Text Ensemble operation {} no longer matches its plugin port contract",
-                operation.id
-            )));
-        }
-        node.id = operation.id;
-        self.position_node(&mut node);
-        self.connect_current_to(&node, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT)?;
-        for (key, property) in operation.properties.iter() {
-            self.move_property_to_node_parameter(
-                &node,
-                key,
-                &format!("{PROPERTY_PORT_PREFIX}{key}"),
-                key,
-                property,
-            )?;
-        }
         Ok(())
     }
 
@@ -903,84 +913,4 @@ fn property_automation(property: &Property) -> Result<AutomationTrack, LibraryEr
         })
         .collect::<Result<Vec<_>, LibraryError>>()?;
     Ok(AutomationTrack { keyframes })
-}
-
-fn shape_path(shape: &ShapeSource) -> Result<crate::model::path::PathValue, LibraryError> {
-    let width = shape_number(shape, "width", 100.0)?;
-    let height = shape_number(shape, "height", 100.0)?;
-    let path = match shape.shape_kind {
-        ShapeKind::Rectangle => format!("M 0 0 H {width} V {height} H 0 Z"),
-        ShapeKind::Ellipse => format!(
-            "M {width} 0 A {} {} 0 1 1 0 0 A {} {} 0 1 1 {width} 0 Z",
-            width / 2.0,
-            height / 2.0,
-            width / 2.0,
-            height / 2.0
-        ),
-        ShapeKind::Path => {
-            return match shape.parameters.get("path") {
-                Some(PropertyValue::Path(path)) => Ok(path.clone()),
-                _ => Err(LibraryError::Validation(
-                    "Path source has no canonical Path value".to_string(),
-                )),
-            };
-        }
-    };
-    crate::model::path::parse_legacy_svg_path_data(&path)
-        .map_err(|error| LibraryError::Validation(error.to_string()))
-}
-
-fn validate_shape_parameters(shape: &ShapeSource) -> Result<(), LibraryError> {
-    let allowed = match shape.shape_kind {
-        ShapeKind::Rectangle | ShapeKind::Ellipse => ["width", "height", "color"].as_slice(),
-        ShapeKind::Path => ["path", "width", "height", "color"].as_slice(),
-    };
-    let mut unsupported = shape
-        .parameters
-        .keys()
-        .filter(|key| !allowed.contains(&key.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    unsupported.sort();
-    if unsupported.is_empty() {
-        Ok(())
-    } else {
-        Err(LibraryError::Validation(format!(
-            "Shape source has unsupported parameters that cannot be moved atomically: {}",
-            unsupported.join(", ")
-        )))
-    }
-}
-
-fn shape_number(shape: &ShapeSource, key: &str, fallback: f64) -> Result<f64, LibraryError> {
-    let value = match shape.parameters.get(key) {
-        None => fallback,
-        Some(PropertyValue::Number(value)) => value.into_inner(),
-        Some(PropertyValue::Integer(value)) => *value as f64,
-        Some(_) => {
-            return Err(LibraryError::Validation(format!(
-                "Shape source parameter '{key}' is not numeric"
-            )));
-        }
-    };
-    if !value.is_finite() || value <= 0.0 {
-        return Err(LibraryError::Validation(format!(
-            "Shape source parameter '{key}' must be positive and finite"
-        )));
-    }
-    Ok(value)
-}
-
-fn positive_shape_extent(
-    shape: &ShapeSource,
-    key: &str,
-    fallback: f64,
-) -> Result<u64, LibraryError> {
-    let value = shape_number(shape, key, fallback)?.ceil();
-    if value > u64::MAX as f64 {
-        return Err(LibraryError::Validation(format!(
-            "Shape source parameter '{key}' is too large"
-        )));
-    }
-    Ok(value as u64)
 }

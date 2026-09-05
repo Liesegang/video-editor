@@ -5,11 +5,10 @@ use ruvie_plugin_api::{
 
 use super::super::abi::RuntimeComponent;
 use super::super::property_wire::color_from_wire;
-use super::{parse_semver_triplet, resolved_config_properties};
+use super::{evaluated_config_properties, parse_semver_triplet};
 use crate::error::LibraryError;
 use crate::model::property::PropertyDefinition;
-use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{Plugin, StylePlugin};
+use crate::plugin::{EvaluatedOperation, Plugin, StylePlugin};
 pub(in crate::plugin::runtime_native) struct RuntimeStylePlugin {
     pub(in crate::plugin::runtime_native) component: RuntimeComponent,
     pub(in crate::plugin::runtime_native) definitions: Vec<PropertyDefinition>,
@@ -44,19 +43,17 @@ impl StylePlugin for RuntimeStylePlugin {
         crate::plugin::OperationDescriptor::style(self.id(), self.name(), self.definitions.clone())
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        context: &FrameEvaluationContext,
+        context: &EvaluatedOperation<'_>,
         source_id: uuid::Uuid,
-        properties: &crate::model::property::PropertyMap,
-        eval_time: f64,
     ) -> Option<crate::model::frame::entity::StyleConfig> {
         let label = format!("Runtime Style '{}'", self.id());
         let properties =
-            resolved_config_properties(context, &self.definitions, properties, eval_time, &label)?;
+            evaluated_config_properties(&self.definitions, context.properties(), &label)?;
         let payload = match serde_json::to_value(StyleEvaluateRequestV1 {
-            time: eval_time,
-            fps: context.evaluation_fps(),
+            time: context.time(),
+            fps: context.fps(),
             properties,
         }) {
             Ok(payload) => payload,

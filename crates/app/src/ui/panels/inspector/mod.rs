@@ -1,7 +1,9 @@
+mod appearance;
 mod asset_preview;
 mod audio;
 mod composition_parameters;
 mod effect_stack;
+mod item_properties;
 mod module_clip;
 pub(crate) mod property_authoring;
 mod text_ensemble;
@@ -32,6 +34,19 @@ use crate::ui::widgets::property_mode::{
 
 use property_authoring::{property_control, property_label, property_row, PropertyRowSpec};
 
+const INSPECTOR_SCROLL_SOURCE: egui::containers::scroll_area::ScrollSource =
+    egui::containers::scroll_area::ScrollSource {
+        scroll_bar: true,
+        drag: false,
+        mouse_wheel: true,
+    };
+
+fn inspector_scroll_area() -> egui::ScrollArea {
+    egui::ScrollArea::vertical()
+        .id_salt("inspector.scroll")
+        .scroll_source(INSPECTOR_SCROLL_SOURCE)
+}
+
 pub fn inspector_panel(
     ui: &mut egui::Ui,
     project: &Arc<AuthoringProject>,
@@ -55,109 +70,116 @@ pub fn inspector_panel(
         return;
     };
 
-    crate::qa::register_component(
+    let scroll = inspector_scroll_area().show(ui, |ui| match selection {
+        AuthoringSelection::Timeline(id) => {
+            if let Some(timeline) = project.timelines.get(&id) {
+                section_title(ui, icons::FILM_STRIP, "Timeline", &timeline.name, None);
+                editable_name(ui, state, &timeline.name, |name| {
+                    service.update_timeline_settings(
+                        id,
+                        library::editor::TimelineSettingsUpdate {
+                            name: Some(name),
+                            ..Default::default()
+                        },
+                    )
+                });
+                ui.separator();
+                egui::Grid::new("timeline_settings_grid")
+                    .num_columns(2)
+                    .spacing([10.0, 7.0])
+                    .show(ui, |ui| {
+                        ui.label("Size");
+                        ui.label(format!("{} × {}", timeline.width, timeline.height));
+                        ui.end_row();
+                        ui.label("Frame rate");
+                        ui.label(format!("{:.3} fps", timeline.fps.to_f64()));
+                        ui.end_row();
+                        ui.label("Duration");
+                        ui.label(format!("{:.3} s", timeline.duration.to_seconds_f64()));
+                        ui.end_row();
+                    });
+                effect_stack::effect_stack(
+                    ui,
+                    project,
+                    state,
+                    service,
+                    plugins,
+                    AttachmentOwner::Timeline { timeline_id: id },
+                    &[
+                        AttachmentStage::TimelinePostComposite,
+                        AttachmentStage::TimelinePostMix,
+                    ],
+                );
+            }
+        }
+        AuthoringSelection::Track(id) => {
+            if let Some(track) = project.tracks.get(&id) {
+                section_title(ui, icons::STACK, "Track", &track.name, None);
+                editable_name(ui, state, &track.name, |name| {
+                    service.rename_track(id, name)
+                });
+                ui.separator();
+                ui.label(format!("Type: {}", track_kind_name(track.kind)));
+                effect_stack::effect_stack(
+                    ui,
+                    project,
+                    state,
+                    service,
+                    plugins,
+                    AttachmentOwner::Track { track_id: id },
+                    &[
+                        AttachmentStage::TrackPostComposite,
+                        AttachmentStage::TrackPostMix,
+                    ],
+                );
+            }
+        }
+        AuthoringSelection::Item(id) => {
+            if let Some(item) = project.items.get(&id) {
+                item_inspector(ui, project, state, service, plugins, item);
+            }
+        }
+        AuthoringSelection::Transition(id) => {
+            transition::transition_inspector(ui, project, state, service, id);
+        }
+        AuthoringSelection::Asset(id) => {
+            if let Some(asset) = project.assets.iter().find(|asset| asset.id == id) {
+                asset_preview::asset_inspector(ui, project, asset, waveform, media_previews);
+            }
+        }
+        AuthoringSelection::ModuleDefinition(id) => {
+            if let Some(definition) = project.module_definitions.get(&id) {
+                section_title(
+                    ui,
+                    icons::SHARE_NETWORK,
+                    "Node Clip template",
+                    &definition.name,
+                    None,
+                );
+                ui.separator();
+                ui.label(format!("{} nodes", definition.graph.nodes.len()));
+                ui.label(format!(
+                    "{} published parameters",
+                    definition.interface.parameters.len()
+                ));
+                ui.weak("Drag this template from Assets to create an independent instance.");
+            }
+        }
+    });
+    crate::qa::register_component_with_metadata(
         "inspector.scroll_area",
         "inspector_scroll_area",
-        ui.available_rect_before_wrap(),
+        scroll.inner_rect,
+        true,
+        Some(serde_json::json!({
+            "offset_y": scroll.state.offset.y,
+            "content_height": scroll.content_size.y,
+            "viewport_height": scroll.inner_rect.height(),
+            "drag_to_scroll": INSPECTOR_SCROLL_SOURCE.drag,
+            "mouse_wheel": INSPECTOR_SCROLL_SOURCE.mouse_wheel,
+            "scroll_bar": INSPECTOR_SCROLL_SOURCE.scroll_bar,
+        })),
     );
-    egui::ScrollArea::vertical()
-        .id_salt("inspector.scroll")
-        .show(ui, |ui| match selection {
-            AuthoringSelection::Timeline(id) => {
-                if let Some(timeline) = project.timelines.get(&id) {
-                    section_title(ui, icons::FILM_STRIP, "Timeline", &timeline.name, None);
-                    editable_name(ui, state, &timeline.name, |name| {
-                        service.update_timeline_settings(
-                            id,
-                            library::editor::TimelineSettingsUpdate {
-                                name: Some(name),
-                                ..Default::default()
-                            },
-                        )
-                    });
-                    ui.separator();
-                    egui::Grid::new("timeline_settings_grid")
-                        .num_columns(2)
-                        .spacing([10.0, 7.0])
-                        .show(ui, |ui| {
-                            ui.label("Size");
-                            ui.label(format!("{} × {}", timeline.width, timeline.height));
-                            ui.end_row();
-                            ui.label("Frame rate");
-                            ui.label(format!("{:.3} fps", timeline.fps.to_f64()));
-                            ui.end_row();
-                            ui.label("Duration");
-                            ui.label(format!("{:.3} s", timeline.duration.to_seconds_f64()));
-                            ui.end_row();
-                        });
-                    effect_stack::effect_stack(
-                        ui,
-                        project,
-                        state,
-                        service,
-                        plugins,
-                        AttachmentOwner::Timeline { timeline_id: id },
-                        &[
-                            AttachmentStage::TimelinePostComposite,
-                            AttachmentStage::TimelinePostMix,
-                        ],
-                    );
-                }
-            }
-            AuthoringSelection::Track(id) => {
-                if let Some(track) = project.tracks.get(&id) {
-                    section_title(ui, icons::STACK, "Track", &track.name, None);
-                    editable_name(ui, state, &track.name, |name| {
-                        service.rename_track(id, name)
-                    });
-                    ui.separator();
-                    ui.label(format!("Type: {}", track_kind_name(track.kind)));
-                    effect_stack::effect_stack(
-                        ui,
-                        project,
-                        state,
-                        service,
-                        plugins,
-                        AttachmentOwner::Track { track_id: id },
-                        &[
-                            AttachmentStage::TrackPostComposite,
-                            AttachmentStage::TrackPostMix,
-                        ],
-                    );
-                }
-            }
-            AuthoringSelection::Item(id) => {
-                if let Some(item) = project.items.get(&id) {
-                    item_inspector(ui, project, state, service, plugins, item);
-                }
-            }
-            AuthoringSelection::Transition(id) => {
-                transition::transition_inspector(ui, project, state, service, id);
-            }
-            AuthoringSelection::Asset(id) => {
-                if let Some(asset) = project.assets.iter().find(|asset| asset.id == id) {
-                    asset_preview::asset_inspector(ui, project, asset, waveform, media_previews);
-                }
-            }
-            AuthoringSelection::ModuleDefinition(id) => {
-                if let Some(definition) = project.module_definitions.get(&id) {
-                    section_title(
-                        ui,
-                        icons::SHARE_NETWORK,
-                        "Node Clip template",
-                        &definition.name,
-                        None,
-                    );
-                    ui.separator();
-                    ui.label(format!("{} nodes", definition.graph.nodes.len()));
-                    ui.label(format!(
-                        "{} published parameters",
-                        definition.interface.parameters.len()
-                    ));
-                    ui.weak("Drag this template from Assets to create an independent instance.");
-                }
-            }
-        });
 }
 
 fn empty_inspector(ui: &mut egui::Ui) {
@@ -251,6 +273,31 @@ fn item_inspector(
     ui.separator();
 
     timing::timing_section(ui, state, service, item);
+    item_properties::source_properties(ui, project, state, service, item);
+    match &item.source {
+        SourceRef::Text {
+            appearance_operations,
+            ..
+        } => appearance::appearance_section(
+            ui,
+            project,
+            state,
+            service,
+            plugins,
+            item,
+            appearance_operations,
+        ),
+        SourceRef::Shape { shape } => appearance::appearance_section(
+            ui,
+            project,
+            state,
+            service,
+            plugins,
+            item,
+            &shape.appearance_operations,
+        ),
+        _ => {}
+    }
     if audio::item_is_audio_asset(project, item) {
         audio::audio_section(ui, project, state, service, item);
     } else {
@@ -259,43 +306,10 @@ fn item_inspector(
     }
 
     if let SourceRef::Text {
-        text,
         ensemble_operations,
+        ..
     } = &item.source
     {
-        ui.separator();
-        egui::CollapsingHeader::new("Text")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.weak("Content");
-                    composition_parameters::publication_icon(
-                        ui,
-                        project,
-                        state,
-                        service,
-                        item,
-                        composition_parameters::PublicationSpec {
-                            target:
-                                library::model::authoring::CompositionParameterTarget::TextContent {
-                                    item_id: item.id,
-                                },
-                            default_value: PropertyValue::String(text.clone()),
-                            suggested_name: format!("{} Text", item.name),
-                        },
-                    );
-                });
-                let response = ui.add(
-                    egui::TextEdit::multiline(&mut state.inspector.text)
-                        .desired_rows(4)
-                        .desired_width(f32::INFINITY),
-                );
-                if response.lost_focus() && state.inspector.text != *text {
-                    if let Err(error) = service.set_text(item.id, state.inspector.text.clone()) {
-                        state.error = Some(error.to_string());
-                    }
-                }
-            });
         text_ensemble::text_ensemble_section(
             ui,
             project,
@@ -439,116 +453,20 @@ fn transform_section(
                     0.01,
                 ),
             ] {
-                let draft_key = format!("authored:{key}");
-                let local_time = item_local_time(project, state, item);
-                let local_seconds = local_time
-                    .as_ref()
-                    .map_or(0.0, |time| time.to_seconds_f64());
-                let authored = item.authored_properties.get(key);
-                let mode_state =
-                    PropertyModeState::from_property(authored, local_seconds, true);
-                let allow_expression = default.supports_expression();
-                let initial = property_value_at(item, key, default, local_seconds);
-                let model_value = initial.clone();
-                let (finished, mode_action, edited_value) = ui
-                    .horizontal(|ui| {
-                        let (finished, mode_action, edited_value, publish_default) = {
-                            let value = state
-                                .inspector
-                                .property_values
-                                .entry(draft_key)
-                                .or_insert(initial);
-                            let result = property_row(
-                                ui,
-                                value,
-                                &project.palette,
-                                PropertyRowSpec {
-                                    control_id: &format!("item:{}:{key}", item.id),
-                                    label,
-                                    definition: None,
-                                    suffix,
-                                    speed,
-                                    mode_state,
-                                    allow_keyframe: true,
-                                    keyframe_disabled_reason: None,
-                                    allow_expression,
-                                },
-                            );
-                            (
-                                result.finished,
-                                result.mode_action,
-                                value.clone(),
-                                value.clone(),
-                            )
-                        };
-                        composition_parameters::publication_icon(
-                            ui,
-                            project,
-                            state,
-                            service,
-                            item,
-                            composition_parameters::PublicationSpec {
-                                target: library::model::authoring::CompositionParameterTarget::ItemProperty {
-                                    item_id: item.id,
-                                    property_key: key.to_string(),
-                                },
-                                default_value: publish_default,
-                                suggested_name: format!("{} {label}", item.name),
-                            },
-                        );
-                        (finished, mode_action, edited_value)
-                    })
-                    .inner;
-                if finished && edited_value != model_value {
-                    let result = local_time.clone().and_then(|time| {
-                        property_authoring::commit_authored_value(
-                            service,
-                            AuthoringPropertyOwner::Item(item.id),
-                            key,
-                            authored,
-                            edited_value.clone(),
-                            time,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    }
-                }
-                if let Some(action) = mode_action {
-                    let result = local_time.clone().and_then(|time| {
-                        property_authoring::apply_authored_mode_action(
-                            service,
-                            AuthoringPropertyOwner::Item(item.id),
-                            key,
-                            authored,
-                            edited_value,
-                            time,
-                            action,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    } else {
-                        state.status = format!("{label}: {}", mode_action_label(action));
-                    }
-                }
-                if authored.is_some_and(|property| property.evaluator == "expression") {
-                    expression_source(
-                        ui,
-                        state,
-                        service,
-                        item,
-                        key,
-                        authored,
-                        &format!("item:{}:{key}", item.id),
-                    );
-                }
-                value_provenance(
+                item_properties::show_item_property(
                     ui,
-                    item.authored_properties
-                        .get(key)
-                        .is_some_and(|property| property.evaluator == "keyframe"),
-                    false,
+                    project,
+                    state,
+                    service,
+                    item,
+                    item_properties::ItemPropertySpec {
+                        key,
+                        label,
+                        default,
+                        definition: None,
+                        suffix,
+                        speed,
+                    },
                 );
             }
         });
@@ -564,7 +482,10 @@ fn sync_draft(
     if state.inspector.target == selection && state.inspector.synced_revision == Some(revision) {
         if state.inspector.synced_frame != Some(current_frame) {
             state.inspector.synced_frame = Some(current_frame);
-            state.inspector.property_values.clear();
+            state
+                .inspector
+                .property_values
+                .retain(|key, _| key.starts_with("source:"));
             state.inspector.effect_values.clear();
             state.inspector.transient_property_edit = None;
         }
@@ -578,7 +499,6 @@ fn sync_draft(
     state.inspector.effect_values.clear();
     state.inspector.transient_property_edit = None;
     state.inspector.name.clear();
-    state.inspector.text.clear();
     let Some(selection) = selection else {
         return;
     };
@@ -599,7 +519,10 @@ fn sync_draft(
                 state.inspector.start_seconds = item.interval.start.to_seconds_f64();
                 state.inspector.duration_seconds = item.interval.duration.to_seconds_f64();
                 if let SourceRef::Text { text, .. } = &item.source {
-                    state.inspector.text.clone_from(text);
+                    state.inspector.property_values.insert(
+                        "source:text".to_string(),
+                        PropertyValue::String(text.clone()),
+                    );
                 }
                 for (key, property) in item.authored_properties.iter() {
                     if let Some(value) = property.value() {

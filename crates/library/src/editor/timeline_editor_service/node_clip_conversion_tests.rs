@@ -7,11 +7,12 @@ use ordered_float::OrderedFloat;
 use crate::cache::CacheManager;
 use crate::core::render_plan::{RenderPlanCache, RenderPlanCompiler, evaluate_render_plan_frame};
 use crate::editor::{
-    AuthoringNodeFactory, ModuleNodeRequest, RenderDestination, RenderService,
-    TextEnsembleOperationKind, build_authoring_e2e_fixture,
+    AppearanceOperationFactory, AuthoringNodeFactory, ModuleNodeRequest, RenderDestination,
+    RenderService, TextEnsembleOperationKind, build_authoring_e2e_fixture,
 };
 use crate::model::authoring::{
-    AttachmentProcessor, ModuleDefinitionSharing, ModulePortAddress, ShapeKind, ShapeSource,
+    AppearanceOperation, AttachmentProcessor, ModuleDefinitionSharing, ModulePortAddress,
+    ShapeKind, ShapeSource,
 };
 use crate::model::frame::draw_type::{PathEffect, TrimPathUnits};
 use crate::model::frame::entity::{FrameContent, FrameItem, FrameObject};
@@ -22,7 +23,7 @@ use crate::model::project::{BACKGROUND_SHAPE_INPUT_PORT, SHAPE_INPUT_PORT, SHAPE
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_renderer::SkiaRenderer;
 
-fn time(seconds: i64) -> MediaTime {
+pub(super) fn time(seconds: i64) -> MediaTime {
     MediaTime::new(seconds, 1).expect("whole-second time")
 }
 
@@ -30,7 +31,7 @@ fn interval(duration: i64) -> TimelineInterval {
     TimelineInterval::new(MediaTime::zero(), time(duration)).expect("positive interval")
 }
 
-fn color(r: u8, g: u8, b: u8, a: u8) -> Color {
+pub(super) fn color(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color { r, g, b, a }
 }
 
@@ -41,14 +42,40 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
     })
 }
 
-fn small_service(name: &str) -> (TimelineEditorService, TimelineTrackId) {
+fn fill(plugins: &PluginManager, color: Color) -> AppearanceOperation {
+    let mut fill = AppearanceOperationFactory::create(plugins, "fill").expect("Fill style");
+    fill.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
+            &color,
+        ))),
+    );
+    fill
+}
+
+fn stroke(plugins: &PluginManager, color: Color, width: f64) -> AppearanceOperation {
+    let mut stroke = AppearanceOperationFactory::create(plugins, "stroke").expect("Stroke style");
+    stroke.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
+            &color,
+        ))),
+    );
+    stroke.properties.set(
+        "width".to_string(),
+        Property::constant(PropertyValue::from(width)),
+    );
+    stroke
+}
+
+pub(super) fn small_service(name: &str) -> (TimelineEditorService, TimelineTrackId) {
     let project =
         AuthoringProject::new(name, 96, 64, RationalRate::new(30, 1).unwrap(), time(4)).unwrap();
     let track_id = project.timelines[&project.root_timeline_id].track_order[0];
     (TimelineEditorService::new(project).unwrap(), track_id)
 }
 
-fn rendered_pixels(
+pub(super) fn rendered_pixels(
     project: &AuthoringProject,
     plugins: Arc<PluginManager>,
     frame_number: u64,
@@ -140,12 +167,15 @@ fn first_shape(items: &[FrameItem]) -> Option<ShapeFrameView<'_>> {
 fn text_source_ensemble_and_pre_effect_convert_with_pixel_parity_and_one_undo() {
     let plugins = Arc::new(PluginManager::default());
     let (service, track_id) = small_service("Text Node Clip conversion");
+    let text_fill = fill(plugins.as_ref(), color(245, 120, 30, 255));
+    let text_fill_id = text_fill.id;
     let (item_id, _) = service
         .add_item(
             track_id,
             "Title".to_string(),
             SourceRef::Text {
                 text: "Node Clip".to_string(),
+                appearance_operations: vec![text_fill],
                 ensemble_operations: Vec::new(),
             },
             interval(3),
@@ -178,9 +208,12 @@ fn text_source_ensemble_and_pre_effect_convert_with_pixel_parity_and_one_undo() 
         )
         .unwrap();
     service
-        .set_authored_property_constant(
-            AuthoringPropertyOwner::Item(item_id),
-            "color".to_string(),
+        .set_appearance_property(
+            plugins.as_ref(),
+            item_id,
+            text_fill_id,
+            "color",
+            MediaTime::zero(),
             PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&color(245, 120, 30, 255))),
         )
         .unwrap();
@@ -417,6 +450,8 @@ fn qa_text_tile_conversion_keeps_full_scene_pixels() {
 fn shape_and_image_sources_keep_raster_parity() {
     let plugins = Arc::new(PluginManager::default());
     let (shape_service, shape_track_id) = small_service("Shape conversion");
+    let shape_fill = fill(plugins.as_ref(), color(40, 180, 220, 255));
+    let shape_fill_id = shape_fill.id;
     let (shape_id, _) = shape_service
         .add_item(
             shape_track_id,
@@ -427,26 +462,127 @@ fn shape_and_image_sources_keep_raster_parity() {
                     parameters: HashMap::from([
                         ("width".to_string(), PropertyValue::from(28.0)),
                         ("height".to_string(), PropertyValue::from(20.0)),
-                        (
-                            "color".to_string(),
-                            PropertyValue::Color(color(40, 180, 220, 255)),
-                        ),
                     ]),
+                    appearance_operations: vec![shape_fill],
                 },
             },
             interval(2),
             0,
         )
         .unwrap();
-    let shape_before = shape_service.snapshot().unwrap();
-    let shape_pixels = rendered_pixels(&shape_before, Arc::clone(&plugins), 0);
+    let (width_key_a, _) = shape_service
+        .upsert_authored_property_keyframe(
+            AuthoringPropertyOwner::Item(shape_id),
+            "width".to_string(),
+            MediaTime::zero(),
+            PropertyValue::from(28.0),
+            None,
+        )
+        .unwrap();
+    let (width_key_b, _) = shape_service
+        .upsert_authored_property_keyframe(
+            AuthoringPropertyOwner::Item(shape_id),
+            "width".to_string(),
+            time(1),
+            PropertyValue::from(52.0),
+            Some(EasingFunction::EaseInOutQuad),
+        )
+        .unwrap();
     shape_service
+        .set_authored_property_constant(
+            AuthoringPropertyOwner::Item(shape_id),
+            "height".to_string(),
+            PropertyValue::from(30.0),
+        )
+        .unwrap();
+    for (seconds, value) in [(0, color(40, 180, 220, 255)), (1, color(220, 40, 80, 255))] {
+        shape_service
+            .upsert_authored_property_keyframe(
+                AuthoringPropertyOwner::Appearance {
+                    item_id: shape_id,
+                    operation_id: shape_fill_id,
+                },
+                "color".to_string(),
+                MediaTime::from_whole_seconds(seconds),
+                PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&value)),
+                None,
+            )
+            .unwrap();
+    }
+    let shape_before = shape_service.snapshot().unwrap();
+    let shape_pixels = rendered_pixels(&shape_before, Arc::clone(&plugins), 15);
+    let conversion = shape_service
         .convert_source_to_node_clip(plugins.as_ref(), shape_id)
         .unwrap();
     let shape_after = shape_service.snapshot().unwrap();
     assert_eq!(
-        rendered_pixels(&shape_after, Arc::clone(&plugins), 0),
+        rendered_pixels(&shape_after, Arc::clone(&plugins), 15),
         shape_pixels
+    );
+    let SourceRef::Module(invocation) = &shape_after.items[&shape_id].source else {
+        panic!("converted Shape must be a Module invocation");
+    };
+    assert!(["width", "height"].into_iter().all(|key| {
+        shape_after.items[&shape_id]
+            .authored_properties
+            .get(key)
+            .is_none()
+    }));
+    let moved_keys = invocation
+        .automation_tracks
+        .values()
+        .flat_map(|track| track.keyframes.iter().map(|keyframe| keyframe.id))
+        .collect::<Vec<_>>();
+    assert!(moved_keys.contains(&width_key_a));
+    assert!(moved_keys.contains(&width_key_b));
+    assert!(
+        shape_after.module_definitions[&conversion.definition_id]
+            .graph
+            .nodes
+            .values()
+            .any(
+                |node| matches!(node.content(), NodeContent::NativeOperation(operation)
+            if operation.catalog_id == crate::model::node::RECTANGLE_SHAPE_CATALOG_ID)
+            )
+    );
+    shape_service.undo().unwrap().expect("one conversion undo");
+    assert_eq!(
+        shape_service.snapshot().unwrap().as_ref(),
+        shape_before.as_ref()
+    );
+
+    let (ellipse_service, ellipse_track_id) = small_service("Ellipse conversion");
+    let (ellipse_id, _) = ellipse_service
+        .add_item(
+            ellipse_track_id,
+            "Ellipse".to_string(),
+            SourceRef::Shape {
+                shape: ShapeSource {
+                    shape_kind: ShapeKind::Ellipse,
+                    parameters: HashMap::from([
+                        ("width".to_string(), PropertyValue::from(46.0)),
+                        ("height".to_string(), PropertyValue::from(18.0)),
+                    ]),
+                    appearance_operations: vec![fill(plugins.as_ref(), color(90, 210, 70, 255))],
+                },
+            },
+            interval(2),
+            0,
+        )
+        .unwrap();
+    let ellipse_before = ellipse_service.snapshot().unwrap();
+    let ellipse_pixels = rendered_pixels(&ellipse_before, Arc::clone(&plugins), 0);
+    ellipse_service
+        .convert_source_to_node_clip(plugins.as_ref(), ellipse_id)
+        .unwrap();
+    assert_eq!(
+        rendered_pixels(
+            &ellipse_service.snapshot().unwrap(),
+            Arc::clone(&plugins),
+            0
+        ),
+        ellipse_pixels,
+        "Ellipse primitive geometry changed during conversion"
     );
 
     let directory = tempfile::tempdir().unwrap();
@@ -495,6 +631,124 @@ fn shape_and_image_sources_keep_raster_parity() {
 }
 
 #[test]
+fn multiple_appearance_branches_convert_to_one_ordered_appearance_stack_with_pixel_parity() {
+    let plugins = Arc::new(PluginManager::default());
+    let (service, track_id) = small_service("Appearance conversion");
+    let fill = fill(plugins.as_ref(), color(30, 70, 210, 255));
+    let stroke = stroke(plugins.as_ref(), color(240, 120, 20, 255), 7.0);
+    let mut shadow = AppearanceOperationFactory::create(plugins.as_ref(), "drop_shadow").unwrap();
+    shadow.properties.set(
+        "distance".to_string(),
+        Property::constant(PropertyValue::from(4.0)),
+    );
+    shadow.properties.set(
+        "size".to_string(),
+        Property::constant(PropertyValue::from(2.0)),
+    );
+    let appearance_ids = [shadow.id, fill.id, stroke.id];
+    let (item_id, _) = service
+        .add_item(
+            track_id,
+            "Styled Rectangle".to_string(),
+            SourceRef::Shape {
+                shape: ShapeSource {
+                    shape_kind: ShapeKind::Rectangle,
+                    parameters: HashMap::from([
+                        ("width".to_string(), PropertyValue::from(42.0)),
+                        ("height".to_string(), PropertyValue::from(30.0)),
+                    ]),
+                    appearance_operations: vec![shadow, fill, stroke],
+                },
+            },
+            interval(2),
+            0,
+        )
+        .unwrap();
+    let before = service.snapshot().unwrap();
+    let before_pixels = rendered_pixels(&before, Arc::clone(&plugins), 0);
+
+    let conversion = service
+        .convert_source_to_node_clip(plugins.as_ref(), item_id)
+        .unwrap();
+    let after = service.snapshot().unwrap();
+    assert_eq!(
+        rendered_pixels(&after, Arc::clone(&plugins), 0),
+        before_pixels
+    );
+    let definition = &after.module_definitions[&conversion.definition_id];
+    assert!(
+        appearance_ids
+            .iter()
+            .all(|id| definition.graph.nodes.contains_key(id))
+    );
+    let stack = definition
+        .graph
+        .nodes
+        .values()
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id
+                        == crate::model::node::APPEARANCE_STACK_CATALOG_ID
+            )
+        })
+        .expect("parallel Appearance values share one Appearance Stack");
+    let mut inputs = definition
+        .graph
+        .connections
+        .iter()
+        .filter(|connection| {
+            connection.to.node_id == stack.id
+                && connection.to.port == crate::model::project::APPEARANCE_STYLES_PORT
+        })
+        .map(|connection| (connection.order, connection.from.node_id))
+        .collect::<Vec<_>>();
+    inputs.sort_by_key(|(order, _)| *order);
+    assert_eq!(
+        inputs,
+        vec![
+            (0, appearance_ids[0]),
+            (1, appearance_ids[1]),
+            (2, appearance_ids[2]),
+        ]
+    );
+    assert!(inputs.iter().all(|(_, node_id)| {
+        definition.graph.connections.iter().any(|connection| {
+            connection.from.node_id == *node_id
+                && connection.from.port == crate::model::project::STYLE_OUTPUT_PORT
+                && connection.to.node_id == stack.id
+        })
+    }));
+    assert_eq!(
+        definition
+            .graph
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.to.node_id == stack.id
+                    && connection.to.port == crate::model::project::SHAPE_INPUT_PORT
+            })
+            .count(),
+        1,
+        "Appearance Stack owns the only Shape dependency"
+    );
+    assert!(appearance_ids.iter().all(|node_id| {
+        !definition.graph.connections.iter().any(|connection| {
+            connection.to.node_id == *node_id
+                && connection.to.port == crate::model::project::SHAPE_INPUT_PORT
+        })
+    }));
+    assert!(appearance_ids.iter().all(|node_id| {
+        definition
+            .interface
+            .parameters
+            .iter()
+            .any(|parameter| parameter.target.node_id == *node_id)
+    }));
+}
+
+#[test]
 fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
     let plugins = Arc::new(PluginManager::default());
     let (service, track_id) = small_service("Shape operation runtime");
@@ -508,11 +762,8 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
                     parameters: HashMap::from([
                         ("width".to_string(), PropertyValue::from(28.0)),
                         ("height".to_string(), PropertyValue::from(20.0)),
-                        (
-                            "color".to_string(),
-                            PropertyValue::Color(color(40, 180, 220, 255)),
-                        ),
                     ]),
+                    appearance_operations: vec![fill(plugins.as_ref(), color(40, 180, 220, 255))],
                 },
             },
             interval(2),
@@ -532,36 +783,40 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
         .find(|node| {
             matches!(
                 node.content(),
-                NodeContent::Generator(GeneratorContent::Shape)
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == crate::model::node::RECTANGLE_SHAPE_CATALOG_ID
             )
         })
         .unwrap()
         .id;
-    let fill_id = definition
+    let appearance_stack_id = definition
         .graph
         .nodes
         .values()
         .find(|node| {
             matches!(
                 node.content(),
-                NodeContent::PluginOperation(operation)
-                    if operation.category == crate::plugin::STYLE_CATEGORY
-                        && operation.component_id == "fill"
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == crate::model::node::APPEARANCE_STACK_CATALOG_ID
             )
         })
         .unwrap()
         .id;
-    let source_to_fill = definition
+    let source_to_appearance = definition
         .graph
         .connections
         .iter()
-        .find(|connection| connection.from.node_id == source_id && connection.to.node_id == fill_id)
+        .find(|connection| {
+            connection.from.node_id == source_id
+                && connection.to.node_id == appearance_stack_id
+                && connection.to.port == SHAPE_INPUT_PORT
+        })
         .unwrap()
         .id;
     drop(project);
 
     service
-        .disconnect_instance_module_connection(conversion.instance_id, source_to_fill)
+        .disconnect_instance_module_connection(conversion.instance_id, source_to_appearance)
         .unwrap();
     let path_node = plugins.create_path_effect_operation_node("trim").unwrap();
     let path_id = path_node.id;
@@ -623,7 +878,7 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
                 port: SHAPE_OUTPUT_PORT.to_string(),
             },
             ModulePortAddress {
-                node_id: fill_id,
+                node_id: appearance_stack_id,
                 port: SHAPE_INPUT_PORT.to_string(),
             },
         ),
@@ -661,139 +916,6 @@ fn node_clip_shape_catalog_operations_execute_path_effect_and_xy_transform() {
         (3.0, 5.0)
     );
     assert_eq!(shape.transform.rotation, 23.0);
-}
-
-#[test]
-fn node_clip_graph_backplate_consumes_its_background_shape_input() {
-    let plugins = Arc::new(PluginManager::default());
-    let (service, track_id) = small_service("Graph Backplate runtime");
-    let (item_id, _) = service
-        .add_item(
-            track_id,
-            "Title".to_string(),
-            SourceRef::Text {
-                text: "Backplate".to_string(),
-                ensemble_operations: Vec::new(),
-            },
-            interval(2),
-            0,
-        )
-        .unwrap();
-    let conversion = service
-        .convert_source_to_node_clip(plugins.as_ref(), item_id)
-        .unwrap();
-
-    let project = service.snapshot().unwrap();
-    let definition = &project.module_definitions[&conversion.definition_id];
-    let text_id = definition
-        .graph
-        .nodes
-        .values()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(GeneratorContent::Text)
-            )
-        })
-        .unwrap()
-        .id;
-    let fill_id = definition
-        .graph
-        .nodes
-        .values()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::PluginOperation(operation)
-                    if operation.category == crate::plugin::STYLE_CATEGORY
-                        && operation.component_id == "fill"
-            )
-        })
-        .unwrap()
-        .id;
-    let text_to_fill = definition
-        .graph
-        .connections
-        .iter()
-        .find(|connection| connection.from.node_id == text_id && connection.to.node_id == fill_id)
-        .unwrap()
-        .id;
-    drop(project);
-
-    service
-        .disconnect_instance_module_connection(conversion.instance_id, text_to_fill)
-        .unwrap();
-    let background = AuthoringNodeFactory::create(
-        plugins.as_ref(),
-        ModuleNodeRequest::Shape {
-            path: "M 0 0 H 10 V 10 H 0 Z".to_string(),
-            width: 10,
-            height: 10,
-        },
-        96,
-        64,
-    )
-    .unwrap();
-    let background_id = background.id;
-    service
-        .add_instance_module_node(conversion.instance_id, background)
-        .unwrap();
-    let backplate = plugins
-        .create_decorator_operation_node("backplate")
-        .unwrap();
-    let backplate_id = backplate.id;
-    service
-        .add_instance_module_node(conversion.instance_id, backplate)
-        .unwrap();
-    for (from, to) in [
-        (
-            ModulePortAddress {
-                node_id: text_id,
-                port: SHAPE_OUTPUT_PORT.to_string(),
-            },
-            ModulePortAddress {
-                node_id: backplate_id,
-                port: SHAPE_INPUT_PORT.to_string(),
-            },
-        ),
-        (
-            ModulePortAddress {
-                node_id: background_id,
-                port: SHAPE_OUTPUT_PORT.to_string(),
-            },
-            ModulePortAddress {
-                node_id: backplate_id,
-                port: BACKGROUND_SHAPE_INPUT_PORT.to_string(),
-            },
-        ),
-        (
-            ModulePortAddress {
-                node_id: backplate_id,
-                port: SHAPE_OUTPUT_PORT.to_string(),
-            },
-            ModulePortAddress {
-                node_id: fill_id,
-                port: SHAPE_INPUT_PORT.to_string(),
-            },
-        ),
-    ] {
-        service
-            .connect_instance_module_ports(conversion.instance_id, from, to, 0)
-            .unwrap();
-    }
-
-    let project = service.snapshot().unwrap();
-    let plan = RenderPlanCompiler::compile(&project).unwrap();
-    let frame =
-        evaluate_render_plan_frame(&project, &plan, plugins.as_ref(), 0, 1.0, None).unwrap();
-    let shape = first_shape(&frame.items).expect("Backplate must produce fitted Shape geometry");
-    assert_eq!(shape.object.source_node_id, backplate_id);
-    assert!(!shape.path.is_empty());
-    assert!(
-        shape.ensemble.is_none(),
-        "graph Backplate must not use paint-time fallback"
-    );
-    assert!(shape.path_effects.is_empty());
 }
 
 #[test]
@@ -871,3 +993,7 @@ fn unsupported_source_or_processor_fails_without_any_project_mutation() {
         processor_before.as_ref()
     );
 }
+
+mod appearance_parity;
+#[path = "node_clip_conversion_tests/graph_runtime.rs"]
+mod graph_runtime;

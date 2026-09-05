@@ -3,7 +3,9 @@ use egui::{Pos2, Rect, Vec2};
 use crate::input::interaction_input;
 use crate::layout_swipe::hit_anchor as hit_layout_swipe_anchor;
 use crate::wire::ReconnectEndpoint;
-use crate::{after_click, GraphFrame, ItemId, LayoutSwipeHitArea, LayoutSwipePhase, PortDirection};
+use crate::{
+    after_click, GraphFrame, ItemId, LayoutSwipeHitArea, LayoutSwipePhase, PortDirection, PortOwner,
+};
 
 use super::{
     hit, keyboard, selection, transient, EditorOutput, Gesture, InteractionOptions,
@@ -11,10 +13,13 @@ use super::{
 };
 
 const MOVE_DRAG_THRESHOLD: f32 = 4.0;
+const CUT_SAMPLE_DISTANCE: f32 = 3.0;
+const CUT_WIRE_TOLERANCE: f32 = 3.0;
 const MIN_GROUP_SIZE: Vec2 = Vec2::new(80.0, 48.0);
 
 pub(crate) fn interact<NodeId, PortId, WireId, GroupId, Key>(
     ui: &mut egui::Ui,
+    overlay_painter: &egui::Painter,
     frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
     options: InteractionOptions,
@@ -29,6 +34,13 @@ where
 {
     let input = interaction_input(ui);
     let mut outputs = Vec::new();
+    // Node controls may open a popup outside their own body rectangle. Raw
+    // graph hit testing must not see through that popup, even when the color
+    // slider is geometrically over another Node or the pointer leaves it.
+    if egui::Popup::is_any_open(ui.ctx()) {
+        cancel_gesture(state, input.pointer, &mut outputs);
+        return outputs;
+    }
     let layout_swipe_was_active = state.is_layout_swipe_active();
     cancel_disabled_gesture(state, options, input.pointer, &mut outputs);
     if layout_swipe_was_active && !state.is_layout_swipe_active() {
@@ -58,6 +70,44 @@ where
         || !a_held_through_release;
     if state.is_layout_swipe_active() && layout_conflict {
         cancel_gesture(state, input.pointer, &mut outputs);
+        return outputs;
+    }
+
+    if state.gesture.is_none()
+        && input.secondary_pressed
+        && !pointer_blocked
+        && input
+            .secondary_press_position
+            .is_some_and(|position| frame.viewport.contains(position))
+    {
+        let Some(screen_position) = input.secondary_press_position else {
+            return outputs;
+        };
+        begin_secondary(
+            ui,
+            frame,
+            state,
+            options,
+            frame.graph_position(screen_position),
+            screen_position,
+            input.secondary_press_modifiers,
+        );
+    }
+
+    if is_secondary_gesture(state) {
+        if let Some(position) = input.pointer {
+            update_secondary(
+                state,
+                position,
+                input.secondary_down || input.secondary_released,
+            );
+        }
+        transient::paint(overlay_painter, frame, state);
+        if input.secondary_released {
+            finish_secondary(frame, state, options, input.pointer, &mut outputs);
+        } else if !input.secondary_pressed && (!input.secondary_down || !input.has_pointer) {
+            cancel_gesture(state, input.pointer, &mut outputs);
+        }
         return outputs;
     }
 
@@ -100,7 +150,7 @@ where
         );
     }
 
-    transient::paint(ui, frame, state);
+    transient::paint(overlay_painter, frame, state);
 
     if input.released {
         finish(frame, state, options, input.pointer, &mut outputs);
@@ -123,6 +173,8 @@ fn cancel_disabled_gesture<NodeId, PortId, WireId, GroupId>(
         Some(Gesture::Hold { .. } | Gesture::Move { .. }) => !options.move_items,
         Some(Gesture::Marquee { .. }) => !options.select || !options.marquee,
         Some(Gesture::Connect { .. } | Gesture::Reconnect { .. }) => !options.connect,
+        Some(Gesture::LazyConnect { .. }) => !options.connect,
+        Some(Gesture::WireSecondary { .. } | Gesture::CutWires { .. }) => !options.disconnect,
         Some(Gesture::Resize { .. }) => !options.resize_groups,
         Some(Gesture::LayoutSwipe(_)) => options.layout_swipe == LayoutSwipeHitArea::Disabled,
         None => false,
@@ -132,7 +184,7 @@ fn cancel_disabled_gesture<NodeId, PortId, WireId, GroupId>(
     }
 }
 
-fn cancel_gesture<NodeId, PortId, WireId, GroupId>(
+pub(crate) fn cancel_gesture<NodeId, PortId, WireId, GroupId>(
     state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
     current: Option<Pos2>,
     outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
@@ -154,10 +206,244 @@ fn cancel_gesture<NodeId, PortId, WireId, GroupId>(
             | Gesture::Move { .. }
             | Gesture::Connect { .. }
             | Gesture::Reconnect { .. }
+            | Gesture::WireSecondary { .. }
+            | Gesture::CutWires { .. }
+            | Gesture::LazyConnect { .. }
             | Gesture::Resize { .. },
         )
         | None => {}
     }
+}
+
+fn is_secondary_gesture<NodeId, PortId, WireId, GroupId>(
+    state: &InteractionState<NodeId, PortId, WireId, GroupId>,
+) -> bool {
+    matches!(
+        state.gesture,
+        Some(
+            Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. }
+        )
+    )
+}
+
+fn begin_secondary<NodeId, PortId, WireId, GroupId, Key>(
+    ui: &egui::Ui,
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
+    options: InteractionOptions,
+    graph_position: Pos2,
+    screen_position: Pos2,
+    modifiers: egui::Modifiers,
+) where
+    NodeId: Clone + Eq,
+    WireId: Clone,
+{
+    if modifiers.ctrl && options.disconnect {
+        state.gesture = Some(Gesture::CutWires {
+            points: vec![screen_position],
+            transform: frame.transform,
+        });
+        capture_pointer(ui);
+        return;
+    }
+    if modifiers.alt && options.connect {
+        if let Some(node) = hit::node(frame, graph_position) {
+            state.gesture = Some(Gesture::LazyConnect {
+                from_node: node.clone(),
+                start: screen_position,
+                current: screen_position,
+                transform: frame.transform,
+            });
+            capture_pointer(ui);
+        }
+        return;
+    }
+    if hit::node(frame, graph_position).is_some() || hit::port(frame, graph_position).is_some() {
+        return;
+    }
+    if options.disconnect {
+        if let Some(wire) = hit::wire(frame, graph_position).filter(|wire| wire.editable) {
+            state.gesture = Some(Gesture::WireSecondary {
+                wire: wire.id.clone(),
+                start: screen_position,
+                current: screen_position,
+                transform: frame.transform,
+            });
+            capture_pointer(ui);
+        }
+    }
+}
+
+fn update_secondary<NodeId, PortId, WireId, GroupId>(
+    state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
+    screen_position: Pos2,
+    pointer_active: bool,
+) {
+    if !pointer_active {
+        return;
+    }
+    match state.gesture.as_mut() {
+        Some(Gesture::WireSecondary { current, .. } | Gesture::LazyConnect { current, .. }) => {
+            *current = screen_position
+        }
+        Some(Gesture::CutWires { points, .. }) => {
+            if points
+                .last()
+                .is_none_or(|point| point.distance(screen_position) >= CUT_SAMPLE_DISTANCE)
+            {
+                points.push(screen_position);
+            }
+        }
+        Some(
+            Gesture::Hold { .. }
+            | Gesture::Marquee { .. }
+            | Gesture::Move { .. }
+            | Gesture::Connect { .. }
+            | Gesture::Reconnect { .. }
+            | Gesture::Resize { .. }
+            | Gesture::LayoutSwipe(_),
+        )
+        | None => {}
+    }
+}
+
+fn finish_secondary<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    state: &mut InteractionState<NodeId, PortId, WireId, GroupId>,
+    options: InteractionOptions,
+    pointer: Option<Pos2>,
+    outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
+) where
+    NodeId: Clone + Eq,
+    PortId: Clone + Eq,
+    WireId: Clone + Eq,
+    GroupId: Eq,
+    Key: Copy + Eq,
+{
+    let Some(gesture) = state.gesture.take() else {
+        return;
+    };
+    match gesture {
+        Gesture::WireSecondary {
+            wire,
+            start,
+            current,
+            ..
+        } if options.disconnect && start.distance(current) < MOVE_DRAG_THRESHOLD => {
+            outputs.push(EditorOutput::WireContextMenu {
+                wire,
+                screen_position: current,
+            });
+        }
+        Gesture::CutWires {
+            mut points,
+            transform,
+        } if options.disconnect => {
+            if let Some(pointer) = pointer {
+                points.push(pointer);
+            }
+            let travel = points
+                .windows(2)
+                .map(|segment| segment[0].distance(segment[1]))
+                .sum::<f32>();
+            if travel < MOVE_DRAG_THRESHOLD {
+                return;
+            }
+            let scale = transform.scaling.abs().max(f32::EPSILON);
+            for wire in frame.wires.iter().filter(|wire| wire.editable) {
+                let crossed = points.windows(2).any(|segment| {
+                    wire.curve.intersects_segment(
+                        transform.inverse() * segment[0],
+                        transform.inverse() * segment[1],
+                        CUT_WIRE_TOLERANCE / scale,
+                    )
+                });
+                if crossed {
+                    outputs.push(EditorOutput::Disconnect {
+                        wire: wire.id.clone(),
+                    });
+                }
+            }
+        }
+        Gesture::LazyConnect {
+            from_node,
+            transform,
+            ..
+        } if options.connect => {
+            let Some(pointer) = pointer else {
+                return;
+            };
+            let Some(to_node) = hit::node(frame, transform.inverse() * pointer) else {
+                return;
+            };
+            finish_lazy_connect(frame, &from_node, to_node, outputs);
+        }
+        Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
+        Gesture::Hold { .. }
+        | Gesture::Marquee { .. }
+        | Gesture::Move { .. }
+        | Gesture::Connect { .. }
+        | Gesture::Reconnect { .. }
+        | Gesture::Resize { .. }
+        | Gesture::LayoutSwipe(_) => {}
+    }
+}
+
+fn finish_lazy_connect<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    from_node: &NodeId,
+    to_node: &NodeId,
+    outputs: &mut Vec<EditorOutput<NodeId, PortId, WireId, GroupId>>,
+) where
+    NodeId: Clone + Eq,
+    PortId: Clone + Eq,
+    GroupId: Eq,
+    Key: Copy + Eq,
+{
+    if from_node == to_node {
+        return;
+    }
+    let Some((from, to)) = compatible_node_port_ids(frame, from_node, to_node)
+        .or_else(|| compatible_node_port_ids(frame, to_node, from_node))
+    else {
+        return;
+    };
+    outputs.push(EditorOutput::Connect { from, to });
+}
+
+fn compatible_node_port_ids<NodeId, PortId, WireId, GroupId, Key>(
+    frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    output_node: &NodeId,
+    input_node: &NodeId,
+) -> Option<(PortId, PortId)>
+where
+    NodeId: Clone + Eq,
+    PortId: Clone,
+    GroupId: Eq,
+{
+    frame
+        .ports
+        .iter()
+        .filter(|port| {
+            port.owner == PortOwner::Node(output_node.clone())
+                && port.direction == PortDirection::Output
+                && port.connectable
+        })
+        .find_map(|source| {
+            frame
+                .ports
+                .iter()
+                .find(|target| {
+                    target.owner == PortOwner::Node(input_node.clone())
+                        && target.direction == PortDirection::Input
+                        && target.connectable
+                        && (frame.ports_compatible)(
+                            source.type_key.value(),
+                            target.type_key.value(),
+                        )
+                })
+                .map(|target| (source.id.clone(), target.id.clone()))
+        })
 }
 
 #[allow(
@@ -396,6 +682,7 @@ fn update<NodeId, PortId, WireId, GroupId>(
                 }
             }
         }
+        Gesture::WireSecondary { .. } | Gesture::CutWires { .. } | Gesture::LazyConnect { .. } => {}
     }
 }
 
@@ -469,6 +756,9 @@ fn finish<NodeId, PortId, WireId, GroupId, Key>(
         | Gesture::Marquee { .. }
         | Gesture::Connect { .. }
         | Gesture::Reconnect { .. }
+        | Gesture::WireSecondary { .. }
+        | Gesture::CutWires { .. }
+        | Gesture::LazyConnect { .. }
         | Gesture::Move { .. }
         | Gesture::Resize { .. } => {}
     }

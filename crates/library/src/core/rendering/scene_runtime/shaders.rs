@@ -23,6 +23,11 @@ uniform uint uStartStep;
 uniform uint uStepCount;
 uniform float uRate;
 uniform float uLifetime;
+uniform int uEmitterShape;
+uniform vec3 uEmitterPosition;
+uniform float uEmitterRadius;
+uniform vec3 uEmitterSize;
+uniform bool uEmitterSurfaceOnly;
 uniform vec3 uVelocityMin;
 uniform vec3 uVelocityMax;
 uniform vec3 uGravity;
@@ -45,13 +50,47 @@ float random_01(uint serial, uint channel) {
     return float(bits & 0x00ffffffu) / 16777216.0;
 }
 
+vec3 sphere_direction(uint serial) {
+    float z = random_01(serial, 7u) * 2.0 - 1.0;
+    float angle = random_01(serial, 8u) * 6.28318530718;
+    float radial = sqrt(max(0.0, 1.0 - z * z));
+    return vec3(radial * cos(angle), radial * sin(angle), z);
+}
+
+vec3 box_position(uint serial) {
+    vec3 normalized = vec3(
+        random_01(serial, 7u),
+        random_01(serial, 8u),
+        random_01(serial, 9u)
+    ) - vec3(0.5);
+    if (uEmitterSurfaceOnly) {
+        int face = min(5, int(floor(random_01(serial, 10u) * 6.0)));
+        int axis = face / 2;
+        normalized[axis] = (face % 2 == 0) ? -0.5 : 0.5;
+    }
+    return normalized * uEmitterSize;
+}
+
+vec3 emitter_position(uint serial) {
+    if (uEmitterShape == 1) {
+        return uEmitterPosition + box_position(serial);
+    }
+    if (uEmitterShape == 2) {
+        float distance_from_center = uEmitterSurfaceOnly
+            ? uEmitterRadius
+            : uEmitterRadius * pow(random_01(serial, 9u), 1.0 / 3.0);
+        return uEmitterPosition + sphere_direction(serial) * distance_from_center;
+    }
+    return uEmitterPosition;
+}
+
 void spawn(inout Particle particle, uint serial) {
     vec3 random_velocity = vec3(
         random_01(serial, 0u),
         random_01(serial, 1u),
         random_01(serial, 2u)
     );
-    particle.position_age = vec4(0.0, 0.0, 0.0, 0.0);
+    particle.position_age = vec4(emitter_position(serial), 0.0);
     particle.velocity_lifetime = vec4(
         mix(uVelocityMin, uVelocityMax, random_velocity),
         uLifetime

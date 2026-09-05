@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use crate::error::LibraryError;
 use crate::model::frame::particle::{
     PARTICLE_CHECKPOINT_INTERVAL_STEPS, PARTICLE_MAX_CHECKPOINTS, PARTICLE_MAX_REPLAY_STEPS,
-    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey, particle_lifetime_steps,
+    ParticleEmitterShape, ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+    particle_lifetime_steps,
 };
 use crate::model::property::Vec3;
 use crate::rendering::renderer::Affine2D;
@@ -593,6 +594,11 @@ fn stable_parameter_hash(parameters: &ParticleSceneParameters) -> u64 {
     parameters.emission_rate.hash(&mut hasher);
     parameters.lifetime_seconds.hash(&mut hasher);
     parameters.seed.hash(&mut hasher);
+    parameters.emitter_shape.hash(&mut hasher);
+    parameters.emitter_position.hash(&mut hasher);
+    parameters.emitter_radius.hash(&mut hasher);
+    parameters.emitter_size.hash(&mut hasher);
+    parameters.emitter_surface_only.hash(&mut hasher);
     parameters.velocity_min.hash(&mut hasher);
     parameters.velocity_max.hash(&mut hasher);
     parameters.gravity.hash(&mut hasher);
@@ -726,6 +732,13 @@ fn simulate_particles(
     let velocity_min = vec3_f32(request.parameters.velocity_min, "minimum velocity")?;
     let velocity_max = vec3_f32(request.parameters.velocity_max, "maximum velocity")?;
     let gravity = vec3_f32(request.parameters.gravity, "gravity")?;
+    let emitter_position = vec3_f32(request.parameters.emitter_position, "emitter position")?;
+    let emitter_size = vec3_f32(request.parameters.emitter_size, "emitter size")?;
+    let emitter_shape = match request.parameters.emitter_shape {
+        ParticleEmitterShape::Point => 0,
+        ParticleEmitterShape::Box => 1,
+        ParticleEmitterShape::Sphere => 2,
+    };
     // SAFETY: request resources belong to the current SceneRuntime context;
     // validation bounds every uniform and the dispatch covers only the
     // allocated `capacity` slots (the shader guards the final workgroup).
@@ -744,6 +757,27 @@ fn simulate_particles(
         gl.uniform_1_f32(
             Some(&pipeline.compute.lifetime),
             request.parameters.lifetime_seconds.into_inner(),
+        );
+        gl.uniform_1_i32(Some(&pipeline.compute.emitter_shape), emitter_shape);
+        gl.uniform_3_f32(
+            Some(&pipeline.compute.emitter_position),
+            emitter_position[0],
+            emitter_position[1],
+            emitter_position[2],
+        );
+        gl.uniform_1_f32(
+            Some(&pipeline.compute.emitter_radius),
+            request.parameters.emitter_radius.into_inner(),
+        );
+        gl.uniform_3_f32(
+            Some(&pipeline.compute.emitter_size),
+            emitter_size[0],
+            emitter_size[1],
+            emitter_size[2],
+        );
+        gl.uniform_1_i32(
+            Some(&pipeline.compute.emitter_surface_only),
+            i32::from(request.parameters.emitter_surface_only),
         );
         gl.uniform_3_f32(
             Some(&pipeline.compute.velocity_min),

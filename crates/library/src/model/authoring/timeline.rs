@@ -84,6 +84,35 @@ pub struct TimelineItem {
     pub authored_properties: PropertyMap,
 }
 
+/// Persisted Track-owned visual enable property. Absence means enabled so
+/// existing and newly-created Projects do not need redundant default state.
+pub const TRACK_VISIBILITY_PROPERTY: &str = "visible";
+
+impl TimelineTrack {
+    /// Whether this Track contributes to the image pipeline.
+    ///
+    /// This control deliberately does not mute Audio output. In particular,
+    /// disabling an AudioVisual Track hides only its visual contribution.
+    pub fn is_visually_enabled(&self) -> Result<bool, String> {
+        let Some(property) = self.authored_properties.get(TRACK_VISIBILITY_PROPERTY) else {
+            return Ok(true);
+        };
+        if property.evaluator != "constant" {
+            return Err(format!(
+                "Track {} visual visibility must be a Constant Boolean",
+                self.id
+            ));
+        }
+        match property.value() {
+            Some(PropertyValue::Boolean(visible)) => Ok(*visible),
+            _ => Err(format!(
+                "Track {} visual visibility must be a Constant Boolean",
+                self.id
+            )),
+        }
+    }
+}
+
 /// Non-persisted placement state used by atomic Timeline edit projections.
 ///
 /// Source, parenting, authored properties, and Module topology are
@@ -197,6 +226,10 @@ pub enum SourceRef {
     },
     Text {
         text: String,
+        /// Ordered descriptor-backed styles composed around one text body.
+        /// Underlays, body styles, and overlays retain their authored order
+        /// within each renderer phase and share the same content alpha.
+        appearance_operations: Vec<AppearanceOperation>,
         /// Ordered descriptor-backed operations applied to the transient text
         /// Shape before rasterization. The operation identity and authored
         /// properties are the same contract used by production Node graphs;
@@ -232,6 +265,69 @@ pub struct TextEnsembleOperation {
     /// the matching plugin is unavailable.
     pub declared_ports: Vec<crate::model::project::PortDefinition>,
     pub properties: PropertyMap,
+}
+
+/// One descriptor-backed paint operation in a direct Text or Shape
+/// appearance stack.
+///
+/// The operation snapshot is deliberately the same contract persisted by a
+/// graph Node. Timeline authoring owns only this short ordered stack; it does
+/// not persist or expose generated Node topology.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AppearanceOperation {
+    pub id: uuid::Uuid,
+    pub operation: super::OperationRef,
+    pub declared_ports: Vec<crate::model::project::PortDefinition>,
+    pub properties: PropertyMap,
+}
+
+/// Whether a descriptor is a self-contained Shape-to-Image appearance
+/// operation suitable for a direct Timeline Text or Shape source.
+pub fn appearance_direct_contract_is_compatible(
+    ports: &[crate::model::project::PortDefinition],
+) -> bool {
+    use std::collections::HashSet;
+
+    use crate::model::project::{
+        IMAGE_OUTPUT_PORT, PortDirection, PortMultiplicity, SHAPE_INPUT_PORT, STYLE_OUTPUT_PORT,
+        TIME_PORT,
+    };
+
+    let mut shape_inputs = 0;
+    let mut image_outputs = 0;
+    let mut style_outputs = 0;
+    let mut keys = HashSet::new();
+    for port in ports {
+        if !keys.insert(port.key.as_str()) || port.multiplicity != PortMultiplicity::Single {
+            return false;
+        }
+        match (port.direction, port.key.as_str()) {
+            (PortDirection::Input, SHAPE_INPUT_PORT)
+                if port.data_type == crate::model::project::PortDataType::Shape =>
+            {
+                shape_inputs += 1;
+            }
+            (PortDirection::Input, TIME_PORT)
+                if port.data_type == crate::model::project::PortDataType::Number => {}
+            (PortDirection::Input, key)
+                if key
+                    .strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX)
+                    .is_some_and(|name| !name.is_empty()) => {}
+            (PortDirection::Output, IMAGE_OUTPUT_PORT)
+                if port.data_type == crate::model::project::PortDataType::Image =>
+            {
+                image_outputs += 1;
+            }
+            (PortDirection::Output, STYLE_OUTPUT_PORT)
+                if port.data_type == crate::model::project::PortDataType::Style =>
+            {
+                style_outputs += 1;
+            }
+            _ => return false,
+        }
+    }
+    shape_inputs == 1 && image_outputs == 1 && style_outputs == 1
 }
 
 /// Whether a descriptor can run as an inline Text Ensemble operation.
@@ -280,6 +376,8 @@ pub fn text_ensemble_direct_contract_is_compatible(
 pub struct ShapeSource {
     pub shape_kind: ShapeKind,
     pub parameters: HashMap<String, PropertyValue>,
+    /// Ordered paint entries sharing this Shape's body and composite phases.
+    pub appearance_operations: Vec<AppearanceOperation>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -491,12 +589,11 @@ impl AutomationTrack {
         if time.is_some_and(MediaTime::is_negative) {
             return Err("Automation Keyframe time must be non-negative".to_string());
         }
-        if let Some(time) = time
-            && self
-                .keyframes
+        if time.is_some_and(|time| {
+            self.keyframes
                 .iter()
                 .any(|keyframe| keyframe.id != keyframe_id && keyframe.time == time)
-        {
+        }) {
             return Err("Automation already has a Keyframe at that time".to_string());
         }
         let keyframe = self

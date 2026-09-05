@@ -343,6 +343,7 @@ mod tests {
 
         for available in [
             "native.particle.emitter",
+            "native.particle.shape-location",
             "native.particle.initialize",
             "native.particle.gravity-force",
             "native.particle.drag-force",

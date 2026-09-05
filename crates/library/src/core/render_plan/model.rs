@@ -135,6 +135,7 @@ pub struct CompiledParticleDefinition {
     pub emitter_node_id: uuid::Uuid,
     /// Optional pass-through modifier stages. A bypassed Particle modifier is
     /// absent here and the runtime applies the neutral value for that stage.
+    pub shape_location_node_id: Option<uuid::Uuid>,
     pub initialize_node_id: Option<uuid::Uuid>,
     pub gravity_node_id: Option<uuid::Uuid>,
     pub drag_node_id: Option<uuid::Uuid>,

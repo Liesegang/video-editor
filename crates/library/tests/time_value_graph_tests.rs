@@ -71,6 +71,7 @@ fn time_graph_fixture(
             file_path: "virtual.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         320,
         180,

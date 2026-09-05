@@ -10,10 +10,15 @@ use crate::model::frame::color::Color;
 
 mod color_value;
 mod evaluation;
+mod paint;
 mod ui_type;
 
 pub use color_value::{ColorSpaceRef, ColorValue, ColorValueError};
 pub use evaluation::PropertySampleError;
+pub use paint::{
+    GradientGeometry, GradientSpread, GradientStop, GradientValue, PaintValueError, PatternKind,
+    PatternValue,
+};
 pub use ui_type::PropertyUiType;
 pub use value::{PropertyValue, TryGetProperty, Vec2, Vec3, Vec4};
 

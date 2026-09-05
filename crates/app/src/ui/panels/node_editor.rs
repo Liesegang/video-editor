@@ -23,7 +23,8 @@ use canvas::{
     paint_node_editor_canvas_grid, NODE_EDITOR_MAX_SCALE, NODE_EDITOR_MIN_SCALE,
 };
 use components::{
-    measured_label_width, node_icon_for_node, node_palette_for_node, pin_info, property_label,
+    measured_label_width, node_icon_for_node, node_palette_for_node, pin_color, pin_info,
+    property_label,
 };
 
 // Physical dimensions from the original production Node Editor. Keeping them

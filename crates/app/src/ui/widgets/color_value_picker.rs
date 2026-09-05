@@ -7,7 +7,7 @@
 
 use egui::ecolor::{hsv_from_rgb, rgb_from_hsv, HsvaGamma};
 use egui::{Color32, Id, Mesh, Popup, PopupCloseBehavior, Rect, Response, Sense, StrokeKind, Ui};
-use library::model::authoring::{PaintDefinitionId, ProjectPalette};
+use library::model::authoring::{Paint, PaintDefinitionId, ProjectPalette};
 use library::model::property::ColorValue;
 
 mod palette;
@@ -32,6 +32,10 @@ pub(crate) enum PaletteUiIntent {
     AddSolid {
         suggested_name: String,
         color: ColorValue,
+    },
+    AddPaint {
+        suggested_name: String,
+        paint: Paint,
     },
     Rename {
         id: PaintDefinitionId,
@@ -312,6 +316,29 @@ pub(crate) fn color_value_picker(
                 let saturation_value = saturation_value_control(ui, &mut draft.hsva);
                 let hue = hue_control(ui, &mut draft.hsva);
                 let alpha = alpha_control(ui, &mut draft.hsva);
+                for (id, component_type, response) in [
+                    (
+                        "color_picker.saturation_value",
+                        "color_picker_saturation_value",
+                        &saturation_value,
+                    ),
+                    ("color_picker.hue", "color_picker_hue", &hue),
+                    ("color_picker.alpha", "color_picker_alpha", &alpha),
+                ] {
+                    crate::qa::register_component_with_metadata(
+                        id,
+                        component_type,
+                        response.rect,
+                        response.enabled(),
+                        Some(serde_json::json!({
+                            "display_hue": draft.hsva.h,
+                            "display_saturation": draft.hsva.s,
+                            "display_value": draft.hsva.v,
+                            "straight_alpha": draft.hsva.a,
+                            "authored_color_space": value.color_space(),
+                        })),
+                    );
+                }
                 edited |= numeric_changed
                     || saturation_value.changed()
                     || hue.changed()

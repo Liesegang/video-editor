@@ -1,6 +1,6 @@
 use egui::Ui;
 
-use super::property_drag_value::FloatDragValueConfig;
+use super::property_drag_value::{numeric_edit_finished, FloatDragValueConfig};
 
 const CONTROL_WIDTH: f32 = 184.0;
 const COMPONENT_GAP: f32 = 2.0;
@@ -64,9 +64,7 @@ pub(crate) fn vector_drag_values(
             );
             changed |= response.changed();
             reset |= response.middle_clicked();
-            finished |= response.drag_stopped()
-                || response.lost_focus()
-                || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            finished |= numeric_edit_finished(&response);
             axes.push(VectorAxisResponse {
                 axis,
                 response,

@@ -21,15 +21,17 @@ mod containers;
 mod data;
 mod legacy_media_color;
 mod list;
+mod media;
 mod path;
 mod sound_analysis;
 mod transition;
+pub(crate) use catalog::{
+    APPEARANCE_STACK_CATALOG_ID, ELLIPSE_SHAPE_CATALOG_ID, PARTICLE_SPRITE_RENDERER_CATALOG_ID,
+    PARTICLE_SYSTEM_PORT, ParticleNodeRole, RECTANGLE_SHAPE_CATALOG_ID,
+};
 pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
     native_node_descriptor, native_node_descriptor_for_node,
-};
-pub(crate) use catalog::{
-    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
 };
 pub use color::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
@@ -46,6 +48,7 @@ pub use legacy_media_color::{
     active_legacy_media_color_properties, is_legacy_media_color_property,
 };
 pub use list::ListContent;
+pub use media::{MediaContent, MediaOutputSelection};
 pub use path::PathOperationContent;
 pub use sound_analysis::SoundAnalysisContent;
 pub use transition::{
@@ -311,6 +314,7 @@ impl Node {
         definitions: &[PropertyDefinition],
         file_path: String,
     ) -> Result<Self, String> {
+        content.validate()?;
         let mut properties = Self::default_properties("Media converter", definitions, true)?;
         if properties.get("file_path").is_some() {
             return Err(
@@ -932,27 +936,6 @@ pub struct PluginOperationContent {
 #[serde(deny_unknown_fields)]
 pub struct NativeOperationContent {
     pub catalog_id: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct MediaContent {
-    pub asset_id: Uuid,
-    /// Primary visual/media stream as a zero-based global container index.
-    pub stream_index: Option<usize>,
-    /// Embedded audio override as a zero-based global container index.
-    /// This is independent from the visual stream because they are distinct
-    /// streams in a video container.
-    #[serde(deserialize_with = "deserialize_required_audio_stream_index")]
-    pub audio_stream_index: Option<usize>,
-}
-
-fn deserialize_required_audio_stream_index<'de, D>(
-    deserializer: D,
-) -> Result<Option<usize>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<usize>::deserialize(deserializer)
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

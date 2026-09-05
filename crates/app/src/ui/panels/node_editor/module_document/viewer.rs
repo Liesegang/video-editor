@@ -26,6 +26,7 @@ pub(super) struct ModuleSurfaceCapture {
     pub(super) ports: HashMap<ModuleEditorPortId, PortVisual>,
     pub(super) selection_order: Vec<Uuid>,
     pub(super) body_pointer_owned: bool,
+    pub(super) wire_paint_slot: Option<(egui::Painter, egui::layers::ShapeIdx)>,
 }
 
 impl ModuleSurfaceCapture {
@@ -46,6 +47,7 @@ impl ModuleSurfaceCapture {
 
 pub(super) struct ModuleNodeViewer<'a> {
     pub(super) definition: &'a ModuleDefinition,
+    pub(super) assets: &'a [Asset],
     pub(super) palette: &'a library::model::authoring::ProjectPalette,
     pub(super) plugins: &'a PluginManager,
     pub(super) property_context: ModulePropertyContext,
@@ -163,15 +165,23 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         let node_id = node.id;
         let is_output = matches!(node.content(), NodeContent::ModuleOutput(_));
         let is_protected = self.definition.is_protected_host_boundary_node(node_id);
-        let icon = node_icon_for_node(Some(&node), |_| None);
+        let icon = node_icon_for_node(Some(&node), |asset_id| {
+            self.assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .map(|asset| &asset.kind)
+        });
+        let supports_bypass = node.supports_bypass();
         let status = if is_protected {
             (icons::LOCK, "Protected host boundary")
-        } else if node.bypassed {
-            (icons::PAUSE, "Bypassed")
         } else if !node.enabled {
-            (icons::EYE_SLASH, "Disabled")
+            (icons::EYE_SLASH, "Disabled — click to enable")
+        } else if node.bypassed {
+            (icons::PAUSE, "Bypassed — click to resume processing")
+        } else if supports_bypass {
+            (icons::EYE, "Enabled — click to bypass processing")
         } else {
-            (icons::CHECK, "Enabled")
+            (icons::EYE, "Enabled — click to disable")
         };
         let header_width = NODE_HEADER_WIDTH
             .max(node.ui_size[0])
@@ -189,6 +199,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                     glyph: status.0,
                     tooltip: status.1,
                 }),
+                trailing_interactive: !is_output && !is_protected,
                 accent: node_palette_for_node(Some(&node)).accent,
                 min_width: header_width,
                 title_width: header_width - 48.0,
@@ -196,7 +207,38 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 details_visible: node_editor_details_visible(self.to_global.scaling),
             },
         );
-        let graph_rect = response.rect;
+        if let Some(status_response) = response.trailing.as_ref() {
+            self.capture_response(status_response);
+            if status_response.clicked() {
+                if let Some((enabled, bypassed)) = next_header_node_state(
+                    node.enabled,
+                    node.bypassed,
+                    supports_bypass,
+                    is_output || is_protected,
+                ) {
+                    self.actions.push(ModuleEditorAction::SetNodeState {
+                        node_id,
+                        name: node.name.clone(),
+                        enabled,
+                        bypassed,
+                    });
+                }
+            }
+            let state_rect = (*self.to_global * status_response.rect).intersect(*self.canvas_clip);
+            crate::qa::register_component_with_metadata(
+                format!("node_editor.node_state:{node_id}"),
+                "node_state_control",
+                state_rect,
+                !is_output && !is_protected,
+                Some(serde_json::json!({
+                    "node_id": node_id,
+                    "enabled": node.enabled,
+                    "bypassed": node.bypassed,
+                    "supports_bypass": supports_bypass,
+                })),
+            );
+        }
+        let graph_rect = response.response.rect;
         if let Ok(mut capture) = self.capture.lock() {
             capture.header_rects.insert(node_id, graph_rect);
         }
@@ -215,97 +257,122 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                 "production_surface": "egui_snarl",
             })),
         );
-        response.context_menu(|ui| {
-            const OUTPUT_STATE_REASON: &str =
-                "Module Output is a required render terminal and cannot be disabled or bypassed.";
-            const OUTPUT_DELETE_REASON: &str =
-                "Module Output is a required render terminal and cannot be deleted.";
-            const HOST_BOUNDARY_STATE_REASON: &str =
+    }
+
+    fn has_node_menu(&mut self, node_id: &Uuid) -> bool {
+        self.definition.graph.nodes.contains_key(node_id)
+    }
+
+    fn show_node_menu(
+        &mut self,
+        node_id: egui_snarl::NodeId,
+        _inputs: &[InPin],
+        _outputs: &[OutPin],
+        ui: &mut egui::Ui,
+        snarl: &mut Snarl<Uuid>,
+    ) {
+        let Some(node) = self.node(snarl, node_id).cloned() else {
+            return;
+        };
+        let node_id = node.id;
+        let is_output = is_module_output_node(self.definition, node_id);
+        let is_protected = self.definition.is_protected_host_boundary_node(node_id);
+        const OUTPUT_STATE_REASON: &str =
+            "Module Output is a required render terminal and cannot be disabled or bypassed.";
+        const OUTPUT_DELETE_REASON: &str =
+            "Module Output is a required render terminal and cannot be deleted.";
+        const HOST_BOUNDARY_STATE_REASON: &str =
                 "Transition A/B/Progress boundaries are supplied by the Timeline and cannot be disabled or bypassed.";
-            const HOST_BOUNDARY_DELETE_REASON: &str =
+        const HOST_BOUNDARY_DELETE_REASON: &str =
                 "Transition A/B/Progress boundaries are required by the host contract and cannot be deleted.";
-            let mut name = node.name.clone();
-            if ui.text_edit_singleline(&mut name).changed() {
-                self.actions.push(ModuleEditorAction::SetNodeState {
-                    node_id,
-                    name,
-                    enabled: node.enabled,
-                    bypassed: node.bypassed,
-                });
-            }
-            let mut enabled = node.enabled;
-            let enabled_response = ui.add_enabled(
-                !is_output && !is_protected,
-                egui::Checkbox::new(&mut enabled, "Enabled"),
+        let mut name = node.name.clone();
+        if ui.text_edit_singleline(&mut name).changed() {
+            self.actions.push(ModuleEditorAction::SetNodeState {
+                node_id,
+                name,
+                enabled: node.enabled,
+                bypassed: node.bypassed,
+            });
+        }
+        let mut enabled = node.enabled;
+        let enabled_response = ui.add_enabled(
+            !is_output && !is_protected,
+            egui::Checkbox::new(&mut enabled, "Enabled"),
+        );
+        if enabled_response.changed() {
+            self.actions.push(ModuleEditorAction::SetNodeState {
+                node_id,
+                name: node.name.clone(),
+                enabled,
+                bypassed: node.bypassed,
+            });
+        }
+        if is_output {
+            register_output_control(node_id, "enabled", &enabled_response, OUTPUT_STATE_REASON);
+            enabled_response.on_hover_text(OUTPUT_STATE_REASON);
+        } else if is_protected {
+            register_host_boundary_control(
+                node_id,
+                "enabled",
+                &enabled_response,
+                HOST_BOUNDARY_STATE_REASON,
             );
-            if enabled_response.changed() {
-                self.actions.push(ModuleEditorAction::SetNodeState {
-                    node_id,
-                    name: node.name.clone(),
-                    enabled,
-                    bypassed: node.bypassed,
-                });
-            }
-            if is_output {
-                register_output_control(node_id, "enabled", &enabled_response, OUTPUT_STATE_REASON);
-                enabled_response.on_hover_text(OUTPUT_STATE_REASON);
-            } else if is_protected {
-                register_host_boundary_control(
-                    node_id,
-                    "enabled",
-                    &enabled_response,
-                    HOST_BOUNDARY_STATE_REASON,
-                );
-                enabled_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
-            }
-            let mut bypassed = node.bypassed;
-            let bypass_response = ui.add_enabled(
-                !is_output && !is_protected && node.supports_bypass(),
-                egui::Checkbox::new(&mut bypassed, "Bypass"),
+            enabled_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
+        }
+        let mut bypassed = node.bypassed;
+        let bypass_response = ui.add_enabled(
+            !is_output && !is_protected && node.supports_bypass(),
+            egui::Checkbox::new(&mut bypassed, "Bypass"),
+        );
+        if bypass_response.changed() {
+            self.actions.push(ModuleEditorAction::SetNodeState {
+                node_id,
+                name: node.name.clone(),
+                enabled: node.enabled,
+                bypassed,
+            });
+        }
+        if is_output {
+            register_output_control(node_id, "bypass", &bypass_response, OUTPUT_STATE_REASON);
+            bypass_response.on_hover_text(OUTPUT_STATE_REASON);
+        } else if is_protected {
+            register_host_boundary_control(
+                node_id,
+                "bypass",
+                &bypass_response,
+                HOST_BOUNDARY_STATE_REASON,
             );
-            if bypass_response.changed() {
-                self.actions.push(ModuleEditorAction::SetNodeState {
-                    node_id,
-                    name: node.name.clone(),
-                    enabled: node.enabled,
-                    bypassed,
-                });
-            }
-            if is_output {
-                register_output_control(node_id, "bypass", &bypass_response, OUTPUT_STATE_REASON);
-                bypass_response.on_hover_text(OUTPUT_STATE_REASON);
-            } else if is_protected {
-                register_host_boundary_control(
-                    node_id,
-                    "bypass",
-                    &bypass_response,
-                    HOST_BOUNDARY_STATE_REASON,
-                );
-                bypass_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
-            }
-            ui.separator();
-            let delete_response = ui.add_enabled(
-                !is_output && !is_protected,
-                egui::Button::new(format!("{} Delete Node", icons::TRASH)),
+            bypass_response.on_hover_text(HOST_BOUNDARY_STATE_REASON);
+        }
+        ui.separator();
+        let delete_response = ui.add_enabled(
+            !is_output && !is_protected,
+            egui::Button::new(format!("{} Delete Node", icons::TRASH)).shortcut_text("Del"),
+        );
+        crate::qa::register_component_with_metadata(
+            format!("node_editor.node_menu:{node_id}:delete"),
+            "node_menu_action",
+            delete_response.rect,
+            delete_response.enabled(),
+            Some(serde_json::json!({"node_id": node_id, "action": "delete"})),
+        );
+        if delete_response.clicked() {
+            self.actions
+                .push(ModuleEditorAction::DeleteNodes(vec![node_id]));
+            ui.close();
+        }
+        if is_output {
+            register_output_control(node_id, "delete", &delete_response, OUTPUT_DELETE_REASON);
+            delete_response.on_hover_text(OUTPUT_DELETE_REASON);
+        } else if is_protected {
+            register_host_boundary_control(
+                node_id,
+                "delete",
+                &delete_response,
+                HOST_BOUNDARY_DELETE_REASON,
             );
-            if delete_response.clicked() {
-                self.actions
-                    .push(ModuleEditorAction::DeleteNodes(vec![node_id]));
-                ui.close();
-            }
-            if is_output {
-                register_output_control(node_id, "delete", &delete_response, OUTPUT_DELETE_REASON);
-                delete_response.on_hover_text(OUTPUT_DELETE_REASON);
-            } else if is_protected {
-                register_host_boundary_control(
-                    node_id,
-                    "delete",
-                    &delete_response,
-                    HOST_BOUNDARY_DELETE_REASON,
-                );
-                delete_response.on_hover_text(HOST_BOUNDARY_DELETE_REASON);
-            }
-        });
+            delete_response.on_hover_text(HOST_BOUNDARY_DELETE_REASON);
+        }
     }
 
     fn inputs(&mut self, node_id: &Uuid) -> usize {
@@ -501,7 +568,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         &mut self,
         node_id: egui_snarl::NodeId,
         rect: egui::Rect,
-        _ui: &mut egui::Ui,
+        ui: &mut egui::Ui,
         snarl: &mut Snarl<Uuid>,
     ) {
         let Some(node_id) = snarl.get_node(node_id).copied() else {
@@ -509,6 +576,26 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         };
         if let Ok(mut capture) = self.capture.lock() {
             capture.record_node(node_id, rect);
+        }
+        if self.selected_nodes.contains(&node_id) {
+            let visual = Editor::node_visual_style(
+                node_palette_for_node(self.definition.graph.nodes.get(&node_id)),
+                self.definition
+                    .graph
+                    .nodes
+                    .get(&node_id)
+                    .is_some_and(|node| !node.enabled),
+                true,
+                self.to_global.scaling,
+            );
+            if let Some(stroke) = visual.highlight_stroke {
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(10),
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
         }
         crate::qa::register_component_with_metadata(
             format!("node_editor.node:{node_id}"),
@@ -545,6 +632,9 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
     ) {
         *self.canvas_clip = *self.to_global * painter.clip_rect();
         paint_node_editor_canvas_grid(painter, *viewport, *self.canvas_clip, *self.to_global);
+        if let Ok(mut capture) = self.capture.lock() {
+            capture.wire_paint_slot = Some((painter.clone(), painter.add(egui::Shape::Noop)));
+        }
     }
 
     fn current_transform(
@@ -557,6 +647,23 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         // has already updated the one authoritative application camera.
         *to_global = self.canvas_transform;
         *self.to_global = self.canvas_transform;
+    }
+}
+
+pub(super) const fn next_header_node_state(
+    enabled: bool,
+    bypassed: bool,
+    supports_bypass: bool,
+    protected: bool,
+) -> Option<(bool, bool)> {
+    if protected {
+        None
+    } else if !enabled {
+        Some((true, false))
+    } else if supports_bypass {
+        Some((true, !bypassed))
+    } else {
+        Some((false, false))
     }
 }
 

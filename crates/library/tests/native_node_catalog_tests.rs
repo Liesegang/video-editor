@@ -82,6 +82,7 @@ impl NodeListPort {
 
 #[derive(Clone, Debug, Default)]
 struct NodeListEntry {
+    key: String,
     label: String,
     category: Option<String>,
     catalog_status: Option<String>,
@@ -198,6 +199,7 @@ fn parse_node_list() -> BTreeMap<String, NodeListEntry> {
                 panic!("node_list.yml:{line_number}: expected a top-level Node label");
             };
             current = Some(NodeListEntry {
+                key: label.to_string(),
                 label: label.to_string(),
                 ..NodeListEntry::default()
             });
@@ -216,6 +218,10 @@ fn parse_node_list() -> BTreeMap<String, NodeListEntry> {
                 _ => {
                     section = None;
                     if let Some((key, value)) = yaml_field(trimmed) {
+                        if key == "label" {
+                            entry.label = value.to_string();
+                            continue;
+                        }
                         let target = match key {
                             "category" => &mut entry.category,
                             "catalog_status" => &mut entry.catalog_status,
@@ -329,10 +335,10 @@ fn finish_entry(
     let Some(entry) = current.take() else {
         return;
     };
-    let label = entry.label.clone();
+    let key = entry.key.clone();
     assert!(
-        entries.insert(label.clone(), entry).is_none(),
-        "duplicate node_list.yml entry {label}"
+        entries.insert(key.clone(), entry).is_none(),
+        "duplicate node_list.yml entry {key}"
     );
 }
 
@@ -475,6 +481,7 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "List<Any>" | "List<Path>" => PortDataType::List,
         "Image" | "List<Image>" => PortDataType::Image,
         "Shape" => PortDataType::Shape,
+        "Style" | "List<Style>" => PortDataType::Style,
         "Audio" => PortDataType::Audio,
         "Spectrum" => PortDataType::Spectrum,
         "Scalar/Vector" | "Numeric" => PortDataType::Numeric,
@@ -490,6 +497,7 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "Enum" => PortDataType::Enum,
         "Asset" => PortDataType::Asset,
         "Gradient" => PortDataType::Gradient,
+        "Pattern" => PortDataType::Pattern,
         "Curve" => PortDataType::Curve,
         "ParticleSystem" => PortDataType::ParticleSystem,
         "Material" => PortDataType::Material,
@@ -506,7 +514,7 @@ fn parse_data_type(value: &str, node_label: &str, port_name: &str) -> (PortDataT
         "MotionBehavior" => PortDataType::MotionBehavior,
         other => panic!("{node_label}.{port_name}: unsupported catalog type {other}"),
     };
-    (data_type, value == "List<Image>")
+    (data_type, matches!(value, "List<Image>" | "List<Style>"))
 }
 
 fn compare_plugin_property_contracts(

@@ -17,7 +17,8 @@ mod selection;
 mod wire;
 
 pub use chrome::{
-    GroupChrome, HeaderGlyph, NodeHeader, NodePalette, NodeVisualStyle, PortLabel, PortVisualStyle,
+    GroupChrome, HeaderGlyph, NodeHeader, NodeHeaderResponse, NodePalette, NodeVisualStyle,
+    PortLabel, PortVisualStyle,
 };
 pub use editor::{Editor, EditorConfig, NodeBodyRenderer, NodeBodyResponse};
 pub use graph::{

@@ -93,6 +93,7 @@ fn fake_external_layout_consumes_the_same_chrome_descriptors() {
                                         tooltip: "Source",
                                     }),
                                     trailing: None,
+                                    trailing_interactive: false,
                                     accent: palette.accent,
                                     min_width: 180.0,
                                     title_width: 140.0,
@@ -100,7 +101,7 @@ fn fake_external_layout_consumes_the_same_chrome_descriptors() {
                                     details_visible: true,
                                 },
                             );
-                            response_rects.borrow_mut().push(response.rect);
+                            response_rects.borrow_mut().push(response.response.rect);
                         });
                         let response = Editor::show_port_label(
                             ui,
@@ -301,4 +302,152 @@ fn body_response_maps_global_press_origin_into_a_transformed_layer() {
         pointer_button(global_control, true, Modifiers::NONE),
     ]);
     assert!(owned.get());
+}
+
+#[test]
+fn open_popup_owns_drag_and_keyboard_even_outside_the_original_node_body() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let popup_id = egui::Id::new("node-color-popup-test");
+    egui::Popup::open_id(&context, popup_id);
+    let header = graph.nodes[1].header_rect.center();
+    let end = header + vec2(90.0, 80.0);
+    for events in [
+        vec![
+            Event::PointerMoved(header),
+            pointer_button(header, true, Modifiers::NONE),
+        ],
+        vec![Event::PointerMoved(end)],
+        vec![pointer_button(end, false, Modifiers::NONE)],
+        vec![key(egui::Key::Delete)],
+    ] {
+        // The fake host has no popup renderer to keep its open state alive.
+        egui::Popup::open_id(&context, popup_id);
+        let outputs = run_interaction_frame_with(
+            &context,
+            &graph,
+            &mut state,
+            InteractionOptions::default(),
+            &[ItemId::Node(1)],
+            Some(ItemId::Node(1)),
+            events,
+            Modifiers::NONE,
+            false,
+        );
+        assert!(
+            outputs.is_empty(),
+            "popup input leaked into the graph: {outputs:?}"
+        );
+    }
+    egui::Popup::close_id(&context, popup_id);
+    run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::default(),
+        vec![
+            Event::PointerMoved(header),
+            pointer_button(header, true, Modifiers::NONE),
+        ],
+    );
+    let outputs = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::default(),
+        vec![Event::PointerMoved(end)],
+    );
+    assert!(
+        outputs.iter().any(|output| matches!(
+            output,
+            EditorOutput::Move {
+                grabbed: ItemId::Node(2),
+                ..
+            }
+        )),
+        "closing the popup must restore normal Node movement"
+    );
+}
+
+#[test]
+fn popup_opening_cancels_an_existing_background_move() {
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let header = graph.nodes[0].header_rect.center();
+    for events in [
+        vec![
+            Event::PointerMoved(header),
+            pointer_button(header, true, Modifiers::NONE),
+        ],
+        vec![Event::PointerMoved(header + vec2(30.0, 10.0))],
+    ] {
+        run_interaction_frame(
+            &context,
+            &graph,
+            &mut state,
+            InteractionOptions::default(),
+            events,
+        );
+    }
+    egui::Popup::open_id(&context, egui::Id::new("interrupt-background-move"));
+    let outputs = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::default(),
+        vec![Event::PointerMoved(header + vec2(50.0, 10.0))],
+    );
+    assert_eq!(outputs.len(), 1);
+    assert!(matches!(
+        outputs[0],
+        EditorOutput::MoveEnd {
+            outcome: MoveEndOutcome::Cancelled
+        }
+    ));
+}
+
+#[test]
+fn popup_dismissal_during_body_render_cannot_select_the_node_behind_it() {
+    struct DismissingBody(egui::Id);
+    impl NodeBodyRenderer<u8> for DismissingBody {
+        fn show(&mut self, _node: &u8, ui: &mut egui::Ui) -> NodeBodyResponse {
+            egui::Popup::close_id(ui.ctx(), self.0);
+            NodeBodyResponse::NONE
+        }
+    }
+    let context = egui::Context::default();
+    let graph = FakeGraph::new();
+    let mut state = State::default();
+    let popup_id = egui::Id::new("popup-dismissal-frame");
+    let mut body = DismissingBody(popup_id);
+    let header = graph.nodes[1].header_rect.center();
+    egui::Popup::open_id(&context, popup_id);
+    let outputs = RefCell::new(Vec::new());
+    drop(context.run(
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0))),
+            events: vec![
+                Event::PointerMoved(header),
+                pointer_button(header, true, Modifiers::NONE),
+                pointer_button(header, false, Modifiers::NONE),
+            ],
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                outputs.borrow_mut().extend(Editor::show(
+                    ui,
+                    &graph.frame(&[ItemId::Node(1)], Some(ItemId::Node(1))),
+                    &mut state,
+                    &mut body,
+                    EditorConfig::default(),
+                ));
+            });
+        },
+    ));
+    assert!(!egui::Popup::is_any_open(&context));
+    assert!(outputs.into_inner().is_empty());
+    assert!(!state.is_active());
 }

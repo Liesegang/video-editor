@@ -27,6 +27,7 @@ use skia_safe::{
 };
 
 mod context_lifecycle;
+mod layer_styles;
 mod legacy_backplate;
 mod output_compositing;
 mod paint;

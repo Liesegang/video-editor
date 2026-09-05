@@ -22,7 +22,13 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     available.sort();
     assert_eq!(
         available,
-        ["opacity", "randomize", "step_delay", "transform"]
+        [
+            "opacity",
+            "randomize",
+            "step_delay",
+            "tracking",
+            "transform"
+        ]
     );
 
     for component_id in available {
@@ -82,6 +88,10 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     let opacity = plugins.create_effector_operation_node("opacity")?;
     for key in ["opacity", "mode", "target"] {
         assert!(opacity.properties().get(key).is_some(), "missing {key}");
+    }
+    let tracking = plugins.create_effector_operation_node("tracking")?;
+    for key in ["amount", "target"] {
+        assert!(tracking.properties().get(key).is_some(), "missing {key}");
     }
 
     let manager = ProjectManager::new(Arc::new(RwLock::new(Project::new("factory"))), plugins);

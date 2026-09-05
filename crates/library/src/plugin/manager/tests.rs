@@ -8,7 +8,7 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::project::{Composition, EvalOutput, PortDirection, Project, TIME_PORT};
-use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
+use crate::model::property::{Property, PropertyUiType, PropertyValue};
 use crate::plugin::{
     EffectColorDomain, FrameEvaluationContext, LoadPlugin, OperationDescriptor,
     OperationDescriptorError, Plugin, PropertyEvaluator, PropertyPlugin,
@@ -504,18 +504,16 @@ impl StylePlugin for EvaluatedValueStylePlugin {
         )
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        context: &FrameEvaluationContext,
+        context: &crate::plugin::EvaluatedOperation<'_>,
         source_id: uuid::Uuid,
-        properties: &PropertyMap,
-        eval_time: f64,
     ) -> Option<StyleConfig> {
         Some(StyleConfig {
             id: source_id,
             style: DrawStyle::Fill {
                 color: Color::white(),
-                offset: context.evaluate_number(properties, "value", eval_time, -1.0),
+                offset: context.number("value").unwrap_or(-1.0),
             },
         })
     }
@@ -544,12 +542,10 @@ impl StylePlugin for ExternalFillReplacementStylePlugin {
         OperationDescriptor::style(self.id(), self.name(), Vec::new())
     }
 
-    fn evaluate_source(
+    fn evaluate_values(
         &self,
-        _context: &FrameEvaluationContext,
+        _context: &crate::plugin::EvaluatedOperation<'_>,
         _source_id: uuid::Uuid,
-        _properties: &PropertyMap,
-        _eval_time: f64,
     ) -> Option<StyleConfig> {
         None
     }

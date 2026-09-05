@@ -150,6 +150,9 @@ impl RuViEApp {
                     self.dock_state
                         .focused_leaf()
                         .is_some_and(|focused| focused.0 == position.0 && focused.1 == position.1)
+                        && self.dock_state[position.0][position.1]
+                            .get_leaf()
+                            .is_some_and(|leaf| leaf.active == position.2)
                 }) {
                 CommandScope::NodeEditor
             } else {
@@ -199,6 +202,10 @@ impl RuViEApp {
             }
             CommandId::Undo => self.undo(),
             CommandId::Redo => self.redo(),
+            CommandId::Delete if self.command_context().scope == CommandScope::NodeEditor => {
+                self.state.node_editor.pending_command = Some(command);
+                Ok(())
+            }
             CommandId::Delete => self.delete_selection(),
             CommandId::Settings => {
                 self.settings_dialog
@@ -227,7 +234,7 @@ impl RuViEApp {
             | CommandId::NodeEditorCleanLayoutSelection
             | CommandId::NodeEditorCleanLayoutContainer
             | CommandId::NodeEditorCleanLayoutAll => {
-                self.state.node_editor.pending_layout_command = Some(command);
+                self.state.node_editor.pending_command = Some(command);
                 focus_or_open_tab(&mut self.dock_state, Tab::NodeEditor);
                 Ok(())
             }

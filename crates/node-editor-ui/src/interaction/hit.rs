@@ -73,6 +73,25 @@ where
     }
 }
 
+pub(super) fn node<'a, NodeId, PortId, WireId, GroupId, Key>(
+    frame: &'a GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
+    position: Pos2,
+) -> Option<&'a NodeId>
+where
+    NodeId: Eq,
+{
+    frame.selection_order.iter().rev().find_map(|item| {
+        let ItemId::Node(node_id) = item else {
+            return None;
+        };
+        frame
+            .nodes
+            .iter()
+            .find(|node| node.id == *node_id && node.rect.contains(position))
+            .map(|node| &node.id)
+    })
+}
+
 pub(super) fn deepest_group<'a, NodeId, PortId, WireId, GroupId, Key>(
     frame: &'a GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     position: Pos2,

@@ -57,6 +57,7 @@ impl FrameEvaluator<'_> {
             match target_definition.data_type {
                 PortDataType::Image
                 | PortDataType::Shape
+                | PortDataType::Style
                 | PortDataType::Audio
                 | PortDataType::Spectrum => continue,
                 _ => {}

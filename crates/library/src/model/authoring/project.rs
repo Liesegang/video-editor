@@ -284,6 +284,7 @@ impl AuthoringProject {
                 &track.authored_properties,
                 &format!("Track {}", track.id),
             )?;
+            track.is_visually_enabled()?;
         }
         Ok(())
     }
@@ -435,10 +436,18 @@ impl AuthoringProject {
                     return Err(format!("Item {} refers to a missing Asset", item.id));
                 }
                 SourceRef::Text {
+                    appearance_operations,
                     ensemble_operations,
                     ..
                 } => {
+                    validation::validate_appearance_operations(appearance_operations, item.id)?;
                     validate_text_ensemble_operations(ensemble_operations, item.id)?;
+                }
+                SourceRef::Shape { shape } => {
+                    validation::validate_appearance_operations(
+                        &shape.appearance_operations,
+                        item.id,
+                    )?;
                 }
                 SourceRef::Composition(instance) => {
                     let nested = self.timelines.get(&instance.timeline_id).ok_or_else(|| {

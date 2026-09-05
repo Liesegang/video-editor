@@ -76,6 +76,7 @@ impl FakeGraph {
                     pos2(310.0, 160.0),
                     pos2(360.0, 160.0),
                 ),
+                color: egui::Color32::from_rgb(145, 151, 170),
                 editable: true,
             }],
             groups: vec![GroupDescriptor {
@@ -153,8 +154,10 @@ fn run_frame(
                         ui.ctx()
                             .memory_mut(|memory| memory.request_focus(egui::Id::new("search")));
                     }
+                    let overlay_painter = ui.painter().clone();
                     outputs.borrow_mut().extend(Editor::interact(
                         ui,
+                        &overlay_painter,
                         &graph.frame(transform),
                         state,
                         options,

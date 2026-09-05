@@ -10,17 +10,21 @@ use pan_zoom_ui::{
 
 use crate::state::authoring::{
     AuthoringSelection, AuthoringUiState, AutomationLaneId, AutomationOwner, CurveEditorState,
-    CurveKeyDrag,
+    CurveKeyDrag, CurveKeyframeEditor,
 };
 use crate::ui::automation_lanes::{
     self, component_name, component_value, lane_metadata, owner_metadata, with_component,
     AutomationChannel as CurveSeries,
 };
-use crate::ui::easing_menus::{easing_summary, show_easing_menu, EasingMenuQaScope};
+use crate::ui::easing_menus::{
+    easing_name, easing_summary, show_easing_menu, show_easing_parameters, EasingMenuQaScope,
+};
+use crate::ui::time_ruler::{TimeRuler, TimeRulerTick};
 use crate::ui::viewport::{ViewportController, ViewportInputPolicy, ViewportState, ZoomPolicy};
 
 const CHANNEL_WIDTH: f32 = 156.0;
 const TOOLBAR_HEIGHT: f32 = 30.0;
+const RULER_HEIGHT: f32 = 24.0;
 const POINT_RADIUS: f32 = 5.0;
 const PLOT_PADDING: Vec2 = Vec2::new(20.0, 16.0);
 const MIN_TIME_ZOOM: f32 = 0.01;
@@ -38,6 +42,8 @@ pub fn curve_editor_panel(
     service: &TimelineEditorService,
 ) {
     let Some(owner) = selected_owner(state) else {
+        state.curve_editor.drag = None;
+        state.curve_editor.keyframe_editor = None;
         ui.centered_and_justified(|ui| ui.label("Select a clip with keyframes"));
         return;
     };
@@ -62,6 +68,7 @@ pub fn curve_editor_panel(
     channel_list(ui, state, &series, channel_rect);
     series.retain(|candidate| series_visible(state, candidate));
     curve_canvas(ui, project, state, service, &owner, &series, curve_rect);
+    show_keyframe_editor(ui.ctx(), state, service);
 }
 
 fn curve_toolbar(ui: &mut egui::Ui, state: &mut AuthoringUiState, has_curves: bool) {
@@ -143,7 +150,11 @@ fn curve_canvas(
     };
     let duration = interval.duration.to_seconds_f64().max(1.0 / 30.0);
     let (value_min, value_max) = value_extent(series);
-    let plot_rect = curve_plot_rect(rect);
+    let canvas_rect = Rect::from_min_max(
+        Pos2::new(rect.left(), (rect.top() + RULER_HEIGHT).min(rect.bottom())),
+        rect.right_bottom(),
+    );
+    let plot_rect = curve_plot_rect(canvas_rect);
     if !plot_rect.is_positive() {
         finish_key_drag(ui, state, service);
         return;
@@ -196,6 +207,11 @@ fn curve_canvas(
         })),
     );
     paint_grid(ui, transform);
+    let ruler_rect = Rect::from_min_max(
+        Pos2::new(transform.rect.left(), rect.top()),
+        Pos2::new(transform.rect.right(), canvas_rect.top()),
+    );
+    show_curve_ruler(ui, project, state, owner, transform, ruler_rect);
 
     if series.is_empty() {
         ui.painter().text(
@@ -210,7 +226,7 @@ fn curve_canvas(
     for (index, curve) in series.iter().enumerate() {
         paint_curve(ui, state, service, curve, curve_color(index), transform);
     }
-    paint_playhead(ui, project, state, owner, transform);
+    paint_playhead(ui, project, state, owner, transform, ruler_rect);
     finish_key_drag(ui, state, service);
 }
 
@@ -327,6 +343,13 @@ impl CurveTransform {
         (min.is_finite() && max.is_finite()).then_some((min, max))
     }
 
+    fn time_at_screen_x(self, screen_x: f32) -> Option<f64> {
+        self.canvas
+            .screen_to_world(Pos2::new(screen_x, self.rect.center().y))
+            .map(|point| self.time_at_world_x(point.x))
+            .filter(|time| time.is_finite())
+    }
+
     fn grid_config(self) -> GridConfig {
         GridConfig {
             minor_spacing: Vec2::new(self.rect.width() / 10.0, self.rect.height() / 8.0),
@@ -352,22 +375,66 @@ fn paint_grid(ui: &egui::Ui, transform: CurveTransform) {
         .filter(|line| line.kind != GridLineKind::Minor)
     {
         match line.axis {
-            GridAxis::X => painter.text(
-                Pos2::new(line.screen_position + 2.0, transform.rect.bottom() - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                format!("{:.2}s", transform.time_at_world_x(line.world_position)),
-                egui::FontId::monospace(9.0),
-                label_color,
-            ),
-            GridAxis::Y => painter.text(
-                Pos2::new(transform.rect.left() + 3.0, line.screen_position - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                format_curve_value(transform.value_at_world_y(line.world_position)),
-                egui::FontId::monospace(9.0),
-                label_color,
-            ),
+            GridAxis::X => {}
+            GridAxis::Y => {
+                painter.text(
+                    Pos2::new(transform.rect.left() + 3.0, line.screen_position - 2.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    format_curve_value(transform.value_at_world_y(line.world_position)),
+                    egui::FontId::monospace(9.0),
+                    label_color,
+                );
+            }
         };
     }
+}
+
+fn show_curve_ruler(
+    ui: &mut egui::Ui,
+    project: &AuthoringProject,
+    state: &mut AuthoringUiState,
+    owner: &AutomationOwner,
+    transform: CurveTransform,
+    ruler_rect: Rect,
+) {
+    if !ruler_rect.is_positive() {
+        return;
+    }
+    let ticks = pan_zoom_ui::grid_lines(transform.rect, transform.canvas, transform.grid_config())
+        .into_iter()
+        .filter(|line| line.axis == GridAxis::X && line.kind != GridLineKind::Minor)
+        .map(|line| {
+            let seconds = transform.time_at_world_x(line.world_position);
+            TimeRulerTick {
+                x: line.screen_position,
+                label: format!("{seconds:.2}s"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let response = TimeRuler::new("authoring_curve_editor_ruler", "curve_editor.ruler", &ticks)
+        .show(ui, ruler_rect);
+    if !(response.clicked() || response.dragged()) {
+        return;
+    }
+    let Some(local_seconds) = response
+        .interact_pointer_pos()
+        .and_then(|pointer| transform.time_at_screen_x(pointer.x))
+        .map(|seconds| seconds.clamp(0.0, transform.duration))
+    else {
+        return;
+    };
+    let Ok(local_time) = MediaTime::from_seconds_f64(local_seconds, 1_000_000) else {
+        return;
+    };
+    let Some(timeline_time) = automation_lanes::timeline_time_for_local(project, owner, local_time)
+    else {
+        return;
+    };
+    let Some(timeline) = project.timelines.get(&state.active_timeline_id) else {
+        return;
+    };
+    let frame = (timeline_time.to_seconds_f64() * timeline.fps.to_f64()).round() as i64;
+    state.timeline.seek_frame(frame);
 }
 
 fn format_curve_value(value: f64) -> String {
@@ -469,8 +536,40 @@ fn paint_curve(
                 projected_value: point.full_value.clone(),
             });
         }
+        if response.double_clicked() {
+            state.curve_editor.keyframe_editor = Some(CurveKeyframeEditor {
+                lane: curve.id.clone(),
+                component: curve.component,
+                keyframe_id: point.id,
+                time: point.time,
+                value: point.full_value.clone(),
+                easing: point.easing.clone(),
+            });
+        }
         let mut easing_update = None;
         response.context_menu(|ui| {
+            let edit = ui.button(format!("{} Edit keyframe…", icons::PENCIL_SIMPLE));
+            crate::qa::register_component(
+                format!(
+                    "curve_editor.keyframe_menu.edit:{}:{}",
+                    point.id,
+                    component_name(curve.component)
+                ),
+                "curve_editor_keyframe_action",
+                edit.rect,
+            );
+            if edit.clicked() {
+                state.curve_editor.keyframe_editor = Some(CurveKeyframeEditor {
+                    lane: curve.id.clone(),
+                    component: curve.component,
+                    keyframe_id: point.id,
+                    time: point.time,
+                    value: point.full_value.clone(),
+                    easing: point.easing.clone(),
+                });
+                ui.close();
+            }
+            ui.separator();
             ui.strong("Interpolation after key");
             ui.weak(easing_summary(&point.easing));
             ui.separator();
@@ -523,6 +622,108 @@ fn paint_curve(
             Stroke::new(1.0, Color32::BLACK),
             StrokeKind::Inside,
         );
+    }
+}
+
+fn show_keyframe_editor(
+    context: &egui::Context,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+) {
+    let Some(mut draft) = state.curve_editor.keyframe_editor.take() else {
+        return;
+    };
+    let mut open = true;
+    let mut apply = false;
+    let mut cancel = false;
+    crate::ui::widgets::modal::Modal::dialog("Edit Keyframe", 420.0)
+        .open(&mut open)
+        .show(context, |ui| {
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+            egui::Grid::new("curve_keyframe_editor_values")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Time");
+                    let mut seconds = draft.time.to_seconds_f64();
+                    let time = ui.add(
+                        egui::DragValue::new(&mut seconds)
+                            .speed(0.01)
+                            .range(0.0..=f64::MAX)
+                            .suffix(" s"),
+                    );
+                    crate::qa::register_component(
+                        "curve_editor.keyframe_dialog.time",
+                        "keyframe_dialog_control",
+                        time.rect,
+                    );
+                    if time.changed() {
+                        if let Ok(value) = MediaTime::from_seconds_f64(seconds, 1_000_000) {
+                            draft.time = value;
+                        }
+                    }
+                    ui.end_row();
+
+                    ui.label("Value");
+                    let mut value = component_value(&draft.value, draft.component).unwrap_or(0.0);
+                    let value_response = ui.add(egui::DragValue::new(&mut value).speed(0.1));
+                    crate::qa::register_component(
+                        "curve_editor.keyframe_dialog.value",
+                        "keyframe_dialog_control",
+                        value_response.rect,
+                    );
+                    if value_response.changed() {
+                        draft.value = with_component(draft.value.clone(), draft.component, value);
+                    }
+                    ui.end_row();
+
+                    ui.label("Interpolation");
+                    egui::ComboBox::from_id_salt("curve_keyframe_editor_easing")
+                        .selected_text(easing_name(&draft.easing))
+                        .show_ui(ui, |ui| {
+                            let current = draft.easing.clone();
+                            show_easing_menu(ui, Some(&current), None, |easing| {
+                                draft.easing = easing;
+                            });
+                        });
+                    ui.end_row();
+                });
+            ui.separator();
+            show_easing_parameters(ui, &mut draft.easing);
+            crate::ui::dialogs::dialog_footer(ui, |ui| {
+                let apply_response = crate::ui::dialogs::dialog_button(
+                    ui,
+                    "Apply",
+                    crate::ui::dialogs::DialogButtonRole::Primary,
+                );
+                crate::qa::register_component(
+                    "curve_editor.keyframe_dialog.apply",
+                    "keyframe_dialog_button",
+                    apply_response.rect,
+                );
+                apply = apply_response.clicked();
+                let cancel_response = crate::ui::dialogs::dialog_button(
+                    ui,
+                    "Cancel",
+                    crate::ui::dialogs::DialogButtonRole::Secondary,
+                );
+                cancel = cancel_response.clicked();
+            });
+        });
+    if apply {
+        let update = AuthoringKeyframeUpdate {
+            time: Some(draft.time),
+            value: Some(draft.value),
+            easing: Some(draft.easing),
+        };
+        match automation_lanes::update_keyframe(service, &draft.lane, draft.keyframe_id, update) {
+            Ok(_) => state.status = "Updated keyframe".to_string(),
+            Err(error) => state.error = Some(error.to_string()),
+        }
+    } else if open && !cancel {
+        state.curve_editor.keyframe_editor = Some(draft);
     }
 }
 
@@ -583,6 +784,7 @@ fn paint_playhead(
     state: &AuthoringUiState,
     owner: &AutomationOwner,
     transform: CurveTransform,
+    ruler_rect: Rect,
 ) {
     let Some(timeline) = project.timelines.get(&state.active_timeline_id) else {
         return;
@@ -614,6 +816,21 @@ fn paint_playhead(
         ],
         Stroke::new(1.0, Color32::from_rgb(255, 94, 94)),
     );
+    if ruler_rect.is_positive() {
+        let painter = ui.painter().with_clip_rect(ruler_rect);
+        painter.line_segment(
+            [
+                Pos2::new(x, ruler_rect.top()),
+                Pos2::new(x, ruler_rect.bottom()),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(255, 94, 94)),
+        );
+        painter.circle_filled(
+            Pos2::new(x, ruler_rect.bottom() - 3.0),
+            4.0,
+            Color32::from_rgb(255, 94, 94),
+        );
+    }
 }
 
 /// Returns a playhead position only while its local time is visible in the
@@ -652,6 +869,8 @@ fn sync_visibility(state: &mut AuthoringUiState, owner: &AutomationOwner, series
         state.curve_editor.target_owner = Some(owner.clone());
         state.curve_editor.canvas = CanvasState::uniform(Vec2::ZERO, 1.0);
         state.curve_editor.visible_lanes = lanes;
+        state.curve_editor.drag = None;
+        state.curve_editor.keyframe_editor = None;
     } else {
         state
             .curve_editor

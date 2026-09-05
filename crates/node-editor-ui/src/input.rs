@@ -11,6 +11,11 @@ pub(crate) struct InteractionInput {
     pub(crate) pointer: Option<Pos2>,
     pub(crate) press_position: Option<Pos2>,
     pub(crate) press_modifiers: Modifiers,
+    pub(crate) secondary_pressed: bool,
+    pub(crate) secondary_down: bool,
+    pub(crate) secondary_released: bool,
+    pub(crate) secondary_press_position: Option<Pos2>,
+    pub(crate) secondary_press_modifiers: Modifiers,
     pub(crate) a_down: bool,
     pub(crate) a_down_at_press: bool,
     pub(crate) space_down: bool,
@@ -36,6 +41,15 @@ pub(crate) fn interaction_input(ui: &egui::Ui) -> InteractionInput {
                     } => Some((index, *pos, *modifiers)),
                     _ => None,
                 });
+        let secondary_press = input.events.iter().find_map(|event| match event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers,
+            } => Some((*pos, *modifiers)),
+            _ => None,
+        });
         InteractionInput {
             pressed: input.pointer.primary_pressed(),
             down: input.pointer.primary_down(),
@@ -46,6 +60,16 @@ pub(crate) fn interaction_input(ui: &egui::Ui) -> InteractionInput {
                 .map(|(_, position, _)| position)
                 .or_else(|| input.pointer.interact_pos()),
             press_modifiers: primary_press.map_or(input.modifiers, |(_, _, modifiers)| modifiers),
+            secondary_pressed: input.pointer.button_pressed(egui::PointerButton::Secondary),
+            secondary_down: input.pointer.button_down(egui::PointerButton::Secondary),
+            secondary_released: input
+                .pointer
+                .button_released(egui::PointerButton::Secondary),
+            secondary_press_position: secondary_press
+                .map(|(position, _)| position)
+                .or_else(|| input.pointer.interact_pos()),
+            secondary_press_modifiers: secondary_press
+                .map_or(input.modifiers, |(_, modifiers)| modifiers),
             a_down: input.key_down(egui::Key::A),
             a_down_at_press: primary_press.is_some_and(|(index, _, _)| {
                 key_down_before_event(

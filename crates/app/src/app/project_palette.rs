@@ -21,6 +21,15 @@ pub(super) fn apply_pending(
                     .map(|_| ()),
                 format!("Added {suggested_name} to Project Palette"),
             ),
+            PaletteUiIntent::AddPaint {
+                suggested_name,
+                paint,
+            } => (
+                service
+                    .add_paint_definition(suggested_name.clone(), paint)
+                    .map(|_| ()),
+                format!("Added {suggested_name} to Project Palette"),
+            ),
             PaletteUiIntent::Rename { id, name } => (
                 service
                     .rename_paint_definition(id, name.clone())

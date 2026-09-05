@@ -7,14 +7,14 @@ use crate::ItemId;
 use super::{Gesture, InteractionState};
 
 pub(super) fn paint<NodeId, PortId, WireId, GroupId, Key>(
-    ui: &egui::Ui,
+    overlay_painter: &egui::Painter,
     frame: &GraphFrame<'_, NodeId, PortId, WireId, GroupId, Key>,
     state: &InteractionState<NodeId, PortId, WireId, GroupId>,
 ) where
     PortId: Eq,
     WireId: Eq,
 {
-    let painter = ui.painter().with_clip_rect(frame.viewport);
+    let painter = overlay_painter.with_clip_rect(frame.viewport);
     paint_reconnect_handles(&painter, frame);
     match state.gesture.as_ref() {
         Some(Gesture::Marquee { start, current, .. }) => {
@@ -67,6 +67,30 @@ pub(super) fn paint<NodeId, PortId, WireId, GroupId, Key>(
                     egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 196, 72)),
                 ));
             }
+        }
+        Some(Gesture::WireSecondary { wire, .. }) => {
+            if let Some(wire) = frame.wires.iter().find(|candidate| candidate.id == *wire) {
+                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                    wire.curve.transformed(frame.transform).points(),
+                    false,
+                    egui::Color32::TRANSPARENT,
+                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 98, 98)),
+                ));
+            }
+        }
+        Some(Gesture::CutWires { points, .. }) => {
+            for segment in points.windows(2) {
+                painter.line_segment(
+                    [segment[0], segment[1]],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 98, 98)),
+                );
+            }
+        }
+        Some(Gesture::LazyConnect { start, current, .. }) => {
+            painter.line_segment(
+                [*start, *current],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(110, 174, 255)),
+            );
         }
         Some(Gesture::Hold { .. })
         | Some(Gesture::Move { .. })

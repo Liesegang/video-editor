@@ -8,8 +8,9 @@ use std::collections::HashMap;
 
 use crate::error::LibraryError;
 use crate::model::authoring::{
-    AutomatableParameter, BuiltinEffectInstance, EffectContractSnapshot, OperationRef,
-    ProcessorParameterContract, TextEnsembleOperation, text_ensemble_direct_contract_is_compatible,
+    AppearanceOperation, AutomatableParameter, BuiltinEffectInstance, EffectContractSnapshot,
+    OperationRef, ProcessorParameterContract, TextEnsembleOperation,
+    appearance_direct_contract_is_compatible, text_ensemble_direct_contract_is_compatible,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::{GeneratorContent, MediaContent, NativeNodeFactory, Node};
@@ -35,6 +36,38 @@ impl TextEnsembleOperationFactory {
         kind: TextEnsembleOperationKind,
         component_id: &str,
     ) -> Result<TextEnsembleOperation, LibraryError> {
+        let (node, version) = Self::create_node_and_version(plugins, kind, component_id)?;
+        let crate::model::node::NodeContent::PluginOperation(operation) = node.content() else {
+            return Err(LibraryError::Validation(
+                "Text Ensemble factory did not create a plugin operation".to_string(),
+            ));
+        };
+        Ok(TextEnsembleOperation {
+            id: node.id,
+            operation: OperationRef {
+                category: operation.category.clone(),
+                component_id: operation.component_id.clone(),
+                operation: operation.operation.clone(),
+                version: format!("{}.{}.{}", version.0, version.1, version.2),
+            },
+            declared_ports: operation.declared_ports.clone(),
+            properties: node.properties().clone(),
+        })
+    }
+
+    pub(crate) fn create_node(
+        plugins: &PluginManager,
+        kind: TextEnsembleOperationKind,
+        component_id: &str,
+    ) -> Result<Node, LibraryError> {
+        Self::create_node_and_version(plugins, kind, component_id).map(|(node, _)| node)
+    }
+
+    fn create_node_and_version(
+        plugins: &PluginManager,
+        kind: TextEnsembleOperationKind,
+        component_id: &str,
+    ) -> Result<(Node, (u32, u32, u32)), LibraryError> {
         let (category, version) = match kind {
             TextEnsembleOperationKind::Effector => {
                 let plugin = plugins.get_effector_plugin(component_id).ok_or_else(|| {
@@ -63,7 +96,35 @@ impl TextEnsembleOperationFactory {
                 operation.category, operation.component_id, operation.operation
             )));
         }
-        Ok(TextEnsembleOperation {
+        Ok((node, version))
+    }
+}
+
+/// Builds one direct-source appearance entry through the same descriptor and
+/// Node factory used by the production Node Editor.
+pub struct AppearanceOperationFactory;
+
+impl AppearanceOperationFactory {
+    pub fn create(
+        plugins: &PluginManager,
+        component_id: &str,
+    ) -> Result<AppearanceOperation, LibraryError> {
+        let plugin = plugins.get_style_plugin(component_id).ok_or_else(|| {
+            LibraryError::Plugin(format!("Style plugin '{component_id}' is unavailable"))
+        })?;
+        let version = plugin.version();
+        let node = plugins.create_style_operation_node(component_id)?;
+        let crate::model::node::NodeContent::PluginOperation(operation) = node.content() else {
+            return Err(LibraryError::Validation(
+                "Appearance factory did not create a plugin operation".to_string(),
+            ));
+        };
+        if !appearance_direct_contract_is_compatible(&operation.declared_ports) {
+            return Err(LibraryError::Validation(format!(
+                "Style '{component_id}' requires Node Editor media inputs and cannot run inline"
+            )));
+        }
+        Ok(AppearanceOperation {
             id: node.id,
             operation: OperationRef {
                 category: operation.category.clone(),
@@ -110,6 +171,55 @@ pub enum ModuleNodeRequest {
 pub struct AuthoringNodeFactory;
 
 impl AuthoringNodeFactory {
+    /// Builds the Media Node represented by one imported Asset. Asset kind,
+    /// stream identity, source path, and media dimensions are resolved here
+    /// so editor surfaces never reconstruct persisted media semantics.
+    pub fn create_asset_media(
+        plugins: &PluginManager,
+        asset: &crate::model::asset::Asset,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<Node, LibraryError> {
+        use super::project_service::MediaNodeRequest;
+        use crate::model::asset::AssetKind;
+
+        let request = match asset.kind {
+            AssetKind::Audio => MediaNodeRequest::Audio {
+                asset_id: asset.id,
+                file_path: asset.path.clone(),
+                audio_stream_index: asset.stream_index,
+            },
+            AssetKind::Video => MediaNodeRequest::Video {
+                asset_id: asset.id,
+                file_path: asset.path.clone(),
+                stream_index: asset.stream_index,
+                // Imports expose each media stream as its own Asset. A Video
+                // Asset therefore must not guess a sibling audio stream.
+                audio_stream_index: None,
+                outputs: crate::model::MediaOutputSelection::Image,
+            },
+            AssetKind::Image => MediaNodeRequest::Image {
+                asset_id: asset.id,
+                file_path: asset.path.clone(),
+            },
+            AssetKind::Model3D | AssetKind::Other => {
+                return Err(LibraryError::Validation(format!(
+                    "Asset kind {:?} cannot be used as a 2D Media Node",
+                    asset.kind
+                )));
+            }
+        };
+        Self::create_media(
+            plugins,
+            &asset.name,
+            request,
+            canvas_width,
+            canvas_height,
+            asset.width.map(u64::from).unwrap_or(canvas_width),
+            asset.height.map(u64::from).unwrap_or(canvas_height),
+        )
+    }
+
     /// Builds the authoritative detached Media Node used by both authoring
     /// models. Source identity and converter defaults are materialized in one
     /// step, so callers cannot construct a half-initialized Media Node.
@@ -132,11 +242,13 @@ impl AuthoringNodeFactory {
             } => (
                 "audio",
                 false,
-                MediaContent {
+                MediaContent::new(
                     asset_id,
-                    stream_index: None,
+                    crate::model::MediaOutputSelection::Audio,
+                    None,
                     audio_stream_index,
-                },
+                )
+                .map_err(LibraryError::Validation)?,
                 file_path,
             ),
             MediaNodeRequest::Video {
@@ -144,14 +256,12 @@ impl AuthoringNodeFactory {
                 file_path,
                 stream_index,
                 audio_stream_index,
+                outputs,
             } => (
                 "video",
                 true,
-                MediaContent {
-                    asset_id,
-                    stream_index,
-                    audio_stream_index,
-                },
+                MediaContent::new(asset_id, outputs, stream_index, audio_stream_index)
+                    .map_err(LibraryError::Validation)?,
                 file_path,
             ),
             MediaNodeRequest::Image {
@@ -160,11 +270,13 @@ impl AuthoringNodeFactory {
             } => (
                 "image",
                 true,
-                MediaContent {
+                MediaContent::new(
                     asset_id,
-                    stream_index: None,
-                    audio_stream_index: None,
-                },
+                    crate::model::MediaOutputSelection::Image,
+                    None,
+                    None,
+                )
+                .map_err(LibraryError::Validation)?,
                 file_path,
             ),
         };

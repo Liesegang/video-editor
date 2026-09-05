@@ -1,7 +1,8 @@
 //! Typed Particle node contracts.
 //!
-//! Only the bounded Emitter -> Initialize -> Gravity -> Drag -> Sprite slice
-//! has a native runtime. Every other descriptor remains explicitly disabled.
+//! Only the bounded Emitter -> Emitter Shape -> Birth Attributes -> Gravity
+//! -> Drag -> Sprite slice has a native runtime. Every other descriptor
+//! remains explicitly disabled.
 
 use ordered_float::OrderedFloat;
 
@@ -22,6 +23,7 @@ pub(crate) const PARTICLE_SPRITE_RENDERER_CATALOG_ID: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParticleNodeRole {
     Emitter,
+    ShapeLocation,
     Initialize,
     Gravity,
     Drag,
@@ -32,6 +34,7 @@ impl ParticleNodeRole {
     pub(crate) const fn catalog_id(self) -> &'static str {
         match self {
             Self::Emitter => "native.particle.emitter",
+            Self::ShapeLocation => "native.particle.shape-location",
             Self::Initialize => "native.particle.initialize",
             Self::Gravity => "native.particle.gravity-force",
             Self::Drag => "native.particle.drag-force",
@@ -42,16 +45,18 @@ impl ParticleNodeRole {
     pub(crate) const fn execution_rank(self) -> u8 {
         match self {
             Self::Emitter => 0,
-            Self::Initialize => 1,
-            Self::Gravity => 2,
-            Self::Drag => 3,
-            Self::SpriteRenderer => 4,
+            Self::ShapeLocation => 1,
+            Self::Initialize => 2,
+            Self::Gravity => 3,
+            Self::Drag => 4,
+            Self::SpriteRenderer => 5,
         }
     }
 
     pub(crate) fn from_catalog_id(catalog_id: &str) -> Option<Self> {
         [
             Self::Emitter,
+            Self::ShapeLocation,
             Self::Initialize,
             Self::Gravity,
             Self::Drag,
@@ -87,7 +92,8 @@ const SPAWN_BURST_INPUTS: &[PortSpec] = &[
 ];
 const SHAPE_LOCATION_INPUTS: &[PortSpec] = &[
     PARTICLE,
-    PortSpec::single("shape", "Shape", PortDataType::Enum),
+    PortSpec::single("shape", "Shape", PortDataType::String),
+    PortSpec::single("position", "Position", PortDataType::Vec3),
     PortSpec::single("radius", "Radius", PortDataType::Number),
     PortSpec::single("size", "Size", PortDataType::Vec3),
     PortSpec::single("surface_only", "Surface Only", PortDataType::Boolean),
@@ -164,6 +170,8 @@ const PARTICLE_FIXED_STEP_REASON: &str = "deterministic Particle simulation need
 const EMITTER_CONSTANT_ONLY_INPUTS: &[&str] = &["capacity", "rate", "lifetime", "seed"];
 const INITIALIZE_CONSTANT_ONLY_INPUTS: &[&str] =
     &["velocity_min", "velocity_max", "size_min", "size_max"];
+const SHAPE_LOCATION_CONSTANT_ONLY_INPUTS: &[&str] =
+    &["shape", "position", "radius", "size", "surface_only"];
 const GRAVITY_CONSTANT_ONLY_INPUTS: &[&str] = &["force"];
 const DRAG_CONSTANT_ONLY_INPUTS: &[&str] = &["coefficient"];
 const MESH_RENDERER_INPUTS: &[PortSpec] = &[
@@ -200,17 +208,27 @@ const SPECS: &[DescriptorSpec] = &[
         SPAWN_BURST_INPUTS,
         PARTICLE_OUTPUT,
     ),
-    DescriptorSpec::placeholder(
-        "native.particle.shape-location",
-        "Shape Location",
-        "Particles",
+    DescriptorSpec::implemented_native(
+        DescriptorIdentity::new(
+            ParticleNodeRole::ShapeLocation.catalog_id(),
+            "Emitter Shape",
+            "Particles",
+            "node_editor.menu.create.particle_shape_location",
+            &["particle", "emitter", "spawn", "point", "box", "sphere"],
+        ),
         SHAPE_LOCATION_INPUTS,
         PARTICLE_OUTPUT,
+        shape_location_properties,
+    )
+    .validate_property_set(validate_shape_location_property_set)
+    .constant_only_inputs(
+        SHAPE_LOCATION_CONSTANT_ONLY_INPUTS,
+        PARTICLE_FIXED_STEP_REASON,
     ),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
             ParticleNodeRole::Initialize.catalog_id(),
-            "Initialize Particle",
+            "Birth Attributes",
             "Particles",
             "node_editor.menu.create.particle_initialize",
             &["particle", "initialize", "velocity", "size"],
@@ -389,11 +407,57 @@ fn initialize_properties() -> Vec<PropertyDefinition> {
     ]
 }
 
+fn shape_location_properties() -> Vec<PropertyDefinition> {
+    vec![
+        PropertyDefinition::new(
+            "shape",
+            PropertyUiType::Dropdown {
+                options: vec!["Point".to_string(), "Box".to_string(), "Sphere".to_string()],
+            },
+            "Shape",
+            PropertyValue::String("Point".to_string()),
+        ),
+        vec3_property("position", "Position", [0.0, 0.0, 0.0], " px"),
+        number_property("radius", "Radius", 0.0, 1_000_000.0, 100.0, " px"),
+        vec3_property("size", "Size", [200.0, 200.0, 200.0], " px"),
+        PropertyDefinition::new(
+            "surface_only",
+            PropertyUiType::Bool,
+            "Surface Only",
+            PropertyValue::Boolean(false),
+        ),
+    ]
+}
+
+fn validate_shape_location_property_set(properties: &PropertyMap) -> Result<(), String> {
+    let shape = match properties
+        .get("shape")
+        .and_then(|property| property.value())
+    {
+        Some(PropertyValue::String(value)) => value.as_str(),
+        _ => return Err("Emitter Shape requires a string 'shape' Property".to_string()),
+    };
+    if !matches!(shape, "Point" | "Box" | "Sphere") {
+        return Err(format!("Emitter Shape has unknown shape '{shape}'"));
+    }
+    let size = match properties.get("size").and_then(|property| property.value()) {
+        Some(PropertyValue::Vec3(value)) => value,
+        _ => return Err("Emitter Shape requires a Vec3 'size' Property".to_string()),
+    };
+    if [size.x, size.y, size.z]
+        .into_iter()
+        .any(|component| component.into_inner() < 0.0)
+    {
+        return Err("Emitter Shape size components must be non-negative".to_string());
+    }
+    Ok(())
+}
+
 fn validate_initialize_property_set(properties: &PropertyMap) -> Result<(), String> {
     let number = |key: &str| match properties.get(key).and_then(|property| property.value()) {
         Some(PropertyValue::Number(value)) => Ok(value.into_inner()),
         _ => Err(format!(
-            "Initialize Particle requires a numeric '{key}' Property"
+            "Birth Attributes requires a numeric '{key}' Property"
         )),
     };
     validate_particle_size_range(number("size_min")?, number("size_max")?)

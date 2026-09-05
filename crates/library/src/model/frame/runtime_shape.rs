@@ -105,20 +105,7 @@ pub fn measure_shape_visual_bounds(
 
 fn shape_visual_outset(styles: &[StyleConfig], path_effects: &[PathEffect]) -> f32 {
     let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
-        let candidate = match &config.style {
-            DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
-            DrawStyle::Stroke { width, offset, .. } if *width > 0.0 => {
-                if *offset > 0.0 {
-                    (offset + width / 2.0) as f32
-                } else if *offset == 0.0 {
-                    (width / 2.0) as f32
-                } else {
-                    0.0
-                }
-            }
-            DrawStyle::Stroke { .. } => 0.0,
-        };
-        outset.max(candidate)
+        outset.max(config.style.visual_outset())
     });
     let effect_outset = path_effects.iter().fold(0.0_f32, |outset, effect| {
         if let PathEffect::Discrete { deviation, .. } = effect {
@@ -597,9 +584,26 @@ impl RuntimeShape {
         style: StyleConfig,
         current_time: f32,
     ) -> Result<Vec<FrameObject>, LibraryError> {
+        self.into_appearance_objects(vec![style], current_time)
+    }
+
+    /// Cross the Shape -> Image boundary once with one ordered Appearance.
+    /// All layer styles share the same composed content alpha and renderer
+    /// phase ordering; evaluating each style as an independent Image would
+    /// change shadow, glow, offset-fill, and partial-alpha semantics.
+    pub fn into_appearance_objects(
+        self,
+        styles: Vec<StyleConfig>,
+        current_time: f32,
+    ) -> Result<Vec<FrameObject>, LibraryError> {
+        if styles.is_empty() {
+            return Err(LibraryError::Validation(
+                "Appearance Stack requires at least one Style".to_string(),
+            ));
+        }
         let RuntimeShapeGeometry::Path(path) = &self.geometry else {
             return self
-                .into_styled_object(style, current_time)
+                .into_appearance_object(styles, current_time)
                 .map(|object| vec![object]);
         };
         if path.parts.is_empty()
@@ -609,7 +613,7 @@ impl RuntimeShape {
                 .all(|part| (part.opacity - 1.0).abs() <= f32::EPSILON)
         {
             return self
-                .into_styled_object(style, current_time)
+                .into_appearance_object(styles, current_time)
                 .map(|object| vec![object]);
         }
 
@@ -626,15 +630,19 @@ impl RuntimeShape {
                     path_effects: path_effects.clone(),
                     parts: vec![part.clone()],
                 });
-                shape.into_styled_object(style_with_opacity(&style, part.opacity), current_time)
+                let styles = styles
+                    .iter()
+                    .map(|style| style_with_opacity(style, part.opacity))
+                    .collect();
+                shape.into_appearance_object(styles, current_time)
             })
             .collect()
     }
 
     /// Create one renderer object after any semantic part expansion above.
-    fn into_styled_object(
+    fn into_appearance_object(
         self,
-        style: StyleConfig,
+        styles: Vec<StyleConfig>,
         current_time: f32,
     ) -> Result<FrameObject, LibraryError> {
         let source_node_id = self.source_id;
@@ -652,16 +660,10 @@ impl RuntimeShape {
         let content_bounds = match &self.geometry {
             RuntimeShapeGeometry::Text(text) => {
                 let bounds = if let Some(ensemble) = &ensemble {
-                    measure_ensemble_text_visual_bounds(
-                        text,
-                        std::slice::from_ref(&style),
-                        ensemble,
-                        current_time,
-                    )?
+                    measure_ensemble_text_visual_bounds(text, &styles, ensemble, current_time)?
                 } else {
-                    let outset = crate::core::rendering::text_layout::text_style_outset(
-                        std::slice::from_ref(&style),
-                    ) + CONSERVATIVE_RASTER_OUTSET;
+                    let outset = crate::core::rendering::text_layout::text_style_outset(&styles)
+                        + CONSERVATIVE_RASTER_OUTSET;
                     Some(text.block_bounds.expand(outset))
                 };
                 bounds.map(|bounds| {
@@ -672,7 +674,7 @@ impl RuntimeShape {
                 // `path.bounds` was measured from exact canonical Skia
                 // geometry when available. Re-parsing the SVG fallback here
                 // would silently turn weighted conics into ordinary quads.
-                let outset = shape_visual_outset(std::slice::from_ref(&style), &path.path_effects);
+                let outset = shape_visual_outset(&styles, &path.path_effects);
                 let mut bounds = Some(path.bounds.expand(outset));
                 if let Some(ensemble) = &ensemble
                     && let Some(decorator_bounds) =
@@ -693,7 +695,7 @@ impl RuntimeShape {
                 text: text.text,
                 font: text.font,
                 size: text.size,
-                styles: vec![style],
+                styles,
                 effects: self.effects,
                 ensemble,
                 transform: self.transform,
@@ -701,7 +703,7 @@ impl RuntimeShape {
             RuntimeShapeGeometry::Path(path) => FrameContent::Shape {
                 path: path.path,
                 canonical_path: path.canonical_path,
-                styles: vec![style],
+                styles,
                 path_effects: path.path_effects,
                 effects: self.effects,
                 ensemble,
@@ -721,11 +723,51 @@ impl RuntimeShape {
 fn style_with_opacity(style: &StyleConfig, opacity: f32) -> StyleConfig {
     let mut style = style.clone();
     let opacity = opacity.clamp(0.0, 1.0);
-    let color = match &mut style.style {
-        crate::model::frame::draw_type::DrawStyle::Fill { color, .. }
-        | crate::model::frame::draw_type::DrawStyle::Stroke { color, .. } => color,
-    };
-    color.a = (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8;
+    match &mut style.style {
+        DrawStyle::Fill { color, .. } | DrawStyle::Stroke { color, .. } => {
+            color.a = (f32::from(color.a) * opacity).clamp(0.0, 255.0) as u8;
+        }
+        DrawStyle::DropShadow {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::ColorOverlay {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::GradientOverlay {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::PatternOverlay {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::InnerShadow {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::OuterGlow {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::InnerGlow {
+            opacity: style_opacity,
+            ..
+        }
+        | DrawStyle::Satin {
+            opacity: style_opacity,
+            ..
+        } => *style_opacity *= f64::from(opacity),
+        DrawStyle::BevelEmboss {
+            highlight_opacity,
+            shadow_opacity,
+            ..
+        } => {
+            *highlight_opacity *= f64::from(opacity);
+            *shadow_opacity *= f64::from(opacity);
+        }
+    }
     style
 }
 

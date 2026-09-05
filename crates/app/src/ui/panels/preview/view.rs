@@ -19,20 +19,7 @@ const MIN_ZOOM: f32 = 0.0001;
 const MAX_ZOOM: f32 = 1000.0;
 const CHECKER_SIZE: f32 = 12.0;
 
-pub(super) fn toolbar(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    state: &mut AuthoringUiState,
-    text_tool_enabled: bool,
-    path_tool_enabled: bool,
-) {
-    if !text_tool_enabled && state.preview.active_tool == PreviewTool::Text {
-        state.preview.active_tool = PreviewTool::Select;
-    }
-    if !path_tool_enabled && state.preview.active_tool == PreviewTool::Path {
-        state.preview.active_tool = PreviewTool::Select;
-        state.preview.path_editor.cancel_drag();
-    }
+pub(super) fn toolbar(ui: &mut egui::Ui, rect: egui::Rect, state: &mut AuthoringUiState) {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 0.0);
@@ -44,22 +31,8 @@ pub(super) fn toolbar(
                 "select",
                 true,
             );
-            tool_button(
-                ui,
-                state,
-                PreviewTool::Text,
-                icons::TEXT_T,
-                "text",
-                text_tool_enabled,
-            );
-            tool_button(
-                ui,
-                state,
-                PreviewTool::Path,
-                icons::BEZIER_CURVE,
-                "path",
-                path_tool_enabled,
-            );
+            tool_button(ui, state, PreviewTool::Text, icons::TEXT_T, "text", true);
+            shape_tool_menu(ui, state);
             tool_button(ui, state, PreviewTool::Pan, icons::HAND, "pan", true);
             tool_button(
                 ui,
@@ -99,6 +72,53 @@ pub(super) fn toolbar(
             });
         });
     });
+}
+
+fn shape_tool_menu(ui: &mut egui::Ui, state: &mut AuthoringUiState) {
+    let active = matches!(
+        state.preview.active_tool,
+        PreviewTool::Path | PreviewTool::Pen | PreviewTool::Rectangle | PreviewTool::Ellipse
+    );
+    let icon = match state.preview.active_tool {
+        PreviewTool::Rectangle => icons::SQUARE,
+        PreviewTool::Ellipse => icons::CIRCLE,
+        PreviewTool::Pen => icons::PENCIL_SIMPLE,
+        _ => icons::BEZIER_CURVE,
+    };
+    let menu = ui.menu_button(egui::RichText::new(icon).size(18.0), |ui| {
+        for (tool, icon, label, id) in [
+            (PreviewTool::Pen, icons::PENCIL_SIMPLE, "Pen", "pen"),
+            (
+                PreviewTool::Rectangle,
+                icons::SQUARE,
+                "Rectangle",
+                "rectangle",
+            ),
+            (PreviewTool::Ellipse, icons::CIRCLE, "Ellipse", "ellipse"),
+            (
+                PreviewTool::Path,
+                icons::BEZIER_CURVE,
+                "Edit selected Path",
+                "path",
+            ),
+        ] {
+            let choice =
+                ui.selectable_label(state.preview.active_tool == tool, format!("{icon} {label}"));
+            register_button_qa(
+                &format!("preview.tool.{id}"),
+                id,
+                &choice,
+                state.preview.active_tool == tool,
+            );
+            if choice.clicked() {
+                state.preview.active_tool = tool;
+                state.preview.path_editor.cancel_drag();
+                ui.close();
+            }
+        }
+    });
+    register_button_qa("preview.tool.shape", "shape", &menu.response, active);
+    menu.response.on_hover_text("Shape and Path tools");
 }
 
 fn tool_button(

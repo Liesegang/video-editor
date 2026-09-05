@@ -1,6 +1,6 @@
 use library::model::project::{
     IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity,
-    PortSide, SHAPE_INPUT_PORT, TIME_PORT,
+    PortSide, SHAPE_INPUT_PORT, STYLE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::plugin::{
@@ -150,6 +150,7 @@ fn bundled_fill_descriptor_keeps_its_persisted_port_contract() {
             PortDefinition::input(&property_port_key("offset"), "Offset", PortDataType::Number,),
             PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
             output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
+            output(STYLE_OUTPUT_PORT, "Style", PortDataType::Style),
         ]
     );
 }

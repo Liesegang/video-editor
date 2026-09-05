@@ -304,6 +304,28 @@ impl TimelineEditorService {
         plan_timeline_edit(session.project(), session.revision(), &index, request)
     }
 
+    pub(super) fn plan_current_group_move(
+        &self,
+        item_ids: &[TimelineItemId],
+        primary_item_id: TimelineItemId,
+        track_id: TimelineTrackId,
+        start: MediaTime,
+        layer: i64,
+    ) -> Result<EditPlan, TimelineEditError> {
+        let session = self
+            .read_session()
+            .map_err(|error| TimelineEditError::SessionUnavailable(error.to_string()))?;
+        let request = TimelineEditRequest::move_item(
+            session.revision(),
+            primary_item_id,
+            track_id,
+            start,
+            layer,
+        );
+        let index = self.planning_index_for(session.project(), session.revision())?;
+        plan_group_move(session.project(), &index, request, item_ids)
+    }
+
     fn planning_index_for(
         &self,
         project: &AuthoringProject,
@@ -337,6 +359,132 @@ impl TimelineEditorService {
         *cached = Some(Arc::clone(&built));
         Ok(built)
     }
+}
+
+fn plan_group_move(
+    project: &AuthoringProject,
+    index: &TimelineEditPlanningIndex,
+    request: TimelineEditRequest,
+    item_ids: &[TimelineItemId],
+) -> Result<EditPlan, TimelineEditError> {
+    let TimelineEditOperation::MoveItem {
+        item_id: primary_item_id,
+        track_id: target_track_id,
+        start: target_start,
+        layer: target_layer,
+    } = request.operation
+    else {
+        return Err(TimelineEditError::InvalidRequest(
+            "A grouped Timeline move requires a move request".to_string(),
+        ));
+    };
+    let selected = item_ids.iter().copied().collect::<BTreeSet<_>>();
+    if selected.is_empty() || !selected.contains(&primary_item_id) {
+        return Err(TimelineEditError::InvalidRequest(
+            "A grouped Timeline move requires its primary item in the selection".to_string(),
+        ));
+    }
+    if selected.len() != item_ids.len() {
+        return Err(TimelineEditError::InvalidRequest(
+            "A grouped Timeline move cannot contain duplicate items".to_string(),
+        ));
+    }
+
+    let target_timeline_id = timeline_id_for_track(project, target_track_id)?;
+    let primary = project
+        .items
+        .get(&primary_item_id)
+        .ok_or(TimelineEditError::MissingItem(primary_item_id))?;
+    let time_delta = target_start
+        .checked_sub(primary.interval.start)
+        .map_err(TimelineEditError::InvalidRequest)?;
+    let mut affected_tracks = BTreeSet::from([target_track_id]);
+    for item_id in &selected {
+        let item = project
+            .items
+            .get(item_id)
+            .ok_or(TimelineEditError::MissingItem(*item_id))?;
+        let timeline_id = timeline_id_for_track(project, item.track_id)?;
+        if timeline_id != target_timeline_id {
+            return Err(TimelineEditError::InvalidRequest(
+                "Grouped Timeline items must remain in one Timeline".to_string(),
+            ));
+        }
+        affected_tracks.insert(item.track_id);
+    }
+
+    let expected_tracks = affected_tracks
+        .iter()
+        .map(|track_id| Ok((*track_id, timeline_id_for_track(project, *track_id)?)))
+        .collect::<Result<BTreeMap<_, _>, TimelineEditError>>()?;
+    let relevant_items = affected_tracks
+        .iter()
+        .flat_map(|track_id| index.track_items(*track_id).iter().copied())
+        .collect::<BTreeSet<_>>();
+    let expected_items = item_states(project, relevant_items)?;
+    let mut desired_items = expected_items.clone();
+    for item_id in &selected {
+        let state = desired_items
+            .get_mut(item_id)
+            .ok_or(TimelineEditError::MissingItem(*item_id))?;
+        state.track_id = target_track_id;
+        state.interval.start = state
+            .interval
+            .start
+            .checked_add(time_delta)
+            .map_err(TimelineEditError::InvalidRequest)?;
+        if state.interval.start.is_negative() {
+            return Err(TimelineEditError::InvalidRequest(
+                "A grouped Timeline move cannot place an item before zero".to_string(),
+            ));
+        }
+    }
+
+    let preserves_existing_layers = selected
+        .iter()
+        .all(|item_id| project.items[item_id].track_id == target_track_id)
+        && target_layer == primary.layer;
+    if !preserves_existing_layers {
+        let mut group = selected.iter().copied().collect::<Vec<_>>();
+        group.sort_by_key(|item_id| {
+            let item = &project.items[item_id];
+            (item.layer, *item_id)
+        });
+        let primary_group_index = group
+            .iter()
+            .position(|item_id| *item_id == primary_item_id)
+            .ok_or(TimelineEditError::MissingItem(primary_item_id))?;
+        let mut target_order = index
+            .track_items(target_track_id)
+            .iter()
+            .copied()
+            .filter(|item_id| !selected.contains(item_id))
+            .collect::<Vec<_>>();
+        let requested_primary_index = usize::try_from(target_layer.max(0)).unwrap_or(usize::MAX);
+        let insertion_index = requested_primary_index
+            .saturating_sub(primary_group_index)
+            .min(target_order.len());
+        target_order.splice(insertion_index..insertion_index, group);
+        assign_layers(&mut desired_items, target_order)?;
+        for source_track_id in affected_tracks {
+            if source_track_id == target_track_id {
+                continue;
+            }
+            assign_layers(
+                &mut desired_items,
+                index
+                    .track_items(source_track_id)
+                    .iter()
+                    .copied()
+                    .filter(|item_id| !selected.contains(item_id))
+                    .collect(),
+            )?;
+        }
+    }
+
+    let mut plan = finish_plan(request, expected_items, expected_tracks, desired_items);
+    plan.validation_scope = validate_projected_state(project, index, &plan)?;
+    Ok(plan)
 }
 
 fn plan_move(

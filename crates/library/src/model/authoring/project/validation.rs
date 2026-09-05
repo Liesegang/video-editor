@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 use crate::model::property::{PropertyMap, PropertyValue};
 
 use super::super::{
-    AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter, AutomationTrack,
-    BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaTime,
+    AppearanceOperation, AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter,
+    AutomationTrack, BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaTime,
     ProcessorParameterContract, PublishedParameter, TextEnsembleOperation, TimelineInterval,
-    TimelineItemId, Transition, TransitionMediaType, authored_parameter_value_is_compatible,
-    property_value_type, text_ensemble_direct_contract_is_compatible,
+    TimelineItemId, Transition, TransitionMediaType, appearance_direct_contract_is_compatible,
+    authored_parameter_value_is_compatible, property_value_type,
+    text_ensemble_direct_contract_is_compatible,
 };
 use super::item_placement::{ItemPlacementOverlay, TimelineItemOrderIndex};
 use super::transition_module::validate_transition_processor;
@@ -89,6 +90,63 @@ pub(super) fn validate_text_ensemble_operations(
         )?;
     }
     Ok(())
+}
+
+pub(super) fn validate_appearance_operations(
+    operations: &[AppearanceOperation],
+    item_id: TimelineItemId,
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    for operation in operations {
+        if operation.id.is_nil() || !ids.insert(operation.id) {
+            return Err(format!(
+                "Timeline item {item_id} repeats or omits an Appearance operation ID"
+            ));
+        }
+        if operation.operation.category != crate::plugin::STYLE_CATEGORY
+            || operation.operation.operation != crate::plugin::STYLE_APPLY_OPERATION
+            || operation.operation.component_id.trim().is_empty()
+            || operation.operation.version.trim().is_empty()
+        {
+            return Err(format!(
+                "Appearance operation {} has an incomplete or unsupported identity",
+                operation.id
+            ));
+        }
+        if !appearance_direct_contract_is_compatible(&operation.declared_ports) {
+            return Err(format!(
+                "Appearance operation {} requires unsupported media inputs",
+                operation.id
+            ));
+        }
+        validate_operation_property_snapshot(
+            &operation.declared_ports,
+            &operation.properties,
+            &format!("Appearance operation {}", operation.id),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_operation_property_snapshot(
+    ports: &[crate::model::project::PortDefinition],
+    properties: &PropertyMap,
+    owner: &str,
+) -> Result<(), String> {
+    let declared = ports
+        .iter()
+        .filter_map(|port| port.key.strip_prefix(crate::plugin::PROPERTY_PORT_PREFIX))
+        .collect::<HashSet<_>>();
+    let authored = properties
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<HashSet<_>>();
+    if declared != authored {
+        return Err(format!(
+            "{owner} properties do not match its declared ports"
+        ));
+    }
+    validate_authored_properties(properties, owner)
 }
 
 pub(super) fn validate_composition_parameter_value(

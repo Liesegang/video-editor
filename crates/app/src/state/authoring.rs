@@ -137,6 +137,21 @@ pub struct TimelineItemGesture {
     pub projected_interval: TimelineInterval,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TimelineSelectionGesture {
+    pub start: egui::Pos2,
+    pub modifiers: egui::Modifiers,
+}
+
+/// A header drag projects Track order without mutating the Project until release.
+#[derive(Clone, Debug)]
+pub struct TimelineTrackGesture {
+    pub timeline_id: TimelineId,
+    pub track_id: TimelineTrackId,
+    pub original_order: Vec<TimelineTrackId>,
+    pub projected_index: usize,
+}
+
 impl TimelineItemGesture {
     pub fn changed(&self) -> bool {
         self.projected_track_id != self.original_track_id
@@ -152,6 +167,7 @@ pub enum AuthoringLibraryDrag {
     ModuleDefinition(ModuleDefinitionId),
     NewNodeClip,
     NewParticleNodeClip,
+    NewShaderNodeClip,
 }
 
 #[derive(Clone, Debug)]
@@ -192,8 +208,9 @@ pub struct AuthoringTimelineView {
     /// rows. This is presentation state and never changes Project ownership.
     pub expanded_items: HashSet<TimelineItemId>,
     pub item_gesture: Option<TimelineItemGesture>,
+    pub track_gesture: Option<TimelineTrackGesture>,
     pub keyframe_gesture: Option<TimelineKeyframeGesture>,
-    pub library_drag: Option<AuthoringLibraryDrag>,
+    pub selection_gesture: Option<TimelineSelectionGesture>,
     /// Pending reusable Transition assignment. Bindings remain transient until
     /// Apply submits the complete form as one Project transaction.
     pub transition_module_assignment: Option<TransitionModuleAssignmentDraft>,
@@ -214,8 +231,9 @@ impl Default for AuthoringTimelineView {
             item_display_modes: HashMap::new(),
             expanded_items: HashSet::new(),
             item_gesture: None,
+            track_gesture: None,
             keyframe_gesture: None,
-            library_drag: None,
+            selection_gesture: None,
             transition_module_assignment: None,
             playback_anchor: None,
         }
@@ -310,6 +328,9 @@ pub enum PreviewTool {
     Select,
     Text,
     Path,
+    Pen,
+    Rectangle,
+    Ellipse,
     Pan,
     Zoom,
 }
@@ -445,6 +466,17 @@ pub struct CurveEditorState {
     pub canvas: pan_zoom_ui::CanvasState,
     pub visible_lanes: HashSet<AutomationLaneId>,
     pub drag: Option<CurveKeyDrag>,
+    pub keyframe_editor: Option<CurveKeyframeEditor>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CurveKeyframeEditor {
+    pub lane: AutomationLaneId,
+    pub component: CurveValueComponent,
+    pub keyframe_id: library::model::property::KeyframeId,
+    pub time: MediaTime,
+    pub value: library::model::property::PropertyValue,
+    pub easing: library::animation::EasingFunction,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -457,7 +489,6 @@ pub struct AuthoringInspectorView {
     /// Unlike a project revision, seeking changes this value every frame.
     pub synced_frame: Option<i64>,
     pub name: String,
-    pub text: String,
     pub start_seconds: f64,
     pub duration_seconds: f64,
     pub property_values: std::collections::HashMap<String, library::model::property::PropertyValue>,
@@ -521,6 +552,7 @@ impl Default for CurveEditorState {
             canvas: pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0),
             visible_lanes: HashSet::new(),
             drag: None,
+            keyframe_editor: None,
         }
     }
 }
@@ -537,6 +569,9 @@ pub struct AuthoringUiState {
     pub curve_editor: CurveEditorState,
     pub inspector: AuthoringInspectorView,
     pub node_editor: NodeEditorState,
+    /// One library gesture shared by every editor surface that accepts
+    /// library sources. Destinations decide which payload kinds they support.
+    pub library_drag: Option<AuthoringLibraryDrag>,
     pub error: Option<String>,
     pub status: String,
 }
@@ -553,6 +588,7 @@ impl AuthoringUiState {
             curve_editor: CurveEditorState::default(),
             inspector: AuthoringInspectorView::default(),
             node_editor: NodeEditorState::default(),
+            library_drag: None,
             error: None,
             status: "Ready".to_string(),
         }

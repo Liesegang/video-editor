@@ -254,12 +254,13 @@ fn validate_publish_target(
             if property_key.trim().is_empty() {
                 return Err("Composition Property key must not be empty".to_string());
             }
-            if let Some(authored) = item
+            let authored = item
                 .authored_properties
                 .get(property_key)
-                .and_then(|property| property.value())
-                && !property_value_type(default_value).accepts(property_value_type(authored))
-            {
+                .and_then(|property| property.value());
+            if authored.is_some_and(|authored| {
+                !property_value_type(default_value).accepts(property_value_type(authored))
+            }) {
                 return Err(
                     "Composition parameter default does not match its authored Property"
                         .to_string(),

@@ -3,6 +3,7 @@
 //! Typing is rendered from a transient Project snapshot. Only acceptance
 //! calls the editor service, keeping a whole typing session atomic for Undo.
 
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -11,11 +12,13 @@ use library::model::authoring::{
     AuthoringProject, MediaTime, ProjectRevision, SourceRef, TimelineItem, TimelineItemId,
 };
 use library::model::frame::frame::FrameInfo;
+use library::plugin::PluginManager;
 use pan_zoom_ui::CanvasTransform;
 
 use crate::state::authoring::{AuthoringSelection, AuthoringUiState, PreviewTool};
+use crate::ui::clip_creation::{create_basic_clip, BasicClipKind, BasicClipPlacement};
 
-use super::gizmo_geometry::item_gizmo_geometry;
+use super::gizmo_geometry::{hit_test_item, item_gizmo_geometry};
 
 pub(super) fn selected_text<'a>(
     project: &'a AuthoringProject,
@@ -35,11 +38,89 @@ pub(super) fn selected_text<'a>(
     Some((item_id, text))
 }
 
-pub(super) fn selected_text_is_editable(
+/// Route the Text tool through the rendered canvas: edit the top-most Text at
+/// the click or create one at the click when no Text occupies that point.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Text hit/edit/create is one atomic Preview interaction requiring rendered geometry, canonical viewport state, plugin registry, and authoring transaction"
+)]
+pub(super) fn handle_tool_click(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    content_rect: egui::Rect,
+    canvas: CanvasTransform,
+    frame: Option<&FrameInfo>,
+    revision: ProjectRevision,
     project: &AuthoringProject,
-    state: &AuthoringUiState,
+    state: &mut AuthoringUiState,
+    service: &TimelineEditorService,
+    plugins: &PluginManager,
 ) -> bool {
-    selected_text(project, state).is_some()
+    if state.preview.active_tool != PreviewTool::Text
+        || state.preview.text_editor.editing
+        || !response.clicked_by(egui::PointerButton::Primary)
+        || egui::Popup::is_any_open(ui.ctx())
+    {
+        return false;
+    }
+    let Some(pointer) = response.interact_pointer_pos() else {
+        return false;
+    };
+    if !content_rect.contains(pointer) {
+        return false;
+    }
+    let Some(world) = canvas.screen_to_world(pointer) else {
+        return false;
+    };
+    let selectable = project
+        .items
+        .values()
+        .filter(|item| {
+            matches!(item.source, SourceRef::Text { .. })
+                && project
+                    .tracks
+                    .get(&item.track_id)
+                    .is_some_and(|track| track.timeline_id == state.active_timeline_id)
+                && item_is_at_playhead(project, state, item)
+        })
+        .map(|item| item.id)
+        .collect::<HashSet<_>>();
+    if let Some(item_id) = frame.and_then(|frame| hit_test_item(frame, &selectable, world)) {
+        state.selection.replace(AuthoringSelection::Item(item_id));
+        if let Some(SourceRef::Text { text, .. }) =
+            project.items.get(&item_id).map(|item| &item.source)
+        {
+            state.preview.text_editor.begin(item_id, revision, text);
+        }
+        return false;
+    }
+    match create_basic_clip(
+        project,
+        state.active_timeline_id,
+        state,
+        service,
+        plugins,
+        BasicClipKind::Text,
+        BasicClipPlacement {
+            position: Some([f64::from(world.x), f64::from(world.y)]),
+            ..Default::default()
+        },
+    ) {
+        Ok(item_id) => {
+            state.selection.replace(AuthoringSelection::Item(item_id));
+            if let Ok(revision) = service.revision() {
+                state.preview.text_editor.begin(item_id, revision, "Text");
+            }
+            state.inspector.invalidate();
+            state.status = "Created Text clip".to_string();
+            state.error = None;
+            true
+        }
+        Err(error) => {
+            state.error = Some(error);
+            false
+        }
+    }
 }
 
 /// Substitute only the transient Text buffer into the render snapshot.
@@ -109,8 +190,8 @@ pub(super) fn text_editor_overlay(
         return;
     }
 
-    let Some((item_id, authored_text)) = selected_text(project, state) else {
-        cancel(state, "Select a visible Text clip to edit it in Preview");
+    let Some((item_id, _)) = selected_text(project, state) else {
+        state.preview.text_editor.finish();
         return;
     };
     if state.preview.text_editor.editing
@@ -124,10 +205,7 @@ pub(super) fn text_editor_overlay(
         return;
     }
     if !state.preview.text_editor.editing {
-        state
-            .preview
-            .text_editor
-            .begin(item_id, revision, authored_text);
+        return;
     }
 
     let Some(rect) = frame

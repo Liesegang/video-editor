@@ -1,14 +1,17 @@
 pub mod authoring_tab_viewer;
 pub(crate) mod automation_lanes;
+pub(crate) mod clip_creation;
 pub mod command_palette;
 pub mod dialogs;
 pub mod easing_menus;
 pub(crate) mod media_preview;
 pub(crate) mod module_media_input;
+pub(crate) mod panel_layout;
 pub mod panels;
 pub(crate) mod property_metadata;
 pub mod selection;
 pub mod theme;
+pub(crate) mod time_ruler;
 pub mod viewport;
 pub(crate) mod waveform;
 pub mod widgets;

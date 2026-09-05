@@ -203,10 +203,11 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
     }
 }
 
-fn pin_color(data_type: PortDataType) -> Color32 {
+pub(in crate::ui::panels::node_editor) fn pin_color(data_type: PortDataType) -> Color32 {
     match data_type {
         PortDataType::Image => Color32::from_rgb(238, 207, 109),
         PortDataType::Shape => Color32::from_rgb(142, 132, 246),
+        PortDataType::Style => Color32::from_rgb(224, 146, 214),
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
         PortDataType::Spectrum => Color32::from_rgb(88, 207, 220),
         PortDataType::String => Color32::from_rgb(100, 220, 220),
@@ -221,7 +222,9 @@ fn pin_color(data_type: PortDataType) -> Color32 {
         PortDataType::Boolean => Color32::from_rgb(220, 160, 100),
         PortDataType::Enum => Color32::from_rgb(225, 154, 91),
         PortDataType::Asset | PortDataType::Material => Color32::from_rgb(105, 145, 180),
-        PortDataType::Gradient | PortDataType::Curve => Color32::from_rgb(205, 120, 205),
+        PortDataType::Gradient | PortDataType::Pattern | PortDataType::Curve => {
+            Color32::from_rgb(205, 120, 205)
+        }
         PortDataType::ParticleSystem => Color32::from_rgb(105, 205, 145),
         PortDataType::Geometry3D
         | PortDataType::Object3D

@@ -1,9 +1,10 @@
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use egui_phosphor::regular as icons;
 use library::model::asset::AssetKind;
 use library::model::authoring::{AuthoringProject, MediaTime, SourceRef, Timeline, TimelineItem};
 
 use crate::state::authoring::AuthoringUiState;
+use crate::ui::time_ruler::{TimeRuler, TimeRulerTick};
 
 use super::geometry::{
     format_time, frame_for_seconds, major_tick_seconds, TimelineRowMetrics, RULER_HEIGHT,
@@ -82,23 +83,6 @@ pub(super) fn draw_ruler(
         Pos2::new(content_rect.min.x, canvas_rect.min.y),
         Pos2::new(content_rect.max.x, content_rect.min.y),
     );
-    let response = ui.interact(
-        ruler_rect,
-        ui.id().with("authoring_timeline_ruler"),
-        Sense::click_and_drag(),
-    );
-    crate::qa::register_component("timeline.ruler", "timeline_ruler", ruler_rect);
-    if response.clicked() || response.dragged() {
-        if let Some(pointer) = response.interact_pointer_pos() {
-            let seconds = screen_x_to_seconds(pointer.x, content_rect, &state.timeline);
-            state
-                .timeline
-                .seek_frame(frame_for_seconds(seconds, timeline.fps));
-        }
-    }
-
-    let painter = ui.painter_at(ruler_rect);
-    painter.rect_filled(ruler_rect, 0.0, ui.visuals().panel_fill);
     let seconds_per_major = major_tick_seconds(state.timeline.pixels_per_second);
     let first =
         (state.timeline.horizontal_scroll / state.timeline.pixels_per_second / seconds_per_major)
@@ -107,41 +91,31 @@ pub(super) fn draw_ruler(
     let count = (ruler_rect.width() / (seconds_per_major * state.timeline.pixels_per_second)).ceil()
         as i64
         + 3;
-    for index in first..(first + count) {
-        if index < 0 {
-            continue;
-        }
-        let seconds = index as f32 * seconds_per_major;
-        let x = seconds_to_screen_x(seconds, content_rect, &state.timeline);
-        painter.line_segment(
-            [
-                Pos2::new(x, ruler_rect.bottom() - 9.0),
-                Pos2::new(x, ruler_rect.bottom()),
-            ],
-            Stroke::new(1.0, ui.visuals().weak_text_color()),
-        );
-        painter.text(
-            Pos2::new(x + 3.0, ruler_rect.top() + 4.0),
-            egui::Align2::LEFT_TOP,
-            format_time(seconds),
-            egui::FontId::monospace(10.0),
-            ui.visuals().weak_text_color(),
-        );
-    }
-
+    let ticks = (first..(first + count))
+        .filter(|index| *index >= 0)
+        .map(|index| {
+            let seconds = index as f32 * seconds_per_major;
+            TimeRulerTick {
+                x: seconds_to_screen_x(seconds, content_rect, &state.timeline),
+                label: format_time(seconds),
+            }
+        })
+        .collect::<Vec<_>>();
     let duration_x = seconds_to_screen_x(
         timeline.duration.to_seconds_f64() as f32,
         content_rect,
         &state.timeline,
     );
-    if ruler_rect.contains(Pos2::new(duration_x, ruler_rect.center().y)) {
-        painter.line_segment(
-            [
-                Pos2::new(duration_x, ruler_rect.top()),
-                Pos2::new(duration_x, ruler_rect.bottom()),
-            ],
-            Stroke::new(1.0, Color32::from_rgb(150, 90, 90)),
-        );
+    let response = TimeRuler::new("authoring_timeline_ruler", "timeline.ruler", &ticks)
+        .with_duration_x(Some(duration_x))
+        .show(ui, ruler_rect);
+    if response.clicked() || response.dragged() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let seconds = screen_x_to_seconds(pointer.x, content_rect, &state.timeline);
+            state
+                .timeline
+                .seek_frame(frame_for_seconds(seconds, timeline.fps));
+        }
     }
 }
 

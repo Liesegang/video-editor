@@ -19,6 +19,12 @@ pub(crate) struct PathDragGesture {
     pub changed: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ShapeCreationGesture {
+    pub start_world: [f32; 2],
+    pub current_world: [f32; 2],
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PathEditorState {
     pub target_item: Option<TimelineItemId>,
@@ -29,6 +35,8 @@ pub(crate) struct PathEditorState {
     /// Last directly selected handle, retained after release for clear paint.
     pub focused_handle: Option<(usize, HandleType)>,
     pub drag: Option<PathDragGesture>,
+    pub shape_creation: Option<ShapeCreationGesture>,
+    pub pen_points: Vec<[f32; 2]>,
 }
 
 impl PathEditorState {
@@ -70,5 +78,7 @@ impl PathEditorState {
         self.selected_handle = None;
         self.focused_handle = None;
         self.drag = None;
+        self.shape_creation = None;
+        self.pen_points.clear();
     }
 }

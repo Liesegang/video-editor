@@ -21,6 +21,7 @@ from qa_support import (
     AUTHORING_AUDIO_FIXTURE,
     AUTHORING_FIXTURE,
     AUTHORING_PATH_FIXTURE,
+    QA_APP_BINARY_ENV,
     QaClient,
     REPOSITORY_ROOT,
     capture_viewport,
@@ -78,11 +79,18 @@ FULL_SUITES = (
     SuiteSpec("preview", "qa-preview-authoring-e2e.py"),
     SuiteSpec("path-editor", "qa-path-editor-e2e.py", AUTHORING_PATH_FIXTURE),
     SuiteSpec("inspector-property-mode", "qa-inspector-property-mode-e2e.py"),
+    SuiteSpec("inspector-source", "qa-inspector-source-e2e.py"),
     SuiteSpec("color-palette", "qa-color-palette-e2e.py"),
+    SuiteSpec(
+        "appearance",
+        "qa-appearance-e2e.py",
+        project_file=True,
+        expects_exit=True,
+    ),
     SuiteSpec("inspector-effects", "qa-inspector-effects-e2e.py"),
     SuiteSpec("timeline-dopesheet", "qa-timeline-dopesheet-e2e.py"),
     SuiteSpec("curve-editor", "qa-curve-editor-e2e.py"),
-    SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
+    SuiteSpec("node-editor", "qa-node-editor-e2e.py", AUTHORING_AUDIO_FIXTURE),
     SuiteSpec("node-clip-conversion", "qa-node-clip-conversion-e2e.py"),
     SuiteSpec("audio-playback", "qa-audio-playback-e2e.py", AUTHORING_AUDIO_FIXTURE),
     SuiteSpec("text-ensemble", "qa-text-ensemble-e2e.py"),
@@ -159,6 +167,20 @@ def capture_file_matches_metadata(path: pathlib.Path, metadata) -> bool:
         and metadata.get("phase") == "ready"
         and hashlib.sha256(path.read_bytes()).hexdigest() == metadata.get("sha256")
     )
+
+
+def wait_for_suite_app_exit(
+    process: subprocess.Popen, suite_ok: bool, timeout: float
+) -> int | None:
+    # An assertion failure may precede the suite's native close request. Keep
+    # that live app available for diagnostics instead of waiting for a close
+    # the suite never requested; the runner's finally block owns cleanup.
+    if not suite_ok:
+        return process.poll()
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def build_profile(mode: str) -> str:
@@ -282,6 +304,7 @@ def run_one_suite(
             "RUVIE_QA_FIXTURE": spec.fixture,
             "RUVIE_QA_RUN_ID": run_identity,
             "RUVIE_QA_ARTIFACT_DIR": str(suite_dir.resolve()),
+            QA_APP_BINARY_ENV: str(app_binary.resolve()),
         }
     )
     if spec.name == "video-export":
@@ -339,13 +362,15 @@ def run_one_suite(
             )
             evidence = read_json(evidence_path)
             result["evidence_ok"] = evidence_matches_run(evidence, run_identity, spec.fixture)
+            suite_ok = code == 0 and not timed_out and result["evidence_ok"]
             if spec.expects_exit:
                 exit_wait_started = time.monotonic()
-                try:
-                    app_exit_code = app_process.wait(timeout=health_timeout)
-                except subprocess.TimeoutExpired:
-                    app_exit_code = None
-                capture = read_json(suite_dir / "capture.json")
+                app_exit_code = wait_for_suite_app_exit(
+                    app_process, suite_ok, health_timeout
+                )
+                capture = read_json(suite_dir / "capture.json") or (
+                    evidence.get("capture") if isinstance(evidence, dict) else None
+                )
                 result["app_exit_code"] = app_exit_code
                 result["app_exit_seconds_after_suite"] = round(
                     time.monotonic() - exit_wait_started, 3
@@ -353,9 +378,7 @@ def run_one_suite(
                 result["capture_metadata"] = capture
                 result["capture_ok"] = capture_file_matches_metadata(capture_path, capture)
                 result["ok"] = (
-                    code == 0
-                    and not timed_out
-                    and result["evidence_ok"]
+                    suite_ok
                     and app_exit_code == 0
                     and result["capture_ok"]
                 )
@@ -363,7 +386,7 @@ def run_one_suite(
                 capture = capture_viewport(client, capture_path)
                 write_json(suite_dir / "capture.json", capture)
                 result["capture_metadata"] = capture
-                result["ok"] = code == 0 and not timed_out and result["evidence_ok"]
+                result["ok"] = suite_ok
             if not result["ok"]:
                 result["error"] = "suite or current-run evidence validation failed"
                 result["diagnostics"] = collect_failure(client, suite_dir)

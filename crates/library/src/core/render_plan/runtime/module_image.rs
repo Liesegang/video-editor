@@ -433,6 +433,7 @@ impl ModuleImageRuntime<'_> {
         catalog_id: &str,
     ) -> Result<Option<FrameItem>, LibraryError> {
         match catalog_id {
+            crate::model::node::APPEARANCE_STACK_CATALOG_ID => self.appearance_stack_image(node),
             crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID => {
                 let Some(particle) = self.definition.particle_renderers.get(&node.id).cloned()
                 else {

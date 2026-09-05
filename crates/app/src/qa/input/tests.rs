@@ -329,6 +329,12 @@ fn export_shortcut_key_maps_to_egui_e() {
 }
 
 #[test]
+fn delete_key_deserializes_and_injects_the_real_delete_key() {
+    let key: QaKey = serde_json::from_str("\"delete\"").expect("Delete QA key");
+    assert_eq!(egui::Key::from(key), egui::Key::Delete);
+}
+
+#[test]
 fn key_step_exposes_its_modifiers_through_raw_input() {
     let steps = build_steps(
         InputCommand {

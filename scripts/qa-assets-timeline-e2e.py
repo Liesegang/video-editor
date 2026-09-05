@@ -34,25 +34,40 @@ def _assert_contained(child, parent, description):
         raise QaFailure("{} is clipped outside its row".format(description))
 
 
-def _wait_view_mode(client, mode):
-    def active():
-        state = client.state()
-        snapshot = client.component_snapshot()
-        view = next(
-            (
-                component
-                for component in snapshot["components"]
-                if component["id"] == "assets.view_mode"
-            ),
-            None,
-        )
-        if view is None or (view.get("metadata") or {}).get("mode") != mode:
-            return None
-        if state["editor"]["assets"].get("view_mode") != mode:
-            return None
-        return state, snapshot, view
+def _active_view_mode(client, mode):
+    state = client.state()
+    snapshot = client.component_snapshot()
+    view = next(
+        (component for component in snapshot["components"] if component["id"] == "assets.view_mode"),
+        None,
+    )
+    if view is None or (view.get("metadata") or {}).get("mode") != mode:
+        return None
+    if state["editor"]["assets"].get("view_mode") != mode:
+        return None
+    return state, snapshot, view
 
-    return client.wait_until("Assets {} view".format(mode), active)
+
+def _wait_view_mode(client, mode, timeout=None):
+    return client.wait_until(
+        "Assets {} view".format(mode),
+        lambda: _active_view_mode(client, mode),
+        timeout=timeout,
+    )
+
+
+def _activate_view_mode(client, mode):
+    """Click the stable toggle and verify the resulting mode, retrying one missed input."""
+    component_id = "assets.view." + mode
+    for attempt in range(2):
+        client.wait_component_settled(component_id)
+        client.click_component(component_id)
+        try:
+            return _wait_view_mode(client, mode, timeout=2.0 if attempt == 0 else None)
+        except QaFailure:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
 
 
 def run_suite(client):
@@ -108,9 +123,24 @@ def run_suite(client):
     _, toolbar = client.wait_component("assets.toolbar")
     if (toolbar.get("metadata") or {}).get("drag_instruction_visible") is not False:
         raise QaFailure("obsolete Assets drag instruction is still visible")
+    _, footer = client.wait_component_settled("assets.footer")
+    _assert_contained(toolbar, footer, "Assets toolbar")
+    _, layout = client.wait_component_settled("assets.layout")
+    layout_metadata = layout.get("metadata") or {}
+    body_rect = layout_metadata.get("body") or {}
+    footer_rect = layout_metadata.get("footer") or {}
+    if body_rect.get("max_y", float("inf")) > footer_rect.get("min_y", float("-inf")):
+        raise QaFailure("Assets body overlaps its fixed footer")
+    if layout_metadata.get("footer_contained") is not True:
+        raise QaFailure("Assets footer escaped the panel allocation")
+    if layout_metadata.get("scrollbars") != "visible_when_needed":
+        raise QaFailure("Assets forces scrollbars even when content fits")
+    if layout_metadata.get("vertical_overflow") is not False:
+        raise QaFailure("Assets List fixture unnecessarily overflows vertically")
+    if abs(float(layout_metadata.get("offset_y", 0.0))) > 0.1:
+        raise QaFailure("Assets List starts with a stale vertical scroll offset")
 
-    client.click_component("assets.view.table")
-    table_state, _, table_mode = _wait_view_mode(client, "table")
+    table_state, _, table_mode = _activate_view_mode(client, "table")
     if table_state["project"] != project or table_state["history"] != initial_history:
         raise QaFailure("switching to Table view mutated Project history")
     _, table_asset = client.wait_component_settled(asset_component_id)
@@ -141,8 +171,7 @@ def run_suite(client):
     if (duration_column.get("metadata") or {}).get("label") != "Duration":
         raise QaFailure("Table horizontal scroll did not reveal Duration")
 
-    client.click_component("assets.view.grid")
-    grid_state, _, grid_mode = _wait_view_mode(client, "grid")
+    grid_state, _, grid_mode = _activate_view_mode(client, "grid")
     if grid_state["project"] != project or grid_state["history"] != initial_history:
         raise QaFailure("switching to Grid view mutated Project history")
     _, grid_asset = client.wait_component_settled(asset_component_id)
@@ -176,10 +205,8 @@ def run_suite(client):
 
     # Re-entering Grid must reuse the resident texture instead of painting an
     # empty card while an equivalent request is pending.
-    client.click_component("assets.view.table")
-    _wait_view_mode(client, "table")
-    client.click_component("assets.view.grid")
-    _wait_view_mode(client, "grid")
+    _activate_view_mode(client, "table")
+    _activate_view_mode(client, "grid")
     stable_previews = []
     for _ in range(4):
         _, preview = client.wait_component(preview_id)
@@ -241,6 +268,8 @@ def run_suite(client):
         "asset_row": asset_component,
         "asset_metadata": asset_metadata,
         "composition_metadata": composition_metadata,
+        "layout": layout,
+        "footer": footer,
         "visible_asset_rows": [row["id"] for row in rows],
         "view_modes": {
             "table": table_mode,

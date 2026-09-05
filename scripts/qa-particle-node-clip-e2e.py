@@ -22,10 +22,15 @@ PUBLISHED_PARAMETERS = [
     "Emission Rate",
     "Lifetime",
     "Seed",
-    "Velocity Min",
-    "Velocity Max",
-    "Size Min",
-    "Size Max",
+    "Emitter Shape",
+    "Emitter Position",
+    "Emitter Radius",
+    "Emitter Size",
+    "Emitter Surface Only",
+    "Birth Velocity Min",
+    "Birth Velocity Max",
+    "Birth Size Min",
+    "Birth Size Max",
     "Gravity",
     "Drag",
     "Color",
@@ -33,6 +38,7 @@ PUBLISHED_PARAMETERS = [
 CONSTANT_ONLY_PARAMETERS = set(PUBLISHED_PARAMETERS) - {"Color"}
 PARTICLE_CATALOG_IDS = {
     "native.particle.emitter",
+    "native.particle.shape-location",
     "native.particle.initialize",
     "native.particle.gravity-force",
     "native.particle.drag-force",
@@ -325,8 +331,8 @@ def _assert_open_particle_definition(
     if native_ids != PARTICLE_CATALOG_IDS:
         raise QaFailure("production Node Editor opened the wrong Particle topology")
     output_ids = _module_output_node_ids(opened_definition)
-    if len(nodes) != 6 or len(output_ids) != 1:
-        raise QaFailure("Particle Node Editor omitted its five Nodes or Output terminal")
+    if len(nodes) != 7 or len(output_ids) != 1:
+        raise QaFailure("Particle Node Editor omitted its six Nodes or Output terminal")
     for node_id in nodes:
         component = _wait_registered_component(client, "node_editor.node:" + node_id)
         metadata = component.get("metadata") or {}
@@ -482,8 +488,8 @@ def _create_unpublished_emitter_and_assert_locked_rate(
     restored = client.wait_until("one Undo restoring the Particle topology", emitter_undone)
     restored_graph = restored["project"]["module_definitions"][definition_id]["graph"]
     if (
-        len(restored_graph["nodes"]) != 6
-        or len(restored_graph["connections"]) != 5
+        len(restored_graph["nodes"]) != 7
+        or len(restored_graph["connections"]) != 6
         or restored["history"].get("can_redo") is not True
     ):
         raise QaFailure("Particle Emitter creation was not one Undo boundary")
@@ -678,8 +684,8 @@ def run_suite(client):
         raise QaFailure("Particle Definition is not private to its Timeline Item")
     graph = definition.get("graph") or {}
     parameters = (definition.get("interface") or {}).get("parameters") or []
-    if len(graph.get("nodes") or {}) != 6 or len(graph.get("connections") or []) != 5:
-        raise QaFailure("Particle Definition omitted its authoritative six-node topology")
+    if len(graph.get("nodes") or {}) != 7 or len(graph.get("connections") or []) != 6:
+        raise QaFailure("Particle Definition omitted its authoritative seven-node topology")
     if [parameter.get("name") for parameter in parameters] != PUBLISHED_PARAMETERS:
         raise QaFailure("Particle Definition omitted its curated published parameters")
 

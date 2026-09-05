@@ -447,6 +447,12 @@ impl ModuleGraph {
             if matches!(node.content(), NodeContent::CompositionInstance(_)) {
                 return Err("Module graph cannot contain a Composition instance".to_string());
             }
+            if node.bypassed && !node.supports_bypass() {
+                return Err(format!(
+                    "Module Node {} ('{}') cannot be bypassed because it has no unambiguous type-preserving input",
+                    node.id, node.name
+                ));
+            }
             if matches!(node.content(), NodeContent::NativeOperation(_))
                 && let Some(descriptor) = native_node_descriptor_for_node(node)
             {
@@ -622,23 +628,33 @@ impl ModuleNodePortContract {
                 .map(|port| PortDefinition::input(port.key, port.label, port.data_type))
                 .collect(),
             NodeContent::PluginOperation(operation) => operation.declared_ports.clone(),
-            NodeContent::Media(_) => vec![
-                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
-                PortDefinition::output(
-                    IMAGE_OUTPUT_PORT,
-                    "Image",
-                    PortDataType::Image,
-                    PortSide::Right,
-                    PortExposure::Graph,
-                ),
-                PortDefinition::output(
-                    AUDIO_OUTPUT_PORT,
-                    "Audio",
-                    PortDataType::Audio,
-                    PortSide::Right,
-                    PortExposure::Graph,
-                ),
-            ],
+            NodeContent::Media(media) => {
+                media.validate()?;
+                let mut ports = vec![PortDefinition::input(
+                    TIME_PORT,
+                    "Time",
+                    PortDataType::Number,
+                )];
+                if media.has_image_output() {
+                    ports.push(PortDefinition::output(
+                        IMAGE_OUTPUT_PORT,
+                        "Image",
+                        PortDataType::Image,
+                        PortSide::Right,
+                        PortExposure::Graph,
+                    ));
+                }
+                if media.has_audio_output() {
+                    ports.push(PortDefinition::output(
+                        AUDIO_OUTPUT_PORT,
+                        "Audio",
+                        PortDataType::Audio,
+                        PortSide::Right,
+                        PortExposure::Graph,
+                    ));
+                }
+                ports
+            }
             NodeContent::CompositionInstance(_) => {
                 return Err("Module graph cannot contain a Composition instance".to_string());
             }
@@ -831,6 +847,8 @@ pub(crate) fn property_value_type(value: &PropertyValue) -> PortDataType {
         PropertyValue::Vec4(_) => PortDataType::Vec4,
         PropertyValue::ColorValue(_) | PropertyValue::Color(_) => PortDataType::Color,
         PropertyValue::Path(_) => PortDataType::Path,
+        PropertyValue::Gradient(_) => PortDataType::Gradient,
+        PropertyValue::Pattern(_) => PortDataType::Pattern,
         PropertyValue::Array(_) => PortDataType::List,
         PropertyValue::Map(_) | PropertyValue::OpaqueJson(_) => PortDataType::Any,
     }

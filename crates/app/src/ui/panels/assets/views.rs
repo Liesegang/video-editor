@@ -30,6 +30,7 @@ enum LibraryEntry<'a> {
     Composition(&'a Timeline),
     NewNodeClip,
     NewParticleNodeClip,
+    NewShaderNodeClip,
     NodeClip(&'a ModuleDefinition),
     Media(&'a Asset),
 }
@@ -40,6 +41,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(timeline) => format!("assets.composition:{}", timeline.id),
             Self::NewNodeClip => "assets.node_clip_source".to_string(),
             Self::NewParticleNodeClip => "assets.particle_node_clip_source".to_string(),
+            Self::NewShaderNodeClip => "assets.shader_node_clip_source".to_string(),
             Self::NodeClip(definition) => format!("assets.module:{}", definition.id),
             Self::Media(asset) => format!("assets.asset:{}", asset.id),
         }
@@ -50,6 +52,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(timeline) => &timeline.name,
             Self::NewNodeClip => "New Node Clip",
             Self::NewParticleNodeClip => "Particle System",
+            Self::NewShaderNodeClip => "SkSL Shader",
             Self::NodeClip(definition) => &definition.name,
             Self::Media(asset) => &asset.name,
         }
@@ -60,6 +63,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(_) => (icons::FILM_STRIP, Color32::from_rgb(242, 190, 72)),
             Self::NewNodeClip => (icons::PLUS_CIRCLE, Color32::from_rgb(202, 128, 255)),
             Self::NewParticleNodeClip => (icons::SPARKLE, Color32::from_rgb(105, 205, 145)),
+            Self::NewShaderNodeClip => (icons::FUNCTION, Color32::from_rgb(94, 190, 232)),
             Self::NodeClip(_) => (icons::SHARE_NETWORK, Color32::from_rgb(202, 128, 255)),
             Self::Media(asset) => asset_kind_presentation(asset),
         }
@@ -70,6 +74,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(_) => "Composition",
             Self::NewNodeClip => "Node Clip",
             Self::NewParticleNodeClip => "Particle System",
+            Self::NewShaderNodeClip => "Shader Clip",
             Self::NodeClip(_) => "Node Clip",
             Self::Media(asset) => asset_kind_name(&asset.kind),
         }
@@ -82,7 +87,10 @@ impl<'a> LibraryEntry<'a> {
                 || "--".to_string(),
                 |(width, height)| format!("{width} x {height}"),
             ),
-            Self::NewNodeClip | Self::NewParticleNodeClip | Self::NodeClip(_) => "--".to_string(),
+            Self::NewNodeClip
+            | Self::NewParticleNodeClip
+            | Self::NewShaderNodeClip
+            | Self::NodeClip(_) => "--".to_string(),
         }
     }
 
@@ -93,7 +101,10 @@ impl<'a> LibraryEntry<'a> {
                 .fps
                 .filter(|fps| fps.is_finite() && *fps > 0.0)
                 .map_or_else(|| "--".to_string(), |fps| format!("{fps:.3}")),
-            Self::NewNodeClip | Self::NewParticleNodeClip | Self::NodeClip(_) => "--".to_string(),
+            Self::NewNodeClip
+            | Self::NewParticleNodeClip
+            | Self::NewShaderNodeClip
+            | Self::NodeClip(_) => "--".to_string(),
         }
     }
 
@@ -103,7 +114,10 @@ impl<'a> LibraryEntry<'a> {
             Self::Media(asset) => asset
                 .duration
                 .map_or_else(|| "--".to_string(), format_duration),
-            Self::NewNodeClip | Self::NewParticleNodeClip | Self::NodeClip(_) => "--".to_string(),
+            Self::NewNodeClip
+            | Self::NewParticleNodeClip
+            | Self::NewShaderNodeClip
+            | Self::NodeClip(_) => "--".to_string(),
         }
     }
 
@@ -114,6 +128,7 @@ impl<'a> LibraryEntry<'a> {
             }
             Self::NewNodeClip => "Private logic clip".to_string(),
             Self::NewParticleNodeClip => "Procedural particle generator".to_string(),
+            Self::NewShaderNodeClip => "Procedural SkSL image generator".to_string(),
             Self::NodeClip(definition) => format!(
                 "Template | {} node{}",
                 definition.graph.nodes.len(),
@@ -147,7 +162,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(timeline) => state
                 .selection
                 .contains(AuthoringSelection::Timeline(timeline.id)),
-            Self::NewNodeClip | Self::NewParticleNodeClip => false,
+            Self::NewNodeClip | Self::NewParticleNodeClip | Self::NewShaderNodeClip => false,
             Self::NodeClip(definition) => state
                 .selection
                 .contains(AuthoringSelection::ModuleDefinition(definition.id)),
@@ -169,6 +184,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(_) => "Drag to the Timeline, or double-click to open".to_string(),
             Self::NewNodeClip => "Drag to create a private Node Clip".to_string(),
             Self::NewParticleNodeClip => "Drag the Particle System to the Timeline".to_string(),
+            Self::NewShaderNodeClip => "Drag the SkSL Shader to the Timeline".to_string(),
             Self::NodeClip(_) => "Drag this reusable Node Clip to the Timeline".to_string(),
             Self::Media(asset) => asset.path.clone(),
         };
@@ -180,6 +196,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(timeline) => format!("assets.preview.composition:{}", timeline.id),
             Self::NewNodeClip => "assets.preview.node_clip_source".to_string(),
             Self::NewParticleNodeClip => "assets.preview.particle_node_clip_source".to_string(),
+            Self::NewShaderNodeClip => "assets.preview.shader_node_clip_source".to_string(),
             Self::NodeClip(definition) => format!("assets.preview.module:{}", definition.id),
             Self::Media(asset) => format!("assets.preview:{}", asset.id),
         }
@@ -219,7 +236,10 @@ pub(super) fn project_library(
         .filter(|definition| is_node_clip_definition(definition))
         .collect::<Vec<_>>();
     definitions.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
-    let particle_systems = [LibraryEntry::NewParticleNodeClip];
+    let particle_systems = [
+        LibraryEntry::NewParticleNodeClip,
+        LibraryEntry::NewShaderNodeClip,
+    ];
     render_section(
         ui,
         "assets.section.generators",
@@ -399,6 +419,7 @@ fn register_metadata(
         LibraryEntry::NewParticleNodeClip => {
             "assets.particle_node_clip_source_metadata".to_string()
         }
+        LibraryEntry::NewShaderNodeClip => "assets.shader_node_clip_source_metadata".to_string(),
         LibraryEntry::NodeClip(definition) => format!("assets.module_metadata:{}", definition.id),
         LibraryEntry::Media(asset) => format!("assets.asset_metadata:{}", asset.id),
     };
@@ -441,7 +462,9 @@ fn handle_entry_response(
             LibraryEntry::Composition(timeline) => state
                 .selection
                 .replace(AuthoringSelection::Timeline(timeline.id)),
-            LibraryEntry::NewNodeClip | LibraryEntry::NewParticleNodeClip => {}
+            LibraryEntry::NewNodeClip
+            | LibraryEntry::NewParticleNodeClip
+            | LibraryEntry::NewShaderNodeClip => {}
             LibraryEntry::NodeClip(definition) => state
                 .selection
                 .replace(AuthoringSelection::ModuleDefinition(definition.id)),
@@ -455,8 +478,11 @@ fn handle_entry_response(
             super::open_timeline(project, state, timeline.id);
         }
     }
+    if draggable {
+        response.dnd_set_drag_payload(library_drag_payload(entry));
+    }
     if draggable && response.drag_started() {
-        state.timeline.library_drag = Some(library_drag_payload(entry));
+        state.library_drag = Some(library_drag_payload(entry));
     }
     response.context_menu(|ui| {
         match entry {
@@ -483,6 +509,7 @@ fn handle_entry_response(
             }
             LibraryEntry::NewNodeClip
             | LibraryEntry::NewParticleNodeClip
+            | LibraryEntry::NewShaderNodeClip
             | LibraryEntry::NodeClip(_) => {}
         }
         super::creation_menu(ui, project, state, service);
@@ -512,6 +539,10 @@ fn entry_qa_metadata(
             "draggable_to_timeline".to_string(),
             serde_json::json!(draggable),
         ),
+        (
+            "draggable_to_node_editor".to_string(),
+            serde_json::json!(matches!(entry, LibraryEntry::Media(_))),
+        ),
         ("row_index".to_string(), serde_json::json!(row_index)),
     ]);
     match entry {
@@ -527,6 +558,13 @@ fn entry_qa_metadata(
             object.insert(
                 "creation_kind".to_string(),
                 serde_json::json!("particle_node_clip"),
+            );
+            object.insert("private_definition".to_string(), serde_json::json!(true));
+        }
+        LibraryEntry::NewShaderNodeClip => {
+            object.insert(
+                "creation_kind".to_string(),
+                serde_json::json!("sksl_shader_node_clip"),
             );
             object.insert("private_definition".to_string(), serde_json::json!(true));
         }
@@ -555,6 +593,7 @@ fn library_drag_payload(entry: LibraryEntry<'_>) -> AuthoringLibraryDrag {
         LibraryEntry::Composition(timeline) => AuthoringLibraryDrag::Timeline(timeline.id),
         LibraryEntry::NewNodeClip => AuthoringLibraryDrag::NewNodeClip,
         LibraryEntry::NewParticleNodeClip => AuthoringLibraryDrag::NewParticleNodeClip,
+        LibraryEntry::NewShaderNodeClip => AuthoringLibraryDrag::NewShaderNodeClip,
         LibraryEntry::NodeClip(definition) => AuthoringLibraryDrag::ModuleDefinition(definition.id),
         LibraryEntry::Media(asset) => AuthoringLibraryDrag::Asset(asset.id),
     }

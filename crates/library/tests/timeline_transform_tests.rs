@@ -88,6 +88,7 @@ fn clip_time_drives_an_explicit_image_transform_without_mutating_the_media_sourc
             file_path: "fixture.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         320,
         180,

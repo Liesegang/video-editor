@@ -8,11 +8,11 @@ const INVALID_NAME: &str = "Paint Definition name must not be empty";
 const NOT_UNGROUPED: &str = "Paint Definition is not in the ungrouped Palette order";
 
 impl TimelineEditorService {
-    /// Adds one managed Solid swatch to the end of the ungrouped Palette.
-    pub fn add_solid_paint_definition(
+    /// Adds one managed Paint to the end of the ungrouped Project Palette.
+    pub fn add_paint_definition(
         &self,
         name: String,
-        color: ColorValue,
+        paint: Paint,
     ) -> Result<(PaintDefinitionId, ChangeSet), LibraryError> {
         let name = normalized_name(name)?;
         let definition_id = PaintDefinitionId::new();
@@ -24,7 +24,7 @@ impl TimelineEditorService {
                     PaintDefinition {
                         id: definition_id,
                         name,
-                        paint: Paint::Solid(color),
+                        paint,
                         tags: Vec::new(),
                     },
                 );
@@ -32,6 +32,15 @@ impl TimelineEditorService {
                 Ok(definition_id)
             })
             .map_err(LibraryError::Validation)
+    }
+
+    /// Adds one managed Solid swatch to the end of the ungrouped Palette.
+    pub fn add_solid_paint_definition(
+        &self,
+        name: String,
+        color: ColorValue,
+    ) -> Result<(PaintDefinitionId, ChangeSet), LibraryError> {
+        self.add_paint_definition(name, Paint::Solid(color))
     }
 
     pub fn rename_paint_definition(

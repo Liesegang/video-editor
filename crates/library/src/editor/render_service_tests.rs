@@ -547,6 +547,19 @@ fn particle_without_effects_uses_the_backend_native_draw_boundary() {
             emission_rate: OrderedFloat(1.0),
             lifetime_seconds: OrderedFloat(1.0),
             seed: 1,
+            emitter_shape: crate::model::frame::particle::ParticleEmitterShape::Point,
+            emitter_position: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            emitter_radius: OrderedFloat(0.0),
+            emitter_size: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            emitter_surface_only: false,
             velocity_min: crate::model::property::Vec3 {
                 x: OrderedFloat(0.0),
                 y: OrderedFloat(0.0),

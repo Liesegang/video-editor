@@ -36,6 +36,11 @@ mod gpu_terminal;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/gpu_terminal_hdr.rs"]
 mod gpu_terminal_hdr;
+#[path = "tests/layer_styles.rs"]
+mod layer_styles;
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/particle_gpu.rs"]
+mod particle_gpu;
 #[path = "tests/render_target.rs"]
 mod render_target;
 #[path = "tests/vector_layer_native.rs"]
@@ -640,6 +645,11 @@ fn particle_scene(target_step: u64) -> ParticleSceneFrame {
             emission_rate: OrderedFloat(120.0),
             lifetime_seconds: OrderedFloat(4.0),
             seed: 42,
+            emitter_shape: crate::model::frame::particle::ParticleEmitterShape::Point,
+            emitter_position: particle_vec3(0.0, 0.0, 0.0),
+            emitter_radius: OrderedFloat(0.0),
+            emitter_size: particle_vec3(0.0, 0.0, 0.0),
+            emitter_surface_only: false,
             velocity_min: particle_vec3(-40.0, -120.0, -20.0),
             velocity_max: particle_vec3(40.0, -80.0, 20.0),
             gravity: particle_vec3(0.0, 100.0, 0.0),
@@ -736,6 +746,43 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     let replayed =
         render_particle_test_scene(&mut preview, &at_checkpoint).expect("checkpoint restore");
     assert_eq!(first.data, replayed.data);
+
+    let mut shaped_emitter = particle_scene(64);
+    shaped_emitter.parameters.capacity = 64;
+    shaped_emitter.parameters.emission_rate = OrderedFloat(120.0);
+    shaped_emitter.parameters.velocity_min = particle_vec3(0.0, 0.0, 0.0);
+    shaped_emitter.parameters.velocity_max = particle_vec3(0.0, 0.0, 0.0);
+    shaped_emitter.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
+    shaped_emitter.parameters.drag = OrderedFloat(0.0);
+    shaped_emitter.parameters.size_min = OrderedFloat(4.0);
+    shaped_emitter.parameters.size_max = OrderedFloat(4.0);
+    shaped_emitter.parameters.color = Color::white();
+    let point = render_particle_test_scene(&mut preview, &shaped_emitter)
+        .expect("point-emitter Particle render");
+    shaped_emitter.parameters.emitter_shape =
+        crate::model::frame::particle::ParticleEmitterShape::Box;
+    shaped_emitter.parameters.emitter_size = particle_vec3(120.0, 60.0, 0.0);
+    shaped_emitter.parameters.emitter_surface_only = true;
+    let box_surface = render_particle_test_scene(&mut preview, &shaped_emitter)
+        .expect("box-surface Particle render");
+    let (point_width, point_height) = nontransparent_bounds(&point).expect("point-emitter pixels");
+    let (box_width, box_height) = nontransparent_bounds(&box_surface).expect("box-emitter pixels");
+    assert!(
+        box_width > point_width * 4 && box_height > point_height * 4,
+        "Box birth positions must spread sprites beyond Point bounds: point={point_width}x{point_height}, box={box_width}x{box_height}"
+    );
+
+    shaped_emitter.parameters.emitter_shape =
+        crate::model::frame::particle::ParticleEmitterShape::Sphere;
+    shaped_emitter.parameters.emitter_radius = OrderedFloat(50.0);
+    let sphere_surface = render_particle_test_scene(&mut preview, &shaped_emitter)
+        .expect("sphere-surface Particle render");
+    let (sphere_width, sphere_height) =
+        nontransparent_bounds(&sphere_surface).expect("sphere-emitter pixels");
+    assert!(
+        sphere_width > point_width * 4 && sphere_height > point_height * 4,
+        "Sphere birth positions must spread sprites beyond Point bounds: point={point_width}x{point_height}, sphere={sphere_width}x{sphere_height}"
+    );
 
     let mut export = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
     let preview_handle = preview
@@ -918,82 +965,4 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     let after_resize = render_particle_test_scene(&mut preview, &at_checkpoint)
         .expect("Particle render after target restoration");
     assert_eq!(after_resize.data, first.data);
-}
-
-/// Exercises the transaction used when Preview adopts a newly shared WGL
-/// context. Both failure rollback and successful replacement must leave the
-/// renderer's owning context current before the next SceneRuntime operation.
-#[cfg(all(feature = "gl", target_os = "windows"))]
-#[test]
-#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
-fn gpu_render_target_replacement_restores_and_activates_the_owner_context() {
-    let transparent = Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
-    let mut renderer = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
-    if renderer.gpu_context.is_none() {
-        eprintln!("skipping unsupported device: renderer has no GPU context");
-        return;
-    }
-    let Some(previous_handle) = get_current_context_handle() else {
-        panic!("GPU renderer did not leave its WGL context current");
-    };
-    let scene = particle_scene(240);
-    let first = match render_particle_test_scene(&mut renderer, &scene) {
-        Ok(image) => image,
-        Err(diagnostic) if diagnostic.contains("GPU Particle unavailable") => {
-            eprintln!("skipping unsupported device: {diagnostic}");
-            return;
-        }
-        Err(error) => panic!("GPU Particle render failed before replacement: {error}"),
-    };
-
-    let Some(rejected_context) = create_gpu_context(None, None) else {
-        eprintln!("skipping device unable to create a second GPU context");
-        return;
-    };
-    let rejected = renderer.replace_render_target(Some(rejected_context), Some(91), None, |_| {
-        Err(LibraryError::Render(
-            "injected GPU replacement failure".to_string(),
-        ))
-    });
-    assert!(rejected.is_err());
-    assert_eq!(get_current_context_handle(), Some(previous_handle));
-    let restored = render_particle_test_scene(&mut renderer, &scene)
-        .expect("old SceneRuntime must remain usable after replacement rollback");
-    assert_eq!(restored.data, first.data);
-
-    let Some(mut incoming_context) = create_gpu_context(None, None) else {
-        eprintln!("skipping device unable to create a replacement GPU context");
-        return;
-    };
-    incoming_context.resize(256, 144);
-    let Some(incoming_handle) = get_current_context_handle() else {
-        panic!("replacement WGL context was not current after construction");
-    };
-    assert_ne!(incoming_handle, previous_handle);
-    let contract = renderer.surface_contract.clone();
-    renderer
-        .replace_render_target(
-            Some(incoming_context),
-            Some(incoming_handle),
-            None,
-            move |direct_context| {
-                crate::rendering::skia_working_surface::create_surface(
-                    256,
-                    144,
-                    direct_context,
-                    &contract,
-                    false,
-                )
-            },
-        )
-        .expect("GPU target replacement");
-    assert_eq!(get_current_context_handle(), Some(incoming_handle));
-    let replaced = render_particle_test_scene(&mut renderer, &scene)
-        .expect("new SceneRuntime must use the replacement context");
-    assert_eq!(replaced.data, first.data);
 }

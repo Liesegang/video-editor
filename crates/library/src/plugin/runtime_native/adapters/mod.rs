@@ -18,25 +18,11 @@ use ruvie_plugin_api::PropertyValueV1;
 
 use super::property_wire::property_value_to_wire;
 use crate::model::property::PropertyDefinition;
-use crate::plugin::entity_converter::FrameEvaluationContext;
-
-pub(super) fn resolved_config_properties(
-    context: &FrameEvaluationContext,
+pub(super) fn evaluated_config_properties(
     definitions: &[PropertyDefinition],
-    properties: &crate::model::property::PropertyMap,
-    eval_time: f64,
+    evaluated: &std::collections::HashMap<String, crate::model::property::PropertyValue>,
     operation_label: &str,
 ) -> Option<BTreeMap<String, PropertyValueV1>> {
-    if !eval_time.is_finite() {
-        log::error!("{operation_label} received a non-finite evaluation time");
-        return None;
-    }
-    let evaluated = context.evaluate_operation_properties(
-        definitions,
-        properties,
-        eval_time,
-        operation_label,
-    )?;
     let mut wire_properties = BTreeMap::new();
     for definition in definitions {
         let Some(value) = evaluated.get(definition.name()) else {

@@ -70,6 +70,7 @@ fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
             "property:opacity",
             "property:offset",
             IMAGE_OUTPUT_PORT,
+            STYLE_OUTPUT_PORT,
         ]
     );
     let NodeContent::PluginOperation(operation) = project.get_node(style_id).unwrap().content()

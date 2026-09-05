@@ -13,7 +13,10 @@ use library::model::property::{
 use ordered_float::OrderedFloat;
 
 use super::color_value_picker::color_value_picker;
-use super::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+use super::paint_value_editor::{gradient_value_editor, pattern_value_editor};
+use super::property_drag_value::{
+    numeric_edit_finished, FloatDragValueConfig, IntegerDragValueConfig,
+};
 use super::vector_drag_value::{vector_drag_values, VectorAxisResponse};
 
 pub(crate) struct PropertyValueEdit {
@@ -64,7 +67,7 @@ pub(crate) fn property_value_editor(
                 *number = OrderedFloat(raw);
             }
             PropertyValueEdit {
-                finished: numeric_finished(ui, &response),
+                finished: numeric_edit_finished(&response),
                 response,
                 changed,
             }
@@ -80,7 +83,7 @@ pub(crate) fn property_value_editor(
             let response = ui.add(config.widget(integer));
             PropertyValueEdit {
                 changed: response.changed(),
-                finished: numeric_finished(ui, &response),
+                finished: numeric_edit_finished(&response),
                 response,
             }
         }
@@ -165,6 +168,22 @@ pub(crate) fn property_value_editor(
                 finished: picker.finished,
             }
         }
+        PropertyValue::Gradient(gradient) => {
+            let edited = gradient_value_editor(ui, id.with("gradient"), qa_id, gradient, palette);
+            PropertyValueEdit {
+                response: edited.response,
+                changed: edited.changed,
+                finished: edited.finished,
+            }
+        }
+        PropertyValue::Pattern(pattern) => {
+            let edited = pattern_value_editor(ui, id.with("pattern"), qa_id, pattern, palette);
+            PropertyValueEdit {
+                response: edited.response,
+                changed: edited.changed,
+                finished: edited.finished,
+            }
+        }
         PropertyValue::Path(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_)
@@ -196,10 +215,31 @@ pub(crate) fn property_value_editor(
         Some(serde_json::json!({
             "value": &*value,
             "has_definition": definition.is_some(),
+            "editor_kind": definition.map(|definition| property_ui_kind(definition.ui_type())),
             "changed": edit.changed,
         })),
     );
     edit
+}
+
+fn property_ui_kind(ui_type: &PropertyUiType) -> &'static str {
+    match ui_type {
+        PropertyUiType::Float { .. } => "float",
+        PropertyUiType::Integer { .. } => "integer",
+        PropertyUiType::ColorValue => "managed_color",
+        PropertyUiType::Gradient => "gradient",
+        PropertyUiType::Pattern => "pattern",
+        PropertyUiType::Path => "path",
+        PropertyUiType::Color => "encoded_color",
+        PropertyUiType::Text => "text",
+        PropertyUiType::MultilineText => "multiline_text",
+        PropertyUiType::Bool => "boolean",
+        PropertyUiType::Vec2 { .. } => "vec2",
+        PropertyUiType::Vec3 { .. } => "vec3",
+        PropertyUiType::Vec4 { .. } => "vec4",
+        PropertyUiType::Dropdown { .. } => "dropdown",
+        PropertyUiType::Font => "font",
+    }
 }
 
 fn string_editor(
@@ -208,22 +248,33 @@ fn string_editor(
     text: &mut String,
     definition: Option<&PropertyDefinition>,
 ) -> PropertyValueEdit {
-    if let Some(PropertyUiType::Dropdown { options }) = definition.map(PropertyDefinition::ui_type)
-    {
-        let previous = text.clone();
-        let combo = egui::ComboBox::from_id_salt(id.with("dropdown"))
-            .selected_text(text.as_str())
-            .show_ui(ui, |ui| {
-                for option in options {
-                    ui.selectable_value(text, option.clone(), option);
-                }
-            });
-        let changed = *text != previous;
-        return PropertyValueEdit {
-            response: combo.response,
-            changed,
-            finished: changed,
-        };
+    match definition.map(PropertyDefinition::ui_type) {
+        Some(PropertyUiType::Dropdown { options }) => {
+            return combo_string_editor(ui, id.with("dropdown"), text, options);
+        }
+        Some(PropertyUiType::Font) => {
+            static AVAILABLE_FONTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+            let fonts = AVAILABLE_FONTS
+                .get_or_init(library::core::rendering::skia_utils::get_available_fonts);
+            return combo_string_editor(ui, id.with("font"), text, fonts);
+        }
+        Some(PropertyUiType::MultilineText) => {
+            let response = ui.add(
+                egui::TextEdit::multiline(text)
+                    .desired_rows(3)
+                    .desired_width(184.0),
+            );
+            return PropertyValueEdit {
+                changed: response.changed(),
+                finished: response.lost_focus()
+                    || (response.has_focus()
+                        && ui.input(|input| {
+                            input.modifiers.command && input.key_pressed(egui::Key::Enter)
+                        })),
+                response,
+            };
+        }
+        _ => {}
     }
 
     let response = ui.add(egui::TextEdit::singleline(text).desired_width(184.0));
@@ -232,6 +283,29 @@ fn string_editor(
         finished: response.lost_focus()
             || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))),
         response,
+    }
+}
+
+fn combo_string_editor(
+    ui: &mut Ui,
+    id: Id,
+    text: &mut String,
+    options: &[String],
+) -> PropertyValueEdit {
+    let previous = text.clone();
+    let combo = egui::ComboBox::from_id_salt(id)
+        .selected_text(text.as_str())
+        .width(184.0)
+        .show_ui(ui, |ui| {
+            for option in options {
+                ui.selectable_value(text, option.clone(), option);
+            }
+        });
+    let changed = *text != previous;
+    PropertyValueEdit {
+        response: combo.response,
+        changed,
+        finished: changed,
     }
 }
 
@@ -368,12 +442,6 @@ fn float_config(
             hard_min: None,
             hard_max: None,
         })
-}
-
-fn numeric_finished(ui: &Ui, response: &Response) -> bool {
-    response.drag_stopped()
-        || response.lost_focus()
-        || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
 }
 
 fn register_vector_axes(qa_id: &str, axes: &[VectorAxisResponse]) {

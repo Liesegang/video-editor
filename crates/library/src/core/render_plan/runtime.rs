@@ -36,6 +36,7 @@ use super::{
     RenderPlan,
 };
 
+mod appearance;
 mod composition_parameters;
 mod frame_values;
 mod module_image;
@@ -49,12 +50,15 @@ mod transition_module;
 #[cfg(test)]
 mod instance_tests;
 #[cfg(test)]
+mod track_visibility_tests;
+#[cfg(test)]
 mod transition_blend_tests;
 #[cfg(test)]
 mod transition_reachability_tests;
 #[cfg(test)]
 mod transition_tests;
 
+use appearance::evaluate_appearance;
 use frame_values::{
     planned_source_matches, shape_item, solid_item, stage_key, text_item_from_values, transform_at,
     transform_from_values, transparent,
@@ -462,6 +466,7 @@ impl AuthoringFrameEvaluator<'_> {
             ),
             SourceRef::Text {
                 text,
+                appearance_operations,
                 ensemble_operations,
             } => {
                 let text = self.effective_text(timeline, item.id, text, instance_path)?;
@@ -477,16 +482,55 @@ impl AuthoringFrameEvaluator<'_> {
                     crate::model::project::EvalOutput::Produced(ensemble) => ensemble,
                     crate::model::project::EvalOutput::NoOutput => return Ok(None),
                 };
-                text_item_from_values(item.id.as_uuid(), &text, &values, ensemble).map(Some)
+                let styles = match evaluate_appearance(
+                    self.plugins,
+                    appearance_operations,
+                    local_time.to_seconds_f64(),
+                    timeline.fps.to_f64(),
+                    (timeline.width, timeline.height),
+                )? {
+                    crate::model::project::EvalOutput::Produced(styles) => styles,
+                    crate::model::project::EvalOutput::NoOutput => return Ok(None),
+                };
+                text_item_from_values(item.id.as_uuid(), &text, &values, styles, ensemble).map(Some)
             }
-            SourceRef::Shape { shape } => shape_item(item.id.as_uuid(), shape).map(Some),
-            SourceRef::Solid { color } => Ok(Some(solid_item(
-                item.id.as_uuid(),
-                timeline.width,
-                timeline.height,
-                color.clone(),
-                BlendMode::Normal,
-            ))),
+            SourceRef::Shape { shape } => {
+                let values =
+                    self.effective_item_property_values(timeline, item, local_time, instance_path)?;
+                let mut shape = shape.clone();
+                for key in ["width", "height", "color"] {
+                    if let Some(value) = values.get(key) {
+                        shape.parameters.insert(key.to_string(), value.clone());
+                    }
+                }
+                let styles = match evaluate_appearance(
+                    self.plugins,
+                    &shape.appearance_operations,
+                    local_time.to_seconds_f64(),
+                    timeline.fps.to_f64(),
+                    (timeline.width, timeline.height),
+                )? {
+                    crate::model::project::EvalOutput::Produced(styles) => styles,
+                    crate::model::project::EvalOutput::NoOutput => return Ok(None),
+                };
+                shape_item(item.id.as_uuid(), &shape, styles).map(Some)
+            }
+            SourceRef::Solid { color } => {
+                let values =
+                    self.effective_item_property_values(timeline, item, local_time, instance_path)?;
+                let color = if values.contains_key("color") {
+                    frame_values::required_color(&values, "color", "Solid")?
+                } else {
+                    color.clone()
+                };
+                Ok(Some(solid_item(
+                    item.id.as_uuid(),
+                    timeline.width,
+                    timeline.height,
+                    color,
+                    BlendMode::Normal,
+                )))
+            }
             SourceRef::Composition(instance) => {
                 let nested = self
                     .project

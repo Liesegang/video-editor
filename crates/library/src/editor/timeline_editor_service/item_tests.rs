@@ -121,6 +121,121 @@ fn a_layer_move_and_its_reindexing_are_one_undo_step() {
 }
 
 #[test]
+fn grouped_move_preserves_offsets_and_order_across_tracks_in_one_undo_step() {
+    let service = TimelineEditorService::create_default("group move").unwrap();
+    let project = service.snapshot().unwrap();
+    let timeline_id = project.root_timeline_id;
+    let source_track_id = project.timelines[&timeline_id].track_order[0];
+    drop(project);
+    let (target_track_id, _) = service
+        .add_track(
+            timeline_id,
+            "Video 2".to_string(),
+            TimelineTrackKind::Visual,
+        )
+        .unwrap();
+    let (first, _) = service
+        .add_item(
+            source_track_id,
+            "First".to_string(),
+            solid(1),
+            TimelineInterval::new(seconds(2), seconds(2)).unwrap(),
+            0,
+        )
+        .unwrap();
+    let (primary, _) = service
+        .add_item(
+            source_track_id,
+            "Primary".to_string(),
+            solid(2),
+            TimelineInterval::new(seconds(5), seconds(2)).unwrap(),
+            1,
+        )
+        .unwrap();
+    let (remaining, _) = service
+        .add_item(
+            source_track_id,
+            "Remaining".to_string(),
+            solid(3),
+            TimelineInterval::new(seconds(8), seconds(2)).unwrap(),
+            2,
+        )
+        .unwrap();
+    let (target_existing, _) = service
+        .add_item(
+            target_track_id,
+            "Target existing".to_string(),
+            solid(4),
+            TimelineInterval::new(seconds(1), seconds(2)).unwrap(),
+            0,
+        )
+        .unwrap();
+    let before_move = service.snapshot().unwrap();
+    let before_revision = service.revision().unwrap();
+
+    service
+        .move_items(&[first, primary], primary, target_track_id, seconds(20), 1)
+        .unwrap();
+
+    assert_eq!(service.revision().unwrap().get(), before_revision.get() + 1);
+    let moved = service.snapshot().unwrap();
+    assert_eq!(moved.items[&first].track_id, target_track_id);
+    assert_eq!(moved.items[&primary].track_id, target_track_id);
+    assert_eq!(moved.items[&first].interval.start, seconds(17));
+    assert_eq!(moved.items[&primary].interval.start, seconds(20));
+    assert_eq!(moved.items[&first].layer, 0);
+    assert_eq!(moved.items[&primary].layer, 1);
+    assert_eq!(moved.items[&target_existing].layer, 2);
+    assert_eq!(moved.items[&remaining].track_id, source_track_id);
+    assert_eq!(moved.items[&remaining].layer, 0);
+
+    service
+        .undo()
+        .unwrap()
+        .expect("one grouped move transaction");
+    assert_eq!(service.snapshot().unwrap().as_ref(), before_move.as_ref());
+}
+
+#[test]
+fn grouped_horizontal_move_does_not_collapse_noncontiguous_layers() {
+    let service = TimelineEditorService::create_default("horizontal group move").unwrap();
+    let project = service.snapshot().unwrap();
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    drop(project);
+    let mut item_ids = Vec::new();
+    for index in 0..3 {
+        let (item_id, _) = service
+            .add_item(
+                track_id,
+                format!("Clip {index}"),
+                solid(index),
+                TimelineInterval::new(seconds(index.into()), seconds(2)).unwrap(),
+                index.into(),
+            )
+            .unwrap();
+        item_ids.push(item_id);
+    }
+
+    service
+        .move_items(
+            &[item_ids[0], item_ids[2]],
+            item_ids[2],
+            track_id,
+            seconds(7),
+            2,
+        )
+        .unwrap();
+
+    let moved = service.snapshot().unwrap();
+    assert_eq!(moved.items[&item_ids[0]].layer, 0);
+    assert_eq!(moved.items[&item_ids[1]].layer, 1);
+    assert_eq!(moved.items[&item_ids[2]].layer, 2);
+    assert_eq!(moved.items[&item_ids[0]].interval.start, seconds(5));
+    assert_eq!(moved.items[&item_ids[1]].interval.start, seconds(1));
+    assert_eq!(moved.items[&item_ids[2]].interval.start, seconds(7));
+}
+
+#[test]
 fn blend_mode_is_owned_by_one_placement_and_is_undoable() {
     let service = TimelineEditorService::create_default("placement blend").unwrap();
     let project = service.snapshot().unwrap();

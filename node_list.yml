@@ -872,6 +872,43 @@ Merge:
     - name: image
       type: Image
 
+Appearance Stack:
+  category: Compositing
+  catalog_status: native
+  catalog_id: native.appearance-stack
+  runtime_status: implemented
+  description: Rasterize one Shape once with an ordered stack of typed Style values
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: styles
+      key: styles
+      label: Styles
+      type: List<Style>
+      side: Left
+      exposure: Graph
+      multiplicity: Variadic
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+
 # --- Audio ---
 Audio Mix:
   category: Audio
@@ -1277,6 +1314,64 @@ Shape:
   outputs:
     - name: shape
       type: Shape
+Rectangle:
+  category: Generators
+  catalog_status: native
+  catalog_id: native.shape.rectangle
+  runtime_status: implemented
+  description: Parameterized rectangle Shape with independently automatable width and height
+  inputs:
+    - name: width
+      key: width
+      label: Width
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: height
+      key: height
+      label: Height
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Ellipse:
+  category: Generators
+  catalog_status: native
+  catalog_id: native.shape.ellipse
+  runtime_status: implemented
+  description: Parameterized ellipse Shape with independently automatable width and height
+  inputs:
+    - name: width
+      key: width
+      label: Width
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: height
+      key: height
+      label: Height
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 SkSL Shader:
   category: Generators
   catalog_status: native
@@ -2277,18 +2372,19 @@ Spawn Burst:
   outputs:
     - name: particles
       type: ParticleSystem
-Shape Location:
+Emitter Shape:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.shape-location
-  runtime_status: design-needed
-  description: Initialize particle positions on a shape
+  runtime_status: implemented
+  description: Choose where newly born particles start without changing their later motion
   inputs:
     - name: particles
       type: ParticleSystem
     - name: shape
-      type: Enum
-      options: [Sphere, Box, Cone, Torus]
+      type: String
+    - name: position
+      type: Vector3
     - name: radius
       type: Scalar
     - name: size
@@ -2298,11 +2394,12 @@ Shape Location:
   outputs:
     - name: particles
       type: ParticleSystem
-Initialize Particle:
+Birth Attributes:
   category: Particles
   catalog_status: native
   catalog_id: native.particle.initialize
   runtime_status: implemented
+  description: Set initial velocity and size once when a particle is born
   inputs:
     - name: particles
       type: ParticleSystem
@@ -2841,6 +2938,824 @@ Fill:
       side: Right
       exposure: Graph
       multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
++Drop Shadow Style:
+  label: Drop Shadow
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: drop_shadow
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Multiply, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: angle
+      key: property:angle
+      label: Angle
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: angle
+      property_metadata: { ui_type: Float, default: 120.0, min: -360.0, max: 360.0, step: 1.0, suffix: "°", min_hard_limit: false, max_hard_limit: false }
+    - name: distance
+      key: property:distance
+      label: Distance
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: distance
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: spread
+      key: property:spread
+      label: Spread
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: spread
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Inner Shadow:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: inner_shadow
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Multiply, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: angle
+      key: property:angle
+      label: Angle
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: angle
+      property_metadata: { ui_type: Float, default: 120.0, min: -360.0, max: 360.0, step: 1.0, suffix: "°", min_hard_limit: false, max_hard_limit: false }
+    - name: distance
+      key: property:distance
+      label: Distance
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: distance
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: spread
+      key: property:spread
+      label: Choke
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: spread
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Outer Glow:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: outer_glow
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Screen, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: spread
+      key: property:spread
+      label: Spread
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: spread
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Inner Glow:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: inner_glow
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Screen, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: spread
+      key: property:spread
+      label: Choke
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: spread
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Satin:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: satin
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 0.5, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Multiply, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: angle
+      key: property:angle
+      label: Angle
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: angle
+      property_metadata: { ui_type: Float, default: 19.0, min: -360.0, max: 360.0, step: 1.0, suffix: "°", min_hard_limit: false, max_hard_limit: false }
+    - name: distance
+      key: property:distance
+      label: Distance
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: distance
+      property_metadata: { ui_type: Float, default: 11.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 14.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: invert
+      key: property:invert
+      label: Invert
+      type: Boolean
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: invert
+      property_metadata: { ui_type: Bool, default: true }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Bevel & Emboss:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: bevel_emboss
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: property:style
+      label: Style
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: style
+      property_metadata: { ui_type: Dropdown, default: Inner Bevel, options: [Inner Bevel, Outer Bevel, Emboss, Pillow Emboss, Stroke Emboss] }
+    - name: technique
+      key: property:technique
+      label: Technique
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: technique
+      property_metadata: { ui_type: Dropdown, default: Smooth, options: [Smooth, Chisel Hard, Chisel Soft] }
+    - name: depth
+      key: property:depth
+      label: Depth
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: depth
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: direction
+      key: property:direction
+      label: Direction
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: direction
+      property_metadata: { ui_type: Dropdown, default: Up, options: [Up, Down] }
+    - name: size
+      key: property:size
+      label: Size
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: size
+      property_metadata: { ui_type: Float, default: 5.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: soften
+      key: property:soften
+      label: Soften
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: soften
+      property_metadata: { ui_type: Float, default: 0.0, min: 0.0, max: 1000.0, step: 0.1, suffix: " px", min_hard_limit: true, max_hard_limit: true }
+    - name: angle
+      key: property:angle
+      label: Angle
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: angle
+      property_metadata: { ui_type: Float, default: 120.0, min: -360.0, max: 360.0, step: 1.0, suffix: "°", min_hard_limit: false, max_hard_limit: false }
+    - name: altitude
+      key: property:altitude
+      label: Altitude
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: altitude
+      property_metadata: { ui_type: Float, default: 30.0, min: -90.0, max: 90.0, step: 1.0, suffix: "°", min_hard_limit: true, max_hard_limit: true }
+    - name: highlight_color
+      key: property:highlight_color
+      label: Highlight Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: highlight_color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 } }
+    - name: highlight_opacity
+      key: property:highlight_opacity
+      label: Highlight Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: highlight_opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: highlight_blend_mode
+      key: property:highlight_blend_mode
+      label: Highlight Blend
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: highlight_blend_mode
+      property_metadata: { ui_type: Dropdown, default: Screen, options: [Normal, Screen, Linear Dodge (Add)] }
+    - name: shadow_color
+      key: property:shadow_color
+      label: Shadow Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: shadow_color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+    - name: shadow_opacity
+      key: property:shadow_opacity
+      label: Shadow Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: shadow_opacity
+      property_metadata: { ui_type: Float, default: 0.75, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: shadow_blend_mode
+      key: property:shadow_blend_mode
+      label: Shadow Blend
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: shadow_blend_mode
+      property_metadata: { ui_type: Dropdown, default: Multiply, options: [Normal, Multiply] }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Color Overlay:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: color_overlay
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: color
+      key: property:color
+      label: Color
+      type: Color
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: color
+      property_metadata: { ui_type: ColorValue, default: { space: srgb, r: 1.0, g: 1.0, b: 1.0, a: 1.0 } }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Gradient Overlay:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: gradient_overlay
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: gradient
+      key: property:gradient
+      label: Gradient
+      type: Gradient
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: gradient
+      property_metadata: { ui_type: Gradient, default: '{"$type":"gradient_value","geometry":{"kind":"linear","start":{"x":0.0,"y":0.5},"end":{"x":1.0,"y":0.5}},"spread":"pad","stops":[{"offset":0.0,"color":{"$type":"color_value","space":"srgb","rgba":[0.0,0.0,0.0,1.0]}},{"offset":1.0,"color":{"$type":"color_value","space":"srgb","rgba":[1.0,1.0,1.0,1.0]}}]}' }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+Pattern Overlay:
+  category: Shape Operations / Styles
+  catalog_status: plugin-managed
+  operation_category: style
+  component_id: pattern_overlay
+  operation: style.apply.v1
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: pattern
+      key: property:pattern
+      label: Pattern
+      type: Pattern
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: pattern
+      property_metadata: { ui_type: Pattern, default: '{"$type":"pattern_value","kind":"checker","foreground":{"$type":"color_value","space":"srgb","rgba":[1.0,1.0,1.0,1.0]},"background":{"$type":"color_value","space":"srgb","rgba":[0.0,0.0,0.0,1.0]},"scale":{"x":32.0,"y":32.0},"phase":{"x":0.0,"y":0.0},"angle":0.0,"duty":0.5}' }
+    - name: opacity
+      key: property:opacity
+      label: Opacity
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: opacity
+      property_metadata: { ui_type: Float, default: 1.0, min: 0.0, max: 1.0, step: 0.1, suffix: "", min_hard_limit: true, max_hard_limit: true }
+    - name: blend_mode
+      key: property:blend_mode
+      label: Blend Mode
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: blend_mode
+      property_metadata: { ui_type: Dropdown, default: Normal, options: [Normal, Multiply, Screen, Linear Dodge (Add)] }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: image
+      key: image
+      label: Image
+      type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
+      side: Right
+      exposure: Graph
+      multiplicity: Single
 Stroke:
   category: Shape Operations / Styles
   catalog_status: plugin-managed
@@ -2999,6 +3914,13 @@ Stroke:
       key: image
       label: Image
       type: Image
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+    - name: style
+      key: style
+      label: Style
+      type: Style
       side: Right
       exposure: Graph
       multiplicity: Single
@@ -3302,6 +4224,55 @@ Opacity Modulation:
       multiplicity: Single
       property: target
       property_metadata: { ui_type: Dropdown, default: Block, options: [Block, Line, Char] }
+    - name: shape
+      key: shape_in
+      label: Shape
+      type: Shape
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+  outputs:
+    - name: shape
+      key: shape
+      label: Shape
+      type: Shape
+      side: Right
+      exposure: Graph
+      multiplicity: Single
+
+Tracking:
+  category: Ensemble
+  catalog_status: plugin-managed
+  operation_category: effector
+  component_id: tracking
+  operation: effector.apply.v1
+  description: Add horizontal spacing between text elements in the selected grouping scope
+  inputs:
+    - name: time
+      key: time
+      label: Time
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+    - name: amount
+      key: property:amount
+      label: Tracking
+      type: Number
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: amount
+      property_metadata: { ui_type: Float, default: 0.0, min: -500.0, max: 500.0, step: 1.0, suffix: px, min_hard_limit: false, max_hard_limit: false }
+    - name: target
+      key: property:target
+      label: Target
+      type: String
+      side: Left
+      exposure: Graph
+      multiplicity: Single
+      property: target
+      property_metadata: { ui_type: Dropdown, default: Line, options: [Block, Line, Char] }
     - name: shape
       key: shape_in
       label: Shape

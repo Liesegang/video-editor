@@ -190,6 +190,8 @@ fn expression_value_from_property(
         PropertyValue::Boolean(value) => Ok(ExpressionValue::Bool(*value)),
         PropertyValue::String(value) => Ok(ExpressionValue::String(value.clone())),
         PropertyValue::Path(_)
+        | PropertyValue::Gradient(_)
+        | PropertyValue::Pattern(_)
         | PropertyValue::Array(_)
         | PropertyValue::Map(_)
         | PropertyValue::OpaqueJson(_) => Err(evaluation_error(

@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Exercise descriptor-backed Text Ensemble authoring and Preview evaluation."""
 
-from qa_support import QaFailure, component_point, item_by_name, run_suite_main
+from qa_support import (
+    QaFailure,
+    component_point,
+    item_by_name,
+    run_suite_main,
+    seek_timeline_seconds,
+)
 
 
 def _text_operations(state, item_id):
@@ -23,6 +29,23 @@ def _operation(state, item_id, operation_id):
         ),
         None,
     )
+
+
+def _constant_number(operation, property_name):
+    try:
+        property_value = operation["properties"][property_name]
+        if property_value["type"] != "constant":
+            raise QaFailure(
+                "{} must start as a constant for the native Step Delay QA".format(
+                    property_name
+                )
+            )
+        value = property_value["properties"]["value"]
+    except KeyError as error:
+        raise QaFailure("{} omitted its authored value".format(property_name)) from error
+    if not isinstance(value, (int, float)):
+        raise QaFailure("{} is not numeric: {!r}".format(property_name, value))
+    return float(value)
 
 
 def _component_in_inspector(client, component_id, attempts=14):
@@ -72,6 +95,32 @@ def _rendered_current_revision(client, prior_hash=None):
     ):
         return state
     return None
+
+
+def _seek_rendered(client, seconds):
+    sought = seek_timeline_seconds(client, seconds)
+    expected_frame = sought["editor"]["timeline"]["current_frame"]
+    return client.wait_until(
+        "rendered Preview at {:.3f}s".format(seconds),
+        lambda: state
+        if (state := _rendered_current_revision(client))
+        and state["editor"]["preview"]["rendered_frame"] == expected_frame
+        else None,
+        30.0,
+    )
+
+
+def _remove_ensemble_operation(client, item_id, operation_id):
+    actions_id = "inspector.text_ensemble.actions:" + operation_id
+    _component_in_inspector(client, actions_id)
+    client.click_component(actions_id)
+    client.click_component("inspector.text_ensemble.remove:" + operation_id)
+    return client.wait_until(
+        "Text Ensemble operation removal",
+        lambda: state
+        if _operation((state := client.state()), item_id, operation_id) is None
+        else None,
+    )
 
 
 def run_suite(client):
@@ -136,6 +185,177 @@ def run_suite(client):
         raise QaFailure("Text Ensemble add catalog is not descriptor-driven")
     if add_metadata.get("node_graph_decorator_count", 0) < 1:
         raise QaFailure("media-input Decorators were not kept in the Node Editor")
+
+    # Reproduce the production Step Delay path before testing stack mechanics.
+    # The check compares enabled/removed pixels at the same clip-local times;
+    # a descriptor-only or time-insensitive implementation cannot pass it.
+    _open_and_choose(
+        client,
+        item_id,
+        "step delay",
+        "inspector.text_ensemble.add.effector:step_delay",
+    )
+
+    def one_step_delay():
+        state = client.state()
+        operations = _text_operations(state, item_id)
+        return state if len(operations) == 1 else None
+
+    step_added = client.wait_until("Step Delay addition", one_step_delay)
+    step_delay = _text_operations(step_added, item_id)[0]
+    step_delay_id = step_delay["id"]
+    if step_delay["operation"] != {
+        "category": "effector",
+        "component_id": "step_delay",
+        "operation": "effector.apply.v1",
+        "version": "0.1.0",
+    }:
+        raise QaFailure("Step Delay did not persist its production operation identity")
+    required_properties = {"delay", "duration", "from_opacity", "to_opacity", "target"}
+    if not step_delay.get("declared_ports") or not required_properties.issubset(
+        step_delay.get("properties", {})
+    ):
+        raise QaFailure("Step Delay omitted its descriptor contract or properties")
+
+    delay = _constant_number(step_delay, "delay")
+    duration_control = "inspector.property:text_ensemble:{}:{}:duration".format(
+        item_id, step_delay_id
+    )
+    _, duration_component = _component_in_inspector(client, duration_control)
+    if (duration_component.get("metadata") or {}).get("has_definition") is not True:
+        raise QaFailure("Step Delay Duration bypassed its typed plugin descriptor")
+    duration_before = _constant_number(step_delay, "duration")
+    revision_before_duration = step_added["history"]["revision"]
+    client.drag_component_by(duration_control, 32.0, 0.0, steps=12)
+
+    def duration_edited():
+        state = client.state()
+        operation = _operation(state, item_id, step_delay_id)
+        if operation is None:
+            return None
+        duration = _constant_number(operation, "duration")
+        if duration == duration_before:
+            return None
+        return state, duration
+
+    duration_state, duration = client.wait_until(
+        "typed Step Delay Duration edit", duration_edited
+    )
+    if duration_state["history"]["revision"] <= revision_before_duration:
+        raise QaFailure("Step Delay Duration edit did not commit a Project revision")
+    if not 0.0 < duration <= 5.0 or not 0.0 < delay <= 5.0:
+        raise QaFailure(
+            "Step Delay typed values left their descriptor range: delay={}, duration={}".format(
+                delay, duration
+            )
+        )
+
+    text_length = len(text_item["source"]["value"]["text"])
+    clip_start = 1.0
+    early_local = duration / 2.0
+    late_local = duration + delay * max(0, text_length - 1) + 0.1
+    if late_local >= 7.0:
+        raise QaFailure(
+            "Step Delay completion time {:.3f}s exceeds the QA Text clip".format(
+                late_local
+            )
+        )
+
+    # The native Timeline is frame-addressed. Quantize computed clip-local
+    # observation times before using the ruler so the click and assertion
+    # cannot disagree at a half-frame boundary.
+    early_frame = int((clip_start + early_local) * 30.0 + 0.5)
+    late_frame = int((clip_start + late_local) * 30.0 + 0.5)
+    early_seconds = early_frame / 30.0
+    late_seconds = late_frame / 30.0
+    early_local = early_seconds - clip_start
+    late_local = late_seconds - clip_start
+
+    early_with_step = _seek_rendered(client, early_seconds)
+    early_step_hash = early_with_step["editor"]["preview"]["pixel_hash"]
+    step_removed_early = _remove_ensemble_operation(client, item_id, step_delay_id)
+    early_without_step = client.wait_until(
+        "early Preview without Step Delay",
+        lambda: state
+        if (state := _rendered_current_revision(client, early_step_hash))
+        and state["editor"]["preview"]["rendered_frame"]
+        == step_removed_early["editor"]["timeline"]["current_frame"]
+        else None,
+        30.0,
+    )
+    early_plain_hash = early_without_step["editor"]["preview"]["pixel_hash"]
+
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    restored_step = client.wait_until(
+        "Step Delay restoration through Undo",
+        lambda: state
+        if _operation((state := client.state()), item_id, step_delay_id) is not None
+        else None,
+    )
+    client.wait_until(
+        "deterministic early Step Delay Preview after Undo",
+        lambda: state
+        if (state := _rendered_current_revision(client))
+        and state["editor"]["preview"]["rendered_frame"]
+        == restored_step["editor"]["timeline"]["current_frame"]
+        and state["editor"]["preview"]["pixel_hash"] == early_step_hash
+        else None,
+        30.0,
+    )
+
+    late_with_step = _seek_rendered(client, late_seconds)
+    late_step_hash = late_with_step["editor"]["preview"]["pixel_hash"]
+    step_removed_late = _remove_ensemble_operation(client, item_id, step_delay_id)
+    late_without_step = client.wait_until(
+        "completed Preview without Step Delay",
+        lambda: state
+        if (state := _rendered_current_revision(client))
+        and state["editor"]["preview"]["rendered_frame"]
+        == step_removed_late["editor"]["timeline"]["current_frame"]
+        else None,
+        30.0,
+    )
+    late_plain_hash = late_without_step["editor"]["preview"]["pixel_hash"]
+
+    # Any enabled Ensemble currently uses the production per-grapheme draw
+    # path, while an empty stack uses SkParagraph. Compare the completed Step
+    # Delay with a neutral Ensemble operation at this exact frame so shaping
+    # differences cannot masquerade as a Step Delay failure.
+    _open_and_choose(
+        client,
+        item_id,
+        "transform",
+        "inspector.text_ensemble.add.effector:transform",
+    )
+    neutral_added = client.wait_until(
+        "neutral Ensemble comparison operation",
+        lambda: state
+        if len(_text_operations((state := client.state()), item_id)) == 1
+        and _text_operations(state, item_id)[0]["operation"]["component_id"]
+        == "transform"
+        else None,
+    )
+    neutral_id = _text_operations(neutral_added, item_id)[0]["id"]
+    neutral_rendered = client.wait_until(
+        "neutral Ensemble Preview at Step Delay completion time",
+        lambda: state
+        if (state := _rendered_current_revision(client))
+        and state["editor"]["preview"]["rendered_frame"]
+        == neutral_added["editor"]["timeline"]["current_frame"]
+        else None,
+        30.0,
+    )
+    late_neutral_hash = neutral_rendered["editor"]["preview"]["pixel_hash"]
+    if late_step_hash != late_neutral_hash:
+        raise QaFailure(
+            "Step Delay did not converge to a neutral Ensemble after completion: "
+            "step={}, neutral={}, no_ensemble={}".format(
+                late_step_hash, late_neutral_hash, late_plain_hash
+            )
+        )
+    _remove_ensemble_operation(client, item_id, neutral_id)
+    _seek_rendered(client, 1.5)
 
     before_add_revision = baseline["history"]["revision"]
     _open_and_choose(
@@ -274,6 +494,19 @@ def run_suite(client):
         "catalog": add_metadata,
         "transform_operation_id": transform_id,
         "opacity_operation_id": opacity_id,
+        "step_delay": {
+            "operation_id": step_delay_id,
+            "delay": delay,
+            "duration_before": duration_before,
+            "duration_after": duration,
+            "early_local_seconds": early_local,
+            "late_local_seconds": late_local,
+            "early_enabled_pixel_hash": early_step_hash,
+            "early_removed_pixel_hash": early_plain_hash,
+            "late_enabled_pixel_hash": late_step_hash,
+            "late_removed_pixel_hash": late_plain_hash,
+            "late_neutral_ensemble_pixel_hash": late_neutral_hash,
+        },
         "baseline_pixel_hash": baseline_hash,
         "edited_pixel_hash": rendered["editor"]["preview"]["pixel_hash"],
         "edited_revision": rendered["history"]["revision"],

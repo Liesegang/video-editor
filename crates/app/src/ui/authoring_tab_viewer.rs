@@ -72,6 +72,7 @@ impl TabViewer for AuthoringTabViewer<'_> {
                 ui,
                 self.state,
                 self.service,
+                self.plugins.as_ref(),
                 self.render_server,
                 self.preview_runtime,
             ),

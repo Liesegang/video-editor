@@ -18,6 +18,64 @@ pub fn move_vertices(path: &mut VectorPath, indices: &[usize], delta: [f32; 2]) 
     }
 }
 
+/// Split one authored segment without changing its geometry.
+///
+/// `segment_index` identifies the segment leaving that point. The last point
+/// owns a segment only for a closed path. The returned index is the inserted
+/// point, which lets editor surfaces move selection without re-identifying it.
+pub fn insert_vertex(path: &mut VectorPath, segment_index: usize, t: f32) -> Option<usize> {
+    if path.points.len() < 2 || !t.is_finite() || !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    let next_index = if segment_index + 1 < path.points.len() {
+        segment_index + 1
+    } else if path.is_closed && segment_index + 1 == path.points.len() {
+        0
+    } else {
+        return None;
+    };
+    let start = path.points[segment_index].clone();
+    let end = path.points[next_index].clone();
+    let inserted_index = segment_index + 1;
+
+    if length(start.handle_out) <= EPSILON && length(end.handle_in) <= EPSILON {
+        path.points.insert(
+            inserted_index,
+            ControlPoint {
+                position: lerp(start.position, end.position, t),
+                handle_in: [0.0, 0.0],
+                handle_out: [0.0, 0.0],
+                point_type: PointType::Corner,
+            },
+        );
+        return Some(inserted_index);
+    }
+
+    let a = start.position;
+    let b = add(a, start.handle_out);
+    let d = end.position;
+    let c = add(d, end.handle_in);
+    let ab = lerp(a, b, t);
+    let bc = lerp(b, c, t);
+    let cd = lerp(c, d, t);
+    let abc = lerp(ab, bc, t);
+    let bcd = lerp(bc, cd, t);
+    let split = lerp(abc, bcd, t);
+
+    path.points[segment_index].handle_out = subtract(ab, a);
+    path.points[next_index].handle_in = subtract(cd, d);
+    path.points.insert(
+        inserted_index,
+        ControlPoint {
+            position: split,
+            handle_in: subtract(abc, split),
+            handle_out: subtract(bcd, split),
+            point_type: PointType::Smooth,
+        },
+    );
+    Some(inserted_index)
+}
+
 /// Move one Bezier handle to a relative vector and enforce its node mode.
 ///
 /// `break_coupling` is the direct-selection Alt/Option gesture: it converts
@@ -223,6 +281,17 @@ fn subtract(left: [f32; 2], right: [f32; 2]) -> [f32; 2] {
     [left[0] - right[0], left[1] - right[1]]
 }
 
+fn add(left: [f32; 2], right: [f32; 2]) -> [f32; 2] {
+    [left[0] + right[0], left[1] + right[1]]
+}
+
+fn lerp(start: [f32; 2], end: [f32; 2], t: f32) -> [f32; 2] {
+    [
+        start[0] + (end[0] - start[0]) * t,
+        start[1] + (end[1] - start[1]) * t,
+    ]
+}
+
 fn distance(left: [f32; 2], right: [f32; 2]) -> f32 {
     length(subtract(left, right))
 }
@@ -338,5 +407,40 @@ mod tests {
             [-path.points[1].handle_out[0], -path.points[1].handle_out[1]]
         );
         assert!(length(path.points[1].handle_out) > EPSILON);
+    }
+
+    #[test]
+    fn insert_vertex_splits_line_and_closed_last_segment() {
+        let mut open = VectorPath {
+            points: vec![point(0.0, 0.0), point(40.0, 20.0)],
+            is_closed: false,
+        };
+        assert_eq!(insert_vertex(&mut open, 0, 0.25), Some(1));
+        assert_eq!(open.points[1].position, [10.0, 5.0]);
+        assert_eq!(insert_vertex(&mut open, 2, 0.5), None);
+
+        let mut closed = VectorPath {
+            points: vec![point(0.0, 0.0), point(40.0, 0.0), point(40.0, 40.0)],
+            is_closed: true,
+        };
+        assert_eq!(insert_vertex(&mut closed, 2, 0.5), Some(3));
+        assert_eq!(closed.points[3].position, [20.0, 20.0]);
+    }
+
+    #[test]
+    fn insert_vertex_preserves_cubic_de_casteljau_controls() {
+        let mut path = VectorPath {
+            points: vec![point(0.0, 0.0), point(90.0, 0.0)],
+            is_closed: false,
+        };
+        path.points[0].handle_out = [30.0, 60.0];
+        path.points[1].handle_in = [-30.0, 60.0];
+
+        assert_eq!(insert_vertex(&mut path, 0, 0.5), Some(1));
+        assert_eq!(path.points[0].handle_out, [15.0, 30.0]);
+        assert_eq!(path.points[1].position, [45.0, 45.0]);
+        assert_eq!(path.points[1].handle_in, [-15.0, 0.0]);
+        assert_eq!(path.points[1].handle_out, [15.0, 0.0]);
+        assert_eq!(path.points[2].handle_in, [-15.0, 30.0]);
     }
 }

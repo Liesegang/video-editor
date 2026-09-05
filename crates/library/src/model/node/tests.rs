@@ -172,6 +172,7 @@ fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
 #[test]
 fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
     for catalog_id in [
+        "native.particle.shape-location",
         "native.particle.initialize",
         "native.particle.gravity-force",
         "native.particle.drag-force",

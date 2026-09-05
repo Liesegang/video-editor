@@ -20,6 +20,7 @@ use super::dope_sheet;
 use super::geometry::TimelineRowMetrics;
 use super::interaction::TimelineRowProjection;
 use super::painting::draw_playhead;
+use super::selection::apply_item_click_selection;
 use super::viewport::row_top;
 use super::{draw_item, DeferredItemAction};
 
@@ -160,6 +161,7 @@ pub(super) fn draw_rows(
                 display_row_index,
                 left_rect,
                 sidebar_rect,
+                service,
             );
         }
 
@@ -385,14 +387,28 @@ fn draw_track_header(
     display_row_index: usize,
     rect: Rect,
     sidebar_rect: Rect,
+    service: &TimelineEditorService,
 ) {
     let display_mode = state.timeline.track_display_mode(track_id);
     let visible_rect = rect.intersect(sidebar_rect);
+    let track = &project.tracks[&track_id];
+    let has_video = track
+        .kind
+        .supports_output(library::model::authoring::MediaOutputKind::Image);
+    let label_rect = Rect::from_min_max(
+        Pos2::new(rect.left() + 27.0, rect.top()),
+        Pos2::new(
+            rect.right() - if has_video { 58.0 } else { 29.0 },
+            rect.bottom(),
+        ),
+    )
+    .intersect(sidebar_rect);
     let response = ui.interact(
-        visible_rect,
+        label_rect,
         ui.id().with(("track", track_id)),
-        Sense::click(),
+        Sense::click_and_drag(),
     );
+    super::tracks::begin_gesture(ui, project, state, track_id, &response);
     crate::qa::register_component_with_metadata(
         format!("timeline.track:{track_id}"),
         "timeline_track",
@@ -404,7 +420,16 @@ fn draw_track_header(
             "display_mode": display_mode.qa_name(),
             "display_row_index": display_row_index,
             "row_height": rect.height(),
+            "dragged": state.timeline.track_gesture.as_ref().is_some_and(|gesture| gesture.track_id == track_id),
+            "reorder_preview_active": state.timeline.track_gesture.is_some(),
         })),
+    );
+    crate::qa::register_component_with_metadata(
+        format!("timeline.track_header:{track_id}"),
+        "timeline_track_drag_header",
+        label_rect,
+        true,
+        Some(serde_json::json!({"track_id": track_id, "display_row_index": display_row_index})),
     );
     if response.clicked() {
         state.selection.replace(AuthoringSelection::Track(track_id));
@@ -444,6 +469,66 @@ fn draw_track_header(
             state.timeline.expanded_tracks.insert(track_id);
         }
     }
+    if has_video {
+        let eye_rect = Rect::from_min_size(
+            Pos2::new(rect.right() - 58.0, rect.top()),
+            Vec2::new(29.0, rect.height()),
+        )
+        .intersect(sidebar_rect);
+        match track.is_visually_enabled() {
+            Ok(enabled) => {
+                let eye = ui
+                    .interact(
+                        eye_rect,
+                        ui.id().with(("track-visibility", track_id)),
+                        Sense::click(),
+                    )
+                    .on_hover_text(if enabled {
+                        "Hide Track video (keep audio)"
+                    } else {
+                        "Show Track video"
+                    });
+                ui.painter().with_clip_rect(sidebar_rect).text(
+                    eye_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    if enabled {
+                        icons::EYE
+                    } else {
+                        icons::EYE_SLASH
+                    },
+                    egui::FontId::proportional(13.0),
+                    if enabled {
+                        ui.visuals().text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    },
+                );
+                crate::qa::register_component_with_metadata(
+                    format!("timeline.track_visibility:{track_id}"),
+                    "timeline_track_visibility",
+                    eye_rect,
+                    true,
+                    Some(
+                        serde_json::json!({"track_id": track_id, "visible": enabled, "affects_audio": false}),
+                    ),
+                );
+                if eye.clicked() {
+                    match service.set_track_visual_enabled(track_id, !enabled) {
+                        Ok(_) => {
+                            state.status = if enabled {
+                                "Track video hidden"
+                            } else {
+                                "Track video shown"
+                            }
+                            .to_string()
+                        }
+                        Err(error) => state.error = Some(error.to_string()),
+                    }
+                }
+            }
+            Err(error) => state.error = Some(error),
+        }
+    }
     let mode_rect = Rect::from_min_size(
         Pos2::new(rect.right() - 29.0, rect.top()),
         Vec2::new(29.0, rect.height()),
@@ -473,7 +558,7 @@ fn draw_track_header(
         egui::FontId::proportional(13.0),
         ui.visuals().text_color(),
     );
-    painter.text(
+    painter.with_clip_rect(label_rect).text(
         Pos2::new(rect.left() + 31.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
@@ -528,7 +613,7 @@ fn draw_clip_label(
         })),
     );
     if response.clicked() {
-        state.selection.replace(AuthoringSelection::Item(item_id));
+        apply_item_click_selection(state, item_id, ui.input(|input| input.modifiers));
     }
     if state.selection.contains(AuthoringSelection::Item(item_id)) {
         ui.painter().with_clip_rect(sidebar_rect).rect_filled(

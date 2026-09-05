@@ -2,14 +2,14 @@ use super::tests::{
     TestAudioFiles, add_audio_node, attach_audio_output, connect_attached_audio_output,
 };
 use super::*;
-use crate::model::asset::AssetKind;
+use crate::model::asset::{Asset, AssetKind};
 use crate::model::project::{
     AUDIO_OUTPUT_PORT, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, IMAGE_OUTPUT_PORT,
     MERGE_SOUNDS_PORT, NUMBER_RESULT_OUTPUT_PORT, PortAddress, PortDataType, PortDefinition,
     PortExposure, PortOwner, PortSide, ProjectGraphError, TIME_PORT,
 };
 use crate::model::property::{Property, PropertyValue};
-use crate::model::{Clip, Node, NodeContainer};
+use crate::model::{Clip, MediaContent, MediaOutputSelection, Node, NodeContainer};
 use ordered_float::OrderedFloat;
 
 fn attach_time_fmod(
@@ -472,14 +472,26 @@ fn malformed_sound_merge_edges_fail_closed_by_source_type_identity_duplicate_and
     };
 
     let mut image_to_sounds = project.clone();
-    image_to_sounds.assets[0].kind = AssetKind::Video;
+    let image_asset = Asset::new("image", "/fixture/image.png", AssetKind::Image);
+    let image_node = Node::from_media_converter(
+        "image",
+        MediaContent::new(image_asset.id, MediaOutputSelection::Image, None, None).unwrap(),
+        &[],
+        image_asset.path.clone(),
+    )
+    .unwrap();
+    let image_node_id = image_node.id;
+    image_to_sounds.assets.push(image_asset);
+    image_to_sounds.add_node(image_node);
+    image_to_sounds
+        .attach_node_to_container(NodeContainer::Track(track_id), image_node_id)
+        .unwrap();
     image_to_sounds
         .connections
         .iter_mut()
         .find(|connection| connection.id == edge_id)
         .unwrap()
-        .from
-        .port = IMAGE_OUTPUT_PORT.to_string();
+        .from = PortAddress::new(PortOwner::Node(image_node_id), IMAGE_OUTPUT_PORT);
     assert_closed(&image_to_sounds);
     assert!(image_to_sounds.validate_connections().iter().any(|error| {
         matches!(

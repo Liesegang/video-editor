@@ -268,6 +268,13 @@ impl OperationDescriptor {
                     PortSide::Right,
                     PortExposure::Graph,
                 ),
+                PortDefinition::output(
+                    crate::model::project::STYLE_OUTPUT_PORT,
+                    "Style",
+                    PortDataType::Style,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
             ],
         )
     }
@@ -659,6 +666,8 @@ pub fn property_ui_type_to_port_data_type(ui_type: &PropertyUiType) -> PortDataT
         PropertyUiType::Color => PortDataType::Color,
         PropertyUiType::ColorValue => PortDataType::Color,
         PropertyUiType::Path => PortDataType::Path,
+        PropertyUiType::Gradient => PortDataType::Gradient,
+        PropertyUiType::Pattern => PortDataType::Pattern,
         PropertyUiType::Text
         | PropertyUiType::MultilineText
         | PropertyUiType::Dropdown { .. }

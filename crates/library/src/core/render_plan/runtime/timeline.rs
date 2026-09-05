@@ -33,6 +33,12 @@ impl AuthoringFrameEvaluator<'_> {
             if track.kind == TimelineTrackKind::Audio {
                 continue;
             }
+            if !track
+                .is_visually_enabled()
+                .map_err(LibraryError::Validation)?
+            {
+                continue;
+            }
             let children = self.evaluate_track_children(
                 timeline_id,
                 *track_id,

@@ -153,6 +153,8 @@ impl Default for PluginManager {
             .register_bundled_effector(Arc::new(crate::plugin::effectors::RandomizeEffectorPlugin));
         manager
             .register_bundled_effector(Arc::new(crate::plugin::effectors::OpacityEffectorPlugin));
+        manager
+            .register_bundled_effector(Arc::new(crate::plugin::effectors::TrackingEffectorPlugin));
 
         manager.register_bundled_decorator(Arc::new(
             crate::plugin::decorators::BackplateDecoratorPlugin,
@@ -161,6 +163,15 @@ impl Default for PluginManager {
         manager.register_bundled_style(Arc::new(crate::plugin::styles::FillStylePlugin));
         manager.register_bundled_style(Arc::new(crate::plugin::styles::StrokeStylePlugin));
         manager.register_bundled_style(Arc::new(crate::plugin::styles::ImageOpacityStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::DropShadowStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::InnerShadowStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::OuterGlowStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::InnerGlowStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::SatinStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::BevelEmbossStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::ColorOverlayStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::GradientOverlayStylePlugin));
+        manager.register_bundled_style(Arc::new(crate::plugin::styles::PatternOverlayStylePlugin));
 
         manager.register_bundled_path_effect(Arc::new(
             crate::plugin::path_effects::DashPathEffectPlugin,

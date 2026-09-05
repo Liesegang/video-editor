@@ -719,6 +719,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
             // Exercise fallback to the authoritative Asset stream metadata.
             stream_index: None,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         16,
         16,
@@ -908,6 +909,7 @@ fn pre_color_project_explicitly_reprobes_untagged_yuv_and_survives_preview() -> 
             file_path: path,
             stream_index: asset.stream_index,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::Image,
         },
         canvas_width,
         canvas_height,

@@ -1,7 +1,7 @@
 use super::super::descriptor::{DescriptorIdentity, DescriptorSpec, NativeNodeFactory, PortSpec};
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, MERGE_SOUNDS_PORT, PortDataType,
-    TIME_PORT,
+    APPEARANCE_STYLES_PORT, AUDIO_OUTPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    MERGE_SOUNDS_PORT, PortDataType, SHAPE_INPUT_PORT, TIME_PORT,
 };
 
 const IMAGE_OUTPUT: &[PortSpec] = &[PortSpec::single(
@@ -22,6 +22,11 @@ const AUDIO_OUTPUT: &[PortSpec] = &[PortSpec::single(
     "Audio",
     PortDataType::Audio,
 )];
+const APPEARANCE_INPUTS: &[PortSpec] = &[
+    PortSpec::single(TIME_PORT, "Time", PortDataType::Number),
+    PortSpec::single(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+    PortSpec::variadic(APPEARANCE_STYLES_PORT, "Styles", PortDataType::Style),
+];
 
 const SPECS: &[DescriptorSpec] = &[
     DescriptorSpec::implemented(
@@ -47,6 +52,18 @@ const SPECS: &[DescriptorSpec] = &[
         NativeNodeFactory::SoundMerge,
         SOUND_MERGE_INPUTS,
         AUDIO_OUTPUT,
+    ),
+    DescriptorSpec::implemented(
+        DescriptorIdentity::new(
+            super::super::APPEARANCE_STACK_CATALOG_ID,
+            "Appearance Stack",
+            "Compositing",
+            "node_editor.menu.create.appearance_stack",
+            &["appearance", "style", "layer style", "shape"],
+        ),
+        NativeNodeFactory::NativeOperation,
+        APPEARANCE_INPUTS,
+        IMAGE_OUTPUT,
     ),
 ];
 

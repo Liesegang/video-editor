@@ -18,6 +18,10 @@ pub(crate) use particle::{
     PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
 };
 
+pub(crate) const RECTANGLE_SHAPE_CATALOG_ID: &str = "native.shape.rectangle";
+pub(crate) const ELLIPSE_SHAPE_CATALOG_ID: &str = "native.shape.ellipse";
+pub(crate) const APPEARANCE_STACK_CATALOG_ID: &str = "native.appearance-stack";
+
 use descriptor::DescriptorSpec;
 
 static NATIVE_NODE_CATALOG: LazyLock<Vec<NativeNodeCatalogDescriptor>> = LazyLock::new(|| {

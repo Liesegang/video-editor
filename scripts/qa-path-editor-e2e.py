@@ -95,6 +95,25 @@ def _drag_component(client, component_id, delta, modifiers=None, steps=14):
     return start, end
 
 
+def _activate_shape_tool(client, tool):
+    client.click_component("preview.tool.shape")
+    client.click_component("preview.tool." + tool)
+    return client.wait_until(
+        "active {} tool".format(tool),
+        lambda: state
+        if (state := client.state())["editor"]["preview"]["active_tool"] == tool
+        else None,
+    )
+
+
+def _new_item(before, after):
+    new_ids = set(after["project"]["items"]) - set(before["project"]["items"])
+    if len(new_ids) != 1:
+        raise QaFailure("creation produced {} new Timeline Items".format(len(new_ids)))
+    item_id = new_ids.pop()
+    return item_id, after["project"]["items"][item_id]
+
+
 def _wait_rendered_revision(client, revision, old_hash=None):
     return client.wait_until(
         "Path edit Preview render",
@@ -150,6 +169,7 @@ def run_suite(client):
     if not gizmo_bounds:
         raise QaFailure("Path selection gizmo omitted its rendered bounds")
 
+    client.click_component("preview.tool.shape")
     _, path_tool = client.wait_component("preview.tool.path")
     if path_tool.get("enabled") is not True:
         raise QaFailure("Path tool did not enable for a selected canonical Path clip")
@@ -214,6 +234,40 @@ def run_suite(client):
     )
     _wait_rendered_revision(client, undone["history"]["revision"])
 
+    # Double-clicking a visible segment inserts one canonical point in one
+    # Project transaction; one Undo restores the exact source path.
+    before_insert = client.state()
+    _, point_zero = client.wait_component_settled("preview.vector.point:0")
+    _, point_one = client.wait_component_settled("preview.vector.point:1")
+    zero_center = component_center(point_zero)
+    one_center = component_center(point_one)
+    insertion = {
+        "x": (zero_center["x"] + one_center["x"]) * 0.5,
+        "y": (zero_center["y"] + one_center["y"]) * 0.5,
+    }
+    client.inject(
+        "double-click",
+        {**insertion, "button": "primary", "coordinate_space": "points"},
+    )
+    inserted = _wait_path(
+        client,
+        item_id,
+        "inserted Path vertex",
+        lambda path, _state: len(path["contours"][0]["segments"])
+        == len(original["contours"][0]["segments"]) + 1,
+    )
+    _assert_one_revision(before_insert, inserted, "Path vertex insertion")
+    _wait_rendered_revision(client, inserted["history"]["revision"])
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    insert_undone = _wait_path(
+        client,
+        item_id,
+        "one-step Path insertion Undo",
+        lambda path, _state: path == original,
+    )
+    _wait_rendered_revision(client, insert_undone["history"]["revision"])
+
     # Alt-dragging a vertex creates a symmetric Bezier pair, reusing the old
     # editor gesture rather than exposing raw PathValue text in Inspector.
     before_handles = client.state()
@@ -269,7 +323,9 @@ def run_suite(client):
     if not _near(broken_in, coupled_in) or _near(broken_out, coupled_out):
         raise QaFailure("Alt handle drag did not preserve only the opposite handle")
 
-    # Corner/Smooth/Symmetric mode controls are real toolbar interactions.
+    # Point modes live in the vertex context menu, not in a permanently
+    # crowded toolbar.
+    client.click_component("preview.vector.point:0", button="secondary")
     for component_id in (
         "preview.vector.mode.corner",
         "preview.vector.mode.smooth",
@@ -334,15 +390,107 @@ def run_suite(client):
             )
         )
 
+    # Rectangle/Ellipse/Pen are canvas gestures backed by the same basic clip
+    # constructor as the Timeline menu. Each gesture creates exactly one Item
+    # and one Undo transaction.
+    created_items = {}
+    _, content = client.wait_component_settled("preview.content")
+    center = component_center(content)
+    for tool, expected_kind, offset in (
+        ("rectangle", "rectangle", (-145.0, -90.0)),
+        ("ellipse", "ellipse", (70.0, -90.0)),
+    ):
+        _activate_shape_tool(client, tool)
+        before_create = client.state()
+        start = {"x": center["x"] + offset[0], "y": center["y"] + offset[1]}
+        end = {"x": start["x"] + 84.0, "y": start["y"] + 52.0}
+        client.drag(start, end, steps=12)
+        created = client.wait_until(
+            "{} canvas creation".format(tool),
+            lambda: state
+            if len((state := client.state())["project"]["items"])
+            == len(before_create["project"]["items"]) + 1
+            else None,
+        )
+        created_id, created_item = _new_item(before_create, created)
+        if created_item["source"].get("kind") != "shape":
+            raise QaFailure("{} tool created the wrong source".format(tool))
+        shape = created_item["source"]["value"]["shape"]
+        if shape.get("shape_kind") != expected_kind:
+            raise QaFailure("{} tool created the wrong source".format(tool))
+        _assert_one_revision(before_create, created, tool + " creation")
+        _wait_rendered_revision(client, created["history"]["revision"])
+        client.key("z", True, command=True)
+        client.key("z", False, command=True)
+        client.wait_until(
+            "one-step {} creation Undo".format(tool),
+            lambda: state
+            if created_id not in (state := client.state())["project"]["items"]
+            else None,
+        )
+        created_items[tool] = created_id
+
+    _activate_shape_tool(client, "pen")
+    before_pen = client.state()
+    pen_points = [
+        {"x": center["x"] - 110.0, "y": center["y"] + 70.0},
+        {"x": center["x"] - 30.0, "y": center["y"] + 35.0},
+        {"x": center["x"] + 45.0, "y": center["y"] + 85.0},
+    ]
+    for point in pen_points:
+        client.inject(
+            "click", {**point, "button": "primary", "coordinate_space": "points"}
+        )
+    client.wait_until(
+        "three authored Pen points",
+        lambda: metadata
+        if (metadata := (client.wait_component("preview.pen.creation")[1].get("metadata") or {})).get(
+            "point_count"
+        )
+        == 3
+        else None,
+    )
+    client.inject(
+        "click",
+        {**pen_points[0], "button": "primary", "coordinate_space": "points"},
+    )
+    pen_created = client.wait_until(
+        "Pen Path creation",
+        lambda: state
+        if len((state := client.state())["project"]["items"])
+        == len(before_pen["project"]["items"]) + 1
+        else None,
+    )
+    pen_id, pen_item = _new_item(before_pen, pen_created)
+    if pen_item["source"].get("kind") != "shape":
+        raise QaFailure("Pen tool did not create canonical Path geometry")
+    pen_shape = pen_item["source"]["value"]["shape"]
+    if pen_shape.get("shape_kind") != "path":
+        raise QaFailure("Pen tool did not create canonical Path geometry")
+    _assert_one_revision(before_pen, pen_created, "Pen Path creation")
+    _wait_rendered_revision(client, pen_created["history"]["revision"])
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    client.wait_until(
+        "one-step Pen creation Undo",
+        lambda: state
+        if pen_id not in (state := client.state())["project"]["items"]
+        else None,
+    )
+    created_items["pen"] = pen_id
+
     return {
         "suite": "path-editor",
         "item_id": item_id,
         "initial_hash": initial_hash,
         "moved_hash": rendered_move["editor"]["preview"]["pixel_hash"],
+        "canvas_created_items": created_items,
         "revisions": {
             "initial": before_move["history"]["revision"],
             "moved": moved["history"]["revision"],
             "undone": undone["history"]["revision"],
+            "inserted": inserted["history"]["revision"],
+            "insert_undone": insert_undone["history"]["revision"],
             "handles": with_handles["history"]["revision"],
             "coupled": coupled["history"]["revision"],
             "broken": broken["history"]["revision"],

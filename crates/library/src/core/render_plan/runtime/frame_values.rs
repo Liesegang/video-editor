@@ -89,6 +89,7 @@ pub(super) fn text_item_from_values(
     source_id: uuid::Uuid,
     text: &str,
     values: &HashMap<String, PropertyValue>,
+    styles: Vec<StyleConfig>,
     ensemble: Option<crate::core::ensemble::EnsembleData>,
 ) -> Result<FrameItem, LibraryError> {
     let font = values
@@ -98,7 +99,7 @@ pub(super) fn text_item_from_values(
             PropertyValue::String(value) => Some(value.clone()),
             _ => None,
         })
-        .unwrap_or_else(|| "Arial".to_string());
+        .unwrap_or_else(|| crate::plugin::entity_converter::DEFAULT_TEXT_FONT_FAMILY.to_string());
     let size = values
         .get("size")
         .or_else(|| values.get("font_size"))
@@ -110,11 +111,7 @@ pub(super) fn text_item_from_values(
             }
         })
         .transpose()?
-        .unwrap_or(48.0);
-    let color = match values.get("color") {
-        Some(_) => required_color(values, "color", "Text item")?,
-        None => crate::model::frame::color::Color::white(),
-    };
+        .unwrap_or(crate::plugin::entity_converter::DEFAULT_TIMELINE_TEXT_SIZE);
     let (content_width, content_height) =
         crate::plugin::entity_converter::measure_text_size(text, &font, size as f32);
     Ok(FrameItem::Object(FrameObject {
@@ -126,10 +123,7 @@ pub(super) fn text_item_from_values(
             text: text.to_string(),
             font,
             size,
-            styles: vec![StyleConfig {
-                id: source_id,
-                style: DrawStyle::Fill { color, offset: 0.0 },
-            }],
+            styles,
             effects: Vec::new(),
             ensemble,
             transform: Transform::default(),
@@ -140,35 +134,14 @@ pub(super) fn text_item_from_values(
 pub(super) fn shape_item(
     source_id: uuid::Uuid,
     shape: &crate::model::authoring::ShapeSource,
+    styles: Vec<StyleConfig>,
 ) -> Result<FrameItem, LibraryError> {
     let width = direct_number(&shape.parameters, "width").unwrap_or(100.0);
     let height = direct_number(&shape.parameters, "height").unwrap_or(100.0);
-    let color = match shape.parameters.get("color") {
-        Some(PropertyValue::Color(color)) => color.clone(),
-        Some(PropertyValue::ColorValue(color)) => {
-            crate::color_management::to_renderer_srgba8(color)
-                .map_err(|error| LibraryError::Render(error.to_string()))?
-        }
-        Some(_) => return Err(type_error("Shape color", "Color")),
-        None => crate::model::frame::color::Color::white(),
-    };
     let (path, canonical_path, declared_bounds) = match shape.shape_kind {
-        crate::model::authoring::ShapeKind::Rectangle => (
-            format!("M 0 0 H {width} V {height} H 0 Z"),
-            None,
-            Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
-        ),
-        crate::model::authoring::ShapeKind::Ellipse => (
-            format!(
-                "M {width} {} A {} {} 0 1 1 0 {} A {} {} 0 1 1 {width} {} Z",
-                height / 2.0,
-                width / 2.0,
-                height / 2.0,
-                height / 2.0,
-                width / 2.0,
-                height / 2.0,
-                height / 2.0
-            ),
+        kind @ (crate::model::authoring::ShapeKind::Rectangle
+        | crate::model::authoring::ShapeKind::Ellipse) => (
+            crate::plugin::entity_converter::primitive_shape_path_data(kind, width, height)?,
             None,
             Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
         ),
@@ -189,7 +162,7 @@ pub(super) fn shape_item(
         source_id,
         path,
         canonical_path,
-        color,
+        styles,
         declared_bounds,
     ))
 }
@@ -215,23 +188,26 @@ pub(super) fn solid_item(
             source_id,
             format!("M 0 0 H {width} V {height} H 0 Z"),
             None,
-            color,
+            vec![fill_style(source_id, color)],
             Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
         )],
     })
+}
+
+fn fill_style(source_id: uuid::Uuid, color: crate::model::frame::color::Color) -> StyleConfig {
+    StyleConfig {
+        id: source_id,
+        style: DrawStyle::Fill { color, offset: 0.0 },
+    }
 }
 
 pub(super) fn shape_object(
     source_id: uuid::Uuid,
     path: String,
     canonical_path: Option<crate::model::path::PathValue>,
-    color: crate::model::frame::color::Color,
+    styles: Vec<StyleConfig>,
     content_bounds: Option<FrameBounds>,
 ) -> FrameItem {
-    let styles = vec![StyleConfig {
-        id: source_id,
-        style: DrawStyle::Fill { color, offset: 0.0 },
-    }];
     let content_bounds = content_bounds.or_else(|| {
         crate::model::frame::runtime_shape::measure_shape_visual_bounds(&path, &styles, &[])
             .map(|(x, y, width, height)| FrameBounds::new(x, y, width, height))
@@ -351,9 +327,19 @@ mod shape_bounds_tests {
                 ("width".to_string(), PropertyValue::from(10.0)),
                 ("height".to_string(), PropertyValue::from(20.0)),
             ]),
+            appearance_operations: Vec::new(),
         };
 
-        let FrameItem::Object(object) = shape_item(uuid::Uuid::new_v4(), &shape).unwrap() else {
+        let source_id = uuid::Uuid::new_v4();
+        let FrameItem::Object(object) = shape_item(
+            source_id,
+            &shape,
+            vec![fill_style(
+                source_id,
+                crate::model::frame::color::Color::white(),
+            )],
+        )
+        .unwrap() else {
             panic!("Shape object");
         };
         let bounds = object.content_bounds.expect("measured Path bounds");
@@ -368,8 +354,18 @@ mod shape_bounds_tests {
                 ("width".to_string(), PropertyValue::from(160.0)),
                 ("height".to_string(), PropertyValue::from(80.0)),
             ]),
+            appearance_operations: Vec::new(),
         };
-        let FrameItem::Object(object) = shape_item(uuid::Uuid::new_v4(), &shape).unwrap() else {
+        let source_id = uuid::Uuid::new_v4();
+        let FrameItem::Object(object) = shape_item(
+            source_id,
+            &shape,
+            vec![fill_style(
+                source_id,
+                crate::model::frame::color::Color::white(),
+            )],
+        )
+        .unwrap() else {
             panic!("Shape object");
         };
         let FrameContent::Shape {

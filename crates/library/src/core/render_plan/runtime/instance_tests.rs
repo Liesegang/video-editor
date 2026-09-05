@@ -300,6 +300,7 @@ fn published_composition_values_are_owned_by_each_concrete_instance_path() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Definition title".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             TimelineInterval::new(seconds(0), seconds(4)).unwrap(),

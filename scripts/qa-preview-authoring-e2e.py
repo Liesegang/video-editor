@@ -83,6 +83,13 @@ def run_suite(client):
     original_text = _text_value(before_text_edit, text_item["id"])
     edited_text = "Preview direct text"
     client.click_component("preview.tool.text")
+    text_click = {
+        "x": (bounds["min"]["x"] + bounds["max"]["x"]) * 0.5,
+        "y": (bounds["min"]["y"] + bounds["max"]["y"]) * 0.5,
+    }
+    client.inject(
+        "click", {**text_click, "button": "primary", "coordinate_space": "points"}
+    )
     client.wait_component("preview.text.editor")
     client.key("a", True, command=True)
     client.key("a", False, command=True)
@@ -112,6 +119,80 @@ def run_suite(client):
         lambda: state
         if _text_value((state := client.state()), text_item["id"]) == original_text
         else None,
+    )
+
+    # The Text tool is armed independently of selection. Clicking blank
+    # canvas creates one Text Item at that point and enters the same editor;
+    # the edit and creation remain two explicit, individually undoable acts.
+    before_text_create = client.state()
+    client.click_component("preview.tool.text")
+    _, settled_content = client.wait_component_settled("preview.content")
+    blank = component_point(settled_content, 0.88, 0.84)
+    client.inject(
+        "click", {**blank, "button": "primary", "coordinate_space": "points"}
+    )
+    text_created = client.wait_until(
+        "blank-canvas Text creation",
+        lambda: state
+        if len((state := client.state())["project"]["items"])
+        == len(before_text_create["project"]["items"]) + 1
+        else None,
+    )
+    created_ids = set(text_created["project"]["items"]) - set(
+        before_text_create["project"]["items"]
+    )
+    if len(created_ids) != 1:
+        raise QaFailure("Text tool did not create exactly one Timeline Item")
+    created_text_id = created_ids.pop()
+    if _text_value(text_created, created_text_id) != "Text":
+        raise QaFailure("Text tool did not create the canonical Text source")
+    if text_created["history"]["revision"] != before_text_create["history"]["revision"] + 1:
+        raise QaFailure("Text creation was not one atomic Project transaction")
+    client.wait_until(
+        "new Text editing session",
+        lambda: metadata
+        if (metadata := _metadata(client, "preview.text.editor")).get("item_id")
+        == created_text_id
+        else None,
+    )
+    created_value = "Canvas-created Text"
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": created_value})
+    client.click_component("preview.tool.select")
+    accepted_creation = client.wait_until(
+        "new Text accepted",
+        lambda: state
+        if _text_value((state := client.state()), created_text_id) == created_value
+        else None,
+    )
+    if accepted_creation["history"]["revision"] != text_created["history"]["revision"] + 1:
+        raise QaFailure("new Text edit was not one atomic Project transaction")
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    client.wait_until(
+        "new Text edit Undo",
+        lambda: state
+        if _text_value((state := client.state()), created_text_id) == "Text"
+        else None,
+    )
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    client.wait_until(
+        "new Text creation Undo",
+        lambda: state
+        if created_text_id not in (state := client.state())["project"]["items"]
+        else None,
+    )
+
+    # Undo removes the selected newly-created Item, so that selection must be
+    # reconciled away. Select the original Text for the separate camera/gizmo
+    # scenario instead of expecting an outline for a now nonexistent Item.
+    client.click_component("timeline.item:" + text_item["id"])
+    client.wait_until(
+        "original Text selection for camera/gizmo checks",
+        lambda: client.state()["editor"]["selection"]["primary"]
+        == {"kind": "timeline_item", "id": text_item["id"]},
     )
 
     preview_before = initial["editor"]["preview"]
@@ -186,6 +267,10 @@ def run_suite(client):
         "gizmo": gizmo_metadata,
         "gizmo_after_pan": gizmo_after_pan,
         "text_edit": {"before": original_text, "accepted": edited_text},
+        "canvas_text_creation": {
+            "item_id": created_text_id,
+            "accepted": created_value,
+        },
         "camera_before": preview_before,
         "camera_after_pan": pan,
         "camera_after_zoom": zoomed["editor"]["preview"],

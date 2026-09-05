@@ -85,6 +85,266 @@ fn fake_host_emits_connect_disconnect_delete_and_deselect_wire_intents() {
 }
 
 #[test]
+fn right_click_requests_a_context_menu_for_the_wire_under_the_pointer() {
+    let graph = FakeGraph::new();
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let target = Editor::wire_selection_target(&graph.frame(&[], None), &30).unwrap();
+    let secondary = egui::PointerButton::Secondary;
+
+    let _ = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, Modifiers::NONE),
+        ],
+    );
+    let outputs = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, false, Modifiers::NONE),
+        ],
+    );
+
+    assert_eq!(
+        outputs,
+        vec![EditorOutput::WireContextMenu {
+            wire: 30,
+            screen_position: target,
+        }]
+    );
+}
+
+#[test]
+fn node_occlusion_wins_over_a_wire_right_click() {
+    let mut graph = FakeGraph::new();
+    let occluder = Rect::from_min_size(pos2(300.0, 145.0), vec2(60.0, 50.0));
+    graph.nodes.push(NodeDescriptor {
+        id: 3,
+        title: "Occluder",
+        rect: occluder,
+        header_rect: occluder,
+        parent: Some(10),
+        enabled: true,
+    });
+    graph.selection_order.push(ItemId::Node(3));
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let target = pos2(330.0, 170.0);
+    let secondary = egui::PointerButton::Secondary;
+
+    let _ = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, Modifiers::NONE),
+        ],
+    );
+    let outputs = run_interaction_frame(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        vec![pointer_button_with(
+            target,
+            secondary,
+            false,
+            Modifiers::NONE,
+        )],
+    );
+
+    assert!(outputs.is_empty());
+}
+
+#[test]
+fn ctrl_right_drag_cuts_each_crossed_wire() {
+    let graph = FakeGraph::new();
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let modifiers = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+    let secondary = egui::PointerButton::Secondary;
+    let start = pos2(330.0, 130.0);
+    let end = pos2(330.0, 210.0);
+
+    let _ = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(start),
+            pointer_button_with(start, secondary, true, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+    let outputs = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(end),
+            pointer_button_with(end, secondary, false, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+
+    assert_eq!(outputs, vec![EditorOutput::Disconnect { wire: 30 }]);
+}
+
+#[test]
+fn ctrl_right_click_without_a_drag_does_not_cut() {
+    let graph = FakeGraph::new();
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let modifiers = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+    let secondary = egui::PointerButton::Secondary;
+    let target = Editor::wire_selection_target(&graph.frame(&[], None), &30).unwrap();
+
+    let _ = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+    let outputs = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![pointer_button_with(target, secondary, false, modifiers)],
+        modifiers,
+        false,
+    );
+
+    assert!(outputs.is_empty());
+}
+
+#[test]
+fn alt_right_drag_lazy_connects_compatible_nodes() {
+    let mut graph = FakeGraph::new();
+    graph.wires.clear();
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let modifiers = Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    };
+    let secondary = egui::PointerButton::Secondary;
+    let source = graph.nodes[0].rect.center();
+    let target = graph.nodes[1].rect.center();
+
+    let _ = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(source),
+            pointer_button_with(source, secondary, true, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+    let outputs = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, false, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+
+    assert_eq!(outputs, vec![EditorOutput::Connect { from: 20, to: 21 }]);
+}
+
+#[test]
+fn lazy_connect_also_resolves_a_reverse_node_drag() {
+    let mut graph = FakeGraph::new();
+    graph.wires.clear();
+    let context = egui::Context::default();
+    let mut state = State::default();
+    let modifiers = Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    };
+    let secondary = egui::PointerButton::Secondary;
+    let target = graph.nodes[1].rect.center();
+    let source = graph.nodes[0].rect.center();
+
+    let _ = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(target),
+            pointer_button_with(target, secondary, true, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+    let outputs = run_interaction_frame_with(
+        &context,
+        &graph,
+        &mut state,
+        InteractionOptions::ALL,
+        &[],
+        None,
+        vec![
+            Event::PointerMoved(source),
+            pointer_button_with(source, secondary, false, modifiers),
+        ],
+        modifiers,
+        false,
+    );
+
+    assert_eq!(outputs, vec![EditorOutput::Connect { from: 20, to: 21 }]);
+}
+
+#[test]
 fn authoritative_wire_target_avoids_node_occlusion_and_selects_the_wire() {
     let mut graph = FakeGraph::new();
     let occluder = Rect::from_min_size(pos2(300.0, 145.0), vec2(60.0, 50.0));

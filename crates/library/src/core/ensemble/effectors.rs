@@ -33,7 +33,8 @@ pub fn evaluate_configured_transform(
             EffectorConfig::Transform { target, .. }
             | EffectorConfig::StepDelay { target, .. }
             | EffectorConfig::Opacity { target, .. }
-            | EffectorConfig::Randomize { target, .. } => *target,
+            | EffectorConfig::Randomize { target, .. }
+            | EffectorConfig::Tracking { target, .. } => *target,
         };
         let (
             group_index,
@@ -77,7 +78,10 @@ pub fn evaluate_configured_transform(
         // A Block sequences every character, a Line restarts that sequence for
         // each line, and a Char is an independent one-element sequence. Other
         // effectors use the addressed group itself for their context.
-        let (index, total) = if matches!(config, EffectorConfig::StepDelay { .. }) {
+        let (index, total) = if matches!(
+            config,
+            EffectorConfig::StepDelay { .. } | EffectorConfig::Tracking { .. }
+        ) {
             (sequence_index, sequence_total)
         } else {
             (group_index, group_total)
@@ -141,9 +145,35 @@ pub fn evaluate_configured_transform(
                 ..
             } => RandomizeEffector::new(*translate_range, *rotate_range, *scale_range, *seed)
                 .apply(&context, &mut transform),
+            EffectorConfig::Tracking { amount, .. } => {
+                TrackingEffector::new(*amount).apply(&context, &mut transform)
+            }
         }
     }
     Ok(transform)
+}
+
+/// Adds horizontal space between consecutive elements in the addressed
+/// sequence. Block continues across the whole text, Line restarts at each
+/// line, and Char addresses a one-element sequence and is therefore neutral.
+pub struct TrackingEffector {
+    pub amount: f32,
+}
+
+impl TrackingEffector {
+    pub fn new(amount: f32) -> Self {
+        Self { amount }
+    }
+}
+
+impl Effector for TrackingEffector {
+    fn apply(&self, ctx: &EffectorContext, transform: &mut TransformData) {
+        transform.translate.0 += ctx.index as f32 * self.amount;
+    }
+
+    fn name(&self) -> &str {
+        "Tracking"
+    }
 }
 
 /// Convert a group-pivot transform into the equivalent translation for the
@@ -570,6 +600,29 @@ mod tests {
         assert_eq!(block.opacity, 0.0);
         assert_eq!(line.opacity, 0.25);
         assert_eq!(character.opacity, 0.75);
+    }
+
+    #[test]
+    fn configured_tracking_uses_block_line_and_character_sequences() {
+        let config = |target| EffectorConfig::Tracking {
+            amount: 12.0,
+            target,
+        };
+        let scoped_element = element(4, 1);
+
+        let block =
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.0, scoped_element)
+                .unwrap();
+        let line =
+            evaluate_configured_transform(&[config(EffectorTarget::Line)], 0.0, scoped_element)
+                .unwrap();
+        let character =
+            evaluate_configured_transform(&[config(EffectorTarget::Char)], 0.0, scoped_element)
+                .unwrap();
+
+        assert_eq!(block.translate, (48.0, 0.0));
+        assert_eq!(line.translate, (12.0, 0.0));
+        assert_eq!(character.translate, (0.0, 0.0));
     }
 
     #[test]

@@ -5,6 +5,10 @@ use crate::core::rendering::text_layout::{
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::{RuntimeShape, RuntimeShapeGeometry};
 
+pub const DEFAULT_TEXT_FONT_FAMILY: &str = "Arial";
+pub const DEFAULT_TEXT_NODE_SIZE: f64 = 100.0;
+pub const DEFAULT_TIMELINE_TEXT_SIZE: f64 = 48.0;
+
 #[derive(Default)]
 pub struct TextEntityConverterPlugin;
 
@@ -12,6 +16,59 @@ impl TextEntityConverterPlugin {
     pub fn new() -> Self {
         Self
     }
+}
+
+fn text_property_definitions(default_size: f64) -> Vec<crate::model::property::PropertyDefinition> {
+    use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use ordered_float::OrderedFloat;
+
+    vec![
+        PropertyDefinition::new(
+            "text",
+            PropertyUiType::MultilineText,
+            "Content",
+            PropertyValue::String("Text".to_string()),
+        ),
+        PropertyDefinition::new(
+            "font_family",
+            PropertyUiType::Font,
+            "Font",
+            PropertyValue::String(DEFAULT_TEXT_FONT_FAMILY.to_string()),
+        ),
+        PropertyDefinition::new(
+            "size",
+            PropertyUiType::Float {
+                min: 1.0,
+                max: 1000.0,
+                step: 1.0,
+                suffix: "px".to_string(),
+                min_hard_limit: false,
+                max_hard_limit: false,
+            },
+            "Font Size",
+            PropertyValue::Number(OrderedFloat(default_size)),
+        ),
+    ]
+}
+
+/// Canonical typed controls for a direct Timeline Text source.
+///
+/// Graph Text Nodes intentionally retain their established 100 px default;
+/// direct Timeline Text uses 48 px. Keeping both definitions in this one
+/// converter prevents conversion and Inspector reset values from drifting.
+pub fn timeline_text_property_definitions() -> Vec<crate::model::property::PropertyDefinition> {
+    use crate::model::property::{ColorValue, PropertyDefinition, PropertyUiType, PropertyValue};
+
+    let mut definitions = text_property_definitions(DEFAULT_TIMELINE_TEXT_SIZE);
+    definitions.push(PropertyDefinition::new(
+        "color",
+        PropertyUiType::ColorValue,
+        "Fill",
+        PropertyValue::ColorValue(ColorValue::from_straight_srgba8(
+            &crate::model::frame::color::Color::white(),
+        )),
+    ));
+    definitions
 }
 
 impl crate::plugin::Plugin for TextEntityConverterPlugin {
@@ -44,36 +101,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         _clip_width: u64,
         _clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-        use ordered_float::OrderedFloat;
-
-        vec![
-            PropertyDefinition::new(
-                "text",
-                PropertyUiType::Text,
-                "Content",
-                PropertyValue::String("Text".to_string()),
-            ),
-            PropertyDefinition::new(
-                "font_family",
-                PropertyUiType::Font,
-                "Font",
-                PropertyValue::String("Arial".to_string()),
-            ),
-            PropertyDefinition::new(
-                "size",
-                PropertyUiType::Float {
-                    min: 1.0,
-                    max: 1000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Font Size",
-                PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        ]
+        text_property_definitions(DEFAULT_TEXT_NODE_SIZE)
     }
 
     fn convert_entity(
@@ -97,8 +125,8 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
             .optional_string(props, "font_family", time)
-            .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", time, 12.0);
+            .unwrap_or_else(|| DEFAULT_TEXT_FONT_FAMILY.to_string());
+        let size = evaluator.evaluate_number(props, "size", time, DEFAULT_TEXT_NODE_SIZE);
         if !size.is_finite() || size <= 0.0 {
             log::warn!(
                 "Text Node {} has invalid size {size}; producing NoOutput",
@@ -124,8 +152,8 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font_name = evaluator
             .optional_string(props, "font_family", eval_time)
-            .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
+            .unwrap_or_else(|| DEFAULT_TEXT_FONT_FAMILY.to_string());
+        let size = evaluator.evaluate_number(props, "size", eval_time, DEFAULT_TEXT_NODE_SIZE);
 
         let metrics = measure_text_layout(&text, &font_name, size as f32);
         let outset = text_style_outset(&[]);
@@ -177,4 +205,40 @@ pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32
         metrics.height
     );
     (metrics.width, metrics.height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::property::{PropertyUiType, PropertyValue};
+
+    #[test]
+    fn timeline_text_controls_keep_direct_source_defaults_without_changing_node_defaults() {
+        let source = timeline_text_property_definitions();
+        assert_eq!(
+            source
+                .iter()
+                .map(|definition| (definition.name(), definition.label()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("text", "Content"),
+                ("font_family", "Font"),
+                ("size", "Font Size"),
+                ("color", "Fill"),
+            ]
+        );
+        assert!(matches!(source[0].ui_type(), PropertyUiType::MultilineText));
+        assert!(matches!(source[1].ui_type(), PropertyUiType::Font));
+        assert_eq!(
+            source[2].default_value(),
+            &PropertyValue::from(DEFAULT_TIMELINE_TEXT_SIZE)
+        );
+
+        let node = text_property_definitions(DEFAULT_TEXT_NODE_SIZE);
+        assert!(matches!(node[0].ui_type(), PropertyUiType::MultilineText));
+        assert_eq!(
+            node[2].default_value(),
+            &PropertyValue::from(DEFAULT_TEXT_NODE_SIZE)
+        );
+    }
 }

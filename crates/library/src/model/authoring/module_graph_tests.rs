@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use super::*;
 use crate::model::BlendMode;
 use crate::model::node::Node;
 use crate::model::project::{
     IMAGE_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, PortDataType, SOUND_INPUT_PORT,
 };
+use crate::plugin::PluginManager;
 
 #[test]
 fn media_module_constructor_has_one_stable_terminal_with_image_and_sound_inputs() {
@@ -74,4 +77,36 @@ fn native_constant_only_inputs_reject_dynamic_graph_authoring() {
         .expect_err("constant-only Particle input must reject graph wiring");
     assert!(error.contains("constant-only input"));
     assert!(error.contains("fixed-step parameter schedule"));
+}
+
+#[test]
+fn module_graph_rejects_unsupported_bypass_and_keeps_typed_image_passthrough() {
+    let plugins = PluginManager::default();
+    let mut fill = plugins
+        .create_style_operation_node("fill")
+        .expect("Fill Style Node");
+    assert!(!fill.supports_bypass());
+    fill.bypassed = true;
+    let fill_id = fill.id;
+    let invalid = ModuleGraph {
+        nodes: HashMap::from([(fill_id, fill)]),
+        connections: Vec::new(),
+    };
+    let error = invalid
+        .validate()
+        .expect_err("a Style value without a Style input cannot bypass");
+    assert!(error.contains(&fill_id.to_string()), "{error}");
+    assert!(error.contains("cannot be bypassed"), "{error}");
+
+    let mut blur = plugins
+        .create_effect_operation_node("blur")
+        .expect("Blur Effect Node");
+    assert!(blur.supports_bypass());
+    blur.bypassed = true;
+    ModuleGraph {
+        nodes: HashMap::from([(blur.id, blur)]),
+        connections: Vec::new(),
+    }
+    .validate()
+    .expect("an Image-to-Image Effect keeps its type-preserving bypass");
 }

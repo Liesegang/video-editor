@@ -29,6 +29,14 @@ pub fn snapshot(
             json!({"kind": "module_definition", "id": id})
         }
     });
+    let selected_items = editor
+        .selection
+        .iter()
+        .filter_map(|selection| match selection {
+            AuthoringSelection::Item(id) => Some(id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let document = editor
         .node_editor
         .active_document
@@ -54,7 +62,10 @@ pub fn snapshot(
                 "instance_path": editor.active_instance_path,
                 "definition_scope": editor.active_instance_path.is_none(),
             },
-            "selection": {"primary": selection},
+            "selection": {
+                "primary": selection,
+                "item_ids": selected_items,
+            },
             "assets": {
                 "view_mode": editor.assets.view_mode.qa_name(),
             },
@@ -67,7 +78,8 @@ pub fn snapshot(
                 "vertical_scroll": editor.timeline.vertical_scroll,
                 "item_gesture_active": editor.timeline.item_gesture.is_some(),
                 "keyframe_gesture_active": editor.timeline.keyframe_gesture.is_some(),
-                "library_drag_active": editor.timeline.library_drag.is_some(),
+                "selection_gesture_active": editor.timeline.selection_gesture.is_some(),
+                "library_drag_active": editor.library_drag.is_some(),
                 "expanded_items": editor.timeline.expanded_items,
                 "track_display_modes": editor.timeline.track_display_modes.iter().map(|(id, mode)| {
                     (id.to_string(), mode.qa_name())
@@ -91,6 +103,9 @@ pub fn snapshot(
                     crate::state::authoring::PreviewTool::Select => "select",
                     crate::state::authoring::PreviewTool::Text => "text",
                     crate::state::authoring::PreviewTool::Path => "path",
+                    crate::state::authoring::PreviewTool::Pen => "pen",
+                    crate::state::authoring::PreviewTool::Rectangle => "rectangle",
+                    crate::state::authoring::PreviewTool::Ellipse => "ellipse",
                     crate::state::authoring::PreviewTool::Pan => "pan",
                     crate::state::authoring::PreviewTool::Zoom => "zoom",
                 },
@@ -125,6 +140,7 @@ pub fn snapshot(
                 "pan": {"x": editor.curve_editor.canvas.pan.x, "y": editor.curve_editor.canvas.pan.y},
                 "zoom": {"x": editor.curve_editor.canvas.zoom.x, "y": editor.curve_editor.canvas.zoom.y},
                 "drag_active": editor.curve_editor.drag.is_some(),
+                "keyframe_editor_active": editor.curve_editor.keyframe_editor.is_some(),
             },
             "status": editor.status,
             "error": editor.error,

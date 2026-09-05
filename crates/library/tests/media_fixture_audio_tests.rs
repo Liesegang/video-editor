@@ -128,6 +128,7 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
             file_path: fixture("multi_audio.mkv"),
             stream_index: Some(0),
             audio_stream_index: Some(2),
+            outputs: library::model::MediaOutputSelection::ImageAndAudio,
         },
         8,
         6,

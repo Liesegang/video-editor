@@ -19,6 +19,23 @@ impl TimelineEditorService {
         self.commit_edit_plan(&plan).map_err(LibraryError::from)
     }
 
+    /// Moves the selected clips as one exact-time, one-history-entry edit.
+    /// Their time offsets and relative layer order are preserved while the
+    /// primary clip anchors the destination Track and insertion layer.
+    pub fn move_items(
+        &self,
+        item_ids: &[TimelineItemId],
+        primary_item_id: TimelineItemId,
+        track_id: TimelineTrackId,
+        start: MediaTime,
+        layer: i64,
+    ) -> Result<ChangeSet, LibraryError> {
+        let plan = self
+            .plan_current_group_move(item_ids, primary_item_id, track_id, start, layer)
+            .map_err(LibraryError::from)?;
+        self.commit_edit_plan(&plan).map_err(LibraryError::from)
+    }
+
     /// Trims a placement while preserving the local source time at every
     /// surviving Timeline instant.
     pub fn trim_item(

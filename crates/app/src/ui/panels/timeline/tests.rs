@@ -31,6 +31,7 @@ pub(super) fn fixture() -> (AuthoringProject, TimelineTrackId, Vec<TimelineItemI
             name: name.to_string(),
             source: SourceRef::Text {
                 text: name.to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             interval: TimelineInterval::new(

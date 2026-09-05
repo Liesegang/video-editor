@@ -62,6 +62,7 @@ mod tests {
                             "path".to_string(),
                             PropertyValue::Path(original.clone()),
                         )]),
+                        appearance_operations: Vec::new(),
                     },
                 },
                 TimelineInterval::new(MediaTime::zero(), MediaTime::new(2, 1).unwrap()).unwrap(),
@@ -108,6 +109,7 @@ mod tests {
                     shape: ShapeSource {
                         shape_kind: ShapeKind::Rectangle,
                         parameters: HashMap::new(),
+                        appearance_operations: Vec::new(),
                     },
                 },
                 TimelineInterval::new(MediaTime::zero(), MediaTime::new(2, 1).unwrap()).unwrap(),

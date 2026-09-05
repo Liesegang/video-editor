@@ -203,6 +203,7 @@ fn ordinary_and_nested_timeline_items_never_create_module_topology() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Timeline-owned".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             interval(0, 2),
@@ -246,6 +247,7 @@ fn hostile_missing_track_document_returns_error_without_panicking() {
             "Text".to_string(),
             SourceRef::Text {
                 text: "hello".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             interval(0, 1),
@@ -585,6 +587,7 @@ fn builtin_effect_is_a_lightweight_attachment_and_undo_redo_are_project_atomic()
             "Text".to_string(),
             SourceRef::Text {
                 text: "Title".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             interval(0, 2),
@@ -847,6 +850,7 @@ fn timeline_authoring_commands_and_effect_reorder_are_single_undo_steps() {
             "Title".to_string(),
             SourceRef::Text {
                 text: "Before".to_string(),
+                appearance_operations: Vec::new(),
                 ensemble_operations: Vec::new(),
             },
             interval(0, 2),

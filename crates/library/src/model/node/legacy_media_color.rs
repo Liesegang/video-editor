@@ -78,6 +78,7 @@ mod tests {
     fn persisted_media_node(properties: serde_json::Value) -> Node {
         let media = MediaContent {
             asset_id: Uuid::new_v4(),
+            output_selection: crate::model::MediaOutputSelection::ImageAndAudio,
             stream_index: None,
             audio_stream_index: None,
         };

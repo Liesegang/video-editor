@@ -42,6 +42,7 @@ fn media_node(manager: &ProjectManager, asset: &Asset) -> Result<Node> {
             file_path: asset.path.clone(),
             stream_index: asset.stream_index,
             audio_stream_index: None,
+            outputs: library::model::MediaOutputSelection::ImageAndAudio,
         },
         AssetKind::Image => MediaNodeRequest::Image {
             asset_id: asset.id,

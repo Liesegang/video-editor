@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use egui_snarl::ui::SnarlViewer;
 use egui_snarl::{InPinId, OutPinId};
-use library::editor::ModuleNodeRequest;
+use library::editor::{ModuleItemPlacement, ModuleNodeRequest};
 use library::model::authoring::{
-    ModuleConnection, ModuleDefinitionSharing, ProjectPalette, TransitionMediaType,
+    MediaTime, ModuleConnection, ModuleDefinitionSharing, ModuleTemplateOrigin, ProjectPalette,
+    TimelineInterval, TransitionMediaType,
 };
 use library::model::frame::color::Color;
 use library::model::project::{
@@ -96,6 +97,7 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
                 *actions.borrow_mut() = show_module_document(
                     ui,
                     &definition,
+                    &[],
                     &palette,
                     &mut state,
                     &plugins,
@@ -109,6 +111,130 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
     assert_eq!(
         state.canvas,
         pan_zoom_ui::CanvasState::uniform(egui::Vec2::ZERO, 1.0)
+    );
+}
+
+#[test]
+fn selected_module_wire_paints_normal_and_highlight_on_one_shared_curve() {
+    fn collect_cubic_curves(shape: &egui::Shape, curves: &mut Vec<[egui::Pos2; 4]>) {
+        match shape {
+            egui::Shape::CubicBezier(curve) => curves.push(curve.points),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_cubic_curves(shape, curves);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let plugins = PluginManager::default();
+    let (definition, _, _) = fixture(&plugins);
+    let connection_id = definition.graph.connections[0].id;
+    let context = egui::Context::default();
+    let mut state = NodeEditorState {
+        selected_connection: Some(connection_id),
+        ..NodeEditorState::default()
+    };
+    let palette = ProjectPalette::default();
+    let full = context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 700.0),
+            )),
+            focused: true,
+            ..Default::default()
+        },
+        |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                show_module_document(
+                    ui,
+                    &definition,
+                    &[],
+                    &palette,
+                    &mut state,
+                    &plugins,
+                    property_context(),
+                );
+            });
+        },
+    );
+    let mut curves = Vec::new();
+    for clipped in &full.shapes {
+        collect_cubic_curves(&clipped.shape, &mut curves);
+    }
+
+    assert_eq!(curves.len(), 2, "normal wire and selection highlight");
+    assert_eq!(curves[0], curves[1]);
+}
+
+#[test]
+fn cancelled_node_move_discards_preview_offsets_without_persisting_them() {
+    let service =
+        TimelineEditorService::create_default("Cancelled Node move").expect("authoring service");
+    let initial = service.snapshot().expect("initial Project");
+    let root_timeline_id = initial.root_timeline_id;
+    let track_id = initial.timelines[&root_timeline_id].track_order[0];
+    drop(initial);
+    let (definition, output_id) = ModuleDefinition::new_image(
+        "Move host",
+        ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project),
+    );
+    let definition_id = definition.id;
+    let node_id = definition.output(output_id).expect("Image Output").node_id;
+    service
+        .add_module_definition(definition)
+        .expect("Module definition");
+    let (_, instance_id, _) = service
+        .place_module_item(
+            definition_id,
+            ModuleItemPlacement {
+                track_id,
+                name: "Node Clip".to_string(),
+                output_id,
+                interval: TimelineInterval::new(
+                    MediaTime::zero(),
+                    MediaTime::from_whole_seconds(2),
+                )
+                .expect("placement interval"),
+                layer: 0,
+                parameter_overrides: HashMap::new(),
+                input_bindings: HashMap::new(),
+            },
+        )
+        .expect("Node Clip placement");
+    let before = service.snapshot().expect("Project before cancelled move");
+    let definition = before.module_definitions[&definition_id].clone();
+    let original_position = definition.graph.nodes[&node_id].ui_position;
+    let revision = service.revision().expect("revision before cancelled move");
+    let can_undo = service
+        .can_undo()
+        .expect("Undo state before cancelled move");
+    let mut state = AuthoringUiState::new(root_timeline_id);
+    state
+        .node_editor
+        .node_drag_offsets
+        .insert(node_id, egui::vec2(84.0, -32.0));
+
+    host::finish_node_move(
+        MoveEndOutcome::Cancelled,
+        &definition,
+        instance_id,
+        &mut state,
+        &service,
+    );
+
+    assert!(state.node_editor.node_drag_offsets.is_empty());
+    assert_eq!(service.revision().expect("revision after cancel"), revision);
+    assert_eq!(
+        service.can_undo().expect("Undo state after cancel"),
+        can_undo
+    );
+    let after = service.snapshot().expect("Project after cancelled move");
+    assert_eq!(
+        after.module_definitions[&definition_id].graph.nodes[&node_id].ui_position,
+        original_position
     );
 }
 
@@ -193,6 +319,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
     {
         let mut viewer = ModuleNodeViewer {
             definition: &definition,
+            assets: &[],
             palette: &palette,
             plugins: &plugins,
             property_context: property_context(),
@@ -223,6 +350,7 @@ fn production_snarl_consumes_the_authoritative_application_transform() {
     let palette = ProjectPalette::default();
     let mut viewer = ModuleNodeViewer {
         definition: &definition,
+        assets: &[],
         palette: &palette,
         plugins: &plugins,
         property_context: property_context(),
@@ -239,6 +367,52 @@ fn production_snarl_consumes_the_authoritative_application_transform() {
 
     assert_eq!(snarl_proposal, authoritative);
     assert_eq!(captured, authoritative);
+}
+
+#[test]
+fn node_header_hit_rect_covers_the_complete_painted_header_width() {
+    let node_rect = egui::Rect::from_min_max(egui::pos2(40.0, 50.0), egui::pos2(280.0, 260.0));
+    let content_rect = egui::Rect::from_min_max(egui::pos2(72.0, 58.0), egui::pos2(230.0, 84.0));
+    let header_frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(9, 7));
+
+    let hit = surface::node_header_hit_rect(node_rect, content_rect, header_frame);
+
+    assert_eq!(hit.left(), node_rect.left());
+    assert_eq!(hit.right(), node_rect.right());
+    assert_eq!(hit.top(), node_rect.top());
+    assert_eq!(hit.bottom(), 91.0);
+}
+
+#[test]
+fn header_state_control_bypasses_resumes_and_enables_without_touching_protected_nodes() {
+    assert_eq!(
+        viewer::next_header_node_state(true, false, true, false),
+        Some((true, true))
+    );
+    assert_eq!(
+        viewer::next_header_node_state(true, true, true, false),
+        Some((true, false))
+    );
+    assert_eq!(
+        viewer::next_header_node_state(false, true, true, false),
+        Some((true, false))
+    );
+    assert_eq!(
+        viewer::next_header_node_state(true, false, false, false),
+        Some((false, false))
+    );
+    assert_eq!(
+        viewer::next_header_node_state(true, false, true, true),
+        None
+    );
+}
+
+#[test]
+fn overview_zoom_keeps_node_deletion_available() {
+    for scale in [0.05, 0.25, 1.0, 2.0] {
+        assert!(surface::module_interaction_options(scale).delete);
+    }
+    assert!(!surface::module_interaction_options(0.05).connect);
 }
 
 #[test]

@@ -80,6 +80,22 @@ impl CubicBezier {
         }
     }
 
+    /// Maps the complete curve through the same affine canvas transform used
+    /// for Nodes, ports, hit testing, and transient overlays.
+    pub fn transformed(self, transform: egui::emath::TSTransform) -> Self {
+        Self::new(
+            transform * self.start,
+            transform * self.control_a,
+            transform * self.control_b,
+            transform * self.end,
+        )
+    }
+
+    /// Cubic control points in painter order.
+    pub const fn points(self) -> [Pos2; 4] {
+        [self.start, self.control_a, self.control_b, self.end]
+    }
+
     /// Returns the point at normalized curve parameter `t`.
     pub fn point(self, t: f32) -> Pos2 {
         let one_minus_t = 1.0 - t;

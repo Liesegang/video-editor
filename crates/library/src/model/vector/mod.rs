@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 mod edit;
 mod path_value;
 
-pub use edit::{move_handle, move_vertices, set_point_type};
+pub use edit::{insert_vertex, move_handle, move_vertices, set_point_type};
 pub use path_value::{PathProjectionError, project_path_contour, replace_path_contour};
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
