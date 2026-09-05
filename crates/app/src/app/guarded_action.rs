@@ -11,6 +11,24 @@ pub(crate) enum GuardedProjectAction {
     Quit,
 }
 
+impl GuardedProjectAction {
+    pub(crate) const fn progress_description(self) -> &'static str {
+        match self {
+            Self::NewProject => "creating a new project",
+            Self::OpenProject => "opening another project",
+            Self::Quit => "closing RuViE",
+        }
+    }
+
+    pub(crate) const fn lifecycle_name(self) -> &'static str {
+        match self {
+            Self::NewProject => "new_project",
+            Self::OpenProject => "open_project",
+            Self::Quit => "quit",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnsavedChoice {
     Save,
@@ -63,6 +81,26 @@ impl GuardedActionState {
             Phase::AwaitingChoice(action) => Some(action),
             _ => None,
         }
+    }
+
+    /// Observe an approved action without consuming it. Background work may
+    /// finish asynchronously before `take_ready_action` commits the action.
+    pub(crate) fn ready_action(&self) -> Option<GuardedProjectAction> {
+        match self.phase {
+            Phase::Ready(action) => Some(action),
+            _ => None,
+        }
+    }
+
+    /// Cancels an approved action when prerequisite background cleanup fails.
+    /// Other phases are left untouched so stale/unrelated completions cannot
+    /// dismiss an unsaved-changes prompt or a committed native close.
+    pub(crate) fn abort_ready_action(&mut self) -> bool {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return false;
+        }
+        self.phase = Phase::Idle;
+        true
     }
 
     /// Applies a modal decision. `Save` keeps the prompt active until the
@@ -189,6 +227,57 @@ mod tests {
             state.take_ready_action(),
             Some(GuardedProjectAction::OpenProject)
         );
+    }
+
+    #[test]
+    fn approved_actions_remain_ready_while_background_cleanup_is_pending() {
+        for action in [
+            GuardedProjectAction::NewProject,
+            GuardedProjectAction::OpenProject,
+            GuardedProjectAction::Quit,
+        ] {
+            let mut state = GuardedActionState::default();
+            assert!(state.request(action));
+            assert!(state.resolve_request(false));
+
+            assert_eq!(state.ready_action(), Some(action));
+            assert_eq!(state.ready_action(), Some(action));
+            assert!(state.blocks_commands());
+            assert!(!state.allows_window_close());
+
+            assert_eq!(state.take_ready_action(), Some(action));
+            assert_eq!(state.ready_action(), None);
+        }
+    }
+
+    #[test]
+    fn only_a_ready_action_can_be_aborted_after_background_failure() {
+        let mut idle = GuardedActionState::default();
+        assert!(!idle.abort_ready_action());
+
+        let mut awaiting_choice = GuardedActionState::default();
+        assert!(awaiting_choice.request(GuardedProjectAction::OpenProject));
+        assert!(awaiting_choice.resolve_request(true));
+        assert!(!awaiting_choice.abort_ready_action());
+        assert_eq!(
+            awaiting_choice.prompt_action(),
+            Some(GuardedProjectAction::OpenProject)
+        );
+
+        for action in [
+            GuardedProjectAction::NewProject,
+            GuardedProjectAction::OpenProject,
+            GuardedProjectAction::Quit,
+        ] {
+            let mut ready = GuardedActionState::default();
+            assert!(ready.request(action));
+            assert!(ready.resolve_request(false));
+            assert!(ready.abort_ready_action());
+            assert_eq!(ready.ready_action(), None);
+            assert_eq!(ready.take_ready_action(), None);
+            assert!(!ready.blocks_commands());
+            assert!(!ready.allows_window_close());
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod authoring_audio;
+pub(super) mod cancellation;
 mod panic_guard;
 mod video_output;
 mod worker;
@@ -29,11 +30,15 @@ use super::{AuthoringExportResult, RenderRequestId, authoring_error_frame_info};
 #[cfg(test)]
 pub(super) use authoring_audio::TemporaryAudioTestControl;
 use authoring_audio::{TemporaryAuthoringAudio, prepare_authoring_audio};
+use cancellation::ExportCancellation;
+#[cfg(test)]
+use cancellation::ExportCheckpoint;
 use panic_guard::catch_export_panic;
 use video_output::AuthoringVideoOutput;
 pub(super) use worker::run_authoring_export_worker;
 
 pub(super) struct AuthoringPngExportRequest {
+    pub(super) cancellation: Arc<ExportCancellation>,
     pub(super) request_id: RenderRequestId,
     pub(super) project: Arc<AuthoringProject>,
     pub(super) plan: Arc<RenderPlan>,
@@ -44,6 +49,7 @@ pub(super) struct AuthoringPngExportRequest {
 }
 
 pub(super) struct AuthoringVideoExportRequest {
+    pub(super) cancellation: Arc<ExportCancellation>,
     pub(super) request_id: RenderRequestId,
     pub(super) project: Arc<AuthoringProject>,
     pub(super) plan: Arc<RenderPlan>,
@@ -262,7 +268,9 @@ fn preflight_authoring_video_particle_targets(
     timeline_id: TimelineId,
     instance_path: Option<&InstancePath>,
     frame_count: u64,
+    cancellation: &ExportCancellation,
 ) -> Result<AuthoringParticlePreflight, LibraryError> {
+    cancellation.check()?;
     if !plan.timeline_may_require_capability(
         project,
         timeline_id,
@@ -277,6 +285,7 @@ fn preflight_authoring_video_particle_targets(
     // TimeMap policies. Resolve exact reachability and target dimensions
     // through the production evaluator before any export side effect.
     for frame_index in 0..frame_count {
+        cancellation.check()?;
         let exact_frame = i64::try_from(frame_index)
             .map_err(|_| LibraryError::Render("video frame index exceeds i64".to_string()))?;
         let frame_info = evaluate_timeline_render_plan_frame_at_instance(
@@ -310,6 +319,7 @@ pub(super) fn preflight_authoring_video_requires_gpu(
         timeline_id,
         instance_path,
         frame_count,
+        &ExportCancellation::default(),
     )?
     .requires_gpu())
 }
@@ -379,7 +389,12 @@ fn write_authoring_png(
     let (finish, _) = catch_export_panic("authoring PNG exporter finalization", || {
         exporter.finish_export(&destination, settings)
     });
-    combine_export_and_finish(write, finish, "PNG write failed")
+    combine_operation_and_cleanup(
+        write,
+        finish,
+        "PNG write failed",
+        "exporter finalization also failed",
+    )
 }
 
 fn authoring_video_settings(
@@ -462,21 +477,6 @@ pub(super) fn authoring_video_frame_count(
     Ok(frames)
 }
 
-fn combine_export_and_finish(
-    export: Result<(), LibraryError>,
-    finish: Result<(), LibraryError>,
-    export_failure: &str,
-) -> Result<(), LibraryError> {
-    match (export, finish) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(export_error), Ok(())) => Err(export_error),
-        (Ok(()), Err(finish_error)) => Err(finish_error),
-        (Err(export_error), Err(finish_error)) => Err(LibraryError::Render(format!(
-            "{export_failure}: {export_error}; exporter finalization also failed: {finish_error}"
-        ))),
-    }
-}
-
 pub(super) fn combine_operation_and_cleanup(
     operation: Result<(), LibraryError>,
     cleanup: Result<(), LibraryError>,
@@ -502,16 +502,18 @@ fn run_authoring_png_export(
     plugin_manager: &Arc<PluginManager>,
     cache_manager: &SharedCacheManager,
 ) -> AuthoringExportResult {
-    let frame_info = match evaluate_timeline_render_plan_frame_at_instance(
-        request.project.as_ref(),
-        request.plan.as_ref(),
-        plugin_manager.as_ref(),
-        request.timeline_id,
-        request.frame_number,
-        1.0,
-        None,
-        request.instance_path.as_ref(),
-    ) {
+    let frame_info = match request.cancellation.check().and_then(|()| {
+        evaluate_timeline_render_plan_frame_at_instance(
+            request.project.as_ref(),
+            request.plan.as_ref(),
+            plugin_manager.as_ref(),
+            request.timeline_id,
+            request.frame_number,
+            1.0,
+            None,
+            request.instance_path.as_ref(),
+        )
+    }) {
         Ok(frame_info) => frame_info,
         Err(error) => {
             return AuthoringExportResult {
@@ -537,6 +539,7 @@ fn run_authoring_png_export(
     let preflight_result = particle_preflight.include_frame(&frame_info);
 
     let output = (|| {
+        request.cancellation.check()?;
         preflight_result?;
         let timeline = request
             .project
@@ -566,6 +569,17 @@ fn run_authoring_png_export(
         // Re-resolve filesystem identities immediately before the plugin is
         // allowed to create or truncate the destination.
         require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
+        // A PNG write publishes directly; once it starts, cancellation is too
+        // late. The request remains tracked until write and finish complete.
+        #[cfg(test)]
+        request
+            .cancellation
+            .pause_at(ExportCheckpoint::BeforePublication)?;
+        request.cancellation.begin_publication()?;
+        #[cfg(test)]
+        request
+            .cancellation
+            .pause_at(ExportCheckpoint::PublicationStarted)?;
         write_authoring_png(
             plugin_manager.as_ref(),
             &request.output_path,
@@ -640,6 +654,7 @@ fn run_authoring_video_export(
         request.timeline_id,
         request.instance_path.as_ref(),
         frame_count,
+        &request.cancellation,
     ) {
         Ok(preflight) => preflight,
         Err(error) => {
@@ -664,6 +679,7 @@ fn run_authoring_video_export(
     let mut destination_lease = None;
     let mut exporter: Option<Arc<dyn ExportPlugin>> = None;
     let (output, job_panicked) = catch_export_panic("authoring video export job", || {
+        request.cancellation.check()?;
         require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
         // Establish the complete export's renderer capability before creating
         // temporary audio or giving the exporter a chance to open the output.
@@ -676,6 +692,7 @@ fn run_authoring_video_export(
             plugin_manager,
             cache_manager,
         )?;
+        request.cancellation.check()?;
         exporter = Some(plugin_manager.require_export_plugin("ffmpeg_export")?);
         // Exporter sessions end before host-side cleanup and publication.
         // Keep this logical destination reserved across that entire gap so a
@@ -692,11 +709,17 @@ fn run_authoring_video_export(
             cache_manager,
             &mut settings,
             &mut temporary_audio,
+            &request.cancellation,
             #[cfg(test)]
             Arc::clone(&request.temporary_audio_test_control),
         );
         audio_preparation?;
         for frame_index in 0..frame_count {
+            #[cfg(test)]
+            request
+                .cancellation
+                .pause_at(ExportCheckpoint::BeforeFrame(frame_index))?;
+            request.cancellation.check()?;
             let exact_frame = i64::try_from(frame_index)
                 .map_err(|_| LibraryError::Render("video frame index exceeds i64".to_string()))?;
             frame_info = evaluate_timeline_render_plan_frame_at_instance(
@@ -709,15 +732,22 @@ fn run_authoring_video_export(
                 None,
                 request.instance_path.as_ref(),
             )?;
+            request.cancellation.check()?;
             let renderer = renderer.as_mut().ok_or_else(|| {
                 LibraryError::Render("authoring export renderer did not initialize".to_string())
             })?;
             renderer.prepare(&frame_info)?;
             let frame = renderer.render_frame(request.project.as_ref(), &frame_info)?;
 
+            #[cfg(test)]
+            request
+                .cancellation
+                .pause_at(ExportCheckpoint::FrameRendered(frame_index))?;
+
             // This check is deliberately repeated: an input symlink or output
             // alias can change while a long export is running.
             require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
+            request.cancellation.check()?;
             exporter_attempted = true;
             let destination = video_output.as_ref().ok_or_else(|| {
                 LibraryError::Render("video export destination is unavailable".to_string())
@@ -748,16 +778,39 @@ fn run_authoring_video_export(
             ),
             (false, _, _) => (Ok(()), false),
         };
-    let output = combine_export_and_finish(output, finish, "video export failed");
+    let output = combine_operation_and_cleanup(
+        output.and_then(|()| request.cancellation.check()),
+        finish,
+        "video export failed",
+        "exporter finalization also failed",
+    );
     let cleanup = temporary_audio
         .as_mut()
         .map_or(Ok(()), TemporaryAuthoringAudio::cleanup);
     let mut output = combine_operation_and_cleanup(
-        output,
+        output.and_then(|()| request.cancellation.check()),
         cleanup,
         "video export failed",
         "temporary audio cleanup also failed",
     );
+    #[cfg(test)]
+    if output.is_ok() {
+        output = request
+            .cancellation
+            .pause_at(ExportCheckpoint::BeforePublication);
+    }
+    if output.is_ok() {
+        // Linearize cancellation against publication after encoder shutdown
+        // and Audio cleanup. An accepted cancel can never reach atomic replace.
+        // Once publication starts, callers must await its terminal result.
+        output = request.cancellation.begin_publication();
+    }
+    #[cfg(test)]
+    if output.is_ok() {
+        output = request
+            .cancellation
+            .pause_at(ExportCheckpoint::PublicationStarted);
+    }
     if output.is_ok() {
         output = video_output
             .take()

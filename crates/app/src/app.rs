@@ -273,7 +273,44 @@ impl RuViEApp {
     }
 
     fn process_guarded_action(&mut self, context: &egui::Context) {
+        if let Some(action) = self.guarded_action.ready_action() {
+            if self.export_runtime.has_pending() {
+                if let Some((request_id, output_path)) =
+                    self.export_runtime.take_cancellation_request()
+                {
+                    let accepted = self
+                        .render_server
+                        .cancel_authoring_export_request(request_id);
+                    log::info!(
+                        target: export::EXPORT_LIFECYCLE_LOG_TARGET,
+                        "RUVIE_EXPORT_LIFECYCLE event=cancel_requested request_id={} accepted={} action={}",
+                        request_id.get(),
+                        accepted,
+                        action.lifecycle_name(),
+                    );
+                    self.state.status = if accepted {
+                        format!(
+                            "Cancelling Export to {output_path} before {}",
+                            action.progress_description()
+                        )
+                    } else {
+                        format!(
+                            "Waiting for Export to {output_path} before {}",
+                            action.progress_description()
+                        )
+                    };
+                }
+                context.request_repaint_after(std::time::Duration::from_millis(50));
+                return;
+            }
+        }
+
         if let Some(action) = self.guarded_action.take_ready_action() {
+            log::info!(
+                target: export::EXPORT_LIFECYCLE_LOG_TARGET,
+                "RUVIE_EXPORT_LIFECYCLE event=guarded_action_execute action={}",
+                action.lifecycle_name(),
+            );
             if let Err(error) = self.execute_guarded_action(context, action) {
                 self.state.error = Some(error.to_string());
             }
@@ -347,7 +384,6 @@ impl RuViEApp {
         initialize_timeline_view(&project, &mut self.state);
         self.audio.stop().map_err(LibraryError::Runtime)?;
         self.preview_runtime = AuthoringPreviewRuntime::default();
-        self.export_runtime = AuthoringExportRuntime::for_app();
         self.saved_revision = Some(self.service.revision()?);
         self.state.status = path.map_or_else(
             || "New Project".to_string(),

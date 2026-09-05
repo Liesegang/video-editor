@@ -39,7 +39,7 @@ pub fn show(
                             egui::Label::new(
                                 egui::RichText::new(format!(
                                     "Save your changes before {}?",
-                                    action_label(action)
+                                    action.progress_description()
                                 ))
                                 .color(ui.visuals().weak_text_color()),
                             )
@@ -129,13 +129,5 @@ const fn action_id(action: GuardedProjectAction) -> &'static str {
         GuardedProjectAction::NewProject => "new_project",
         GuardedProjectAction::OpenProject => "open_project",
         GuardedProjectAction::Quit => "quit",
-    }
-}
-
-const fn action_label(action: GuardedProjectAction) -> &'static str {
-    match action {
-        GuardedProjectAction::NewProject => "creating a new project",
-        GuardedProjectAction::OpenProject => "opening another project",
-        GuardedProjectAction::Quit => "closing RuViE",
     }
 }

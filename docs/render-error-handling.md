@@ -57,6 +57,37 @@ update. Starting a retry clears only the error previously reported by Export,
 so an unrelated subsystem error is neither hidden nor mistaken for Export
 progress.
 
+Each accepted Export request also owns one cancellation state, addressed by
+`RenderRequestId` until its completion is polled. Duplicate outstanding IDs are
+rejected. `cancel_authoring_export_request` returns whether cancellation was
+accepted, not whether cleanup has finished. The worker checks that same state
+before work, during Particle preflight and Audio windows, before frame
+evaluation, and between rendering and exporter writes. Cancellation follows
+the ordinary finalization/cleanup path: an unattempted exporter is not finished;
+an attempted exporter is finished exactly once. A clean cancellation emits one
+typed `LibraryError::ExportCancelled` completion with `published = false`.
+Finalization or cleanup errors remain visible alongside cancellation in the
+typed combined error; cancellation does not erase an earlier operation failure.
+
+After exporter finalization and Audio cleanup, an atomic state transition
+closes the cancellation window before publication begins. An accepted cancel
+cannot publish. Once this transition wins, further cancellation returns false
+and callers wait for sync/validation/atomic replacement to finish. PNG export,
+which writes directly, closes its cancellation window before its exporter
+write instead; it does not acquire Video's atomic-publication guarantees.
+
+Approved New/Open/Quit actions retain the current project and pending Export
+until the matching terminal completion arrives. Cancelling the unsaved-changes
+prompt does not cancel Export. Ordinary cancellation is shown as status, not
+an error dialog; combined cleanup failures remain errors. Window close stays
+uncommitted while cleanup is pending, and project replacement does not reset
+the request ID sequence. As a final normal-shutdown guarantee, `RenderServer`
+Drop cancels active and queued exports and joins the export worker synchronously.
+Preview retains its separate non-blocking teardown. Cancellation is cooperative:
+an in-flight plugin callback, media decode, GPU call, encoder write or encoder
+wait must return before the worker can observe it. This is not a bounded-time
+shutdown or a process-kill cleanup guarantee.
+
 Focused production-path regressions execute a non-zero built-in Blur
 Attachment and the real FFmpeg Video Loader before a private, test-only
 one-shot hook converts their successful callback into a failure. Ordinary
@@ -108,6 +139,7 @@ The focused regression checks are:
 cargo test -p library core::rendering -- --nocapture
 cargo test -p library util::atomic_file -- --nocapture
 cargo test -p library publication_failure_tests -- --nocapture
+cargo test -p library cancellation -- --nocapture
 cargo test -p app failed_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
 cargo test -p app unpublished_export_completion_clears_pending_status_and_surfaces_error -- --nocapture
 cargo test -p app retry_after_failed_export_clears_only_the_previous_export_error -- --nocapture

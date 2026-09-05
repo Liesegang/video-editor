@@ -90,7 +90,9 @@ FULL_SUITES = (
         "video-export",
         "qa-video-export-e2e.py",
         AUTHORING_AUDIO_FIXTURE,
+        project_file=True,
         export_file=True,
+        expects_exit=True,
     ),
 )
 
@@ -282,6 +284,9 @@ def run_one_suite(
             "RUVIE_QA_ARTIFACT_DIR": str(suite_dir.resolve()),
         }
     )
+    if spec.name == "video-export":
+        rust_log = environment.get("RUST_LOG") or "error"
+        environment["RUST_LOG"] = rust_log + ",ruvie_export_lifecycle=info"
     if spec.project_file:
         environment["RUVIE_QA_PROJECT_PATH"] = str((suite_dir / "project.ruvie").resolve())
     if spec.export_file:

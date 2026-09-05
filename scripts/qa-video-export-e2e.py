@@ -11,12 +11,15 @@ import pathlib
 import re
 import struct
 import subprocess
+import time
 
 from qa_support import (
     AUTHORING_AUDIO_FIXTURE,
     QaFailure,
     REPOSITORY_ROOT,
+    capture_viewport,
     run_suite_main,
+    wait_endpoint_closed,
 )
 
 
@@ -24,6 +27,7 @@ EXPORT_PATH_ENV = "RUVIE_QA_EXPORT_PATH"
 ARTIFACT_DIRECTORY_ENV = "RUVIE_QA_ARTIFACT_DIR"
 ERROR_LEVEL = re.compile(r"(?:^|[\[\s])ERROR(?:[\]\s:]|$)")
 SUCCESS = re.compile(r"^Exported ([0-9]+) frames to (.+)$")
+LIFECYCLE_PREFIX = "RUVIE_EXPORT_LIFECYCLE "
 SENTINEL = b"RuViE native QA existing destination; replace only after success\n"
 AUDIO_CODEC = "aac"
 AUDIO_SAMPLE_RATE = 48_000
@@ -358,9 +362,145 @@ def _application_error_lines() -> tuple[pathlib.Path, list[str]]:
     return log_path, [line for line in lines if ERROR_LEVEL.search(line)]
 
 
+def _export_lifecycle_events() -> list[dict]:
+    log_path, _ = _application_error_lines()
+    events = []
+    for line_number, line in enumerate(
+        log_path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+    ):
+        marker = line.find(LIFECYCLE_PREFIX)
+        if marker < 0:
+            continue
+        fields = {}
+        for token in line[marker + len(LIFECYCLE_PREFIX) :].split():
+            key, separator, value = token.partition("=")
+            if separator != "=" or not key or not value:
+                raise QaFailure(
+                    "malformed Export lifecycle log token on line {}: {!r}".format(
+                        line_number, token
+                    )
+                )
+            fields[key] = value
+        if "event" not in fields:
+            raise QaFailure(
+                "Export lifecycle log line {} has no event".format(line_number)
+            )
+        events.append({"line": line_number, **fields})
+    return events
+
+
+def _validate_guarded_export_lifecycle(events: list[dict]) -> list[dict]:
+    cursor = 0
+    verified = []
+
+    def next_event(event_name: str, action: str, start: int) -> tuple[int, dict]:
+        for index in range(start, len(events)):
+            event = events[index]
+            if event.get("event") == event_name and event.get("action") == action:
+                return index, event
+        raise QaFailure(
+            "Export lifecycle log has no {} event for {} after event {}".format(
+                event_name, action, start
+            )
+        )
+
+    for action in ("new_project", "open_project", "quit"):
+        cancel_index, cancel = next_event("cancel_requested", action, cursor)
+        if cancel.get("accepted") != "true":
+            raise QaFailure("{} Export cancellation was not accepted".format(action))
+        request_id = cancel.get("request_id")
+        if request_id is None:
+            raise QaFailure("{} cancellation log has no request ID".format(action))
+
+        terminal_index, terminal = next_event("terminal", action, cancel_index + 1)
+        if terminal.get("request_id") != request_id:
+            raise QaFailure("{} terminal result has a different request ID".format(action))
+        if terminal.get("outcome") != "cancelled":
+            raise QaFailure(
+                "{} Export terminal outcome is not cancelled: {!r}".format(
+                    action, terminal.get("outcome")
+                )
+            )
+
+        execute_index, execute = next_event(
+            "guarded_action_execute", action, terminal_index + 1
+        )
+        verified.extend((cancel, terminal, execute))
+        cursor = execute_index + 1
+    return verified
+
+
 def _trigger_export(client) -> None:
     client.key("e", True, command=True)
     client.key("e", False, command=True)
+
+
+def _command(client, key: str) -> None:
+    client.key(key, True, command=True)
+    client.key(key, False, command=True)
+
+
+def _start_cancellable_export(
+    client,
+    output: pathlib.Path,
+    baseline_entries: set[pathlib.Path],
+    description: str,
+) -> dict:
+    _trigger_export(client)
+    exporting = client.wait_until(
+        description + " status",
+        lambda: state
+        if (state := client.state())["editor"].get("status", "").startswith(
+            "Exporting "
+        )
+        and state["editor"].get("error") is None
+        else None,
+        timeout=5.0,
+    )
+
+    def staging_started():
+        candidates = _new_unexpected_siblings(
+            baseline_entries, _directory_entries(output.parent), output
+        )
+        nonempty = [
+            path for path in candidates if path.is_file() and path.stat().st_size > 0
+        ]
+        return nonempty or None
+
+    staging = client.wait_until(description + " staging write", staging_started, timeout=15.0)
+    return {
+        "status": exporting["editor"]["status"],
+        "staging": [str(path) for path in staging],
+    }
+
+
+def _assert_cancelled_artifacts(
+    output: pathlib.Path,
+    expected_output: bytes,
+    baseline_entries: set[pathlib.Path],
+    description: str,
+) -> None:
+    if output.read_bytes() != expected_output:
+        raise QaFailure(description + " published over the existing destination")
+    unexpected = _new_unexpected_siblings(
+        baseline_entries, _directory_entries(output.parent), output
+    )
+    if unexpected:
+        raise QaFailure(
+            description
+            + " left staging files: "
+            + ", ".join(str(path) for path in unexpected)
+        )
+
+
+def _capture_before_quit(client) -> dict:
+    artifact_dir = pathlib.Path(os.environ[ARTIFACT_DIRECTORY_ENV]).resolve()
+    capture_path = artifact_dir / "capture.png"
+    metadata = capture_viewport(client, capture_path)
+    (artifact_dir / "capture.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return metadata
 
 
 def _wait_for_successful_export(
@@ -504,6 +644,52 @@ def run_suite(client):
             "Export retry left new sibling files: "
             + ", ".join(str(path) for path in unexpected)
         )
+
+    original_project_name = client.state()["project"]["name"]
+    new_started = _start_cancellable_export(
+        client, output, before_entries, "Export before New Project"
+    )
+    _command(client, "n")
+    new_project = client.wait_until(
+        "New Project after Export terminal cleanup",
+        lambda: state
+        if (state := client.state())["project"]["name"] == "Untitled Project"
+        else None,
+        timeout=15.0,
+    )
+    _assert_cancelled_artifacts(
+        output, recovered_encoded, before_entries, "New Project cancellation"
+    )
+
+    open_started = _start_cancellable_export(
+        client, output, before_entries, "Export before Open Project"
+    )
+    _command(client, "o")
+    opened_project = client.wait_until(
+        "Open Project after Export terminal cleanup",
+        lambda: state
+        if (state := client.state())["project"]["name"] == original_project_name
+        else None,
+        timeout=15.0,
+    )
+    _assert_cancelled_artifacts(
+        output, recovered_encoded, before_entries, "Open Project cancellation"
+    )
+
+    quit_capture = _capture_before_quit(client)
+    quit_baseline_entries = _directory_entries(output.parent)
+    quit_started = _start_cancellable_export(
+        client, output, quit_baseline_entries, "Export before native Quit"
+    )
+    client.inject("close-request", {})
+    quit_wait_started = time.monotonic()
+    endpoint_closed = wait_endpoint_closed(
+        client, timeout=30.0, description="Quit after Export cancellation"
+    )
+    _assert_cancelled_artifacts(
+        output, recovered_encoded, quit_baseline_entries, "Quit cancellation"
+    )
+    lifecycle_events = _validate_guarded_export_lifecycle(_export_lifecycle_events())
     log_path, error_lines = _application_error_lines()
     if error_lines:
         raise QaFailure("native app emitted ERROR logs: " + " | ".join(error_lines))
@@ -534,6 +720,27 @@ def run_suite(client):
             "started_status": retry["editor"]["status"],
             "completed_status": recovered["editor"]["status"],
             "bytes": len(recovered_encoded),
+        },
+        "guarded_export_cancellation": {
+            "new": {
+                "started": new_started,
+                "completed_project": new_project["project"]["name"],
+                "ordering_evidence": "persistent_lifecycle_log",
+            },
+            "open": {
+                "started": open_started,
+                "completed_project": opened_project["project"]["name"],
+                "ordering_evidence": "persistent_lifecycle_log",
+            },
+            "quit": {
+                "started": quit_started,
+                "endpoint_close_seconds": endpoint_closed - quit_wait_started,
+                "capture": quit_capture,
+                "ordering_evidence": "persistent_lifecycle_log",
+            },
+            "lifecycle_events": lifecycle_events,
+            "destination_sha256": hashlib.sha256(recovered_encoded).hexdigest(),
+            "new_unexpected_siblings": [],
         },
         "new_unexpected_siblings": [],
         "app_log": {"path": str(log_path), "error_count": 0},

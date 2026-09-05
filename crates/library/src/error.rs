@@ -71,6 +71,8 @@ pub enum LibraryError {
     Project(String),
     #[error("Rendering error: {0}")]
     Render(String),
+    #[error("Export cancelled")]
+    ExportCancelled,
     #[error("{operation_phase}: {operation}; {cleanup_phase}: {cleanup}")]
     OperationAndCleanup {
         operation_phase: &'static str,

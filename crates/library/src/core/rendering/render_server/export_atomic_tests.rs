@@ -17,6 +17,8 @@ use std::time::Duration;
 
 #[path = "export_atomic_tests/audio_cleanup_tests.rs"]
 mod audio_cleanup_tests;
+#[path = "export_atomic_tests/cancellation_tests.rs"]
+mod cancellation_tests;
 #[path = "export_atomic_tests/publication_failure_tests.rs"]
 mod publication_failure_tests;
 #[path = "export_atomic_tests/render_failure_tests.rs"]

@@ -18,6 +18,9 @@ mod export;
 mod preview_mailbox;
 
 #[cfg(test)]
+use export::cancellation::CancellationTestControl;
+use export::cancellation::{ExportCancellation, ExportCancellations};
+#[cfg(test)]
 use export::{AtomicSyncTestControl, TemporaryAudioTestControl};
 use export::{
     AuthoringExportRequest, AuthoringPngExportRequest, AuthoringVideoExportRequest,
@@ -30,6 +33,9 @@ pub struct RenderServer {
     rx_authoring_result: Receiver<RenderResult>,
     tx_authoring_export: SyncSender<AuthoringExportRequest>,
     rx_authoring_export_result: Receiver<AuthoringExportResult>,
+    export_cancellations: ExportCancellations,
+    #[cfg(test)]
+    cancellation_test_control: Arc<CancellationTestControl>,
     #[cfg(test)]
     temporary_audio_test_control: Arc<TemporaryAudioTestControl>,
     #[cfg(test)]
@@ -339,6 +345,9 @@ impl RenderServer {
             rx_authoring_result,
             tx_authoring_export,
             rx_authoring_export_result,
+            export_cancellations: ExportCancellations::default(),
+            #[cfg(test)]
+            cancellation_test_control: Arc::new(CancellationTestControl::default()),
             #[cfg(test)]
             temporary_audio_test_control,
             #[cfg(test)]
@@ -453,9 +462,9 @@ impl RenderServer {
         frame_number: i64,
         output_path: String,
     ) -> bool {
-        match self
-            .tx_authoring_export
-            .try_send(AuthoringExportRequest::Png(AuthoringPngExportRequest {
+        self.submit_authoring_export(request_id, |cancellation| {
+            AuthoringExportRequest::Png(AuthoringPngExportRequest {
+                cancellation,
                 request_id,
                 project,
                 plan,
@@ -463,26 +472,16 @@ impl RenderServer {
                 instance_path,
                 frame_number,
                 output_path,
-            })) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) => {
-                log::debug!("Authoring export worker already has a pending request");
-                false
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                log::debug!("Authoring export worker is unavailable");
-                false
-            }
-        }
+            })
+        })
     }
 
     /// Queue a full-duration authoring video export.
     ///
     /// Frames are rendered from the immutable Project/RenderPlan snapshot and
     /// streamed to the FFmpeg exporter on the dedicated export worker. Audio
-    /// is intentionally absent until the authoring runtime has a real audio
-    /// schedule and mixer; this API does not manufacture a legacy graph or a
-    /// silent placeholder source.
+    /// uses the authoring schedule and mixer. A request ID must be unique until
+    /// its completion has been polled.
     pub fn send_authoring_video_export_request(
         &self,
         request_id: RenderRequestId,
@@ -511,9 +510,9 @@ impl RenderServer {
         instance_path: Option<InstancePath>,
         output_path: String,
     ) -> bool {
-        match self
-            .tx_authoring_export
-            .try_send(AuthoringExportRequest::Video(AuthoringVideoExportRequest {
+        self.submit_authoring_export(request_id, |cancellation| {
+            AuthoringExportRequest::Video(AuthoringVideoExportRequest {
+                cancellation,
                 request_id,
                 project,
                 plan,
@@ -524,13 +523,36 @@ impl RenderServer {
                 temporary_audio_test_control: Arc::clone(&self.temporary_audio_test_control),
                 #[cfg(test)]
                 atomic_sync_test_control: Arc::clone(&self.atomic_sync_test_control),
-            })) {
+            })
+        })
+    }
+
+    fn submit_authoring_export(
+        &self,
+        request_id: RenderRequestId,
+        build: impl FnOnce(Arc<ExportCancellation>) -> AuthoringExportRequest,
+    ) -> bool {
+        let Some(cancellation) = self.export_cancellations.register(request_id) else {
+            log::debug!("Authoring export request identity is already in use");
+            return false;
+        };
+        #[cfg(test)]
+        if cancellation
+            .set_test_control(Arc::clone(&self.cancellation_test_control))
+            .is_err()
+        {
+            self.export_cancellations.remove(request_id);
+            return false;
+        }
+        match self.tx_authoring_export.try_send(build(cancellation)) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
+                self.export_cancellations.remove(request_id);
                 log::debug!("Authoring export worker already has a pending request");
                 false
             }
             Err(TrySendError::Disconnected(_)) => {
+                self.export_cancellations.remove(request_id);
                 log::debug!("Authoring export worker is unavailable");
                 false
             }
@@ -545,7 +567,18 @@ impl RenderServer {
     /// Poll only authoring export completions. Preview never observes or
     /// discards values from this receiver.
     pub fn poll_authoring_export_result(&self) -> Result<AuthoringExportResult, TryRecvError> {
-        self.rx_authoring_export_result.try_recv()
+        let result = self.rx_authoring_export_result.try_recv()?;
+        self.export_cancellations.remove(result.request_id);
+        Ok(result)
+    }
+
+    /// Request cooperative cancellation of an accepted export. `true` means
+    /// cancellation won against publication (or was already requested).
+    /// `false` means the ID is unknown, terminal, or publication has started.
+    /// In either case an accepted export must remain tracked until completion;
+    /// cancellation never skips encoder finalization or temporary-file cleanup.
+    pub fn cancel_authoring_export_request(&self, request_id: RenderRequestId) -> bool {
+        self.export_cancellations.cancel(request_id)
     }
 
     pub fn set_sharing_context(&self, handle: usize, hwnd: Option<isize>) {
@@ -591,23 +624,22 @@ impl RenderServer {
 impl Drop for RenderServer {
     fn drop(&mut self) {
         self.preview_mailbox.shutdown();
-        match self
+        self.export_cancellations.cancel_all();
+        // Cancel both active and queued requests before waiting for queue
+        // space. The worker must deliver their cleanup completions and stop
+        // before this owner disappears; detaching it can lose an encoder or
+        // temporary-file cleanup at process exit.
+        let _shutdown = self
             .tx_authoring_export
-            .try_send(AuthoringExportRequest::Shutdown)
+            .send(AuthoringExportRequest::Shutdown);
+        if let Some(handle) = self.export_handle.take()
+            && handle.join().is_err()
         {
-            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
-            Err(TrySendError::Full(_)) => {
-                // Dropping the last sender after this method returns closes
-                // the channel once the already queued export is received.
-                log::debug!("Authoring export shutdown follows its queued request");
-            }
+            error!("Authoring export thread panicked during shutdown");
         }
-        let mut workers = Vec::with_capacity(2);
+        let mut workers = Vec::with_capacity(1);
         if let Some(handle) = self.handle.take() {
             workers.push(("Render server thread", handle));
-        }
-        if let Some(handle) = self.export_handle.take() {
-            workers.push(("Authoring export thread", handle));
         }
         crate::util::thread::join_in_background("render-shutdown-reaper", workers);
     }

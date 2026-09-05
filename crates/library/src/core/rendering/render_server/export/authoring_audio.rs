@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use super::cancellation::ExportCancellation;
 use crate::cache::SharedCacheManager;
 use crate::core::audio::authoring::{
     AUTHORING_AUDIO_CHANNELS, AUTHORING_AUDIO_SAMPLE_RATE, AuthoringAudioMixer,
@@ -291,8 +292,10 @@ pub(super) fn prepare_authoring_audio(
     cache_manager: &SharedCacheManager,
     settings: &mut ExportSettings,
     owner: &mut Option<TemporaryAuthoringAudio>,
+    cancellation: &ExportCancellation,
     #[cfg(test)] test_control: Arc<TemporaryAudioTestControl>,
 ) -> Result<(), LibraryError> {
+    cancellation.check()?;
     let mut mixer = AuthoringAudioMixer::new(project, cache_manager.as_ref(), timeline_id)
         .map_err(|error| {
             LibraryError::Render(format!("authoring audio schedule failed: {error}"))
@@ -318,6 +321,11 @@ pub(super) fn prepare_authoring_audio(
     })?;
     let mut start_frame = 0_u64;
     while start_frame < frame_count {
+        #[cfg(test)]
+        cancellation.pause_at(super::cancellation::ExportCheckpoint::AudioWindow(
+            start_frame,
+        ))?;
+        cancellation.check()?;
         let remaining = frame_count - start_frame;
         let window_frames = usize::try_from(
             remaining.min(MAX_AUTHORING_AUDIO_WINDOW_FRAMES as u64),
@@ -328,6 +336,7 @@ pub(super) fn prepare_authoring_audio(
             .map_err(|error| {
                 LibraryError::Render(format!("authoring audio render failed: {error}"))
             })?;
+        cancellation.check()?;
         temporary.write_samples(&samples)?;
         start_frame = start_frame
             .checked_add(window_frames as u64)
