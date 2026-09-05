@@ -3,6 +3,7 @@ use super::*;
 mod connections;
 mod output;
 mod parameter_automation;
+pub(super) mod removal;
 
 use connections::{
     connect_definition_ports, disconnect_definition_connection, reconnect_definition_connection,
@@ -268,17 +269,6 @@ impl TimelineEditorService {
         })
     }
 
-    pub fn remove_instance_module_node(
-        &self,
-        instance_id: ModuleInstanceId,
-        node_id: uuid::Uuid,
-    ) -> Result<(ModuleDefinitionId, ChangeSet), LibraryError> {
-        self.edit_instance_definition(instance_id, |definition| {
-            remove_node_from_definition(definition, node_id)
-        })
-        .map(|(_, definition_id, changes)| (definition_id, changes))
-    }
-
     pub fn connect_instance_module_ports(
         &self,
         instance_id: ModuleInstanceId,
@@ -395,16 +385,6 @@ impl TimelineEditorService {
     ) -> Result<SharedModuleEdit<uuid::Uuid>, LibraryError> {
         self.edit_shared_definition(definition_id, |definition| {
             add_node_to_definition(definition, node)
-        })
-    }
-
-    pub fn remove_shared_module_node(
-        &self,
-        definition_id: ModuleDefinitionId,
-        node_id: uuid::Uuid,
-    ) -> Result<SharedModuleEdit<()>, LibraryError> {
-        self.edit_shared_definition(definition_id, |definition| {
-            remove_node_from_definition(definition, node_id)
         })
     }
 
@@ -712,7 +692,7 @@ pub(super) fn remove_instance_and_private_definition(
     }
 }
 
-fn add_node_to_definition(
+pub(super) fn add_node_to_definition(
     definition: &mut ModuleDefinition,
     node: Node,
 ) -> Result<uuid::Uuid, String> {
@@ -726,55 +706,6 @@ fn add_node_to_definition(
     }
     bump_topology_revision(definition)?;
     Ok(node_id)
-}
-
-fn remove_node_from_definition(
-    definition: &mut ModuleDefinition,
-    node_id: uuid::Uuid,
-) -> Result<(), String> {
-    require_unprotected_transition_node(definition, node_id)?;
-    require_removable_processing_node(definition, node_id)?;
-    if definition.graph.nodes.remove(&node_id).is_none() {
-        return Err(format!("Missing Module Node {node_id}"));
-    }
-    definition.graph.connections.retain(|connection| {
-        connection.from.node_id != node_id && connection.to.node_id != node_id
-    });
-    let before = interface_len(definition);
-    definition
-        .interface
-        .parameters
-        .retain(|entry| entry.target.node_id != node_id);
-    definition
-        .interface
-        .media_inputs
-        .retain(|entry| entry.target.node_id != node_id);
-    definition
-        .interface
-        .signals
-        .retain(|entry| entry.source.node_id != node_id);
-    definition
-        .interface
-        .actions
-        .retain(|entry| entry.target.node_id != node_id);
-    bump_topology_revision(definition)?;
-    if before != interface_len(definition) {
-        bump_interface_version(definition)?;
-    }
-    Ok(())
-}
-
-fn require_unprotected_transition_node(
-    definition: &ModuleDefinition,
-    node_id: uuid::Uuid,
-) -> Result<(), String> {
-    if definition.is_protected_host_boundary_node(node_id) {
-        Err(format!(
-            "Transition Module Node {node_id} is a protected A/B/Progress/Output boundary and cannot be deleted"
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 fn set_definition_node_state(
@@ -890,11 +821,4 @@ pub(super) fn bump_interface_version(definition: &mut ModuleDefinition) -> Resul
         .checked_add(1)
         .ok_or_else(|| "Module interface version overflow".to_string())?;
     Ok(())
-}
-
-fn interface_len(definition: &ModuleDefinition) -> usize {
-    definition.interface.parameters.len()
-        + definition.interface.media_inputs.len()
-        + definition.interface.signals.len()
-        + definition.interface.actions.len()
 }

@@ -421,6 +421,45 @@ fn cleanup_interface_dependents(
     Ok(impact)
 }
 
+pub(super) fn cleanup_removed_interface_dependents(
+    project: &mut AuthoringProject,
+    affected_instances: &[ModuleInstanceId],
+    parameter_ids: impl IntoIterator<Item = PublishedParameterId>,
+    media_input_ids: impl IntoIterator<Item = PublishedMediaInputId>,
+) -> Result<ModuleInterfaceEditImpact, String> {
+    let mut combined = ModuleInterfaceEditImpact::default();
+    for parameter_id in parameter_ids {
+        merge_cleanup_impact(
+            &mut combined,
+            cleanup_interface_dependents(
+                project,
+                affected_instances,
+                InterfaceCleanup::Parameter(parameter_id),
+            )?,
+        );
+    }
+    for input_id in media_input_ids {
+        merge_cleanup_impact(
+            &mut combined,
+            cleanup_interface_dependents(
+                project,
+                affected_instances,
+                InterfaceCleanup::MediaInput(input_id),
+            )?,
+        );
+    }
+    Ok(combined)
+}
+
+fn merge_cleanup_impact(
+    combined: &mut ModuleInterfaceEditImpact,
+    impact: ModuleInterfaceEditImpact,
+) {
+    combined.removed_parameter_overrides += impact.removed_parameter_overrides;
+    combined.removed_automation_tracks += impact.removed_automation_tracks;
+    combined.removed_media_input_bindings += impact.removed_media_input_bindings;
+}
+
 fn for_each_affected_invocation_mut(
     project: &mut AuthoringProject,
     affected: &HashSet<ModuleInstanceId>,

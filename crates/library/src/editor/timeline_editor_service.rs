@@ -30,6 +30,8 @@ mod item_tests;
 #[cfg(test)]
 mod module_presentation_tests;
 #[cfg(test)]
+mod module_removal_tests;
+#[cfg(test)]
 mod node_clip_conversion_tests;
 #[cfg(test)]
 mod palette_tests;
