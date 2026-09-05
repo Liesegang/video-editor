@@ -9,7 +9,7 @@ use super::super::{
     TransitionModulePlacementTarget, TransitionModuleProcessor,
 };
 use super::item_placement::ItemPlacementOverlay;
-use super::validation::{validate_parameter_value, validate_typed_automation};
+use super::validation::validate_typed_automation;
 
 /// Every persisted control store for one Transition Module instance.
 ///
@@ -85,23 +85,17 @@ pub(super) fn validate_transition_module_instance_overrides(
             );
         };
 
-        for (parameter_id, value) in &controls.parameter_overrides {
+        for parameter_id in controls.parameter_overrides.keys() {
             if *parameter_id == contract.progress_parameter_id {
                 return Err(format!(
                     "Transition {} cannot override host-owned Progress",
                     transition.id
                 ));
             }
-            let parameter = definition
-                .interface
-                .parameters
-                .iter()
-                .find(|parameter| parameter.id == *parameter_id)
-                .ok_or_else(|| {
-                    "Transition instance overrides an unpublished parameter".to_string()
-                })?;
-            validate_parameter_value(parameter, value)?;
         }
+        let mut effective_parameter_overrides = instance.parameter_overrides.clone();
+        effective_parameter_overrides.extend(controls.parameter_overrides.clone());
+        definition.validate_parameter_overrides(&effective_parameter_overrides)?;
         for (input_id, binding) in &controls.input_bindings {
             if *input_id == contract.from_input_id || *input_id == contract.to_input_id {
                 return Err(format!(
@@ -158,6 +152,7 @@ pub(super) fn validate_transition_module_instance_overrides(
                     "Transition instance automates an unpublished parameter".to_string()
                 })?;
             if let Some(automation) = automation {
+                definition.require_parameter_automation(*parameter_id)?;
                 validate_typed_automation(
                     automation,
                     parameter.data_type,
@@ -167,6 +162,9 @@ pub(super) fn validate_transition_module_instance_overrides(
                     ),
                     Some(transition.duration),
                 )?;
+                for keyframe in &automation.keyframes {
+                    definition.validate_parameter_value(*parameter_id, &keyframe.value)?;
+                }
             }
         }
     }

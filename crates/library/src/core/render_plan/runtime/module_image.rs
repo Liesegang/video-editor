@@ -102,11 +102,6 @@ impl ModuleImageRuntime<'_> {
         &mut self,
         output: &CompiledModuleOutput,
     ) -> Result<Option<FrameItem>, LibraryError> {
-        if let Some(particle) = self.definition.particle_outputs.get(&output.terminal.id) {
-            return self
-                .evaluate_particle_terminal(output.terminal.id, particle)
-                .map(Some);
-        }
         let image_target = output
             .terminal
             .target(crate::model::project::PortDataType::Image)
@@ -166,13 +161,24 @@ impl ModuleImageRuntime<'_> {
             return Ok(None);
         }
         if node.bypassed {
-            let input = node.bypass_routes.get(&source.port).ok_or_else(|| {
-                LibraryError::Validation(format!(
-                    "Node {} has no bypass route for '{}'",
-                    node.id, source.port
-                ))
-            })?;
-            return self.single_image_input(node.id, input);
+            if let Some(input) = node.bypass_routes.get(&source.port) {
+                return self.single_image_input(node.id, input);
+            }
+            if matches!(
+                &node.content,
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id
+                        == crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID
+            ) {
+                // ParticleSystem cannot be passed through an Image output.
+                // Its endpoint bypass state therefore has the same stable
+                // no-output result as a disabled endpoint.
+                return Ok(None);
+            }
+            return Err(LibraryError::Validation(format!(
+                "Node {} has no bypass route for '{}'",
+                node.id, source.port
+            )));
         }
         match &node.content {
             NodeContent::ModuleOutput(_) => Err(LibraryError::Validation(format!(
@@ -427,6 +433,18 @@ impl ModuleImageRuntime<'_> {
         catalog_id: &str,
     ) -> Result<Option<FrameItem>, LibraryError> {
         match catalog_id {
+            crate::model::node::PARTICLE_SPRITE_RENDERER_CATALOG_ID => {
+                let Some(particle) = self.definition.particle_renderers.get(&node.id).cloned()
+                else {
+                    // The compiler validates Particle topology even when a
+                    // chain is inactive. A disabled stage, or an endpoint
+                    // with no type-preserving bypass, deterministically
+                    // produces no Image like every other disabled Module path.
+                    return Ok(None);
+                };
+                self.evaluate_particle_renderer(self.invocation.output_id, &particle)
+                    .map(Some)
+            }
             TRANSITION_IMAGE_INPUT_NODE_ID => self.single_image_input(node.id, IMAGE_INPUT_PORT),
             TRANSITION_IMAGE_MIX_NODE_ID => self.transition_image_mix(node),
             _ => Err(LibraryError::Render(format!(

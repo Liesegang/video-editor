@@ -7,10 +7,66 @@ use ordered_float::OrderedFloat;
 
 use super::descriptor::{DescriptorIdentity, DescriptorSpec, PortSpec};
 use crate::model::frame::color::Color;
+use crate::model::frame::particle::{
+    validate_particle_cold_replay_budget, validate_particle_size_range,
+};
 use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
-use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec3};
+use crate::model::property::{
+    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec3,
+};
 
-const PARTICLE: PortSpec = PortSpec::single("particles", "Particles", PortDataType::ParticleSystem);
+pub(crate) const PARTICLE_SYSTEM_PORT: &str = "particles";
+pub(crate) const PARTICLE_SPRITE_RENDERER_CATALOG_ID: &str =
+    ParticleNodeRole::SpriteRenderer.catalog_id();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParticleNodeRole {
+    Emitter,
+    Initialize,
+    Gravity,
+    Drag,
+    SpriteRenderer,
+}
+
+impl ParticleNodeRole {
+    pub(crate) const fn catalog_id(self) -> &'static str {
+        match self {
+            Self::Emitter => "native.particle.emitter",
+            Self::Initialize => "native.particle.initialize",
+            Self::Gravity => "native.particle.gravity-force",
+            Self::Drag => "native.particle.drag-force",
+            Self::SpriteRenderer => "native.particle.sprite-renderer",
+        }
+    }
+
+    pub(crate) const fn execution_rank(self) -> u8 {
+        match self {
+            Self::Emitter => 0,
+            Self::Initialize => 1,
+            Self::Gravity => 2,
+            Self::Drag => 3,
+            Self::SpriteRenderer => 4,
+        }
+    }
+
+    pub(crate) fn from_catalog_id(catalog_id: &str) -> Option<Self> {
+        [
+            Self::Emitter,
+            Self::Initialize,
+            Self::Gravity,
+            Self::Drag,
+            Self::SpriteRenderer,
+        ]
+        .into_iter()
+        .find(|role| role.catalog_id() == catalog_id)
+    }
+}
+
+const PARTICLE: PortSpec = PortSpec::single(
+    PARTICLE_SYSTEM_PORT,
+    "Particles",
+    PortDataType::ParticleSystem,
+);
 const PARTICLE_OUTPUT: &[PortSpec] = &[PARTICLE];
 const IMAGE_OUTPUT: &[PortSpec] = &[PortSpec::single(
     IMAGE_OUTPUT_PORT,
@@ -40,8 +96,6 @@ const INITIALIZE_PARTICLE_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("velocity_min", "Velocity Min", PortDataType::Vec3),
     PortSpec::single("velocity_max", "Velocity Max", PortDataType::Vec3),
-    PortSpec::single("color_min", "Color Min", PortDataType::Color),
-    PortSpec::single("color_max", "Color Max", PortDataType::Color),
     PortSpec::single("size_min", "Size Min", PortDataType::Number),
     PortSpec::single("size_max", "Size Max", PortDataType::Number),
 ];
@@ -106,6 +160,12 @@ const SPRITE_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("color", "Color", PortDataType::Color),
 ];
+const PARTICLE_FIXED_STEP_REASON: &str = "deterministic Particle simulation needs a fixed-step parameter schedule, which is not implemented yet";
+const EMITTER_CONSTANT_ONLY_INPUTS: &[&str] = &["capacity", "rate", "lifetime", "seed"];
+const INITIALIZE_CONSTANT_ONLY_INPUTS: &[&str] =
+    &["velocity_min", "velocity_max", "size_min", "size_max"];
+const GRAVITY_CONSTANT_ONLY_INPUTS: &[&str] = &["force"];
+const DRAG_CONSTANT_ONLY_INPUTS: &[&str] = &["coefficient"];
 const MESH_RENDERER_INPUTS: &[PortSpec] = &[
     PARTICLE,
     PortSpec::single("mesh", "Mesh", PortDataType::Asset),
@@ -121,7 +181,7 @@ const RIBBON_RENDERER_INPUTS: &[PortSpec] = &[
 const SPECS: &[DescriptorSpec] = &[
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
-            "native.particle.emitter",
+            ParticleNodeRole::Emitter.catalog_id(),
             "Particle Emitter",
             "Particles",
             "node_editor.menu.create.particle_emitter",
@@ -130,7 +190,9 @@ const SPECS: &[DescriptorSpec] = &[
         PARTICLE_EMITTER_INPUTS,
         PARTICLE_OUTPUT,
         emitter_properties,
-    ),
+    )
+    .validate_property_set(validate_emitter_property_set)
+    .constant_only_inputs(EMITTER_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::placeholder(
         "native.particle.spawn-burst",
         "Spawn Burst",
@@ -147,7 +209,7 @@ const SPECS: &[DescriptorSpec] = &[
     ),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
-            "native.particle.initialize",
+            ParticleNodeRole::Initialize.catalog_id(),
             "Initialize Particle",
             "Particles",
             "node_editor.menu.create.particle_initialize",
@@ -156,7 +218,9 @@ const SPECS: &[DescriptorSpec] = &[
         INITIALIZE_PARTICLE_INPUTS,
         PARTICLE_OUTPUT,
         initialize_properties,
-    ),
+    )
+    .validate_property_set(validate_initialize_property_set)
+    .constant_only_inputs(INITIALIZE_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::placeholder(
         "native.particle.set-attribute",
         "Set Attribute",
@@ -166,7 +230,7 @@ const SPECS: &[DescriptorSpec] = &[
     ),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
-            "native.particle.gravity-force",
+            ParticleNodeRole::Gravity.catalog_id(),
             "Gravity Force",
             "Particles",
             "node_editor.menu.create.particle_gravity",
@@ -175,10 +239,11 @@ const SPECS: &[DescriptorSpec] = &[
         GRAVITY_INPUTS,
         PARTICLE_OUTPUT,
         gravity_properties,
-    ),
+    )
+    .constant_only_inputs(GRAVITY_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
-            "native.particle.drag-force",
+            ParticleNodeRole::Drag.catalog_id(),
             "Drag Force",
             "Particles",
             "node_editor.menu.create.particle_drag",
@@ -187,7 +252,8 @@ const SPECS: &[DescriptorSpec] = &[
         DRAG_INPUTS,
         PARTICLE_OUTPUT,
         drag_properties,
-    ),
+    )
+    .constant_only_inputs(DRAG_CONSTANT_ONLY_INPUTS, PARTICLE_FIXED_STEP_REASON),
     DescriptorSpec::placeholder(
         "native.particle.point-force",
         "Point Force",
@@ -246,7 +312,7 @@ const SPECS: &[DescriptorSpec] = &[
     ),
     DescriptorSpec::implemented_native(
         DescriptorIdentity::new(
-            "native.particle.sprite-renderer",
+            ParticleNodeRole::SpriteRenderer.catalog_id(),
             "Sprite Renderer",
             "Particles",
             "node_editor.menu.create.particle_sprite_renderer",
@@ -285,6 +351,25 @@ fn emitter_properties() -> Vec<PropertyDefinition> {
     ]
 }
 
+fn validate_emitter_property_set(properties: &PropertyMap) -> Result<(), String> {
+    let capacity = match properties
+        .get("capacity")
+        .and_then(|property| property.value())
+    {
+        Some(PropertyValue::Integer(value)) => u32::try_from(*value)
+            .map_err(|_| "Particle capacity does not fit the runtime range".to_string())?,
+        _ => return Err("Particle Emitter requires an integer 'capacity' Property".to_string()),
+    };
+    let lifetime = match properties
+        .get("lifetime")
+        .and_then(|property| property.value())
+    {
+        Some(PropertyValue::Number(value)) => value.into_inner(),
+        _ => return Err("Particle Emitter requires a numeric 'lifetime' Property".to_string()),
+    };
+    validate_particle_cold_replay_budget(capacity, lifetime)
+}
+
 fn initialize_properties() -> Vec<PropertyDefinition> {
     vec![
         vec3_property(
@@ -302,6 +387,16 @@ fn initialize_properties() -> Vec<PropertyDefinition> {
         number_property("size_min", "Size Min", 0.25, 512.0, 6.0, " px"),
         number_property("size_max", "Size Max", 0.25, 512.0, 18.0, " px"),
     ]
+}
+
+fn validate_initialize_property_set(properties: &PropertyMap) -> Result<(), String> {
+    let number = |key: &str| match properties.get(key).and_then(|property| property.value()) {
+        Some(PropertyValue::Number(value)) => Ok(value.into_inner()),
+        _ => Err(format!(
+            "Initialize Particle requires a numeric '{key}' Property"
+        )),
+    };
+    validate_particle_size_range(number("size_min")?, number("size_max")?)
 }
 
 fn gravity_properties() -> Vec<PropertyDefinition> {

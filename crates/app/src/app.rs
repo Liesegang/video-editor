@@ -572,7 +572,23 @@ fn command_triggered(context: &egui::Context, command: &crate::command::Command)
         return false;
     };
     if !command.trigger_on_release {
-        return context.input_mut(|input| input.consume_key(modifiers, key));
+        return context.input_mut(|input| {
+            let Some(index) = input.events.iter().position(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: event_key,
+                        pressed: true,
+                        modifiers: event_modifiers,
+                        ..
+                    } if *event_key == key && event_modifiers.matches_exact(modifiers)
+                )
+            }) else {
+                return false;
+            };
+            input.events.remove(index);
+            true
+        });
     }
     context.input(|input| {
         input.events.iter().any(|event| {
@@ -583,20 +599,10 @@ fn command_triggered(context: &egui::Context, command: &crate::command::Command)
                     pressed: false,
                     modifiers: event_modifiers,
                     ..
-                } if *event_key == key && modifiers_match(*event_modifiers, modifiers)
+                } if *event_key == key && event_modifiers.matches_exact(modifiers)
             )
         })
     })
-}
-
-fn modifiers_match(actual: egui::Modifiers, expected: egui::Modifiers) -> bool {
-    if actual == expected {
-        return true;
-    }
-    expected.command
-        && actual.command
-        && actual.alt == expected.alt
-        && actual.shift == expected.shift
 }
 
 impl eframe::App for RuViEApp {

@@ -349,6 +349,11 @@ fn module_controls(
                     "transition:{}:module_parameter:{}",
                     transition.id, parameter.id
                 );
+                let (allow_keyframe, keyframe_disabled_reason) =
+                    crate::ui::property_metadata::published_parameter_keyframe_capability(
+                        definition,
+                        parameter.id,
+                    );
                 let (row_result, edited_value, reset) = ui
                     .horizontal(|ui| {
                         let value = state
@@ -367,6 +372,8 @@ fn module_controls(
                                 suffix: "",
                                 speed: 0.1,
                                 mode_state,
+                                allow_keyframe,
+                                keyframe_disabled_reason,
                                 allow_expression: false,
                             },
                         );

@@ -1,9 +1,12 @@
 //! Skia storage adapter for legacy and Project-linear surface contracts.
 //!
-//! Project surfaces, transient layers, and isolated groups all use RGBAF32
-//! premultiplied storage. The exact Project color identity travels beside the
-//! pixels; Skia's linear color-space tag prevents encoded-light resampling and
-//! blending but is not used as a replacement for Project/OCIO authority.
+//! Project surfaces, transient layers, and isolated groups use premultiplied
+//! floating-point storage. Raster surfaces retain RGBAF32; Ganesh selects
+//! RGBAF32 or RGBAF16 according to the real device render-target support and
+//! converts the terminal readback to the authoritative RGBAF32 working image.
+//! The exact Project color identity travels beside the pixels; Skia's linear
+//! color-space tag prevents encoded-light resampling and blending but is not
+//! used as a replacement for Project/OCIO authority.
 
 use bytemuck::{cast_slice, cast_slice_mut};
 use ruvie_color_management::{LinearWorkingImage, ManagedLinearWorkingImage};
@@ -53,7 +56,28 @@ pub(super) fn create_surface(
     height: u32,
     context: Option<&mut skia_safe::gpu::DirectContext>,
     contract: &SkiaSurfaceContract,
+    require_gpu_backing: bool,
 ) -> Result<Surface, LibraryError> {
+    if require_gpu_backing {
+        let context = context.ok_or_else(|| {
+            LibraryError::Render(
+                "GPU Particle requires a GPU-backed Skia surface, but no Ganesh context is active"
+                    .to_string(),
+            )
+        })?;
+        return match contract {
+            SkiaSurfaceContract::UnmanagedSrgba8 => {
+                skia_utils::create_texture_surface(width, height, context).map_err(|error| {
+                    LibraryError::Render(format!(
+                        "GPU Particle cannot create an encoded GPU-backed Skia surface {width}x{height}: {error}"
+                    ))
+                })
+            }
+            SkiaSurfaceContract::ProjectLinear(_) => {
+                create_gpu_working_surface(width, height, context)
+            }
+        };
+    }
     match contract {
         SkiaSurfaceContract::UnmanagedSrgba8 => skia_utils::create_surface(width, height, context),
         SkiaSurfaceContract::ProjectLinear(_) => create_working_surface(width, height, context),
@@ -66,21 +90,12 @@ pub(crate) fn create_working_surface(
     context: Option<&mut skia_safe::gpu::DirectContext>,
 ) -> Result<Surface, LibraryError> {
     validate_working_surface_payload(width, height)?;
-    let info = working_image_info(width, height, ColorType::RGBAF32)?;
     if let Some(context) = context
-        && let Some(surface) = gpu::surfaces::render_target(
-            context,
-            gpu::Budgeted::Yes,
-            &info,
-            None,
-            gpu::SurfaceOrigin::TopLeft,
-            None,
-            false,
-            false,
-        )
+        && let Some(surface) = try_create_gpu_working_surface(width, height, context)?
     {
         return Ok(surface);
     }
+    let info = working_image_info(width, height, ColorType::RGBAF32)?;
     surfaces::raster(&info, None, None).ok_or_else(|| {
         LibraryError::Render(format!(
             "cannot create Project linear RGBAF32 surface {width}x{height}"
@@ -175,34 +190,105 @@ pub(super) fn authored_premultiplied_rgba(
     ])
 }
 
-/// Borrow SceneRuntime's GL texture into Ganesh under the exact surface
-/// storage/color contract. The runtime retains ownership of the GL name.
+/// Select the highest-precision floating GL storage Ganesh can borrow for a
+/// Project-linear Particle intermediate.
+#[cfg(feature = "gl")]
+pub(super) fn scene_texture_format(
+    context: &skia_safe::gpu::DirectContext,
+    contract: &SkiaSurfaceContract,
+) -> Result<SceneTextureFormat, LibraryError> {
+    if contract.working().is_none() {
+        return Ok(SceneTextureFormat::Srgba8);
+    }
+    for (color_type, gl_format, scene_format) in [
+        (
+            ColorType::RGBAF32,
+            glow::RGBA32F,
+            SceneTextureFormat::LinearRgbaF32,
+        ),
+        (
+            ColorType::RGBAF16,
+            glow::RGBA16F,
+            SceneTextureFormat::LinearRgbaF16,
+        ),
+    ] {
+        let backend_format =
+            context.default_backend_format(color_type, skia_safe::gpu::Renderable::No);
+        if backend_format.as_gl_format_enum() == gl_format {
+            return Ok(scene_format);
+        }
+    }
+    Err(LibraryError::Render(
+        "GPU Particle unavailable: OpenGL/Ganesh cannot borrow a floating-point Project-linear scene texture"
+            .to_string(),
+    ))
+}
+
+fn create_gpu_working_surface(
+    width: u32,
+    height: u32,
+    context: &mut skia_safe::gpu::DirectContext,
+) -> Result<Surface, LibraryError> {
+    validate_working_surface_payload(width, height)?;
+    try_create_gpu_working_surface(width, height, context)?.ok_or_else(|| {
+        LibraryError::Render(format!(
+            "GPU Particle cannot create a GPU-backed Project-linear floating-point Skia surface {width}x{height}; raster fallback is forbidden"
+        ))
+    })
+}
+
+fn try_create_gpu_working_surface(
+    width: u32,
+    height: u32,
+    context: &mut skia_safe::gpu::DirectContext,
+) -> Result<Option<Surface>, LibraryError> {
+    for color_type in [ColorType::RGBAF32, ColorType::RGBAF16] {
+        let info = working_image_info(width, height, color_type)?;
+        if let Some(surface) = gpu::surfaces::render_target(
+            context,
+            gpu::Budgeted::Yes,
+            &info,
+            None,
+            gpu::SurfaceOrigin::TopLeft,
+            None,
+            false,
+            false,
+        ) {
+            return Ok(Some(surface));
+        }
+    }
+    Ok(None)
+}
+
+/// Borrow SceneRuntime's live GL texture into Ganesh. SceneRuntime retains
+/// ownership of the GL name.
 #[cfg(feature = "gl")]
 pub(super) fn scene_texture_to_skia_image(
     context: &mut skia_safe::gpu::DirectContext,
     texture: SceneTexture,
     contract: &SkiaSurfaceContract,
 ) -> Result<Image, LibraryError> {
-    let (expected_format, gl_format, color_type, color_space) = match contract {
-        SkiaSurfaceContract::UnmanagedSrgba8 => (
-            SceneTextureFormat::Srgba8,
-            glow::RGBA8,
-            ColorType::RGBA8888,
-            None,
+    let (gl_format, color_type, color_space) = match (contract, texture.format) {
+        (SkiaSurfaceContract::UnmanagedSrgba8, SceneTextureFormat::Srgba8) => {
+            (glow::RGBA8, ColorType::RGBA8888, None)
+        }
+        (SkiaSurfaceContract::ProjectLinear(_), SceneTextureFormat::LinearRgbaF16) => (
+            glow::RGBA16F,
+            ColorType::RGBAF16,
+            Some(working_color_space()),
         ),
-        SkiaSurfaceContract::ProjectLinear(_) => (
-            SceneTextureFormat::LinearRgbaF32,
+        (SkiaSurfaceContract::ProjectLinear(_), SceneTextureFormat::LinearRgbaF32) => (
             glow::RGBA32F,
             ColorType::RGBAF32,
             Some(working_color_space()),
         ),
+        _ => {
+            return Err(LibraryError::Render(format!(
+                "GPU Particle texture {:?} is incompatible with the active Skia surface contract",
+                texture.format
+            )));
+        }
     };
-    if texture.format != expected_format {
-        return Err(LibraryError::Render(format!(
-            "GPU Particle texture {:?} is incompatible with the active Skia surface contract",
-            texture.format
-        )));
-    }
     let texture_info = skia_safe::gpu::gl::TextureInfo {
         target: glow::TEXTURE_2D,
         id: texture.texture_id,

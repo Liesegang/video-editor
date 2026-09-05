@@ -16,6 +16,23 @@ use super::{
     PublishedActionId, PublishedMediaInputId, PublishedParameterId, PublishedSignalId,
 };
 
+#[path = "module_graph/parameter_value_validation.rs"]
+mod parameter_value_validation;
+
+/// Runtime sampling support for one Published Module parameter.
+///
+/// This is derived from the parameter's target port rather than persisted in
+/// the Published Interface, so changing native runtime support cannot leave a
+/// stale second authority in Project files.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PublishedParameterAutomationCapability {
+    /// The runtime evaluates the Published value independently for each frame.
+    FrameSampled,
+    /// The runtime needs one value for state history and cannot consume
+    /// Timeline keyframes until the stated scheduling contract exists.
+    ConstantOnly { reason: &'static str },
+}
+
 /// Reusable media-processing logic. Render boundaries are dedicated Output
 /// Nodes in `graph`; `interface` contains only externally supplied controls
 /// and host inputs, never a second output-routing source of truth.
@@ -106,6 +123,7 @@ impl ModuleDefinition {
         self.graph.validate()?;
         self.validate_outputs()?;
         self.interface.validate(&self.graph)?;
+        self.validate_parameter_overrides(&HashMap::new())?;
         if let ModuleHostContract::Transition(contract) = &self.host_contract {
             contract.validate_definition(self)?;
         }
@@ -175,6 +193,92 @@ impl ModuleDefinition {
             return ModuleInputPortOwnership::Published;
         }
         ModuleInputPortOwnership::Internal
+    }
+
+    /// Whether the production Module runtime can consume a graph edge at this
+    /// input. Published/host inputs and native constant-only inputs remain
+    /// directly editable but never advertise a connect gesture.
+    pub fn input_port_accepts_connection(&self, address: &ModulePortAddress) -> bool {
+        if self
+            .graph
+            .port_definition(address, PortDirection::Input)
+            .is_err()
+            || self.input_port_ownership(address).is_externally_driven()
+        {
+            return false;
+        }
+        self.graph
+            .nodes
+            .get(&address.node_id)
+            .and_then(native_node_descriptor_for_node)
+            .and_then(|descriptor| descriptor.dynamic_input_disabled_reason(&address.port))
+            .is_none()
+    }
+
+    /// Resolve the one model-side automation contract for a Published
+    /// parameter. Plugin and general native inputs remain frame-sampled unless
+    /// their canonical native descriptor explicitly narrows the capability.
+    pub fn parameter_automation_capability(
+        &self,
+        parameter_id: PublishedParameterId,
+    ) -> Result<PublishedParameterAutomationCapability, String> {
+        let parameter = self
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == parameter_id)
+            .ok_or_else(|| {
+                format!(
+                    "Module definition {} has no Published parameter {parameter_id}",
+                    self.id
+                )
+            })?;
+        self.graph
+            .port_definition(&parameter.target, PortDirection::Input)
+            .map_err(|error| {
+                format!("Published parameter {parameter_id} has an invalid target: {error}")
+            })?;
+        let node = self
+            .graph
+            .nodes
+            .get(&parameter.target.node_id)
+            .ok_or_else(|| {
+                format!(
+                    "Published parameter {parameter_id} targets missing Node {}",
+                    parameter.target.node_id
+                )
+            })?;
+        Ok(native_node_descriptor_for_node(node).map_or(
+            PublishedParameterAutomationCapability::FrameSampled,
+            |descriptor| descriptor.input_automation_capability(&parameter.target.port),
+        ))
+    }
+
+    /// Reject Timeline automation before a RenderPlan can observe a parameter
+    /// whose runtime needs constant simulation history.
+    pub fn require_parameter_automation(
+        &self,
+        parameter_id: PublishedParameterId,
+    ) -> Result<(), String> {
+        let parameter = self
+            .interface
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == parameter_id)
+            .ok_or_else(|| {
+                format!(
+                    "Module definition {} has no Published parameter {parameter_id}",
+                    self.id
+                )
+            })?;
+        let capability = self.parameter_automation_capability(parameter_id)?;
+        let PublishedParameterAutomationCapability::ConstantOnly { reason } = capability else {
+            return Ok(());
+        };
+        Err(format!(
+            "Published parameter '{}' ({parameter_id}) is constant-only and cannot use Timeline automation: {reason}",
+            parameter.name
+        ))
     }
 
     fn validate_outputs(&self) -> Result<(), String> {
@@ -343,6 +447,11 @@ impl ModuleGraph {
             if matches!(node.content(), NodeContent::CompositionInstance(_)) {
                 return Err("Module graph cannot contain a Composition instance".to_string());
             }
+            if matches!(node.content(), NodeContent::NativeOperation(_))
+                && let Some(descriptor) = native_node_descriptor_for_node(node)
+            {
+                descriptor.validate_native_properties(node.properties())?;
+            }
             contracts.insert(*key, ModuleNodePortContract::resolve(node)?);
         }
         let mut target_orders: HashMap<ModulePortAddress, Vec<i64>> = HashMap::new();
@@ -382,6 +491,19 @@ impl ModuleGraph {
                 .get(&connection.to.node_id)
                 .ok_or_else(|| format!("Module connection {} has a missing target", connection.id))?
                 .require(&connection.to.port, PortDirection::Input)?;
+            if let Some(reason) = self
+                .nodes
+                .get(&connection.to.node_id)
+                .and_then(native_node_descriptor_for_node)
+                .and_then(|descriptor| {
+                    descriptor.dynamic_input_disabled_reason(&connection.to.port)
+                })
+            {
+                return Err(format!(
+                    "Module connection {} cannot drive constant-only input {}:{}: {reason}",
+                    connection.id, connection.to.node_id, connection.to.port
+                ));
+            }
             if !target.data_type.accepts(source.data_type) {
                 return Err(format!(
                     "Module connection {} cannot connect {:?} to {:?}",
@@ -601,10 +723,10 @@ impl ModuleInterface {
             require_interface_name(&parameter.name, "Published parameter")?;
             let target = graph.port_definition(&parameter.target, PortDirection::Input)?;
             require_unambiguous_published_target(graph, &mut published_targets, &parameter.target)?;
-            if !parameter
-                .data_type
-                .accepts(property_value_type(&parameter.default_value))
-            {
+            if !authored_parameter_value_is_compatible(
+                parameter.data_type,
+                &parameter.default_value,
+            ) {
                 return Err(format!(
                     "Published parameter {} has a mismatched default",
                     parameter.id
@@ -714,6 +836,22 @@ pub(crate) fn property_value_type(value: &PropertyValue) -> PortDataType {
     }
 }
 
+/// Strict persisted-value compatibility for Published parameters and their
+/// Timeline automation. `Any` remains dynamic for graph edge typing, but a
+/// concrete authored Map/OpaqueJson must not masquerade as Number, Color, or
+/// another typed public control.
+pub(crate) fn authored_parameter_value_is_compatible(
+    target: PortDataType,
+    value: &PropertyValue,
+) -> bool {
+    let source = property_value_type(value);
+    if source == PortDataType::Any {
+        target == PortDataType::Any
+    } else {
+        target.accepts(source)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct PublishedParameter {
@@ -758,30 +896,4 @@ pub struct ModuleInstance {
     pub id: ModuleInstanceId,
     pub definition_id: ModuleDefinitionId,
     pub parameter_overrides: HashMap<PublishedParameterId, PropertyValue>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn media_module_constructor_has_one_stable_terminal_with_image_and_sound_inputs() {
-        let (definition, output_id) =
-            ModuleDefinition::new_image("Image Module", ModuleDefinitionSharing::Private);
-
-        definition.validate().expect("valid image Module");
-        let outputs = definition.outputs().collect::<Vec<_>>();
-        assert_eq!(definition.graph.nodes.len(), 1);
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].id, output_id);
-        assert_eq!(
-            outputs[0].target(PortDataType::Image).unwrap().port,
-            IMAGE_INPUT_PORT
-        );
-        assert_eq!(
-            outputs[0].target(PortDataType::Audio).unwrap().port,
-            SOUND_INPUT_PORT
-        );
-        assert!(definition.interface.signals.is_empty());
-    }
 }

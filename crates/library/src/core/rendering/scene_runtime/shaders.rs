@@ -127,20 +127,30 @@ uniform vec2 uTargetSize;
 uniform vec3 uAffineX;
 uniform vec3 uAffineY;
 uniform float uFocalLength;
-uniform float uPointScale;
+
+out vec2 vSpriteCoord;
+
+const vec2 QUAD_CORNERS[6] = vec2[6](
+    vec2(-0.5, -0.5), vec2(0.5, -0.5), vec2(0.5, 0.5),
+    vec2(-0.5, -0.5), vec2(0.5, 0.5), vec2(-0.5, 0.5)
+);
 
 void main() {
-    Particle particle = particles[gl_VertexID];
+    uint particle_index = uint(gl_VertexID) / 6u;
+    uint corner_index = uint(gl_VertexID) % 6u;
+    Particle particle = particles[particle_index];
     float age = particle.position_age.w;
     if (age < 0.0 || age >= particle.velocity_lifetime.w) {
         gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
-        gl_PointSize = 0.0;
+        vSpriteCoord = vec2(-1.0);
         return;
     }
 
     vec3 position = particle.position_age.xyz;
     float perspective = uFocalLength / max(1.0, uFocalLength + position.z);
-    vec2 local = uLogicalSize * 0.5 + position.xy * perspective;
+    vec2 corner = QUAD_CORNERS[corner_index];
+    vec2 local_center = uLogicalSize * 0.5 + position.xy * perspective;
+    vec2 local = local_center + corner * particle.appearance.w * perspective;
     vec2 screen = vec2(
         dot(uAffineX, vec3(local, 1.0)),
         dot(uAffineY, vec3(local, 1.0))
@@ -151,16 +161,17 @@ void main() {
     );
     float depth = clamp(position.z / (uFocalLength * 4.0), -0.99, 0.99);
     gl_Position = vec4(ndc, depth, 1.0);
-    gl_PointSize = max(1.0, particle.appearance.w * perspective * uPointScale);
+    vSpriteCoord = corner + vec2(0.5);
 }
 "#;
 
 pub(super) const PARTICLE_FRAGMENT: &str = r#"#version 430 core
 uniform vec4 uPremultipliedColor;
+in vec2 vSpriteCoord;
 layout(location = 0) out vec4 output_color;
 
 void main() {
-    float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
+    float radius = length(vSpriteCoord - vec2(0.5)) * 2.0;
     float coverage = 1.0 - smoothstep(0.82, 1.0, radius);
     if (coverage <= 0.0) {
         discard;

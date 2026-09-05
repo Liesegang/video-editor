@@ -396,6 +396,19 @@ pub trait Renderer {
     /// effects before drawing this output into its parent target.
     fn end_group(&mut self) -> Result<RenderOutput, LibraryError>;
 
+    /// Finish the current group and composite it into its parent target.
+    /// Backends override this combined boundary when they can keep the group
+    /// in native storage; the default remains correct for CPU renderers.
+    fn end_group_and_draw(
+        &mut self,
+        transform: &Affine2D,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.end_group()?;
+        self.draw_layer_affine_with_blend(&layer, transform, opacity, blend_mode)
+    }
+
     fn rasterize_text_layer(
         &mut self,
         request: TextRasterRequest<'_>,
@@ -421,6 +434,35 @@ pub trait Renderer {
             "GPU Particle requires an OpenGL 4.3 SceneRuntime; this renderer has no compatible GPU boundary"
                 .to_string(),
         ))
+    }
+
+    /// Prove that the complete stateful Particle backend is usable before an
+    /// exporter creates any externally visible output. Implementations must
+    /// validate their real execution/storage path, not merely the presence of
+    /// a nominal GPU context. `target_sizes` are the distinct render targets
+    /// reached by Particle scenes in the requested export range.
+    fn preflight_particle_backend(
+        &mut self,
+        _target_sizes: &[(u32, u32)],
+    ) -> Result<(), LibraryError> {
+        Err(LibraryError::Render(
+            "GPU Particle requires an OpenGL 4.3 SceneRuntime; this renderer cannot preflight that backend"
+                .to_string(),
+        ))
+    }
+
+    /// Render and composite one stateful Particle scene into the active
+    /// backend target. GPU renderers override this boundary so the scene
+    /// texture remains backend-native instead of round-tripping through a
+    /// full-frame CPU image before the immediately following composite.
+    fn draw_particle_layer(
+        &mut self,
+        request: ParticleRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let layer = self.rasterize_particle_layer(request)?;
+        self.draw_layer_affine_with_blend(&layer, &Affine2D::IDENTITY, opacity, blend_mode)
     }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;

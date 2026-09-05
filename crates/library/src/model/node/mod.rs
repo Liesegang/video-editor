@@ -28,6 +28,9 @@ pub use catalog::{
     NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus, native_node_catalog,
     native_node_descriptor, native_node_descriptor_for_node,
 };
+pub(crate) use catalog::{
+    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
+};
 pub use color::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
     COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RED_PORT, COLOR_SPACE_PORT,
@@ -475,24 +478,10 @@ impl Node {
                 Some(COLOR_VALUE_PORT)
             }
             NodeContent::PluginOperation(operation) => {
-                let output_type = operation
-                    .declared_ports
-                    .iter()
-                    .find(|port| port.key == output && port.direction == PortDirection::Output)?
-                    .data_type;
-                let matching = operation
-                    .declared_ports
-                    .iter()
-                    .filter(|port| {
-                        port.direction == PortDirection::Input
-                            && port.multiplicity == PortMultiplicity::Single
-                            && port.data_type == output_type
-                    })
-                    .collect::<Vec<_>>();
-                let [input] = matching.as_slice() else {
-                    return None;
-                };
-                Some(input.key.as_str())
+                single_type_preserving_input(&operation.declared_ports, output)
+            }
+            NodeContent::NativeOperation(_) => {
+                single_type_preserving_input(native_node_descriptor_for_node(self)?.ports(), output)
             }
             _ => None,
         }
@@ -511,6 +500,12 @@ impl Node {
         let ports = match self.content() {
             NodeContent::Value(value) => value.port_definitions(),
             NodeContent::PluginOperation(operation) => operation.declared_ports.as_slice(),
+            NodeContent::NativeOperation(_) => {
+                let Some(descriptor) = native_node_descriptor_for_node(self) else {
+                    return false;
+                };
+                descriptor.ports()
+            }
             _ => return false,
         };
         let outputs = ports
@@ -535,6 +530,7 @@ impl Node {
                         | PortDataType::Vec2
                         | PortDataType::Vec3
                         | PortDataType::Vec4
+                        | PortDataType::ParticleSystem
                 ) && self.bypass_input_for_output(&port.key).is_some()
             })
     }
@@ -759,6 +755,20 @@ impl Node {
         property.properties.insert(attribute_key, attribute_value);
         true
     }
+}
+
+fn single_type_preserving_input<'a>(ports: &'a [PortDefinition], output: &str) -> Option<&'a str> {
+    let output_type = ports
+        .iter()
+        .find(|port| port.key == output && port.direction == PortDirection::Output)?
+        .data_type;
+    let mut matching = ports.iter().filter(|port| {
+        port.direction == PortDirection::Input
+            && port.multiplicity == PortMultiplicity::Single
+            && port.data_type == output_type
+    });
+    let input = matching.next()?;
+    matching.next().is_none().then_some(input.key.as_str())
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

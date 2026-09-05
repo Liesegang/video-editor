@@ -14,6 +14,9 @@ mod particle;
 mod three_d;
 
 pub use descriptor::{NativeNodeCatalogDescriptor, NativeNodeFactory, NativeNodeRuntimeStatus};
+pub(crate) use particle::{
+    PARTICLE_SPRITE_RENDERER_CATALOG_ID, PARTICLE_SYSTEM_PORT, ParticleNodeRole,
+};
 
 use descriptor::DescriptorSpec;
 

@@ -80,3 +80,44 @@ fn transition_modules_are_not_presented_as_draggable_node_clips() {
     assert!(!is_node_clip_definition(&transition));
     assert!(!is_node_clip_definition(&private));
 }
+
+#[test]
+fn particle_system_source_has_beginner_facing_copy_and_one_stable_drag_contract() {
+    let project = AuthoringProject::new(
+        "test",
+        1920,
+        1080,
+        library::model::authoring::RationalRate::new(30, 1).unwrap(),
+        library::model::authoring::MediaTime::new(10, 1).unwrap(),
+    )
+    .unwrap();
+    let state = AuthoringUiState::new(project.root_timeline_id);
+    let entry = LibraryEntry::NewParticleNodeClip;
+
+    assert_eq!(entry.qa_id(), "assets.particle_node_clip_source");
+    assert_eq!(entry.name(), "Particle System");
+    assert_eq!(entry.kind(), "Particle System");
+    assert_eq!(entry.list_metadata(), "Procedural particle generator");
+    let hover_text = entry.hover_text(&state);
+    assert!(hover_text.contains("Drag the Particle System to the Timeline"));
+    for implementation_term in ["Node", "GPU", "private", "Private"] {
+        assert!(
+            !entry.name().contains(implementation_term)
+                && !entry.kind().contains(implementation_term)
+                && !entry.list_metadata().contains(implementation_term)
+                && !hover_text.contains(implementation_term),
+            "beginner-facing Particle copy exposed {implementation_term:?}"
+        );
+    }
+    assert!(entry.draggable(&state));
+    assert_eq!(
+        library_drag_payload(entry),
+        AuthoringLibraryDrag::NewParticleNodeClip
+    );
+
+    let metadata = entry_qa_metadata(entry, &state, true, 1);
+    assert_eq!(metadata["kind"], "particle_system");
+    assert_eq!(metadata["creation_kind"], "particle_node_clip");
+    assert_eq!(metadata["private_definition"], true);
+    assert_eq!(metadata["draggable_to_timeline"], true);
+}

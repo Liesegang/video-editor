@@ -57,7 +57,9 @@ pub(crate) struct AutomationChannel {
 /// Discover every editable item-owned automation lane in stable UI order.
 ///
 /// Constant authored properties remain visible with no diamonds, and every
-/// published Module parameter is exposed even before it receives automation.
+/// keyframe-capable Published Module parameter is exposed before it receives
+/// automation. Constant-only runtime inputs stay Inspector/Node properties
+/// and never masquerade as editable Curve lanes.
 pub(crate) fn collect_item_lanes(
     project: &AuthoringProject,
     item_id: TimelineItemId,
@@ -106,7 +108,12 @@ pub(crate) fn collect_item_lanes(
                     .map(|definition| (instance, definition))
             })
         {
-            for parameter in &definition.interface.parameters {
+            for parameter in definition.interface.parameters.iter().filter(|parameter| {
+                matches!(
+                    definition.parameter_automation_capability(parameter.id),
+                    Ok(library::model::authoring::PublishedParameterAutomationCapability::FrameSampled)
+                )
+            }) {
                 let mut points = invocation
                     .automation_tracks
                     .get(&parameter.id)
@@ -241,6 +248,12 @@ fn collect_transition_lanes(
         .parameters
         .iter()
         .filter(|parameter| parameter.id != contract.progress_parameter_id)
+        .filter(|parameter| {
+            matches!(
+                definition.parameter_automation_capability(parameter.id),
+                Ok(library::model::authoring::PublishedParameterAutomationCapability::FrameSampled)
+            )
+        })
         .map(|parameter| AutomationLane {
             id: AutomationLaneId {
                 owner: owner.clone(),

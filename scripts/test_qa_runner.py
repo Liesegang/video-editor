@@ -29,6 +29,7 @@ RUNNER = load("ruvie_qa_runner", "qa-runner.py")
 ASSETS = load("ruvie_qa_assets", "qa-assets-timeline-e2e.py")
 TIMELINE = load("ruvie_qa_timeline", "qa-timeline-edit-e2e.py")
 CURVE = load("ruvie_qa_curve", "qa-curve-editor-e2e.py")
+PARTICLE = load("ruvie_qa_particle", "qa-particle-node-clip-e2e.py")
 
 
 class QaRunnerTests(unittest.TestCase):
@@ -38,6 +39,7 @@ class QaRunnerTests(unittest.TestCase):
             "unsaved-changes",
             "settings-dialog",
             "assets-timeline",
+            "particle-node-clip",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",
@@ -158,6 +160,26 @@ class QaRunnerTests(unittest.TestCase):
             [rows[0], {"id": "b", "rect_points": {"min_y": 42.0, "max_y": 72.0}}]
         )
 
+    def test_particle_pixel_evidence_requires_a_same_frame_visible_delta(self):
+        baseline = {
+            "rendered_frame": 201,
+            "pixel_hash": "before",
+            "nontransparent_pixels": 1,
+        }
+        edited = {
+            "rendered_frame": 201,
+            "pixel_hash": "after",
+            "nontransparent_pixels": 1,
+        }
+        PARTICLE._assert_same_frame_particle_delta(baseline, edited)
+        for invalid in (
+            {**edited, "rendered_frame": 202},
+            {**edited, "pixel_hash": "before"},
+            {**edited, "nontransparent_pixels": 0},
+        ):
+            with self.assertRaises(PARTICLE.QaFailure):
+                PARTICLE._assert_same_frame_particle_delta(baseline, invalid)
+
     def test_process_cleanup_is_cross_platform(self):
         process = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -169,6 +191,48 @@ class QaRunnerTests(unittest.TestCase):
             self.assertIsNotNone(process.poll())
         finally:
             SUPPORT.terminate_process(process, grace_seconds=0.1)
+
+    def test_dock_activation_does_not_toggle_a_tab_published_one_frame_late(self):
+        class DelayedDockClient:
+            def __init__(self):
+                self.snapshots = 0
+                self.keys = []
+                self.clicked = []
+
+            def component_snapshot(self):
+                self.snapshots += 1
+                components = []
+                if self.snapshots >= 2:
+                    components = [{"id": "dock.tab:node_editor"}]
+                return {"components": components}
+
+            def wait_until(self, _description, predicate, timeout=None):
+                self.asserted_timeout = timeout
+                value = predicate()
+                if value is None:
+                    raise SUPPORT.QaFailure("not published")
+                return value
+
+            def key(self, *args, **kwargs):
+                self.keys.append((args, kwargs))
+
+            def inject(self, *args, **kwargs):
+                raise AssertionError("late publication must not invoke Command Palette")
+
+            def click_component(self, component_id):
+                self.clicked.append(component_id)
+
+            def wait_component_settled(self, component_id):
+                return component_id
+
+        client = DelayedDockClient()
+        result = SUPPORT.activate_dock_tab(
+            client, "dock.tab:node_editor", "Node Editor", "Node Editor publication"
+        )
+        self.assertEqual(result, "dock.tab:node_editor")
+        self.assertEqual(client.keys, [])
+        self.assertEqual(client.clicked, ["dock.tab:node_editor"])
+        self.assertEqual(client.asserted_timeout, 0.75)
 
     def test_positive_jobs_rejects_zero(self):
         self.assertEqual(RUNNER.parse_args(["--jobs", "2"]).jobs, 2)

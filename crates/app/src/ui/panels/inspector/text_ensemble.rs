@@ -352,6 +352,8 @@ fn operation_entry(
                             local_seconds,
                             false,
                         ),
+                        allow_keyframe: true,
+                        keyframe_disabled_reason: None,
                         allow_expression: definition.default_value().supports_expression(),
                     },
                 );

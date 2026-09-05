@@ -17,6 +17,7 @@ use crate::ui::panels::node_editor::{
     node_icon_for_node, node_palette_for_node, paint_node_editor_canvas_grid, pin_info,
     NODE_HEADER_WIDTH, PORT_LABEL_WIDTH, PORT_ROW_HEIGHT,
 };
+use crate::ui::property_metadata::node_property_definition;
 
 #[derive(Default)]
 pub(super) struct ModuleSurfaceCapture {
@@ -358,6 +359,10 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             },
         );
         let graph_connected = !pin.remotes.is_empty();
+        let connection_disabled_reason = node
+            .as_ref()
+            .zip(port.as_ref())
+            .and_then(|(node, port)| input_connection_disabled_reason(ownership, node, &port.key));
         if node_editor_details_visible(self.to_global.scaling) {
             if let (Some(node), Some(port)) = (node.as_ref(), port.as_ref()) {
                 let property = input_allows_inline_authoring(ownership)
@@ -369,7 +374,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                     self.capture_response(&response);
                     response
                 } else if let Some((key, property)) = property {
-                    let definition = property::node_property_definition(self.plugins, node, key);
+                    let definition = node_property_definition(self.plugins, node, key);
                     let (response, action) = property::show_property_input(
                         ui,
                         self.plugins,
@@ -402,6 +407,25 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                     self.capture_response(&response);
                     response
                 };
+                if !ownership.is_externally_driven() {
+                    if let Some(reason) = connection_disabled_reason {
+                        let lock = ui
+                            .weak(icons::LOCK)
+                            .on_hover_text(format!("Connection unavailable: {reason}"));
+                        crate::qa::register_component_with_metadata(
+                            format!("node_editor.port_lock.node:{}.input:{}", node.id, port.key),
+                            "node_editor_port_lock",
+                            self.canvas_transform * lock.rect,
+                            false,
+                            Some(serde_json::json!({
+                                "node_id": node.id,
+                                "port": port.key,
+                                "direction": "input",
+                                "disabled_reason": reason,
+                            })),
+                        );
+                    }
+                }
                 self.actions
                     .extend(super::interface::input_port_interface_actions(
                         &interface_response,
@@ -414,11 +438,23 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
         } else {
             ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH + 80.0, PORT_ROW_HEIGHT));
         }
+        let connectable = node
+            .as_ref()
+            .zip(port.as_ref())
+            .is_some_and(|(node, port)| {
+                self.definition
+                    .input_port_accepts_connection(&ModulePortAddress {
+                        node_id: node.id,
+                        port: port.key.clone(),
+                    })
+            });
         ModulePin::new(ModulePinRequest {
             node_id: node.as_ref().map(|node| node.id),
             port,
             direction: PortDirection::Input,
             connected: graph_connected || ownership.is_externally_driven(),
+            connectable,
+            connection_disabled_reason,
             ownership,
             to_global: *self.to_global,
             canvas_clip: *self.canvas_clip,
@@ -452,6 +488,8 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
             port,
             direction: PortDirection::Output,
             connected: !pin.remotes.is_empty(),
+            connectable: true,
+            connection_disabled_reason: None,
             ownership: ModuleInputPortOwnership::Internal,
             to_global: *self.to_global,
             canvas_clip: *self.canvas_clip,
@@ -526,15 +564,38 @@ pub(super) const fn input_allows_inline_authoring(ownership: ModuleInputPortOwne
     !ownership.is_externally_driven()
 }
 
+fn input_connection_disabled_reason(
+    ownership: ModuleInputPortOwnership,
+    node: &Node,
+    port_key: &str,
+) -> Option<&'static str> {
+    if let Some(reason) = externally_driven_input_reason(ownership) {
+        return Some(reason);
+    }
+    library::model::native_node_descriptor_for_node(node)?.dynamic_input_disabled_reason(port_key)
+}
+
+const fn externally_driven_input_reason(
+    ownership: ModuleInputPortOwnership,
+) -> Option<&'static str> {
+    match ownership {
+        ModuleInputPortOwnership::HostProtected => Some(
+            "This input is supplied by the Timeline host and cannot be wired or authored inside the Module",
+        ),
+        ModuleInputPortOwnership::Published => Some(
+            "This Published Interface input is supplied by the Module host; unpublish it before wiring or authoring it",
+        ),
+        ModuleInputPortOwnership::Internal => None,
+    }
+}
+
 fn show_externally_driven_input(
     ui: &mut egui::Ui,
     port: &PortDefinition,
     ownership: ModuleInputPortOwnership,
 ) -> egui::Response {
-    let reason = if ownership.is_host_protected() {
-        "This input is supplied by the Timeline host and cannot be wired or authored inside the Module"
-    } else {
-        "This Published Interface input is supplied by the Module host; unpublish it before wiring or authoring it"
+    let Some(reason) = externally_driven_input_reason(ownership) else {
+        return ui.weak("This input is authored inside the Module");
     };
     ui.horizontal(|ui| {
         let label_width = measured_label_width(ui, &port.label, PORT_LABEL_WIDTH);
@@ -600,6 +661,8 @@ struct ModulePin {
     port: Option<PortDefinition>,
     direction: PortDirection,
     connected: bool,
+    connectable: bool,
+    connection_disabled_reason: Option<&'static str>,
     ownership: ModuleInputPortOwnership,
     to_global: egui::emath::TSTransform,
     canvas_clip: egui::Rect,
@@ -611,6 +674,8 @@ struct ModulePinRequest {
     port: Option<PortDefinition>,
     direction: PortDirection,
     connected: bool,
+    connectable: bool,
+    connection_disabled_reason: Option<&'static str>,
     ownership: ModuleInputPortOwnership,
     to_global: egui::emath::TSTransform,
     canvas_clip: egui::Rect,
@@ -624,6 +689,8 @@ impl ModulePin {
             port,
             direction,
             connected,
+            connectable,
+            connection_disabled_reason,
             ownership,
             to_global,
             canvas_clip,
@@ -633,11 +700,13 @@ impl ModulePin {
             .as_ref()
             .map_or(PortDataType::Any, |port| port.data_type);
         Self {
-            info: pin_info(data_type, connected),
+            info: pin_info(data_type, connected, connectable),
             node_id,
             port,
             direction,
             connected,
+            connectable,
+            connection_disabled_reason,
             ownership,
             to_global,
             canvas_clip,
@@ -679,7 +748,7 @@ impl SnarlPin for ModulePin {
                 format!("node_editor.port.node:{node_id}.{direction}:{}", port.key),
                 "node_editor_port",
                 qa_rect,
-                !self.ownership.is_externally_driven(),
+                self.connectable,
                 Some(serde_json::json!({
                     "document_kind": "module_definition",
                     "node_id": node_id,
@@ -688,6 +757,9 @@ impl SnarlPin for ModulePin {
                     "direction": direction,
                     "data_type": port.data_type,
                     "connected": self.connected,
+                    "connectable": self.connectable,
+                    "disabled_reason": self.connection_disabled_reason,
+                    "visual_state": if self.connectable { "active" } else { "disabled" },
                     "input_ownership": match self.ownership {
                         ModuleInputPortOwnership::Internal => "internal",
                         ModuleInputPortOwnership::Published => "published",

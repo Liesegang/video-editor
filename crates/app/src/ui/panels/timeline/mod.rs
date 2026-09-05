@@ -10,6 +10,8 @@ mod transitions;
 mod viewport;
 
 #[cfg(test)]
+mod particle_clip_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;

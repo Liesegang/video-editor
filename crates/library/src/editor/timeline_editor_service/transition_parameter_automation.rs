@@ -1,7 +1,8 @@
 //! Atomic keyframe commands for Timeline-owned Transition Module parameters.
 
 use super::transition_module_controls::{
-    require_editable_parameter, transition_module_context, transition_module_mut,
+    require_editable_parameter, require_transition_parameter_automation, transition_module_context,
+    transition_module_mut,
 };
 use super::*;
 
@@ -110,7 +111,13 @@ impl TimelineEditorService {
         };
         let (_, _, contract) = {
             let session = self.read_session()?;
-            transition_module_context(session.project(), transition_id)?
+            let context = transition_module_context(session.project(), transition_id)?;
+            require_transition_parameter_automation(
+                session.project(),
+                transition_id,
+                parameter_id,
+            )?;
+            context
         };
         require_editable_parameter(transition_id, &contract, parameter_id)?;
         match owner {

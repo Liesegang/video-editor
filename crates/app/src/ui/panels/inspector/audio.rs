@@ -52,6 +52,8 @@ pub(super) fn audio_section(
                             local_seconds,
                             true,
                         ),
+                        allow_keyframe: true,
+                        keyframe_disabled_reason: None,
                         allow_expression: true,
                     },
                 );

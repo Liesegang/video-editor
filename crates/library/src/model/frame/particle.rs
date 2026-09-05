@@ -16,8 +16,33 @@ use crate::model::property::Vec3;
 pub const PARTICLE_FIXED_STEP_HZ: i64 = 120;
 pub const PARTICLE_MAX_CAPACITY: u32 = 100_000;
 pub const PARTICLE_MAX_REPLAY_STEPS: u64 = 14_400;
+pub const PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS: u64 = 32 * 1024 * 1024;
 pub const PARTICLE_CHECKPOINT_INTERVAL_STEPS: u64 = 240;
 pub const PARTICLE_MAX_CHECKPOINTS: usize = 8;
+
+pub(crate) fn validate_particle_size_range(size_min: f64, size_max: f64) -> Result<(), String> {
+    if size_min <= 0.0 || size_min > size_max || size_max > 512.0 {
+        return Err("Particle size range must be positive, ordered, and at most 512px".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn particle_lifetime_steps(lifetime_seconds: f64) -> u64 {
+    (lifetime_seconds * PARTICLE_FIXED_STEP_HZ as f64).ceil() as u64
+}
+
+pub(crate) fn validate_particle_cold_replay_budget(
+    capacity: u32,
+    lifetime_seconds: f64,
+) -> Result<(), String> {
+    let work = u64::from(capacity).saturating_mul(particle_lifetime_steps(lifetime_seconds));
+    if work > PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS {
+        return Err(format!(
+            "Particle capacity x lifetime requires {work} particle-steps for a cold seek, exceeding the {PARTICLE_MAX_COLD_REPLAY_PARTICLE_STEPS} work budget"
+        ));
+    }
+    Ok(())
+}
 
 /// Mutable scene state address. Module-internal topology contributes only the
 /// stable state slot; placement identity is always instance-scoped.
@@ -85,17 +110,17 @@ impl ParticleSceneParameters {
         {
             return Err("Particle lifetime must be between one fixed step and 120s".to_string());
         }
+        validate_particle_cold_replay_budget(
+            self.capacity,
+            f64::from(self.lifetime_seconds.into_inner()),
+        )?;
         if !(0.0..=100.0).contains(&self.drag.into_inner()) {
             return Err("Particle drag must be between 0 and 100".to_string());
         }
-        if self.size_min.into_inner() <= 0.0
-            || self.size_min > self.size_max
-            || self.size_max.into_inner() > 512.0
-        {
-            return Err(
-                "Particle size range must be positive, ordered, and at most 512px".to_string(),
-            );
-        }
+        validate_particle_size_range(
+            f64::from(self.size_min.into_inner()),
+            f64::from(self.size_max.into_inner()),
+        )?;
         Ok(())
     }
 }
@@ -106,6 +131,10 @@ impl ParticleSceneParameters {
 #[serde(deny_unknown_fields)]
 pub struct ParticleSceneFrame {
     pub invocation: SceneInvocationKey,
+    /// Stable identity of the authored emitter that owns the random stream.
+    /// Renderer branches keep separate mutable state slots while replaying the
+    /// same emissions when they share an emitter.
+    pub random_stream_id: uuid::Uuid,
     pub executable_hash: [u8; 32],
     pub target_step: u64,
     pub logical_width: u32,

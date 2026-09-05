@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use library::editor::TimelineEditorService;
+use library::editor::{ParticleNodeClipPlacement, TimelineEditorService};
 use library::model::authoring::{
     InstancePath, MediaTime, ModuleDefinition, ModuleDefinitionSharing, ModuleInstance,
     ModuleInstanceId, ModuleInvocation, PublishedParameterId, SourceRef, TimelineInterval,
@@ -10,6 +10,7 @@ use library::model::authoring::{
 };
 use library::model::frame::color::Color;
 use library::model::property::PropertyValue;
+use library::model::Node;
 use library::plugin::PluginManager;
 
 use super::*;
@@ -46,6 +47,9 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
 
     let (mut definition, output_id) =
         ModuleDefinition::new_image("Module", ModuleDefinitionSharing::Private);
+    let numeric = Node::new_add("Amount");
+    let numeric_id = numeric.id;
+    definition.graph.nodes.insert(numeric_id, numeric);
     let parameter_id = PublishedParameterId::new();
     definition
         .interface
@@ -56,8 +60,8 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
             data_type: library::model::project::PortDataType::Number,
             default_value: PropertyValue::from(1.0),
             target: library::model::authoring::ModulePortAddress {
-                node_id: uuid::Uuid::new_v4(),
-                port: "amount".to_string(),
+                node_id: numeric_id,
+                port: library::model::project::NUMERIC_A_INPUT_PORT.to_string(),
             },
         });
     let definition_id = definition.id;
@@ -102,6 +106,32 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
     );
     assert!(module[0].points.is_empty());
     assert!(collect_item_keyframed_lanes(&project, module_item).is_empty());
+}
+
+#[test]
+fn constant_only_particle_parameters_are_not_advertised_as_automation_lanes() {
+    let service = TimelineEditorService::create_default("particle lanes").expect("service");
+    let project = service.snapshot().expect("project");
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    drop(project);
+    let created = service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id,
+            name: "Particle".to_string(),
+            interval: TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap())
+                .unwrap(),
+            layer: 0,
+        })
+        .expect("Particle Node Clip");
+
+    let project = service.snapshot().expect("Particle project");
+    let lanes = collect_item_lanes(&project, created.item_id);
+    assert_eq!(lanes.len(), 1);
+    assert_eq!(lanes[0].label, "Color");
+    assert_eq!(
+        lanes[0].id.target,
+        AutomationTarget::ModuleParameter(created.parameters.color)
+    );
 }
 
 #[test]

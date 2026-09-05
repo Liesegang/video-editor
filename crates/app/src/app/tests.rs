@@ -35,3 +35,31 @@ fn playback_shortcut_triggers_on_release_so_hold_to_pan_remains_available() {
     }));
     assert!(released_result);
 }
+
+#[test]
+fn redo_shortcut_is_not_consumed_by_the_earlier_undo_command() {
+    let registry = CommandRegistry::new(&AppConfig::new());
+    let undo = registry.find(CommandId::Undo).expect("Undo command");
+    let redo = registry.find(CommandId::Redo).expect("Redo command");
+    let context = egui::Context::default();
+    let mut undo_triggered = false;
+    let mut redo_triggered = false;
+    drop(context.run(
+        RawInput {
+            events: vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND | Modifiers::SHIFT,
+            }],
+            ..RawInput::default()
+        },
+        |context| {
+            undo_triggered = command_triggered(context, undo);
+            redo_triggered = command_triggered(context, redo);
+        },
+    ));
+    assert!(!undo_triggered);
+    assert!(redo_triggered);
+}

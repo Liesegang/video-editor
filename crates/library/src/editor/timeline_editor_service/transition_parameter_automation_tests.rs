@@ -6,8 +6,8 @@ use crate::animation::EasingFunction;
 use crate::model::authoring::{
     CompositionInstance, DurationPolicy, ModulePortAddress, ProjectInvalidation,
 };
-use crate::model::node::{Node, ValueContent};
-use crate::model::project::connection::NUMERIC_A_INPUT_PORT;
+use crate::model::node::{Node, TRANSITION_IMAGE_MIX_NODE_ID, ValueContent};
+use crate::model::project::connection::{NUMERIC_A_INPUT_PORT, TRANSITION_PROGRESS_INPUT_PORT};
 
 fn seconds(value: i64) -> MediaTime {
     MediaTime::new(value, 1).expect("whole seconds")
@@ -111,6 +111,38 @@ fn transition_track(
         .module_processor()?
         .automation_tracks
         .get(&parameter_id)
+}
+
+fn bounded_transition_project() -> (AuthoringProject, TransitionId, PublishedParameterId) {
+    let (mut project, transition_id, parameter_id) = transition_project();
+    let instance_id = project.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("Module Transition")
+        .instance_id;
+    let definition_id = project.module_instances[&instance_id].definition_id;
+    let definition = project
+        .module_definitions
+        .get_mut(&definition_id)
+        .expect("Transition definition");
+    let bounded = Node::new_catalog_node(TRANSITION_IMAGE_MIX_NODE_ID)
+        .expect("bounded native Progress property");
+    let bounded_id = bounded.id;
+    definition.graph.nodes.insert(bounded_id, bounded);
+    let parameter = definition
+        .interface
+        .parameters
+        .iter_mut()
+        .find(|parameter| parameter.id == parameter_id)
+        .expect("ordinary parameter");
+    parameter.name = "Bounded Progress".to_string();
+    parameter.default_value = number(0.5);
+    parameter.target = ModulePortAddress {
+        node_id: bounded_id,
+        port: TRANSITION_PROGRESS_INPUT_PORT.to_string(),
+    };
+    project.validate().expect("bounded Transition project");
+    (project, transition_id, parameter_id)
 }
 
 fn assert_definition_invalidation(
@@ -312,6 +344,68 @@ fn wrap_with_two_composition_instances(
         .items
         .insert(second_item_id, placement(second_item_id, 1));
     (root_timeline_id, first_item_id, second_item_id)
+}
+
+#[test]
+fn transition_defaults_overrides_and_keyframes_obey_native_hard_bounds() {
+    let (project, transition_id, parameter_id) = bounded_transition_project();
+    let instance_id = project.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("Module Transition")
+        .instance_id;
+    let definition_id = project.module_instances[&instance_id].definition_id;
+
+    let mut invalid_default = project.clone();
+    invalid_default
+        .module_definitions
+        .get_mut(&definition_id)
+        .unwrap()
+        .interface
+        .parameters
+        .iter_mut()
+        .find(|parameter| parameter.id == parameter_id)
+        .unwrap()
+        .default_value = number(-0.1);
+    let error = invalid_default.validate().unwrap_err();
+    assert!(error.contains("cannot be less than 0"), "{error}");
+
+    let mut invalid_override = project.clone();
+    invalid_override
+        .module_instances
+        .get_mut(&instance_id)
+        .unwrap()
+        .parameter_overrides
+        .insert(parameter_id, number(1.1));
+    let error = invalid_override.validate().unwrap_err();
+    assert!(error.contains("cannot be greater than 1"), "{error}");
+
+    let service = TimelineEditorService::new(project.clone()).expect("service");
+    let owner = TransitionAutomationOwner::Definition(transition_id);
+    let error = service
+        .upsert_transition_parameter_keyframe(
+            &owner,
+            parameter_id,
+            seconds(0),
+            number(-0.1),
+            Some(EasingFunction::Linear),
+        )
+        .expect_err("keyframe must obey the target PropertyDefinition");
+    assert!(error.to_string().contains("cannot be less than 0"));
+
+    let mut nested = project;
+    let nested_timeline_id = nested.root_timeline_id;
+    let (root_timeline_id, first_item_id, _) =
+        wrap_with_two_composition_instances(&mut nested, nested_timeline_id);
+    nested.validate().expect("nested project");
+    let service = TimelineEditorService::new(nested).expect("nested service");
+    let before = service.snapshot().expect("before invalid override");
+    let path = InstancePath::root(root_timeline_id).nested(first_item_id);
+    let error = service
+        .set_transition_module_instance_parameter(&path, transition_id, parameter_id, number(1.1))
+        .expect_err("concrete Transition override must obey hard bounds");
+    assert!(error.to_string().contains("cannot be greater than 1"));
+    assert_eq!(service.snapshot().expect("unchanged project"), before);
 }
 
 #[test]

@@ -2,8 +2,12 @@ use super::*;
 use crate::cache::CacheManager;
 use crate::core::framing::FrameEvaluator;
 use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
+use crate::model::authoring::{InstancePath, ModuleInstanceId, ModuleOutputId, TimelineId};
 use crate::model::frame::color::Color;
 use crate::model::frame::frame::Region;
+use crate::model::frame::particle::{
+    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+};
 use crate::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner,
@@ -54,6 +58,9 @@ struct CountingEffect {
 
 struct TexturePathRenderer {
     saw_texture_layer: bool,
+    native_group_composites: usize,
+    direct_particle_draws: usize,
+    particle_rasterizations: usize,
 }
 
 impl Renderer for TexturePathRenderer {
@@ -85,6 +92,16 @@ impl Renderer for TexturePathRenderer {
         )))
     }
 
+    fn end_group_and_draw(
+        &mut self,
+        _transform: &Affine2D,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.native_group_composites += 1;
+        Ok(())
+    }
+
     fn rasterize_text_layer(
         &mut self,
         _request: TextRasterRequest<'_>,
@@ -110,6 +127,28 @@ impl Renderer for TexturePathRenderer {
         _request: crate::rendering::renderer::SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         Err(LibraryError::Render("unexpected SkSL".into()))
+    }
+
+    fn rasterize_particle_layer(
+        &mut self,
+        _request: ParticleRasterRequest<'_>,
+    ) -> Result<RenderOutput, LibraryError> {
+        self.particle_rasterizations += 1;
+        Ok(RenderOutput::Image(crate::model::frame::Image::new(
+            1,
+            1,
+            vec![0, 0, 0, 0],
+        )))
+    }
+
+    fn draw_particle_layer(
+        &mut self,
+        _request: ParticleRasterRequest<'_>,
+        _opacity: f64,
+        _blend_mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.direct_particle_draws += 1;
+        Ok(())
     }
 
     fn read_surface(
@@ -429,15 +468,101 @@ fn hierarchical_rendering_preserves_texture_layers_and_root_texture_output() {
     .unwrap();
     let renderer = TexturePathRenderer {
         saw_texture_layer: false,
+        native_group_composites: 0,
+        direct_particle_draws: 0,
+        particle_rasterizations: 0,
     };
     let mut service = RenderService::new(renderer, plugin_manager, Arc::new(CacheManager::new()));
 
     let output = service.render_from_frame_info(&frame).unwrap();
     assert!(service.renderer.saw_texture_layer);
+    assert!(
+        service.renderer.native_group_composites > 0,
+        "no-effect Composition/Merge groups must use the backend-native combined boundary"
+    );
     assert!(matches!(
         output,
         RenderOutput::Texture(crate::rendering::renderer::TextureInfo { texture_id: 99, .. })
     ));
+}
+
+#[test]
+fn particle_without_effects_uses_the_backend_native_draw_boundary() {
+    let scene = ParticleSceneFrame {
+        invocation: SceneInvocationKey {
+            instance_path: InstancePath::root(TimelineId::new()),
+            module_instance_id: ModuleInstanceId::new(),
+            state_slot_id: uuid::Uuid::new_v4(),
+            output_id: ModuleOutputId::new(),
+        },
+        random_stream_id: uuid::Uuid::new_v4(),
+        executable_hash: [1; 32],
+        target_step: 1,
+        logical_width: 1,
+        logical_height: 1,
+        parameters: ParticleSceneParameters {
+            capacity: 1,
+            emission_rate: OrderedFloat(1.0),
+            lifetime_seconds: OrderedFloat(1.0),
+            seed: 1,
+            velocity_min: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            velocity_max: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            gravity: crate::model::property::Vec3 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+                z: OrderedFloat(0.0),
+            },
+            drag: OrderedFloat(0.0),
+            size_min: OrderedFloat(1.0),
+            size_max: OrderedFloat(1.0),
+            color: Color::white(),
+        },
+    };
+    let frame = FrameInfo {
+        width: 1,
+        height: 1,
+        background_color: Color::black(),
+        color_profile: String::new(),
+        render_scale: OrderedFloat(1.0),
+        now_time: OrderedFloat(0.0),
+        region: None,
+        items: vec![FrameItem::Object(FrameObject {
+            source_node_id: uuid::Uuid::new_v4(),
+            spatial_transform_node_id: None,
+            spatial_transform: Box::default(),
+            content_bounds: None,
+            content: FrameContent::ParticleScene {
+                scene,
+                effects: Vec::new(),
+                transform: Transform::default(),
+            },
+        })],
+    };
+    let renderer = TexturePathRenderer {
+        saw_texture_layer: false,
+        native_group_composites: 0,
+        direct_particle_draws: 0,
+        particle_rasterizations: 0,
+    };
+    let mut service = RenderService::new(
+        renderer,
+        Arc::new(PluginManager::default()),
+        Arc::new(CacheManager::new()),
+    );
+
+    service
+        .render_from_frame_info(&frame)
+        .expect("backend-native Particle draw");
+    assert_eq!(service.renderer.direct_particle_draws, 1);
+    assert_eq!(service.renderer.particle_rasterizations, 0);
 }
 
 #[test]

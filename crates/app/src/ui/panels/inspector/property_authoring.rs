@@ -27,6 +27,8 @@ pub(super) struct PropertyRowSpec<'a> {
     pub(super) suffix: &'a str,
     pub(super) speed: f64,
     pub(super) mode_state: PropertyModeState,
+    pub(super) allow_keyframe: bool,
+    pub(super) keyframe_disabled_reason: Option<&'a str>,
     pub(super) allow_expression: bool,
 }
 
@@ -55,7 +57,8 @@ pub(super) fn property_row(
             ui,
             &format!("inspector.property_mode:{}", spec.control_id),
             spec.mode_state,
-            true,
+            spec.allow_keyframe,
+            spec.keyframe_disabled_reason,
             spec.allow_expression,
         );
         let value_edit = property_value_editor(
@@ -89,6 +92,8 @@ pub(super) fn property_row(
         Some(serde_json::json!({
             "control_id": spec.control_id,
             "column_order": ["label", "property_mode", "value"],
+            "allow_keyframe": spec.allow_keyframe,
+            "keyframe_disabled_reason": spec.keyframe_disabled_reason,
         })),
     );
     result
@@ -574,6 +579,8 @@ mod tests {
                             suffix: "",
                             speed: 0.1,
                             mode_state: PropertyModeState::constant(0.0),
+                            allow_keyframe: true,
+                            keyframe_disabled_reason: None,
                             allow_expression: true,
                         },
                     );

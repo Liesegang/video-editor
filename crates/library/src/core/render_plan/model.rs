@@ -118,9 +118,12 @@ pub struct CompiledModuleDefinition {
     pub parameters: HashMap<PublishedParameterId, PublishedParameter>,
     pub media_inputs: HashMap<PublishedMediaInputId, PublishedMediaInput>,
     pub outputs: HashMap<ModuleOutputId, CompiledModuleOutput>,
-    /// GPU particle executables keyed by their existing Module Output. The
-    /// topology is compiled once per definition and never expanded per item.
-    pub particle_outputs: HashMap<ModuleOutputId, CompiledParticleDefinition>,
+    /// GPU particle executables keyed by their Sprite Renderer Node. A
+    /// renderer is an ordinary Image-producing graph source, so its result can
+    /// flow through Merge, effects, and transforms before reaching an Output.
+    /// The topology is compiled once per definition and never expanded per
+    /// Timeline item.
+    pub particle_renderers: HashMap<uuid::Uuid, CompiledParticleDefinition>,
     /// Retained at the compiled boundary for the future stateful/event runtime;
     /// the first stateless Image slice does not evaluate these interfaces.
     pub signals: HashMap<PublishedSignalId, PublishedSignal>,
@@ -130,9 +133,11 @@ pub struct CompiledModuleDefinition {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompiledParticleDefinition {
     pub emitter_node_id: uuid::Uuid,
-    pub initialize_node_id: uuid::Uuid,
-    pub gravity_node_id: uuid::Uuid,
-    pub drag_node_id: uuid::Uuid,
+    /// Optional pass-through modifier stages. A bypassed Particle modifier is
+    /// absent here and the runtime applies the neutral value for that stage.
+    pub initialize_node_id: Option<uuid::Uuid>,
+    pub gravity_node_id: Option<uuid::Uuid>,
+    pub drag_node_id: Option<uuid::Uuid>,
     pub renderer_node_id: uuid::Uuid,
     /// Stable Module-owned mutable state slot. Runtime keys combine it with
     /// InstancePath and ModuleInstanceId before allocating any buffer.
@@ -160,6 +165,24 @@ pub struct CompiledModuleOutput {
     /// Stable topological order containing only Nodes that can reach this
     /// Output terminal. Dead editor branches never expand an invocation.
     pub evaluation_order: Vec<uuid::Uuid>,
+    /// Published media inputs that can contribute to this Output. Inputs on
+    /// dead editor branches are deliberately excluded so dependency traversal
+    /// does not pull unrelated Timeline items into preview/export preflight.
+    pub reachable_media_inputs: BTreeSet<PublishedMediaInputId>,
+    /// Runtime facilities required by this Output's currently executable
+    /// graph. This is derived data, never persisted in the Project.
+    pub required_capabilities: BTreeSet<RenderCapability>,
+}
+
+impl CompiledModuleOutput {
+    pub fn requires(&self, capability: RenderCapability) -> bool {
+        self.required_capabilities.contains(&capability)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum RenderCapability {
+    Gpu,
 }
 
 /// Lightweight references to the two ordinary schedule entries evaluated by

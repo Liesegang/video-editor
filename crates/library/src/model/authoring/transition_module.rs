@@ -19,8 +19,8 @@ use crate::model::property::PropertyValue;
 use super::{
     AutomationTrack, MediaInputBinding, ModuleConnection, ModuleConnectionId, ModuleDefinition,
     ModuleDefinitionSharing, ModuleInstanceId, ModuleOutputId, ModulePortAddress,
-    PublishedMediaInput, PublishedMediaInputId, PublishedParameter, PublishedParameterId,
-    TransitionMediaType,
+    PublishedMediaInput, PublishedMediaInputId, PublishedParameter,
+    PublishedParameterAutomationCapability, PublishedParameterId, TransitionMediaType,
 };
 
 /// Host-specific public contract of a reusable Module Definition.
@@ -260,6 +260,26 @@ impl TransitionModuleInterface {
             .nodes
             .get(&progress.target.node_id)
             .ok_or_else(|| "Transition Module protected Progress target is missing".to_string())?;
+        if progress.target.port != TRANSITION_PROGRESS_INPUT_PORT
+            || !matches!(
+                progress_target.content(),
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == TRANSITION_PROGRESS_INPUT_NODE_ID
+            )
+        {
+            return Err(
+                "Transition Module protected Progress must target the canonical Progress boundary"
+                    .to_string(),
+            );
+        }
+        if !matches!(
+            definition.parameter_automation_capability(self.progress_parameter_id)?,
+            PublishedParameterAutomationCapability::FrameSampled
+        ) {
+            return Err(
+                "Transition Module protected Progress boundary must be frame-sampled".to_string(),
+            );
+        }
         if !progress_target.enabled || progress_target.bypassed {
             return Err(
                 "Transition Module protected Progress boundary cannot be disabled or bypassed"
@@ -645,6 +665,34 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot publish a primary")
         );
+    }
+
+    #[test]
+    fn transition_progress_cannot_retarget_a_constant_only_particle_input() {
+        let (mut definition, contract) = ModuleDefinition::new_transition(
+            "Protected Progress",
+            ModuleDefinitionSharing::Private,
+            TransitionMediaType::Image,
+        )
+        .unwrap();
+        let emitter = Node::new_catalog_node("native.particle.emitter").expect("Particle Emitter");
+        let emitter_id = emitter.id;
+        definition.graph.nodes.insert(emitter_id, emitter);
+        definition
+            .interface
+            .parameters
+            .iter_mut()
+            .find(|parameter| parameter.id == contract.progress_parameter_id)
+            .expect("protected Progress")
+            .target = ModulePortAddress {
+            node_id: emitter_id,
+            port: "rate".to_string(),
+        };
+
+        let error = definition
+            .validate()
+            .expect_err("the host clock must not drive Particle simulation state");
+        assert!(error.contains("canonical Progress boundary"), "{error}");
     }
 
     #[test]

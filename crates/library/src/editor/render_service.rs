@@ -224,15 +224,7 @@ impl<T: Renderer> RenderService<T> {
         frame_info: &FrameInfo,
         destination: RenderDestination,
     ) -> Result<RenderOutput, LibraryError> {
-        let managed_destination = match destination {
-            RenderDestination::Preview => ManagedRenderDestination::Preview,
-            RenderDestination::Export => ManagedRenderDestination::Export,
-        };
-        let pipeline = self
-            .color_pipeline_cache
-            .for_authoring_project(project, managed_destination)?;
-        self.renderer
-            .use_project_linear_surface(pipeline.working_surface_contract())?;
+        let pipeline = self.prepare_authoring_color_pipeline(project, destination)?;
         let output = self.render_with_authority(
             frame_info,
             &RenderColorAuthority::Managed {
@@ -247,6 +239,36 @@ impl<T: Renderer> RenderService<T> {
             ));
         };
         pipeline.terminal_image(&working).map(RenderOutput::Image)
+    }
+
+    /// Validate the exact Project-linear Particle rendering boundary without
+    /// evaluating or writing an export frame. Export workers call this before
+    /// audio temporaries, encoder sessions, or destination files exist.
+    pub(crate) fn preflight_authoring_particle_backend(
+        &mut self,
+        project: &AuthoringProject,
+        destination: RenderDestination,
+        target_sizes: &[(u32, u32)],
+    ) -> Result<(), LibraryError> {
+        self.prepare_authoring_color_pipeline(project, destination)?;
+        self.renderer.preflight_particle_backend(target_sizes)
+    }
+
+    fn prepare_authoring_color_pipeline(
+        &mut self,
+        project: &AuthoringProject,
+        destination: RenderDestination,
+    ) -> Result<Arc<ProjectColorPipeline>, LibraryError> {
+        let managed_destination = match destination {
+            RenderDestination::Preview => ManagedRenderDestination::Preview,
+            RenderDestination::Export => ManagedRenderDestination::Export,
+        };
+        let pipeline = self
+            .color_pipeline_cache
+            .for_authoring_project(project, managed_destination)?;
+        self.renderer
+            .use_project_linear_surface(pipeline.working_surface_contract())?;
+        Ok(pipeline)
     }
 
     /// Project-free compatibility boundary for versioned native plugin probes.
@@ -334,9 +356,17 @@ impl<T: Renderer> RenderService<T> {
             group.effect_time.into_inner(),
             color_authority,
         );
-        let output_result = self.renderer.end_group();
-        children_result?;
-        let output = output_result?;
+        if let Err(error) = children_result {
+            return Err(self.close_failed_group(error, "isolated group"));
+        }
+        if group.effects.is_empty() {
+            return self.renderer.end_group_and_draw(
+                &Affine2D::IDENTITY,
+                group.transform.opacity,
+                group.blend_mode,
+            );
+        }
+        let output = self.renderer.end_group()?;
         let output = self.apply_effects(
             output,
             &group.effects,
@@ -371,9 +401,9 @@ impl<T: Renderer> RenderService<T> {
             group.effect_time.into_inner(),
             color_authority,
         );
-        let output_result = self.renderer.end_group();
-        children_result?;
-        let output = output_result?;
+        if let Err(error) = children_result {
+            return Err(self.close_failed_group(error, "Image Transform group"));
+        }
 
         let pixel_to_local = Affine2D::scale(
             1.0 / parent_context.render_scale,
@@ -383,12 +413,8 @@ impl<T: Renderer> RenderService<T> {
             .logical_to_target
             .compose(Affine2D::from(&group.transform))
             .compose(pixel_to_local);
-        self.renderer.draw_layer_affine_with_blend(
-            &output,
-            &transform,
-            group.transform.opacity,
-            group.blend_mode,
-        )
+        self.renderer
+            .end_group_and_draw(&transform, group.transform.opacity, group.blend_mode)
     }
 
     fn render_composition_group(
@@ -409,15 +435,9 @@ impl<T: Renderer> RenderService<T> {
             group.effect_time.into_inner(),
             color_authority,
         );
-        let output_result = self.renderer.end_group();
-        children_result?;
-        let output = output_result?;
-        let output = self.apply_effects(
-            output,
-            &group.effects,
-            group.effect_time.into_inner(),
-            color_authority,
-        )?;
+        if let Err(error) = children_result {
+            return Err(self.close_failed_group(error, "Composition group"));
+        }
 
         let pixel_to_local = Affine2D::scale(
             1.0 / parent_context.render_scale,
@@ -427,12 +447,33 @@ impl<T: Renderer> RenderService<T> {
             .logical_to_target
             .compose(Affine2D::from(&group.transform))
             .compose(pixel_to_local);
+        if group.effects.is_empty() {
+            return self.renderer.end_group_and_draw(
+                &transform,
+                group.transform.opacity,
+                group.blend_mode,
+            );
+        }
+        let output = self.renderer.end_group()?;
+        let output = self.apply_effects(
+            output,
+            &group.effects,
+            group.effect_time.into_inner(),
+            color_authority,
+        )?;
         self.renderer.draw_layer_affine_with_blend(
             &output,
             &transform,
             group.transform.opacity,
             group.blend_mode,
         )
+    }
+
+    fn close_failed_group(&mut self, render_error: LibraryError, label: &str) -> LibraryError {
+        if let Err(cleanup_error) = self.renderer.end_group() {
+            log::error!("failed to close {label} after child render error: {cleanup_error}");
+        }
+        render_error
     }
 
     fn render_object(
@@ -586,6 +627,18 @@ impl<T: Renderer> RenderService<T> {
                 transform,
             } => {
                 let render_transform = context.transform(transform);
+                if effects.is_empty() {
+                    return measure_debug("Draw GPU Particle scene", || {
+                        self.renderer.draw_particle_layer(
+                            ParticleRasterRequest {
+                                scene,
+                                transform: &render_transform,
+                            },
+                            transform.opacity,
+                            crate::model::BlendMode::Normal,
+                        )
+                    });
+                }
                 let particle_layer = measure_debug("Rasterize GPU Particle scene", || {
                     self.renderer
                         .rasterize_particle_layer(ParticleRasterRequest {

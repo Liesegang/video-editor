@@ -398,11 +398,33 @@ def activate_dock_tab(
         component["id"] for component in client.component_snapshot()["components"]
     }
     if component_id not in component_ids:
-        client.key("p", True, command=True, shift=True)
-        client.key("p", False, command=True, shift=True)
-        client.inject("text", {"text": label})
-        client.key("enter", True)
-        client.key("enter", False)
+        # A production action can add/focus a dock tab after that frame's UI
+        # was already painted. Give the component registry one short grace
+        # period before invoking TogglePanel; otherwise the fallback can close
+        # the tab that has just been opened.
+        try:
+            client.wait_until(
+                description or (label + " dock tab publication"),
+                lambda: component
+                if (
+                    component := next(
+                        (
+                            item
+                            for item in client.component_snapshot()["components"]
+                            if item["id"] == component_id
+                        ),
+                        None,
+                    )
+                )
+                else None,
+                timeout=0.75,
+            )
+        except QaFailure:
+            client.key("p", True, command=True, shift=True)
+            client.key("p", False, command=True, shift=True)
+            client.inject("text", {"text": label})
+            client.key("enter", True)
+            client.key("enter", False)
     client.click_component(component_id)
     return client.wait_component_settled(component_id)
 

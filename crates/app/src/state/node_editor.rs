@@ -66,6 +66,9 @@ impl Default for NodeEditorState {
 impl NodeEditorState {
     pub fn request_document(&mut self, document: NodeEditorDocument) {
         if self.active_document.as_ref() != Some(&document) {
+            // A layout command is scoped to the document that was active when
+            // it was requested. Never apply it later to a newly opened Module.
+            self.pending_layout_command = None;
             self.surface_interaction.cancel();
             self.selected_nodes.clear();
             self.primary_node = None;
@@ -187,7 +190,10 @@ mod tests {
 
     #[test]
     fn switching_documents_clears_only_transient_module_interaction() {
-        let mut state = NodeEditorState::default();
+        let mut state = NodeEditorState {
+            pending_layout_command: Some(CommandId::NodeEditorCleanLayoutAll),
+            ..NodeEditorState::default()
+        };
         state.selected_nodes.insert(Uuid::new_v4());
         state.canvas = CanvasState::uniform(egui::vec2(10.0, 20.0), 0.75);
         state.direct_gesture_transform = Some(egui::emath::TSTransform::IDENTITY);
@@ -201,6 +207,7 @@ mod tests {
         };
         state.request_document(document.clone());
         assert!(state.selected_nodes.is_empty());
+        assert_eq!(state.pending_layout_command, None);
         assert_eq!(state.canvas, CanvasState::uniform(egui::Vec2::ZERO, 1.0));
         assert!(state.fit_requested);
         assert_eq!(state.direct_gesture_transform, None);

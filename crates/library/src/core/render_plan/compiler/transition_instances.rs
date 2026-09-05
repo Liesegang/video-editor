@@ -56,12 +56,18 @@ pub(super) fn compile_transition_instance_controls(
                 transition.id
             ));
         }
-        if !definitions.contains_key(&base.definition_id) {
-            return Err(format!(
+        let definition = definitions.get(&base.definition_id).ok_or_else(|| {
+            format!(
                 "Transition {} instance controls have no compiled Module definition",
                 transition.id
-            ));
-        }
+            )
+        })?;
+        let output = definition.outputs.get(&base.output_id).ok_or_else(|| {
+            format!(
+                "Transition {} instance controls select a missing compiled Output",
+                transition.id
+            )
+        })?;
         let interval = transition.interval()?;
         dependencies.transition_instance_ranges.insert(
             target.clone(),
@@ -82,7 +88,12 @@ pub(super) fn compile_transition_instance_controls(
             .entry(base.instance_id)
             .or_default()
             .push(target.clone());
-        for binding in controls.input_bindings.values().flatten() {
+        for binding in controls
+            .input_bindings
+            .iter()
+            .filter(|(input_id, _)| output.reachable_media_inputs.contains(input_id))
+            .filter_map(|(_, binding)| binding.as_ref())
+        {
             let MediaInputBinding::TimelineItemOutput { item_id, .. } = binding;
             dependencies
                 .transition_instance_media_consumers

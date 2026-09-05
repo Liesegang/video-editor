@@ -170,6 +170,27 @@ fn bypass_capability_requires_supported_unambiguous_ports_for_every_output() {
 }
 
 #[test]
+fn particle_catalog_advertises_bypass_only_for_type_preserving_modifiers() {
+    for catalog_id in [
+        "native.particle.initialize",
+        "native.particle.gravity-force",
+        "native.particle.drag-force",
+    ] {
+        let node = Node::new_catalog_node(catalog_id).expect("implemented Particle modifier");
+        assert!(node.supports_bypass(), "{catalog_id}");
+        assert_eq!(
+            node.bypass_input_for_output("particles"),
+            Some("particles"),
+            "{catalog_id}"
+        );
+    }
+    for catalog_id in ["native.particle.emitter", "native.particle.sprite-renderer"] {
+        let node = Node::new_catalog_node(catalog_id).expect("implemented Particle endpoint");
+        assert!(!node.supports_bypass(), "{catalog_id}");
+    }
+}
+
+#[test]
 fn authored_edits_cannot_extend_a_factory_property_contract() {
     let mut node = Node::new_fmod("sealed property contract");
     let unknown = Property::constant(PropertyValue::Number(OrderedFloat(2.0)));
@@ -487,4 +508,80 @@ fn canonical_data_ui_types_reject_lossy_legacy_substitutions() {
     assert!(!legacy.is_compatible_with(&PropertyUiType::ColorValue));
     assert!(path.is_compatible_with(&PropertyUiType::Path));
     assert!(!path.is_compatible_with(&PropertyUiType::MultilineText));
+}
+
+#[test]
+fn module_creation_capability_is_owned_by_semantic_catalog_factories() {
+    let particle = native_node_descriptor("native.particle.emitter").unwrap();
+    assert_eq!(particle.factory(), NativeNodeFactory::NativeOperation);
+    assert!(particle.supports_general_module_creation());
+    assert!(particle.supports_host_module_creation());
+
+    let particle_placeholder = native_node_descriptor("native.particle.spawn-burst").unwrap();
+    assert_eq!(
+        particle_placeholder.factory(),
+        NativeNodeFactory::TypedPlaceholder
+    );
+    assert!(!particle_placeholder.supports_general_module_creation());
+    assert!(!particle_placeholder.supports_host_module_creation());
+
+    let transition_mix = native_node_descriptor(TRANSITION_IMAGE_MIX_NODE_ID).unwrap();
+    assert_eq!(transition_mix.factory(), NativeNodeFactory::HostOperation);
+    assert!(!transition_mix.supports_general_module_creation());
+    assert!(transition_mix.supports_host_module_creation());
+}
+
+#[test]
+fn native_particle_descriptor_rejects_schema_and_typed_value_drift() {
+    let descriptor = native_node_descriptor("native.particle.emitter").unwrap();
+    let emitter = Node::new_catalog_node(descriptor.catalog_id()).unwrap();
+    descriptor
+        .validate_native_properties(emitter.properties())
+        .unwrap();
+
+    let mut missing = emitter.properties().clone();
+    missing.remove("rate");
+    let error = descriptor.validate_native_properties(&missing).unwrap_err();
+    assert!(
+        error.contains("missing required Property 'rate'"),
+        "{error}"
+    );
+
+    let mut unknown = emitter.properties().clone();
+    unknown.set(
+        "surprise".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+    );
+    let error = descriptor.validate_native_properties(&unknown).unwrap_err();
+    assert!(error.contains("unknown Property 'surprise'"), "{error}");
+
+    let mut wrong_type = emitter.properties().clone();
+    wrong_type.set(
+        "rate".to_string(),
+        Property::constant(PropertyValue::String("fast".to_string())),
+    );
+    let error = descriptor
+        .validate_native_properties(&wrong_type)
+        .unwrap_err();
+    assert!(error.contains("Property 'rate' expects"), "{error}");
+
+    let mut non_finite = emitter.properties().clone();
+    non_finite.set(
+        "rate".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(f64::NAN))),
+    );
+    let error = descriptor
+        .validate_native_properties(&non_finite)
+        .unwrap_err();
+    assert!(error.contains("Property 'rate' must be finite"), "{error}");
+
+    let mut outside_hard_bounds = emitter.properties().clone();
+    outside_hard_bounds.set(
+        "rate".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(-1.0))),
+    );
+    let error = descriptor
+        .validate_native_properties(&outside_hard_bounds)
+        .unwrap_err();
+    assert!(error.contains("cannot be less than 0"), "{error}");
 }

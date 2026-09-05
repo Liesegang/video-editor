@@ -4,9 +4,8 @@ use super::property_drag_value::FloatDragValueConfig;
 
 const CONTROL_WIDTH: f32 = 184.0;
 const COMPONENT_GAP: f32 = 2.0;
-// Two glyphs (for example `px`) stay visible; longer units are truncated and
-// available in the hover text so Vec4 keeps useful keyboard-editing width.
-const SUFFIX_WIDTH: f32 = 14.0;
+const MIN_SUFFIX_WIDTH: f32 = 14.0;
+const MAX_SUFFIX_WIDTH: f32 = 56.0;
 
 pub(crate) struct VectorAxisResponse {
     pub(crate) axis: &'static str,
@@ -37,8 +36,20 @@ pub(crate) fn vector_drag_values(
     let mut finished = false;
     let mut axes = Vec::with_capacity(components.len());
     let has_suffix = !config.suffix.is_empty();
+    let suffix = config.suffix.trim();
+    let suffix_width = if has_suffix {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        (ui.painter()
+            .layout_no_wrap(suffix.to_owned(), font, ui.visuals().weak_text_color())
+            .size()
+            .x
+            + COMPONENT_GAP)
+            .clamp(MIN_SUFFIX_WIDTH, MAX_SUFFIX_WIDTH)
+    } else {
+        0.0
+    };
     let item_count = components.len() + usize::from(has_suffix);
-    let components_width = CONTROL_WIDTH - if has_suffix { SUFFIX_WIDTH } else { 0.0 };
+    let components_width = CONTROL_WIDTH - suffix_width;
     let component_width = (components_width - COMPONENT_GAP * item_count.saturating_sub(1) as f32)
         / components.len().max(1) as f32;
 
@@ -64,12 +75,10 @@ pub(crate) fn vector_drag_values(
         }
         if has_suffix {
             ui.add_sized(
-                [SUFFIX_WIDTH, height],
-                egui::Label::new(config.suffix.trim())
-                    .selectable(false)
-                    .truncate(),
+                [suffix_width, height],
+                egui::Label::new(suffix).selectable(false),
             )
-            .on_hover_text(format!("Unit: {}", config.suffix.trim()));
+            .on_hover_text(format!("Unit: {suffix}"));
         }
     });
 
@@ -139,8 +148,40 @@ mod tests {
             .all(|pair| (pair[0].center().y - pair[1].center().y).abs() < 0.01));
         let total_width = group_rect.width();
         assert!(
-            (CONTROL_WIDTH - 0.1..=CONTROL_WIDTH + 0.1).contains(&total_width),
+            (CONTROL_WIDTH - 0.5..=CONTROL_WIDTH + 0.5).contains(&total_width),
             "expected {CONTROL_WIDTH}px total control width, got {total_width}px: {rects:?}"
         );
+    }
+
+    #[test]
+    fn long_vector_unit_is_allocated_more_than_the_two_glyph_minimum() {
+        let context = egui::Context::default();
+        let mut unit_width = 0.0;
+        let mut x = 1.0;
+        let mut y = 2.0;
+        let mut z = 3.0;
+        let config = FloatDragValueConfig {
+            speed: 0.25,
+            suffix: " px/s".to_string(),
+            hard_min: None,
+            hard_max: None,
+        };
+        drop(context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                let before = ui.next_widget_position().x;
+                let rendered = vector_drag_values(
+                    ui,
+                    &config,
+                    &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z)],
+                    20.0,
+                );
+                let axes_right = rendered.axes.last().expect("Z axis").response.rect.right();
+                unit_width = rendered.response.rect.right()
+                    - axes_right
+                    - COMPONENT_GAP
+                    - (rendered.response.rect.left() - before);
+            });
+        }));
+        assert!(unit_width > MIN_SUFFIX_WIDTH, "unit width was {unit_width}");
     }
 }

@@ -153,6 +153,9 @@ impl AuthoringFrameEvaluator<'_> {
                     input.data_type
                 )));
             }
+            if !output.reachable_media_inputs.contains(input_id) {
+                continue;
+            }
             if let Some(mut frame) =
                 self.evaluate_media_binding(binding, timeline_id, timeline_time, instance_path)?
             {
@@ -168,7 +171,7 @@ impl AuthoringFrameEvaluator<'_> {
         for input in definition
             .media_inputs
             .values()
-            .filter(|input| input.required)
+            .filter(|input| input.required && output.reachable_media_inputs.contains(&input.id))
         {
             if !external_images.contains_key(&input.target) {
                 return Err(LibraryError::Render(format!(

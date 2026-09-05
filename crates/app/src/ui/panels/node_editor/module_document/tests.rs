@@ -506,3 +506,30 @@ fn transition_host_inputs_are_locked_while_the_output_terminal_stays_connectable
         ModuleInputPortOwnership::Internal
     ));
 }
+
+#[test]
+fn particle_constant_only_ports_do_not_advertise_invalid_wire_gestures() {
+    let (mut definition, _) =
+        ModuleDefinition::new_image("Particle ports", ModuleDefinitionSharing::Private);
+    let emitter = Node::new_catalog_node("native.particle.emitter").expect("Particle Emitter");
+    let emitter_id = emitter.id;
+    definition.graph.nodes.insert(emitter_id, emitter);
+    let rate = PortVisual {
+        id: ModuleEditorPortId {
+            address: ModulePortAddress {
+                node_id: emitter_id,
+                port: "rate".to_string(),
+            },
+            direction: PortDirection::Input,
+        },
+        label: "Rate".to_string(),
+        center: egui::Pos2::ZERO,
+        data_type: PortDataType::Number,
+    };
+
+    assert_eq!(
+        definition.input_port_ownership(&rate.id.address),
+        ModuleInputPortOwnership::Internal
+    );
+    assert!(!surface::module_port_is_connectable(&definition, &rate));
+}

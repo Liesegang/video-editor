@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -9,12 +10,16 @@ use crate::core::audio::authoring::{
     AUTHORING_AUDIO_CHANNELS, AUTHORING_AUDIO_SAMPLE_RATE, AuthoringAudioMixer,
     MAX_AUTHORING_AUDIO_WINDOW_FRAMES,
 };
-use crate::core::render_plan::{RenderPlan, evaluate_timeline_render_plan_frame_at_instance};
-use crate::editor::RenderService;
+use crate::core::render_plan::{
+    RenderCapability, RenderPlan, evaluate_timeline_render_plan_frame_at_instance,
+};
+use crate::editor::{RenderDestination, RenderService};
 use crate::error::LibraryError;
 use crate::model::authoring::{AuthoringProject, InstancePath, TimelineId};
+use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
 use crate::model::frame::frame::FrameInfo;
-use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
+use crate::plugin::{ExportFormat, ExportFrame, ExportSettings, PluginManager};
+use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::output_path_identity::output_path_identity;
 
@@ -50,28 +55,54 @@ struct AuthoringExportRenderer {
     width: u32,
     height: u32,
     background_color: crate::model::frame::color::Color,
+    requires_gpu: bool,
+}
+
+#[derive(Default)]
+struct AuthoringParticlePreflight {
+    target_sizes: BTreeSet<(u32, u32)>,
+}
+
+impl AuthoringParticlePreflight {
+    fn requires_gpu(&self) -> bool {
+        !self.target_sizes.is_empty()
+    }
+
+    fn target_sizes(&self) -> Vec<(u32, u32)> {
+        self.target_sizes.iter().copied().collect()
+    }
+
+    fn include_frame(&mut self, frame_info: &FrameInfo) -> Result<(), LibraryError> {
+        let root = authoring_export_dimensions(frame_info)?;
+        collect_particle_target_sizes(&frame_info.items, root, &mut self.target_sizes)
+    }
 }
 
 impl AuthoringExportRenderer {
     fn new(
         frame_info: &FrameInfo,
+        requires_gpu: bool,
         plugin_manager: Arc<PluginManager>,
         cache_manager: SharedCacheManager,
     ) -> Result<Self, LibraryError> {
         let (width, height) = authoring_export_dimensions(frame_info)?;
-        let renderer = SkiaRenderer::new(
+        let mut renderer = SkiaRenderer::new(
             width,
             height,
             frame_info.background_color.clone(),
-            false,
+            requires_gpu,
             None,
             Some(Arc::clone(&cache_manager)),
         )?;
+        if requires_gpu && renderer.get_gpu_context().is_none() {
+            return Err(particle_gpu_unavailable());
+        }
         Ok(Self {
             service: RenderService::new(renderer, plugin_manager, cache_manager),
             width,
             height,
             background_color: frame_info.background_color.clone(),
+            requires_gpu,
         })
     }
 
@@ -92,6 +123,183 @@ impl AuthoringExportRenderer {
         }
         Ok(())
     }
+
+    fn render_frame(
+        &mut self,
+        project: &AuthoringProject,
+        frame_info: &FrameInfo,
+    ) -> Result<ExportFrame, LibraryError> {
+        if frame_uses_gpu_particle(&frame_info.items)
+            && self.service.renderer.get_gpu_context().is_none()
+        {
+            return Err(particle_gpu_unavailable());
+        }
+        self.service
+            .render_authoring_export_frame(project, frame_info)
+    }
+}
+
+fn particle_gpu_unavailable() -> LibraryError {
+    LibraryError::Render(
+        "GPU Particle export is unavailable: the export worker could not create an OpenGL GPU session; desktop OpenGL 4.3 compute/SSBO support is required"
+            .to_string(),
+    )
+}
+
+fn ensure_authoring_export_renderer(
+    renderer: &mut Option<AuthoringExportRenderer>,
+    project: &AuthoringProject,
+    frame_info: &FrameInfo,
+    particle_preflight: &AuthoringParticlePreflight,
+    plugin_manager: &Arc<PluginManager>,
+    cache_manager: &SharedCacheManager,
+) -> Result<(), LibraryError> {
+    let requires_gpu = particle_preflight.requires_gpu();
+    if renderer
+        .as_ref()
+        .is_none_or(|renderer| renderer.requires_gpu != requires_gpu)
+    {
+        let replacement = AuthoringExportRenderer::new(
+            frame_info,
+            requires_gpu,
+            Arc::clone(plugin_manager),
+            Arc::clone(cache_manager),
+        )?;
+        *renderer = Some(replacement);
+    }
+    let renderer = renderer.as_mut().ok_or_else(|| {
+        LibraryError::Render("authoring export renderer did not initialize".to_string())
+    })?;
+    renderer.prepare(frame_info)?;
+    if requires_gpu {
+        renderer.service.preflight_authoring_particle_backend(
+            project,
+            RenderDestination::Export,
+            &particle_preflight.target_sizes(),
+        )?;
+    }
+    Ok(())
+}
+
+fn frame_uses_gpu_particle(items: &[FrameItem]) -> bool {
+    items.iter().any(|item| match item {
+        FrameItem::Object(object) => matches!(&object.content, FrameContent::ParticleScene { .. }),
+        FrameItem::Group(group) => frame_uses_gpu_particle(&group.items),
+        FrameItem::Transition(transition) => {
+            frame_uses_gpu_particle(std::slice::from_ref(&transition.from.item))
+                || frame_uses_gpu_particle(std::slice::from_ref(&transition.to.item))
+        }
+    })
+}
+
+fn collect_particle_target_sizes(
+    items: &[FrameItem],
+    current_target: (u32, u32),
+    targets: &mut BTreeSet<(u32, u32)>,
+) -> Result<(), LibraryError> {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                if matches!(&object.content, FrameContent::ParticleScene { .. }) {
+                    targets.insert(current_target);
+                }
+            }
+            FrameItem::Group(group) => {
+                let child_target = if matches!(
+                    group.kind,
+                    FrameGroupKind::Composition | FrameGroupKind::ImageTransform
+                ) {
+                    (
+                        preflight_dimension(group.width, "width")?,
+                        preflight_dimension(group.height, "height")?,
+                    )
+                } else {
+                    current_target
+                };
+                collect_particle_target_sizes(&group.items, child_target, targets)?;
+            }
+            FrameItem::Transition(transition) => {
+                collect_particle_target_sizes(
+                    std::slice::from_ref(&transition.from.item),
+                    current_target,
+                    targets,
+                )?;
+                collect_particle_target_sizes(
+                    std::slice::from_ref(&transition.to.item),
+                    current_target,
+                    targets,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preflight_dimension(value: u64, axis: &str) -> Result<u32, LibraryError> {
+    u32::try_from(value.max(1)).map_err(|_| {
+        LibraryError::Render(format!(
+            "GPU Particle nested target {axis} {value} exceeds the renderer limit"
+        ))
+    })
+}
+
+fn preflight_authoring_video_particle_targets(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    plugin_manager: &PluginManager,
+    timeline_id: TimelineId,
+    instance_path: Option<&InstancePath>,
+    frame_count: u64,
+) -> Result<AuthoringParticlePreflight, LibraryError> {
+    if !plan.timeline_may_require_capability(
+        project,
+        timeline_id,
+        instance_path,
+        RenderCapability::Gpu,
+    )? {
+        return Ok(AuthoringParticlePreflight::default());
+    }
+
+    let mut preflight = AuthoringParticlePreflight::default();
+    // The hierarchical query is intentionally conservative around nested
+    // TimeMap policies. Resolve exact reachability and target dimensions
+    // through the production evaluator before any export side effect.
+    for frame_index in 0..frame_count {
+        let exact_frame = i64::try_from(frame_index)
+            .map_err(|_| LibraryError::Render("video frame index exceeds i64".to_string()))?;
+        let frame_info = evaluate_timeline_render_plan_frame_at_instance(
+            project,
+            plan,
+            plugin_manager,
+            timeline_id,
+            exact_frame,
+            1.0,
+            None,
+            instance_path,
+        )?;
+        preflight.include_frame(&frame_info)?;
+    }
+    Ok(preflight)
+}
+
+#[cfg(test)]
+pub(super) fn preflight_authoring_video_requires_gpu(
+    project: &AuthoringProject,
+    plan: &RenderPlan,
+    plugin_manager: &PluginManager,
+    timeline_id: TimelineId,
+    instance_path: Option<&InstancePath>,
+    frame_count: u64,
+) -> Result<bool, LibraryError> {
+    Ok(preflight_authoring_video_particle_targets(
+        project,
+        plan,
+        plugin_manager,
+        timeline_id,
+        instance_path,
+        frame_count,
+    )?
+    .requires_gpu())
 }
 
 fn authoring_export_dimensions(frame_info: &FrameInfo) -> Result<(u32, u32), LibraryError> {
@@ -477,8 +685,11 @@ fn run_authoring_png_export(
             };
         }
     };
+    let mut particle_preflight = AuthoringParticlePreflight::default();
+    let preflight_result = particle_preflight.include_frame(&frame_info);
 
     let output = (|| {
+        preflight_result?;
         let timeline = request
             .project
             .timelines
@@ -491,20 +702,18 @@ fn run_authoring_png_export(
         settings.pixel_format = "rgba".to_string();
         settings.parameters.retain(|name, _| name == "compression");
 
-        if renderer.is_none() {
-            *renderer = Some(AuthoringExportRenderer::new(
-                &frame_info,
-                Arc::clone(plugin_manager),
-                Arc::clone(cache_manager),
-            )?);
-        }
+        ensure_authoring_export_renderer(
+            renderer,
+            request.project.as_ref(),
+            &frame_info,
+            &particle_preflight,
+            plugin_manager,
+            cache_manager,
+        )?;
         let renderer = renderer.as_mut().ok_or_else(|| {
             LibraryError::Render("authoring export renderer did not initialize".to_string())
         })?;
-        renderer.prepare(&frame_info)?;
-        let frame = renderer
-            .service
-            .render_authoring_export_frame(request.project.as_ref(), &frame_info)?;
+        let frame = renderer.render_frame(request.project.as_ref(), &frame_info)?;
 
         // Re-resolve filesystem identities immediately before the plugin is
         // allowed to create or truncate the destination.
@@ -572,12 +781,45 @@ fn run_authoring_video_export(
             };
         }
     };
+    let particle_preflight = match preflight_authoring_video_particle_targets(
+        request.project.as_ref(),
+        request.plan.as_ref(),
+        plugin_manager.as_ref(),
+        request.timeline_id,
+        request.instance_path.as_ref(),
+        frame_count,
+    ) {
+        Ok(preflight) => preflight,
+        Err(error) => {
+            return AuthoringExportResult {
+                request_id: request.request_id,
+                timeline_id: request.timeline_id,
+                frame_number: 0,
+                output_path: request.output_path,
+                output: Err(error),
+                frame_info,
+                frames_exported: 0,
+                frame_count,
+            };
+        }
+    };
 
     let mut frames_exported = 0_u64;
     let mut exporter_attempted = false;
     let mut temporary_audio = None;
     let output = (|| {
         require_safe_authoring_output(request.project.as_ref(), &request.output_path)?;
+        // Establish the complete export's renderer capability before creating
+        // temporary audio or giving the exporter a chance to open the output.
+        // A Particle that starts late therefore cannot leave a partial video.
+        ensure_authoring_export_renderer(
+            renderer,
+            request.project.as_ref(),
+            &frame_info,
+            &particle_preflight,
+            plugin_manager,
+            cache_manager,
+        )?;
         temporary_audio = prepare_authoring_audio(
             request.project.as_ref(),
             request.timeline_id,
@@ -597,20 +839,11 @@ fn run_authoring_video_export(
                 None,
                 request.instance_path.as_ref(),
             )?;
-            if renderer.is_none() {
-                *renderer = Some(AuthoringExportRenderer::new(
-                    &frame_info,
-                    Arc::clone(plugin_manager),
-                    Arc::clone(cache_manager),
-                )?);
-            }
             let renderer = renderer.as_mut().ok_or_else(|| {
                 LibraryError::Render("authoring export renderer did not initialize".to_string())
             })?;
             renderer.prepare(&frame_info)?;
-            let frame = renderer
-                .service
-                .render_authoring_export_frame(request.project.as_ref(), &frame_info)?;
+            let frame = renderer.render_frame(request.project.as_ref(), &frame_info)?;
 
             // This check is deliberately repeated: an input symlink or output
             // alias can change while a long export is running.

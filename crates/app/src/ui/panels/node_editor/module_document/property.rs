@@ -51,11 +51,9 @@ pub(super) fn show_property_input(
     let label = definition.map_or(key, PropertyDefinition::label);
     let qa_id = format!("node_editor.property.node:{}:{key}", node.id);
     let mut action = None;
-
-    let row = ui.horizontal(|ui| {
-        property_label(ui, label).on_hover_text(label);
-
-        let allow_expression = definition.map_or_else(
+    let dynamic_value_disabled_reason = node_property_dynamic_value_disabled_reason(node, key);
+    let allow_expression = dynamic_value_disabled_reason.is_none()
+        && definition.map_or_else(
             || {
                 mode_value
                     .as_ref()
@@ -63,12 +61,17 @@ pub(super) fn show_property_input(
             },
             |definition| definition.ui_type().supports_expression(),
         );
+
+    let row = ui.horizontal(|ui| {
+        property_label(ui, label).on_hover_text(label);
+
         let mode_state = PropertyModeState::from_property(Some(property), context.time, false);
         let (mode_action, mode_response) = property_mode_control_for_state(
             ui,
             &format!("node_editor.property_mode.node:{}:{key}", node.id),
             mode_state,
             false,
+            dynamic_value_disabled_reason,
             allow_expression,
         );
         if let (Some(mode_action), Some(current_value)) = (mode_action, mode_value.clone()) {
@@ -138,6 +141,8 @@ pub(super) fn show_property_input(
             "connected": connected,
             "evaluator": property.evaluator,
             "descriptor_available": definition.is_some(),
+            "allow_expression": allow_expression,
+            "dynamic_value_disabled_reason": dynamic_value_disabled_reason,
             "current_time": context.time,
             "evaluation_diagnostic": diagnostic,
         })),
@@ -145,57 +150,12 @@ pub(super) fn show_property_input(
     (response, action)
 }
 
-pub(super) fn node_property_definition(
-    plugins: &PluginManager,
+fn node_property_dynamic_value_disabled_reason(
     node: &Node,
-    property_name: &str,
-) -> Option<PropertyDefinition> {
-    use library::model::NodeContent;
-
-    let definitions: &[PropertyDefinition] = match node.content() {
-        NodeContent::Value(value) => value.property_definitions(),
-        NodeContent::Color(value) => value.property_definitions(),
-        NodeContent::SoundAnalysis(value) => value.property_definitions(),
-        NodeContent::Data(value) => value.property_definitions(),
-        NodeContent::List(value) => value.property_definitions(),
-        NodeContent::Path(value) => value.property_definitions(),
-        NodeContent::PluginOperation(operation) => {
-            let direct_ensemble_contract =
-                library::model::authoring::text_ensemble_direct_contract_is_compatible(
-                    &operation.declared_ports,
-                ) && (operation.category == library::plugin::EFFECTOR_CATEGORY
-                    || operation.category == library::plugin::DECORATOR_CATEGORY);
-            let descriptor = if direct_ensemble_contract {
-                plugins.text_ensemble_operation_descriptor(
-                    &operation.category,
-                    &operation.component_id,
-                )
-            } else {
-                plugins.operation_descriptor(
-                    &operation.category,
-                    &operation.component_id,
-                    &operation.operation,
-                )
-            };
-            return descriptor
-                .ok()?
-                .properties()
-                .iter()
-                .find(|definition| definition.name() == property_name)
-                .cloned();
-        }
-        NodeContent::ModuleOutput(_)
-        | NodeContent::Media(_)
-        | NodeContent::Generator(_)
-        | NodeContent::CompositionInstance(_)
-        | NodeContent::NativeOperation(_)
-        | NodeContent::Merge
-        | NodeContent::SoundMerge => return None,
-    };
-    definitions
-        .iter()
-        .find(|definition| definition.name() == property_name)
-        .cloned()
+    property_key: &str,
+) -> Option<&'static str> {
+    library::model::native_node_descriptor_for_node(node)?
+        .dynamic_input_disabled_reason(property_key)
 }
 
 pub(super) fn property_with_edited_value(
@@ -274,22 +234,11 @@ mod tests {
     }
 
     #[test]
-    fn inline_text_decorator_uses_its_persisted_contract_metadata() {
-        let plugins = PluginManager::default();
-        let inline = plugins
-            .create_text_ensemble_operation_node(library::plugin::DECORATOR_CATEGORY, "backplate")
-            .expect("inline Backplate node");
-        for property in ["target", "shape", "color", "padding", "radius"] {
-            assert!(
-                node_property_definition(&plugins, &inline, property).is_some(),
-                "inline Backplate is missing descriptor metadata for {property}"
-            );
-        }
-
-        let graph = plugins
-            .create_decorator_operation_node("backplate")
-            .expect("graph Backplate node");
-        assert!(node_property_definition(&plugins, &graph, "offset").is_some());
-        assert!(node_property_definition(&plugins, &graph, "shape").is_none());
+    fn native_particle_dynamic_input_uses_the_catalog_capability() {
+        let emitter = Node::new_catalog_node("native.particle.emitter").expect("Particle Emitter");
+        assert!(
+            node_property_dynamic_value_disabled_reason(&emitter, "rate")
+                .is_some_and(|reason| reason.contains("fixed-step"))
+        );
     }
 }

@@ -10,6 +10,7 @@ use super::shaders::{PARTICLE_COMPUTE, PARTICLE_FRAGMENT, PARTICLE_VERTEX};
 
 pub(super) const PARTICLE_STRIDE_BYTES: u64 = 48;
 pub(super) const PARTICLE_WORKGROUP_SIZE: u32 = 64;
+pub(super) const PARTICLE_VERTICES_PER_SPRITE: u32 = 6;
 
 #[derive(Clone, Debug)]
 pub(super) struct CapabilityProfile {
@@ -71,7 +72,6 @@ pub(super) struct RenderUniforms {
     pub affine_x: glow::UniformLocation,
     pub affine_y: glow::UniformLocation,
     pub focal_length: glow::UniformLocation,
-    pub point_scale: glow::UniformLocation,
     pub premultiplied_color: glow::UniformLocation,
 }
 
@@ -144,7 +144,6 @@ impl ParticlePipeline {
                     affine_x: required_uniform(gl, render_program, "uAffineX")?,
                     affine_y: required_uniform(gl, render_program, "uAffineY")?,
                     focal_length: required_uniform(gl, render_program, "uFocalLength")?,
-                    point_scale: required_uniform(gl, render_program, "uPointScale")?,
                     premultiplied_color: required_uniform(
                         gl,
                         render_program,
@@ -286,6 +285,7 @@ fn required_uniform(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SceneTextureFormat {
     Srgba8,
+    LinearRgbaF16,
     LinearRgbaF32,
 }
 
@@ -293,6 +293,7 @@ impl SceneTextureFormat {
     pub fn bytes_per_pixel(self) -> u64 {
         match self {
             Self::Srgba8 => 4,
+            Self::LinearRgbaF16 => 8,
             Self::LinearRgbaF32 => 16,
         }
     }
@@ -300,6 +301,7 @@ impl SceneTextureFormat {
     fn gl_internal_format(self) -> u32 {
         match self {
             Self::Srgba8 => glow::RGBA8,
+            Self::LinearRgbaF16 => glow::RGBA16F,
             Self::LinearRgbaF32 => glow::RGBA32F,
         }
     }
@@ -311,7 +313,12 @@ pub(super) struct SceneTarget {
     pub format: SceneTextureFormat,
     pub texture: glow::Texture,
     pub framebuffer: glow::Framebuffer,
-    pub depth: glow::Renderbuffer,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SceneTargetBindings {
+    pub(super) texture_id: u32,
+    pub(super) framebuffer_id: u32,
 }
 
 impl SceneTarget {
@@ -340,23 +347,8 @@ impl SceneTarget {
                 )));
             }
         };
-        // SAFETY: resource creation is issued to the same current context.
-        let depth = match unsafe { gl.create_renderbuffer() } {
-            Ok(depth) => depth,
-            Err(error) => {
-                // SAFETY: neither handle escaped this failed construction and
-                // both belong to the current context.
-                unsafe {
-                    gl.delete_framebuffer(framebuffer);
-                    gl.delete_texture(texture);
-                }
-                return Err(LibraryError::Render(format!(
-                    "Cannot allocate GPU Particle depth buffer: {error}"
-                )));
-            }
-        };
         let result = (|| {
-            // SAFETY: all bound names were created by this current context;
+            // SAFETY: both bound names were created by this current context;
             // dimensions and formats were validated by SceneRuntime before
             // construction, and storage is initialized before attachment.
             unsafe {
@@ -388,13 +380,6 @@ impl SceneTarget {
                     glow::TEXTURE_WRAP_T,
                     glow::CLAMP_TO_EDGE as i32,
                 );
-                gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
-                gl.renderbuffer_storage(
-                    glow::RENDERBUFFER,
-                    glow::DEPTH_COMPONENT24,
-                    width as i32,
-                    height as i32,
-                );
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                 gl.framebuffer_texture_2d(
                     glow::FRAMEBUFFER,
@@ -402,12 +387,6 @@ impl SceneTarget {
                     glow::TEXTURE_2D,
                     Some(texture),
                     0,
-                );
-                gl.framebuffer_renderbuffer(
-                    glow::FRAMEBUFFER,
-                    glow::DEPTH_ATTACHMENT,
-                    glow::RENDERBUFFER,
-                    Some(depth),
                 );
                 let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
                 if status != glow::FRAMEBUFFER_COMPLETE {
@@ -419,10 +398,9 @@ impl SceneTarget {
             Ok(())
         })();
         if let Err(error) = result {
-            // SAFETY: failed construction still exclusively owns all three
+            // SAFETY: failed construction still exclusively owns both
             // handles and deletes each exactly once.
             unsafe {
-                gl.delete_renderbuffer(depth);
                 gl.delete_framebuffer(framebuffer);
                 gl.delete_texture(texture);
             }
@@ -434,7 +412,6 @@ impl SceneTarget {
             format,
             texture,
             framebuffer,
-            depth,
         })
     }
 
@@ -442,7 +419,6 @@ impl SceneTarget {
         // SAFETY: SceneTarget uniquely owns resources created by this context
         // and destruction runs while that same context is current.
         unsafe {
-            gl.delete_renderbuffer(self.depth);
             gl.delete_framebuffer(self.framebuffer);
             gl.delete_texture(self.texture);
         }
@@ -450,6 +426,13 @@ impl SceneTarget {
 
     pub fn texture_id(&self) -> u32 {
         self.texture.0.get()
+    }
+
+    pub fn bindings(&self) -> SceneTargetBindings {
+        SceneTargetBindings {
+            texture_id: self.texture.0.get(),
+            framebuffer_id: self.framebuffer.0.get(),
+        }
     }
 }
 
@@ -460,7 +443,6 @@ pub(super) struct SavedGlState {
     vertex_array: Option<glow::VertexArray>,
     draw_framebuffer: Option<glow::Framebuffer>,
     read_framebuffer: Option<glow::Framebuffer>,
-    renderbuffer: Option<glow::Renderbuffer>,
     texture_2d: Option<glow::Texture>,
     shader_storage_buffer: Option<glow::Buffer>,
     shader_storage_binding_zero: Option<glow::Buffer>,
@@ -469,14 +451,10 @@ pub(super) struct SavedGlState {
     viewport: [i32; 4],
     scissor_box: [i32; 4],
     clear_color: [f32; 4],
-    clear_depth: f32,
     color_mask: [bool; 4],
     blend: bool,
     depth_test: bool,
     scissor_test: bool,
-    program_point_size: bool,
-    depth_mask: bool,
-    depth_func: i32,
     blend_src_rgb: i32,
     blend_dst_rgb: i32,
     blend_src_alpha: i32,
@@ -503,7 +481,6 @@ impl SavedGlState {
                 vertex_array: gl.get_parameter_vertex_array(glow::VERTEX_ARRAY_BINDING),
                 draw_framebuffer: gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING),
                 read_framebuffer: gl.get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING),
-                renderbuffer: gl.get_parameter_renderbuffer(glow::RENDERBUFFER_BINDING),
                 texture_2d: gl.get_parameter_texture(glow::TEXTURE_BINDING_2D),
                 shader_storage_buffer: gl.get_parameter_buffer(glow::SHADER_STORAGE_BUFFER_BINDING),
                 shader_storage_binding_zero: native_buffer(indexed_storage),
@@ -512,14 +489,10 @@ impl SavedGlState {
                 viewport,
                 scissor_box,
                 clear_color,
-                clear_depth: gl.get_parameter_f32(glow::DEPTH_CLEAR_VALUE),
                 color_mask: gl.get_parameter_bool_array(glow::COLOR_WRITEMASK),
                 blend: gl.is_enabled(glow::BLEND),
                 depth_test: gl.is_enabled(glow::DEPTH_TEST),
                 scissor_test: gl.is_enabled(glow::SCISSOR_TEST),
-                program_point_size: gl.is_enabled(glow::PROGRAM_POINT_SIZE),
-                depth_mask: gl.get_parameter_bool(glow::DEPTH_WRITEMASK),
-                depth_func: gl.get_parameter_i32(glow::DEPTH_FUNC),
                 blend_src_rgb: gl.get_parameter_i32(glow::BLEND_SRC_RGB),
                 blend_dst_rgb: gl.get_parameter_i32(glow::BLEND_DST_RGB),
                 blend_src_alpha: gl.get_parameter_i32(glow::BLEND_SRC_ALPHA),
@@ -527,6 +500,30 @@ impl SavedGlState {
                 blend_equation_rgb: gl.get_parameter_i32(glow::BLEND_EQUATION_RGB),
                 blend_equation_alpha: gl.get_parameter_i32(glow::BLEND_EQUATION_ALPHA),
             }
+        }
+    }
+
+    /// Scene target replacement may delete a texture/framebuffer which
+    /// Ganesh left bound after sampling. Such names cannot be restored; bind
+    /// the default object instead and let the caller reset Ganesh's cache.
+    pub fn invalidate_destroyed_target(&mut self, target: SceneTargetBindings) {
+        if self
+            .texture_2d
+            .is_some_and(|texture| texture.0.get() == target.texture_id)
+        {
+            self.texture_2d = None;
+        }
+        if self
+            .draw_framebuffer
+            .is_some_and(|framebuffer| framebuffer.0.get() == target.framebuffer_id)
+        {
+            self.draw_framebuffer = None;
+        }
+        if self
+            .read_framebuffer
+            .is_some_and(|framebuffer| framebuffer.0.get() == target.framebuffer_id)
+        {
+            self.read_framebuffer = None;
         }
     }
 
@@ -539,7 +536,6 @@ impl SavedGlState {
             gl.bind_vertex_array(self.vertex_array);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, self.draw_framebuffer);
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, self.read_framebuffer);
-            gl.bind_renderbuffer(glow::RENDERBUFFER, self.renderbuffer);
             gl.bind_texture(glow::TEXTURE_2D, self.texture_2d);
             gl.bind_buffer_base(
                 glow::SHADER_STORAGE_BUFFER,
@@ -569,15 +565,12 @@ impl SavedGlState {
                 self.clear_color[2],
                 self.clear_color[3],
             );
-            gl.clear_depth_f32(self.clear_depth);
             gl.color_mask(
                 self.color_mask[0],
                 self.color_mask[1],
                 self.color_mask[2],
                 self.color_mask[3],
             );
-            gl.depth_mask(self.depth_mask);
-            gl.depth_func(self.depth_func as u32);
             gl.blend_func_separate(
                 self.blend_src_rgb as u32,
                 self.blend_dst_rgb as u32,
@@ -591,7 +584,6 @@ impl SavedGlState {
             restore_enable(gl, glow::BLEND, self.blend);
             restore_enable(gl, glow::DEPTH_TEST, self.depth_test);
             restore_enable(gl, glow::SCISSOR_TEST, self.scissor_test);
-            restore_enable(gl, glow::PROGRAM_POINT_SIZE, self.program_point_size);
         }
     }
 }

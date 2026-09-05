@@ -399,19 +399,8 @@ impl AuthoringProject {
                 .module_definitions
                 .get(&instance.definition_id)
                 .ok_or_else(|| format!("Module instance {} has no definition", instance.id))?;
-            for (parameter_id, value) in &instance.parameter_overrides {
-                let parameter = definition
-                    .interface
-                    .parameters
-                    .iter()
-                    .find(|parameter| parameter.id == *parameter_id)
-                    .ok_or_else(|| {
-                        format!(
-                            "Module instance {} overrides an unpublished parameter",
-                            instance.id
-                        )
-                    })?;
-                validate_parameter_value(parameter, value)?;
+            definition.validate_parameter_overrides(&instance.parameter_overrides)?;
+            for parameter_id in instance.parameter_overrides.keys() {
                 if definition.host_contract.protects_parameter(*parameter_id) {
                     return Err(format!(
                         "Module instance {} cannot override a host-owned parameter",
@@ -625,7 +614,11 @@ impl AuthoringProject {
                 .iter()
                 .find(|parameter| parameter.id == *parameter_id)
                 .ok_or_else(|| "Invocation automates an unpublished parameter".to_string())?;
+            definition.require_parameter_automation(*parameter_id)?;
             validate_automation(track, parameter)?;
+            for keyframe in &track.keyframes {
+                definition.validate_parameter_value(*parameter_id, &keyframe.value)?;
+            }
         }
         Ok(())
     }

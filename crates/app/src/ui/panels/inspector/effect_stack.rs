@@ -448,6 +448,8 @@ fn effect_parameters(
                             suffix: "",
                             speed: 0.1,
                             mode_state,
+                            allow_keyframe: true,
+                            keyframe_disabled_reason: None,
                             allow_expression: false,
                         },
                     );

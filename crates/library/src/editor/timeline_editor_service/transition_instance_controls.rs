@@ -1,8 +1,8 @@
 //! Concrete nested-placement controls for Transition Module invocations.
 
 use super::transition_module_controls::{
-    require_editable_input, require_editable_parameter, transition_module_context,
-    transition_module_mut,
+    require_editable_input, require_editable_parameter, require_transition_parameter_automation,
+    transition_module_context, transition_module_mut,
 };
 use super::*;
 use crate::model::authoring::{InstancePath, TransitionModuleInstanceTarget};
@@ -204,7 +204,13 @@ impl TimelineEditorService {
     ) -> Result<ChangeSet, LibraryError> {
         let (_, _, contract) = {
             let session = self.read_session()?;
-            transition_module_context(session.project(), transition_id)?
+            let context = transition_module_context(session.project(), transition_id)?;
+            require_transition_parameter_automation(
+                session.project(),
+                transition_id,
+                parameter_id,
+            )?;
+            context
         };
         require_editable_parameter(transition_id, &contract, parameter_id)?;
         self.edit_transition_instance(instance_path, transition_id, |project, target, is_root| {

@@ -191,6 +191,7 @@ fn paint_grid_preview(
         visual: match entry {
             LibraryEntry::Composition(_) => "composition_icon",
             LibraryEntry::NewNodeClip | LibraryEntry::NodeClip(_) => "node_clip_icon",
+            LibraryEntry::NewParticleNodeClip => "particle_node_clip_icon",
             LibraryEntry::Media(asset) if asset.kind == AssetKind::Model3D => "model_icon",
             LibraryEntry::Media(_) => "file_icon",
         },

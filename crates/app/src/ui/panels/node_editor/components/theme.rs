@@ -242,8 +242,13 @@ fn pin_color(data_type: PortDataType) -> Color32 {
 pub(in crate::ui::panels::node_editor) fn pin_info(
     data_type: PortDataType,
     connected: bool,
+    connectable: bool,
 ) -> PinInfo {
-    let color = pin_color(data_type);
+    let color = if connectable {
+        pin_color(data_type)
+    } else {
+        pin_color(data_type).gamma_multiply(0.32)
+    };
     let visual = Editor::port_visual_style(color, connected);
     PinInfo::circle()
         .with_fill(visual.fill)

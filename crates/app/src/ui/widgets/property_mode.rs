@@ -188,29 +188,50 @@ pub(crate) fn property_mode_control_for_state(
     qa_id: &str,
     state: PropertyModeState,
     allow_keyframe: bool,
+    keyframe_disabled_reason: Option<&str>,
     allow_expression: bool,
 ) -> (Option<PropertyModeAction>, egui::Response) {
     let presentation = mode_presentation(state);
-    let button = ui
+    let mode_switch_available =
+        property_mode_switch_available(presentation.mode, allow_keyframe, allow_expression);
+    let tooltip = match (
+        mode_switch_available,
+        allow_keyframe,
+        keyframe_disabled_reason,
+    ) {
+        (false, _, Some(reason)) => {
+            format!("Constant value\nDynamic authoring is unavailable: {reason}")
+        }
+        (false, _, None) => "Constant value\nNo alternate authoring mode is available".to_string(),
+        (true, false, Some(reason)) => format!(
+            "{}\nTimeline keyframes are unavailable: {reason}",
+            presentation.tooltip
+        ),
+        _ => presentation.tooltip.to_string(),
+    };
+    let button_response = ui
         .push_id(qa_id, |ui| {
-            ui.add_sized(
-                [24.0, ui.spacing().interact_size.y],
-                egui::Button::new(
-                    RichText::new(presentation.icon)
-                        .color(presentation.color)
-                        .strong(),
+            ui.add_enabled_ui(mode_switch_available, |ui| {
+                ui.add_sized(
+                    [24.0, ui.spacing().interact_size.y],
+                    egui::Button::new(
+                        RichText::new(presentation.icon)
+                            .color(presentation.color)
+                            .strong(),
+                    )
+                    .frame(false),
                 )
-                .frame(false),
-            )
+            })
+            .inner
         })
-        .inner
-        .on_hover_text(presentation.tooltip);
+        .inner;
+    let button = if mode_switch_available {
+        button_response.on_hover_text(&tooltip)
+    } else {
+        button_response.on_disabled_hover_text(&tooltip)
+    };
     button.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            button.enabled(),
-            presentation.tooltip,
-        )
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled(), &tooltip)
     });
     crate::qa::register_component_with_metadata(
         qa_id,
@@ -229,89 +250,104 @@ pub(crate) fn property_mode_control_for_state(
             "keyframe_count": state.keyframe_count,
             "evaluator": state.mode.map(PropertyAuthoringMode::qa_key),
             "allow_keyframe": allow_keyframe,
+            "keyframe_disabled_reason": keyframe_disabled_reason,
             "allow_expression": allow_expression,
+            "mode_switch_available": mode_switch_available,
+            "locked": !mode_switch_available,
         })),
     );
     let mut action = None;
-    egui::Popup::menu(&button).show(|ui| {
-        ui.set_min_width(170.0);
-        for mode in [
-            PropertyAuthoringMode::Constant,
-            PropertyAuthoringMode::Keyframe,
-            PropertyAuthoringMode::Expression,
-        ]
-        .into_iter()
-        .filter(|mode| match mode {
-            PropertyAuthoringMode::Constant => true,
-            PropertyAuthoringMode::Keyframe => allow_keyframe,
-            PropertyAuthoringMode::Expression => allow_expression,
-        }) {
-            let (icon, semantic) = match mode {
-                PropertyAuthoringMode::Constant => (regular::TIMER, "timer_constant"),
-                PropertyAuthoringMode::Keyframe => (regular::DIAMOND, "diamond_outline_keyframe"),
-                PropertyAuthoringMode::Expression => (regular::FUNCTION, "function_expression"),
-            };
-            let option = ui.selectable_label(
-                presentation.mode == Some(mode),
-                format!("{icon}  {}", mode.label()),
-            );
-            let option_id = format!("{qa_id}.option:{}", mode.qa_key());
-            crate::qa::register_component_with_metadata(
-                option_id,
-                "property_mode_option",
-                option.rect,
-                option.enabled(),
-                Some(serde_json::json!({
-                    "mode": mode.qa_key(),
-                    "mode_label": mode.label(),
-                    "selected": presentation.mode == Some(mode),
-                    "icon": {"library": "egui_phosphor", "semantic": semantic},
-                })),
-            );
-            if option.clicked() && presentation.mode != Some(mode) {
-                action = Some(PropertyModeAction::SetMode(mode));
-                ui.close();
+    if mode_switch_available {
+        egui::Popup::menu(&button).show(|ui| {
+            ui.set_min_width(170.0);
+            for mode in [
+                PropertyAuthoringMode::Constant,
+                PropertyAuthoringMode::Keyframe,
+                PropertyAuthoringMode::Expression,
+            ]
+            .into_iter()
+            .filter(|mode| match mode {
+                PropertyAuthoringMode::Constant => true,
+                PropertyAuthoringMode::Keyframe => allow_keyframe,
+                PropertyAuthoringMode::Expression => allow_expression,
+            }) {
+                let (icon, semantic) = match mode {
+                    PropertyAuthoringMode::Constant => (regular::TIMER, "timer_constant"),
+                    PropertyAuthoringMode::Keyframe => {
+                        (regular::DIAMOND, "diamond_outline_keyframe")
+                    }
+                    PropertyAuthoringMode::Expression => (regular::FUNCTION, "function_expression"),
+                };
+                let option = ui.selectable_label(
+                    presentation.mode == Some(mode),
+                    format!("{icon}  {}", mode.label()),
+                );
+                let option_id = format!("{qa_id}.option:{}", mode.qa_key());
+                crate::qa::register_component_with_metadata(
+                    option_id,
+                    "property_mode_option",
+                    option.rect,
+                    option.enabled(),
+                    Some(serde_json::json!({
+                        "mode": mode.qa_key(),
+                        "mode_label": mode.label(),
+                        "selected": presentation.mode == Some(mode),
+                        "icon": {"library": "egui_phosphor", "semantic": semantic},
+                    })),
+                );
+                if option.clicked() && presentation.mode != Some(mode) {
+                    action = Some(PropertyModeAction::SetMode(mode));
+                    ui.close();
+                }
             }
-        }
 
-        if allow_keyframe && presentation.mode == Some(PropertyAuthoringMode::Keyframe) {
-            ui.separator();
-            let (icon, label, semantic) = if presentation.key_at_current_time {
-                (
-                    fill::DIAMOND,
-                    "Remove key at current time",
-                    "diamond_filled_keyframe",
-                )
-            } else {
-                (
-                    regular::DIAMOND,
-                    "Add key at current time",
-                    "diamond_outline_keyframe",
-                )
-            };
-            let toggle = ui.button(format!("{icon}  {label}"));
-            crate::qa::register_component_with_metadata(
-                format!("{qa_id}.toggle_keyframe"),
-                "property_keyframe_toggle",
-                toggle.rect,
-                toggle.enabled(),
-                Some(serde_json::json!({
-                    "action": if presentation.key_at_current_time {"remove"} else {"add"},
-                    "key_at_current_time": presentation.key_at_current_time,
-                    "current_time": state.current_time,
-                    "icon": {"library": "egui_phosphor", "semantic": semantic},
-                })),
-            );
-            if toggle.clicked() {
-                action = Some(PropertyModeAction::ToggleKeyframe);
-                ui.close();
+            if allow_keyframe && presentation.mode == Some(PropertyAuthoringMode::Keyframe) {
+                ui.separator();
+                let (icon, label, semantic) = if presentation.key_at_current_time {
+                    (
+                        fill::DIAMOND,
+                        "Remove key at current time",
+                        "diamond_filled_keyframe",
+                    )
+                } else {
+                    (
+                        regular::DIAMOND,
+                        "Add key at current time",
+                        "diamond_outline_keyframe",
+                    )
+                };
+                let toggle = ui.button(format!("{icon}  {label}"));
+                crate::qa::register_component_with_metadata(
+                    format!("{qa_id}.toggle_keyframe"),
+                    "property_keyframe_toggle",
+                    toggle.rect,
+                    toggle.enabled(),
+                    Some(serde_json::json!({
+                        "action": if presentation.key_at_current_time {"remove"} else {"add"},
+                        "key_at_current_time": presentation.key_at_current_time,
+                        "current_time": state.current_time,
+                        "icon": {"library": "egui_phosphor", "semantic": semantic},
+                    })),
+                );
+                if toggle.clicked() {
+                    action = Some(PropertyModeAction::ToggleKeyframe);
+                    ui.close();
+                }
             }
-        }
-    });
+        });
+    }
     if action.is_some() {
         ui.ctx().request_repaint();
     }
     (action, button)
+}
+
+const fn property_mode_switch_available(
+    mode: Option<PropertyAuthoringMode>,
+    allow_keyframe: bool,
+    allow_expression: bool,
+) -> bool {
+    allow_keyframe || allow_expression || !matches!(mode, Some(PropertyAuthoringMode::Constant))
 }
 
 pub(crate) fn property_for_mode(
@@ -430,6 +466,21 @@ mod tests {
         assert!(!away.key_at_current_time());
         let here = PropertyModeState::from_keyframe_times(4.0, [0.0, 4.0]);
         assert!(here.key_at_current_time());
+    }
+
+    #[test]
+    fn constant_only_mode_is_locked_but_invalid_persisted_modes_can_recover() {
+        assert!(!property_mode_switch_available(
+            Some(PropertyAuthoringMode::Constant),
+            false,
+            false
+        ));
+        assert!(property_mode_switch_available(
+            Some(PropertyAuthoringMode::Keyframe),
+            false,
+            false
+        ));
+        assert!(property_mode_switch_available(None, false, false));
     }
 
     #[test]

@@ -14,10 +14,8 @@ use crate::model::authoring::{
     ModuleDefinitionSharing, ModuleInstanceId, ModuleOutputId, ModulePortAddress,
     PublishedParameter, PublishedParameterId, TimelineInterval, TimelineItemId, TimelineTrackId,
 };
-use crate::model::node::Node;
+use crate::model::node::{Node, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 use crate::model::project::{IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType};
-
-const PARTICLES_PORT: &str = "particles";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParticlePublishedParameters {
@@ -77,19 +75,19 @@ impl ParticleNodeClipFactory {
             })?
             .node_id;
 
-        let mut emitter =
-            Node::new_catalog_node("native.particle.emitter").map_err(LibraryError::Validation)?;
+        let mut emitter = Node::new_catalog_node(ParticleNodeRole::Emitter.catalog_id())
+            .map_err(LibraryError::Validation)?;
         emitter.ui_position = [0.0, 140.0];
-        let mut initialize = Node::new_catalog_node("native.particle.initialize")
+        let mut initialize = Node::new_catalog_node(ParticleNodeRole::Initialize.catalog_id())
             .map_err(LibraryError::Validation)?;
         initialize.ui_position = [280.0, 140.0];
-        let mut gravity = Node::new_catalog_node("native.particle.gravity-force")
+        let mut gravity = Node::new_catalog_node(ParticleNodeRole::Gravity.catalog_id())
             .map_err(LibraryError::Validation)?;
         gravity.ui_position = [560.0, 70.0];
-        let mut drag = Node::new_catalog_node("native.particle.drag-force")
+        let mut drag = Node::new_catalog_node(ParticleNodeRole::Drag.catalog_id())
             .map_err(LibraryError::Validation)?;
         drag.ui_position = [560.0, 260.0];
-        let mut renderer = Node::new_catalog_node("native.particle.sprite-renderer")
+        let mut renderer = Node::new_catalog_node(ParticleNodeRole::SpriteRenderer.catalog_id())
             .map_err(LibraryError::Validation)?;
         renderer.ui_position = [840.0, 140.0];
         if let Some(output) = definition.graph.nodes.get_mut(&output_node_id) {
@@ -109,10 +107,30 @@ impl ParticleNodeClipFactory {
             (renderer_id, renderer),
         ]);
         definition.graph.connections = vec![
-            connection(emitter_id, PARTICLES_PORT, initialize_id, PARTICLES_PORT),
-            connection(initialize_id, PARTICLES_PORT, gravity_id, PARTICLES_PORT),
-            connection(gravity_id, PARTICLES_PORT, drag_id, PARTICLES_PORT),
-            connection(drag_id, PARTICLES_PORT, renderer_id, PARTICLES_PORT),
+            connection(
+                emitter_id,
+                PARTICLE_SYSTEM_PORT,
+                initialize_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                initialize_id,
+                PARTICLE_SYSTEM_PORT,
+                gravity_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                gravity_id,
+                PARTICLE_SYSTEM_PORT,
+                drag_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
+            connection(
+                drag_id,
+                PARTICLE_SYSTEM_PORT,
+                renderer_id,
+                PARTICLE_SYSTEM_PORT,
+            ),
             connection(
                 renderer_id,
                 IMAGE_OUTPUT_PORT,
@@ -312,107 +330,5 @@ fn publish(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::authoring::{MediaTime, SourceRef};
-    use crate::model::frame::color::Color;
-    use crate::model::node::{NativeNodeRuntimeStatus, native_node_descriptor};
-
-    fn seconds(value: i64) -> MediaTime {
-        MediaTime::new(value, 1).expect("whole seconds")
-    }
-
-    #[test]
-    fn factory_builds_one_private_typed_chain_and_mandatory_output() {
-        let result = ParticleNodeClipFactory::create("GPU Particles").expect("factory");
-        assert_eq!(result.definition.graph.nodes.len(), 6);
-        assert_eq!(result.definition.graph.connections.len(), 5);
-        assert_eq!(result.definition.outputs().count(), 1);
-        assert_eq!(result.definition.interface.parameters.len(), 11);
-        assert_eq!(result.definition.sharing, ModuleDefinitionSharing::Private);
-        result
-            .definition
-            .validate()
-            .expect("valid particle topology");
-    }
-
-    #[test]
-    fn only_the_executable_particle_slice_is_enabled_in_the_catalog() {
-        for catalog_id in [
-            "native.particle.emitter",
-            "native.particle.initialize",
-            "native.particle.gravity-force",
-            "native.particle.drag-force",
-            "native.particle.sprite-renderer",
-        ] {
-            assert_eq!(
-                native_node_descriptor(catalog_id)
-                    .expect("descriptor")
-                    .runtime_status(),
-                NativeNodeRuntimeStatus::Implemented
-            );
-        }
-        assert_eq!(
-            native_node_descriptor("native.particle.mesh-renderer")
-                .expect("placeholder")
-                .runtime_status(),
-            NativeNodeRuntimeStatus::DesignNeeded
-        );
-    }
-
-    #[test]
-    fn service_creates_only_the_explicit_particle_item_in_one_undo_step() {
-        let service = TimelineEditorService::create_default("Particle authoring").expect("service");
-        let project = service.snapshot().expect("project");
-        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
-        drop(project);
-        let (ordinary_item_id, _) = service
-            .add_item(
-                track_id,
-                "Ordinary".to_string(),
-                SourceRef::Solid {
-                    color: Color::white(),
-                },
-                TimelineInterval::new(seconds(0), seconds(2)).expect("interval"),
-                0,
-            )
-            .expect("ordinary item");
-        let before = service.snapshot().expect("before");
-
-        let created = service
-            .create_particle_node_clip(ParticleNodeClipPlacement {
-                track_id,
-                name: "GPU Particles".to_string(),
-                interval: TimelineInterval::new(seconds(1), seconds(5)).expect("interval"),
-                layer: 1,
-            })
-            .expect("particle item");
-        let project = service.snapshot().expect("created project");
-        assert!(matches!(
-            project.items[&ordinary_item_id].source,
-            SourceRef::Solid { .. }
-        ));
-        let SourceRef::Module(invocation) = &project.items[&created.item_id].source else {
-            panic!("Particle item must be an explicit Node Clip");
-        };
-        assert_eq!(invocation.instance_id, created.instance_id);
-        assert_eq!(invocation.output_id, created.output_id);
-        assert!(invocation.automation_tracks.is_empty());
-        assert!(invocation.input_bindings.is_empty());
-        assert_eq!(
-            project.module_instances[&created.instance_id].definition_id,
-            created.definition_id
-        );
-        assert_eq!(
-            project.module_definitions[&created.definition_id].sharing,
-            ModuleDefinitionSharing::Private
-        );
-        drop(project);
-
-        service.undo().expect("undo").expect("creation transaction");
-        assert_eq!(
-            service.snapshot().expect("restored").as_ref(),
-            before.as_ref()
-        );
-    }
-}
+#[path = "particle_node_clip_tests.rs"]
+mod tests;

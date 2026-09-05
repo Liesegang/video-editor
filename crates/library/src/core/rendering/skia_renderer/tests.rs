@@ -20,6 +20,8 @@ use crate::rendering::renderer::{
     WorkingSurfaceContract,
 };
 #[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::rendering::skia_utils::{create_gpu_context, get_current_context_handle};
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use ordered_float::OrderedFloat;
 use ruvie_color_management::{
     BuiltinColorTransform, ColorContext, ColorTransformBackend, ColorTransformRequest,
@@ -27,6 +29,9 @@ use ruvie_color_management::{
     VerifiedSourceSpace, WorkingColorIdentity,
 };
 use uuid::Uuid;
+
+#[path = "tests/render_target.rs"]
+mod render_target;
 
 const CUSTOM_BLEND_MODES: [BlendMode; 10] = [
     BlendMode::LinearBurn,
@@ -100,31 +105,6 @@ fn assert_pixel_near(actual: [f32; 4], expected: [f32; 4]) {
             "actual {actual}, expected {expected} for {actual:?}"
         );
     }
-}
-
-#[test]
-fn construction_returns_an_error_for_invalid_dimensions() {
-    let result = SkiaRenderer::new(0, 0, Color::black(), false, None, None);
-    assert!(matches!(result, Err(LibraryError::Render(_))));
-}
-
-#[test]
-fn failed_render_target_replacement_preserves_the_current_surface() {
-    let mut renderer = SkiaRenderer::new(2, 2, Color::black(), false, None, None).unwrap();
-    let result = renderer.replace_render_target(None, Some(99), Some(77), |_| {
-        Err(LibraryError::Render(
-            "injected surface creation failure".to_string(),
-        ))
-    });
-
-    assert!(matches!(result, Err(LibraryError::Render(_))));
-    assert_eq!(renderer.sharing_handle, None);
-    assert_eq!(renderer.sharing_hwnd, None);
-    renderer.clear().unwrap();
-    let RenderOutput::Image(image) = renderer.finalize().unwrap() else {
-        panic!("CPU renderer must retain its image surface");
-    };
-    assert_eq!((image.width, image.height), (2, 2));
 }
 
 #[test]
@@ -642,6 +622,7 @@ fn particle_scene(target_step: u64) -> ParticleSceneFrame {
             state_slot_id: Uuid::from_u128(3),
             output_id: ModuleOutputId::from_uuid(Uuid::from_u128(4)),
         },
+        random_stream_id: Uuid::from_u128(5),
         executable_hash: [17; 32],
         target_step,
         logical_width: 256,
@@ -672,16 +653,44 @@ fn render_particle_test_scene(
     renderer: &mut SkiaRenderer,
     scene: &ParticleSceneFrame,
 ) -> Result<Image, String> {
+    render_particle_test_scene_with_transform(renderer, scene, &Affine2D::IDENTITY)
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn render_particle_test_scene_with_transform(
+    renderer: &mut SkiaRenderer,
+    scene: &ParticleSceneFrame,
+    transform: &Affine2D,
+) -> Result<Image, String> {
     let output = renderer
-        .rasterize_particle_layer(ParticleRasterRequest {
-            scene,
-            transform: &Affine2D::IDENTITY,
-        })
+        .rasterize_particle_layer(ParticleRasterRequest { scene, transform })
         .map_err(|error| error.to_string())?;
     match output {
         RenderOutput::Image(image) => Ok(image),
         other => Err(format!("unexpected Particle output {other:?}")),
     }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn nontransparent_bounds(image: &Image) -> Option<(u32, u32)> {
+    let mut min_x = image.width;
+    let mut min_y = image.height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found = false;
+    for (index, pixel) in image.data.chunks_exact(4).enumerate() {
+        if pixel[3] == 0 {
+            continue;
+        }
+        let index = index as u32;
+        let (x, y) = (index % image.width, index / image.width);
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+        found = true;
+    }
+    found.then_some((max_x - min_x + 1, max_y - min_y + 1))
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
@@ -721,7 +730,262 @@ fn gpu_particle_seek_and_independent_renderer_are_deterministic() {
     assert_eq!(first.data, replayed.data);
 
     let mut export = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
+    let preview_handle = preview
+        .gpu_context
+        .as_ref()
+        .and_then(|context| {
+            context.ensure_current().ok()?;
+            get_current_context_handle()
+        })
+        .expect("preview renderer must own a WGL context");
+    let export_handle = export
+        .gpu_context
+        .as_ref()
+        .and_then(|context| {
+            context.ensure_current().ok()?;
+            get_current_context_handle()
+        })
+        .expect("export renderer must own a WGL context");
+    assert_ne!(preview_handle, export_handle);
+
+    // Export construction made a second context current. Preview must reclaim
+    // its own context at the Renderer boundary without the caller knowing
+    // about GL ownership, then export must be able to do the same in reverse.
+    let preview_after_export_creation = render_particle_test_scene(&mut preview, &at_checkpoint)
+        .expect("preview must reactivate its context after export construction");
+    assert_eq!(get_current_context_handle(), Some(preview_handle));
+    assert_eq!(first.data, preview_after_export_creation.data);
     let independent = render_particle_test_scene(&mut export, &at_checkpoint)
         .expect("independent export session");
+    assert_eq!(get_current_context_handle(), Some(export_handle));
     assert_eq!(first.data, independent.data);
+
+    let singular = render_particle_test_scene_with_transform(
+        &mut preview,
+        &at_checkpoint,
+        &Affine2D::scale(0.0, 0.0),
+    )
+    .expect("singular Particle transform");
+    assert!(
+        singular.data.iter().all(|component| *component == 0),
+        "a zero-area Particle transform must produce exact transparent pixels"
+    );
+
+    let mut translucent_overlap = particle_scene(4);
+    translucent_overlap.parameters.capacity = 4;
+    translucent_overlap.parameters.emission_rate = OrderedFloat(120.0);
+    translucent_overlap.parameters.velocity_min = particle_vec3(0.0, 0.0, -120.0);
+    translucent_overlap.parameters.velocity_max = particle_vec3(0.0, 0.0, -120.0);
+    translucent_overlap.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
+    translucent_overlap.parameters.drag = OrderedFloat(0.0);
+    translucent_overlap.parameters.size_min = OrderedFloat(32.0);
+    translucent_overlap.parameters.size_max = OrderedFloat(32.0);
+    translucent_overlap.parameters.color = Color {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 64,
+    };
+    let soft_particles = render_particle_test_scene(&mut preview, &translucent_overlap)
+        .expect("overlapping translucent Particles");
+    let center_alpha = soft_particles.data[((72 * 256 + 128) * 4 + 3) as usize];
+    assert!(
+        center_alpha > 150,
+        "all four translucent sprites must composite at center; alpha was {center_alpha}"
+    );
+
+    let mut stretched_scene = particle_scene(1);
+    stretched_scene.parameters.capacity = 1;
+    stretched_scene.parameters.emission_rate = OrderedFloat(120.0);
+    stretched_scene.parameters.velocity_min = particle_vec3(0.0, 0.0, 0.0);
+    stretched_scene.parameters.velocity_max = particle_vec3(0.0, 0.0, 0.0);
+    stretched_scene.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
+    stretched_scene.parameters.drag = OrderedFloat(0.0);
+    stretched_scene.parameters.size_min = OrderedFloat(32.0);
+    stretched_scene.parameters.size_max = OrderedFloat(32.0);
+    stretched_scene.parameters.color = Color::white();
+    let centered_non_uniform = Affine2D::translate(128.0, 72.0)
+        .compose(Affine2D::scale(4.0, 0.25))
+        .compose(Affine2D::translate(-128.0, -72.0));
+    let stretched = render_particle_test_scene_with_transform(
+        &mut preview,
+        &stretched_scene,
+        &centered_non_uniform,
+    )
+    .expect("non-uniform Particle transform");
+    let (stretched_width, stretched_height) =
+        nontransparent_bounds(&stretched).expect("stretched sprite pixels");
+    assert!(
+        stretched_width > 80 && stretched_height < 20 && stretched_width > stretched_height * 8,
+        "Particle quad must follow the full affine; bounds were {stretched_width}x{stretched_height}"
+    );
+
+    // Perspective is authored in logical Composition space. Preview quality
+    // scaling must only change raster resolution, never the apparent logical
+    // size of a particle with non-zero Z.
+    let mut perspective_scene = particle_scene(180);
+    perspective_scene.parameters.capacity = 1;
+    perspective_scene.parameters.emission_rate = OrderedFloat(1.0);
+    perspective_scene.parameters.velocity_min = particle_vec3(0.0, 0.0, 144.0);
+    perspective_scene.parameters.velocity_max = particle_vec3(0.0, 0.0, 144.0);
+    perspective_scene.parameters.gravity = particle_vec3(0.0, 0.0, 0.0);
+    perspective_scene.parameters.drag = OrderedFloat(0.0);
+    perspective_scene.parameters.size_min = OrderedFloat(48.0);
+    perspective_scene.parameters.size_max = OrderedFloat(48.0);
+    perspective_scene.parameters.color = Color::white();
+    let full_resolution = render_particle_test_scene(&mut preview, &perspective_scene)
+        .expect("full-resolution perspective Particle");
+    let mut half_resolution_renderer = SkiaRenderer::new(
+        128,
+        72,
+        Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        },
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    let half_resolution = render_particle_test_scene_with_transform(
+        &mut half_resolution_renderer,
+        &perspective_scene,
+        &Affine2D::scale(0.5, 0.5),
+    )
+    .expect("half-resolution perspective Particle");
+    let (full_width, full_height) =
+        nontransparent_bounds(&full_resolution).expect("full-resolution perspective pixels");
+    let (half_width, half_height) =
+        nontransparent_bounds(&half_resolution).expect("half-resolution perspective pixels");
+    assert!(
+        full_width.abs_diff(half_width * 2) <= 4 && full_height.abs_diff(half_height * 2) <= 4,
+        "logical-space perspective must be resolution invariant; full={full_width}x{full_height}, half={half_width}x{half_height}"
+    );
+
+    // Three minutes is beyond the per-request replay budget and the retained
+    // checkpoint window. A cold/direct seek reconstructs only the live
+    // lifetime suffix and must equal ordinary sequential playback exactly.
+    render_particle_test_scene(&mut preview, &particle_scene(7_200)).expect("first minute");
+    render_particle_test_scene(&mut preview, &particle_scene(14_400)).expect("second minute");
+    let sequential_far = render_particle_test_scene(&mut preview, &particle_scene(21_600))
+        .expect("sequential third minute");
+    let direct_far = render_particle_test_scene(&mut export, &particle_scene(21_600))
+        .expect("bounded direct seek");
+    assert_eq!(sequential_far.data, direct_far.data);
+    let distant_rewind =
+        render_particle_test_scene(&mut preview, &at_checkpoint).expect("distant rewind");
+    assert_eq!(first.data, distant_rewind.data);
+
+    // Ganesh may leave the borrowed SceneRuntime texture bound after a draw.
+    // Replacing that target on resize must never restore its deleted GL name.
+    preview
+        .resize_render_target(
+            320,
+            180,
+            Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        )
+        .expect("resize Particle renderer");
+    let resized = render_particle_test_scene(&mut preview, &at_checkpoint)
+        .expect("Particle render after target growth");
+    assert_eq!((resized.width, resized.height), (320, 180));
+    preview
+        .resize_render_target(
+            256,
+            144,
+            Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        )
+        .expect("restore Particle renderer size");
+    let after_resize = render_particle_test_scene(&mut preview, &at_checkpoint)
+        .expect("Particle render after target restoration");
+    assert_eq!(after_resize.data, first.data);
+}
+
+/// Exercises the transaction used when Preview adopts a newly shared WGL
+/// context. Both failure rollback and successful replacement must leave the
+/// renderer's owning context current before the next SceneRuntime operation.
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn gpu_render_target_replacement_restores_and_activates_the_owner_context() {
+    let transparent = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let mut renderer = SkiaRenderer::new(256, 144, transparent, true, None, None).unwrap();
+    if renderer.gpu_context.is_none() {
+        eprintln!("skipping unsupported device: renderer has no GPU context");
+        return;
+    }
+    let Some(previous_handle) = get_current_context_handle() else {
+        panic!("GPU renderer did not leave its WGL context current");
+    };
+    let scene = particle_scene(240);
+    let first = match render_particle_test_scene(&mut renderer, &scene) {
+        Ok(image) => image,
+        Err(diagnostic) if diagnostic.contains("GPU Particle unavailable") => {
+            eprintln!("skipping unsupported device: {diagnostic}");
+            return;
+        }
+        Err(error) => panic!("GPU Particle render failed before replacement: {error}"),
+    };
+
+    let Some(rejected_context) = create_gpu_context(None, None) else {
+        eprintln!("skipping device unable to create a second GPU context");
+        return;
+    };
+    let rejected = renderer.replace_render_target(Some(rejected_context), Some(91), None, |_| {
+        Err(LibraryError::Render(
+            "injected GPU replacement failure".to_string(),
+        ))
+    });
+    assert!(rejected.is_err());
+    assert_eq!(get_current_context_handle(), Some(previous_handle));
+    let restored = render_particle_test_scene(&mut renderer, &scene)
+        .expect("old SceneRuntime must remain usable after replacement rollback");
+    assert_eq!(restored.data, first.data);
+
+    let Some(mut incoming_context) = create_gpu_context(None, None) else {
+        eprintln!("skipping device unable to create a replacement GPU context");
+        return;
+    };
+    incoming_context.resize(256, 144);
+    let Some(incoming_handle) = get_current_context_handle() else {
+        panic!("replacement WGL context was not current after construction");
+    };
+    assert_ne!(incoming_handle, previous_handle);
+    let contract = renderer.surface_contract.clone();
+    renderer
+        .replace_render_target(
+            Some(incoming_context),
+            Some(incoming_handle),
+            None,
+            move |direct_context| {
+                crate::rendering::skia_working_surface::create_surface(
+                    256,
+                    144,
+                    direct_context,
+                    &contract,
+                    false,
+                )
+            },
+        )
+        .expect("GPU target replacement");
+    assert_eq!(get_current_context_handle(), Some(incoming_handle));
+    let replaced = render_particle_test_scene(&mut renderer, &scene)
+        .expect("new SceneRuntime must use the replacement context");
+    assert_eq!(replaced.data, first.data);
 }

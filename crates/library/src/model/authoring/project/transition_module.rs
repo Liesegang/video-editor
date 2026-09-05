@@ -135,6 +135,7 @@ pub(super) fn validate_transition_processor(
                             transition.id
                         )
                     })?;
+                definition.require_parameter_automation(*parameter_id)?;
                 validate_typed_automation(
                     track,
                     parameter.data_type,
@@ -144,6 +145,9 @@ pub(super) fn validate_transition_processor(
                     ),
                     Some(transition.duration),
                 )?;
+                for keyframe in &track.keyframes {
+                    definition.validate_parameter_value(*parameter_id, &keyframe.value)?;
+                }
             }
             Ok(())
         }

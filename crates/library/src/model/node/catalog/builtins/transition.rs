@@ -62,7 +62,7 @@ const AUDIO_MIX_INPUTS: &[PortSpec] = &[
 ];
 
 const SPECS: &[DescriptorSpec] = &[
-    DescriptorSpec::implemented_native(
+    DescriptorSpec::implemented_host_native(
         DescriptorIdentity::new(
             TRANSITION_IMAGE_INPUT_NODE_ID,
             "Transition Image Input",
@@ -74,7 +74,7 @@ const SPECS: &[DescriptorSpec] = &[
         IMAGE_OUTPUT,
         no_properties,
     ),
-    DescriptorSpec::implemented_native(
+    DescriptorSpec::implemented_host_native(
         DescriptorIdentity::new(
             TRANSITION_AUDIO_INPUT_NODE_ID,
             "Transition Audio Input",
@@ -86,7 +86,7 @@ const SPECS: &[DescriptorSpec] = &[
         AUDIO_OUTPUT,
         no_properties,
     ),
-    DescriptorSpec::implemented_native(
+    DescriptorSpec::implemented_host_native(
         DescriptorIdentity::new(
             TRANSITION_PROGRESS_INPUT_NODE_ID,
             "Transition Progress",
@@ -98,7 +98,7 @@ const SPECS: &[DescriptorSpec] = &[
         PROGRESS_OUTPUT,
         progress_property,
     ),
-    DescriptorSpec::implemented_native(
+    DescriptorSpec::implemented_host_native(
         DescriptorIdentity::new(
             TRANSITION_IMAGE_MIX_NODE_ID,
             "Transition Image Mix",
@@ -110,7 +110,7 @@ const SPECS: &[DescriptorSpec] = &[
         IMAGE_OUTPUT,
         progress_property,
     ),
-    DescriptorSpec::implemented_native(
+    DescriptorSpec::implemented_host_native(
         DescriptorIdentity::new(
             TRANSITION_AUDIO_MIX_NODE_ID,
             "Transition Audio Mix",

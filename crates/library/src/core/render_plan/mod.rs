@@ -5,6 +5,7 @@
 //! compiled Node graph, and all instances share the same compiled definition.
 
 mod cache;
+mod capability;
 mod compiler;
 mod model;
 mod particle;

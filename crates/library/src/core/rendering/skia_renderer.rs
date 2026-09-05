@@ -11,7 +11,7 @@ use crate::rendering::renderer::{
     ShapeRasterRequest, SkSLRasterRequest, TextRasterRequest, TextureInfo, WorkingSurfaceContract,
 };
 #[cfg(feature = "gl")]
-use crate::rendering::scene_runtime::{SceneRuntime, SceneTextureFormat};
+use crate::rendering::scene_runtime::SceneRuntime;
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, image_to_skia,
@@ -26,9 +26,11 @@ use skia_safe::{
     SamplingOptions, Shader, Surface, runtime_effect::ChildPtr,
 };
 
+mod context_lifecycle;
 mod legacy_backplate;
 mod output_compositing;
 mod paint;
+mod particle;
 
 use output_compositing::build_transform_matrix;
 use paint::{PaintFactory, StrokeRenderConfig};
@@ -56,6 +58,7 @@ pub struct SkiaRenderer {
     #[cfg(feature = "gl")]
     scene_runtime: Option<SceneRuntime>,
     gpu_context: Option<GpuContext>,
+    require_gpu_surfaces: bool,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
 }
@@ -75,6 +78,7 @@ impl SkiaRenderer {
                     .to_string(),
             ));
         }
+        self.activate_graphics_context()?;
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
 
@@ -113,6 +117,7 @@ impl SkiaRenderer {
         let mut gpu_context = if use_gpu {
             if let Some(mut ctx) = existing_context {
                 debug!("SkiaRenderer: Reusing existing GPU context");
+                ctx.ensure_current()?;
                 ctx.resize(width, height);
                 Some(ctx)
             } else if let Some(mut ctx) = create_gpu_context(None, None) {
@@ -139,6 +144,7 @@ impl SkiaRenderer {
             height,
             gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
             &surface_contract,
+            false,
         )
         .map_err(|error| {
             LibraryError::Render(format!(
@@ -164,6 +170,7 @@ impl SkiaRenderer {
             #[cfg(feature = "gl")]
             scene_runtime,
             gpu_context,
+            require_gpu_surfaces: false,
             sharing_handle: None,
             sharing_hwnd: None,
         };
@@ -179,6 +186,7 @@ impl SkiaRenderer {
         height: u32,
         background_color: Color,
     ) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
         let mut surface = skia_working_surface::create_surface(
             width,
             height,
@@ -186,6 +194,7 @@ impl SkiaRenderer {
                 .as_mut()
                 .map(|context| &mut context.direct_context),
             &self.surface_contract,
+            self.require_gpu_surfaces,
         )
         .map_err(|error| {
             LibraryError::Render(format!(
@@ -211,12 +220,14 @@ impl SkiaRenderer {
     }
 
     fn create_layer_surface(&mut self) -> Result<Surface, LibraryError> {
+        self.activate_graphics_context()?;
         let (width, height) = self.current_target_dimensions();
         skia_working_surface::create_surface(
             width,
             height,
             self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
             &self.surface_contract,
+            self.require_gpu_surfaces,
         )
     }
 
@@ -263,6 +274,7 @@ impl SkiaRenderer {
             self.surface_contract = contract;
             return Ok(());
         }
+        self.activate_graphics_context()?;
         let mut surface = skia_working_surface::create_surface(
             self.width,
             self.height,
@@ -270,6 +282,7 @@ impl SkiaRenderer {
                 .as_mut()
                 .map(|context| &mut context.direct_context),
             &contract,
+            self.require_gpu_surfaces,
         )?;
         skia_working_surface::clear_authored_color(
             &mut surface,
@@ -290,36 +303,38 @@ impl SkiaRenderer {
             .unwrap_or((self.width, self.height))
     }
 
-    fn replace_render_target(
+    fn draw_skia_image_affine_with_blend(
         &mut self,
-        mut gpu_context: Option<GpuContext>,
-        sharing_handle: Option<usize>,
-        sharing_hwnd: Option<isize>,
-        create: impl FnOnce(Option<&mut skia_safe::gpu::DirectContext>) -> Result<Surface, LibraryError>,
+        image: &skia_safe::Image,
+        transform: &Affine2D,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        let mut surface = create(
-            gpu_context
-                .as_mut()
-                .map(|context| &mut context.direct_context),
-        )?;
-        skia_working_surface::clear_authored_color(
-            &mut surface,
-            &self.surface_contract,
-            &self.background_color,
-        )?;
-        self.surface = surface;
-        #[cfg(feature = "gl")]
-        {
-            self.scene_runtime = gpu_context
-                .as_ref()
-                .map(|context| SceneRuntime::new(context.create_glow_context()));
-        }
-        self.gpu_context = gpu_context;
-        self.sharing_handle = sharing_handle;
-        self.sharing_hwnd = sharing_hwnd;
-        self.group_surfaces.clear();
-        self.retained_group_surfaces.clear();
-        Ok(())
+        self.activate_graphics_context()?;
+        let matrix = build_transform_matrix(transform);
+        let identity = *transform == Affine2D::IDENTITY;
+        let sampling = if identity {
+            SamplingOptions::default()
+        } else {
+            SamplingOptions::from(CubicResampler::mitchell())
+        };
+        let blend_runtime = &mut self.blend_runtime;
+        let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
+            group.surface.canvas()
+        } else {
+            self.surface.canvas()
+        };
+        with_restored_canvas(canvas, |canvas| {
+            canvas.concat(&matrix);
+            blend_runtime.draw_image(
+                canvas,
+                image,
+                sampling,
+                identity,
+                opacity.clamp(0.0, 1.0) as f32,
+                blend_mode,
+            )
+        })
     }
 
     /// Render text with ensemble effectors and decorators.
@@ -452,36 +467,11 @@ impl Renderer for SkiaRenderer {
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::draw_layer");
+        self.activate_graphics_context()?;
 
         let src_image = self.output_to_skia_image(layer)?;
 
-        let matrix = build_transform_matrix(transform);
-        let identity = *transform == Affine2D::IDENTITY;
-        let sampling = if identity {
-            SamplingOptions::default()
-        } else {
-            SamplingOptions::from(CubicResampler::mitchell())
-        };
-        let blend_runtime = &mut self.blend_runtime;
-        let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
-            group.surface.canvas()
-        } else {
-            self.surface.canvas()
-        };
-
-        with_restored_canvas(canvas, |canvas| {
-            canvas.concat(&matrix);
-            blend_runtime.draw_image(
-                canvas,
-                &src_image,
-                sampling,
-                identity,
-                opacity.clamp(0.0, 1.0) as f32,
-                blend_mode,
-            )
-        })?;
-
-        Ok(())
+        self.draw_skia_image_affine_with_blend(&src_image, transform, opacity, blend_mode)
     }
 
     fn draw_cross_dissolve(
@@ -491,6 +481,7 @@ impl Renderer for SkiaRenderer {
         progress: f32,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
         self.draw_cross_dissolve_outputs(from, to, progress, blend_mode)
     }
 
@@ -500,6 +491,7 @@ impl Renderer for SkiaRenderer {
         height: u32,
         background_color: &Color,
     ) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
         let width = width.max(1);
         let height = height.max(1);
         let mut surface = skia_working_surface::create_surface(
@@ -509,6 +501,7 @@ impl Renderer for SkiaRenderer {
                 .as_mut()
                 .map(|context| &mut context.direct_context),
             &self.surface_contract,
+            self.require_gpu_surfaces,
         )?;
         skia_working_surface::clear_authored_color(
             &mut surface,
@@ -524,6 +517,7 @@ impl Renderer for SkiaRenderer {
     }
 
     fn end_group(&mut self) -> Result<RenderOutput, LibraryError> {
+        self.activate_graphics_context()?;
         let mut group = self.group_surfaces.pop().ok_or_else(|| {
             LibraryError::Render("end_group called without a matching begin_group".to_string())
         })?;
@@ -531,6 +525,27 @@ impl Renderer for SkiaRenderer {
         // A texture ID is owned by its Surface. Read the isolated target before
         // dropping it so nested groups cannot leave dangling GPU texture IDs.
         self.snapshot_surface(&mut group.surface, group.width, group.height)
+    }
+
+    fn end_group_and_draw(
+        &mut self,
+        transform: &Affine2D,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
+        let mut group = self.group_surfaces.pop().ok_or_else(|| {
+            LibraryError::Render(
+                "end_group_and_draw called without a matching begin_group".to_string(),
+            )
+        })?;
+        let image = group.surface.image_snapshot();
+        // Keep `group` alive until the parent draw has retained the image's
+        // backend resource. No CPU pixels cross this group boundary.
+        let result = self.draw_skia_image_affine_with_blend(&image, transform, opacity, blend_mode);
+        drop(image);
+        drop(group);
+        result
     }
 
     fn end_group_retained(&mut self) -> Result<RetainedRenderLayer, LibraryError> {
@@ -549,6 +564,7 @@ impl Renderer for SkiaRenderer {
     }
 
     fn release_retained_layer(&mut self, layer: RetainedRenderLayer) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
         let index = self
             .retained_group_surfaces
             .iter()
@@ -565,6 +581,7 @@ impl Renderer for SkiaRenderer {
         progress: f32,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
+        self.activate_graphics_context()?;
         self.draw_cross_dissolve_retained_layers(from, to, progress, blend_mode)
     }
 
@@ -645,70 +662,23 @@ impl Renderer for SkiaRenderer {
         &mut self,
         request: ParticleRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
-        #[cfg(not(feature = "gl"))]
-        {
-            let _ = request;
-            Err(LibraryError::Render(
-                "GPU Particle unavailable: library was built without the OpenGL backend"
-                    .to_string(),
-            ))
-        }
-        #[cfg(feature = "gl")]
-        {
-            let (target_width, target_height) = self.current_target_dimensions();
-            let format = if self.surface_contract.working().is_some() {
-                SceneTextureFormat::LinearRgbaF32
-            } else {
-                SceneTextureFormat::Srgba8
-            };
-            let premultiplied_color = skia_working_surface::authored_premultiplied_rgba(
-                &self.surface_contract,
-                &request.scene.parameters.color,
-            )?;
-            let scene_texture = {
-                let gpu_context = self.gpu_context.as_mut().ok_or_else(|| {
-                    LibraryError::Render(
-                        "GPU Particle unavailable: SkiaRenderer has no active GPU context"
-                            .to_string(),
-                    )
-                })?;
-                let scene_runtime = self.scene_runtime.as_mut().ok_or_else(|| {
-                    LibraryError::Render(
-                        "GPU Particle unavailable: SceneRuntime was not created for the active GPU context"
-                            .to_string(),
-                    )
-                })?;
-                gpu_context.direct_context.flush_and_submit();
-                let result = scene_runtime.render_particle(
-                    request.scene,
-                    request.transform,
-                    target_width,
-                    target_height,
-                    format,
-                    premultiplied_color,
-                );
-                // Raw GL invalidates Ganesh's cached assumptions regardless of
-                // whether SceneRuntime returned success.
-                gpu_context.direct_context.reset(None);
-                result?
-            };
-            let scene_image = {
-                let gpu_context = self.gpu_context.as_mut().ok_or_else(|| {
-                    LibraryError::Render(
-                        "GPU Particle lost its GPU context before Ganesh ingestion".to_string(),
-                    )
-                })?;
-                skia_working_surface::scene_texture_to_skia_image(
-                    &mut gpu_context.direct_context,
-                    scene_texture,
-                    &self.surface_contract,
-                )?
-            };
-            let mut layer = self.create_layer_surface()?;
-            layer.canvas().clear(skia_safe::Color::TRANSPARENT);
-            layer.canvas().draw_image(&scene_image, (0, 0), None);
-            self.snapshot_surface(&mut layer, target_width, target_height)
-        }
+        self.rasterize_particle_output(request)
+    }
+
+    fn preflight_particle_backend(
+        &mut self,
+        target_sizes: &[(u32, u32)],
+    ) -> Result<(), LibraryError> {
+        self.preflight_particle_output(target_sizes)
+    }
+
+    fn draw_particle_layer(
+        &mut self,
+        request: ParticleRasterRequest<'_>,
+        opacity: f64,
+        blend_mode: crate::model::BlendMode,
+    ) -> Result<(), LibraryError> {
+        self.draw_particle_output(request, opacity, blend_mode)
     }
 
     fn rasterize_text_layer(
@@ -847,6 +817,7 @@ impl Renderer for SkiaRenderer {
                 image.identity()
             ))),
             RenderOutput::Texture(info) => {
+                self.activate_graphics_context()?;
                 if let Some(ctx) = self.gpu_context.as_mut() {
                     let image = create_image_from_texture(
                         &mut ctx.direct_context,
@@ -889,6 +860,7 @@ impl Renderer for SkiaRenderer {
             "SkiaRenderer::finalize {}x{}",
             self.width, self.height
         ));
+        self.activate_graphics_context()?;
 
         if !self.group_surfaces.is_empty() {
             return Err(LibraryError::Render(
@@ -934,6 +906,7 @@ impl Renderer for SkiaRenderer {
 
     fn clear(&mut self) -> Result<(), LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::clear");
+        self.activate_graphics_context()?;
         self.group_surfaces.clear();
         self.retained_group_surfaces.clear();
         skia_working_surface::clear_authored_color(
@@ -944,7 +917,12 @@ impl Renderer for SkiaRenderer {
     }
 
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
-        self.gpu_context.as_mut()
+        let context = self.gpu_context.as_mut()?;
+        if let Err(error) = context.ensure_current() {
+            log::error!("SkiaRenderer: cannot expose an inactive GPU context: {error}");
+            return None;
+        }
+        Some(context)
     }
 
     fn set_sharing_context(
@@ -961,13 +939,6 @@ impl Renderer for SkiaRenderer {
             handle,
             hwnd
         );
-        #[cfg(feature = "gl")]
-        {
-            // SceneRuntime resources belong to the old, currently active GL
-            // context. Destroy them before glutin switches to the new shared
-            // context below.
-            self.scene_runtime = None;
-        }
         let mut context = create_gpu_context(Some(handle), hwnd).ok_or_else(|| {
             LibraryError::Render(format!(
                 "Cannot create shared GPU context for handle {handle}"
@@ -976,13 +947,20 @@ impl Renderer for SkiaRenderer {
         context.resize(self.width, self.height);
         let (width, height) = (self.width, self.height);
         let surface_contract = self.surface_contract.clone();
+        let require_gpu_surfaces = self.require_gpu_surfaces;
         self.replace_render_target(Some(context), Some(handle), hwnd, move |direct_context| {
-            skia_working_surface::create_surface(width, height, direct_context, &surface_contract)
-                .map_err(|error| {
-                    LibraryError::Render(format!(
-                        "Cannot create shared Skia surface {width}x{height}: {error}"
-                    ))
-                })
+            skia_working_surface::create_surface(
+                width,
+                height,
+                direct_context,
+                &surface_contract,
+                require_gpu_surfaces,
+            )
+            .map_err(|error| {
+                LibraryError::Render(format!(
+                    "Cannot create shared Skia surface {width}x{height}: {error}"
+                ))
+            })
         })?;
         log::info!("SkiaRenderer: Recreated GPU context with sharing enabled.");
         Ok(())

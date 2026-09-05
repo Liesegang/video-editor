@@ -51,20 +51,7 @@ impl CommandPalette {
         // Let's optimize by only constructing the vector when needed if list gets large.
 
         // Simple case-insensitive search
-        self.filtered_commands = registry
-            .commands
-            .iter()
-            .filter(|cmd| {
-                if !cmd.is_available_in(command_context) {
-                    return false;
-                }
-                if self.query.is_empty() {
-                    return true;
-                }
-                cmd.text.to_lowercase().contains(&self.query.to_lowercase())
-            })
-            .cloned()
-            .collect();
+        self.filtered_commands = matching_commands(registry, command_context, &self.query);
 
         // Clamp selected index
         if !self.filtered_commands.is_empty() {
@@ -202,10 +189,44 @@ impl CommandPalette {
     }
 }
 
+fn matching_commands(
+    registry: &CommandRegistry,
+    context: CommandContext,
+    query: &str,
+) -> Vec<Command> {
+    let normalized_query = query.to_lowercase();
+    let mut commands = registry
+        .commands
+        .iter()
+        .filter(|command| {
+            command.is_available_in(context)
+                && (normalized_query.is_empty()
+                    || command.text.to_lowercase().contains(&normalized_query))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    // An exact panel/command name must beat longer commands with the same
+    // prefix. This prevents `Node Editor` from silently selecting `Node
+    // Editor: Clean Layout` while the panel is opening on the next frame.
+    commands.sort_by_key(|command| {
+        let label = command.text.to_lowercase();
+        if label == normalized_query {
+            0
+        } else if label.starts_with(&normalized_query) {
+            1
+        } else {
+            2
+        }
+    });
+    commands
+}
+
 #[cfg(test)]
 mod tests {
-    use super::CommandPalette;
-    use crate::command::{CommandContext, CommandScope};
+    use super::{matching_commands, CommandPalette};
+    use crate::command::{CommandContext, CommandId, CommandRegistry, CommandScope};
+    use crate::config::AppConfig;
+    use crate::model::ui_types::Tab;
 
     #[test]
     fn palette_latches_its_origin_context_until_close() {
@@ -226,5 +247,26 @@ mod tests {
             has_node_selection: false,
         });
         assert_eq!(palette.command_context, None);
+    }
+
+    #[test]
+    fn exact_panel_name_beats_node_layout_prefixes() {
+        let registry = CommandRegistry::new(&AppConfig::new());
+        let commands = matching_commands(
+            &registry,
+            CommandContext {
+                scope: CommandScope::NodeEditor,
+                has_node_selection: true,
+            },
+            "Node Editor",
+        );
+        assert_eq!(
+            commands.first().map(|command| command.id),
+            Some(CommandId::TogglePanel(Tab::NodeEditor))
+        );
+        assert!(commands
+            .iter()
+            .skip(1)
+            .any(|command| command.id.is_node_editor_layout()));
     }
 }

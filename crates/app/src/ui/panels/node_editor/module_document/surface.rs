@@ -505,9 +505,7 @@ impl<'a> ModuleSurfaceProjection<'a> {
 pub(super) fn module_port_is_connectable(definition: &ModuleDefinition, port: &PortVisual) -> bool {
     match port.id.direction {
         PortDirection::Output => true,
-        PortDirection::Input => !definition
-            .input_port_ownership(&port.id.address)
-            .is_externally_driven(),
+        PortDirection::Input => definition.input_port_accepts_connection(&port.id.address),
     }
 }
 

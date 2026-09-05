@@ -2,6 +2,7 @@ mod asset_preview;
 mod audio;
 mod composition_parameters;
 mod effect_stack;
+mod module_clip;
 pub(crate) mod property_authoring;
 mod text_ensemble;
 mod timing;
@@ -15,8 +16,7 @@ use std::sync::Arc;
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringPropertyOwner, AuthoringWaveformService, TimelineEditorService};
 use library::model::authoring::{
-    AttachmentOwner, AttachmentStage, AuthoringProject, InstanceLocator, ItemOutputStage,
-    MediaInputBinding, MediaOutputKind, MediaTime, SourceRef, TimelineItem,
+    AttachmentOwner, AttachmentStage, AuthoringProject, MediaTime, SourceRef, TimelineItem,
 };
 use library::model::property::{PropertyValue, Vec2};
 use library::plugin::PluginManager;
@@ -322,7 +322,7 @@ fn item_inspector(
     }
 
     if let SourceRef::Module(invocation) = &item.source {
-        module_parameters(ui, project, state, service, item, invocation);
+        module_clip::module_parameters(ui, project, state, service, plugins, item, invocation);
     }
 
     effect_stack::effect_stack(
@@ -469,6 +469,8 @@ fn transform_section(
                                     suffix,
                                     speed,
                                     mode_state,
+                                    allow_keyframe: true,
+                                    keyframe_disabled_reason: None,
                                     allow_expression,
                                 },
                             );
@@ -550,240 +552,6 @@ fn transform_section(
                 );
             }
         });
-}
-
-fn module_parameters(
-    ui: &mut egui::Ui,
-    project: &AuthoringProject,
-    state: &mut AuthoringUiState,
-    service: &TimelineEditorService,
-    item: &TimelineItem,
-    invocation: &library::model::authoring::ModuleInvocation,
-) {
-    let Some(instance) = project.module_instances.get(&invocation.instance_id) else {
-        return;
-    };
-    let Some(definition) = project.module_definitions.get(&instance.definition_id) else {
-        return;
-    };
-    ui.separator();
-    egui::CollapsingHeader::new("Node Clip parameters")
-        .default_open(true)
-        .show(ui, |ui| {
-            if definition.interface.parameters.is_empty() {
-                ui.weak("Publish a Node input to expose a reusable control here.");
-            }
-            for parameter in &definition.interface.parameters {
-                let key = format!("module:{}", parameter.id);
-                let base_value = instance
-                    .parameter_overrides
-                    .get(&parameter.id)
-                    .cloned()
-                    .unwrap_or_else(|| parameter.default_value.clone());
-                let local_time = item_local_time(project, state, item);
-                let local_seconds = local_time
-                    .as_ref()
-                    .map_or(0.0, |time| time.to_seconds_f64());
-                let automation = invocation.automation_tracks.get(&parameter.id);
-                let initial = automation
-                    .and_then(|track| {
-                        local_time
-                            .as_ref()
-                            .ok()
-                            .and_then(|time| track.evaluate_at(*time).ok())
-                    })
-                    .unwrap_or(base_value);
-                let model_value = initial.clone();
-                let mode_state = automation.map_or_else(
-                    || PropertyModeState::constant(local_seconds),
-                    |track| {
-                        PropertyModeState::from_keyframe_times(
-                            local_seconds,
-                            track
-                                .keyframes
-                                .iter()
-                                .map(|keyframe| keyframe.time.to_seconds_f64()),
-                        )
-                    },
-                );
-                let (finished, mode_action, edited_value) = {
-                    let value = state
-                        .inspector
-                        .property_values
-                        .entry(key)
-                        .or_insert(initial);
-                    let result = property_row(
-                        ui,
-                        value,
-                        &project.palette,
-                        PropertyRowSpec {
-                            control_id: &format!(
-                                "module_instance:{}:{}",
-                                instance.id, parameter.id
-                            ),
-                            label: &parameter.name,
-                            definition: None,
-                            suffix: "",
-                            speed: 0.1,
-                            mode_state,
-                            allow_expression: false,
-                        },
-                    );
-                    (result.finished, result.mode_action, value.clone())
-                };
-                if finished && edited_value != model_value {
-                    let result = local_time.clone().and_then(|time| {
-                        property_authoring::commit_module_parameter_value(
-                            service,
-                            item.id,
-                            instance.id,
-                            parameter.id,
-                            automation,
-                            edited_value.clone(),
-                            time,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    }
-                }
-                if let Some(action) = mode_action {
-                    let result = local_time.clone().and_then(|time| {
-                        property_authoring::apply_module_parameter_mode_action(
-                            service,
-                            item.id,
-                            parameter.id,
-                            automation,
-                            edited_value,
-                            time,
-                            action,
-                        )
-                    });
-                    if let Err(error) = result {
-                        state.error = Some(error);
-                    } else {
-                        state.status = format!("{}: {}", parameter.name, mode_action_label(action));
-                    }
-                }
-                value_provenance(
-                    ui,
-                    automation.is_some(),
-                    instance.parameter_overrides.contains_key(&parameter.id),
-                );
-            }
-        });
-    module_media_inputs(ui, project, state, service, item, invocation, definition);
-}
-
-fn module_media_inputs(
-    ui: &mut egui::Ui,
-    project: &AuthoringProject,
-    state: &mut AuthoringUiState,
-    service: &TimelineEditorService,
-    item: &TimelineItem,
-    invocation: &library::model::authoring::ModuleInvocation,
-    definition: &library::model::authoring::ModuleDefinition,
-) {
-    if definition.interface.media_inputs.is_empty() {
-        return;
-    }
-    let Some(host_track) = project.tracks.get(&item.track_id) else {
-        return;
-    };
-    let mut candidates = project
-        .items
-        .values()
-        .filter(|candidate| candidate.id != item.id)
-        .filter(|candidate| {
-            project
-                .tracks
-                .get(&candidate.track_id)
-                .is_some_and(|track| track.timeline_id == host_track.timeline_id)
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|candidate| (candidate.layer, candidate.interval.start, candidate.id));
-
-    egui::CollapsingHeader::new("Node Clip inputs")
-        .default_open(true)
-        .show(ui, |ui| {
-            for input in &definition.interface.media_inputs {
-                ui.horizontal(|ui| {
-                    ui.label(&input.name);
-                    if input.data_type != library::model::project::PortDataType::Image {
-                        ui.weak("Audio input runtime is not available yet");
-                        return;
-                    }
-                    let current = invocation.input_bindings.get(&input.id).map(|binding| {
-                        let MediaInputBinding::TimelineItemOutput { item_id, .. } = binding;
-                        *item_id
-                    });
-                    let current_label = current
-                        .and_then(|item_id| project.items.get(&item_id))
-                        .map_or("Unbound", |source| source.name.as_str());
-                    egui::ComboBox::from_id_salt(("module-media-input", item.id, input.id))
-                        .selected_text(current_label)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(current.is_none(), "Unbound").clicked()
-                                && current.is_some()
-                            {
-                                if let Err(error) = service.unbind_module_input(item.id, input.id) {
-                                    state.error = Some(error.to_string());
-                                }
-                            }
-                            for source in &candidates {
-                                if !item_has_image_output(project, source) {
-                                    continue;
-                                }
-                                if ui
-                                    .selectable_label(current == Some(source.id), &source.name)
-                                    .clicked()
-                                {
-                                    let binding = MediaInputBinding::TimelineItemOutput {
-                                        locator: InstanceLocator::SameTimeline,
-                                        item_id: source.id,
-                                        output: MediaOutputKind::Image,
-                                        stage: ItemOutputStage::PostTransform,
-                                    };
-                                    match service.bind_module_input(item.id, input.id, binding) {
-                                        Ok(_) => {
-                                            state.status =
-                                                format!("Bound {} to {}", source.name, input.name);
-                                        }
-                                        Err(error) => state.error = Some(error.to_string()),
-                                    }
-                                }
-                            }
-                        });
-                });
-            }
-            ui.weak("Inputs reference clip outputs, not internal Node UUIDs.");
-        });
-}
-
-fn item_has_image_output(project: &AuthoringProject, item: &TimelineItem) -> bool {
-    match &item.source {
-        SourceRef::Asset { asset_id } => project
-            .assets
-            .iter()
-            .find(|asset| asset.id == *asset_id)
-            .is_some_and(|asset| {
-                matches!(
-                    asset.kind,
-                    library::model::asset::AssetKind::Image
-                        | library::model::asset::AssetKind::Video
-                )
-            }),
-        SourceRef::Text { .. }
-        | SourceRef::Shape { .. }
-        | SourceRef::Solid { .. }
-        | SourceRef::Composition(_) => true,
-        SourceRef::Module(invocation) => project
-            .module_instances
-            .get(&invocation.instance_id)
-            .and_then(|instance| project.module_definitions.get(&instance.definition_id))
-            .and_then(|definition| definition.output(invocation.output_id))
-            .is_some_and(|output| output.supports(library::model::project::PortDataType::Image)),
-    }
 }
 
 fn sync_draft(

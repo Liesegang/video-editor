@@ -1,20 +1,32 @@
-use super::export::authoring_video_frame_count;
+use super::export::{authoring_video_frame_count, preflight_authoring_video_requires_gpu};
 use super::{RenderRequestId, RenderServer};
 use crate::cache::CacheManager;
-use crate::core::render_plan::RenderPlanCompiler;
+use crate::core::render_plan::{RenderCapability, RenderPlanCompiler};
+use crate::editor::{ParticleNodeClipPlacement, TimelineEditorService};
 use crate::error::LibraryError;
 use crate::model::authoring::{
-    AuthoringProject, MediaTime, RationalRate, SourceRef, TimeMap, TimelineInterval, TimelineItem,
+    AuthoringProject, CompositionInstance, DurationPolicy, InstanceLocator, ItemOutputStage,
+    MediaInputBinding, MediaOutputKind, MediaTime, ModuleDefinition, ModuleDefinitionSharing,
+    ModuleInstance, ModuleInstanceId, ModuleInvocation, ModulePortAddress, PublishedMediaInput,
+    PublishedMediaInputId, RationalRate, SourceRef, TimeMap, TimelineInterval, TimelineItem,
     TimelineItemId,
 };
+use crate::model::frame::color::Color;
 use crate::model::project::asset::{Asset, AssetKind};
 use crate::model::project::property::PropertyMap;
+use crate::model::project::{IMAGE_INPUT_PORT, PortDataType};
 use crate::plugin::{ExportFrame, ExportPlugin, ExportSettings, Plugin, PluginManager};
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use crate::rendering::renderer::RenderOutput;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
+
+#[path = "export_capability_tests.rs"]
+mod capability_tests;
 
 struct TemporaryPng(PathBuf);
 
@@ -32,6 +44,328 @@ impl Drop for TemporaryPng {
             eprintln!("failed to remove authoring export test PNG: {error}");
         }
     }
+}
+
+fn particle_export_project() -> Arc<AuthoringProject> {
+    let mut project = AuthoringProject::new(
+        "Particle export parity",
+        256,
+        144,
+        RationalRate::new(30, 1).unwrap(),
+        MediaTime::new(5, 1).unwrap(),
+    )
+    .unwrap();
+    let timeline_id = project.root_timeline_id;
+    project
+        .timelines
+        .get_mut(&timeline_id)
+        .unwrap()
+        .background_color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let service = TimelineEditorService::new(project).unwrap();
+    let project = service.snapshot().unwrap();
+    let track_id = project.timelines[&timeline_id].track_order[0];
+    drop(project);
+    service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id,
+            name: "GPU Particles".to_string(),
+            interval: TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap())
+                .unwrap(),
+            layer: 0,
+        })
+        .unwrap();
+    service.snapshot().unwrap()
+}
+
+#[cfg(not(all(feature = "gl", target_os = "windows")))]
+fn assert_explicit_particle_gpu_diagnostic(error: &LibraryError) {
+    let diagnostic = error.to_string();
+    assert!(
+        diagnostic.contains("GPU Particle") && diagnostic.contains("OpenGL"),
+        "expected explicit GPU Particle/OpenGL diagnosis, got: {diagnostic}"
+    );
+}
+
+#[test]
+fn export_gpu_requirement_comes_from_the_requested_render_plan() {
+    let ordinary = AuthoringProject::new(
+        "CPU export",
+        64,
+        36,
+        RationalRate::new(24, 1).unwrap(),
+        MediaTime::new(1, 1).unwrap(),
+    )
+    .unwrap();
+    let ordinary_plan = RenderPlanCompiler::compile(&ordinary).unwrap();
+    assert!(
+        !ordinary_plan
+            .timeline_may_require_capability(
+                &ordinary,
+                ordinary.root_timeline_id,
+                None,
+                RenderCapability::Gpu,
+            )
+            .unwrap(),
+        "ordinary Timeline export must keep the CPU renderer"
+    );
+
+    let particle = particle_export_project();
+    let particle_plan = RenderPlanCompiler::compile(particle.as_ref()).unwrap();
+    assert!(
+        particle_plan
+            .timeline_may_require_capability(
+                particle.as_ref(),
+                particle.root_timeline_id,
+                None,
+                RenderCapability::Gpu,
+            )
+            .unwrap(),
+        "the selected Output reaches a compiled Particle renderer"
+    );
+}
+
+#[test]
+fn export_gpu_requirement_ignores_nested_placement_outside_export_range() {
+    let project = AuthoringProject::new(
+        "Nested export range",
+        64,
+        36,
+        RationalRate::new(24, 1).unwrap(),
+        MediaTime::new(5, 1).unwrap(),
+    )
+    .unwrap();
+    let timeline_id = project.root_timeline_id;
+    let root_track_id = project.timelines[&timeline_id].track_order[0];
+    let service = TimelineEditorService::new(project).unwrap();
+    let (nested_timeline_id, nested_track_id, _) = service
+        .add_timeline(
+            "Nested Particle".to_string(),
+            64,
+            36,
+            RationalRate::new(24, 1).unwrap(),
+            MediaTime::new(5, 1).unwrap(),
+        )
+        .unwrap();
+    service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id: nested_track_id,
+            name: "Nested GPU Particles".to_string(),
+            interval: TimelineInterval::new(MediaTime::zero(), MediaTime::new(5, 1).unwrap())
+                .unwrap(),
+            layer: 0,
+        })
+        .unwrap();
+    service
+        .add_item(
+            root_track_id,
+            "Inactive nested placement".to_string(),
+            SourceRef::Composition(CompositionInstance {
+                timeline_id: nested_timeline_id,
+                duration_policy: DurationPolicy::Fixed,
+                parameter_overrides: HashMap::new(),
+                transition_module_overrides: Vec::new(),
+            }),
+            TimelineInterval::new(MediaTime::new(6, 1).unwrap(), MediaTime::new(1, 1).unwrap())
+                .unwrap(),
+            0,
+        )
+        .unwrap();
+    let project = service.snapshot().unwrap();
+    let plan = RenderPlanCompiler::compile(project.as_ref()).unwrap();
+
+    assert!(
+        !plan
+            .timeline_may_require_capability(
+                project.as_ref(),
+                timeline_id,
+                None,
+                RenderCapability::Gpu,
+            )
+            .unwrap(),
+        "a nested Particle placement outside the exported Timeline range is unreachable"
+    );
+}
+
+#[test]
+fn export_gpu_preflight_resolves_inactive_nested_time_range_without_false_positive() {
+    let project = AuthoringProject::new(
+        "Nested fixed range",
+        64,
+        36,
+        RationalRate::new(24, 1).unwrap(),
+        MediaTime::new(2, 1).unwrap(),
+    )
+    .unwrap();
+    let timeline_id = project.root_timeline_id;
+    let root_track_id = project.timelines[&timeline_id].track_order[0];
+    let service = TimelineEditorService::new(project).unwrap();
+    let (nested_timeline_id, nested_track_id, _) = service
+        .add_timeline(
+            "Nested fixed Particle".to_string(),
+            64,
+            36,
+            RationalRate::new(24, 1).unwrap(),
+            MediaTime::new(5, 1).unwrap(),
+        )
+        .unwrap();
+    service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id: nested_track_id,
+            name: "Late nested Particles".to_string(),
+            interval: TimelineInterval::new(
+                MediaTime::new(4, 1).unwrap(),
+                MediaTime::new(1, 1).unwrap(),
+            )
+            .unwrap(),
+            layer: 0,
+        })
+        .unwrap();
+    service
+        .add_item(
+            root_track_id,
+            "One-second fixed placement".to_string(),
+            SourceRef::Composition(CompositionInstance {
+                timeline_id: nested_timeline_id,
+                duration_policy: DurationPolicy::Fixed,
+                parameter_overrides: HashMap::new(),
+                transition_module_overrides: Vec::new(),
+            }),
+            TimelineInterval::new(MediaTime::zero(), MediaTime::new(1, 1).unwrap()).unwrap(),
+            0,
+        )
+        .unwrap();
+    let project = service.snapshot().unwrap();
+    let plan = RenderPlanCompiler::compile(project.as_ref()).unwrap();
+    assert!(
+        plan.timeline_may_require_capability(
+            project.as_ref(),
+            timeline_id,
+            None,
+            RenderCapability::Gpu,
+        )
+        .unwrap(),
+        "the cheap hierarchical query may conservatively see the nested definition"
+    );
+    let frame_count = authoring_video_frame_count(project.as_ref(), timeline_id).unwrap();
+
+    assert!(
+        !preflight_authoring_video_requires_gpu(
+            project.as_ref(),
+            &plan,
+            &PluginManager::default(),
+            timeline_id,
+            None,
+            frame_count,
+        )
+        .unwrap(),
+        "production frame evaluation must resolve the Fixed placement's actual reachable range"
+    );
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn read_rgba8_png(path: &std::path::Path) -> Vec<u8> {
+    let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path).unwrap()));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let output = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!(output.color_type, png::ColorType::Rgba);
+    assert_eq!(output.bit_depth, png::BitDepth::Eight);
+    pixels.truncate(output.buffer_size());
+    pixels
+}
+
+/// Exercises the production Preview and PNG export workers with independent
+/// real GL contexts and compares their terminal straight-RGBA8 pixels.
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn authoring_particle_png_export_matches_preview_and_is_nontransparent() {
+    let project = particle_export_project();
+    let timeline_id = project.root_timeline_id;
+    let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
+    let output = TemporaryPng::new();
+    let output_path = output.0.to_string_lossy().into_owned();
+    let server = RenderServer::new(
+        Arc::new(PluginManager::default()),
+        Arc::new(CacheManager::new()),
+    );
+    let frame_number = 60;
+
+    assert!(server.send_authoring_request(
+        RenderRequestId::new(80),
+        Arc::clone(&project),
+        Arc::clone(&plan),
+        timeline_id,
+        frame_number,
+        1.0,
+        None,
+    ));
+    assert!(server.send_authoring_png_export_request(
+        RenderRequestId::new(81),
+        project,
+        plan,
+        timeline_id,
+        frame_number,
+        output_path,
+    ));
+
+    let exported = server
+        .rx_authoring_export_result
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    let preview = server
+        .rx_authoring_result
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    exported
+        .output
+        .unwrap_or_else(|error| panic!("Particle export preflight/render failed: {error}"));
+    assert_eq!(exported.frames_exported, 1);
+    let preview_image = match preview.output {
+        Ok(RenderOutput::Image(image)) => image,
+        Ok(other) => panic!("expected terminal Preview image, got {other:?}"),
+        Err(error) => panic!("Particle Preview failed while export succeeded: {error}"),
+    };
+    let exported_pixels = read_rgba8_png(&output.0);
+    assert_eq!(exported_pixels, preview_image.data);
+    assert!(
+        exported_pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+        "Particle PNG must contain at least one nontransparent pixel"
+    );
+}
+
+#[cfg(not(all(feature = "gl", target_os = "windows")))]
+#[test]
+fn authoring_particle_png_export_reports_unsupported_gpu_without_writing() {
+    let project = particle_export_project();
+    let timeline_id = project.root_timeline_id;
+    let plan = Arc::new(RenderPlanCompiler::compile(project.as_ref()).unwrap());
+    let output = TemporaryPng::new();
+    let server = RenderServer::new(
+        Arc::new(PluginManager::default()),
+        Arc::new(CacheManager::new()),
+    );
+    assert!(server.send_authoring_png_export_request(
+        RenderRequestId::new(82),
+        project,
+        plan,
+        timeline_id,
+        60,
+        output.0.to_string_lossy().into_owned(),
+    ));
+    let exported = server
+        .rx_authoring_export_result
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    let error = exported.output.unwrap_err();
+    assert_explicit_particle_gpu_diagnostic(&error);
+    assert_eq!(exported.frames_exported, 0);
+    assert!(!output.0.exists());
 }
 
 #[derive(Default)]
@@ -296,6 +630,52 @@ fn authoring_video_export_streams_the_complete_timeline_then_finishes() {
     assert_eq!(state.containers, vec!["mp4"; 3]);
     assert!(state.runtime_audio.iter().all(Option::is_none));
     assert_eq!(state.finishes, 1);
+}
+
+#[cfg(not(all(feature = "gl", target_os = "windows")))]
+#[test]
+fn late_particle_video_fails_gpu_preflight_before_frame_zero() {
+    let mut project = particle_export_project().as_ref().clone();
+    let item = project
+        .items
+        .values_mut()
+        .find(|item| matches!(&item.source, SourceRef::Module(_)))
+        .expect("Particle Node Clip");
+    item.interval =
+        TimelineInterval::new(MediaTime::new(4, 1).unwrap(), MediaTime::new(1, 1).unwrap())
+            .unwrap();
+    project.validate().unwrap();
+    let timeline_id = project.root_timeline_id;
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let state = Arc::new(Mutex::new(MockVideoState::default()));
+    let plugins = Arc::new(PluginManager::default());
+    plugins.register_export_plugin(Arc::new(MockVideoExporter {
+        state: Arc::clone(&state),
+    }));
+    let server = RenderServer::new(plugins, Arc::new(CacheManager::new()));
+    let output_path = std::env::temp_dir()
+        .join(format!("late-particle-{}.mp4", Uuid::new_v4()))
+        .to_string_lossy()
+        .into_owned();
+
+    assert!(server.send_authoring_video_export_request(
+        RenderRequestId::new(83),
+        Arc::new(project),
+        Arc::new(plan),
+        timeline_id,
+        output_path,
+    ));
+    let exported = server
+        .rx_authoring_export_result
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    let error = exported.output.unwrap_err();
+    assert_explicit_particle_gpu_diagnostic(&error);
+    assert_eq!(exported.frames_exported, 0);
+    let state = state.lock().unwrap();
+    assert!(state.frame_dimensions.is_empty());
+    assert!(state.runtime_audio.is_empty());
+    assert_eq!(state.finishes, 0);
 }
 
 fn write_stereo_wave(path: &std::path::Path, frames: &[[f32; 2]]) {

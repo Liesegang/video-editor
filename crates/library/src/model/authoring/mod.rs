@@ -33,4 +33,6 @@ pub use transition_module::*;
 #[cfg(test)]
 mod file_import_tests;
 #[cfg(test)]
+mod module_graph_tests;
+#[cfg(test)]
 mod tests;

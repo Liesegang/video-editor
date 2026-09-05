@@ -5,16 +5,17 @@ use sha2::{Digest, Sha256};
 
 use crate::model::authoring::{
     AttachmentProcessor, AuthoringProject, MediaInputBinding, MediaOutputKind, ModuleDefinition,
-    ModuleDefinitionId, ModuleHostContract, ModuleInvocation, SourceRef, TimelineId,
-    TimelineItemId, Transition,
+    ModuleDefinitionId, ModuleHostContract, ModuleInvocation, ModulePortAddress, SourceRef,
+    TimelineId, TimelineItemId, Transition,
 };
-use crate::model::project::connection::PortDataType;
-use crate::model::project::connection::PortDirection;
+use crate::model::project::connection::{
+    AUDIO_OUTPUT_PORT, MERGE_SOUNDS_PORT, PortDataType, PortDirection,
+};
 
 use super::{
     CompiledModuleDefinition, CompiledModuleInvocation, CompiledModuleOutput, CompiledNode,
     CompiledTimeline, CompiledTransition, DependencyIndex, ModuleHost,
-    NormalizedTransitionProgress, PlannedSource, RenderPlan, ScheduledItem,
+    NormalizedTransitionProgress, PlannedSource, RenderCapability, RenderPlan, ScheduledItem,
     TimelineRangeDependency, TransitionHandleRequirement, TransitionSourceInvocation,
 };
 
@@ -233,7 +234,7 @@ fn register_invocation(
             instance.definition_id, instance.id
         )
     })?;
-    definition.outputs.get(&authored.output_id).ok_or_else(|| {
+    let output = definition.outputs.get(&authored.output_id).ok_or_else(|| {
         format!(
             "Module instance {} selects missing Output terminal {}",
             instance.id, authored.output_id
@@ -265,7 +266,12 @@ fn register_invocation(
         input_bindings: authored.input_bindings.clone(),
         automation_tracks: authored.automation_tracks.clone(),
     };
-    for binding in authored.input_bindings.values() {
+    for binding in authored
+        .input_bindings
+        .iter()
+        .filter(|(input_id, _)| output.reachable_media_inputs.contains(input_id))
+        .map(|(_, binding)| binding)
+    {
         let MediaInputBinding::TimelineItemOutput { item_id, .. } = binding;
         dependencies
             .media_input_consumers
@@ -493,8 +499,10 @@ pub(super) fn compile_module(
     let mut outputs = HashMap::new();
     for output in definition.outputs() {
         let mut ancestry = HashSet::new();
+        let mut reachable_input_targets = HashSet::new();
         let mut sources = HashMap::new();
         for (data_type, target) in output.targets() {
+            reachable_input_targets.insert(target.clone());
             if let Some(source) = definition
                 .graph
                 .connections
@@ -502,10 +510,9 @@ pub(super) fn compile_module(
                 .find(|connection| connection.to == target)
                 .map(|connection| connection.from.clone())
             {
-                ancestry.extend(nodes_reaching(
-                    &definition.graph.connections,
-                    source.node_id,
-                ));
+                let reachable = nodes_reaching_output(definition, &source);
+                ancestry.extend(reachable.nodes);
+                reachable_input_targets.extend(reachable.input_targets);
                 sources.insert(data_type, source);
             }
         }
@@ -520,12 +527,21 @@ pub(super) fn compile_module(
             .filter(|node_id| ancestry.contains(node_id) && **node_id != output.node_id)
             .copied()
             .collect();
+        let reachable_media_inputs = definition
+            .interface
+            .media_inputs
+            .iter()
+            .filter(|input| reachable_input_targets.contains(&input.target))
+            .map(|input| input.id)
+            .collect();
         outputs.insert(
             output.id,
             CompiledModuleOutput {
                 terminal: output,
                 sources,
                 evaluation_order,
+                reachable_media_inputs,
+                required_capabilities: BTreeSet::new(),
             },
         );
     }
@@ -578,7 +594,16 @@ pub(super) fn compile_module(
             right.id,
         ))
     });
-    let particle_outputs = super::particle::compile_particle_outputs(definition, &outputs)?;
+    let particle_renderers = super::particle::compile_particle_renderers(definition, &active_nodes);
+    for output in outputs.values_mut() {
+        if output
+            .evaluation_order
+            .iter()
+            .any(|node_id| particle_renderers.contains_key(node_id))
+        {
+            output.required_capabilities.insert(RenderCapability::Gpu);
+        }
+    }
     Ok(CompiledModuleDefinition {
         id: definition.id,
         topology_revision: definition.topology_revision,
@@ -602,7 +627,7 @@ pub(super) fn compile_module(
             .map(|input| (input.id, input))
             .collect(),
         outputs,
-        particle_outputs,
+        particle_renderers,
         signals: definition
             .interface
             .signals
@@ -667,25 +692,86 @@ fn topological_order(definition: &ModuleDefinition) -> Result<Vec<uuid::Uuid>, S
     Ok(result)
 }
 
-fn nodes_reaching(
-    connections: &[crate::model::authoring::ModuleConnection],
-    output_node: uuid::Uuid,
-) -> HashSet<uuid::Uuid> {
-    let mut incoming: HashMap<_, Vec<_>> = HashMap::new();
-    for connection in connections {
-        incoming
-            .entry(connection.to.node_id)
-            .or_default()
-            .push(connection.from.node_id);
-    }
-    let mut active = HashSet::new();
-    let mut pending = vec![output_node];
-    while let Some(node_id) = pending.pop() {
-        if active.insert(node_id) {
-            pending.extend(incoming.get(&node_id).into_iter().flatten().copied());
+#[derive(Default)]
+struct ExecutableReachability {
+    nodes: HashSet<uuid::Uuid>,
+    input_targets: HashSet<ModulePortAddress>,
+}
+
+/// Traces only the inputs that the runtime can evaluate for one graph output.
+/// Disabled Nodes terminate evaluation. Bypassed Nodes follow their canonical
+/// same-typed input instead of retaining every authored upstream branch.
+fn nodes_reaching_output(
+    definition: &ModuleDefinition,
+    output: &ModulePortAddress,
+) -> ExecutableReachability {
+    let mut reachable = ExecutableReachability::default();
+    let mut visited_outputs = HashSet::new();
+    let mut pending = vec![output.clone()];
+    while let Some(source) = pending.pop() {
+        if !visited_outputs.insert(source.clone()) {
+            continue;
         }
+        let Some(node) = definition.graph.nodes.get(&source.node_id) else {
+            continue;
+        };
+        reachable.nodes.insert(node.id);
+        if !node.enabled {
+            continue;
+        }
+
+        if node.bypassed {
+            let bypassed_sound_merge =
+                matches!(node.content(), crate::model::node::NodeContent::SoundMerge)
+                    && source.port == AUDIO_OUTPUT_PORT;
+            let input_port = if bypassed_sound_merge {
+                Some(MERGE_SOUNDS_PORT)
+            } else {
+                node.bypass_input_for_output(&source.port)
+            };
+            let Some(input_port) = input_port else {
+                continue;
+            };
+            let target = ModulePortAddress {
+                node_id: node.id,
+                port: input_port.to_string(),
+            };
+            reachable.input_targets.insert(target.clone());
+            let mut inputs = definition
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| connection.to == target)
+                .collect::<Vec<_>>();
+            inputs.sort_by_key(|connection| (connection.order, connection.id));
+            pending.extend(
+                inputs
+                    .into_iter()
+                    .take(if bypassed_sound_merge { 1 } else { usize::MAX })
+                    .map(|connection| connection.from.clone()),
+            );
+            continue;
+        }
+
+        for connection in definition
+            .graph
+            .connections
+            .iter()
+            .filter(|connection| connection.to.node_id == node.id)
+        {
+            reachable.input_targets.insert(connection.to.clone());
+            pending.push(connection.from.clone());
+        }
+        reachable.input_targets.extend(
+            definition
+                .interface
+                .media_inputs
+                .iter()
+                .filter(|input| input.target.node_id == node.id)
+                .map(|input| input.target.clone()),
+        );
     }
-    active
+    reachable
 }
 
 pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u8; 32], String> {

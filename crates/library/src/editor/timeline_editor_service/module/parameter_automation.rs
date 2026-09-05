@@ -125,6 +125,7 @@ impl TimelineEditorService {
     ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
         let mut session = self.write_session()?;
         let timeline_id = timeline_for_item(session.project(), item_id)?;
+        require_item_parameter_automation(session.project(), item_id, parameter_id)?;
         session
             .transact(
                 vec![ProjectInvalidation::Item {
@@ -154,6 +155,7 @@ impl TimelineEditorService {
     ) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
         let timeline_id = timeline_for_item(session.project(), item_id)?;
+        require_item_parameter_automation(session.project(), item_id, parameter_id)?;
         session
             .transact(
                 vec![ProjectInvalidation::Item {
@@ -211,6 +213,42 @@ impl TimelineEditorService {
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
+}
+
+fn require_item_parameter_automation(
+    project: &AuthoringProject,
+    item_id: TimelineItemId,
+    parameter_id: PublishedParameterId,
+) -> Result<(), LibraryError> {
+    let item = project
+        .items
+        .get(&item_id)
+        .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline item {item_id}")))?;
+    let SourceRef::Module(invocation) = &item.source else {
+        return Err(LibraryError::Validation(format!(
+            "Timeline item {item_id} is not a Node Clip"
+        )));
+    };
+    let instance = project
+        .module_instances
+        .get(&invocation.instance_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Missing Module instance {}",
+                invocation.instance_id
+            ))
+        })?;
+    project
+        .module_definitions
+        .get(&instance.definition_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Missing Module definition {}",
+                instance.definition_id
+            ))
+        })?
+        .require_parameter_automation(parameter_id)
+        .map_err(LibraryError::Validation)
 }
 
 #[cfg(test)]

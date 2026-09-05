@@ -151,6 +151,7 @@ pub enum AuthoringLibraryDrag {
     Timeline(TimelineId),
     ModuleDefinition(ModuleDefinitionId),
     NewNodeClip,
+    NewParticleNodeClip,
 }
 
 #[derive(Clone, Debug)]

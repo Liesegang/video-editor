@@ -17,7 +17,9 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::{FrameContent, FrameGroupKind, FrameItem};
 use crate::model::node::Node;
-use crate::model::project::connection::{IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType};
+use crate::model::project::connection::{
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortDataType,
+};
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::plugin::PluginManager;
 use crate::rendering::renderer::RenderOutput;
@@ -337,6 +339,23 @@ fn dead_module_branches_do_not_enter_the_compiled_output() {
         },
     );
     definition.graph.nodes.insert(dead.id, dead);
+    let dead_effect = PluginManager::default()
+        .create_effect_operation_node("blur")
+        .expect("Blur operation");
+    let dead_effect_id = dead_effect.id;
+    definition.graph.nodes.insert(dead_effect_id, dead_effect);
+    let dead_input_id = PublishedMediaInputId::new();
+    definition.interface.media_inputs.push(PublishedMediaInput {
+        id: dead_input_id,
+        name: "Dead image input".to_string(),
+        data_type: PortDataType::Image,
+        target: ModulePortAddress {
+            node_id: dead_effect_id,
+            port: IMAGE_INPUT_PORT.to_string(),
+        },
+        required: false,
+        primary: false,
+    });
     definition.topology_revision += 1;
 
     let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
@@ -352,6 +371,127 @@ fn dead_module_branches_do_not_enter_the_compiled_output() {
             .evaluation_order
             .len(),
         1
+    );
+    assert!(
+        compiled
+            .outputs
+            .values()
+            .next()
+            .unwrap()
+            .reachable_media_inputs
+            .is_empty()
+    );
+}
+
+#[test]
+fn media_input_reachability_respects_disabled_and_bypassed_nodes() {
+    let mut fixture = node_clip_fixture(2);
+    let output_id = match &fixture.project.items[&fixture.item_ids[0]].source {
+        SourceRef::Module(invocation) => invocation.output_id,
+        _ => panic!("fixture must contain a Node Clip"),
+    };
+    let input_id = PublishedMediaInputId::new();
+    let mut blur = PluginManager::default()
+        .create_effect_operation_node("blur")
+        .expect("Blur operation");
+    blur.enabled = false;
+    let blur_id = blur.id;
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let output = definition.output(output_id).unwrap();
+    let output_target = output.target(PortDataType::Image).unwrap();
+    definition.graph.nodes.retain(|_, node| {
+        matches!(
+            node.content(),
+            crate::model::node::NodeContent::ModuleOutput(_)
+        )
+    });
+    definition.graph.connections.clear();
+    definition.interface.parameters.clear();
+    definition.graph.nodes.insert(blur_id, blur);
+    definition
+        .graph
+        .connections
+        .push(crate::model::authoring::ModuleConnection {
+            id: crate::model::authoring::ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: blur_id,
+                port: IMAGE_OUTPUT_PORT.to_string(),
+            },
+            to: output_target,
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        });
+    definition.interface.media_inputs = vec![PublishedMediaInput {
+        id: input_id,
+        name: "Effect image".to_string(),
+        data_type: PortDataType::Image,
+        target: ModulePortAddress {
+            node_id: blur_id,
+            port: IMAGE_INPUT_PORT.to_string(),
+        },
+        required: false,
+        primary: false,
+    }];
+    definition.topology_revision += 1;
+    let source_id = fixture.item_ids[1];
+    let SourceRef::Module(invocation) = &mut fixture
+        .project
+        .items
+        .get_mut(&fixture.item_ids[0])
+        .unwrap()
+        .source
+    else {
+        panic!("fixture must contain a Node Clip");
+    };
+    invocation.input_bindings.insert(
+        input_id,
+        MediaInputBinding::TimelineItemOutput {
+            locator: InstanceLocator::SameTimeline,
+            item_id: source_id,
+            output: MediaOutputKind::Image,
+            stage: ItemOutputStage::PostTransform,
+        },
+    );
+
+    let disabled = RenderPlanCompiler::compile(&fixture.project).unwrap();
+    assert!(
+        !disabled.module_definitions[&fixture.definition_id].outputs[&output_id]
+            .reachable_media_inputs
+            .contains(&input_id)
+    );
+    assert!(
+        !disabled
+            .dependencies
+            .media_input_consumers
+            .contains_key(&source_id)
+    );
+
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let blur = definition.graph.nodes.get_mut(&blur_id).unwrap();
+    blur.enabled = true;
+    blur.bypassed = true;
+    definition.topology_revision += 1;
+    let bypassed = RenderPlanCompiler::compile(&fixture.project).unwrap();
+    assert!(
+        bypassed.module_definitions[&fixture.definition_id].outputs[&output_id]
+            .reachable_media_inputs
+            .contains(&input_id)
+    );
+    assert_eq!(
+        bypassed
+            .dependencies
+            .media_input_consumers
+            .get(&source_id)
+            .map(Vec::len),
+        Some(1)
     );
 }
 
@@ -385,7 +525,6 @@ fn node_clip_runtime_applies_instance_parameters_without_mutating_definition() {
         .parameter_overrides
         .insert(fixture.parameter_id, PropertyValue::Color(authored.clone()));
     let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
-
     let frame = evaluate_render_plan_frame(
         &fixture.project,
         &plan,
@@ -554,6 +693,11 @@ fn same_timeline_media_input_uses_timeline_time_not_node_clip_local_time() {
         },
     );
     let plan = RenderPlanCompiler::compile(&fixture.project).unwrap();
+    assert!(
+        plan.module_definitions[&fixture.definition_id].outputs[&output_id]
+            .reachable_media_inputs
+            .contains(&input_id)
+    );
 
     let frame = evaluate_render_plan_frame(
         &fixture.project,

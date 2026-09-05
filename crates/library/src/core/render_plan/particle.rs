@@ -1,169 +1,135 @@
 //! Compilation of the bounded executable Particle Node chain.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::model::authoring::{ModuleDefinition, ModuleOutputId, ModulePortAddress};
-use crate::model::node::{Node, NodeContent};
-use crate::model::project::{IMAGE_OUTPUT_PORT, PortDataType};
-use crate::plugin::property_name_from_port;
+use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
+use crate::model::node::{Node, NodeContent, PARTICLE_SYSTEM_PORT, ParticleNodeRole};
 
-use super::{CompiledModuleOutput, CompiledParticleDefinition};
+use super::CompiledParticleDefinition;
 
-const PARTICLES_PORT: &str = "particles";
-const EMITTER: &str = "native.particle.emitter";
-const INITIALIZE: &str = "native.particle.initialize";
-const GRAVITY: &str = "native.particle.gravity-force";
-const DRAG: &str = "native.particle.drag-force";
-const SPRITE: &str = "native.particle.sprite-renderer";
-
-pub(super) fn compile_particle_outputs(
+pub(super) fn compile_particle_renderers(
     definition: &ModuleDefinition,
-    outputs: &HashMap<ModuleOutputId, CompiledModuleOutput>,
-) -> Result<HashMap<ModuleOutputId, CompiledParticleDefinition>, String> {
+    active_nodes: &HashSet<uuid::Uuid>,
+) -> HashMap<uuid::Uuid, CompiledParticleDefinition> {
     let mut compiled = HashMap::new();
-    for (output_id, output) in outputs {
-        let Some(source) = output.source(PortDataType::Image) else {
+    let mut candidate_ids = active_nodes.iter().copied().collect::<Vec<_>>();
+    candidate_ids.sort_unstable();
+    for renderer_node_id in candidate_ids {
+        let Some(node) = definition.graph.nodes.get(&renderer_node_id) else {
             continue;
         };
-        let Some(node) = definition.graph.nodes.get(&source.node_id) else {
-            continue;
-        };
-        if native_identity(node) != Some(SPRITE) {
+        if native_role(node) != Some(ParticleNodeRole::SpriteRenderer) {
             continue;
         }
-        if source.port != IMAGE_OUTPUT_PORT {
-            return Err(format!(
-                "Particle Sprite Node {} must reach Output through its Image port",
-                node.id
-            ));
+        // Disabled Nodes produce no output before resolving their descriptor,
+        // properties, or upstream topology. Particle endpoints cannot
+        // type-preservingly bypass, so bypassing either endpoint is likewise
+        // a stable no-image result.
+        if !node.enabled || node.bypassed {
+            continue;
         }
-        require_executable(node, SPRITE)?;
-        let renderer_node_id = node.id;
-        let drag_node_id = require_upstream(definition, renderer_node_id, DRAG)?;
-        let gravity_node_id = require_upstream(definition, drag_node_id, GRAVITY)?;
-        let initialize_node_id = require_upstream(definition, gravity_node_id, INITIALIZE)?;
-        let emitter_node_id = require_upstream(definition, initialize_node_id, EMITTER)?;
-        if definition.graph.connections.iter().any(|connection| {
-            connection.to.node_id == emitter_node_id && connection.to.port == PARTICLES_PORT
-        }) {
-            return Err(format!(
-                "Particle Emitter Node {emitter_node_id} cannot consume a ParticleSystem"
-            ));
+        if let Some(particle) = compile_particle_chain(definition, renderer_node_id) {
+            compiled.insert(renderer_node_id, particle);
         }
-        require_static_simulation_inputs(
-            definition,
-            emitter_node_id,
-            &["capacity", "rate", "lifetime", "seed"],
-        )?;
-        require_static_simulation_inputs(
-            definition,
-            initialize_node_id,
-            &["velocity_min", "velocity_max", "size_min", "size_max"],
-        )?;
-        require_static_simulation_inputs(definition, gravity_node_id, &["force"])?;
-        require_static_simulation_inputs(definition, drag_node_id, &["coefficient"])?;
-        compiled.insert(
-            *output_id,
-            CompiledParticleDefinition {
-                emitter_node_id,
-                initialize_node_id,
-                gravity_node_id,
-                drag_node_id,
-                renderer_node_id,
-                state_slot_id: emitter_node_id,
-            },
-        );
     }
-    Ok(compiled)
+    compiled
 }
 
-fn require_static_simulation_inputs(
+#[derive(Default)]
+struct ParticleStages {
+    emitter: Option<uuid::Uuid>,
+    initialize: Option<uuid::Uuid>,
+    gravity: Option<uuid::Uuid>,
+    drag: Option<uuid::Uuid>,
+}
+
+/// Compile the implemented typed stages while allowing omitted modifiers
+/// (for example Emitter -> Gravity -> Sprite). Incomplete, disabled,
+/// unsupported, duplicate, or out-of-order chains are a stable no-image
+/// result while the Node Editor is being rewired; they never turn a
+/// model-valid Project into a RenderPlan compilation failure.
+fn compile_particle_chain(
     definition: &ModuleDefinition,
-    node_id: uuid::Uuid,
-    property_keys: &[&str],
-) -> Result<(), String> {
-    let node = definition
-        .graph
-        .nodes
-        .get(&node_id)
-        .ok_or_else(|| format!("Particle simulation reaches missing Node {node_id}"))?;
-    for key in property_keys {
-        let property = node.properties().get(key).ok_or_else(|| {
-            format!("Particle Node {node_id} is missing required Property '{key}'")
-        })?;
-        if property.evaluator != "constant" {
-            return Err(format!(
-                "Particle simulation Property {node_id}:{key} uses '{}'; the first GPU slice accepts constant/instance values only because deterministic step-sampled automation is not implemented",
-                property.evaluator
-            ));
+    renderer_node_id: uuid::Uuid,
+) -> Option<CompiledParticleDefinition> {
+    let mut stages = ParticleStages::default();
+    let mut downstream_rank = ParticleNodeRole::SpriteRenderer.execution_rank();
+    let mut downstream_node_id = renderer_node_id;
+    loop {
+        let node = single_particle_source(definition, downstream_node_id)?;
+        if !node.enabled {
+            return None;
         }
+        let role = native_role(node)?;
+        if role == ParticleNodeRole::SpriteRenderer || role.execution_rank() >= downstream_rank {
+            return None;
+        }
+        downstream_rank = role.execution_rank();
+        let slot = match role {
+            ParticleNodeRole::Emitter => &mut stages.emitter,
+            ParticleNodeRole::Initialize => &mut stages.initialize,
+            ParticleNodeRole::Gravity => &mut stages.gravity,
+            ParticleNodeRole::Drag => &mut stages.drag,
+            ParticleNodeRole::SpriteRenderer => return None,
+        };
+        if slot.is_some() {
+            return None;
+        }
+        if role == ParticleNodeRole::Emitter {
+            if node.bypassed || has_particle_input(definition, node.id) {
+                return None;
+            }
+            *slot = Some(node.id);
+            break;
+        }
+        if !node.bypassed {
+            *slot = Some(node.id);
+        }
+        downstream_node_id = node.id;
     }
-    if let Some(connection) = definition.graph.connections.iter().find(|connection| {
-        connection.to.node_id == node_id
-            && property_keys.contains(
-                &property_name_from_port(&connection.to.port).unwrap_or(&connection.to.port),
-            )
-    }) {
-        return Err(format!(
-            "Particle simulation Property {}:{} is driven by a Node connection; step-sampled value inputs are not implemented in the first GPU slice",
-            connection.to.node_id, connection.to.port
-        ));
-    }
-    Ok(())
+    Some(CompiledParticleDefinition {
+        emitter_node_id: stages.emitter?,
+        initialize_node_id: stages.initialize,
+        gravity_node_id: stages.gravity,
+        drag_node_id: stages.drag,
+        renderer_node_id,
+        // A fused executable is owned by this concrete renderer chain. Two
+        // branches from one Emitter must never evict each other's SSBO state.
+        state_slot_id: renderer_node_id,
+    })
 }
 
-fn require_upstream(
+fn single_particle_source(
     definition: &ModuleDefinition,
     target_node_id: uuid::Uuid,
-    expected_catalog_id: &str,
-) -> Result<uuid::Uuid, String> {
+) -> Option<&Node> {
     let target = ModulePortAddress {
         node_id: target_node_id,
-        port: PARTICLES_PORT.to_string(),
+        port: PARTICLE_SYSTEM_PORT.to_string(),
     };
     let mut incoming = definition
         .graph
         .connections
         .iter()
         .filter(|connection| connection.to == target);
-    let source = incoming.next().ok_or_else(|| {
-        format!(
-            "Particle Node {target_node_id} requires one '{PARTICLES_PORT}' input from {expected_catalog_id}"
-        )
-    })?;
-    if incoming.next().is_some() || source.from.port != PARTICLES_PORT {
-        return Err(format!(
-            "Particle Node {target_node_id} has an invalid ParticleSystem input"
-        ));
+    let source = incoming.next()?;
+    if incoming.next().is_some() || source.from.port != PARTICLE_SYSTEM_PORT {
+        return None;
     }
-    let node = definition
-        .graph
-        .nodes
-        .get(&source.from.node_id)
-        .ok_or_else(|| "Particle chain reaches a missing Node".to_string())?;
-    require_executable(node, expected_catalog_id)?;
-    Ok(node.id)
+    definition.graph.nodes.get(&source.from.node_id)
 }
 
-fn require_executable(node: &Node, expected_catalog_id: &str) -> Result<(), String> {
-    if native_identity(node) != Some(expected_catalog_id) {
-        return Err(format!(
-            "Particle chain expected {expected_catalog_id}, found Node '{}'",
-            node.name
-        ));
-    }
-    if !node.enabled || node.bypassed {
-        return Err(format!(
-            "Executable Particle Node {} cannot be disabled or bypassed",
-            node.id
-        ));
-    }
-    Ok(())
+fn has_particle_input(definition: &ModuleDefinition, node_id: uuid::Uuid) -> bool {
+    definition.graph.connections.iter().any(|connection| {
+        connection.to.node_id == node_id && connection.to.port == PARTICLE_SYSTEM_PORT
+    })
 }
 
-fn native_identity(node: &Node) -> Option<&str> {
+fn native_role(node: &Node) -> Option<ParticleNodeRole> {
     match node.content() {
-        NodeContent::NativeOperation(operation) => Some(operation.catalog_id.as_str()),
+        NodeContent::NativeOperation(operation) => {
+            ParticleNodeRole::from_catalog_id(&operation.catalog_id)
+        }
         _ => None,
     }
 }
@@ -180,10 +146,12 @@ mod tests {
         let fixture = ParticleNodeClipFactory::create("Particles").expect("fixture");
         let compiled = compile_module(&fixture.definition).expect("compiled");
         let particle = compiled
-            .particle_outputs
-            .get(&fixture.output_id)
+            .particle_renderers
+            .values()
+            .next()
             .expect("particle executable");
-        assert_eq!(particle.state_slot_id, particle.emitter_node_id);
+        assert_eq!(particle.state_slot_id, particle.renderer_node_id);
+        assert_eq!(compiled.particle_renderers.len(), 1);
         assert_eq!(compiled.nodes.len(), 5);
     }
 
@@ -214,6 +182,7 @@ mod tests {
             .expect("known property");
 
         let error = compile_module(&fixture.definition).unwrap_err();
-        assert!(error.contains("step-sampled automation is not implemented"));
+        assert!(error.contains("must remain constant"));
+        assert!(error.contains("fixed-step parameter schedule"));
     }
 }

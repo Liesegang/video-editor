@@ -66,6 +66,7 @@ impl TimelineEditorService {
         let (timeline_id, interval, contract) =
             transition_module_context(session.project(), transition_id)?;
         require_editable_parameter(transition_id, &contract, parameter_id)?;
+        require_transition_parameter_automation(session.project(), transition_id, parameter_id)?;
         session
             .transact(
                 transition_range_invalidation(timeline_id, interval),
@@ -192,6 +193,37 @@ pub(super) fn require_editable_parameter(
     } else {
         Ok(())
     }
+}
+
+pub(super) fn require_transition_parameter_automation(
+    project: &AuthoringProject,
+    transition_id: TransitionId,
+    parameter_id: PublishedParameterId,
+) -> Result<(), LibraryError> {
+    let transition = project
+        .transitions
+        .get(&transition_id)
+        .ok_or_else(|| LibraryError::Validation(format!("Missing Transition {transition_id}")))?;
+    let module = transition.processor.module_processor().ok_or_else(|| {
+        LibraryError::Validation(format!("Transition {transition_id} does not use a Module"))
+    })?;
+    let instance = project
+        .module_instances
+        .get(&module.instance_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!("Missing Module instance {}", module.instance_id))
+        })?;
+    project
+        .module_definitions
+        .get(&instance.definition_id)
+        .ok_or_else(|| {
+            LibraryError::Validation(format!(
+                "Missing Module definition {}",
+                instance.definition_id
+            ))
+        })?
+        .require_parameter_automation(parameter_id)
+        .map_err(LibraryError::Validation)
 }
 
 fn transition_range_invalidation(

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind};
 use egui_phosphor::regular as icons;
-use library::editor::{ModuleItemPlacement, TimelineEditorService};
+use library::editor::{ModuleItemPlacement, ParticleNodeClipPlacement, TimelineEditorService};
 use library::model::asset::AssetKind;
 use library::model::authoring::{
     ordered_track_item_ids, track_item_ids_after_placement, AuthoringProject, CompositionInstance,
@@ -465,7 +465,7 @@ pub(super) fn handle_library_drop(
     }
 }
 
-fn place_payload(
+pub(super) fn place_payload(
     project: &AuthoringProject,
     timeline_id: TimelineId,
     payload: AuthoringLibraryDrag,
@@ -550,6 +550,15 @@ fn place_payload(
                 .map(|(item_id, _, _)| item_id)
                 .map_err(|error| error.to_string())
         }
+        AuthoringLibraryDrag::NewParticleNodeClip => service
+            .create_particle_node_clip(ParticleNodeClipPlacement {
+                track_id,
+                name: "Particle System".to_string(),
+                interval: TimelineInterval::new(start, MediaTime::new(5, 1)?)?,
+                layer,
+            })
+            .map(|creation| creation.item_id)
+            .map_err(|error| error.to_string()),
     }
 }
 

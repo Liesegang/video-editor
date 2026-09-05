@@ -6,8 +6,8 @@ use super::super::{
     AttachmentOwner, AttachmentStage, AuthoringProject, AutomatableParameter, AutomationTrack,
     BuiltinEffectInstance, CompositionParameter, DurationPolicy, MediaTime,
     ProcessorParameterContract, PublishedParameter, TextEnsembleOperation, TimelineInterval,
-    TimelineItemId, Transition, TransitionMediaType, property_value_type,
-    text_ensemble_direct_contract_is_compatible,
+    TimelineItemId, Transition, TransitionMediaType, authored_parameter_value_is_compatible,
+    property_value_type, text_ensemble_direct_contract_is_compatible,
 };
 use super::item_placement::{ItemPlacementOverlay, TimelineItemOrderIndex};
 use super::transition_module::validate_transition_processor;
@@ -105,64 +105,15 @@ pub(super) fn validate_composition_parameter_value(
     }
 }
 
-pub(super) fn validate_parameter_value(
-    parameter: &PublishedParameter,
-    value: &PropertyValue,
-) -> Result<(), String> {
-    if parameter.data_type.accepts(property_value_type(value)) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Published parameter {} has an incompatible value",
-            parameter.id
-        ))
-    }
-}
-
 pub(super) fn validate_authored_properties(
     properties: &PropertyMap,
     owner: &str,
 ) -> Result<(), String> {
     for (key, property) in properties.iter() {
-        if key.trim().is_empty() || property.evaluator.trim().is_empty() {
+        if key.trim().is_empty() {
             return Err(format!("{owner} has an invalid authored Property"));
         }
-        match property.evaluator.as_str() {
-            "constant" if property.value().is_none() => {
-                return Err(format!("{owner} Property '{key}' has no constant value"));
-            }
-            "keyframe" => {
-                let raw_count = match property.properties.get("keyframes") {
-                    Some(PropertyValue::Array(values)) => values.len(),
-                    _ => {
-                        return Err(format!("{owner} Property '{key}' has no Keyframe array"));
-                    }
-                };
-                let keyframes = property.keyframes();
-                if keyframes.is_empty() || keyframes.len() != raw_count {
-                    return Err(format!("{owner} Property '{key}' has invalid Keyframes"));
-                }
-                let mut ids = HashSet::new();
-                let mut previous = None;
-                for keyframe in keyframes {
-                    let time = keyframe.time.into_inner();
-                    if !time.is_finite()
-                        || time < 0.0
-                        || !ids.insert(keyframe.id)
-                        || previous.is_some_and(|previous| previous >= time)
-                    {
-                        return Err(format!("{owner} Property '{key}' has invalid Keyframes"));
-                    }
-                    previous = Some(time);
-                }
-            }
-            "expression" if property.expression_text().is_none() || property.value().is_none() => {
-                return Err(format!(
-                    "{owner} Property '{key}' has an incomplete expression"
-                ));
-            }
-            _ => {}
-        }
+        property.validate_authored(&format!("{owner} Property '{key}'"))?;
     }
     Ok(())
 }
@@ -198,7 +149,7 @@ pub(super) fn validate_typed_automation(
         {
             return Err(format!("{owner} has invalid Keyframes"));
         }
-        if !data_type.accepts(property_value_type(&keyframe.value)) {
+        if !authored_parameter_value_is_compatible(data_type, &keyframe.value) {
             return Err(format!("{owner} has an incompatible Keyframe value"));
         }
         previous = Some(keyframe.time);

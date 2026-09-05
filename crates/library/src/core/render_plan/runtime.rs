@@ -51,6 +51,8 @@ mod instance_tests;
 #[cfg(test)]
 mod transition_blend_tests;
 #[cfg(test)]
+mod transition_reachability_tests;
+#[cfg(test)]
 mod transition_tests;
 
 use frame_values::{
@@ -797,7 +799,11 @@ impl AuthoringFrameEvaluator<'_> {
                 ))
             })?;
         let mut external_images = HashMap::new();
-        for (input_id, binding) in &invocation.input_bindings {
+        for (input_id, binding) in invocation
+            .input_bindings
+            .iter()
+            .filter(|(input_id, _)| output.reachable_media_inputs.contains(input_id))
+        {
             let input = definition.media_inputs.get(input_id).ok_or_else(|| {
                 LibraryError::Validation(format!("Module input {input_id} is no longer published"))
             })?;
@@ -812,17 +818,12 @@ impl AuthoringFrameEvaluator<'_> {
                 external_images.insert(input.target.clone(), frame);
             }
         }
-        if let Some(primary) = implicit_primary {
-            let published = definition
+        if let Some(primary) = implicit_primary
+            && let Some(published) = definition
                 .media_inputs
                 .values()
-                .find(|input| input.primary)
-                .ok_or_else(|| {
-                    LibraryError::Validation(format!(
-                        "Attachment Module {} has no primary media input",
-                        definition.id
-                    ))
-                })?;
+                .find(|input| input.primary && output.reachable_media_inputs.contains(&input.id))
+        {
             external_images
                 .entry(published.target.clone())
                 .or_insert(primary);
@@ -830,7 +831,7 @@ impl AuthoringFrameEvaluator<'_> {
         for input in definition
             .media_inputs
             .values()
-            .filter(|input| input.required)
+            .filter(|input| input.required && output.reachable_media_inputs.contains(&input.id))
         {
             if !external_images.contains_key(&input.target) {
                 return Ok(None);

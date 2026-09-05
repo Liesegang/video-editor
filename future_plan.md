@@ -2,7 +2,7 @@
 
 この文書は RuViE の今後の実装作業を管理する唯一のバックログです。
 新しい機能案、調査結果、受入条件はここへ統合し、別の並行ロードマップを作りません。
-上から依存関係を潰し、コード、テスト、native HTTP QA、エラーログ確認まで完了して初めてチェックを付けます。
+上から依存関係を潰し、コードと対象テストを通し、UI に影響する項目では native HTTP QA とエラーログ確認まで完了して初めてチェックを付けます。
 作業 goal は、依存が解決済みの未完了チェック項目から一つの vertical slice を選んで設定し、完了した同じ commit でこの文書の状態も更新します。
 
 ## ステータスの読み方
@@ -37,22 +37,28 @@ M0 Baseline / repository hygiene
      -> M5 Extensible plugin kernel
         -> M6 Workflow and provider plugins
      -> M7 Unified 3D / Particle / FBX
-M3 + M4 + M5 + M6 + M7
-  -> M8 Realtime performance / export / publish
-     -> M9 Persona acceptance
+M8 Realtime performance / export / publish / QA
+  = M2 から M7 の各 vertical slice に並走する継続 gate
+M3 + M4 + M5 + M6 + M7 + M8
+  -> M9 Persona acceptance
 ```
 
 M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 の基本編集を壊した状態で先へ進めません。
 
 ## 直近の実装順
 
-1. **GPU Particle の最小製品導線を閉じる。** Assets の Node Clips から Timeline へドラッグし、同じ有限な Module Definition を Inspector と production Node Editor の両方で編集し、実 GPU Preview、seek、独立 renderer、Export、Undo/Redo、native HTTP QA を通す。通常 Clip と Timeline 全体は Node 化しない。
-2. **M2 の production editor 回帰をゼロにする。** 上記導線を既存 Assets、Timeline、Preview、Inspector、Node Editor、共通 property/media picker、pan/zoom/grid 上へ統合し、専用の並行 UI や重複 resolver を残さない。full native QA と source-size/DRY gate を再実行する。
-3. **Transition の配置・編集 tool を完成する。** 実装済みの有限な Transition Module を、edit point への drag/drop、右クリック、Timeline handle、trim/ripple/roll と結合する。二つの Clip や Timeline 全体を Node へ展開しない。
-4. **Audio と musical time を先に一つの transport へ統合する。** Audio Output、waveform、playback/export parity、Tempo/拍子/Marker を固めてから MIDI Clip、piano roll、VST3、DAW routing へ進む。
-5. **同じ SceneRuntime を 3D へ拡張する。** Timeline 3D transform と Camera Item、scene-neutral model、FBX、拡張 Particle、Plexus の順に実装し、別 renderer/device や Inspector 専用データモデルを作らない。
+到達済みの範囲: Particle System は、Assets からの drag、有限な Module Definition、Inspector と production Node Editor、実 GPU Preview/seek、独立 Export renderer、同一フレームの parameter override と Undo/Redo、native HTTP QA までの最小対話導線に到達した。通常 Clip と Timeline 全体は Node 化していない。保存→再起動→再読込、GPU runner での必須化、複数 Particle layer の 60 fps 計測が未完了なので、製品 vertical slice 全体は完了扱いにしない。
 
-各項目は途中の型やメニュー項目では完了にせず、利用者が到達する production UI、実行結果、保存、Undo/Redo、対象 native QA が同じ commit で揃った時点で次へ進みます。
+1. **Particle の最小製品 slice を閉じる。** Instance override を project file へ保存し、app 終了・再起動・再読込後の値と同一フレーム Preview を native QA する。その後、現 HEAD で full 21 suite と実 GPU test を再実行する。
+2. **一般動画 Export を原子的にする。** 同じ filesystem の一時 file へ出力し、全処理成功後だけ destination を atomic replace する。既存 destination の破損と partial output を防ぐ安全要件なので、新しい Transition、Audio、3D 機能より先に閉じる。
+3. **M2 の production editor 回帰をゼロにする。** Particle を含む追加機能を既存 Assets、Timeline、Preview、Inspector、Node Editor、共通 property/media picker、pan/zoom/grid 上へ統合し続け、専用の並行 UI や重複 resolver を残さない。未完の panel/window UX と複合 viewport scenario を閉じる。
+4. **Transition の配置・編集 tool を完成する。** 実装済みの有限な Transition Module を、edit point への drag/drop、右クリック、Timeline handle、trim/ripple/roll と結合する。二つの Clip や Timeline 全体を Node へ展開しない。
+5. **Audio と musical time を先に一つの transport へ統合する。** generic Module の Image+Audio dual-output runtime と Video+Audio の Node Clip 昇格、Audio Output、waveform、playback/export parity、Tempo/拍子/Marker を固めてから MIDI Clip、piano roll、VST3、DAW routing へ進む。
+6. **Node catalog の schema ownership を閉じる。** sampling capability、property key、Published Interface 生成規則、hard limit を共通 descriptor の一つの正本へ集約し、Particle node を増やす前に factory/compiler/UI の重複を除去する。
+7. **同じ SceneRuntime に 3D 基盤を追加する。** Timeline 3D transform、Camera Item、scene-neutral model、FBX の順に実装し、別 renderer/device や Inspector 専用データモデルを作らない。
+8. **Particle の時間入力と表現力を拡張する。** fixed-step parameter schedule を RenderPlan の共通 transport として実装してから、Box/Sphere/Mesh emitter、color/size over life、Field/Turbulence、collision、mesh/ribbon、Plexus へ進む。Inspector 専用の第二モデルや任意 Node UUID binding は作らない。
+
+各項目は途中の型やメニュー項目では完了にせず、該当する production UI、実行結果、保存、Undo/Redo、対象テストまたは native QA が同じ commit で揃った時点で次へ進みます。
 
 ---
 
@@ -100,6 +106,9 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
   - 通常 Clip 数に比例して Node 数が増えず、変換前後の golden image/audio が一致する。
 
 - [ ] **部分実装：Module host を Node Clip 以外へ一般化する。** Item/Track/Composition/Bus/Master/Project Control の Attachment host を同じ `ModuleInvocation` 契約で追加する。他レイヤーや Nested Timeline を displacement/matte 等の入力にするときは Published Media Input と `InstancePath` binding を使い、対象 Timeline を Node 化しない。
+
+- [ ] **部分実装：Node catalog を唯一の schema owner にする。** Particle の role、port、descriptor、runtime status は共通 catalog へ集約済み。property key、Published Interface の生成規則、上限値を factory/compiler/UI に再定義せず descriptor から導出し、sampling/automation capability は authoring 固有型ではなく catalog/common が所有する。
+  - authoring validation も選択 Output の reachability を共通規則から導出し、到達不能な required Published Media Input に不要な binding を要求しないようにする。現在は persisted binding の構造整合性を保つため、dead input にも binding が必要である。
 
 - [ ] **部分実装：Signal/Event binding runtime を完成する。** `docs/adr/0002-event-runtime.md` は public contract のみ完了している。
   - Signal は base、keyframe、各 binding、manual override の寄与と operator/smoothing を deterministic に合成する。
@@ -190,7 +199,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：Transition を Timeline の第一級モデルとして完成する。** Transition の時間と配置は Timeline が所有し、処理だけを built-in、plugin、または有限な Transition Module として差し替える。
   - [x] `from_item`、`to_item`、edit point/interval、duration/alignment、processor reference、parameters/automation を持つ型付き authoring model、atomic edit API、validation、局所 invalidation、階層型 RenderPlan、Image/Audio の実レンダリングを実装した。
   - [x] Image 用の保護された `A: Image`、`B: Image`、`Progress: Number(0..1)` と、一つの共通 Output terminal が持つ `Image` 型入力を境界にした `Transition ModuleDefinition` を実装した。Audio も同じ Output terminal の `Audio` 型入力を使う。共有 Definition は一度だけ compile し、各 Transition は Module Instance、InstancePath、parameter/automation だけを持つ。
-  - [x] `Edit Transition Logic` を明示したときだけ既存 production Node Editor を開き、from/to Clip や Timeline 全体を Node へ展開しない。追加の matte、displacement、Signal も Published Media/Parameter/Signal と InstancePath だけを通す。
+  - [x] `Edit Transition Logic` を明示したときだけ既存 production Node Editor を開き、from/to Clip や Timeline 全体を Node へ展開しない。将来追加する matte、displacement、Signal も Published Media/Parameter/Signal と InstancePath だけを通す。
   - [x] Inspector、Dope Sheet、Curve Editor から Published Parameter と automation を編集し、必須追加 input を一 transaction で割り当て、非 Normal Blend Mode を含む実レンダリングと native HTTP QA を通した。
   - [ ] Transition preset を二 Clip の edit point へ drag/drop、または edit point の右クリック `Add Transition` で追加する production UI を実装する。Timeline handle で duration/alignment を編集し、source handle 不足を診断する。場当たり的な上部ボタンは追加しない。
   - [ ] Cross Dissolve、Dip to Color、Wipe、Audio Crossfade を built-in baseline とし、Transition Template の作成、保存、検索、再利用、plugin 登録を同じ typed contract へ接続する。
@@ -288,14 +297,16 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 - [ ] **部分実装：GPU Particle の最初の executable slice を製品機能にする。** Emitter → Initialize → Gravity → Drag → Sprite Renderer → Output の bounded Node Clip、fixed 1/120 s、seed、checkpoint、最大 capacity、per-instance state、shared compiled pipeline までは存在する。通常 Clip や Timeline は Node 化しない。
   - [x] Particle Node Clip factory、6 nodes/5 connections/11 Published Parameters、階層 RenderPlan の `ParticleSceneFrame`、既存 `SceneRuntime` への Preview 実行経路を実装した。
-  - [ ] **現在の最優先 blocker：実 GPU の可視出力を直す。** opt-in test `gpu_particle_seek_and_independent_renderer_are_deterministic` は RTX 3090 上で compute/SSBO の active particle 240 件まで進むが、particle FBO が全面透明のため失敗する。`SceneRuntime::draw_particles` の GL state、point sprite、FBO draw/readback 境界を既存 renderer 内で修正し、失敗後の GL teardown も停止せず終了させる。
-  - [ ] Preview と Export に同じ Particle scene semantics を通す。現在の Export worker は GPU 無効固定のため Particle を出力できない。新しい renderer や CPU particle simulator を増やさず、既存 `SkiaRenderer + SceneRuntime` の独立 GPU session、明示的な unsupported 診断、1-frame PNG golden を実装する。
-  - [ ] Assets の Node Clips セクションと右クリックから Particle Node Clip を正式に作成し、Timeline への drag/drop を一 transaction、一 Undo で処理する。上部に一時ボタンを追加しない。
-  - [ ] curated Inspector は native descriptor の hard range、step、単位、automation capability を表示する。fixed-step sampling 未実装の simulation parameter に keyframe/expression を作らせず、Sprite Color など実行可能な frame-local parameter だけを許可する。UI だけでなく authoring service でも同じ capability を検証する。
-  - [ ] production Node Editor の作成メニューに、runtime status が Implemented の Particle node だけを出す。削除後も同じ Emitter/Initialize/Force/Renderer を再作成・再接続でき、DesignNeeded placeholder は利用可能に見せない。
+  - [x] 実 GPU の可視出力を修正した。point sprite ではなく full affine に追従する 6-vertex quad を描画し、premultiplied alpha、非等方 scale/shear、透明重なり、singular transform、遠距離 seek/rewind、複数 GPU context の所有権を opt-in 実 GPU test で検証した。
+  - [x] Preview と PNG/Video Export の frame 生成に同じ Particle scene semantics を通した。通常 Export は CPU renderer のまま維持し、選択 Output が Particle に到達するときだけ独立 GPU session を作る。GPU 不可時は audio temp、exporter、出力作成より前に明示診断し、partial file を残さない。Preview/PNG の最終 RGBA8 pixel parity は実 GPU test で検証済みだが、encoded Video の再 decode による画・timing・audio parity は M8 に残す。
+  - [x] Assets の Generators セクションから初心者向けの `Particle System` として Timeline へ drag/drop し、一つの private Definition、Instance、5 秒 Item を一 transaction、一 Undo で作成する。通常 UI に Node/GPU/private の実装用語や上部の一時ボタンを出さない。
+  - [x] curated Inspector は native descriptor の hard range、step、単位、automation capability を表示する。fixed-step sampling 未実装の simulation parameter に keyframe/expression/Node connection を作らせず、Sprite Color など実行可能な frame-local parameter だけを許可する。UI、authoring service、Project validation は同じ catalog contract を使う。
+  - [x] production Node Editor の作成メニューには runtime status が Implemented の5種類の Particle Node だけを出す。DesignNeeded placeholder は隠し、定数専用 socket は理由を表示して無効化する。Sprite Renderer は通常の Image source として Effect、Merge、共通 Output terminal の前に接続できる。
+  - [x] Node の状態意味論を固定した。disabled stage と bypass 不可能な Emitter/Sprite は no output、Initialize/Gravity/Drag の bypass は中立値の type-preserving pass-through とする。実装済み modifier は型付きの正順で省略可能にし、編集中の不完全・未対応・順序違反 chain は Project 全体の compile error ではなく安定した no-image にする。
+  - [x] Output reachability を capability、media dependency、runtime で共通化した。到達不能な binding は GPU capability、cache dependency、runtime 評価へ入れず、Transition の instance override も到達不能な必須 input を評価しない。Sprite branch ごとに state slot を分離しつつ、同じ Emitter ID から同一の deterministic random sequence を導出する。
   - [ ] simulation parameter の Timeline keyframe、expression、Published input を step boundary で deterministic に sample する。Preview、seek、reverse、repeat、Export が同じ schedule を使う。
   - [ ] Point、Box/Sphere/Mesh emitter、velocity/lifetime/size/color over life、Vortex/Field/Turbulence、collision、sprite/mesh/ribbon renderer を同じ typed `ParticleSystem` graph と runtime に追加する。
-  - [ ] real GPU native QA、seek/reverse/repeat/export parity、OOM/device unsupported diagnostics、60 fps benchmark を必須 suite として通す。
+  - [ ] real GPU の seek/reverse/repeat/export parity、OOM/device unsupported diagnostics を必須 suite として通す。ローカル実 GPUでは非透明描画、deterministic seek/rewind、独立 renderer、context teardown、Preview/PNG parity、解像度に依存しない logical-space projection が通過済み。残りは GPU runner での必須化、OOM/device-loss matrix、長時間 repeat である。複数 Particle layer の target 再利用と 60 fps 計測は M8 の継続 gate で扱う。
 
 - [ ] **未実装：Plexus-style proximity geometry を Particle/point-cloud の上に実装する。** 別 simulator を作らず、GPU spatial hash/grid、neighbor search、max distance/max neighbors、stable edge identity と Point/Line/Triangle renderer node を追加する。
   - animated particle/model vertices を入力でき、distance/color/width/opacity を Published Parameter と Timeline keyframe で制御できる。
@@ -319,17 +330,25 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 ## M8: 60 fps、cache、export、publish、QA
 
 - [ ] **部分実装：realtime frame budget を守る。** VJ 用 reference scene/hardware を M0 baseline で固定し、release build の定常 playback で 60 fps、p95 frame work 16.67 ms 以下、10 分間の dropped frame 1% 未満、UI main-thread stall 50 ms 未満を目標/CI perf threshold にする。
+  - 閾値を確定する前に、M0 の復旧 tag と clean main を同一 machine、同一 fixture、同一 release profile で計測し、GPU/driver/process memory を含む比較記録を残す。
   - render/decode/audio/plugin/model job を UI thread から分離し、最新 frame 優先の bounded queue と cancellation/backpressure を使う。
   - blur、thumbnail、waveform、video decode、Node zoom、dialog、plugin scan が無制限 work/memory を発生させない。
+  - 複数 Particle layer で full-frame transient target を毎回作らず、同一 GPU owner の bounded pool、再利用、batching または直接 target 合成を実装し、reference scene の Preview/VJ 60 fps と memory budget を計測する。
   - preview resolution/quality degradation はユーザーに表示し、Export の意味論を変えない。
 
 - [ ] **部分実装：cache と incremental scheduling を全 media に統一する。** RenderPlan、frame、decoded media、waveform、Module executable、scene pipeline/state/checkpoint、ASR/TTS/generated asset を共通 dependency/fingerprint policy で invalidation する。cache owner を二重化せず、budget、LRU、metrics、diagnostic を一箇所で追跡する。
 
 - [ ] **部分実装：Preview/Audio/Export parity を保証する。** Project linear RGBAF32 と encoded sRGBA8/plugin boundary、alpha、HDR/SDR、sample rate/channel layout、frame/sample rounding を明文化し、mosaic/diagonal_clip のような format mismatch を compile 時に診断/convert する。Preview と Export は同じ derived plan/effect/audio/scene semantics を使う。
+  - [x] Particle を使用する Export は、選択 Output の到達性と実 frame range を先に走査し、到達する全 target 寸法について SceneRuntime allocation、実 shader/SSBO/FBO draw、同寸法の strict GPU Ganesh surface、texture ingestion を audio temp、exporter、出力作成前に検証する。GPU 非対応や寸法別 allocation failure では出力を開始しない。
+  - [ ] Particle を含む encoded Video を再 decode し、複数 frame の画素、frame timing、Audio mux を Preview/RenderPlan の基準値と許容差内で比較する。
+  - [ ] 一般の動画 Export は destination と同じ filesystem の一時 file へ書き、renderer/effect/encoder/OOM を含む全処理成功後に close/sync と atomic replace を行う。失敗時は既存 destination を保持し、partial output を残さない。GPU preflight の早期診断だけでこの項目を完了扱いにしない。
+  - [ ] Project-linear GPU surface が RGBAF32 非対応時に使う RGBAF16 fallback について、負値・1.0 超の extended range、half-float 上限、Preview/Export 許容差を実 GPU test と仕様に固定する。
 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
-  - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で 20 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。
-  - [ ] 上記 20 suite は ignored の実 GPU Particle test を含まない。対応 GPU を持つ runner では ignored のままにせず、非透明 pixel、deterministic seek、独立 renderer、正常 teardown、Preview/Export parity を必須検査にする。
+  - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で 21 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Particle System、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。
+  - [x] `qa-particle-node-clip-e2e.py` が Assets からの drag、Timeline placement、11 Published Parameter の Inspector、Seed の Instance override、同一フレーム Preview pixel 差分、Undo/Redo の完全復元、実 GPU Preview の時間変化/seek再現性、production Node Editor の有限 catalog と無効 socket を native HTTP 実操作で検証する。
+  - [ ] Particle System の Instance override を project fileへ保存し、appを終了・再起動して再読込後も値と同一フレーム Previewが一致することをnative QAする。現行loopback bridgeは保存先を指定するAPIを持たないため、未検証を完了扱いにしない。
+  - [ ] 上記 UI suite と別に、対応 GPU を持つ自動 runner で opt-in 実 GPU test を ignored のままにせず、非透明 pixel、deterministic seek、独立 renderer、正常 teardown、Preview/Export parity を必須検査にする。
   - Assets drag、Timeline move/trim/reorder/content zoom、Preview select/gizmo/text/path、Curve drag、Dope Sheet、Node add/connect/reconnect/property、Effect reorder、Ensemble、Audio playback、Unsaved dialog、Transition、Ripple を scenario 化する。
   - `python scripts/qa-runner.py --mode full --jobs 1` が clean release-like build で通り、panic/render/plugin error が 0 件になる。
 

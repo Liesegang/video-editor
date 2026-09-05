@@ -5,9 +5,7 @@
 //! graph hierarchy.
 
 use library::model::authoring::{ModuleHostContract, TransitionMediaType};
-use library::model::{
-    native_node_catalog, transition_mix_node_id, GeneratorContent, NativeNodeFactory,
-};
+use library::model::{native_node_catalog, NativeNodeFactory};
 use library::plugin::{
     PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECTOR_APPLY_OPERATION,
     EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY, IMAGE_OPACITY_STYLE_COMPONENT_ID,
@@ -287,13 +285,9 @@ fn module_runtime_supports_native_for_host(
     descriptor: &library::model::NativeNodeCatalogDescriptor,
 ) -> bool {
     let Some(transition) = host_contract.transition() else {
-        return module_runtime_supports_native(descriptor.factory());
+        return descriptor.supports_general_module_creation();
     };
-    let transition_mix =
-        transition_mix_node_id(transition.media_type == TransitionMediaType::Audio);
-    let factory_is_supported = module_runtime_supports_native(descriptor.factory())
-        || transition_mix == descriptor.catalog_id();
-    if !factory_is_supported {
+    if !descriptor.supports_host_module_creation() {
         return false;
     }
     if matches!(descriptor.factory(), NativeNodeFactory::Generator(_)) {
@@ -307,21 +301,6 @@ fn module_runtime_supports_native_for_host(
             .validate_authored_processing_node(&node)
             .is_ok()
     })
-}
-
-const fn module_runtime_supports_native(factory: NativeNodeFactory) -> bool {
-    matches!(
-        factory,
-        NativeNodeFactory::Generator(
-            GeneratorContent::Text
-                | GeneratorContent::Solid
-                | GeneratorContent::Shape
-                | GeneratorContent::SkSL
-        ) | NativeNodeFactory::Value(_)
-            | NativeNodeFactory::Data(_)
-            | NativeNodeFactory::Merge
-            | NativeNodeFactory::SoundMerge
-    )
 }
 
 #[cfg(test)]
@@ -346,8 +325,41 @@ mod tests {
             if let ModuleNodeCreateRequest::Native(catalog_id) = item.value {
                 let descriptor = library::model::native_node_descriptor(&catalog_id)
                     .expect("menu catalog entry");
-                assert!(module_runtime_supports_native(descriptor.factory()));
+                assert!(descriptor.supports_general_module_creation());
             }
+        }
+    }
+
+    #[test]
+    fn menu_exposes_only_executable_particle_nodes() {
+        let items = module_node_menu_items(&PluginManager::default(), &ModuleHostContract::General);
+        let native_ids = items
+            .iter()
+            .filter_map(|item| match &item.value {
+                ModuleNodeCreateRequest::Native(catalog_id) => Some(catalog_id.as_str()),
+                ModuleNodeCreateRequest::PluginOperation { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        for available in [
+            "native.particle.emitter",
+            "native.particle.initialize",
+            "native.particle.gravity-force",
+            "native.particle.drag-force",
+            "native.particle.sprite-renderer",
+        ] {
+            assert!(native_ids.contains(&available), "missing {available}");
+        }
+        for unavailable in [
+            "native.particle.spawn-burst",
+            "native.particle.vortex-force",
+            "native.particle.mesh-renderer",
+            "native.model.source",
+        ] {
+            assert!(
+                !native_ids.contains(&unavailable),
+                "design-needed Node was exposed: {unavailable}"
+            );
         }
     }
 

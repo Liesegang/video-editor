@@ -60,6 +60,7 @@ FULL_SUITES = (
     ),
     SuiteSpec("settings-dialog", "qa-settings-dialog-e2e.py"),
     SuiteSpec("assets-timeline", "qa-assets-timeline-e2e.py"),
+    SuiteSpec("particle-node-clip", "qa-particle-node-clip-e2e.py"),
     SuiteSpec("inspector-asset-preview", "qa-inspector-asset-preview-e2e.py"),
     SuiteSpec("timeline-edit", "qa-timeline-edit-e2e.py"),
     SuiteSpec("timeline-transition", "qa-transition-e2e.py"),

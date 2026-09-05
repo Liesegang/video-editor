@@ -12,15 +12,15 @@ use sha2::{Digest, Sha256};
 use crate::error::LibraryError;
 use crate::model::frame::particle::{
     PARTICLE_CHECKPOINT_INTERVAL_STEPS, PARTICLE_MAX_CHECKPOINTS, PARTICLE_MAX_REPLAY_STEPS,
-    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey,
+    ParticleSceneFrame, ParticleSceneParameters, SceneInvocationKey, particle_lifetime_steps,
 };
 use crate::model::property::Vec3;
 use crate::rendering::renderer::Affine2D;
 
 pub(crate) use gl_backend::SceneTextureFormat;
 use gl_backend::{
-    PARTICLE_STRIDE_BYTES, PARTICLE_WORKGROUP_SIZE, ParticlePipeline, SavedGlState, SceneTarget,
-    probe_capabilities,
+    PARTICLE_STRIDE_BYTES, PARTICLE_VERTICES_PER_SPRITE, PARTICLE_WORKGROUP_SIZE, ParticlePipeline,
+    SavedGlState, SceneTarget, probe_capabilities,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -126,21 +126,110 @@ impl SceneRuntime {
             format,
             self.limits.max_target_bytes,
         )?;
+        self.with_isolated_gl(|runtime| {
+            runtime.render_particle_isolated(
+                scene,
+                transform,
+                target_width,
+                target_height,
+                format,
+                premultiplied_color,
+            )
+        })
+    }
 
-        // Skia has already been flushed by the caller. Restore every GL state
-        // touched here even when allocation, replay, or shader compilation
-        // fails; the caller resets Ganesh's state cache afterwards.
-        let saved_state = SavedGlState::capture(&self.gl);
-        drain_gl_errors(&self.gl);
-        let result = self.render_particle_isolated(
-            scene,
-            transform,
+    /// Compile and execute the real compute/SSBO/render/FBO boundary without
+    /// creating authored simulation state. Export uses this before opening an
+    /// encoder so a late Particle clip cannot reveal unsupported hardware
+    /// after earlier frames were already written.
+    pub(crate) fn preflight_particle(
+        &mut self,
+        target_width: u32,
+        target_height: u32,
+        format: SceneTextureFormat,
+    ) -> Result<SceneTexture, LibraryError> {
+        let capability = self.capability.as_ref().map_err(|diagnostic| {
+            LibraryError::Render(format!("GPU Particle unavailable: {diagnostic}"))
+        })?;
+        validate_target(
+            capability,
             target_width,
             target_height,
             format,
-            premultiplied_color,
-        );
+            self.limits.max_target_bytes,
+        )?;
+        self.with_isolated_gl(|runtime| {
+            runtime.preflight_particle_isolated(target_width, target_height, format)
+        })
+    }
+
+    fn with_isolated_gl<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, LibraryError>,
+    ) -> Result<T, LibraryError> {
+        // Skia has already been flushed by the caller. Restore every GL state
+        // touched here even when allocation, replay, or shader compilation
+        // fails; the caller resets Ganesh's state cache afterwards.
+        let previous_target = self.target.as_ref().map(SceneTarget::bindings);
+        let mut saved_state = SavedGlState::capture(&self.gl);
+        drain_gl_errors(&self.gl);
+        let result = operation(self);
+        if let Some(previous_target) = previous_target
+            && self
+                .target
+                .as_ref()
+                .is_none_or(|target| target.bindings().texture_id != previous_target.texture_id)
+        {
+            saved_state.invalidate_destroyed_target(previous_target);
+        }
         saved_state.restore(&self.gl);
+        result
+    }
+
+    fn preflight_particle_isolated(
+        &mut self,
+        target_width: u32,
+        target_height: u32,
+        format: SceneTextureFormat,
+    ) -> Result<SceneTexture, LibraryError> {
+        self.use_tick = self.use_tick.wrapping_add(1);
+        let use_tick = self.use_tick;
+        let pipeline = self.pipeline([0; 32], use_tick)?;
+        self.ensure_target(target_width, target_height, format)?;
+        let buffer = allocate_particle_buffer(&self.gl, 1)?;
+        let result = (|| {
+            reset_particles(&self.gl, &pipeline, buffer, 1)?;
+            let invocation = ParticleInvocation {
+                buffer,
+                capacity: 1,
+                executable_hash: [0; 32],
+                parameter_hash: 0,
+                current_step: 0,
+                checkpoints: VecDeque::new(),
+                last_used: use_tick,
+            };
+            let target = self.target.as_ref().ok_or_else(|| {
+                LibraryError::Render("GPU Particle preflight target disappeared".to_string())
+            })?;
+            draw_particles(
+                &self.gl,
+                &pipeline,
+                ParticleDrawRequest {
+                    invocation: &invocation,
+                    target,
+                    transform: &Affine2D::IDENTITY,
+                    logical_size: (target_width, target_height),
+                    premultiplied_color: [0.0; 4],
+                },
+            )?;
+            Ok(SceneTexture {
+                texture_id: target.texture_id(),
+                width: target.width,
+                height: target.height,
+                format: target.format,
+            })
+        })();
+        delete_particle_buffer(&self.gl, buffer);
         result
     }
 
@@ -178,8 +267,15 @@ impl SceneRuntime {
             }
         };
 
+        if let Err(error) = self.seek_invocation(&mut invocation, scene, &pipeline) {
+            // Compute/reset/copy errors can leave the SSBO partially updated
+            // without advancing `current_step`. Discard derived state so a
+            // retry starts from a known cold buffer rather than compounding
+            // the failed step.
+            self.destroy_invocation(invocation);
+            return Err(error);
+        }
         let evaluation = (|| {
-            self.seek_invocation(&mut invocation, scene, &pipeline)?;
             let target = self.target.as_ref().ok_or_else(|| {
                 LibraryError::Render("GPU Particle target disappeared before draw".to_string())
             })?;
@@ -243,10 +339,13 @@ impl SceneRuntime {
         if reusable {
             return Ok(());
         }
-        if let Some(target) = self.target.take() {
+        // Allocate first so a failed resize preserves the prior valid target.
+        // `with_isolated_gl` also prevents a Ganesh binding to the retired
+        // texture/framebuffer from being restored after destruction.
+        let replacement = SceneTarget::create(&self.gl, width, height, format)?;
+        if let Some(target) = self.target.replace(replacement) {
             target.destroy(&self.gl);
         }
-        self.target = Some(SceneTarget::create(&self.gl, width, height, format)?);
         Ok(())
     }
 
@@ -297,6 +396,14 @@ impl SceneRuntime {
                 reset_particles(&self.gl, pipeline, invocation.buffer, invocation.capacity)?;
                 invocation.current_step = 0;
             }
+        }
+        if scene.target_step.saturating_sub(invocation.current_step) > PARTICLE_MAX_REPLAY_STEPS {
+            // The executable slice has no persistent emitter state: a live
+            // particle depends only on emissions within its maximum lifetime.
+            // Reconstruct that bounded suffix with absolute step numbers so a
+            // cold start or distant seek does not replay the entire Clip.
+            reset_particles(&self.gl, pipeline, invocation.buffer, invocation.capacity)?;
+            invocation.current_step = bounded_replay_origin(scene);
         }
         validate_replay(invocation.current_step, scene.target_step)?;
         while invocation.current_step < scene.target_step {
@@ -506,12 +613,19 @@ fn validate_replay(current_step: u64, target_step: u64) -> Result<u64, LibraryEr
     Ok(replay_steps)
 }
 
+fn bounded_replay_origin(scene: &ParticleSceneFrame) -> u64 {
+    let lifetime_steps =
+        particle_lifetime_steps(f64::from(scene.parameters.lifetime_seconds.into_inner()));
+    scene
+        .target_step
+        .saturating_sub(lifetime_steps.clamp(1, PARTICLE_MAX_REPLAY_STEPS))
+}
+
 fn invocation_seed(scene: &ParticleSceneFrame) -> u32 {
     let mut digest = Sha256::new();
     digest.update(scene.parameters.seed.to_le_bytes());
     digest.update(scene.invocation.module_instance_id.as_uuid().as_bytes());
-    digest.update(scene.invocation.state_slot_id.as_bytes());
-    digest.update(scene.invocation.output_id.as_uuid().as_bytes());
+    digest.update(scene.random_stream_id.as_bytes());
     digest.update(
         scene
             .invocation
@@ -700,7 +814,6 @@ fn draw_particles(
 ) -> Result<(), LibraryError> {
     let determinant = request.transform.scale_x * request.transform.scale_y
         - request.transform.skew_x * request.transform.skew_y;
-    let point_scale = determinant.abs().sqrt().min(16_384.0) as f32;
     // SAFETY: the pipeline, invocation buffer, and target all belong to this
     // current context. Scene validation guarantees finite uniforms and target
     // allocation; the draw count never exceeds the SSBO capacity.
@@ -713,17 +826,24 @@ fn draw_particles(
             request.target.height as i32,
         );
         gl.disable(glow::SCISSOR_TEST);
+        gl.disable(glow::DEPTH_TEST);
         gl.color_mask(true, true, true, true);
-        gl.depth_mask(true);
         gl.clear_color(0.0, 0.0, 0.0, 0.0);
-        gl.clear_depth_f32(1.0);
-        gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        if determinant.abs() <= f64::EPSILON {
+            // A singular affine has zero visible area for every other layer.
+            // OpenGL clamps rasterized point size to an implementation-defined
+            // minimum (usually one pixel), so issuing a draw here would turn a
+            // hidden Particle clip into a bright line or point.
+            gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
+            return gl_operation_result(gl, "singular Particle clear");
+        }
         gl.enable(glow::BLEND);
         gl.blend_equation(glow::FUNC_ADD);
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-        gl.enable(glow::DEPTH_TEST);
-        gl.depth_func(glow::LEQUAL);
-        gl.enable(glow::PROGRAM_POINT_SIZE);
+        // Soft/translucent sprites use deterministic SSBO slot order. The
+        // first executable slice is 2D and deliberately allocates no depth
+        // attachment; a later 3D/OIT pass gets its own explicit budget.
         gl.use_program(Some(pipeline.render_program));
         gl.bind_vertex_array(Some(pipeline.vertex_array));
         gl.bind_buffer_base(
@@ -731,21 +851,6 @@ fn draw_particles(
             0,
             Some(request.invocation.buffer),
         );
-        #[cfg(test)]
-        {
-            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(request.invocation.buffer));
-            let mut particle_bytes =
-                vec![0_u8; request.invocation.capacity as usize * PARTICLE_STRIDE_BYTES as usize];
-            gl.get_buffer_sub_data(glow::SHADER_STORAGE_BUFFER, 0, &mut particle_bytes);
-            let active = particle_bytes
-                .chunks_exact(PARTICLE_STRIDE_BYTES as usize)
-                .filter(|particle| {
-                    let age = f32::from_ne_bytes(particle[12..16].try_into().unwrap());
-                    age >= 0.0
-                })
-                .count();
-            eprintln!("active particle buffer entries={active}");
-        }
         gl.uniform_2_f32(
             Some(&pipeline.render.logical_size),
             request.logical_size.0 as f32,
@@ -770,9 +875,8 @@ fn draw_particles(
         );
         gl.uniform_1_f32(
             Some(&pipeline.render.focal_length),
-            request.target.height.max(1) as f32,
+            request.logical_size.1.max(1) as f32,
         );
-        gl.uniform_1_f32(Some(&pipeline.render.point_scale), point_scale);
         gl.uniform_4_f32(
             Some(&pipeline.render.premultiplied_color),
             request.premultiplied_color[0],
@@ -780,26 +884,14 @@ fn draw_particles(
             request.premultiplied_color[2],
             request.premultiplied_color[3],
         );
-        gl.draw_arrays(glow::POINTS, 0, request.invocation.capacity as i32);
+        let vertex_count = request
+            .invocation
+            .capacity
+            .checked_mul(PARTICLE_VERTICES_PER_SPRITE)
+            .and_then(|count| i32::try_from(count).ok())
+            .ok_or_else(|| LibraryError::Render("GPU Particle draw count overflow".to_string()))?;
+        gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
         gl.memory_barrier(glow::FRAMEBUFFER_BARRIER_BIT | glow::TEXTURE_FETCH_BARRIER_BIT);
-        #[cfg(test)]
-        {
-            let mut pixels =
-                vec![0_u8; request.target.width as usize * request.target.height as usize * 4];
-            gl.read_pixels(
-                0,
-                0,
-                request.target.width as i32,
-                request.target.height as i32,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut pixels)),
-            );
-            eprintln!(
-                "raw particle target nonzero={}",
-                pixels.iter().filter(|value| **value != 0).count()
-            );
-        }
     }
     gl_operation_result(gl, "sprite render")
 }
@@ -853,76 +945,4 @@ fn drain_gl_errors(gl: &glow::Context) -> Vec<u32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use ordered_float::OrderedFloat;
-
-    use super::*;
-    use crate::model::frame::color::Color;
-
-    fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
-        Vec3 {
-            x: OrderedFloat(x),
-            y: OrderedFloat(y),
-            z: OrderedFloat(z),
-        }
-    }
-
-    fn parameters() -> ParticleSceneParameters {
-        ParticleSceneParameters {
-            capacity: 8_192,
-            emission_rate: OrderedFloat(120.0),
-            lifetime_seconds: OrderedFloat(4.0),
-            seed: 7,
-            velocity_min: vec3(-1.0, -2.0, -3.0),
-            velocity_max: vec3(1.0, 2.0, 3.0),
-            gravity: vec3(0.0, 180.0, 0.0),
-            drag: OrderedFloat(0.15),
-            size_min: OrderedFloat(6.0),
-            size_max: OrderedFloat(18.0),
-            color: Color {
-                r: 20,
-                g: 40,
-                b: 60,
-                a: 200,
-            },
-        }
-    }
-
-    #[test]
-    fn render_only_color_does_not_invalidate_simulation_history() {
-        let first = parameters();
-        let mut recolored = first.clone();
-        recolored.color = Color::white();
-        assert_eq!(
-            stable_parameter_hash(&first),
-            stable_parameter_hash(&recolored)
-        );
-
-        let mut changed_force = first.clone();
-        changed_force.gravity = vec3(0.0, 200.0, 0.0);
-        assert_ne!(
-            stable_parameter_hash(&first),
-            stable_parameter_hash(&changed_force)
-        );
-    }
-
-    #[test]
-    fn replay_and_target_allocations_fail_at_explicit_bounds() {
-        assert_eq!(validate_replay(10, 20).unwrap(), 10);
-        assert!(validate_replay(0, PARTICLE_MAX_REPLAY_STEPS + 1).is_err());
-        let capability = gl_backend::CapabilityProfile {
-            label: "test OpenGL".to_string(),
-            max_texture_size: 16_384,
-        };
-        assert!(
-            validate_target(
-                &capability,
-                8_192,
-                8_192,
-                SceneTextureFormat::LinearRgbaF32,
-                64 * 1024 * 1024,
-            )
-            .is_err()
-        );
-    }
-}
+mod tests;

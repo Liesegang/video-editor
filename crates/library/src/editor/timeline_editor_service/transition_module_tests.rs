@@ -587,8 +587,11 @@ fn public_id_controls_compile_and_invalidate_only_the_transition_range() {
         Some(&automation)
     );
     let source_invalidation = plan.dependencies.affected_by_item(source_id);
-    assert!(source_invalidation.invocations.contains(&host));
-    assert!(source_invalidation.ranges.contains(
+    assert!(
+        !source_invalidation.invocations.contains(&host),
+        "a published input disconnected from the selected Output is not a runtime dependency"
+    );
+    assert!(!source_invalidation.ranges.contains(
         &crate::core::render_plan::TimelineRangeDependency {
             timeline_id,
             start: interval.start,

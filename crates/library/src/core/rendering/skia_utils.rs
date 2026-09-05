@@ -28,8 +28,8 @@ use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, HWND_MESSAGE, RegisterClassExW,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_MESSAGE,
+    RegisterClassExW, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
@@ -44,14 +44,28 @@ unsafe extern "system" {
 use windows_sys::Win32::Graphics::OpenGL::{HGLRC, wglShareLists};
 
 pub struct GpuContext {
-    pub(crate) _display: glutin::display::Display,
-    pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
-    pub context: glutin::context::PossiblyCurrentContext,
+    // Fields are dropped in declaration order. Ganesh must release its GL
+    // resources while the context and its glutin owners are still alive.
     pub direct_context: skia_safe::gpu::DirectContext,
-    pub(crate) _hwnd: usize,
+    pub context: glutin::context::PossiblyCurrentContext,
+    pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
+    pub(crate) _display: glutin::display::Display,
+    #[cfg(all(feature = "gl", target_os = "windows"))]
+    _window: DummyWindow,
 }
 
 impl GpuContext {
+    pub(crate) fn ensure_current(&self) -> Result<(), LibraryError> {
+        if self.context.is_current() {
+            return Ok(());
+        }
+        self.context.make_current(&self._surface).map_err(|error| {
+            LibraryError::Render(format!(
+                "Cannot activate the renderer OpenGL context: {error}"
+            ))
+        })
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         self._surface.resize(
             &self.context,
@@ -72,6 +86,27 @@ impl GpuContext {
         // the returned function table to another GL context or thread.
         unsafe {
             glow::Context::from_loader_function_cstr(|name| self._display.get_proc_address(name))
+        }
+    }
+}
+
+impl Drop for GpuContext {
+    fn drop(&mut self) {
+        if !self.context.is_current() {
+            // Never steal another renderer's current context during ordinary
+            // field destruction. The owning renderer explicitly activates
+            // this context before releasing its Skia and SceneRuntime state.
+            self.direct_context.abandon();
+            return;
+        }
+
+        // Skia surfaces owned by SkiaRenderer are declared before GpuContext
+        // and have already been destroyed. Release Ganesh's remaining cache
+        // while its owner context is current, then make that context noncurrent
+        // so WGL can actually delete it during field destruction.
+        self.direct_context.release_resources_and_abandon();
+        if let Err(error) = self.context.make_not_current_in_place() {
+            log::warn!("SkiaRenderer: failed to release current GPU context: {error}");
         }
     }
 }
@@ -133,7 +168,38 @@ unsafe extern "system" fn window_proc(
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
-fn create_dummy_window() -> Result<RawWindowHandle, String> {
+struct DummyWindow {
+    hwnd: std::num::NonZeroIsize,
+    hinstance: Option<std::num::NonZeroIsize>,
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+impl DummyWindow {
+    fn raw_handle(&self) -> RawWindowHandle {
+        let mut handle = Win32WindowHandle::new(self.hwnd);
+        handle.hinstance = self.hinstance;
+        RawWindowHandle::Win32(handle)
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+impl Drop for DummyWindow {
+    fn drop(&mut self) {
+        // SAFETY: this object exclusively owns the HWND returned by
+        // CreateWindowExW, and GpuContext declares it after every GL owner so
+        // field destruction reaches it last.
+        if unsafe { DestroyWindow(self.hwnd.get() as HWND) } == 0 {
+            warn!(
+                "SkiaRenderer: failed to destroy dummy GPU window: error {}",
+                // SAFETY: GetLastError has no pointer or lifetime preconditions.
+                unsafe { GetLastError() }
+            );
+        }
+    }
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+fn create_dummy_window() -> Result<DummyWindow, String> {
     // SAFETY: the class descriptor owns `class_name` for every Win32 call in
     // this block, its callback uses the system ABI, and every returned handle
     // is checked before being converted to a non-zero raw-window handle.
@@ -175,16 +241,14 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             std::ptr::null(),
         );
 
-        if hwnd.is_null() {
+        let Some(hwnd) = std::num::NonZeroIsize::new(hwnd as isize) else {
             return Err("Failed to create dummy window".to_string());
-        }
+        };
 
-        let hwnd = std::num::NonZeroIsize::new(hwnd as isize)
-            .ok_or_else(|| "CreateWindowExW returned a null window handle".to_string())?;
-        let mut handle = Win32WindowHandle::new(hwnd);
-        handle.hinstance = std::num::NonZeroIsize::new(hinstance as isize);
-
-        Ok(RawWindowHandle::Win32(handle))
+        Ok(DummyWindow {
+            hwnd,
+            hinstance: std::num::NonZeroIsize::new(hinstance as isize),
+        })
     }
 }
 
@@ -194,11 +258,8 @@ fn init_glutin_headless(
     share_hwnd: Option<isize>,
 ) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
-    let raw_window_handle = create_dummy_window()?;
-    let hwnd = match raw_window_handle {
-        RawWindowHandle::Win32(h) => h.hwnd.get() as usize,
-        _ => return Err("Invalid window handle type".to_string()),
-    };
+    let window = create_dummy_window()?;
+    let raw_window_handle = window.raw_handle();
 
     // Identify target pixel format if sharing
     let target_pf_index = if let Some(hwnd_ptr) = share_hwnd {
@@ -369,11 +430,11 @@ fn init_glutin_headless(
         direct_contexts::make_gl(interface, None).ok_or("Failed to create DirectContext")?;
 
     Ok(GpuContext {
-        _display: display,
-        _surface: surface,
-        context,
         direct_context,
-        _hwnd: hwnd,
+        context,
+        _surface: surface,
+        _display: display,
+        _window: window,
     })
 }
 
@@ -525,6 +586,8 @@ pub fn get_available_fonts() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "gl", target_os = "windows"))]
+    use super::{create_gpu_context, get_current_context_handle};
     use super::{create_raster_surface, image_to_skia, surface_to_image};
     use crate::model::frame::Image;
 
@@ -549,5 +612,31 @@ mod tests {
             );
         }
         assert_eq!(&output.data[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[cfg(all(feature = "gl", target_os = "windows"))]
+    #[test]
+    #[ignore = "requires an idle desktop OpenGL GPU"]
+    fn gpu_context_drop_does_not_steal_another_current_context() {
+        let Some(first) = create_gpu_context(None, None) else {
+            eprintln!("skipping device without an OpenGL context");
+            return;
+        };
+        let Some(first_handle) = get_current_context_handle() else {
+            panic!("first WGL context was not current after construction");
+        };
+        let Some(second) = create_gpu_context(None, None) else {
+            eprintln!("skipping device unable to create a second OpenGL context");
+            return;
+        };
+        let Some(second_handle) = get_current_context_handle() else {
+            panic!("second WGL context was not current after construction");
+        };
+        assert_ne!(first_handle, second_handle);
+
+        drop(first);
+        assert_eq!(get_current_context_handle(), Some(second_handle));
+        drop(second);
+        assert_eq!(get_current_context_handle(), None);
     }
 }

@@ -32,7 +32,7 @@ fn seconds(value: i64) -> MediaTime {
     MediaTime::new(value, 1).unwrap()
 }
 
-fn adjacent_solid_project() -> (
+pub(super) fn adjacent_solid_project() -> (
     AuthoringProject,
     TransitionId,
     TimelineItemId,
@@ -161,7 +161,7 @@ fn render_pixel(project: &AuthoringProject, frame_number: u64) -> [u8; 4] {
     image.data[0..4].try_into().unwrap()
 }
 
-fn render_instance_pixel(
+pub(super) fn render_instance_pixel(
     project: &AuthoringProject,
     timeline_id: TimelineId,
     instance_path: &InstancePath,
@@ -193,7 +193,7 @@ fn render_instance_pixel(
     image.data[0..4].try_into().unwrap()
 }
 
-fn wrap_root_with_two_instances(
+pub(super) fn wrap_root_with_two_instances(
     project: &mut AuthoringProject,
     nested_timeline_id: TimelineId,
 ) -> (TimelineId, TimelineItemId, TimelineItemId) {
@@ -254,7 +254,7 @@ fn wrap_root_with_two_instances(
     (root_timeline_id, first_item_id, second_item_id)
 }
 
-fn promote_cross_dissolve_to_module(
+pub(super) fn promote_cross_dissolve_to_module(
     project: &mut AuthoringProject,
     transition_id: TransitionId,
 ) -> ModuleDefinitionId {
