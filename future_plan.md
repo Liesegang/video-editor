@@ -47,16 +47,17 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 
 ## 直近の実装順
 
-到達済みの範囲: Particle System は、Assets からの drag、有限な Module Definition、Inspector と production Node Editor、実 GPU Preview/seek、独立 Export renderer、同一フレームの parameter override と Undo/Redo、native HTTP QA までの最小対話導線に到達した。通常 Clip と Timeline 全体は Node 化していない。保存→再起動→再読込、GPU runner での必須化、複数 Particle layer の 60 fps 計測が未完了なので、製品 vertical slice 全体は完了扱いにしない。
+到達済みの範囲: Particle System は、Assets からの drag、有限な Module Definition、Inspector と production Node Editor、実 GPU Preview/seek、独立 Export renderer、同一フレームの parameter override と Undo/Redo、project file への保存→app終了→新プロセス起動→再読込みまでの最小対話導線に到達した。通常 Clip と Timeline 全体は Node 化していない。対応 GPU runner での必須化、複数 Particle layer の 60 fps 計測が未完了なので、製品 vertical slice 全体は完了扱いにしない。
 
-1. **Particle の最小製品 slice を閉じる。** Instance override を project file へ保存し、app 終了・再起動・再読込後の値と同一フレーム Preview を native QA する。その後、現 HEAD で full 21 suite と実 GPU test を再実行する。
-2. **一般動画 Export を原子的にする。** 同じ filesystem の一時 file へ出力し、全処理成功後だけ destination を atomic replace する。既存 destination の破損と partial output を防ぐ安全要件なので、新しい Transition、Audio、3D 機能より先に閉じる。
-3. **M2 の production editor 回帰をゼロにする。** Particle を含む追加機能を既存 Assets、Timeline、Preview、Inspector、Node Editor、共通 property/media picker、pan/zoom/grid 上へ統合し続け、専用の並行 UI や重複 resolver を残さない。未完の panel/window UX と複合 viewport scenario を閉じる。
-4. **Transition の配置・編集 tool を完成する。** 実装済みの有限な Transition Module を、edit point への drag/drop、右クリック、Timeline handle、trim/ripple/roll と結合する。二つの Clip や Timeline 全体を Node へ展開しない。
-5. **Audio と musical time を先に一つの transport へ統合する。** generic Module の Image+Audio dual-output runtime と Video+Audio の Node Clip 昇格、Audio Output、waveform、playback/export parity、Tempo/拍子/Marker を固めてから MIDI Clip、piano roll、VST3、DAW routing へ進む。
-6. **Node catalog の schema ownership を閉じる。** sampling capability、property key、Published Interface 生成規則、hard limit を共通 descriptor の一つの正本へ集約し、Particle node を増やす前に factory/compiler/UI の重複を除去する。
-7. **同じ SceneRuntime に 3D 基盤を追加する。** Timeline 3D transform、Camera Item、scene-neutral model、FBX の順に実装し、別 renderer/device や Inspector 専用データモデルを作らない。
-8. **Particle の時間入力と表現力を拡張する。** fixed-step parameter schedule を RenderPlan の共通 transport として実装してから、Box/Sphere/Mesh emitter、color/size over life、Field/Turbulence、collision、mesh/ribbon、Plexus へ進む。Inspector 専用の第二モデルや任意 Node UUID binding は作らない。
+直前の完了 gate: `qa-particle-persistence-e2e.py` が production UI で作成・編集・保存した Particle を native 終了し、新しい app process で同じ project file を開いた後も、Item、Module Definition/Instance、Seed override、同一 frame の Preview pixel hash が完全一致することを検証した。続けて full native HTTP QA 21/21 と opt-in 実 GPU test 4/4 を再実行し、すべて成功した。
+
+1. **一般動画 Export を原子的にする。** 同じ filesystem の一時 file へ出力し、全処理成功後だけ destination を atomic replace する。既存 destination の破損と partial output を防ぐ安全要件なので、新しい Transition、Audio、3D 機能より先に閉じる。
+2. **M2 の production editor 回帰をゼロにする。** Particle を含む追加機能を既存 Assets、Timeline、Preview、Inspector、Node Editor、共通 property/media picker、pan/zoom/grid 上へ統合し続け、専用の並行 UI や重複 resolver を残さない。未完の panel/window UX と複合 viewport scenario を閉じる。
+3. **Transition の配置・編集 tool を完成する。** 実装済みの有限な Transition Module を、edit point への drag/drop、右クリック、Timeline handle、trim/ripple/roll と結合する。二つの Clip や Timeline 全体を Node へ展開しない。
+4. **Audio と musical time を先に一つの transport へ統合する。** generic Module の Image+Audio dual-output runtime と Video+Audio の Node Clip 昇格、Audio Output、waveform、playback/export parity、Tempo/拍子/Marker を固めてから MIDI Clip、piano roll、VST3、DAW routing へ進む。
+5. **Node catalog の schema ownership を閉じる。** sampling capability、property key、Published Interface 生成規則、hard limit を共通 descriptor の一つの正本へ集約し、Particle node を増やす前に factory/compiler/UI の重複を除去する。
+6. **同じ SceneRuntime に 3D 基盤を追加する。** Timeline 3D transform、Camera Item、scene-neutral model、FBX の順に実装し、別 renderer/device や Inspector 専用データモデルを作らない。
+7. **Particle の時間入力と表現力を拡張する。** fixed-step parameter schedule を RenderPlan の共通 transport として実装してから、Box/Sphere/Mesh emitter、color/size over life、Field/Turbulence、collision、mesh/ribbon、Plexus へ進む。Inspector 専用の第二モデルや任意 Node UUID binding は作らない。
 
 各項目は途中の型やメニュー項目では完了にせず、該当する production UI、実行結果、保存、Undo/Redo、対象テストまたは native QA が同じ commit で揃った時点で次へ進みます。
 
@@ -347,7 +348,7 @@ M4、M6、M7 は M1 と各契約が固まった後に並行してよいが、M2 
 - [ ] **部分実装：native HTTP QA suite を完走する。** 各 UI 変更で対象 interaction を loopback bridge から操作し、visible pixels、project state、selection、Undo/Redo、audio counters、QA metadata、error log を検証する。
   - [x] 2026-09-05、`python scripts/qa-runner.py --mode full --jobs 1` で 21 suite（Assets、Timeline、Preview、Path、Inspector、Effect、Dope Sheet、Curve、Node、Node Clip、Particle System、Audio、Ensemble、Transition、Color Palette、Settings、Unsaved を含む）が全件通過した。
   - [x] `qa-particle-node-clip-e2e.py` が Assets からの drag、Timeline placement、11 Published Parameter の Inspector、Seed の Instance override、同一フレーム Preview pixel 差分、Undo/Redo の完全復元、実 GPU Preview の時間変化/seek再現性、production Node Editor の有限 catalog と無効 socket を native HTTP 実操作で検証する。
-  - [ ] Particle System の Instance override を project fileへ保存し、appを終了・再起動して再読込後も値と同一フレーム Previewが一致することをnative QAする。現行loopback bridgeは保存先を指定するAPIを持たないため、未検証を完了扱いにしない。
+  - [x] `qa-particle-persistence-e2e.py` で、Assets dragから作成した Particle System の Instance override を production Save で project file へ保存し、native app を終了した。別プロセスの production `TimelineEditorService::open` で再読込みし、Item/Definition/Instance、override、同一 frame の Preview pixel hash、非透明 pixel 数が一致し、再読込み前後で project file hash が変わらないことを検証した。
   - [ ] 上記 UI suite と別に、対応 GPU を持つ自動 runner で opt-in 実 GPU test を ignored のままにせず、非透明 pixel、deterministic seek、独立 renderer、正常 teardown、Preview/Export parity を必須検査にする。
   - Assets drag、Timeline move/trim/reorder/content zoom、Preview select/gizmo/text/path、Curve drag、Dope Sheet、Node add/connect/reconnect/property、Effect reorder、Ensemble、Audio playback、Unsaved dialog、Transition、Ripple を scenario 化する。
   - `python scripts/qa-runner.py --mode full --jobs 1` が clean release-like build で通り、panic/render/plugin error が 0 件になる。

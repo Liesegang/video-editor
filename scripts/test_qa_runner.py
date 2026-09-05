@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent
@@ -30,6 +31,9 @@ ASSETS = load("ruvie_qa_assets", "qa-assets-timeline-e2e.py")
 TIMELINE = load("ruvie_qa_timeline", "qa-timeline-edit-e2e.py")
 CURVE = load("ruvie_qa_curve", "qa-curve-editor-e2e.py")
 PARTICLE = load("ruvie_qa_particle", "qa-particle-node-clip-e2e.py")
+PARTICLE_PERSISTENCE = load(
+    "ruvie_qa_particle_persistence", "qa-particle-persistence-e2e.py"
+)
 
 
 class QaRunnerTests(unittest.TestCase):
@@ -84,6 +88,7 @@ class QaRunnerTests(unittest.TestCase):
     def test_every_active_qa_file_stays_below_one_thousand_lines(self):
         files = [SCRIPTS / "qa-runner.py", SCRIPTS / "qa_support.py"]
         files.extend(SCRIPTS / suite.script for suite in RUNNER.suite_specs("full"))
+        files.append(SCRIPTS / "qa-particle-persistence-e2e.py")
         files.append(pathlib.Path(__file__))
         for path in files:
             with self.subTest(path=path.name):
@@ -179,6 +184,58 @@ class QaRunnerTests(unittest.TestCase):
         ):
             with self.assertRaises(PARTICLE.QaFailure):
                 PARTICLE._assert_same_frame_particle_delta(baseline, invalid)
+
+    def test_particle_persistence_qa_reuses_the_authoring_suite_module(self):
+        self.assertIs(PARTICLE_PERSISTENCE.PARTICLE_QA, PARTICLE)
+
+    def test_spawned_authoring_app_accepts_optional_environment_overrides(self):
+        process = mock.Mock()
+        with (
+            mock.patch.dict(
+                SUPPORT.os.environ,
+                {
+                    "INHERITED": "kept",
+                    "REMOVE_ME": "stale",
+                    "RUVIE_QA_FIXTURE": "parent_fixture",
+                },
+                clear=True,
+            ),
+            mock.patch.object(SUPPORT.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(SUPPORT, "terminate_process") as terminate,
+        ):
+            with SUPPORT.spawned_authoring_app(
+                43123,
+                {
+                    "RUVIE_QA_FIXTURE": "authoring_path_e2e",
+                    "RUVIE_QA_OPEN_EXISTING_PROJECT": "1",
+                    "RUVIE_QA_PROJECT_PATH": "saved.ruvie",
+                    "REMOVE_ME": None,
+                    "RUVIE_QA_PORT": "must-not-win",
+                },
+            ) as yielded:
+                self.assertIs(yielded, process)
+
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(environment["INHERITED"], "kept")
+        self.assertNotIn("REMOVE_ME", environment)
+        self.assertEqual(environment["RUVIE_QA_FIXTURE"], "authoring_path_e2e")
+        self.assertEqual(environment["RUVIE_QA_OPEN_EXISTING_PROJECT"], "1")
+        self.assertEqual(environment["RUVIE_QA_PROJECT_PATH"], "saved.ruvie")
+        self.assertEqual(environment["RUVIE_QA_PORT"], "43123")
+        terminate.assert_called_once_with(process)
+
+    def test_spawned_authoring_app_one_argument_keeps_default_fixture(self):
+        process = mock.Mock()
+        with (
+            mock.patch.dict(SUPPORT.os.environ, {}, clear=True),
+            mock.patch.object(SUPPORT.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(SUPPORT, "terminate_process"),
+        ):
+            with SUPPORT.spawned_authoring_app(43124):
+                pass
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(environment["RUVIE_QA_PORT"], "43124")
+        self.assertEqual(environment["RUVIE_QA_FIXTURE"], SUPPORT.AUTHORING_FIXTURE)
 
     def test_process_cleanup_is_cross_platform(self):
         process = subprocess.Popen(

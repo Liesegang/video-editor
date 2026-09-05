@@ -186,6 +186,47 @@ fn service_creates_only_the_explicit_particle_item_in_one_undo_step() {
 }
 
 #[test]
+fn particle_instance_override_survives_project_file_round_trip() {
+    let service = TimelineEditorService::create_default("Particle persistence").expect("service");
+    let project = service.snapshot().expect("project");
+    let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+    drop(project);
+    let created = service
+        .create_particle_node_clip(ParticleNodeClipPlacement {
+            track_id,
+            name: "Particle System".to_string(),
+            interval: TimelineInterval::new(MediaTime::zero(), seconds(5)).expect("interval"),
+            layer: 0,
+        })
+        .expect("particle item");
+    let persisted_seed = PropertyValue::Integer(7_919);
+    service
+        .set_module_parameter(
+            created.instance_id,
+            created.parameters.seed,
+            persisted_seed.clone(),
+        )
+        .expect("instance Seed override");
+
+    let directory = tempfile::tempdir().expect("temporary project directory");
+    let path = directory.path().join("particle.ruvie");
+    service.save_as(&path).expect("save Particle project");
+    let reopened = TimelineEditorService::open(&path).expect("reopen Particle project");
+    let reopened_project = reopened.snapshot().expect("reopened Particle project");
+
+    assert_eq!(
+        reopened_project.module_instances[&created.instance_id]
+            .parameter_overrides
+            .get(&created.parameters.seed),
+        Some(&persisted_seed)
+    );
+    assert_eq!(
+        reopened.document().expect("reopened document"),
+        service.document().expect("saved document")
+    );
+}
+
+#[test]
 fn service_rejects_particle_simulation_keyframes_but_accepts_sprite_color() {
     let service = TimelineEditorService::create_default("Particle automation").expect("service");
     let project = service.snapshot().expect("project");

@@ -7,10 +7,14 @@ import json
 import os
 import pathlib
 import time
-import urllib.error
-import urllib.request
 
-from qa_support import QaFailure, capture_viewport, item_by_name, run_suite_main
+from qa_support import (
+    QaFailure,
+    capture_viewport,
+    item_by_name,
+    run_suite_main,
+    wait_endpoint_closed,
+)
 
 
 TARGET_NAME = "QA Overlap"
@@ -173,18 +177,6 @@ def _capture_dialog(client):
     return metadata
 
 
-def _wait_endpoint_closed(client, timeout=8.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(client.base_url + "/health", timeout=0.1):
-                pass
-        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
-            return time.monotonic()
-        time.sleep(0.025)
-    raise QaFailure("Discard Quit did not close the native app within {:.1f}s".format(timeout))
-
-
 def run_suite(client):
     client.wait_health()
     initial = client.state()
@@ -273,7 +265,7 @@ def run_suite(client):
     quit_dialog = _wait_dialog(client, "quit")
     quit_started = time.monotonic()
     client.click_component("unsaved.discard")
-    closed_at = _wait_endpoint_closed(client)
+    closed_at = wait_endpoint_closed(client, description="Discard Quit")
 
     return {
         "suite": "unsaved-changes",

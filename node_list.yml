@@ -2310,10 +2310,6 @@ Initialize Particle:
       type: Vector3
     - name: velocity_max
       type: Vector3
-    - name: color_min
-      type: Color
-    - name: color_max
-      type: Color
     - name: size_min
       type: Scalar
     - name: size_max

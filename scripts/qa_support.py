@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -85,6 +86,24 @@ def terminate_process(process: subprocess.Popen, grace_seconds: float = 5.0) -> 
         process.wait(timeout=2.0)
     except subprocess.TimeoutExpired:
         pass
+
+
+def wait_endpoint_closed(
+    client: "QaClient", timeout: float = 8.0, description: str = "native app"
+) -> float:
+    """Wait until one native QA process has actually released its HTTP endpoint."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(client.base_url + "/health", timeout=0.1):
+                pass
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            return time.monotonic()
+        time.sleep(0.025)
+    raise QaFailure(
+        "{} did not close within {:.1f}s".format(description, timeout)
+    )
 
 
 def _json_request(base_url: str, path: str, data=None, method: str | None = None):
@@ -482,8 +501,15 @@ def _point_in_rect(point: dict, rect: dict, padding: float) -> bool:
 
 
 @contextlib.contextmanager
-def spawned_authoring_app(port: int):
+def spawned_authoring_app(
+    port: int, environment_overrides: Mapping[str, str | None] | None = None
+):
     environment = os.environ.copy()
+    for name, value in (environment_overrides or {}).items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
     environment["RUVIE_QA_PORT"] = str(port)
     environment.setdefault("RUVIE_QA_FIXTURE", AUTHORING_FIXTURE)
     process = subprocess.Popen(
