@@ -270,8 +270,22 @@ Ensembleでは、文字ごとの本体を変形してから範囲を合併し、
 Strokeのmiterとcap、およびBevelのblur kernelも範囲の計算へ反映する。
 合成段階と余白の計算はmodelとrendererで共有し、独立した定数を追加しない。
 
-この処理はstyleごとのscratch領域を制限するが、最上位の出力Surfaceを部分領域へ置き換えるものではない。
-4Kの多数レイヤーでの割当量とlatency、および製品全体の60 fpsは、別の実測gateで判定する。
+直接合成するText、Shape、SkSLの一時Surfaceは、変形後のvisual範囲を現在の描画先へ切り詰めて確保する。
+端は整数pixelへ外向きに丸め、AAとfilterの丸めに備えてdevice座標で2 pixelの余白を取る。
+描画時はSurfaceの原点移動を相殺し、local座標のgeometry、mask、styleを従来と同じ処理へ渡す。
+最終合成では整数原点へ無補間で描き戻し、Dissolveの粒を決める座標も元の描画先を基準にする。
+Ensembleの既存Backplateもvisual範囲に含めるが、本体alphaやGradientのgeometryへ混ぜない。
+複数Pathを持つShapeのBackplateは、本体と同じpartの外形を使い、表示用のaggregate fallbackから別の位置を算出しない。
+
+外部Image Effectへ渡すraster境界は、引き続き描画先全体の画像を返す。
+この境界には部分画像の原点を表す契約がないためである。
+直接合成とraster境界は、同じSurface生成と本体描画を使い、物理的な確保範囲だけを変える。
+最終出力とCompositionのgroup Surfaceは全体サイズを維持する。
+
+4Kの小さなTextとShapeについて、1 layerと16 layersのwarm Previewをproduction benchmarkで比較する。
+この計測にはGPU描画、terminal color変換、RGBA8 readbackを含むが、事前のframe評価とUIへのuploadは含まない。
+実際の割当byte数を取得するcounterは未実装であり、面積の計算値を実測値として記録しない。
+製品全体の60 fpsは、別の実測gateで判定する。
 
 ### 明示的なNode Clip昇格
 

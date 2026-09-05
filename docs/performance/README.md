@@ -27,7 +27,7 @@ validates the emitted JSON before reporting success.
 
 ## Measured production paths
 
-The v1 fixture records these operations in nanoseconds per operation:
+The v2 fixture records these operations in nanoseconds per operation:
 
 - file-backed `ProjectFileStore::load`, including deserialize and validation;
 - hierarchical `RenderPlanCompiler::compile` for 100, 1,000, and 10,000
@@ -46,20 +46,32 @@ is also explicitly unavailable because its result depends on the configured
 external FFmpeg binary, codec, and destination filesystem. The production PNG
 export boundary remains measured.
 
-To additionally measure the actual OpenGL Preview renderer at 320×180 and
-1920×1080, run:
+To additionally measure the actual OpenGL Preview renderer at 320×180,
+1920×1080, and the 3840×2160 vector-style workloads, run:
 
 ```sh
 cargo xtask performance-baseline --gpu-preview --output target/performance/gpu-preview.json
 ```
 
-This opt-in workload uses the same four Solid items as the CPU fixture at
-each stated resolution. It records frame evaluation separately from warm
-rasterization, working-pixel readback, and display color termination. GPU
-initialization and the first managed frame are outside the warm timing;
+This opt-in workload uses the same four Solid items as the CPU fixture at the
+two smaller resolutions. It also renders deterministic 3840x2160 authoring
+Projects containing either 1 or 16 small Text layers and 1 or 16 small Shape
+layers. Every small vector layer uses descriptor-backed Fill and Drop Shadow
+appearance operations and is placed through the ordinary Timeline model.
+These four metrics measure the warm production Preview path; they do not
+substitute a benchmark-only renderer.
+
+The Solid workload records frame evaluation separately from warm
+rasterization, GPU terminal color conversion, and RGBA8 readback. GPU
+initialization and the first managed frame are outside every warm timing;
 UI texture upload and presentation are not measured. The command rejects a
 missing OpenGL context or raster-backed Project working surface instead of
-labeling a CPU fallback as GPU performance.
+labeling a CPU fallback as GPU performance. No allocation-byte metric is
+reported because the renderer exposes no authoritative transient-surface
+allocation counter; the harness does not present an estimate as a measurement.
+The 4K metrics repeatedly render one pre-evaluated authoring frame. RenderPlan
+compilation and frame evaluation are setup and are excluded from those timed
+samples; each timed operation clears and renders the production Preview again.
 Device and driver strings come from that renderer's current OpenGL context.
 Compare like-sized metrics with the same device and concurrent workload;
 these short measurements do not establish sustained 60 fps or dropped-frame rates.

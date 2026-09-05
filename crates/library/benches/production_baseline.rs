@@ -57,13 +57,7 @@ fn main() -> BenchResult<()> {
         metrics.extend(measured.metrics);
         Some(measured.driver)
     } else {
-        metrics.push(report::unavailable(
-            "gpu_preview_frame",
-            "preview",
-            "Render one Preview frame on the active graphics device",
-            "RenderService<SkiaRenderer> GPU backend",
-            "GPU measurement requires the opt-in --gpu-preview flag; the default workload selects CPU Skia",
-        ));
+        metrics.extend(gpu_preview::unavailable_metrics());
         None
     };
     let mut report = BaselineReport::new(

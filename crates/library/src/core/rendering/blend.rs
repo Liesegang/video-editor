@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use skia_safe::{
-    BlendMode as SkBlendMode, Blender, Canvas, Data, Image as SkImage, Paint, Rect, RuntimeEffect,
-    SamplingOptions, Shader, runtime_effect::ChildPtr,
+    BlendMode as SkBlendMode, Blender, Canvas, CubicResampler, Data, Image as SkImage, Matrix,
+    Paint, Point, Rect, RuntimeEffect, SamplingOptions, Shader, runtime_effect::ChildPtr,
 };
 
 use crate::error::LibraryError;
@@ -108,28 +108,38 @@ impl BlendRuntime {
         &mut self,
         canvas: &Canvas,
         image: &SkImage,
-        sampling: SamplingOptions,
-        identity: bool,
+        origin: Point,
+        pixel_aligned: bool,
         opacity: f32,
         mode: BlendMode,
     ) -> Result<(), LibraryError> {
+        let sampling = if pixel_aligned {
+            SamplingOptions::default()
+        } else {
+            SamplingOptions::from(CubicResampler::mitchell())
+        };
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         if mode == BlendMode::Dissolve {
-            paint.set_shader(self.dissolve_shader(image, sampling, opacity)?);
+            paint.set_shader(self.dissolve_shader(image, sampling, origin, opacity)?);
             paint.set_blend_mode(SkBlendMode::SrcOver);
             canvas.draw_rect(
-                Rect::from_wh(image.width() as f32, image.height() as f32),
+                Rect::from_xywh(
+                    origin.x,
+                    origin.y,
+                    image.width() as f32,
+                    image.height() as f32,
+                ),
                 &paint,
             );
         } else {
             paint.set_alpha_f(opacity.clamp(0.0, 1.0));
             self.configure_paint(&mut paint, mode)?;
-            if identity {
+            if pixel_aligned {
                 // Pixel-aligned transient layers already have target resolution.
-                canvas.draw_image(image, (0, 0), Some(&paint));
+                canvas.draw_image(image, origin, Some(&paint));
             } else {
-                canvas.draw_image_with_sampling_options(image, (0, 0), sampling, Some(&paint));
+                canvas.draw_image_with_sampling_options(image, origin, sampling, Some(&paint));
             }
         }
         Ok(())
@@ -139,6 +149,7 @@ impl BlendRuntime {
         &mut self,
         image: &SkImage,
         sampling: SamplingOptions,
+        origin: Point,
         opacity: f32,
     ) -> Result<Shader, LibraryError> {
         if self.dissolve_effect.is_none() {
@@ -155,9 +166,15 @@ impl BlendRuntime {
                 "Dissolve runtime cache remained empty after compilation".to_string(),
             )
         })?;
-        let child = image.to_shader(None, sampling, None).ok_or_else(|| {
-            LibraryError::Render("Failed to create Dissolve source image shader".to_string())
-        })?;
+        // Move only source sampling into the physical image rectangle. The
+        // Dissolve noise continues to use the original layer coordinates, so
+        // cropping storage cannot translate its deterministic spatial pattern.
+        let source_matrix = Matrix::translate(origin);
+        let child = image
+            .to_shader(None, sampling, Some(&source_matrix))
+            .ok_or_else(|| {
+                LibraryError::Render("Failed to create Dissolve source image shader".to_string())
+            })?;
         let uniforms = Data::new_copy(&opacity.clamp(0.0, 1.0).to_ne_bytes());
         effect
             .make_shader(uniforms, &[ChildPtr::from(child)], None)

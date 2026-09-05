@@ -3,11 +3,14 @@
 use skia_safe::{Font, Rect};
 
 use crate::core::ensemble::TransformData;
+use crate::core::ensemble::types::DecoratorConfig;
+use crate::error::LibraryError;
 use crate::model::frame::appearance::{AppearanceOutsets, appearance_outsets, path_effect_outset};
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::runtime_shape::{
-    RuntimeBounds, RuntimeTextShape, text_element_center, transform_bounds,
+    RuntimeBounds, RuntimeTextShape, measure_path_decorator_bounds, measure_text_decorator_bounds,
+    text_element_center, transform_bounds,
 };
 use crate::rendering::text_layout::measure_text_ink_bounds;
 
@@ -38,7 +41,8 @@ impl VectorLayerBounds {
         transforms: &[TransformData],
         font: &Font,
         styles: &[StyleConfig],
-    ) -> Self {
+        decorators: &[DecoratorConfig],
+    ) -> Result<Self, LibraryError> {
         let outsets = appearance_outsets(styles);
         let mut geometry = None;
         let mut content = None;
@@ -64,30 +68,36 @@ impl VectorLayerBounds {
         }
 
         let Some(geometry) = geometry else {
-            return Self::empty();
+            return Ok(Self::empty()
+                .with_decorators(measure_text_decorator_bounds(text, transforms, decorators)?));
         };
         // Stroke support follows the element transform, but antialiasing is a
         // device-pixel concern. Reserve it after the transformed union so a
         // strongly scaled-down glyph still cannot clip its edge coverage.
         let content = expand(runtime_rect(content.unwrap_or(geometry)), ANTIALIAS_OUTSET);
         let decoration = (outsets.visual - outsets.body).max(0.0);
-        Self {
+        Ok(Self {
             geometry: runtime_rect(geometry),
             content,
             visual: expand(content, decoration),
         }
+        .with_decorators(measure_text_decorator_bounds(text, transforms, decorators)?))
     }
 
     pub(super) fn path(
         geometry: Rect,
         styles: &[StyleConfig],
         path_effects: &[PathEffect],
-    ) -> Self {
-        Self::from_untransformed_geometry(
+        decorators: &[DecoratorConfig],
+    ) -> Result<Self, LibraryError> {
+        let bounds = Self::from_untransformed_geometry(
             geometry,
             appearance_outsets(styles),
             path_effect_outset(path_effects),
-        )
+        );
+        let geometry =
+            RuntimeBounds::new(geometry.left, geometry.top, geometry.right, geometry.bottom);
+        Ok(bounds.with_decorators(measure_path_decorator_bounds(geometry, decorators)?))
     }
 
     fn from_untransformed_geometry(
@@ -113,6 +123,14 @@ impl VectorLayerBounds {
             visual: Rect::new_empty(),
         }
     }
+
+    fn with_decorators(mut self, decorators: Option<RuntimeBounds>) -> Self {
+        if let Some(decorators) = decorators {
+            let decorators = expand(runtime_rect(decorators), ANTIALIAS_OUTSET);
+            self.visual = union_rect(self.visual, decorators);
+        }
+        self
+    }
 }
 
 fn expand(bounds: Rect, amount: f32) -> Rect {
@@ -127,6 +145,21 @@ fn runtime_rect(bounds: RuntimeBounds) -> Rect {
     Rect::new(bounds.left, bounds.top, bounds.right, bounds.bottom)
 }
 
+fn union_rect(current: Rect, next: Rect) -> Rect {
+    if current.is_empty() {
+        return next;
+    }
+    if next.is_empty() {
+        return current;
+    }
+    Rect::new(
+        current.left.min(next.left),
+        current.top.min(next.top),
+        current.right.max(next.right),
+        current.bottom.max(next.bottom),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::VectorLayerBounds;
@@ -139,7 +172,8 @@ mod tests {
 
     #[test]
     fn small_path_bounds_stay_tight_and_finite() {
-        let bounds = VectorLayerBounds::path(Rect::new(11.0, 17.0, 29.0, 41.0), &[], &[]);
+        let bounds = VectorLayerBounds::path(Rect::new(11.0, 17.0, 29.0, 41.0), &[], &[], &[])
+            .expect("path bounds");
 
         assert_eq!(bounds.geometry, Rect::new(11.0, 17.0, 29.0, 41.0));
         assert!(bounds.content.left.is_finite());
@@ -177,7 +211,7 @@ mod tests {
             },
         ];
 
-        let bounds = VectorLayerBounds::path(geometry, &styles, &[]);
+        let bounds = VectorLayerBounds::path(geometry, &styles, &[], &[]).expect("path bounds");
 
         assert_eq!(bounds.geometry, geometry);
         assert_eq!(bounds.content, Rect::new(6.0, 12.0, 34.0, 46.0));

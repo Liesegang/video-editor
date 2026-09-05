@@ -3,7 +3,7 @@
 //! New built-in and ABI-v2 Backplates are resolved to geometry before Style
 //! and never enter this module.
 
-use skia_safe::{Canvas, Paint, Path, Rect};
+use skia_safe::{Canvas, Paint, Rect};
 
 use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::{DecoratorConfig, TransformData};
@@ -119,11 +119,10 @@ pub(super) fn draw_text_backplates(
 
 pub(super) fn draw_path_backplates(
     canvas: &Canvas,
-    path: &Path,
+    bounds: Rect,
     decorators: &[DecoratorConfig],
     surface_contract: &SkiaSurfaceContract,
 ) -> Result<(), LibraryError> {
-    let bounds = path.compute_tight_bounds();
     for decorator in decorators {
         let DecoratorConfig::LegacyBackplate {
             target,

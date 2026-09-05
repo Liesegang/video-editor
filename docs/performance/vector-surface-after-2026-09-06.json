@@ -1,0 +1,599 @@
+{
+  "schema_version": 1,
+  "generated_at_unix_ms": 1788636866418,
+  "environment": {
+    "os": {
+      "name": "windows",
+      "architecture": "x86_64",
+      "version": {
+        "value": "Microsoft Windows [Version 10.0.26200.9278]",
+        "reason": null
+      }
+    },
+    "cpu": {
+      "value": "AMD64 Family 23 Model 113 Stepping 0, AuthenticAMD",
+      "reason": null
+    },
+    "gpu": {
+      "value": "NVIDIA GeForce RTX 3090/PCIe/SSE2",
+      "reason": null
+    },
+    "graphics_driver": {
+      "value": "4.6.0 NVIDIA 616.56",
+      "reason": null
+    },
+    "logical_parallelism": {
+      "value": "24",
+      "reason": null
+    }
+  },
+  "build": {
+    "profile": "bench",
+    "debug_assertions": false,
+    "git_commit": "4b23bfbf1ef78b2377979143c033a7e855abc5ef",
+    "git_dirty": true,
+    "rustc": {
+      "value": "rustc 1.95.0 (59807616e 2026-04-14)",
+      "reason": null
+    }
+  },
+  "fixture": {
+    "name": "production-baseline-v2",
+    "generator_version": 2,
+    "sha256": "2366799e4b319bffcbf1674f5cbbb09e8691cccef4b78417754d29cc79542827",
+    "load_document_sha256": "9d214d56783d4b396cfe307e517f77c47eeac1359f1f54ea1c69711716af526a",
+    "audio_media_sha256": "bab9145496b7e8eb262cd877a671b84cfdb932d23086480b8035ba52c527fa53",
+    "workloads": [
+      {
+        "name": "timeline-items-100",
+        "timeline_items": 100,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "timeline-items-1000",
+        "timeline_items": 1000,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "timeline-items-10000",
+        "timeline_items": 10000,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "shared-module-1000",
+        "timeline_items": 1000,
+        "module_definitions": 1,
+        "module_instances": 1000
+      },
+      {
+        "name": "preview",
+        "timeline_items": 4,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "styled-text-4k-1",
+        "timeline_items": 1,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "styled-text-4k-16",
+        "timeline_items": 16,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "styled-shape-4k-1",
+        "timeline_items": 1,
+        "module_definitions": 0,
+        "module_instances": 0
+      },
+      {
+        "name": "styled-shape-4k-16",
+        "timeline_items": 16,
+        "module_definitions": 0,
+        "module_instances": 0
+      }
+    ]
+  },
+  "run": {
+    "warmup_iterations": 2,
+    "sample_count": 5,
+    "timer": "std::time::Instant"
+  },
+  "metrics": [
+    {
+      "status": "measured",
+      "name": "project_load_1000_items",
+      "category": "project_load",
+      "description": "Read, deserialize, and validate a 1,000-item authoring Project",
+      "production_path": "ProjectFileStore::load -> ProjectDocument::from_json -> AuthoringProject::validate",
+      "fixture": "timeline-items-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6482800,
+        6075600,
+        6342200,
+        6110300,
+        5789200
+      ],
+      "summary": {
+        "minimum_ns": 5789200,
+        "median_ns": 6110300.0,
+        "mean_ns": 6160020.0,
+        "p95_ns": 6482800,
+        "maximum_ns": 6482800
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_100_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-100",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        1038100,
+        1097900,
+        1322000,
+        1132800,
+        1116700
+      ],
+      "summary": {
+        "minimum_ns": 1038100,
+        "median_ns": 1116700.0,
+        "mean_ns": 1141500.0,
+        "p95_ns": 1322000,
+        "maximum_ns": 1322000
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_1000_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        14294400,
+        16486100,
+        13426700,
+        14446200,
+        15589800
+      ],
+      "summary": {
+        "minimum_ns": 13426700,
+        "median_ns": 14446200.0,
+        "mean_ns": 14848640.0,
+        "p95_ns": 16486100,
+        "maximum_ns": 16486100
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_10000_items",
+      "category": "render_plan_compile",
+      "description": "Compile Timeline-owned placements into the hierarchical RenderPlan",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "timeline-items-10000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        182378900,
+        185729800,
+        183009700,
+        182416700,
+        179358800
+      ],
+      "summary": {
+        "minimum_ns": 179358800,
+        "median_ns": 182416700.0,
+        "mean_ns": 182578780.0,
+        "p95_ns": 185729800,
+        "maximum_ns": 185729800
+      }
+    },
+    {
+      "status": "measured",
+      "name": "render_plan_compile_shared_module_1000_instances",
+      "category": "render_plan_compile",
+      "description": "Compile 1,000 placements which share one compiled Module definition",
+      "production_path": "RenderPlanCompiler::compile",
+      "fixture": "shared-module-1000",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        17826300,
+        16422800,
+        19144900,
+        17714200,
+        15615700
+      ],
+      "summary": {
+        "minimum_ns": 15615700,
+        "median_ns": 17714200.0,
+        "mean_ns": 17344780.0,
+        "p95_ns": 19144900,
+        "maximum_ns": 19144900
+      }
+    },
+    {
+      "status": "measured",
+      "name": "first_frame_cpu_preview",
+      "category": "first_frame",
+      "description": "Cold compile, frame evaluation, CPU Skia initialization, and Preview raster",
+      "production_path": "RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        5250700,
+        5865800,
+        5742300,
+        5080800,
+        5218200
+      ],
+      "summary": {
+        "minimum_ns": 5080800,
+        "median_ns": 5250700.0,
+        "mean_ns": 5431560.0,
+        "p95_ns": 5865800,
+        "maximum_ns": 5865800
+      }
+    },
+    {
+      "status": "measured",
+      "name": "seek_cpu_preview",
+      "category": "seek",
+      "description": "Evaluate and raster a discontinuous frame on a warm CPU Preview renderer",
+      "production_path": "evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        4935800,
+        4620600,
+        5126000,
+        4953800,
+        5024400
+      ],
+      "summary": {
+        "minimum_ns": 4620600,
+        "median_ns": 4953800.0,
+        "mean_ns": 4932120.0,
+        "p95_ns": 5126000,
+        "maximum_ns": 5126000
+      }
+    },
+    {
+      "status": "measured",
+      "name": "consecutive_cpu_preview_frames",
+      "category": "continuous_frames",
+      "description": "Evaluate and raster 30 consecutive frames on one warm CPU Preview renderer",
+      "production_path": "evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        4725920,
+        4818486,
+        4613470,
+        4495250,
+        4817880
+      ],
+      "summary": {
+        "minimum_ns": 4495250,
+        "median_ns": 4725920.0,
+        "mean_ns": 4694201.2,
+        "p95_ns": 4818486,
+        "maximum_ns": 4818486
+      }
+    },
+    {
+      "status": "measured",
+      "name": "edit_to_cpu_preview",
+      "category": "edit_to_preview",
+      "description": "Commit one Inspector-style item property edit, snapshot, compile, evaluate, and raster Preview",
+      "production_path": "TimelineEditorService::set_authored_property_constant -> snapshot -> RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService(Preview)",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        5153200,
+        4814000,
+        5344200,
+        5045400,
+        5253400
+      ],
+      "summary": {
+        "minimum_ns": 4814000,
+        "median_ns": 5153200.0,
+        "mean_ns": 5122040.0,
+        "p95_ns": 5344200,
+        "maximum_ns": 5344200
+      }
+    },
+    {
+      "status": "measured",
+      "name": "audio_first_window",
+      "category": "audio",
+      "description": "Compile routes, decode, and mix the first 100 ms authoring audio window",
+      "production_path": "AuthoringAudioMixer::root -> render_window",
+      "fixture": "authoring-audio-e2e",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        9538500,
+        9332400,
+        9020300,
+        9002100,
+        9238900
+      ],
+      "summary": {
+        "minimum_ns": 9002100,
+        "median_ns": 9238900.0,
+        "mean_ns": 9226440.0,
+        "p95_ns": 9538500,
+        "maximum_ns": 9538500
+      }
+    },
+    {
+      "status": "measured",
+      "name": "audio_cached_window",
+      "category": "audio",
+      "description": "Mix the same 100 ms authoring audio window from the production decode cache",
+      "production_path": "AuthoringAudioMixer::render_window",
+      "fixture": "authoring-audio-e2e",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6388900,
+        6353800,
+        6363600,
+        6426500,
+        6475100
+      ],
+      "summary": {
+        "minimum_ns": 6353800,
+        "median_ns": 6388900.0,
+        "mean_ns": 6401580.0,
+        "p95_ns": 6475100,
+        "maximum_ns": 6475100
+      }
+    },
+    {
+      "status": "measured",
+      "name": "single_frame_png_export",
+      "category": "export",
+      "description": "Evaluate, CPU-raster, color-terminate, and write one authoring frame as PNG",
+      "production_path": "RenderServer authoring PNG worker -> RenderService::render_authoring_export_frame -> png_export",
+      "fixture": "preview",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        6304300,
+        6293000,
+        6745500,
+        7081000,
+        6390900
+      ],
+      "summary": {
+        "minimum_ns": 6293000,
+        "median_ns": 6390900.0,
+        "mean_ns": 6562940.0,
+        "p95_ns": 7081000,
+        "maximum_ns": 7081000
+      }
+    },
+    {
+      "status": "unavailable",
+      "name": "full_timeline_video_export",
+      "category": "export",
+      "description": "Encode and mux a complete Timeline video",
+      "production_path": "RenderServer authoring video worker -> ffmpeg_export",
+      "value": null,
+      "reason": "not sampled by the portable baseline because the result depends on an explicitly configured external FFmpeg binary, codec, and destination filesystem; the PNG production export boundary is measured instead"
+    },
+    {
+      "status": "measured",
+      "name": "frame_evaluation_320x180",
+      "category": "frame_evaluation",
+      "description": "Evaluate four Timeline solids without rasterization",
+      "production_path": "evaluate_render_plan_frame",
+      "fixture": "preview-4-solids-320x180",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        7523,
+        6290,
+        6230,
+        6466,
+        6290
+      ],
+      "summary": {
+        "minimum_ns": 6230,
+        "median_ns": 6290.0,
+        "mean_ns": 6559.8,
+        "p95_ns": 7523,
+        "maximum_ns": 7523
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_raster_and_termination_320x180",
+      "category": "preview",
+      "description": "Warm OpenGL Preview raster, GPU terminal color and RGBA8 readback; excludes UI upload",
+      "production_path": "RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview-4-solids-320x180",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 3,
+      "samples_ns_per_operation": [
+        428133,
+        395433,
+        400366,
+        458233,
+        443600
+      ],
+      "summary": {
+        "minimum_ns": 395433,
+        "median_ns": 428133.0,
+        "mean_ns": 425153.0,
+        "p95_ns": 458233,
+        "maximum_ns": 458233
+      }
+    },
+    {
+      "status": "measured",
+      "name": "frame_evaluation_1920x1080",
+      "category": "frame_evaluation",
+      "description": "Evaluate four Timeline solids without rasterization",
+      "production_path": "evaluate_render_plan_frame",
+      "fixture": "preview-4-solids-1920x1080",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 30,
+      "samples_ns_per_operation": [
+        8690,
+        9150,
+        6803,
+        6296,
+        5976
+      ],
+      "summary": {
+        "minimum_ns": 5976,
+        "median_ns": 6803.0,
+        "mean_ns": 7383.0,
+        "p95_ns": 9150,
+        "maximum_ns": 9150
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_raster_and_termination_1920x1080",
+      "category": "preview",
+      "description": "Warm OpenGL Preview raster, GPU terminal color and RGBA8 readback; excludes UI upload",
+      "production_path": "RenderPlanCompiler -> evaluate_render_plan_frame -> RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "preview-4-solids-1920x1080",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 3,
+      "samples_ns_per_operation": [
+        5315100,
+        5446933,
+        5253100,
+        4923366,
+        5267466
+      ],
+      "summary": {
+        "minimum_ns": 4923366,
+        "median_ns": 5267466.0,
+        "mean_ns": 5241193.0,
+        "p95_ns": 5446933,
+        "maximum_ns": 5446933
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_4k_small_text_drop_shadow_1_layers",
+      "category": "preview",
+      "description": "Warm 4K OpenGL Preview of small descriptor-backed vector layers with Fill and Drop Shadow",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "styled-text-4k-1",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        17998600,
+        17954000,
+        19008100,
+        20719800,
+        19606300
+      ],
+      "summary": {
+        "minimum_ns": 17954000,
+        "median_ns": 19008100.0,
+        "mean_ns": 19057360.0,
+        "p95_ns": 20719800,
+        "maximum_ns": 20719800
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_4k_small_text_drop_shadow_16_layers",
+      "category": "preview",
+      "description": "Warm 4K OpenGL Preview of small descriptor-backed vector layers with Fill and Drop Shadow",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "styled-text-4k-16",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        25967900,
+        25690400,
+        25894300,
+        25677700,
+        25028100
+      ],
+      "summary": {
+        "minimum_ns": 25028100,
+        "median_ns": 25690400.0,
+        "mean_ns": 25651680.0,
+        "p95_ns": 25967900,
+        "maximum_ns": 25967900
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_4k_small_shape_drop_shadow_1_layers",
+      "category": "preview",
+      "description": "Warm 4K OpenGL Preview of small descriptor-backed vector layers with Fill and Drop Shadow",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "styled-shape-4k-1",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        19192700,
+        20768300,
+        18793100,
+        18497700,
+        20407700
+      ],
+      "summary": {
+        "minimum_ns": 18497700,
+        "median_ns": 19192700.0,
+        "mean_ns": 19531900.0,
+        "p95_ns": 20768300,
+        "maximum_ns": 20768300
+      }
+    },
+    {
+      "status": "measured",
+      "name": "gpu_preview_4k_small_shape_drop_shadow_16_layers",
+      "category": "preview",
+      "description": "Warm 4K OpenGL Preview of small descriptor-backed vector layers with Fill and Drop Shadow",
+      "production_path": "RenderService<SkiaRenderer>::render_authoring_frame(Preview)",
+      "fixture": "styled-shape-4k-16",
+      "unit": "nanoseconds_per_operation",
+      "operations_per_sample": 1,
+      "samples_ns_per_operation": [
+        20623400,
+        21105000,
+        20382900,
+        22988500,
+        21133000
+      ],
+      "summary": {
+        "minimum_ns": 20382900,
+        "median_ns": 21105000.0,
+        "mean_ns": 21246560.0,
+        "p95_ns": 22988500,
+        "maximum_ns": 22988500
+      }
+    }
+  ]
+}

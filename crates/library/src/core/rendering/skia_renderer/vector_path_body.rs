@@ -51,10 +51,6 @@ impl PathBody {
         Ok(Self { aggregate, parts })
     }
 
-    pub(super) const fn aggregate_path(&self) -> &Path {
-        &self.aggregate
-    }
-
     pub(super) fn bounds(&self) -> Rect {
         if self.parts.is_empty() {
             return self.aggregate.compute_tight_bounds();

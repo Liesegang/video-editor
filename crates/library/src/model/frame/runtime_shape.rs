@@ -325,7 +325,23 @@ pub fn measure_ensemble_text_visual_bounds(
         .reduce(RuntimeBounds::union)
         .map(|bounds| bounds.expand((outsets.visual - outsets.body).max(0.0)));
 
-    for decorator in &ensemble.decorator_configs {
+    if let Some(decorator_bounds) =
+        measure_text_decorator_bounds(text, &transforms, &ensemble.decorator_configs)?
+    {
+        visual_bounds =
+            Some(visual_bounds.map_or(decorator_bounds, |current| current.union(decorator_bounds)));
+    }
+
+    Ok(visual_bounds.map(|bounds| bounds.expand(CONSERVATIVE_RASTER_OUTSET)))
+}
+
+pub(crate) fn measure_text_decorator_bounds(
+    text: &RuntimeTextShape,
+    transforms: &[TransformData],
+    decorators: &[DecoratorConfig],
+) -> Result<Option<RuntimeBounds>, LibraryError> {
+    let mut decorator_bounds = None;
+    for decorator in decorators {
         let DecoratorConfig::LegacyBackplate {
             target,
             color,
@@ -339,7 +355,7 @@ pub fn measure_ensemble_text_visual_bounds(
         };
         match target {
             crate::core::ensemble::decorators::BackplateTarget::Char => {
-                for (element, transform) in text.elements.iter().zip(&transforms) {
+                for (element, transform) in text.elements.iter().zip(transforms) {
                     if transform.opacity <= 0.0 || color.a == 0 {
                         continue;
                     }
@@ -348,8 +364,10 @@ pub fn measure_ensemble_text_visual_bounds(
                         text_element_center(element),
                         transform,
                     );
-                    visual_bounds =
-                        Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
+                    decorator_bounds = Some(
+                        decorator_bounds
+                            .map_or(bounds, |current: RuntimeBounds| current.union(bounds)),
+                    );
                 }
             }
             crate::core::ensemble::decorators::BackplateTarget::Line => {
@@ -362,11 +380,13 @@ pub fn measure_ensemble_text_visual_bounds(
                         / indices.len().max(1) as f32;
                     if color.a > 0
                         && opacity > 0.0
-                        && let Some(bounds) = union_indices(text, &transforms, indices)
+                        && let Some(bounds) = union_indices(text, transforms, indices)
                     {
                         let bounds = bounds.pad(*padding);
-                        visual_bounds =
-                            Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
+                        decorator_bounds = Some(
+                            decorator_bounds
+                                .map_or(bounds, |current: RuntimeBounds| current.union(bounds)),
+                        );
                     }
                 }
             }
@@ -378,11 +398,13 @@ pub fn measure_ensemble_text_visual_bounds(
                     / transforms.len().max(1) as f32;
                 if color.a > 0
                     && opacity > 0.0
-                    && let Some(bounds) = union_indices(text, &transforms, 0..text.elements.len())
+                    && let Some(bounds) = union_indices(text, transforms, 0..text.elements.len())
                 {
                     let bounds = bounds.pad(*padding);
-                    visual_bounds =
-                        Some(visual_bounds.map_or(bounds, |current| current.union(bounds)));
+                    decorator_bounds = Some(
+                        decorator_bounds
+                            .map_or(bounds, |current: RuntimeBounds| current.union(bounds)),
+                    );
                 }
             }
             crate::core::ensemble::decorators::BackplateTarget::Parts => {
@@ -392,12 +414,11 @@ pub fn measure_ensemble_text_visual_bounds(
             }
         }
     }
-
-    Ok(visual_bounds.map(|bounds| bounds.expand(CONSERVATIVE_RASTER_OUTSET)))
+    Ok(decorator_bounds)
 }
 
-fn measure_path_decorator_bounds(
-    path: &RuntimePathShape,
+pub(crate) fn measure_path_decorator_bounds(
+    path_bounds: RuntimeBounds,
     decorators: &[DecoratorConfig],
 ) -> Result<Option<RuntimeBounds>, LibraryError> {
     decorators
@@ -416,7 +437,7 @@ fn measure_path_decorator_bounds(
                     "Ensemble BackplateTarget::Parts is not supported".to_string(),
                 ));
             }
-            Ok(path.bounds.pad(*padding))
+            Ok(path_bounds.pad(*padding))
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|bounds| bounds.into_iter().reduce(RuntimeBounds::union))
@@ -635,7 +656,7 @@ impl RuntimeShape {
                 let mut bounds = Some(geometry_bounds.expand(outset));
                 if let Some(ensemble) = &ensemble
                     && let Some(decorator_bounds) =
-                        measure_path_decorator_bounds(path, &ensemble.decorator_configs)?
+                        measure_path_decorator_bounds(geometry_bounds, &ensemble.decorator_configs)?
                 {
                     bounds = Some(
                         bounds.map_or(decorator_bounds, |current| current.union(decorator_bounds)),

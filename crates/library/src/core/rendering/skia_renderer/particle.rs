@@ -136,7 +136,7 @@ impl SkiaRenderer {
         {
             let (target_width, target_height) = self.current_target_dimensions();
             let scene_image = self.particle_scene_image(request)?;
-            let mut layer = self.create_layer_surface()?;
+            let mut layer = self.create_layer_surface(target_width, target_height)?;
             layer.canvas().clear(skia_safe::Color::TRANSPARENT);
             layer.canvas().draw_image(&scene_image, (0, 0), None);
             self.snapshot_surface(&mut layer, target_width, target_height)

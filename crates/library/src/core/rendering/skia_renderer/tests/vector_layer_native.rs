@@ -1,13 +1,13 @@
 use super::*;
 
-fn working_pixels(renderer: &mut SkiaRenderer) -> Vec<[f32; 4]> {
+pub(super) fn working_pixels(renderer: &mut SkiaRenderer) -> Vec<[f32; 4]> {
     let RenderOutput::Working(output) = renderer.finalize().expect("final working image") else {
         panic!("Project-linear renderer must retain working pixels");
     };
     output.pixels().pixels().to_vec()
 }
 
-fn renderer(label: &str, width: u32, height: u32) -> SkiaRenderer {
+pub(super) fn renderer(label: &str, width: u32, height: u32) -> SkiaRenderer {
     let mut renderer = SkiaRenderer::new(width, height, Color::black(), false, None, None)
         .expect("CPU Skia renderer");
     renderer
@@ -17,7 +17,7 @@ fn renderer(label: &str, width: u32, height: u32) -> SkiaRenderer {
     renderer
 }
 
-fn assert_pixels_near(left: &[[f32; 4]], right: &[[f32; 4]]) {
+pub(super) fn assert_pixels_near(left: &[[f32; 4]], right: &[[f32; 4]]) {
     assert_eq!(left.len(), right.len());
     for (index, (left, right)) in left.iter().zip(right).enumerate() {
         for channel in 0..4 {
@@ -359,17 +359,26 @@ fn assert_gpu_layer_mask_near(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) {
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[derive(Clone, Copy)]
+struct LayerMaskAaPropagation {
+    transform: Affine2D,
+    local_offset: (f64, f64),
+    local_blur_sigma: f64,
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
 fn assert_gpu_layer_mask_near_outside_baseline_edges(
     cpu: &[[f32; 4]],
     gpu: &[[f32; 4]],
     baseline_cpu: &[[f32; 4]],
     baseline_gpu: &[[f32; 4]],
+    propagation: Option<LayerMaskAaPropagation>,
 ) {
     assert_eq!(cpu.len(), gpu.len());
     assert_eq!(cpu.len(), baseline_cpu.len());
     assert_eq!(cpu.len(), baseline_gpu.len());
     let is_partial_coverage = |alpha: f32| alpha > 2.0e-3 && alpha < 1.0 - 2.0e-3;
-    let coverage_edges = baseline_cpu
+    let mut coverage_edges = baseline_cpu
         .iter()
         .zip(baseline_gpu)
         .map(|(cpu, gpu)| is_partial_coverage(cpu[3]) || is_partial_coverage(gpu[3]))
@@ -378,6 +387,48 @@ fn assert_gpu_layer_mask_near_outside_baseline_edges(
         coverage_edges.iter().any(|edge| *edge),
         "opaque baseline must identify the backend-specific AA contour"
     );
+    if let Some(propagation) = propagation {
+        // Skia's CPU and GPU vector rasterizers can assign different coverage
+        // on a fractional contour. A filter transports that same narrow
+        // source uncertainty by its device-space offset and kernel support.
+        // Keep the strict comparison everywhere outside that measured-source
+        // support; bounds and channel energy below still constrain the whole
+        // moved/blurred result.
+        let source_edges = coverage_edges.clone();
+        let origin = propagation.transform.map_point(0.0, 0.0);
+        let offset = propagation
+            .transform
+            .map_point(propagation.local_offset.0, propagation.local_offset.1);
+        let offset = (offset.0 - origin.0, offset.1 - origin.1);
+        let kernel_radius = 3.0 * propagation.local_blur_sigma.max(0.0);
+        let radius = (
+            kernel_radius
+                * propagation
+                    .transform
+                    .scale_x
+                    .hypot(propagation.transform.skew_x),
+            kernel_radius
+                * propagation
+                    .transform
+                    .skew_y
+                    .hypot(propagation.transform.scale_y),
+        );
+        for (index, is_edge) in source_edges.into_iter().enumerate() {
+            if !is_edge {
+                continue;
+            }
+            let source = ((index % 72) as f64, (index / 72) as f64);
+            let min_x = (source.0 + offset.0 - radius.0 - 1.0).floor() as isize;
+            let max_x = (source.0 + offset.0 + radius.0 + 1.0).ceil() as isize;
+            let min_y = (source.1 + offset.1 - radius.1 - 1.0).floor() as isize;
+            let max_y = (source.1 + offset.1 + radius.1 + 1.0).ceil() as isize;
+            for y in min_y.max(0)..=max_y.min(71) {
+                for x in min_x.max(0)..=max_x.min(71) {
+                    coverage_edges[y as usize * 72 + x as usize] = true;
+                }
+            }
+        }
+    }
     for (index, (cpu, gpu)) in cpu.iter().zip(gpu).enumerate() {
         if coverage_edges[index] {
             continue;
@@ -391,8 +442,9 @@ fn assert_gpu_layer_mask_near_outside_baseline_edges(
     }
 
     // CPU and GPU Skia use different AA coverage on the narrow baseline
-    // contour. Compare its conserved position and channel energy separately,
-    // without relaxing tolerance for the mask interior, hole, or shadow.
+    // contour. Compare its conserved position and channel energy separately;
+    // the strict tolerance remains everywhere outside that measured source
+    // contour and its propagated filter support.
     let alpha_bounds = |pixels: &[[f32; 4]]| {
         let mut bounds: Option<(usize, usize, usize, usize)> = None;
         for (index, pixel) in pixels.iter().enumerate() {
@@ -476,6 +528,7 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
         &stroke_gpu,
         &baseline_cpu,
         &baseline_gpu,
+        None,
     );
     let (center_x, center_y) = transform.map_point(32.0, 32.0);
     let center = center_y as usize * 72 + center_x as usize;
@@ -560,14 +613,60 @@ fn gpu_layer_mask_matches_cpu_for_stroke_hole_partial_alpha_and_transform() {
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 #[test]
-#[ignore = "known issue: fractional nonuniform transforms produce CPU/GPU blur-AA divergence"]
+#[ignore = "requires an idle desktop OpenGL GPU"]
 fn gpu_layer_mask_fractional_nonuniform_blur_matches_cpu() {
+    // The direct fractional body already differs across Skia's CPU/GPU AA
+    // rasterizers (measured max 0.101), while whole-pixel controls are exact
+    // and their blurred filters remain within 0.0005. Verify strict parity
+    // outside only the transported support of that measured source contour.
     let transform = Affine2D::translate(-6.0, 18.0).compose(Affine2D::scale(1.35, 0.55));
     let fill = layer_mask_white_fill();
     let baseline_cpu = render_layer_mask_case(std::slice::from_ref(&fill), transform, false);
     let baseline_gpu = render_layer_mask_case(std::slice::from_ref(&fill), transform, true);
-    let styles = [fill, layer_mask_shadow(10.0, 2.0)];
+    let styles = [fill.clone(), layer_mask_shadow(10.0, 2.0)];
     let cpu = render_layer_mask_case(&styles, transform, false);
     let gpu = render_layer_mask_case(&styles, transform, true);
-    assert_gpu_layer_mask_near_outside_baseline_edges(&cpu, &gpu, &baseline_cpu, &baseline_gpu);
+    let (cast_x, cast_y) = transform.map_point(50.0, 32.0);
+    let cast = cast_y.round() as usize * 72 + cast_x.round() as usize;
+    assert!(
+        baseline_cpu[cast][3] <= 1.0e-6
+            && baseline_gpu[cast][3] <= 1.0e-6
+            && cpu[cast][0] > 0.5
+            && gpu[cast][0] > 0.5,
+        "fractional Drop Shadow must move beyond the original Fill on both backends"
+    );
+    let propagation = LayerMaskAaPropagation {
+        transform,
+        local_offset: (10.0, 0.0),
+        local_blur_sigma: 2.0 / 3.0,
+    };
+    for wrong_gpu in [
+        render_layer_mask_case(
+            &[fill.clone(), layer_mask_shadow(7.0, 2.0)],
+            transform,
+            true,
+        ),
+        render_layer_mask_case(&[fill, layer_mask_shadow(10.0, 0.0)], transform, true),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_gpu_layer_mask_near_outside_baseline_edges(
+                    &cpu,
+                    &wrong_gpu,
+                    &baseline_cpu,
+                    &baseline_gpu,
+                    Some(propagation),
+                );
+            })
+            .is_err(),
+            "the AA envelope must not accept a renderer with the wrong shadow offset or sigma"
+        );
+    }
+    assert_gpu_layer_mask_near_outside_baseline_edges(
+        &cpu,
+        &gpu,
+        &baseline_cpu,
+        &baseline_gpu,
+        Some(propagation),
+    );
 }

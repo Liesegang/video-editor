@@ -6,13 +6,15 @@
 
 use super::vector_bounds::VectorLayerBounds;
 use super::vector_path_body::PathBody;
+use super::vector_surface::{NativeLayer, VectorSurfaceMode};
 use super::*;
 
 impl SkiaRenderer {
     pub(super) fn create_sksl_layer_surface(
         &mut self,
         request: SkSLRasterRequest<'_>,
-    ) -> Result<Surface, LibraryError> {
+        mode: VectorSurfaceMode,
+    ) -> Result<NativeLayer, LibraryError> {
         match request.color_domain {
             SkSLColorDomain::ProjectWorkingLinear if self.surface_contract.working().is_none() => {
                 return Err(LibraryError::Render(
@@ -26,10 +28,10 @@ impl SkiaRenderer {
         let resolution = request.resolution;
         let time = request.time;
         let transform = request.transform;
-        let mut layer = self.create_layer_surface()?;
+        let local_visual = skia_safe::Rect::from_wh(resolution.0, resolution.1);
+        let mut layer = self.create_vector_surface(mode, local_visual, *transform)?;
         {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let canvas: &Canvas = layer.surface.canvas();
 
             let preprocessed_code = shader_utils::preprocess_shader(shader_code);
             let effect = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None)
@@ -79,7 +81,8 @@ impl SkiaRenderer {
     pub(super) fn create_text_layer_surface(
         &mut self,
         request: TextRasterRequest<'_>,
-    ) -> Result<Surface, LibraryError> {
+        mode: VectorSurfaceMode,
+    ) -> Result<NativeLayer, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::rasterize_text_layer len={} size={} ensemble={}",
             request.text.len(),
@@ -89,7 +92,7 @@ impl SkiaRenderer {
         if let Some(ensemble_data) = request.ensemble
             && ensemble_data.enabled
         {
-            return self.create_ensemble_text_layer_surface(request, ensemble_data);
+            return self.create_ensemble_text_layer_surface(request, ensemble_data, mode);
         }
 
         let TextRasterRequest {
@@ -101,37 +104,34 @@ impl SkiaRenderer {
             ..
         } = request;
         let has_content = has_content_styles(styles);
+        let bounds = VectorLayerBounds::text(text, font_name, size as f32, styles);
         let mask = if layer_styles::has_mask_styles(styles) {
-            Some(layer_styles::LayerMask::record(
-                VectorLayerBounds::text(text, font_name, size as f32, styles),
-                |canvas| {
-                    if has_content {
-                        draw_text_body(
-                            &self.surface_contract,
-                            canvas,
-                            text,
-                            font_name,
-                            size as f32,
-                            styles,
-                        )
-                    } else {
-                        draw_text_silhouette(
-                            &self.surface_contract,
-                            canvas,
-                            text,
-                            font_name,
-                            size as f32,
-                        )
-                    }
-                },
-            )?)
+            Some(layer_styles::LayerMask::record(bounds, |canvas| {
+                if has_content {
+                    draw_text_body(
+                        &self.surface_contract,
+                        canvas,
+                        text,
+                        font_name,
+                        size as f32,
+                        styles,
+                    )
+                } else {
+                    draw_text_silhouette(
+                        &self.surface_contract,
+                        canvas,
+                        text,
+                        font_name,
+                        size as f32,
+                    )
+                }
+            })?)
         } else {
             None
         };
-        let mut layer = self.create_layer_surface()?;
+        let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
         {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let canvas: &Canvas = layer.surface.canvas();
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
             if let Some(mask) = &mask {
@@ -169,7 +169,8 @@ impl SkiaRenderer {
         &mut self,
         request: TextRasterRequest<'_>,
         ensemble_data: &crate::core::ensemble::EnsembleData,
-    ) -> Result<Surface, LibraryError> {
+        mode: VectorSurfaceMode,
+    ) -> Result<NativeLayer, LibraryError> {
         use crate::core::ensemble::target::EffectorTarget;
         use crate::core::ensemble::types::EffectorConfig;
 
@@ -217,38 +218,41 @@ impl SkiaRenderer {
         let character_transforms =
             evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
         let has_content = has_content_styles(styles);
+        let bounds = VectorLayerBounds::ensemble(
+            &runtime_text,
+            &character_transforms,
+            &font,
+            styles,
+            &ensemble_data.decorator_configs,
+        )?;
         let mask = if layer_styles::has_mask_styles(styles) {
-            Some(layer_styles::LayerMask::record(
-                VectorLayerBounds::ensemble(&runtime_text, &character_transforms, &font, styles),
-                |canvas| {
-                    if has_content {
-                        draw_ensemble_text_body(
-                            &self.surface_contract,
-                            canvas,
-                            &runtime_text,
-                            &character_transforms,
-                            &font,
-                            styles,
-                        )
-                    } else {
-                        draw_ensemble_text_silhouette(
-                            &self.surface_contract,
-                            canvas,
-                            &runtime_text,
-                            &character_transforms,
-                            &font,
-                        )
-                    }
-                },
-            )?)
+            Some(layer_styles::LayerMask::record(bounds, |canvas| {
+                if has_content {
+                    draw_ensemble_text_body(
+                        &self.surface_contract,
+                        canvas,
+                        &runtime_text,
+                        &character_transforms,
+                        &font,
+                        styles,
+                    )
+                } else {
+                    draw_ensemble_text_silhouette(
+                        &self.surface_contract,
+                        canvas,
+                        &runtime_text,
+                        &character_transforms,
+                        &font,
+                    )
+                }
+            })?)
         } else {
             None
         };
 
-        let mut layer = self.create_layer_surface()?;
+        let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
         {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let canvas: &Canvas = layer.surface.canvas();
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
 
@@ -293,7 +297,8 @@ impl SkiaRenderer {
     pub(super) fn create_shape_layer_surface(
         &mut self,
         request: ShapeRasterRequest<'_>,
-    ) -> Result<Surface, LibraryError> {
+        mode: VectorSurfaceMode,
+    ) -> Result<NativeLayer, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
         let ShapeRasterRequest {
             path_data,
@@ -305,25 +310,26 @@ impl SkiaRenderer {
             transform,
         } = request;
         let body = PathBody::resolve(canonical_path, path_data, parts)?;
+        let body_bounds = body.bounds();
         let has_content = has_content_styles(styles);
+        let decorators = ensemble
+            .filter(|ensemble| ensemble.enabled)
+            .map_or(&[][..], |ensemble| ensemble.decorator_configs.as_slice());
+        let bounds = VectorLayerBounds::path(body_bounds, styles, path_effects, decorators)?;
         let mask = if layer_styles::has_mask_styles(styles) {
-            Some(layer_styles::LayerMask::record(
-                VectorLayerBounds::path(body.bounds(), styles, path_effects),
-                |canvas| {
-                    if has_content {
-                        body.draw_body(&self.surface_contract, canvas, path_effects, styles)
-                    } else {
-                        body.draw_silhouette(&self.surface_contract, canvas, path_effects)
-                    }
-                },
-            )?)
+            Some(layer_styles::LayerMask::record(bounds, |canvas| {
+                if has_content {
+                    body.draw_body(&self.surface_contract, canvas, path_effects, styles)
+                } else {
+                    body.draw_silhouette(&self.surface_contract, canvas, path_effects)
+                }
+            })?)
         } else {
             None
         };
-        let mut layer = self.create_layer_surface()?;
+        let mut layer = self.create_vector_surface(mode, bounds.visual, transform)?;
         {
-            let canvas: &Canvas = layer.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let canvas: &Canvas = layer.surface.canvas();
             canvas.save();
             canvas.concat(&build_transform_matrix(&transform));
             if let Some(ensemble) = ensemble
@@ -331,7 +337,7 @@ impl SkiaRenderer {
             {
                 legacy_backplate::draw_path_backplates(
                     canvas,
-                    body.aggregate_path(),
+                    body_bounds,
                     &ensemble.decorator_configs,
                     &self.surface_contract,
                 )?;
@@ -375,17 +381,26 @@ impl SkiaRenderer {
 
     pub(super) fn draw_native_layer_surface(
         &mut self,
-        mut layer: Surface,
+        mut layer: NativeLayer,
         opacity: f64,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        let image = layer.image_snapshot();
+        let image = layer.surface.image_snapshot();
         // The transient Surface owns a possible backend texture. Keep it alive
         // until the active target has retained the snapshot draw.
-        let result = self.draw_skia_image_affine_with_blend(
+        self.activate_graphics_context()?;
+        let blend_runtime = &mut self.blend_runtime;
+        let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
+            group.surface.canvas()
+        } else {
+            self.surface.canvas()
+        };
+        let result = blend_runtime.draw_image(
+            canvas,
             &image,
-            &Affine2D::IDENTITY,
-            opacity,
+            layer.origin,
+            true,
+            opacity.clamp(0.0, 1.0) as f32,
             blend_mode,
         );
         drop(image);

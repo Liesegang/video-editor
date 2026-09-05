@@ -2,14 +2,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use library::editor::AppearanceOperationFactory;
 use library::model::BlendMode;
 use library::model::authoring::{
     AuthoringProject, MediaTime, ModuleDefinition, ModuleDefinitionId, ModuleInstance,
-    ModuleInstanceId, ModuleInvocation, ProjectDocument, RationalRate, SourceRef, TimeMap,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrackId,
+    ModuleInstanceId, ModuleInvocation, ProjectDocument, RationalRate, ShapeKind, ShapeSource,
+    SourceRef, TimeMap, TimelineId, TimelineInterval, TimelineItem, TimelineItemId,
+    TimelineTrackId,
 };
 use library::model::frame::color::Color;
-use library::model::project::property::PropertyMap;
+use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
+use library::plugin::PluginManager;
+use ordered_float::OrderedFloat;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -18,7 +22,7 @@ use uuid::Uuid;
 use crate::BenchResult;
 
 const FIXTURE_SPEC: &str = concat!(
-    "ruvie-production-baseline-v1\n",
+    "ruvie-production-baseline-v2\n",
     "canvas=320x180@30fps,duration=600s\n",
     "timeline-item-workloads=100,1000,10000\n",
     "project-load-items=1000\n",
@@ -28,6 +32,10 @@ const FIXTURE_SPEC: &str = concat!(
     "audio=test_data/e2e_media/tone.mp3\n",
     "audio-window=4800-frames@48000Hz-stereo\n",
     "consecutive-preview-frames=30\n",
+    "gpu-vector=3840x2160@30fps,duration=10s\n",
+    "gpu-vector-kinds=text,rectangle\n",
+    "gpu-vector-layers=1,16\n",
+    "gpu-vector-object=text-72px,rectangle-128x72,fill+drop-shadow\n",
 );
 
 #[derive(Clone, Debug, Serialize)]
@@ -55,6 +63,8 @@ pub struct FixtureSet {
     pub items_1_000: AuthoringProject,
     pub items_10_000: AuthoringProject,
     pub shared_module_1_000: AuthoringProject,
+    pub styled_text_4k: [AuthoringProject; 2],
+    pub styled_shape_4k: [AuthoringProject; 2],
     pub load_project_path: PathBuf,
     pub audio_media_directory: PathBuf,
     metadata: FixtureMetadata,
@@ -68,6 +78,15 @@ impl FixtureSet {
         let (items_1_000, _, _) = solid_project(1_000, 3)?;
         let (items_10_000, _, _) = solid_project(10_000, 4)?;
         let shared_module_1_000 = shared_module_project(1_000, 5)?;
+        let plugins = PluginManager::default();
+        let styled_text_4k = [
+            styled_vector_project(StyledVectorKind::Text, 1, 6, &plugins)?,
+            styled_vector_project(StyledVectorKind::Text, 16, 7, &plugins)?,
+        ];
+        let styled_shape_4k = [
+            styled_vector_project(StyledVectorKind::Shape, 1, 8, &plugins)?,
+            styled_vector_project(StyledVectorKind::Shape, 16, 9, &plugins)?,
+        ];
 
         let load_document = canonical_project_json(&items_1_000)?;
         let load_document_sha256 = sha256_hex(load_document.as_bytes());
@@ -77,13 +96,18 @@ impl FixtureSet {
         let mut fixture_identity = FIXTURE_SPEC.as_bytes().to_vec();
         fixture_identity.extend_from_slice(load_document_sha256.as_bytes());
         fixture_identity.extend_from_slice(audio_media_sha256.as_bytes());
+        for project in styled_text_4k.iter().chain(&styled_shape_4k) {
+            fixture_identity.extend_from_slice(
+                sha256_hex(canonical_project_json(project)?.as_bytes()).as_bytes(),
+            );
+        }
 
         let temporary_directory = tempfile::tempdir()?;
         let load_project_path = temporary_directory.path().join("load-project.ruvie");
         fs::write(&load_project_path, load_document)?;
         let metadata = FixtureMetadata {
-            name: "production-baseline-v1",
-            generator_version: 1,
+            name: "production-baseline-v2",
+            generator_version: 2,
             sha256: sha256_hex(&fixture_identity),
             load_document_sha256,
             audio_media_sha256,
@@ -93,6 +117,10 @@ impl FixtureSet {
                 workload("timeline-items-10000", 10_000, 0, 0),
                 workload("shared-module-1000", 1_000, 1, 1_000),
                 workload("preview", 4, 0, 0),
+                workload("styled-text-4k-1", 1, 0, 0),
+                workload("styled-text-4k-16", 16, 0, 0),
+                workload("styled-shape-4k-1", 1, 0, 0),
+                workload("styled-shape-4k-16", 16, 0, 0),
             ],
         };
         Ok(Self {
@@ -102,6 +130,8 @@ impl FixtureSet {
             items_1_000,
             items_10_000,
             shared_module_1_000,
+            styled_text_4k,
+            styled_shape_4k,
             load_project_path,
             audio_media_directory,
             metadata,
@@ -112,6 +142,96 @@ impl FixtureSet {
     pub fn metadata(&self) -> &FixtureMetadata {
         &self.metadata
     }
+}
+
+#[derive(Clone, Copy)]
+enum StyledVectorKind {
+    Text,
+    Shape,
+}
+
+impl StyledVectorKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text",
+            Self::Shape => "Shape",
+        }
+    }
+}
+
+fn styled_vector_project(
+    kind: StyledVectorKind,
+    item_count: usize,
+    namespace: u16,
+    plugins: &PluginManager,
+) -> BenchResult<AuthoringProject> {
+    let duration = MediaTime::from_whole_seconds(10);
+    let mut project = AuthoringProject::new(
+        format!("4K styled {} x{item_count}", kind.label()),
+        3840,
+        2160,
+        RationalRate::new(30, 1)?,
+        duration,
+    )?;
+    let track_id = stabilize_root_ids(&mut project, namespace)?;
+    for index in 0..item_count {
+        let mut fill = AppearanceOperationFactory::create(plugins, "fill")?;
+        fill.id = stable_uuid(namespace, 50_000 + index as u64 * 10);
+        let mut shadow = AppearanceOperationFactory::create(plugins, "drop_shadow")?;
+        shadow.id = stable_uuid(namespace, 50_001 + index as u64 * 10);
+        let appearance_operations = vec![fill, shadow];
+        let source = match kind {
+            StyledVectorKind::Text => SourceRef::Text {
+                text: format!("Small {index:02}"),
+                appearance_operations,
+                ensemble_operations: Vec::new(),
+            },
+            StyledVectorKind::Shape => SourceRef::Shape {
+                shape: ShapeSource {
+                    shape_kind: ShapeKind::Rectangle,
+                    parameters: HashMap::from([
+                        ("width".to_string(), PropertyValue::from(128.0)),
+                        ("height".to_string(), PropertyValue::from(72.0)),
+                    ]),
+                    appearance_operations,
+                },
+            },
+        };
+        let column = index % 4;
+        let row = index / 4;
+        let mut authored_properties = PropertyMap::new();
+        authored_properties.set(
+            "position".to_string(),
+            Property::constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(180.0 + column as f64 * 900.0),
+                y: OrderedFloat(180.0 + row as f64 * 480.0),
+            })),
+        );
+        if matches!(kind, StyledVectorKind::Text) {
+            authored_properties.set(
+                "size".to_string(),
+                Property::constant(PropertyValue::from(72.0)),
+            );
+        }
+        let item_id = TimelineItemId::from_uuid(stable_uuid(namespace, 60_000 + index as u64));
+        project.items.insert(
+            item_id,
+            TimelineItem {
+                id: item_id,
+                track_id,
+                name: format!("Styled {} {index}", kind.label()),
+                source,
+                interval: TimelineInterval::new(MediaTime::zero(), duration)?,
+                time_map: TimeMap::default(),
+                layer: index as i64,
+                parent: None,
+                blend_mode: BlendMode::Normal,
+                authored_properties,
+            },
+        );
+    }
+    project.validate()?;
+    Ok(project)
 }
 
 fn workload(

@@ -21,8 +21,8 @@ use crate::util::timing::ScopedTimer;
 use log::debug;
 
 use skia_safe::{
-    AlphaType, Canvas, ColorType, CubicResampler, ISize, ImageInfo, Matrix, Paint, Point,
-    SamplingOptions, Shader, Surface, runtime_effect::ChildPtr,
+    AlphaType, Canvas, ColorType, ISize, ImageInfo, Matrix, Paint, Point, Shader, Surface,
+    runtime_effect::ChildPtr,
 };
 
 mod context_lifecycle;
@@ -37,9 +37,11 @@ mod terminal_compute;
 mod vector_bounds;
 mod vector_layers;
 mod vector_path_body;
+mod vector_surface;
 
 use output_compositing::build_transform_matrix;
 use paint::PaintFactory;
+use vector_surface::VectorSurfaceMode;
 
 const SKSL_STRAIGHT_TO_PREMULTIPLIED: &str = r#"
 uniform shader straight_input;
@@ -254,12 +256,11 @@ impl SkiaRenderer {
         Ok(())
     }
 
-    fn create_layer_surface(&mut self) -> Result<Surface, LibraryError> {
+    fn create_layer_surface(&mut self, width: u32, height: u32) -> Result<Surface, LibraryError> {
         self.activate_graphics_context()?;
-        let (width, height) = self.current_target_dimensions();
         skia_working_surface::create_surface(
-            width,
-            height,
+            width.max(1),
+            height.max(1),
             self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
             &self.surface_contract,
             self.require_gpu_surfaces,
@@ -348,11 +349,6 @@ impl SkiaRenderer {
         self.activate_graphics_context()?;
         let matrix = build_transform_matrix(transform);
         let identity = *transform == Affine2D::IDENTITY;
-        let sampling = if identity {
-            SamplingOptions::default()
-        } else {
-            SamplingOptions::from(CubicResampler::mitchell())
-        };
         let blend_runtime = &mut self.blend_runtime;
         let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
             group.surface.canvas()
@@ -364,7 +360,7 @@ impl SkiaRenderer {
             blend_runtime.draw_image(
                 canvas,
                 image,
-                sampling,
+                skia_safe::Point::new(0.0, 0.0),
                 identity,
                 opacity.clamp(0.0, 1.0) as f32,
                 blend_mode,
@@ -516,8 +512,8 @@ impl Renderer for SkiaRenderer {
         request: SkSLRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_sksl_layer_surface(request)?;
-        self.snapshot_surface(&mut layer, target_width, target_height)
+        let mut layer = self.create_sksl_layer_surface(request, VectorSurfaceMode::Target)?;
+        self.snapshot_surface(&mut layer.surface, target_width, target_height)
     }
 
     fn draw_sksl_layer(
@@ -526,7 +522,7 @@ impl Renderer for SkiaRenderer {
         opacity: f64,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        let layer = self.create_sksl_layer_surface(request)?;
+        let layer = self.create_sksl_layer_surface(request, VectorSurfaceMode::Content)?;
         self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
@@ -558,8 +554,8 @@ impl Renderer for SkiaRenderer {
         request: TextRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_text_layer_surface(request)?;
-        self.snapshot_surface(&mut layer, target_width, target_height)
+        let mut layer = self.create_text_layer_surface(request, VectorSurfaceMode::Target)?;
+        self.snapshot_surface(&mut layer.surface, target_width, target_height)
     }
 
     fn draw_text_layer(
@@ -568,7 +564,7 @@ impl Renderer for SkiaRenderer {
         opacity: f64,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        let layer = self.create_text_layer_surface(request)?;
+        let layer = self.create_text_layer_surface(request, VectorSurfaceMode::Content)?;
         self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 
@@ -577,8 +573,8 @@ impl Renderer for SkiaRenderer {
         request: ShapeRasterRequest<'_>,
     ) -> Result<RenderOutput, LibraryError> {
         let (target_width, target_height) = self.current_target_dimensions();
-        let mut layer = self.create_shape_layer_surface(request)?;
-        self.snapshot_surface(&mut layer, target_width, target_height)
+        let mut layer = self.create_shape_layer_surface(request, VectorSurfaceMode::Target)?;
+        self.snapshot_surface(&mut layer.surface, target_width, target_height)
     }
 
     fn draw_shape_layer(
@@ -587,7 +583,7 @@ impl Renderer for SkiaRenderer {
         opacity: f64,
         blend_mode: crate::model::BlendMode,
     ) -> Result<(), LibraryError> {
-        let layer = self.create_shape_layer_surface(request)?;
+        let layer = self.create_shape_layer_surface(request, VectorSurfaceMode::Content)?;
         self.draw_native_layer_surface(layer, opacity, blend_mode)
     }
 

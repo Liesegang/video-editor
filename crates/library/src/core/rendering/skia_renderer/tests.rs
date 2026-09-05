@@ -45,6 +45,8 @@ mod layer_styles;
 mod particle_gpu;
 #[path = "tests/render_target.rs"]
 mod render_target;
+#[path = "tests/vector_layer_geometry.rs"]
+mod vector_layer_geometry;
 #[path = "tests/vector_layer_native.rs"]
 mod vector_layer_native;
 
