@@ -71,7 +71,22 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
   - [x] Curveのキードラッグを押下開始からの総移動量で評価する。以前のproduction実装と同じ絶対移動の意味を保ち、eguiの押下位置を一時状態に保持して、領域外とreleaseフレームの最終移動も処理する。値は選んだ成分だけ、キーの時刻は全成分へ投影し、曲線の線も同じ投影点を使う。縦軸の範囲を編集後も保持し、対象変更と明示Fitで求め直す。数値チャンネルだけが存在してキーがない場合は仮の範囲を固定しない。
     - 実egui入力を含むCurve Editor 15 testsで、2/16ステップ、押下中の静止、領域外からの再進入、release時の最終移動、成分の独立性、隣接キーの追越し、Esc、一回のUndo、最初のキーからの範囲計算を確認した。native HTTP QAでもpan/zoom後の36px/24px移動が、両ステップ数で時刻2.123821秒、値378.666666となり、期待値と一致した。実際の点、静止後、確定後の位置を比較し、ルーラーもアプリの描画回数ではなくTimelineの期待frame 108への移動を確認した（`target/qa-runs/20260906T-curve-drag-fixed-r4`）。修正前の1/N移動は`20260906T-curve-drag-red-c11e7f1`へ保持した。画面端で切り詰められたクリック領域の中心は点の中心と異なるため、その掴み位置の差を維持して検査する。
     - 最終gateはworkspace全target 1,712 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 26 tests、822 filesの行数制限を通過した。最終release appのnative HTTP QAは25/25で、Curveの実画面を確認し、app/suite logにERROR/panic/描画失敗はなく、QA appも終了した（`target/qa-runs/20260906T-curve-drag-final`、`target/qa-workspace-test-20260906-curve-drag.log`）。既存の補間メニュー、キー編集dialog、Fit、ルーラー、TrackingのNode Clip化も同じbuildで通過した。
-  - [ ] Curveのキードラッグ中の映像Previewを、既存の一時Project投影と対応するRenderPlanへ接続する。現時点のCurve投影は曲線と点の表示に使われ、Previewの一時投影はText編集、Inspector、Gizmoを対象としている。別の編集モデルやrendererは追加せず、キーIDを保持する移動を既存serviceと共有し、ドラッグ中の画素変化、確定後との一致、Esc、Undoを実UIで検証する。
+  - [x] Curveのキードラッグを、Inspectorと共通の一時Property投影と対応するRenderPlanへ接続した。
+    既存キーの更新を型付きtargetへ統合し、投影と確定が同じ検証済みmutationを使う。
+    キーID、補間、未操作の成分を保持し、Projectのrevisionが変わったドラッグは確定しない。
+    古いCurveの状態が残っていても、現在のInspector投影を妨げない。
+    Text、Ensemble、Appearance、Module Parameter、Builtin Effect、Nested Transitionの純粋な投影とUndoを検証した。
+    native QAでは通常PositionとNode Clip化後のTrackingで、押下中の画素変化、release後との完全一致、Undoによる復元、Esc後の履歴不変を確認した（`target/qa-runs/20260906T-curve-live-preview-final-r2/curve-editor`、`target/qa-runs/20260906T-text-tracking-live-preview-final-r5/text-tracking`）。
+    QAが途中フレームを比較した失敗は既存の描画完了待ちへ統一して解消し、非表示Timelineのルーラーを操作した失敗は共通seek処理が対象パネルを開くよう修正した。
+    失敗記録は`20260906T-text-tracking-live-preview-final-r1`、`diagnostic-r2`、`final-r3`、`final-r4`に保持し、画素の一致条件は緩めていない。
+    通し検査では、直前のクリック履歴によってQAのDoubleClickがTripleClickになる問題も再現した。
+    共通InputSequencerでクリック列を分離し、描画pass内で待機後の再描画を予約する。
+    raw-input hookでの予約が失われた失敗も実eguiの回帰テストへ追加し、Color Paletteだけにあった個別待機は削除した。
+    通常UIのクリック判定は変更していない。
+    途中の通し検査は`20260906T-curve-live-preview-user-release-final`と`final-r2`へ保持した。
+    最終gateはworkspace全target 1,724 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 27 tests、827 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-curve-preview-release-r2.log`）。
+    通常のrelease appによるnative HTTP QAは25/25で、実画面を確認し、50本のapp/suite logにERROR/panic/描画失敗はなく、QA appも終了した（`target/qa-runs/20260906T-curve-live-preview-user-release-final-r3`）。
+    検証した`target/release/app.exe`のSHA-256は`936FBC013D7370BBA1715533FA9B2F8BC4BF094F9DE2BE56D239AB0DF58574F4`。
   - [ ] RTLと左右混在の文字列で、正のTrackingが文字間隔を広げることを検証する。現行処理は論理順のindexに応じて+Xへ移動するため、右から左へ並ぶrunでは逆方向に働く可能性がある。既存の組版結果を使う回帰テストで再現し、固定する端と行間の意味を定めてから共通runtimeを修正する。
   - 今回のworkspace全targetは1,706 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 26 tests、819 filesの1,000行制限も通過した（`target/qa-workspace-test-20260906-tracking-verified.log`）。最終release appのnative HTTP QAは25/25で、実画面を確認し、app/suite logにERROR/panic/描画失敗はなく、QA appは終了済み（`target/qa-runs/20260906T-tracking-final`）。途中の実UI検査が検出したlane非表示と古いRenderPlanによる一時値の描画漏れは修正し、失敗記録を`20260906T-tracking-targeted-r1`と`r3`に保持した。移動量とRTLを含むTracking全体の完了や60fpsの証明ではない。
   - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。この時点で残った neutral Ensemble と空 stack の文字描画差は、次項で修正した。
@@ -86,20 +101,21 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     初回は Dope Sheet QA が Inspector のスクロール中に隣の Sigma Y を押して停止したため、既存の component 安定待ちを使用するようテストを修正した。
     初回の記録は `target/qa-runs/20260906T-shaped-text-final` に保持し、検査条件や描画の許容差は緩めていない。
     最終 run の実画面を確認し、app/suite log に ERROR/panic/Failed to render はなく、QA app は終了済み。
-- [ ] Drop Shadow が文字本体の上へ描かれる不具合を修正する。Shape / Text / Ensemble Text 共通で影・外側光彩を背面、本体を中間、Overlay / Inner 系を前面に描く。同一 phase 内の順序を維持し、後続文字の影が先行文字を覆わないこと、角度 120° の右下方向、透明度、Node Clip 化前後を実画素と native QA で確認する。
+- [x] Drop Shadowが文字本体の上へ描かれる不具合を修正した。Shape / Text / Ensemble Text共通で影と外側光彩を背面、本体を中間、OverlayとInner系を前面に描く。同一phase内の順序、隣接文字の影、角度120°の右下方向、透明度、Node Clip化前後を実画素とnative QAで確認した。
   - [x] 作業ツリーの共通 renderer で描画順と本体 alpha mask を修正し、CPU working-linear 描画テスト 12件を通した。Stroke-only の空洞、Fill offset、半透明・透明 Fill、非等方変形、隣接文字の影を検証済み。Picture と source filter は1回構築して共有し、Fill/Stroke-only の直接描画経路は維持する。GPU のキャッシュ効果や 60 fps は未計測。
   - [x] 明示 Node Clip 変換を型付き Style 出力と Appearance Stack に統一した。Stroke-only + Shadow、Fill offset + Shadow、半透明 Fill + Shadow の変換前後の画素一致を 3件で検証した。汎用 Image Merge の意味と単独 Style の Image 出力は変更しない。
   - [x] Backplate などの複数 Path part を既存 Shape 描画要求へ保持し、一つの FrameObject と本体 mask から影を生成するよう修正した。part の opacity は Fill/Stroke 全体へ一回だけ適用し、ImageEffect も一回だけ実行する。半透明 part の重なり、後続 part の影と先行本体、複数の水平 Stroke、RenderService の実呼出回数を回帰テストで確認した。単一 opaque part の直接描画経路は維持する。
   - [x] 実 GPU surface と CPU の parity を、Stroke 空洞、半透明 Fill、blur を含む Shadow、平行移動で検証した。既存 Stroke の AA 差を独立した baseline で分離し、非 AA 部分は working RGBAF32 の 0.002 以下、空洞は 0.000001 以下で比較した。GPU の非等方変形と性能の証明は別 gate に残す。
   - [x] Appearance の保存→通常終了→新プロセス起動→同一 Project/Style ID/画素の再読込み QA を完走した。direct/converted/fresh-process の各 3 地点の画素、Style ID・値・順序、保存ファイルの SHA が一致し、両プロセスは通常終了した（`target/qa-runs/20260906T-integrated-authoring-final/appearance`）。最初の実行で検出した色成分の 1 ULP の差は、JSON parser の `float_roundtrip` を有効化して修正し、binary64 の完全一致を回帰テストで確認した（`ab03bb0`）。QA の完全一致検証は緩めていない。
   - [x] 小さな Text/Shape の影に全フレームの作業 Surface を確保しないようにした。既存 renderer の geometry と共通 style outset から得た visual bounds を変形し、現在の target へ clip した整数原点の Surface に描画する。SkSL も同じ確保処理を使い、Dissolve の座標を維持する。外部 ImageEffect へ渡す raster 境界と最終出力は全サイズのまま。同じ builder の確保寸法、29 BlendMode の画素、nested target、空と画面外、grouped Path の Backplate を CPU 回帰テストで確認した。4K の warm Preview は Text 1/16 layers が 20.28/27.38→19.01/25.69 ms、Shape が 19.86/24.01→19.19/21.11 ms（`docs/performance/vector-surfaces-2026-09-06.md`）。dirty worktree と並行 CPU build を含む診断値であり、60 fps や統計的な改善率の証明ではない。
-  - [ ] 4K の小文字と多数 layer で実際の transient allocation byte 数を取得する counter を追加し、clean revision の同条件計測を CI/perf gate にする。現状の検査は確保された Surface の寸法と latency であり、GPU の割当 byte 数や peak memory は未計測。
   - [x] Gradient Overlay の既定 0→1 を style outset 前の本体へ正規化した。SkParagraph の glyph ink、変形後の Ensemble の ink、実 Path を使い、Composition のサイズと配置から独立させた。異なる解像度、原点外の Text/Shape、回転と非等方変形を含む Ensemble、空文字、水平/垂直 Stroke の Linear/Radial を CPU 描画で確認した。縮退した Gradient のための疑似 geometry や別 renderer は追加していない。
   - [x] Outer Bevel/Emboss の blur kernel と bounds を共有する `BevelRenderGeometry` を導入した。size > 0、depth = 0、soften = 0 を含む Bevel の実画素と外形を検証した。Stroke の miter/cap も共通 outset に反映し、Ensemble の bounds は本体変形後に装飾の余白を加える。縮小した文字の影まで縮めて計測する誤りを回帰テストで防いだ。
   - 直前の `4b23bfb` の共通 renderer を含む release app で native HTTP QA 24/24 が通過した（`target/qa-runs/20260906T-appearance-bounds-final`）。Appearance の追加、数値編集、順序、削除、Undo、明示 Node Clip 化、保存と新プロセスでの再読込み、Preview/Export を含む。当時残した分数倍率と Blur の差は次項で切り分けた。
   - 同 revision の検証は workspace 全 target で 1,670 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 26 tests、first-party 809 files の 1,000 行制限を通過した（`target/qa-workspace-test-20260906-appearance-bounds-verified.log`）。追加した重複 part の画素テストでは、各 part の二つの opaque Fill へ透明度 0.5 を一回だけ適用し、重なった本体と cast shadow の alpha が共に 0.75 になることを確認した。native app と suite のログに ERROR/panic/Failed to render はない。
   - [x] 分数ピクセルの非等方変形と Blur を併用した GPU/CPU の差を切り分けた。元の `translate(-6,18) * scale(1.35,0.55)`、Shadow distance=10、size=2 を保持した診断で、Blur 前の本体にも backend 固有の輪郭 AA 差があり、影の offset がその差を元の輪郭外へ移すことを確認した。比較は baseline の AA 輪郭を offset と blur kernel の範囲へ伝播し、その外側は許容差 0.002、全体は従来の alpha bounds と channel energy の検査を維持する。実描画で distance=7、size=0 に変えた負例は検出した。GPU 3 tests が通過し、この fixture の ignore 理由は既知の描画不具合から idle desktop GPU の必要条件へ変更した。CPU/GPU の全画素一致や過去 renderer との一致を確認したものではない。
   - 部分 Surface と grouped Backplate の修正後、workspace 全 target は 1,680 passed / 0 failed / 17 ignored、追加の実 GPU 比較は 3/3 が通過した。strict Clippy、fmt、QA runner 26 tests、first-party 811 files の 1,000 行制限も通過（`target/qa-workspace-test-20260906-vector-surface-verified.log`）。最終 release app の native HTTP QA は 24/24、Appearance の保存と新プロセス再読込み、Node Clip 変換、Preview、Export を含む（`target/qa-runs/20260906T-vector-surface-final`）。実画面を確認し、全 suite のログに ERROR/panic/Failed to render はなく、QA app は終了済み。
+  - 通常の`target/release/app.exe`も再ビルドし、影だけを追加したTextの実画面を確認した（`target/qa-runs/20260906T-curve-live-preview-user-release-final-r3/appearance/drop-shadow.png`）。Pattern Overlayで文字本体の色が変わる最終画面とは別に、この段階のcaptureをAppearance QAへ残す。
+- [ ] 4Kの小文字と多数layerで実際のtransient allocation byte数を取得するcounterを追加し、clean revisionの同条件計測をCI/perf gateにする。現状の検査は確保されたSurfaceの寸法とlatencyであり、GPUの割当byte数やpeak memoryは未計測。描画順の修正とは別の性能gateとして追跡する。
 - [ ] scalar/vector/timing/Paint の数値確定処理を共通化し、既存 DragValue の capture をそのまま使う。Appearance Distance の 28 px drag は実モデルに 7.2、履歴 revision 2 として確定済みだった。QA が Property の discriminator `type` を `evaluator` と誤読した失敗を修正し、推測で追加した二重 capture は除去した。領域外 release と Undo を含む native QA を継続する。
 - [x] 共通 Color Picker / Palette のドラッグが背後の Node 移動・接続・canvas pan/zoom へ漏れないようにした。背後の Output header と hue control を重ねて popup 外へドラッグし、色だけが変わり Node 位置・選択・pan/zoom が変わらないことを native QA で確認した（`target/qa-runs/20260905T-popup-drag-2/color-palette`）。共通 Node surface / viewport の回帰テストも追加した。
 - [x] Inspector の空白での通常左ドラッグによるスクロールを無効化した。ホイールとスクロールバーは維持し、native QA で実際にホイールでスクロールした後の空白ドラッグが offset を変えないことと数値・色編集を確認した（`target/qa-runs/20260905T-scroll-4/inspector-source`）。
@@ -224,6 +240,7 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
 
 - [ ] **部分実装：Preview の直接編集を production parity へ戻す。** 共通 viewport 上で grid/pan/zoom、object click selection、空白 click deselection、正しい geometry bounds の gizmo、move/scale/rotate を扱う。
   - 円、Shape、Text、Image、Video、Path、Nested Timeline の bounds は Composition 全体ではなく評価済み外形に一致する。
+  - [ ] Ensemble Trackingをキーフレーム評価した直接TextのGizmo外形を検証する。native QAの`20260906T-curve-live-preview-user-release-final-r3/text-tracking/tracking-curve.png`では、文字間隔が広がったB/Dが選択枠の外に見える。映像Previewの更新とGizmoの外形評価を区別し、既存の評価済みgeometryへ統一する。
   - X/Y translate と scale は独立編集でき、uniform lock を明示できる。3D 有効時は Z と X/Y/Z rotation を同じ transform で扱う。
   - [x] canonical `PathValue` と同じ Preview surface 上で point/Bezier handle を編集し、Undo/Redo と render refresh へ接続する Path Editor vertical slice、および native HTTP QA を実装した。
   - [ ] Preview 上の Text 直接編集を production 実装から復旧し、別 surface を作らない。

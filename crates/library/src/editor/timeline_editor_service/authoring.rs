@@ -390,41 +390,6 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
-    pub fn update_authored_property_keyframe(
-        &self,
-        owner: AuthoringPropertyOwner,
-        key: &str,
-        keyframe_id: KeyframeId,
-        update: AuthoringKeyframeUpdate,
-    ) -> Result<ChangeSet, LibraryError> {
-        if update.time.is_some_and(MediaTime::is_negative) {
-            return Err(LibraryError::Validation(
-                "Keyframe time must be non-negative".to_string(),
-            ));
-        }
-        let mut session = self.write_session()?;
-        let invalidations = property_owner_invalidations(session.project(), owner)?;
-        session
-            .transact(invalidations, |project| {
-                let property = authored_properties_mut(project, owner)?
-                    .get_mut(key)
-                    .ok_or_else(|| format!("Missing authored Property '{key}'"))?;
-                let updated = property.update_keyframe_by_id(
-                    keyframe_id,
-                    crate::model::property::KeyframeUpdate {
-                        time: update.time.map(MediaTime::to_seconds_f64),
-                        value: update.value,
-                        easing: update.easing,
-                    },
-                );
-                updated
-                    .then_some(())
-                    .ok_or_else(|| format!("Missing Keyframe {keyframe_id}"))
-            })
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
     pub fn remove_authored_property_keyframe(
         &self,
         owner: AuthoringPropertyOwner,
@@ -547,7 +512,7 @@ fn apply_authored_property_updates(
     Ok(())
 }
 
-fn authored_properties_mut(
+pub(super) fn authored_properties_mut(
     project: &mut AuthoringProject,
     owner: AuthoringPropertyOwner,
 ) -> Result<&mut PropertyMap, String> {
@@ -605,7 +570,7 @@ fn authored_properties_mut(
     }
 }
 
-fn property_owner_invalidations(
+pub(super) fn property_owner_invalidations(
     project: &AuthoringProject,
     owner: AuthoringPropertyOwner,
 ) -> Result<Vec<ProjectInvalidation>, LibraryError> {

@@ -243,23 +243,12 @@ fn unchanged_transform_projection_reuses_the_same_project_arc() {
     let mut runtime = super::super::AuthoringPreviewRuntime::default();
 
     let revision = service.revision().unwrap();
-    let digest = transient_edit_digest(&state);
-    let (first, first_edit) = runtime.project_transient_edit(
-        super::super::TransientProjectionStage::Transform,
-        revision,
-        None,
-        digest,
-        &source,
-        |source| transient_render_project(source, &state),
-    );
-    let (second, second_edit) = runtime.project_transient_edit(
-        super::super::TransientProjectionStage::Transform,
-        revision,
-        None,
-        digest,
-        &source,
-        |source| transient_render_project(source, &state),
-    );
+    let (first, first_edit) = runtime
+        .project_for_preview(&source, revision, &state)
+        .expect("initial transform projection");
+    let (second, second_edit) = runtime
+        .project_for_preview(&source, revision, &state)
+        .expect("cached transform projection");
 
     assert_eq!(first_edit, second_edit);
     assert!(Arc::ptr_eq(&first, &second));

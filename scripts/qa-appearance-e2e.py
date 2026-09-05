@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Exercise and reopen the production Text/Shape/Node Clip Appearance stack."""
 
+import os
+import pathlib
+
 from qa_support import (
     QaFailure,
+    capture_viewport,
     item_by_name,
     run_suite_main,
     seek_timeline_seconds,
@@ -161,6 +165,13 @@ def run_suite(client):
         )
         else None,
         timeout=30.0,
+    )
+    # Keep the shadow-only stage visible in the evidence. The final capture
+    # also contains Pattern/Gradient Overlays, which intentionally recolor text.
+    shadow_capture = capture_viewport(
+        client,
+        pathlib.Path(os.environ.get("RUVIE_QA_ARTIFACT_DIR", "target/qa-appearance"))
+        / "drop-shadow.png",
     )
 
     expected_editors = {
@@ -512,6 +523,7 @@ def run_suite(client):
         "suite": "appearance",
         "item_id": item_id,
         "shadow_id": shadow_id,
+        "shadow_capture": shadow_capture,
         "choice": choice_metadata,
         "available_styles": sorted(available_styles),
         "typed_editors": editor_metadata,

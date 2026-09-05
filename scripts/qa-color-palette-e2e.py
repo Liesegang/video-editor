@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the Project-owned Solid Palette through the shared color picker."""
 
-import time
-
 from qa_support import (
     QaFailure,
     activate_dock_tab,
@@ -425,10 +423,6 @@ def _exercise_node_editor_palette(
         ),
     )
     _ensure_timeline(client)
-    # This clip was selected earlier in the same fast release-build scenario.
-    # Let egui's preceding click series expire so the two injected clicks are
-    # observed as a double-click rather than the tail of a triple-click.
-    time.sleep(0.6)
     client.double_click_component("timeline.item:" + item_id)
     client.wait_component(NODE_EDITOR_TAB_ID)
     client.click_component(NODE_EDITOR_TAB_ID)

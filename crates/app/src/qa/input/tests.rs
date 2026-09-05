@@ -324,6 +324,187 @@ fn key_press_is_injected_as_a_real_egui_event() {
 }
 
 #[test]
+fn sequencer_isolates_double_click_from_recent_click_history() {
+    fn run_click_frame(
+        context: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> (bool, bool) {
+        let mut double_clicked = false;
+        let mut triple_clicked = false;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(160.0, 120.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        drop(context.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, response) =
+                    ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::click());
+                double_clicked = response.double_clicked();
+                triple_clicked = response.triple_clicked();
+            });
+        }));
+        (double_clicked, triple_clicked)
+    }
+
+    fn click_events(position: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(position),
+            pointer_event(
+                position,
+                QaPointerButton::Primary,
+                true,
+                QaModifiers::default(),
+            ),
+            pointer_event(
+                position,
+                QaPointerButton::Primary,
+                false,
+                QaModifiers::default(),
+            ),
+        ]
+    }
+
+    let position = egui::pos2(24.0, 36.0);
+    let immediate = egui::Context::default();
+    run_click_frame(&immediate, 0.0, click_events(position));
+    run_click_frame(&immediate, 0.05, click_events(position));
+    let immediate_steps = build_steps(
+        InputCommand {
+            id: 28,
+            action: InputAction::DoubleClick(pointer_request(position.x, position.y)),
+        },
+        1.0,
+    );
+    let mut immediate_double = false;
+    let mut immediate_triple = false;
+    for step in immediate_steps {
+        let (double, triple) = run_click_frame(&immediate, 0.1, step.events);
+        immediate_double |= double;
+        immediate_triple |= triple;
+    }
+    assert!(
+        !immediate_double,
+        "the unsplit sequence must reproduce the bug"
+    );
+    assert!(
+        immediate_triple,
+        "recent clicks must turn the action into a triple click"
+    );
+
+    let (sender, receiver) = mpsc::channel();
+    let tracker = Arc::new(ActionTracker::default());
+    let mut sequencer = InputSequencer::new(receiver, Arc::clone(&tracker));
+    let context = egui::Context::default();
+    run_click_frame(&context, 0.0, click_events(position));
+    run_click_frame(&context, 0.05, click_events(position));
+    let repaint_delays = Arc::new(Mutex::new(Vec::new()));
+    let observed_repaint_delays = Arc::clone(&repaint_delays);
+    context.set_request_repaint_callback(move |info| {
+        observed_repaint_delays
+            .lock()
+            .expect("repaint observations")
+            .push(info.delay);
+    });
+    context.request_repaint();
+    repaint_delays.lock().expect("repaint observations").clear();
+    tracker.set(29, ActionPhase::Queued);
+    sender
+        .send(InputCommand {
+            id: 29,
+            action: InputAction::DoubleClick(pointer_request(position.x, position.y)),
+        })
+        .expect("queue DoubleClick");
+
+    let mut waiting = egui::RawInput {
+        time: Some(0.1),
+        ..Default::default()
+    };
+    sequencer.inject_for_frame(&context, &mut waiting, 1.0);
+    assert!(waiting.events.is_empty());
+    assert_eq!(
+        tracker.get(29).expect("queued status").phase,
+        ActionPhase::Queued
+    );
+    assert!(
+        repaint_delays
+            .lock()
+            .expect("repaint observations")
+            .is_empty(),
+        "the pre-pass raw-input hook must not own the delayed repaint"
+    );
+    let waiting_output = context.run(waiting, |ctx| {
+        sequencer.schedule_pending_repaint(ctx);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::click());
+        });
+    });
+    assert_eq!(
+        waiting_output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+        std::time::Duration::ZERO,
+        "the server wake owns one immediate settling pass"
+    );
+
+    repaint_delays.lock().expect("repaint observations").clear();
+    let mut scheduling = egui::RawInput {
+        time: Some(0.11),
+        ..Default::default()
+    };
+    sequencer.inject_for_frame(&context, &mut scheduling, 1.0);
+    assert!(scheduling.events.is_empty());
+    assert_eq!(
+        tracker.get(29).expect("queued status").phase,
+        ActionPhase::Queued
+    );
+    let scheduling_output = context.run(scheduling, |ctx| {
+        sequencer.schedule_pending_repaint(ctx);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::click());
+        });
+    });
+    let scheduled_delays = repaint_delays.lock().expect("repaint observations");
+    assert!(
+        scheduled_delays.iter().any(|delay| !delay.is_zero()),
+        "the next active egui pass must schedule the delayed native wake"
+    );
+    drop(scheduled_delays);
+    let scheduled = scheduling_output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    assert!(scheduled > std::time::Duration::ZERO);
+    assert!(scheduled < std::time::Duration::MAX);
+
+    let deadline =
+        0.1 + context.options(|options| options.input_options.max_double_click_delay * 2.0);
+    let mut settle = egui::RawInput {
+        time: Some(deadline),
+        ..Default::default()
+    };
+    sequencer.inject_for_frame(&context, &mut settle, 1.0);
+    assert!(matches!(
+        settle.events.as_slice(),
+        [egui::Event::PointerMoved(_)]
+    ));
+    run_click_frame(&context, deadline, settle.events);
+
+    let mut click = egui::RawInput {
+        time: Some(deadline + 0.01),
+        ..Default::default()
+    };
+    sequencer.inject_for_frame(&context, &mut click, 1.0);
+    let (double_clicked, triple_clicked) = run_click_frame(&context, deadline + 0.01, click.events);
+    assert!(double_clicked);
+    assert!(!triple_clicked);
+    assert_eq!(
+        tracker.get(29).expect("injected status").phase,
+        ActionPhase::Injected
+    );
+}
+
+#[test]
 fn export_shortcut_key_maps_to_egui_e() {
     assert_eq!(egui::Key::from(QaKey::E), egui::Key::E);
 }

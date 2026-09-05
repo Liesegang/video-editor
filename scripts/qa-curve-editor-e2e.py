@@ -10,8 +10,10 @@ from qa_support import (
     activate_dock_tab,
     component_point,
     media_seconds,
+    rendered_current_revision,
     run_suite_main,
 )
+from qa_curve_support import exercise_curve_key_live_preview
 
 CANVAS_ID = "curve_editor.canvas"
 CURVE_TAB_ID = "dock.tab:curve_editor"
@@ -476,9 +478,12 @@ def run_suite(client):
     _, scrub_canvas = client.component(CANVAS_ID)
     scrub_metadata = scrub_canvas.get("metadata") or {}
     visible_time = scrub_metadata.get("visible_time_range") or {}
+    _, ruler_key = wait_position_key(
+        client, item_id, quantitative_keyframe["id"]
+    )
     ruler_rect = ruler["rect_points"]
     ruler_point = {
-        "x": ruler_rect["min_x"] + ruler_rect["width"] * 0.37,
+        "x": ruler_key["rect_points"]["center_x"],
         "y": ruler_rect["center_y"],
     }
     fraction = (ruler_point["x"] - scrub_canvas["rect_points"]["min_x"]) / float(
@@ -521,6 +526,22 @@ def run_suite(client):
                 expected_scrub_frame,
             )
         )
+    live_baseline = client.wait_until(
+        "Position key Preview baseline",
+        lambda: state
+        if (state := rendered_current_revision(client))
+        and state["history"]["revision"] == scrubbed["history"]["revision"]
+        and state["editor"]["preview"]["rendered_frame"] == expected_scrub_frame
+        else None,
+        30.0,
+    )
+    direct_live_preview = exercise_curve_key_live_preview(
+        client,
+        ruler_key["id"],
+        live_baseline,
+        "direct Position Curve drag",
+        delta_y=18.0,
+    )
 
     keys = property_keyframes(client.state()["project"], item_id)
     keyframe = max(keys, key=lambda candidate: float(candidate["time"]))
@@ -732,6 +753,7 @@ def run_suite(client):
             "visible_time_range": visible_time,
         },
         "quantitative_drags": quantitative_drags,
+        "direct_live_preview": direct_live_preview,
         "keyframe_dialog_history": dialog_applied["history"],
         "curve_editor": final_curve,
         "canvas_metadata": final_metadata,

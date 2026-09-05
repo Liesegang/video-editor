@@ -408,6 +408,7 @@ impl Default for AuthoringPreviewView {
 
 #[derive(Clone, Debug)]
 pub struct CurveKeyDrag {
+    pub source_revision: ProjectRevision,
     pub lane: AutomationLaneId,
     pub component: CurveValueComponent,
     pub keyframe_id: library::model::property::KeyframeId,
@@ -527,8 +528,8 @@ impl AuthoringInspectorView {
     }
 }
 
-mod inspector_preview;
-pub(crate) use inspector_preview::TransientPropertyEdit;
+mod property_preview;
+pub(crate) use property_preview::TransientPropertyEdit;
 
 impl Default for CurveEditorState {
     fn default() -> Self {

@@ -1,21 +1,25 @@
-//! One immutable Inspector gesture projection for authored values and published
-//! Module parameters. Release uses the same library mutation owners; drafts
+//! Immutable property gestures shared by Inspector and Curve Editor. Value
+//! edits and keyframe moves use the same library mutation owners as release; drafts
 //! never become a second Project or Undo history.
 
 use std::hash::{Hash, Hasher};
 
 use library::editor::{
-    AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
-    TimelineEditorService,
+    AuthoringKeyframeTarget, AuthoringKeyframeUpdate, AuthoringPropertyOwner,
+    AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate, TimelineEditorService,
 };
 use library::model::authoring::{
     AuthoringProject, ModuleInstanceId, ProjectRevision, PublishedParameterId, TimelineItemId,
 };
-use library::model::property::PropertyValue;
+use library::model::property::{KeyframeId, PropertyValue};
 use library::LibraryError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum PropertyTarget {
+    Keyframe {
+        target: AuthoringKeyframeTarget,
+        keyframe_id: KeyframeId,
+    },
     Authored {
         owner: AuthoringPropertyOwner,
         key: String,
@@ -36,6 +40,24 @@ pub(crate) struct TransientPropertyEdit {
 }
 
 impl TransientPropertyEdit {
+    pub(crate) fn keyframe(
+        source_revision: ProjectRevision,
+        target: AuthoringKeyframeTarget,
+        keyframe_id: KeyframeId,
+        local_time: library::model::authoring::MediaTime,
+        value: PropertyValue,
+    ) -> Self {
+        Self {
+            source_revision,
+            target: PropertyTarget::Keyframe {
+                target,
+                keyframe_id,
+            },
+            value,
+            value_target: AuthoringPropertyValueTarget::Keyframe { local_time },
+        }
+    }
+
     pub(crate) fn authored(
         source_revision: ProjectRevision,
         owner: AuthoringPropertyOwner,
@@ -107,6 +129,27 @@ impl TransientPropertyEdit {
         project: &AuthoringProject,
     ) -> Result<AuthoringProject, LibraryError> {
         match &self.target {
+            PropertyTarget::Keyframe {
+                target,
+                keyframe_id,
+            } => {
+                let AuthoringPropertyValueTarget::Keyframe { local_time } = self.value_target
+                else {
+                    return Err(LibraryError::Validation(
+                        "A keyframe move must retain its time".into(),
+                    ));
+                };
+                TimelineEditorService::project_keyframe_update(
+                    project,
+                    target,
+                    *keyframe_id,
+                    AuthoringKeyframeUpdate {
+                        time: Some(local_time),
+                        value: Some(self.value.clone()),
+                        easing: None,
+                    },
+                )
+            }
             PropertyTarget::Authored { owner, key } => {
                 TimelineEditorService::project_authored_property_values(
                     project,
@@ -210,5 +253,44 @@ mod tests {
             local_time: MediaTime::new(2, 1).unwrap(),
         };
         assert_ne!(edit.digest(), changed.digest());
+    }
+
+    #[test]
+    fn moved_key_digest_includes_identity_time_and_owner() {
+        let item_id = TimelineItemId::new();
+        let target = AuthoringKeyframeTarget::AuthoredProperty {
+            owner: AuthoringPropertyOwner::Item(item_id),
+            key: "opacity".into(),
+        };
+        let key_id = KeyframeId::new();
+        let edit = TransientPropertyEdit::keyframe(
+            ProjectRevision::initial(),
+            target.clone(),
+            key_id,
+            MediaTime::new(1, 1).unwrap(),
+            PropertyValue::from(0.5),
+        );
+        let other_key = TransientPropertyEdit::keyframe(
+            ProjectRevision::initial(),
+            target,
+            KeyframeId::new(),
+            MediaTime::new(1, 1).unwrap(),
+            PropertyValue::from(0.5),
+        );
+        assert_ne!(edit.digest(), other_key.digest());
+        let mut retimed = edit.clone();
+        retimed.value_target = AuthoringPropertyValueTarget::Keyframe {
+            local_time: MediaTime::new(2, 1).unwrap(),
+        };
+        assert_ne!(edit.digest(), retimed.digest());
+        let mut other_owner = edit.clone();
+        other_owner.target = PropertyTarget::Keyframe {
+            target: AuthoringKeyframeTarget::AuthoredProperty {
+                owner: AuthoringPropertyOwner::Item(TimelineItemId::new()),
+                key: "opacity".into(),
+            },
+            keyframe_id: key_id,
+        };
+        assert_ne!(edit.digest(), other_owner.digest());
     }
 }

@@ -115,9 +115,11 @@ impl QaRuntime {
             .inject_for_frame(context, raw_input, pixels_per_point);
     }
 
-    /// Issue at most one real eframe screenshot command during this egui pass.
-    /// The backend returns its pixels as `Event::Screenshot` on a later frame.
-    pub fn issue_capture_for_frame(&self, context: &egui::Context) {
+    /// Schedule pending QA work from inside the active egui pass, after its
+    /// repaint state has been initialized. Also issue at most one real eframe
+    /// screenshot command; its pixels arrive on a later frame.
+    pub fn prepare_ui_frame(&self, context: &egui::Context) {
+        self.sequencer.schedule_pending_repaint(context);
         let current_frame = registry::snapshot().frame.saturating_add(1);
         self.captures.issue_for_frame(context, current_frame);
     }

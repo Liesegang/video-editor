@@ -601,6 +601,16 @@ fn update_curve_easing(
 }
 
 fn finish_key_drag(ui: &egui::Ui, state: &mut AuthoringUiState, service: &TimelineEditorService) {
+    if state
+        .curve_editor
+        .drag
+        .as_ref()
+        .is_some_and(|drag| service.revision().ok() != Some(drag.source_revision))
+    {
+        state.curve_editor.drag = None;
+        state.status = "Keyframe drag cancelled because the Project changed".to_string();
+        return;
+    }
     let (released, down, escape) = ui.input(|input| {
         (
             input.pointer.primary_released(),

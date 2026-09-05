@@ -4,8 +4,9 @@ use ordered_float::OrderedFloat;
 
 use super::*;
 use crate::editor::{
-    AuthoringPropertyOwner, ModuleInterfaceCommand, ModuleInterfaceEditResult, ModuleItemPlacement,
-    ModuleNodeRequest, TimelineEditorService, TimelineSettingsUpdate,
+    AuthoringKeyframeTarget, AuthoringPropertyOwner, ModuleInterfaceCommand,
+    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodeRequest, TimelineEditorService,
+    TimelineSettingsUpdate,
 };
 use crate::model::AssetKind;
 use crate::model::node::{GeneratorContent, Node, NodeContent, ValueContent};
@@ -441,9 +442,11 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         )
         .expect("automation");
     service
-        .update_module_parameter_keyframe(
-            first_item,
-            parameter_id,
+        .update_keyframe(
+            &AuthoringKeyframeTarget::ModuleParameter {
+                item_id: first_item,
+                parameter_id,
+            },
             keyframe_id,
             crate::editor::AuthoringKeyframeUpdate {
                 time: Some(time(3, 4)),
@@ -897,9 +900,11 @@ fn timeline_authoring_commands_and_effect_reorder_are_single_undo_steps() {
         )
         .expect("effect automation");
     service
-        .update_builtin_effect_parameter_keyframe(
-            first,
-            "sigma_x",
+        .update_keyframe(
+            &AuthoringKeyframeTarget::BuiltinEffectParameter {
+                attachment_id: first,
+                key: "sigma_x".to_string(),
+            },
             effect_keyframe_id,
             crate::editor::AuthoringKeyframeUpdate {
                 time: Some(time(3, 4)),

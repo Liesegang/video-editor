@@ -448,6 +448,15 @@ pub(crate) fn update_keyframe(
     keyframe_id: KeyframeId,
     update: AuthoringKeyframeUpdate,
 ) -> Result<(), library::LibraryError> {
+    service
+        .update_keyframe(&keyframe_target(lane)?, keyframe_id, update)
+        .map(|_| ())
+}
+
+pub(crate) fn keyframe_target(
+    lane: &AutomationLaneId,
+) -> Result<library::editor::AuthoringKeyframeTarget, library::LibraryError> {
+    use library::editor::AuthoringKeyframeTarget;
     match (&lane.owner, &lane.target) {
         (AutomationOwner::Item(item_id), AutomationTarget::AuthoredProperty { owner, key }) => {
             let target_item_id = match owner {
@@ -467,49 +476,44 @@ pub(crate) fn update_keyframe(
                     "Item {item_id} automation lane cannot edit {owner:?}"
                 )));
             }
-            service
-                .update_authored_property_keyframe(*owner, key, keyframe_id, update)
-                .map(|_| ())
+            Ok(AuthoringKeyframeTarget::AuthoredProperty {
+                owner: *owner,
+                key: key.clone(),
+            })
         }
         (AutomationOwner::Item(item_id), AutomationTarget::ModuleParameter(parameter_id)) => {
-            service
-                .update_module_parameter_keyframe(*item_id, *parameter_id, keyframe_id, update)
-                .map(|_| ())
+            Ok(AuthoringKeyframeTarget::ModuleParameter {
+                item_id: *item_id,
+                parameter_id: *parameter_id,
+            })
         }
         (
             AutomationOwner::Item(_),
             AutomationTarget::AttachmentParameter { attachment_id, key },
-        ) => service
-            .update_builtin_effect_parameter_keyframe(*attachment_id, key, keyframe_id, update)
-            .map(|_| ()),
+        ) => Ok(AuthoringKeyframeTarget::BuiltinEffectParameter {
+            attachment_id: *attachment_id,
+            key: key.clone(),
+        }),
         (
             AutomationOwner::TransitionDefinition(transition_id),
             AutomationTarget::ModuleParameter(parameter_id),
-        ) => service
-            .update_transition_parameter_keyframe(
-                &TransitionAutomationOwner::Definition(*transition_id),
-                *parameter_id,
-                keyframe_id,
-                update,
-            )
-            .map(|_| ()),
+        ) => Ok(AuthoringKeyframeTarget::TransitionParameter {
+            owner: TransitionAutomationOwner::Definition(*transition_id),
+            parameter_id: *parameter_id,
+        }),
         (
             AutomationOwner::TransitionInstance {
                 transition_id,
                 instance_path,
             },
             AutomationTarget::ModuleParameter(parameter_id),
-        ) => service
-            .update_transition_parameter_keyframe(
-                &TransitionAutomationOwner::Instance {
-                    transition_id: *transition_id,
-                    instance_path: instance_path.clone(),
-                },
-                *parameter_id,
-                keyframe_id,
-                update,
-            )
-            .map(|_| ()),
+        ) => Ok(AuthoringKeyframeTarget::TransitionParameter {
+            owner: TransitionAutomationOwner::Instance {
+                transition_id: *transition_id,
+                instance_path: instance_path.clone(),
+            },
+            parameter_id: *parameter_id,
+        }),
         (AutomationOwner::TransitionDefinition(transition_id), target)
         | (AutomationOwner::TransitionInstance { transition_id, .. }, target) => {
             Err(library::LibraryError::Validation(format!(

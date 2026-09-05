@@ -80,6 +80,7 @@ fn dragging_state(
 ) -> AuthoringUiState {
     let mut state = AuthoringUiState::new(TimelineId::new());
     state.curve_editor.drag = Some(CurveKeyDrag {
+        source_revision: library::model::authoring::ProjectRevision::initial(),
         lane,
         component,
         keyframe_id,

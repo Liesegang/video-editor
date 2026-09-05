@@ -4,6 +4,7 @@
 import os
 import pathlib
 
+from qa_curve_support import exercise_curve_key_live_preview
 from qa_support import (
     AUTHORING_FIXTURE,
     QaClient,
@@ -17,6 +18,7 @@ from qa_support import (
     free_port,
     item_by_name,
     media_seconds,
+    rendered_current_revision,
     request_clean_native_close,
     run_suite_main,
     save_project_to_disk,
@@ -28,7 +30,6 @@ from qa_text_ensemble_support import (
     constant_value,
     open_and_choose,
     operation,
-    rendered_current_revision,
     seek_rendered,
     text_operations,
 )
@@ -366,7 +367,6 @@ def _keyframe_signature(keyframes):
 
 
 def _observe_times(client, seconds, revision):
-    activate_dock_tab(client, TIMELINE_TAB, "Timeline", "Tracking Preview seek")
     observed = []
     for value in seconds:
         rendered = seek_rendered(client, value)
@@ -426,7 +426,6 @@ def _fresh_process_parity(
         )
         if previews != expected_previews:
             raise QaFailure("fresh process changed Tracking Preview pixels")
-        activate_dock_tab(client, TIMELINE_TAB, "Timeline", "Reloaded Tracking")
         bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
         client.click_component("timeline.item:" + item_id)
         component_in_inspector(
@@ -672,6 +671,23 @@ def run_suite(client):
     converted_surfaces = _wait_automation_surfaces(
         client, item_id, module_target, [key["id"] for key in direct_keys]
     )
+    promoted_curve_baseline = client.wait_until(
+        "promoted Tracking Curve Preview baseline",
+        lambda: state
+        if (state := rendered_current_revision(client))
+        and state["history"]["revision"] == converted["history"]["revision"]
+        and state["editor"]["timeline"]["current_frame"]
+        == converted_previews[1]["frame"]
+        else None,
+        30.0,
+    )
+    promoted_curve_live = exercise_curve_key_live_preview(
+        client,
+        converted_surfaces["curve_keys"][1]["id"],
+        promoted_curve_baseline,
+        "promoted Tracking Curve drag",
+        delta_y=18.0,
+    )
 
     activate_dock_tab(client, TIMELINE_TAB, "Timeline", "Node Clip Tracking Inspector")
     client.click_component("timeline.item:" + item_id)
@@ -794,6 +810,7 @@ def run_suite(client):
         "amount_parameter_id": amount_parameter["id"],
         "target_parameter_id": target_parameter["id"],
         "converted_surfaces": converted_surfaces,
+        "promoted_curve_live": promoted_curve_live,
         "module_live_hash": module_held["editor"]["preview"]["pixel_hash"],
         "module_committed_hash": module_committed_render["editor"]["preview"][
             "pixel_hash"

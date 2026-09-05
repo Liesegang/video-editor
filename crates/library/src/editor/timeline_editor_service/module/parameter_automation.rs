@@ -175,36 +175,6 @@ impl TimelineEditorService {
         Ok(projected)
     }
 
-    pub fn update_module_parameter_keyframe(
-        &self,
-        item_id: TimelineItemId,
-        parameter_id: PublishedParameterId,
-        keyframe_id: KeyframeId,
-        update: AuthoringKeyframeUpdate,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        require_item_parameter_automation(session.project(), item_id, parameter_id)?;
-        session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    let track = item_module_invocation_mut(project, item_id)?
-                        .automation_tracks
-                        .get_mut(&parameter_id)
-                        .ok_or_else(|| {
-                            format!("Missing automation for Published parameter {parameter_id}")
-                        })?;
-                    track.update_keyframe(keyframe_id, update.time, update.value, update.easing)
-                },
-            )
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
     pub fn remove_module_parameter_keyframe(
         &self,
         item_id: TimelineItemId,
@@ -287,7 +257,7 @@ fn upsert_parameter_keyframe(
     track.upsert(local_time, value, easing)
 }
 
-fn require_item_parameter_automation(
+pub(in crate::editor::timeline_editor_service) fn require_item_parameter_automation(
     project: &AuthoringProject,
     item_id: TimelineItemId,
     parameter_id: PublishedParameterId,

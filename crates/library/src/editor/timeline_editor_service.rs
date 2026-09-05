@@ -12,6 +12,7 @@ mod composition;
 mod edit_plan;
 mod interface;
 mod item;
+mod keyframe_automation;
 mod module;
 mod module_asset;
 mod module_structure;
@@ -32,6 +33,8 @@ mod attachment_tests;
 mod edit_plan_tests;
 #[cfg(test)]
 mod item_tests;
+#[cfg(test)]
+mod keyframe_projection_tests;
 #[cfg(test)]
 mod module_asset_tests;
 #[cfg(test)]
@@ -71,6 +74,7 @@ pub use edit_plan::{
     TimelineEditRequest, TimelineItemEditState, plan_timeline_edit, project_edit_plan,
 };
 pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
+pub use keyframe_automation::AuthoringKeyframeTarget;
 pub use text_ensemble::{NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack};
 pub use transition::TransitionPlacement;
 

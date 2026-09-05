@@ -17,7 +17,7 @@ fn number(value: f64) -> PropertyValue {
     PropertyValue::Number(OrderedFloat(value))
 }
 
-fn transition_project() -> (AuthoringProject, TransitionId, PublishedParameterId) {
+pub(super) fn transition_project() -> (AuthoringProject, TransitionId, PublishedParameterId) {
     let setup = TimelineEditorService::create_default("Transition parameter automation")
         .expect("default project");
     let project = setup.snapshot().expect("project");
@@ -203,9 +203,11 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     );
 
     let update_change = service
-        .update_transition_parameter_keyframe(
-            &owner,
-            parameter_id,
+        .update_keyframe(
+            &AuthoringKeyframeTarget::TransitionParameter {
+                owner: owner.clone(),
+                parameter_id,
+            },
             second_id,
             AuthoringKeyframeUpdate {
                 time: Some(seconds(3)),
@@ -285,7 +287,7 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     assert!(!service.can_undo().expect("clean Undo state"));
 }
 
-fn wrap_with_two_composition_instances(
+pub(super) fn wrap_with_two_composition_instances(
     project: &mut AuthoringProject,
     nested_timeline_id: TimelineId,
 ) -> (TimelineId, TimelineItemId, TimelineItemId) {
@@ -520,9 +522,11 @@ fn nested_instance_keyframes_copy_inherited_track_and_isolate_siblings() {
     );
 
     let update_change = service
-        .update_transition_parameter_keyframe(
-            &first_owner,
-            parameter_id,
+        .update_keyframe(
+            &AuthoringKeyframeTarget::TransitionParameter {
+                owner: first_owner,
+                parameter_id,
+            },
             placement_id,
             AuthoringKeyframeUpdate {
                 time: Some(seconds(2)),

@@ -3,6 +3,8 @@ use super::*;
 mod connections;
 mod output;
 mod parameter_automation;
+
+pub(super) use parameter_automation::require_item_parameter_automation;
 pub(super) mod removal;
 
 use connections::{
@@ -542,7 +544,7 @@ impl TimelineEditorService {
     }
 }
 
-fn item_module_invocation_mut(
+pub(super) fn item_module_invocation_mut(
     project: &mut AuthoringProject,
     item_id: TimelineItemId,
 ) -> Result<&mut ModuleInvocation, String> {

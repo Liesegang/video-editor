@@ -295,28 +295,6 @@ impl TimelineEditorService {
             .map_err(LibraryError::Validation)
     }
 
-    pub fn update_builtin_effect_parameter_keyframe(
-        &self,
-        attachment_id: AttachmentId,
-        key: &str,
-        keyframe_id: KeyframeId,
-        update: AuthoringKeyframeUpdate,
-    ) -> Result<ChangeSet, LibraryError> {
-        let mut session = self.write_session()?;
-        let owner = attachment_owner(session.project(), attachment_id)?;
-        let invalidations = owner_invalidations(session.project(), &owner)?;
-        session
-            .transact(invalidations, |project| {
-                builtin_effect_parameter_mut(project, attachment_id, key)?
-                    .automation
-                    .as_mut()
-                    .ok_or_else(|| format!("Effect parameter '{key}' has no Automation"))?
-                    .update_keyframe(keyframe_id, update.time, update.value, update.easing)
-            })
-            .map(|(_, changes)| changes)
-            .map_err(LibraryError::Validation)
-    }
-
     pub fn remove_builtin_effect_parameter_keyframe(
         &self,
         attachment_id: AttachmentId,
@@ -500,7 +478,7 @@ impl TimelineEditorService {
     }
 }
 
-fn attachment_owner(
+pub(super) fn attachment_owner(
     project: &AuthoringProject,
     attachment_id: AttachmentId,
 ) -> Result<AttachmentOwner, LibraryError> {
@@ -543,7 +521,7 @@ fn attachment_module_invocation_mut(
     Ok(invocation)
 }
 
-fn builtin_effect_parameter_mut<'a>(
+pub(super) fn builtin_effect_parameter_mut<'a>(
     project: &'a mut AuthoringProject,
     attachment_id: AttachmentId,
     key: &str,

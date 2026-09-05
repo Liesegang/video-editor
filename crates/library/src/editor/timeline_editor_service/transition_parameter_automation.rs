@@ -20,19 +20,6 @@ impl TimelineEditorService {
         })
     }
 
-    pub fn update_transition_parameter_keyframe(
-        &self,
-        owner: &TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
-        keyframe_id: KeyframeId,
-        update: AuthoringKeyframeUpdate,
-    ) -> Result<ChangeSet, LibraryError> {
-        self.edit_transition_parameter_track(owner, parameter_id, move |track| {
-            track.update_keyframe(keyframe_id, update.time, update.value, update.easing)
-        })
-        .map(|(_, changes)| changes)
-    }
-
     pub fn remove_transition_parameter_keyframe(
         &self,
         owner: &TransitionAutomationOwner,
@@ -105,105 +92,110 @@ impl TimelineEditorService {
         parameter_id: PublishedParameterId,
         edit: impl FnOnce(&mut AutomationTrack) -> Result<T, String>,
     ) -> Result<(T, ChangeSet), LibraryError> {
-        let transition_id = match owner {
-            TransitionAutomationOwner::Definition(transition_id)
-            | TransitionAutomationOwner::Instance { transition_id, .. } => *transition_id,
-        };
-        let (_, _, contract) = {
-            let session = self.read_session()?;
-            let context = transition_module_context(session.project(), transition_id)?;
-            require_transition_parameter_automation(
-                session.project(),
+        let mut session = self.write_session()?;
+        let invalidations =
+            transition_parameter_invalidations(session.project(), owner, parameter_id)?;
+        session
+            .transact(invalidations, |project| {
+                edit_transition_parameter_track_in_project(project, owner, parameter_id, edit)
+            })
+            .map_err(LibraryError::Validation)
+    }
+}
+
+pub(super) fn transition_parameter_invalidations(
+    project: &AuthoringProject,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+) -> Result<Vec<ProjectInvalidation>, LibraryError> {
+    let transition_id = match owner {
+        TransitionAutomationOwner::Definition(transition_id)
+        | TransitionAutomationOwner::Instance { transition_id, .. } => *transition_id,
+    };
+    let (timeline_id, interval, contract) = transition_module_context(project, transition_id)?;
+    require_transition_parameter_automation(project, transition_id, parameter_id)?;
+    require_editable_parameter(transition_id, &contract, parameter_id)?;
+
+    if let TransitionAutomationOwner::Instance { instance_path, .. } = owner {
+        project
+            .resolve_transition_module_instance_target(instance_path, transition_id)
+            .map_err(LibraryError::Validation)?;
+        if !instance_path.composition_items.is_empty() {
+            return Ok(vec![ProjectInvalidation::TimelineInstanceRange {
+                instance_path: instance_path.clone(),
+                timeline_id,
                 transition_id,
-                parameter_id,
-            )?;
-            context
-        };
-        require_editable_parameter(transition_id, &contract, parameter_id)?;
-        match owner {
-            TransitionAutomationOwner::Definition(_) => {
-                let mut session = self.write_session()?;
-                let (timeline_id, interval, _) =
-                    transition_module_context(session.project(), transition_id)?;
-                session
-                    .transact(
-                        vec![ProjectInvalidation::TimelineRange {
-                            timeline_id,
-                            start: interval.start,
-                            duration: interval.duration,
-                        }],
-                        |project| {
-                            let module = transition_module_mut(project, transition_id)?;
-                            let mut track = module
-                                .automation_tracks
-                                .get(&parameter_id)
-                                .cloned()
-                                .unwrap_or(AutomationTrack {
-                                    keyframes: Vec::new(),
-                                });
-                            let value = edit(&mut track)?;
-                            if track.keyframes.is_empty() {
-                                module.automation_tracks.remove(&parameter_id);
-                            } else {
-                                module.automation_tracks.insert(parameter_id, track);
-                            }
-                            Ok(value)
-                        },
-                    )
-                    .map_err(LibraryError::Validation)
-            }
-            TransitionAutomationOwner::Instance { instance_path, .. } => {
-                let mut result = None;
-                let changes = self.edit_transition_instance(
-                    instance_path,
-                    transition_id,
-                    |project, target, is_root| {
-                        let mut track = if is_root {
-                            transition_module_mut(project, transition_id)?
-                                .automation_tracks
-                                .get(&parameter_id)
-                                .cloned()
-                        } else {
-                            project
-                                .effective_transition_module_controls(target)?
-                                .automation_tracks
-                                .get(&parameter_id)
-                                .cloned()
-                        }
-                        .unwrap_or(AutomationTrack {
-                            keyframes: Vec::new(),
-                        });
-                        result = Some(edit(&mut track)?);
-                        if is_root {
-                            if track.keyframes.is_empty() {
-                                transition_module_mut(project, transition_id)?
-                                    .automation_tracks
-                                    .remove(&parameter_id);
-                            } else {
-                                transition_module_mut(project, transition_id)?
-                                    .automation_tracks
-                                    .insert(parameter_id, track);
-                            }
-                        } else {
-                            project.edit_transition_module_instance_overrides(
-                                target,
-                                |controls| {
-                                    controls.automation_tracks.insert(
-                                        parameter_id,
-                                        (!track.keyframes.is_empty()).then_some(track),
-                                    );
-                                    Ok(())
-                                },
-                            )?;
-                        }
-                        Ok(())
-                    },
-                )?;
-                let value = result.ok_or_else(|| {
-                    LibraryError::Validation("Automation edit produced no result".to_string())
-                })?;
-                Ok((value, changes))
-            }
+                start: interval.start,
+                duration: interval.duration,
+            }]);
         }
     }
+
+    Ok(vec![ProjectInvalidation::TimelineRange {
+        timeline_id,
+        start: interval.start,
+        duration: interval.duration,
+    }])
+}
+
+pub(super) fn edit_transition_parameter_track_in_project<T>(
+    project: &mut AuthoringProject,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+    edit: impl FnOnce(&mut AutomationTrack) -> Result<T, String>,
+) -> Result<T, String> {
+    let transition_id = match owner {
+        TransitionAutomationOwner::Definition(transition_id)
+        | TransitionAutomationOwner::Instance { transition_id, .. } => *transition_id,
+    };
+    let target = match owner {
+        TransitionAutomationOwner::Definition(_) => None,
+        TransitionAutomationOwner::Instance { instance_path, .. } => Some((
+            project.resolve_transition_module_instance_target(instance_path, transition_id)?,
+            instance_path.composition_items.is_empty(),
+        )),
+    };
+    let is_root = match &target {
+        Some((_, is_root)) => *is_root,
+        None => true,
+    };
+    let mut track = if is_root {
+        transition_module_mut(project, transition_id)?
+            .automation_tracks
+            .get(&parameter_id)
+            .cloned()
+    } else {
+        let (target, _) = target
+            .as_ref()
+            .ok_or_else(|| "Missing Transition instance target".to_string())?;
+        project
+            .effective_transition_module_controls(target)?
+            .automation_tracks
+            .get(&parameter_id)
+            .cloned()
+    }
+    .unwrap_or(AutomationTrack {
+        keyframes: Vec::new(),
+    });
+    let value = edit(&mut track)?;
+
+    if is_root {
+        let module = transition_module_mut(project, transition_id)?;
+        if track.keyframes.is_empty() {
+            module.automation_tracks.remove(&parameter_id);
+        } else {
+            module.automation_tracks.insert(parameter_id, track);
+        }
+    } else {
+        let (target, _) = target
+            .as_ref()
+            .ok_or_else(|| "Missing Transition instance target".to_string())?;
+        project.edit_transition_module_instance_overrides(target, |controls| {
+            controls
+                .automation_tracks
+                .insert(parameter_id, (!track.keyframes.is_empty()).then_some(track));
+            Ok(())
+        })?;
+    }
+    Ok(value)
 }

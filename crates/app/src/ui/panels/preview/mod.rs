@@ -9,9 +9,9 @@ mod gizmo;
 mod gizmo_geometry;
 mod path_editor;
 mod text_editor;
+mod transient;
 mod view;
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,6 +29,7 @@ use pan_zoom_ui::CanvasTransform;
 use crate::state::authoring::AuthoringUiState;
 
 use direct_edit::handle_direct_edit;
+use transient::TransientProjectionCache;
 use view::{
     navigate, paint_empty_preview, paint_preview_background, preview_canvas_transform,
     preview_content_rect, toolbar, update_fit, visible_region,
@@ -94,69 +95,10 @@ struct PublishableRender {
     result: RenderResult,
 }
 
-struct TransientProjectProjection {
-    revision: ProjectRevision,
-    upstream_edit: Option<u64>,
-    edit: u64,
-    project: Arc<AuthoringProject>,
-}
-
 struct TransientRenderPlan {
     revision: ProjectRevision,
     edit: u64,
     plan: Arc<RenderPlan>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum TransientProjectionStage {
-    Text,
-    InspectorProperty,
-    Transform,
-}
-
-#[derive(Default)]
-struct TransientProjectionCache {
-    entries: HashMap<TransientProjectionStage, TransientProjectProjection>,
-}
-
-impl TransientProjectionCache {
-    fn project(
-        &mut self,
-        stage: TransientProjectionStage,
-        revision: ProjectRevision,
-        upstream_edit: Option<u64>,
-        edit: Option<u64>,
-        source: &Arc<AuthoringProject>,
-        apply: impl FnOnce(&Arc<AuthoringProject>) -> (Arc<AuthoringProject>, Option<u64>),
-    ) -> (Arc<AuthoringProject>, Option<u64>) {
-        let Some(edit) = edit else {
-            self.entries.remove(&stage);
-            return (Arc::clone(source), None);
-        };
-        if let Some(cached) = self.entries.get(&stage).filter(|cached| {
-            cached.revision == revision
-                && cached.upstream_edit == upstream_edit
-                && cached.edit == edit
-        }) {
-            return (Arc::clone(&cached.project), Some(edit));
-        }
-
-        let (projected, applied_edit) = apply(source);
-        if applied_edit == Some(edit) {
-            self.entries.insert(
-                stage,
-                TransientProjectProjection {
-                    revision,
-                    upstream_edit,
-                    edit,
-                    project: Arc::clone(&projected),
-                },
-            );
-        } else {
-            self.entries.remove(&stage);
-        }
-        (projected, applied_edit)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -319,19 +261,6 @@ impl AuthoringPreviewRuntime {
             plan,
         });
         Ok(())
-    }
-
-    fn project_transient_edit(
-        &mut self,
-        stage: TransientProjectionStage,
-        revision: ProjectRevision,
-        upstream_edit: Option<u64>,
-        edit: Option<u64>,
-        project: &Arc<AuthoringProject>,
-        apply: impl FnOnce(&Arc<AuthoringProject>) -> (Arc<AuthoringProject>, Option<u64>),
-    ) -> (Arc<AuthoringProject>, Option<u64>) {
-        self.transient_projections
-            .project(stage, revision, upstream_edit, edit, project, apply)
     }
 
     fn suspend(&mut self) {
@@ -548,49 +477,26 @@ pub fn preview_panel(
         } else {
             None
         };
-        let text_digest = text_editor::transient_edit_digest(state);
-        let (render_project, text_edit) = runtime.project_transient_edit(
-            TransientProjectionStage::Text,
-            revision,
-            None,
-            text_digest,
-            &project,
-            |source| text_editor::transient_render_project(source, state),
-        );
-        let inspector_digest = inspector_transient_edit_digest(revision, state);
-        let (render_project, inspector_edit) = runtime.project_transient_edit(
-            TransientProjectionStage::InspectorProperty,
-            revision,
-            text_edit,
-            inspector_digest,
-            &render_project,
-            |source| project_inspector_transient_edit(source, revision, state),
-        );
-        let upstream_edit = combine_transient_edits(text_edit, inspector_edit);
-        let transform_digest = gizmo::transient_edit_digest(state);
-        let (render_project, transform_edit) = runtime.project_transient_edit(
-            TransientProjectionStage::Transform,
-            revision,
-            upstream_edit,
-            transform_digest,
-            &render_project,
-            |source| gizmo::transient_render_project(source, state),
-        );
-        let transient_edit = combine_transient_edits(upstream_edit, transform_edit);
-        if let Err(error) = runtime.request(
-            PreviewRequestKey {
-                revision,
-                timeline_id: timeline.id,
-                instance_path: state.active_instance_path.clone(),
-                frame_number: state.timeline.current_frame,
-                render_scale: OrderedFloat(render_scale),
-                region: Some(region),
-                transient_edit,
-            },
-            playback,
-            render_project,
-            plan,
-        ) {
+        let request = runtime
+            .project_for_preview(&project, revision, state)
+            .and_then(|(render_project, transient_edit)| {
+                runtime.request(
+                    PreviewRequestKey {
+                        revision,
+                        timeline_id: timeline.id,
+                        instance_path: state.active_instance_path.clone(),
+                        frame_number: state.timeline.current_frame,
+                        render_scale: OrderedFloat(render_scale),
+                        region: Some(region),
+                        transient_edit,
+                    },
+                    playback,
+                    render_project,
+                    plan,
+                )
+            });
+        if let Err(error) = request {
+            runtime.suspend();
             runtime.report_error(state, error);
         }
     } else {
@@ -887,46 +793,8 @@ fn next_request_id() -> RenderRequestId {
     RenderRequestId::new(if value == 0 { 1 } else { value })
 }
 
-fn combine_transient_edits(first: Option<u64>, second: Option<u64>) -> Option<u64> {
-    match (first, second) {
-        (None, None) => None,
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (Some(first), Some(second)) => Some(first.rotate_left(17) ^ second.rotate_right(11)),
-    }
-}
-
-fn inspector_transient_edit_digest(
-    revision: ProjectRevision,
-    state: &AuthoringUiState,
-) -> Option<u64> {
-    state
-        .inspector
-        .transient_property_edit
-        .as_ref()
-        .filter(|edit| edit.source_revision == revision)
-        .map(crate::state::authoring::TransientPropertyEdit::digest)
-}
-
-fn project_inspector_transient_edit(
-    project: &Arc<AuthoringProject>,
-    revision: ProjectRevision,
-    state: &AuthoringUiState,
-) -> (Arc<AuthoringProject>, Option<u64>) {
-    let Some(edit) = state
-        .inspector
-        .transient_property_edit
-        .as_ref()
-        .filter(|edit| edit.source_revision == revision)
-    else {
-        return (Arc::clone(project), None);
-    };
-    let digest = edit.digest();
-    match edit.project(project) {
-        Ok(projected) => (Arc::new(projected), Some(digest)),
-        Err(_) => (Arc::clone(project), None),
-    }
-}
-
+#[cfg(test)]
+mod curve_preview_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
+use std::time::Duration;
 
 mod validation;
 
@@ -286,6 +287,7 @@ pub struct InputSequencer {
     tracker: std::sync::Arc<ActionTracker>,
     commands: VecDeque<InputCommand>,
     steps: VecDeque<FrameStep>,
+    double_click_not_before: Option<f64>,
 }
 
 impl InputSequencer {
@@ -295,6 +297,7 @@ impl InputSequencer {
             tracker,
             commands: VecDeque::new(),
             steps: VecDeque::new(),
+            double_click_not_before: None,
         }
     }
 
@@ -306,8 +309,10 @@ impl InputSequencer {
     ) {
         self.drain_receiver();
         if self.steps.is_empty() {
-            self.prepare_next(pixels_per_point);
+            self.prepare_next(ctx, raw_input, pixels_per_point);
         }
+        let waiting_for_double_click =
+            self.steps.is_empty() && self.double_click_not_before.is_some();
 
         let injected_step = if let Some(step) = self.steps.pop_front() {
             // egui widgets read modifiers from `InputState`, not necessarily
@@ -340,7 +345,10 @@ impl InputSequencer {
         // while their resulting popup or dock contents are only registered in
         // the following pass. Without this wake-up a background QA process can
         // publish the pre-click component frame indefinitely.
-        if injected_step || !self.steps.is_empty() || !self.commands.is_empty() {
+        if injected_step
+            || !self.steps.is_empty()
+            || (!self.commands.is_empty() && !waiting_for_double_click)
+        {
             ctx.request_repaint();
         }
     }
@@ -351,13 +359,58 @@ impl InputSequencer {
         }
     }
 
-    fn prepare_next(&mut self, pixels_per_point: f32) {
+    fn prepare_next(
+        &mut self,
+        ctx: &egui::Context,
+        raw_input: &egui::RawInput,
+        pixels_per_point: f32,
+    ) {
+        let Some(command) = self.commands.front() else {
+            self.double_click_not_before = None;
+            return;
+        };
+        if matches!(&command.action, InputAction::DoubleClick(_)) {
+            let now = monotonic_input_time(ctx, raw_input);
+            let deadline = *self.double_click_not_before.get_or_insert_with(|| {
+                now + ctx.options(|options| options.input_options.max_double_click_delay * 2.0)
+            });
+            if now < deadline {
+                return;
+            }
+        }
+
         let Some(command) = self.commands.pop_front() else {
             return;
         };
+        self.double_click_not_before = None;
         self.tracker.set(command.id, ActionPhase::Injecting);
         self.steps = build_steps(command, pixels_per_point).into();
     }
+
+    /// Schedules the wake for a delayed DoubleClick from inside the active
+    /// egui pass. `inject_for_frame` runs in eframe's raw-input hook, before
+    /// `begin_pass_repaint_logic` resets repaint state, so delayed repaint
+    /// ownership must live here instead.
+    pub(super) fn schedule_pending_repaint(&self, ctx: &egui::Context) {
+        let Some(deadline) = self.double_click_not_before else {
+            return;
+        };
+        let now = ctx.input(|input| input.time);
+        if now < deadline {
+            ctx.request_repaint_after(Duration::from_secs_f64(deadline - now));
+        } else {
+            ctx.request_repaint();
+        }
+    }
+}
+
+fn monotonic_input_time(ctx: &egui::Context, raw_input: &egui::RawInput) -> f64 {
+    let previous = ctx.input(|input| input.time);
+    raw_input
+        .time
+        .filter(|time| time.is_finite())
+        .unwrap_or(previous)
+        .max(previous)
 }
 
 fn pointer_event(

@@ -446,6 +446,24 @@ def capture_viewport(
     return result
 
 
+def rendered_current_revision(client: QaClient, prior_hash=None):
+    """Return state only when Preview pixels match the current edit/frame."""
+
+    state = client.state()
+    preview = state["editor"]["preview"]
+    revision = state["history"]["revision"]
+    if (
+        preview.get("rendered_revision") == revision
+        and preview.get("rendered_frame")
+        == state["editor"]["timeline"]["current_frame"]
+        and preview.get("pixel_hash") is not None
+        and state["editor"].get("error") is None
+        and (prior_hash is None or preview["pixel_hash"] != prior_hash)
+    ):
+        return state
+    return None
+
+
 def _interactable(component: dict) -> bool:
     rect = component.get("rect_points") or {}
     return (
@@ -486,6 +504,9 @@ def bring_timeline_component(client: QaClient, component_id: str, direction: flo
 
 def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
     """Seek through the production Timeline ruler and wait for its exact frame."""
+    activate_dock_tab(
+        client, "dock.tab:timeline", "Timeline", "Timeline seek panel activation"
+    )
     state = client.state()
     timeline = state["editor"]["timeline"]
     _, ruler = client.wait_component_settled("timeline.ruler")
@@ -625,10 +646,15 @@ def create_basic_timeline_clip(client: QaClient, kind: str, expected_name: str):
 def activate_dock_tab(
     client: QaClient, component_id: str, label: str, description: str | None = None
 ):
-    component_ids = {
-        component["id"] for component in client.component_snapshot()["components"]
-    }
-    if component_id not in component_ids:
+    component = next(
+        (
+            component
+            for component in client.component_snapshot()["components"]
+            if component["id"] == component_id
+        ),
+        None,
+    )
+    if component is None or not _interactable(component):
         # A production action can add/focus a dock tab after that frame's UI
         # was already painted. Give the component registry one short grace
         # period before invoking TogglePanel; otherwise the fallback can close
@@ -636,13 +662,13 @@ def activate_dock_tab(
         try:
             client.wait_until(
                 description or (label + " dock tab publication"),
-                lambda: component
+                lambda: candidate
                 if (
-                    component := next(
+                    candidate := next(
                         (
                             item
                             for item in client.component_snapshot()["components"]
-                            if item["id"] == component_id
+                            if item["id"] == component_id and _interactable(item)
                         ),
                         None,
                     )

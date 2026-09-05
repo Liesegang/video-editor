@@ -1,6 +1,6 @@
 """Shared native-UI helpers for direct and promoted Text Ensemble authoring."""
 
-from qa_support import QaFailure, seek_timeline_seconds
+from qa_support import QaFailure, rendered_current_revision, seek_timeline_seconds
 
 
 def text_operations(state, item_id):
@@ -78,22 +78,6 @@ def open_and_choose(client, item_id, query, component_id):
     client.inject("text", {"text": query})
     client.wait_component_settled(component_id)
     client.click_component(component_id)
-
-
-def rendered_current_revision(client, prior_hash=None):
-    state = client.state()
-    preview = state["editor"]["preview"]
-    revision = state["history"]["revision"]
-    if (
-        preview.get("rendered_revision") == revision
-        and preview.get("rendered_frame")
-        == state["editor"]["timeline"]["current_frame"]
-        and preview.get("pixel_hash") is not None
-        and state["editor"].get("error") is None
-        and (prior_hash is None or preview["pixel_hash"] != prior_hash)
-    ):
-        return state
-    return None
 
 
 def seek_rendered(client, seconds):

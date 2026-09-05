@@ -5,6 +5,7 @@ from qa_support import (
     QaFailure,
     component_point,
     item_by_name,
+    rendered_current_revision as _rendered_current_revision,
     run_suite_main,
 )
 from qa_text_ensemble_support import (
@@ -13,7 +14,6 @@ from qa_text_ensemble_support import (
     open_and_choose as _open_and_choose,
     operation as _operation,
     remove_ensemble_operation as _remove_ensemble_operation,
-    rendered_current_revision as _rendered_current_revision,
     seek_rendered as _seek_rendered,
     text_operations as _text_operations,
 )

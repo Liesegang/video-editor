@@ -1,6 +1,6 @@
 use super::*;
 use crate::animation::EasingFunction;
-use crate::editor::{AuthoringKeyframeUpdate, ModuleInterfaceCommand};
+use crate::editor::{AuthoringKeyframeTarget, AuthoringKeyframeUpdate, ModuleInterfaceCommand};
 use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, MediaTime, ProjectDocument,
     PublishedParameterAutomationCapability, SourceRef,
@@ -261,9 +261,11 @@ fn service_rejects_particle_simulation_keyframes_but_accepts_sprite_color() {
     assert_eq!(service.revision().expect("unchanged revision"), revision);
 
     let update_error = service
-        .update_module_parameter_keyframe(
-            created.item_id,
-            created.parameters.emission_rate,
+        .update_keyframe(
+            &AuthoringKeyframeTarget::ModuleParameter {
+                item_id: created.item_id,
+                parameter_id: created.parameters.emission_rate,
+            },
             crate::model::project::property::KeyframeId::new(),
             AuthoringKeyframeUpdate {
                 time: Some(MediaTime::zero()),

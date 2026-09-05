@@ -239,6 +239,44 @@ fn begin_drag(context: &egui::Context, fixture: &mut CurveDragFixture, frame: &m
 }
 
 #[test]
+fn changed_project_cancels_held_key_before_release_can_overwrite_it() {
+    let context = egui::Context::default();
+    let mut fixture = fixture();
+    let mut frame = 0;
+    let start = begin_drag(&context, &mut fixture, &mut frame);
+    let endpoint = start + DRAG_DELTA;
+    render_frame(
+        &context,
+        &mut fixture,
+        frame,
+        vec![egui::Event::PointerMoved(endpoint)],
+    );
+    assert!(fixture.state.curve_editor.drag.is_some());
+    fixture
+        .service
+        .set_authored_property_constant(
+            AuthoringPropertyOwner::Item(fixture.item_id),
+            "opacity".into(),
+            PropertyValue::from(0.5),
+        )
+        .unwrap();
+    let (changed, revision) = fixture.service.snapshot_with_revision().unwrap();
+    render_frame(
+        &context,
+        &mut fixture,
+        frame + 1,
+        vec![pointer_button(endpoint, false)],
+    );
+    assert!(fixture.state.curve_editor.drag.is_none());
+    assert_eq!(fixture.service.revision().unwrap(), revision);
+    assert_eq!(
+        fixture.service.snapshot().unwrap().as_ref(),
+        changed.as_ref()
+    );
+    assert_key_value(&fixture, 2.0, 10.0, 20.0);
+}
+
+#[test]
 fn total_drag_is_step_independent_and_commits_once_with_release_frame_motion() {
     for steps in [2_usize, 16] {
         let context = egui::Context::default();

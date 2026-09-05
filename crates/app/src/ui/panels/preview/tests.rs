@@ -1,3 +1,4 @@
+use super::transient::TransientProjectionStage;
 use super::*;
 use crate::state::authoring::AuthoringPreviewView;
 use library::model::authoring::{MediaTime, RationalRate};
@@ -300,33 +301,39 @@ fn transient_projection_cache_is_scoped_by_upstream_edit() {
     let mut cache = TransientProjectionCache::default();
     let apply = |project: &Arc<AuthoringProject>| {
         applications.set(applications.get() + 1);
-        (Arc::new(project.as_ref().clone()), Some(7))
+        Ok((Arc::new(project.as_ref().clone()), Some(7)))
     };
 
-    let (first, _) = cache.project(
-        TransientProjectionStage::InspectorProperty,
-        revision,
-        Some(11),
-        Some(7),
-        &source,
-        apply,
-    );
-    let (reused, _) = cache.project(
-        TransientProjectionStage::InspectorProperty,
-        revision,
-        Some(11),
-        Some(7),
-        &source,
-        apply,
-    );
-    let (reprojected, _) = cache.project(
-        TransientProjectionStage::InspectorProperty,
-        revision,
-        Some(12),
-        Some(7),
-        &source,
-        apply,
-    );
+    let (first, _) = cache
+        .project(
+            TransientProjectionStage::Property,
+            revision,
+            Some(11),
+            Some(7),
+            &source,
+            apply,
+        )
+        .expect("initial projection");
+    let (reused, _) = cache
+        .project(
+            TransientProjectionStage::Property,
+            revision,
+            Some(11),
+            Some(7),
+            &source,
+            apply,
+        )
+        .expect("cached projection");
+    let (reprojected, _) = cache
+        .project(
+            TransientProjectionStage::Property,
+            revision,
+            Some(12),
+            Some(7),
+            &source,
+            apply,
+        )
+        .expect("new upstream projection");
 
     assert_eq!(applications.get(), 2);
     assert!(Arc::ptr_eq(&first, &reused));
@@ -371,8 +378,15 @@ fn inspector_drag_projects_into_preview_without_mutating_the_source_project() {
         },
     ));
 
-    let digest = inspector_transient_edit_digest(revision, &state).expect("edit digest");
-    let (projected, applied) = project_inspector_transient_edit(&source, revision, &state);
+    let digest = state
+        .inspector
+        .transient_property_edit
+        .as_ref()
+        .unwrap()
+        .digest();
+    let (projected, applied) = AuthoringPreviewRuntime::default()
+        .project_for_preview(&source, revision, &state)
+        .expect("property projection");
 
     assert_eq!(applied, Some(digest));
     assert_eq!(

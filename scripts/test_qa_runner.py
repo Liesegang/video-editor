@@ -119,10 +119,9 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(CURVE.FIXTURE, "authoring_e2e")
 
     def test_every_active_qa_file_stays_below_one_thousand_lines(self):
-        files = [SCRIPTS / "qa-runner.py", SCRIPTS / "qa_support.py"]
+        files = [SCRIPTS / "qa-runner.py"]
         files.extend(SCRIPTS / suite.script for suite in RUNNER.suite_specs("full"))
-        files.append(SCRIPTS / "qa_appearance_persistence.py")
-        files.append(SCRIPTS / "qa_text_ensemble_support.py")
+        files.extend(SCRIPTS.glob("qa_*.py"))
         files.append(SCRIPTS / "qa-particle-persistence-e2e.py")
         files.append(pathlib.Path(__file__))
         for path in files:
@@ -443,7 +442,14 @@ class QaRunnerTests(unittest.TestCase):
                 self.snapshots += 1
                 components = []
                 if self.snapshots >= 2:
-                    components = [{"id": "dock.tab:node_editor"}]
+                    components = [
+                        {
+                            "id": "dock.tab:node_editor",
+                            "visible": True,
+                            "enabled": True,
+                            "rect_points": {"width": 40.0, "height": 20.0},
+                        }
+                    ]
                 return {"components": components}
 
             def wait_until(self, _description, predicate, timeout=None):
@@ -472,6 +478,55 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(result, "dock.tab:node_editor")
         self.assertEqual(client.keys, [])
         self.assertEqual(client.clicked, ["dock.tab:node_editor"])
+        self.assertEqual(client.asserted_timeout, 0.75)
+
+    def test_dock_activation_toggles_a_registered_but_hidden_tab(self):
+        class HiddenDockClient:
+            def __init__(self):
+                self.keys = []
+                self.injected = []
+                self.clicked = []
+
+            def component_snapshot(self):
+                return {
+                    "components": [
+                        {
+                            "id": "dock.tab:timeline",
+                            "visible": False,
+                            "enabled": True,
+                        }
+                    ]
+                }
+
+            def wait_until(self, _description, predicate, timeout=None):
+                self.asserted_timeout = timeout
+                if predicate() is None:
+                    raise SUPPORT.QaFailure("not interactable")
+                raise AssertionError("hidden tab unexpectedly became interactable")
+
+            def key(self, *args, **kwargs):
+                self.keys.append((args, kwargs))
+
+            def inject(self, *args, **kwargs):
+                self.injected.append((args, kwargs))
+
+            def click_component(self, component_id):
+                self.clicked.append(component_id)
+
+            def wait_component_settled(self, component_id):
+                return component_id
+
+        client = HiddenDockClient()
+        result = SUPPORT.activate_dock_tab(
+            client, "dock.tab:timeline", "Timeline", "Timeline activation"
+        )
+        self.assertEqual(result, "dock.tab:timeline")
+        self.assertEqual(
+            [args for args, _ in client.keys],
+            [("p", True), ("p", False), ("enter", True), ("enter", False)],
+        )
+        self.assertEqual(client.injected[0][0], ("text", {"text": "Timeline"}))
+        self.assertEqual(client.clicked, ["dock.tab:timeline"])
         self.assertEqual(client.asserted_timeout, 0.75)
 
     def test_terminal_component_click_queues_without_polling_a_closing_endpoint(self):

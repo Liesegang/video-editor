@@ -45,8 +45,12 @@ pub(super) fn paint_curve(
             Sense::click_and_drag(),
         );
         if response.drag_started_by(egui::PointerButton::Primary) {
-            if let Some(pointer_origin) = ui.input(|input| input.pointer.press_origin()) {
+            if let (Some(pointer_origin), Ok(source_revision)) = (
+                ui.input(|input| input.pointer.press_origin()),
+                service.revision(),
+            ) {
                 state.curve_editor.drag = Some(CurveKeyDrag {
+                    source_revision,
                     lane: curve.id.clone(),
                     component: curve.component,
                     keyframe_id: point.id,

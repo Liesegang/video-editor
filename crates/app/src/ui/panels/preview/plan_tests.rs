@@ -12,19 +12,19 @@ use library::model::frame::color::Color;
 use library::model::property::{ColorValue, PropertyValue};
 use library::plugin::PluginManager;
 
-struct SolidNodeClipFixture {
-    service: TimelineEditorService,
-    item_id: TimelineItemId,
-    instance_id: ModuleInstanceId,
-    definition_id: ModuleDefinitionId,
-    color_parameter_id: PublishedParameterId,
+pub(super) struct SolidNodeClipFixture {
+    pub(super) service: TimelineEditorService,
+    pub(super) item_id: TimelineItemId,
+    pub(super) instance_id: ModuleInstanceId,
+    pub(super) definition_id: ModuleDefinitionId,
+    pub(super) color_parameter_id: PublishedParameterId,
 }
 
-fn color(r: u8, g: u8, b: u8) -> PropertyValue {
+pub(super) fn color(r: u8, g: u8, b: u8) -> PropertyValue {
     PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&Color { r, g, b, a: 255 }))
 }
 
-fn solid_node_clip_fixture() -> SolidNodeClipFixture {
+pub(super) fn solid_node_clip_fixture() -> SolidNodeClipFixture {
     let plugins = PluginManager::default();
     let service = TimelineEditorService::create_default("Transient Node Clip plan")
         .expect("authoring service");
@@ -75,7 +75,7 @@ fn solid_node_clip_fixture() -> SolidNodeClipFixture {
     }
 }
 
-fn request_key(
+pub(super) fn request_key(
     revision: ProjectRevision,
     timeline_id: TimelineId,
     frame_number: i64,
@@ -93,7 +93,7 @@ fn request_key(
     }
 }
 
-fn invocation(
+pub(super) fn invocation(
     plan: &RenderPlan,
     timeline_id: TimelineId,
     item_id: TimelineItemId,
@@ -105,7 +105,7 @@ fn invocation(
     .expect("compiled Node Clip invocation")
 }
 
-fn assert_compiled_topology_shared(
+pub(super) fn assert_compiled_topology_shared(
     stable: &RenderPlan,
     transient: &RenderPlan,
     timeline_id: TimelineId,

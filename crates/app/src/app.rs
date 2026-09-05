@@ -570,7 +570,7 @@ impl eframe::App for RuViEApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         crate::qa::begin_frame(context);
         if let Some(runtime) = self.qa_runtime.as_ref() {
-            runtime.issue_capture_for_frame(context);
+            runtime.prepare_ui_frame(context);
         }
 
         if context.input(|input| input.viewport().close_requested())
