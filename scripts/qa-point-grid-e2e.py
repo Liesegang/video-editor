@@ -58,6 +58,91 @@ def _constant(node, key):
     return property_value["value"]
 
 
+def _enter_exact_numeric(client, component_id, value):
+    client.click_component(component_id)
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": str(value)})
+    client.key("enter", True)
+    client.key("enter", False)
+
+
+def _edit_typed_store_values(client, definition_id, integer_id, vec3_id, color_id):
+    color_control = "node_editor.property.node:{}:value".format(color_id)
+    _, color = client.wait_component_settled(color_control)
+    if (color.get("metadata") or {}).get("editor_kind") != "managed_color":
+        raise QaFailure("Store Color bypassed the shared managed Color editor")
+
+    integer_control = "node_editor.property.node:{}:value".format(integer_id)
+    _, integer = client.wait_component_settled(integer_control)
+    integer_metadata = integer.get("metadata") or {}
+    if integer_metadata.get("editor_kind") != "integer":
+        raise QaFailure("Store Integer bypassed the shared typed Integer editor")
+    before_integer = client.state()
+    _enter_exact_numeric(client, integer_control, 16_777_217)
+
+    def integer_edited():
+        state = client.state()
+        node = state["project"]["module_definitions"][definition_id]["graph"][
+            "nodes"
+        ][integer_id]
+        return (
+            state
+            if state["history"]["revision"]
+            == before_integer["history"]["revision"] + 1
+            and _constant(node, "value") == 16_777_217
+            else None
+        )
+
+    client.wait_until("Store Integer exact Value edit", integer_edited)
+
+    vec3_control = "node_editor.property.node:{}:value".format(vec3_id)
+    vec3_x_control = vec3_control + ":x"
+    _, vec3 = client.wait_component_settled(vec3_x_control)
+    vec3_metadata = vec3.get("metadata") or {}
+    if vec3_metadata.get("axis") != "X" or vec3_metadata.get("value") != 0.0:
+        raise QaFailure("Store Vec3 bypassed the shared typed vector editor")
+    before_vec3 = client.state()
+    _enter_exact_numeric(client, vec3_x_control, 12.5)
+
+    def vec3_edited():
+        state = client.state()
+        node = state["project"]["module_definitions"][definition_id]["graph"][
+            "nodes"
+        ][vec3_id]
+        return (
+            state
+            if state["history"]["revision"] == before_vec3["history"]["revision"] + 1
+            and _constant(node, "value") == {"x": 12.5, "y": 0.0, "z": 0.0}
+            else None
+        )
+
+    return client.wait_until("Store Vec3 exact X edit", vec3_edited)
+
+
+def _assert_typed_stores(definition, context):
+    expected = {
+        context["store_integer_id"]: (
+            "native.point.store-integer-attribute",
+            16_777_217,
+        ),
+        context["store_vec3_id"]: (
+            "native.point.store-vec3-attribute",
+            {"x": 12.5, "y": 0.0, "z": 0.0},
+        ),
+        context["store_color_id"]: (
+            "native.point.store-color-attribute",
+            None,
+        ),
+    }
+    for node_id, (catalog_id, value) in expected.items():
+        node = definition["graph"]["nodes"].get(node_id)
+        if node is None or _catalog_id(node) != catalog_id:
+            raise QaFailure("Point Grid lost typed Store " + catalog_id)
+        if value is not None and _constant(node, "value") != value:
+            raise QaFailure("Point Grid changed typed Store Value " + catalog_id)
+
+
 def _assert_grid_defaults(definition, grid_id):
     grid = definition["graph"]["nodes"].get(grid_id)
     if grid is None or _catalog_id(grid) != "native.point.grid":
@@ -185,6 +270,7 @@ def _reload(client, project_file, saved, context, samples, artifact_dir):
         if definition_id != context["definition_id"]:
             raise QaFailure("fresh process changed Point Grid Definition identity")
         _assert_grid_defaults(definition, context["grid_id"])
+        _assert_typed_stores(definition, context)
         _assert_routes(definition, context["routes"])
         capture = capture_viewport(fresh, artifact_dir / "point-grid-reloaded.png")
         reload_close = close_clean_native_app(
@@ -241,7 +327,7 @@ def run_suite(client):
         raise QaFailure("Node Editor did not reach the measured Point authoring overview")
     place_created_node(client, output_id, 0.95, vertical_offset=140.0)
     place_created_node(client, drag_id, 0.06, vertical_offset=140.0)
-    place_created_node(client, sprite_id, 0.88)
+    place_created_node(client, sprite_id, 0.95)
 
     _, grid_id = create_node_from_menu(
         client, "node_clip", "Point Grid", "node_editor.menu.create.point_grid"
@@ -250,32 +336,80 @@ def run_suite(client):
     _, info_id = create_node_from_menu(
         client, "node_clip", "Point Info", "node_editor.menu.create.point_info"
     )
-    place_created_node(client, info_id, 0.22)
+    place_created_node(client, info_id, 0.17)
+    _, store_vec3_id = create_node_from_menu(
+        client,
+        "node_clip",
+        "Store Vec3 Attribute",
+        "node_editor.menu.create.point_store_vec3_attribute",
+    )
+    place_created_node(client, store_vec3_id, 0.30)
     _, store_id = create_node_from_menu(
         client,
         "node_clip",
         "Store Number Attribute",
         "node_editor.menu.create.point_store_number_attribute",
     )
-    place_created_node(client, store_id, 0.38)
+    place_created_node(client, store_id, 0.40)
     _, gradient_id = create_node_from_menu(
         client, "node_clip", "Gradient", "node_editor.menu.create.data:gradient"
     )
-    place_created_node(client, gradient_id, 0.54)
+    place_created_node(client, gradient_id, 0.53)
+    _, store_integer_id = create_node_from_menu(
+        client,
+        "node_clip",
+        "Store Integer Attribute",
+        "node_editor.menu.create.point_store_integer_attribute",
+    )
+    place_created_node(client, store_integer_id, 0.74, vertical_offset=140.0)
     _, ramp_id = create_node_from_menu(
         client, "node_clip", "Color Ramp", "node_editor.menu.create.color:ramp"
     )
-    place_created_node(client, ramp_id, 0.70)
+    place_created_node(client, ramp_id, 0.65)
+    _, store_color_id = create_node_from_menu(
+        client,
+        "node_clip",
+        "Store Color Attribute",
+        "node_editor.menu.create.point_store_color_attribute",
+    )
+    place_created_node(client, store_color_id, 0.82)
+    _edit_typed_store_values(
+        client,
+        definition_id,
+        store_integer_id,
+        store_vec3_id,
+        store_color_id,
+    )
 
-    _assert_grid_defaults(active_definition(client.state(), "node_clip")[1], grid_id)
+    authored_definition = active_definition(client.state(), "node_clip")[1]
+    _assert_grid_defaults(authored_definition, grid_id)
+    _assert_typed_stores(
+        authored_definition,
+        {
+            "store_integer_id": store_integer_id,
+            "store_vec3_id": store_vec3_id,
+            "store_color_id": store_color_id,
+        },
+    )
     route_specs = [
         (grid_id, "points", info_id, "points", "Grid to Point Info"),
-        (grid_id, "points", store_id, "points", "Grid to Store Attribute"),
+        (grid_id, "points", store_vec3_id, "points", "Grid to Vec3 Store"),
+        (info_id, "position", store_vec3_id, "value", "Position to stored Vec3"),
+        (store_vec3_id, "points", store_id, "points", "Vec3 Store to Number Store"),
         (info_id, "random", store_id, "value", "Random to stored field"),
-        (store_id, "points", sprite_id, "particles", "Stored Grid to Sprite"),
+        (store_id, "points", store_integer_id, "points", "Number Store to Integer Store"),
+        (
+            store_integer_id,
+            "points",
+            store_color_id,
+            "points",
+            "Integer Store to Color Store",
+        ),
         (gradient_id, "value", ramp_id, "gradient", "Gradient to Color Ramp"),
         (store_id, "attribute", ramp_id, "factor", "field to Color Ramp Factor"),
-        (ramp_id, "color", sprite_id, "color", "Color Ramp to Sprite Color"),
+        (ramp_id, "color", store_color_id, "value", "Ramp to stored Color"),
+        (store_color_id, "points", sprite_id, "particles", "Stored Grid to Sprite"),
+        (store_color_id, "attribute", sprite_id, "color", "Color field to Sprite"),
     ]
     connections = [
         connect_nodes(client, "node_clip", *route) for route in route_specs[:-1]
@@ -301,7 +435,7 @@ def run_suite(client):
     definition = routed["project"]["module_definitions"][definition_id]
     expected_routes = {route[:4] for route in route_specs}
     _assert_routes(definition, expected_routes)
-    if len(definition["graph"]["connections"]) != len(before["graph"]["connections"]) + 6:
+    if len(definition["graph"]["connections"]) != len(before["graph"]["connections"]) + 11:
         raise QaFailure("Point Grid routing changed an unexpected connection")
 
     colored = _sample(
@@ -376,6 +510,9 @@ def run_suite(client):
             "item_id": item_id,
             "definition_id": definition_id,
             "grid_id": grid_id,
+            "store_integer_id": store_integer_id,
+            "store_vec3_id": store_vec3_id,
+            "store_color_id": store_color_id,
             "routes": expected_routes,
         },
         samples,
@@ -388,7 +525,10 @@ def run_suite(client):
         "nodes": {
             "grid": grid_id,
             "point_info": info_id,
+            "store_integer_attribute": store_integer_id,
+            "store_vec3_attribute": store_vec3_id,
             "store_number_attribute": store_id,
+            "store_color_attribute": store_color_id,
             "gradient": gradient_id,
             "color_ramp": ramp_id,
             "sprite": sprite_id,
