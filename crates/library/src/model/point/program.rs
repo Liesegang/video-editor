@@ -19,13 +19,15 @@ pub enum PointInstruction {
     },
     Age,
     NormalizedAge,
+    /// Producer-local position after simulation, before the Sprite transform.
+    Position,
     Random {
         channel: u32,
     },
     LoadAttribute {
         attribute: u16,
     },
-    StoreNumber {
+    StoreAttribute {
         attribute: u16,
         value: u16,
     },
@@ -74,38 +76,19 @@ impl PointRenderProgram {
                     .pack_value(&PropertyValue::ColorValue(stop.color().clone()))?;
             }
         }
-        // Number stores are the first supported operation. Other schema types
-        // must not silently acquire numeric execution semantics.
-        if self
-            .schema
-            .attributes()
-            .iter()
-            .any(|attribute| attribute.element_type() != PointAttributeElementType::Number)
-        {
-            return Err(
-                "Point render-stage stores currently support Number attributes only".into(),
-            );
-        }
         let mut registers = Vec::with_capacity(self.instructions.len());
         let mut stored = vec![false; self.schema.attributes().len()];
         for instruction in &self.instructions {
             let kind = match instruction {
                 PointInstruction::Constant { value } => {
-                    let kind = match value {
-                        PropertyValue::Number(_) => PointAttributeElementType::Number,
-                        PropertyValue::ColorValue(_) => PointAttributeElementType::Color,
-                        _ => {
-                            return Err(
-                                "Point constants must be canonical Number or Color values".into()
-                            );
-                        }
-                    };
+                    let kind = PointAttributeElementType::from_property_value(value)?;
                     kind.pack_value(value)?;
                     kind
                 }
                 PointInstruction::Age | PointInstruction::NormalizedAge => {
                     PointAttributeElementType::Number
                 }
+                PointInstruction::Position => PointAttributeElementType::Vec3,
                 PointInstruction::Random { channel } => {
                     if *channel >= 3 {
                         return Err("Point random channel must be in 0..3".into());
@@ -118,10 +101,16 @@ impl PointRenderProgram {
                             "Point attribute read requires an earlier Store in this stream".into(),
                         );
                     }
-                    PointAttributeElementType::Number
+                    self.schema.attributes()[usize::from(*attribute)].element_type()
                 }
-                PointInstruction::StoreNumber { attribute, value } => {
-                    require_register(&registers, *value, PointAttributeElementType::Number)?;
+                PointInstruction::StoreAttribute { attribute, value } => {
+                    let kind = self
+                        .schema
+                        .attributes()
+                        .get(usize::from(*attribute))
+                        .ok_or("Point Store references a missing attribute")?
+                        .element_type();
+                    require_register(&registers, *value, kind)?;
                     let target = stored
                         .get_mut(usize::from(*attribute))
                         .ok_or("Point Store references a missing attribute")?;
@@ -129,7 +118,7 @@ impl PointRenderProgram {
                         return Err("Point attribute has multiple stores in one program".into());
                     }
                     *target = true;
-                    PointAttributeElementType::Number
+                    kind
                 }
                 PointInstruction::Binary { left, right, .. } => {
                     require_register(&registers, *left, PointAttributeElementType::Number)?;

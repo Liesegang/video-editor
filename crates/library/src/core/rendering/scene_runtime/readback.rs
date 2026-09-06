@@ -3,13 +3,14 @@
 use glow::HasContext;
 
 use super::*;
+use crate::model::point::{PointAttributeElementType, PointAttributeGpuDefault};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PointFieldReadback {
     pub serial: u32,
     pub age: Option<f32>,
     pub lifetime: Option<f32>,
-    pub attributes: Vec<f32>,
+    pub attributes: Vec<PointAttributeGpuDefault>,
     pub color: [f32; 4],
 }
 
@@ -79,7 +80,7 @@ impl SceneRuntime {
                 .map(|attribute| {
                     let offset =
                         attribute.offset_bytes as usize + slot * attribute.stride_bytes as usize;
-                    read_f32(&columns, offset)
+                    read_attribute(&columns, offset, attribute.element_type)
                 })
                 .collect();
             let color_offset = slot * 16;
@@ -107,6 +108,39 @@ impl SceneRuntime {
 
     pub(crate) fn compiled_point_pipeline_count(&self) -> usize {
         self.pipelines.len()
+    }
+}
+
+fn read_attribute(
+    bytes: &[u8],
+    offset: usize,
+    kind: PointAttributeElementType,
+) -> PointAttributeGpuDefault {
+    match kind {
+        PointAttributeElementType::Number => {
+            PointAttributeGpuDefault::Number(read_f32(bytes, offset))
+        }
+        PointAttributeElementType::Integer => {
+            PointAttributeGpuDefault::Integer(read_u32(bytes, offset) as i32)
+        }
+        PointAttributeElementType::Vec2 => {
+            PointAttributeGpuDefault::Vec2([read_f32(bytes, offset), read_f32(bytes, offset + 4)])
+        }
+        PointAttributeElementType::Vec3 => PointAttributeGpuDefault::Vec3([
+            read_f32(bytes, offset),
+            read_f32(bytes, offset + 4),
+            read_f32(bytes, offset + 8),
+        ]),
+        PointAttributeElementType::Vec4 => {
+            PointAttributeGpuDefault::Vec4(std::array::from_fn(|component| {
+                read_f32(bytes, offset + component * 4)
+            }))
+        }
+        PointAttributeElementType::Color => {
+            PointAttributeGpuDefault::Color(std::array::from_fn(|component| {
+                read_f32(bytes, offset + component * 4)
+            }))
+        }
     }
 }
 

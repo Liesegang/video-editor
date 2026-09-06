@@ -1,7 +1,8 @@
 use ordered_float::OrderedFloat;
 
-use super::particle_tests::{ParticleFixture, particle_scenes, point_scenes};
+use super::particle_tests::{ParticleFixture, particle_fixture, particle_scenes, point_scenes};
 use super::point_tests::{PointNodes, point_fixture, replace_fixture_source_with_grid};
+use super::point_typed_tests::append_uniform_store;
 use super::{
     CompiledPointInstruction, RenderPlanCache, RenderPlanCompiler, evaluate_render_plan_frame,
 };
@@ -12,7 +13,7 @@ use crate::model::authoring::{
 };
 use crate::model::frame::particle::ParticleSceneParameters;
 use crate::model::frame::point::{PointSceneFrame, PointSceneSource};
-use crate::model::point::{PointInstruction, PointRenderProgram};
+use crate::model::point::{PointAttributeElementType, PointInstruction, PointRenderProgram};
 use crate::model::project::{NUMERIC_B_INPUT_PORT, PortDataType};
 use crate::model::property::{PropertyValue, Vec3};
 use crate::plugin::PluginManager;
@@ -268,6 +269,115 @@ fn grid_published_spacing_samples_local_time_and_keeps_sibling_instances_indepen
             vec3(70.0)
         };
         assert_eq!(parameters.spacing, expected);
+    }
+}
+
+#[test]
+fn typed_store_uniform_keyframes_sample_locally_and_keep_siblings_independent() {
+    let mut fixture = particle_fixture(2);
+    let (renderer, store) = append_uniform_store(&mut fixture, PointAttributeElementType::Vec3);
+    let parameter_id = PublishedParameterId::new();
+    let definition = fixture
+        .project
+        .module_definitions
+        .get_mut(&fixture.definition_id)
+        .unwrap();
+    let default_value = definition.graph.nodes[&store]
+        .properties()
+        .get("value")
+        .and_then(|property| property.value())
+        .cloned()
+        .unwrap();
+    definition.interface.parameters.push(PublishedParameter {
+        id: parameter_id,
+        name: "Point Vector".to_string(),
+        data_type: PortDataType::Vec3,
+        default_value,
+        target: ModulePortAddress {
+            node_id: store,
+            port: "value".to_string(),
+        },
+    });
+    definition.interface_version += 1;
+    let mut cache = RenderPlanCache::default();
+    cache.compile(&fixture.project).unwrap();
+
+    let SourceRef::Module(first) = &mut fixture
+        .project
+        .items
+        .get_mut(&fixture.item_ids[0])
+        .unwrap()
+        .source
+    else {
+        panic!("module item");
+    };
+    first.automation_tracks.insert(
+        parameter_id,
+        AutomationTrack {
+            keyframes: vec![
+                AutomationKeyframe::new(
+                    MediaTime::zero(),
+                    PropertyValue::Vec3(vec3(10.0)),
+                    EasingFunction::Linear,
+                ),
+                AutomationKeyframe::new(
+                    MediaTime::new(1, 1).unwrap(),
+                    PropertyValue::Vec3(vec3(30.0)),
+                    EasingFunction::Linear,
+                ),
+            ],
+        },
+    );
+    fixture
+        .project
+        .module_instances
+        .get_mut(&fixture.instance_ids[1])
+        .unwrap()
+        .parameter_overrides
+        .insert(parameter_id, PropertyValue::Vec3(vec3(70.0)));
+    let (plan, stats) = cache.compile(&fixture.project).unwrap();
+    assert_eq!(stats.compiled_definitions, 0);
+    assert_eq!(stats.reused_definitions, 1);
+    let uniform_register = plan.module_definitions[&fixture.definition_id].point_renderers
+        [&renderer]
+        .point_program
+        .as_ref()
+        .unwrap()
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                CompiledPointInstruction::Uniform { node_id, port, element_type }
+                    if *node_id == store
+                        && port == "value"
+                        && *element_type == PointAttributeElementType::Vec3
+            )
+        })
+        .unwrap();
+    let frame = evaluate_render_plan_frame(
+        &fixture.project,
+        &plan,
+        &PluginManager::default(),
+        15,
+        1.0,
+        None,
+    )
+    .unwrap();
+    let scenes = point_scenes(&frame.items);
+    assert_eq!(scenes.len(), 2);
+    for scene in scenes {
+        let expected = if scene.invocation.module_instance_id == fixture.instance_ids[0] {
+            20.0
+        } else {
+            70.0
+        };
+        let PointInstruction::Constant { value } =
+            &scene.point_program.as_ref().unwrap().instructions[uniform_register]
+        else {
+            panic!("typed Store uniform must be sampled once per invocation");
+        };
+        assert_eq!(value, &PropertyValue::Vec3(vec3(expected)));
     }
 }
 

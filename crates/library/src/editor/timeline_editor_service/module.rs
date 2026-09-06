@@ -769,7 +769,8 @@ pub(super) fn add_node_to_definition(
         node.content(),
         crate::model::node::NodeContent::NativeOperation(operation)
             if crate::model::node::PointNodeRole::from_catalog_id(&operation.catalog_id)
-                == Some(crate::model::node::PointNodeRole::StoreNumberAttribute)
+                .and_then(crate::model::node::PointNodeRole::attribute_type)
+                .is_some()
     ) {
         node.name = crate::util::unique_name(
             &node.name,

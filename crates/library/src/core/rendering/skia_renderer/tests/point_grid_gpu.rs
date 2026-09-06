@@ -2,8 +2,9 @@ use super::point_support::{test_gradient, test_random};
 use super::*;
 use crate::model::frame::point::PointGridParameters;
 use crate::model::point::{
-    NumericBinaryOperation, PointAttributeDefinition, PointAttributeElementType, PointAttributeId,
-    PointAttributeSchema, PointInstruction, PointRenderProgram,
+    NumericBinaryOperation, PointAttributeDefinition, PointAttributeElementType,
+    PointAttributeGpuDefault, PointAttributeId, PointAttributeSchema, PointInstruction,
+    PointRenderProgram,
 };
 use crate::model::property::{GradientSpread, PropertyValue};
 
@@ -102,7 +103,7 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         .unwrap(),
         instructions: vec![
             PointInstruction::Random { channel: 0 },
-            PointInstruction::StoreNumber {
+            PointInstruction::StoreAttribute {
                 attribute: 0,
                 value: 0,
             },
@@ -146,7 +147,10 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
         let coordinate = [(index % 5) as u32, (index / 5) as u32, 0];
         assert_eq!(point.serial, grid.point_serial(coordinate).unwrap());
         let expected = test_random(seed, point.serial, 0);
-        assert!((point.attributes[0] - expected).abs() <= 2e-6);
+        let PointAttributeGpuDefault::Number(attribute) = point.attributes[0] else {
+            panic!("Grid heat readback must remain Number")
+        };
+        assert!((attribute - expected).abs() <= 2e-6);
         let expected_color =
             crate::color_management::sample_gradient_at(&ramp, f64::from(expected * 0.75))
                 .unwrap()
@@ -241,6 +245,9 @@ fn gpu_grid_uses_shared_sprite_fields_and_retains_stable_point_attributes() {
             (index / 15) as u32,
         ];
         assert_eq!(point.serial, grid.point_serial(coordinate).unwrap());
-        assert!((point.attributes[0] - test_random(seed, point.serial, 0)).abs() <= 2e-6);
+        let PointAttributeGpuDefault::Number(attribute) = point.attributes[0] else {
+            panic!("Grid heat readback must remain Number")
+        };
+        assert!((attribute - test_random(seed, point.serial, 0)).abs() <= 2e-6);
     }
 }

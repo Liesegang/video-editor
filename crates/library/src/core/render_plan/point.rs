@@ -2,8 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ordered_float::OrderedFloat;
-
+use super::{
+    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
+};
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::node::{
     COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent, Node,
@@ -15,14 +16,10 @@ use crate::model::point::{
     PointAttributeId, PointAttributeSchema,
 };
 use crate::model::project::NUMBER_RESULT_OUTPUT_PORT;
-use crate::model::property::PropertyValue;
-
-use super::{
-    CompiledPointInstruction, CompiledPointProgram, CompiledPointRenderer, CompiledPointSource,
-};
 
 const POINT_AGE_OUTPUT_PORT: &str = "age";
 const POINT_NORMALIZED_AGE_OUTPUT_PORT: &str = "normalized_age";
+const POINT_POSITION_OUTPUT_PORT: &str = "position";
 const POINT_RANDOM_OUTPUT_PORT: &str = "random";
 const SPRITE_COLOR_INPUT_PORT: &str = "color";
 
@@ -127,7 +124,10 @@ fn trace_point_stream(
         let Some(node) = definition.graph.nodes.get(&source.node_id) else {
             return Ok(None);
         };
-        if point_role(node) != Some(PointNodeRole::StoreNumberAttribute) {
+        if point_role(node)
+            .and_then(PointNodeRole::attribute_type)
+            .is_none()
+        {
             break;
         }
         if source.port != POINT_SOURCE_PORT || !visited.insert(node.id) {
@@ -163,11 +163,14 @@ fn compile_point_program(
             definition.graph.nodes.get(store_id).ok_or_else(|| {
                 format!("Point Store Node {store_id} disappeared during compilation")
             })?;
+        let element_type = point_role(store)
+            .and_then(PointNodeRole::attribute_type)
+            .ok_or_else(|| format!("Point Store Node {store_id} has no attribute type"))?;
         definitions.push(PointAttributeDefinition::new(
             PointAttributeId::from_uuid(store.id),
             store.name.clone(),
-            PointAttributeElementType::Number,
-            PropertyValue::Number(OrderedFloat(0.0)),
+            element_type,
+            element_type.default_value(),
         )?);
     }
     let schema = PointAttributeSchema::new(definitions)?;
@@ -189,12 +192,13 @@ fn compile_point_program(
             available_attributes: attribute,
             capabilities,
         };
+        let element_type = builder.schema.attributes()[attribute].element_type();
         let value = builder.compile_input(
             &address(*store_id, POINT_ATTRIBUTE_VALUE_PORT),
-            PointAttributeElementType::Number,
+            element_type,
             &context,
         )?;
-        builder.emit(CompiledPointInstruction::StoreNumber {
+        builder.emit(CompiledPointInstruction::StoreAttribute {
             attribute: checked_u16(attribute, "Point attribute")?,
             value: value.register,
         })?;
@@ -250,7 +254,7 @@ pub(super) fn validate_point_field_consumers(
                 connection.to.port == COLOR_RAMP_FACTOR_PORT
             }
             NodeContent::NativeOperation(_) => match point_role(target) {
-                Some(PointNodeRole::StoreNumberAttribute) => {
+                Some(PointNodeRole::StoreAttribute(_)) => {
                     connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
                 }
                 Some(PointNodeRole::Info) => false,
@@ -359,7 +363,9 @@ impl<'a> PointProgramBuilder<'a> {
         if let Some(source) = source.as_ref()
             && self.depends_on_point(source)
         {
-            return self.compile_source(source, context);
+            let value = self.compile_source(source, element_type, context)?;
+            require_input_type(&value, element_type, target)?;
+            return Ok(value);
         }
         let key = (target.clone(), element_type);
         if let Some(value) = self.uniforms.get(&key) {
@@ -382,6 +388,7 @@ impl<'a> PointProgramBuilder<'a> {
     fn compile_source(
         &mut self,
         source: &ModulePortAddress,
+        expected_type: PointAttributeElementType,
         context: &FieldContext<'_>,
     ) -> Result<CompiledValue, String> {
         if let Some(value) = self.values.get(source) {
@@ -408,17 +415,13 @@ impl<'a> PointProgramBuilder<'a> {
                     node.id, source.port
                 )
             })?;
-            return self.compile_input(
-                &address(node.id, input),
-                expected_output_type(self.definition, source)?,
-                context,
-            );
+            return self.compile_input(&address(node.id, input), expected_type, context);
         }
 
         let value = match node.content() {
             NodeContent::NativeOperation(_) => match point_role(&node) {
                 Some(PointNodeRole::Info) => self.compile_point_info(&node, source, context)?,
-                Some(PointNodeRole::StoreNumberAttribute) => {
+                Some(PointNodeRole::StoreAttribute(_)) => {
                     self.compile_attribute_load(&node, source, context)?
                 }
                 Some(PointNodeRole::Grid) | None => {
@@ -518,6 +521,7 @@ impl<'a> PointProgramBuilder<'a> {
                     source.port
                 ));
             }
+            POINT_POSITION_OUTPUT_PORT => CompiledPointInstruction::Position,
             POINT_RANDOM_OUTPUT_PORT => CompiledPointInstruction::Random { channel: 0 },
             _ => {
                 return Err(format!(
@@ -529,7 +533,11 @@ impl<'a> PointProgramBuilder<'a> {
         let register = self.emit(instruction)?;
         Ok(CompiledValue {
             register,
-            element_type: PointAttributeElementType::Number,
+            element_type: if source.port == POINT_POSITION_OUTPUT_PORT {
+                PointAttributeElementType::Vec3
+            } else {
+                PointAttributeElementType::Number
+            },
             dependencies,
         })
     }
@@ -561,12 +569,13 @@ impl<'a> PointProgramBuilder<'a> {
         let mut dependencies = FieldDependencies::default();
         dependencies.attributes.insert(attribute);
         dependencies.validate(context)?;
+        let element_type = self.schema.attributes()[attribute].element_type();
         let register = self.emit(CompiledPointInstruction::LoadAttribute {
             attribute: checked_u16(attribute, "Point attribute")?,
         })?;
         Ok(CompiledValue {
             register,
-            element_type: PointAttributeElementType::Number,
+            element_type,
             dependencies,
         })
     }
@@ -624,6 +633,9 @@ impl<'a> PointDependencyResolver<'a> {
             crate::model::project::PortDataType::Number
                 | crate::model::project::PortDataType::Integer
                 | crate::model::project::PortDataType::Numeric
+                | crate::model::project::PortDataType::Vec2
+                | crate::model::project::PortDataType::Vec3
+                | crate::model::project::PortDataType::Vec4
                 | crate::model::project::PortDataType::Color
         ) {
             return false;
@@ -634,9 +646,12 @@ impl<'a> PointDependencyResolver<'a> {
         if point_role(&node).is_some_and(|role| match role {
             PointNodeRole::Info => matches!(
                 source.port.as_str(),
-                POINT_AGE_OUTPUT_PORT | POINT_NORMALIZED_AGE_OUTPUT_PORT | POINT_RANDOM_OUTPUT_PORT
+                POINT_AGE_OUTPUT_PORT
+                    | POINT_NORMALIZED_AGE_OUTPUT_PORT
+                    | POINT_RANDOM_OUTPUT_PORT
+                    | POINT_POSITION_OUTPUT_PORT
             ),
-            PointNodeRole::StoreNumberAttribute => source.port == POINT_ATTRIBUTE_OUTPUT_PORT,
+            PointNodeRole::StoreAttribute(_) => source.port == POINT_ATTRIBUTE_OUTPUT_PORT,
             PointNodeRole::Grid => false,
         }) {
             return true;
@@ -673,24 +688,18 @@ fn require_type(
     Ok(())
 }
 
-fn expected_output_type(
-    definition: &ModuleDefinition,
-    source: &ModulePortAddress,
-) -> Result<PointAttributeElementType, String> {
-    let data_type = definition
-        .graph
-        .port_definition(source, crate::model::project::PortDirection::Output)?
-        .data_type;
-    match data_type {
-        crate::model::project::PortDataType::Number
-        | crate::model::project::PortDataType::Integer
-        | crate::model::project::PortDataType::Numeric => Ok(PointAttributeElementType::Number),
-        crate::model::project::PortDataType::Color => Ok(PointAttributeElementType::Color),
-        _ => Err(format!(
-            "Per-Point output {}:{} has unsupported type {data_type:?}",
-            source.node_id, source.port
-        )),
+fn require_input_type(
+    value: &CompiledValue,
+    expected: PointAttributeElementType,
+    target: &ModulePortAddress,
+) -> Result<(), String> {
+    if value.element_type != expected {
+        return Err(format!(
+            "Per-Point input {}:{} requires {expected:?}, received {:?}; implicit varying conversions are not supported",
+            target.node_id, target.port, value.element_type
+        ));
     }
+    Ok(())
 }
 
 fn unsupported_field_node(node: &Node, source: &ModulePortAddress) -> String {

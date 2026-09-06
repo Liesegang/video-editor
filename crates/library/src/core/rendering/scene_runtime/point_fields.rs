@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use crate::error::LibraryError;
 use crate::model::point::{
     NumericBinaryOperation, POINT_MAX_ATTRIBUTE_COUNT, POINT_MAX_INSTRUCTIONS,
-    POINT_MAX_RAMP_STOPS, POINT_MAX_RAMPS, PointAttributeGpuDefault, PointColumnLayout,
-    PointInstruction, PointRenderProgram,
+    POINT_MAX_RAMP_STOPS, POINT_MAX_RAMPS, PointAttributeElementType, PointAttributeGpuDefault,
+    PointColumnLayout, PointInstruction, PointRenderProgram,
 };
 use crate::model::property::{GradientSpread, PropertyValue};
 use crate::rendering::gl_resources::link_program;
@@ -334,24 +334,36 @@ fn compute_source(
     for (index, instruction) in program.instructions.iter().enumerate() {
         let register = format!("r{index}");
         match instruction {
-            PointInstruction::Constant { .. } => {
-                body.push_str(&format!("    vec4 {register} = pointData[{index}];\n"));
+            PointInstruction::Constant { value } => {
+                let kind = PointAttributeElementType::from_property_value(value)
+                    .map_err(LibraryError::Validation)?;
+                body.push_str(&constant_register_source(&register, index, kind));
             }
             PointInstruction::Age => body.push_str(&format!(
-                "    float {register}_value = 0.0;\n    if (!load_point_age(slot, {register}_value)) valid = false;\n    vec4 {register} = vec4({register}_value, 0.0, 0.0, 0.0);\n"
+                "    float {register} = 0.0;\n    if (!load_point_age(slot, {register})) valid = false;\n"
             )),
             PointInstruction::NormalizedAge => body.push_str(&format!(
-                "    float {register}_value = 0.0;\n    if (!load_point_normalized_age(slot, {register}_value)) valid = false;\n    vec4 {register} = vec4({register}_value, 0.0, 0.0, 0.0);\n"
+                "    float {register} = 0.0;\n    if (!load_point_normalized_age(slot, {register})) valid = false;\n"
             )),
+            PointInstruction::Position => {
+                body.push_str(&format!("    vec3 {register} = point.position_size.xyz;\n"));
+            }
             PointInstruction::Random { channel } => body.push_str(&format!(
-                "    vec4 {register} = vec4(random_01(uSeed, point.serial, {channel}u), 0.0, 0.0, 0.0);\n"
+                "    float {register} = random_01(uSeed, point.serial, {channel}u);\n"
             )),
-            PointInstruction::LoadAttribute { attribute } => body.push_str(&format!(
-                "    vec4 {register} = vec4(uintBitsToFloat(pointColumns[uAttributeOffsets[{attribute}] + slot]), 0.0, 0.0, 0.0);\n"
-            )),
-            PointInstruction::StoreNumber { attribute, value } => body.push_str(&format!(
-                "    vec4 {register} = r{value};\n    pointColumns[uAttributeOffsets[{attribute}] + slot] = floatBitsToUint(valid ? {register}.x : 0.0);\n"
-            )),
+            PointInstruction::LoadAttribute { attribute } => {
+                let kind = attribute_type(program, *attribute)?;
+                body.push_str(&load_attribute_source(&register, *attribute, kind));
+            }
+            PointInstruction::StoreAttribute { attribute, value } => {
+                let kind = attribute_type(program, *attribute)?;
+                body.push_str(&store_attribute_source(
+                    &register,
+                    *attribute,
+                    *value,
+                    kind,
+                ));
+            }
             PointInstruction::Binary {
                 operation,
                 left,
@@ -359,15 +371,15 @@ fn compute_source(
             } => {
                 if *operation == NumericBinaryOperation::Fmod {
                     body.push_str(&format!(
-                        "    if (valid && r{right}.x == 0.0) valid = false;\n    float {register}_quotient = valid ? trunc(r{left}.x / r{right}.x) : 0.0;\n    if (isnan({register}_quotient) || isinf({register}_quotient)) valid = false;\n    float {register}_value = valid ? r{left}.x - r{right}.x * {register}_quotient : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    vec4 {register} = vec4(valid ? {register}_value : 0.0, 0.0, 0.0, 0.0);\n"
+                        "    if (valid && r{right} == 0.0) valid = false;\n    float {register}_quotient = valid ? trunc(r{left} / r{right}) : 0.0;\n    if (isnan({register}_quotient) || isinf({register}_quotient)) valid = false;\n    float {register}_value = valid ? r{left} - r{right} * {register}_quotient : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
                     ));
                     continue;
                 }
                 let expression = match operation {
-                    NumericBinaryOperation::Add => format!("r{left}.x + r{right}.x"),
-                    NumericBinaryOperation::Subtract => format!("r{left}.x - r{right}.x"),
-                    NumericBinaryOperation::Multiply => format!("r{left}.x * r{right}.x"),
-                    NumericBinaryOperation::Divide => format!("r{left}.x / r{right}.x"),
+                    NumericBinaryOperation::Add => format!("r{left} + r{right}"),
+                    NumericBinaryOperation::Subtract => format!("r{left} - r{right}"),
+                    NumericBinaryOperation::Multiply => format!("r{left} * r{right}"),
+                    NumericBinaryOperation::Divide => format!("r{left} / r{right}"),
                     NumericBinaryOperation::Fmod => {
                         return Err(LibraryError::Validation(
                             "Point Fmod lowering entered an inconsistent branch".to_string(),
@@ -379,15 +391,15 @@ fn compute_source(
                     NumericBinaryOperation::Divide | NumericBinaryOperation::Fmod
                 ) {
                     body.push_str(&format!(
-                        "    if (valid && r{right}.x == 0.0) valid = false;\n"
+                        "    if (valid && r{right} == 0.0) valid = false;\n"
                     ));
                 }
                 body.push_str(&format!(
-                    "    float {register}_value = valid ? {expression} : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    vec4 {register} = vec4(valid ? {register}_value : 0.0, 0.0, 0.0, 0.0);\n"
+                    "    float {register}_value = valid ? {expression} : 0.0;\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
                 ));
             }
             PointInstruction::ColorRamp { gradient, factor } => body.push_str(&format!(
-                "    vec4 {register} = valid ? sample_point_ramp({gradient}u, r{factor}.x) : vec4(0.0);\n"
+                "    vec4 {register} = valid ? sample_point_ramp({gradient}u, r{factor}) : vec4(0.0);\n"
             )),
         }
     }
@@ -405,17 +417,134 @@ fn compute_source(
         .shader()
         .replace("// PARTICLE_STRUCT", PARTICLE_STRUCT_GLSL);
     Ok(format!(
-        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ vec4 pointData[]; }};\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n        return;\n    }}\n{body}}}\n"
+        "#version 430 core\nlayout(local_size_x = 64) in;\n{RENDER_POINT_GLSL}\n{point_source}\nlayout(std430, binding = 1) buffer PointColumns {{ uint pointColumns[]; }};\nlayout(std430, binding = 2) buffer PointColors {{ vec4 pointColors[]; }};\nlayout(std430, binding = 3) readonly buffer PointProgramData {{ uvec4 pointData[]; }};\nuniform uint uCapacity;\nuniform uint uSeed;\nuniform uint uAttributeOffsets[{POINT_MAX_ATTRIBUTE_COUNT}];\n{PARTICLE_RANDOM_FUNCTIONS}\n{ramp_function}\nvoid main() {{\n    uint slot = gl_GlobalInvocationID.x;\n    if (slot >= uCapacity) return;\n    RenderPoint point = load_render_point(slot);\n    if (!point.alive) {{\n        pointColors[slot] = vec4(0.0);\n        return;\n    }}\n{body}}}\n"
     ))
+}
+
+fn attribute_type(
+    program: &PointRenderProgram,
+    attribute: u16,
+) -> Result<PointAttributeElementType, LibraryError> {
+    program
+        .schema
+        .attributes()
+        .get(usize::from(attribute))
+        .map(|attribute| attribute.element_type())
+        .ok_or_else(|| {
+            LibraryError::Validation("Point instruction references a missing attribute".to_string())
+        })
+}
+
+fn glsl_type(kind: PointAttributeElementType) -> &'static str {
+    match kind {
+        PointAttributeElementType::Number => "float",
+        PointAttributeElementType::Integer => "int",
+        PointAttributeElementType::Vec2 => "vec2",
+        PointAttributeElementType::Vec3 => "vec3",
+        PointAttributeElementType::Vec4 | PointAttributeElementType::Color => "vec4",
+    }
+}
+
+fn component_count(kind: PointAttributeElementType) -> usize {
+    match kind {
+        PointAttributeElementType::Number | PointAttributeElementType::Integer => 1,
+        PointAttributeElementType::Vec2 => 2,
+        PointAttributeElementType::Vec3 => 3,
+        PointAttributeElementType::Vec4 | PointAttributeElementType::Color => 4,
+    }
+}
+
+fn constant_register_source(
+    register: &str,
+    index: usize,
+    kind: PointAttributeElementType,
+) -> String {
+    let expression = match kind {
+        PointAttributeElementType::Number => format!("uintBitsToFloat(pointData[{index}].x)"),
+        // GLSL 4.30 section 5.4.1 defines int(uint)/uint(int) to preserve the
+        // source bit pattern. Float bitcasts are not safe transport because
+        // section 8.3 permits NaN encodings to become unspecified.
+        // https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.30.pdf
+        PointAttributeElementType::Integer => format!("int(pointData[{index}].x)"),
+        PointAttributeElementType::Vec2 => format!("uintBitsToFloat(pointData[{index}].xy)"),
+        PointAttributeElementType::Vec3 => format!("uintBitsToFloat(pointData[{index}].xyz)"),
+        PointAttributeElementType::Vec4 | PointAttributeElementType::Color => {
+            format!("uintBitsToFloat(pointData[{index}])")
+        }
+    };
+    format!("    {} {register} = {expression};\n", glsl_type(kind))
+}
+
+fn load_attribute_source(
+    register: &str,
+    attribute: u16,
+    kind: PointAttributeElementType,
+) -> String {
+    let stride_words = kind.gpu_layout().1 / 4;
+    let base = format!("uAttributeOffsets[{attribute}] + slot * {stride_words}u");
+    let raw = match kind {
+        PointAttributeElementType::Number | PointAttributeElementType::Integer => {
+            format!("pointColumns[{base}]")
+        }
+        PointAttributeElementType::Vec2 => {
+            format!("uvec2(pointColumns[{base}], pointColumns[{base} + 1u])")
+        }
+        PointAttributeElementType::Vec3 => format!(
+            "uvec3(pointColumns[{base}], pointColumns[{base} + 1u], pointColumns[{base} + 2u])"
+        ),
+        PointAttributeElementType::Vec4 | PointAttributeElementType::Color => format!(
+            "uvec4(pointColumns[{base}], pointColumns[{base} + 1u], pointColumns[{base} + 2u], pointColumns[{base} + 3u])"
+        ),
+    };
+    let expression = if kind == PointAttributeElementType::Integer {
+        format!("int({raw})")
+    } else {
+        format!("uintBitsToFloat({raw})")
+    };
+    format!("    {} {register} = {expression};\n", glsl_type(kind))
+}
+
+fn store_attribute_source(
+    register: &str,
+    attribute: u16,
+    value: u16,
+    kind: PointAttributeElementType,
+) -> String {
+    let stride_words = kind.gpu_layout().1 / 4;
+    let base = format!("uAttributeOffsets[{attribute}] + slot * {stride_words}u");
+    let mut source = format!("    {} {register} = r{value};\n", glsl_type(kind));
+    let components = ["x", "y", "z", "w"];
+    for (index, component) in components.iter().take(component_count(kind)).enumerate() {
+        let value = if kind == PointAttributeElementType::Integer {
+            format!("uint(valid ? {register} : 0)")
+        } else {
+            let access = if component_count(kind) == 1 {
+                register.to_string()
+            } else {
+                format!("{register}.{component}")
+            };
+            format!("floatBitsToUint(valid ? {access} : 0.0)")
+        };
+        let suffix = if index == 0 {
+            String::new()
+        } else {
+            format!(" + {index}u")
+        };
+        source.push_str(&format!("    pointColumns[{base}{suffix}] = {value};\n"));
+    }
+    if kind == PointAttributeElementType::Vec3 {
+        source.push_str(&format!("    pointColumns[{base} + 3u] = 0u;\n"));
+    }
+    source
 }
 
 fn ramp_source() -> String {
     format!(
         r#"
 vec4 sample_point_ramp(uint rampIndex, float factor) {{
-    vec4 header = pointData[{POINT_MAX_INSTRUCTIONS}u + rampIndex];
-    uint count = uint(header.x);
-    uint spread = uint(header.y);
+    uvec4 header = pointData[{POINT_MAX_INSTRUCTIONS}u + rampIndex];
+    uint count = header.x;
+    uint spread = header.y;
     float parameter = factor;
     if (spread == 0u) {{
         parameter = clamp(parameter, 0.0, 1.0);
@@ -426,13 +555,16 @@ vec4 sample_point_ramp(uint rampIndex, float factor) {{
         parameter = reflected <= 1.0 ? reflected : 2.0 - reflected;
     }}
     uint base = {PROGRAM_HEADER_VEC4S}u + rampIndex * {ramp_stride}u;
-    vec4 leftStop = pointData[base];
-    vec4 leftColor = vec4(leftStop.yzw, pointData[base + 1u].x);
+    vec4 leftStop = uintBitsToFloat(pointData[base]);
+    vec4 leftColor = vec4(leftStop.yzw, uintBitsToFloat(pointData[base + 1u].x));
     if (parameter < leftStop.x) return leftColor;
     for (uint index = 1u; index < {POINT_MAX_RAMP_STOPS}u; ++index) {{
         if (index >= count) break;
-        vec4 rightStop = pointData[base + index * 2u];
-        vec4 rightColor = vec4(rightStop.yzw, pointData[base + index * 2u + 1u].x);
+        vec4 rightStop = uintBitsToFloat(pointData[base + index * 2u]);
+        vec4 rightColor = vec4(
+            rightStop.yzw,
+            uintBitsToFloat(pointData[base + index * 2u + 1u].x)
+        );
         if (parameter < rightStop.x) {{
             float amount = (parameter - leftStop.x) / (rightStop.x - leftStop.x);
             return mix(leftColor, rightColor, amount);
@@ -448,36 +580,33 @@ vec4 sample_point_ramp(uint rampIndex, float factor) {{
 }
 
 fn program_data(program: &PointRenderProgram) -> Result<Vec<u8>, LibraryError> {
-    let mut values = vec![[0.0_f32; 4]; PROGRAM_DATA_VEC4S];
+    let mut values = vec![[0_u32; 4]; PROGRAM_DATA_VEC4S];
     for (index, instruction) in program.instructions.iter().enumerate() {
         if let PointInstruction::Constant { value } = instruction {
-            values[index] = match value {
-                PropertyValue::Number(_) => packed_value(value)?,
-                PropertyValue::ColorValue(_) => packed_value(value)?,
-                _ => {
-                    return Err(LibraryError::Validation(
-                        "Point program contains an unsupported constant".to_string(),
-                    ));
-                }
-            };
+            values[index] = packed_value(value)?;
         }
     }
     for (ramp_index, ramp) in program.ramps.iter().enumerate() {
         values[POINT_MAX_INSTRUCTIONS + ramp_index] = [
-            ramp.stops().len() as f32,
+            ramp.stops().len() as u32,
             match ramp.spread() {
-                GradientSpread::Pad => 0.0,
-                GradientSpread::Repeat => 1.0,
-                GradientSpread::Reflect => 2.0,
+                GradientSpread::Pad => 0,
+                GradientSpread::Repeat => 1,
+                GradientSpread::Reflect => 2,
             },
-            0.0,
-            0.0,
+            0,
+            0,
         ];
         let base = PROGRAM_HEADER_VEC4S + ramp_index * POINT_MAX_RAMP_STOPS * RAMP_STOP_VEC4S;
         for (stop_index, stop) in ramp.stops().iter().enumerate() {
             let color = packed_value(&PropertyValue::ColorValue(stop.color().clone()))?;
-            values[base + stop_index * 2] = [stop.offset() as f32, color[0], color[1], color[2]];
-            values[base + stop_index * 2 + 1] = [color[3], 0.0, 0.0, 0.0];
+            values[base + stop_index * 2] = [
+                (stop.offset() as f32).to_bits(),
+                color[0],
+                color[1],
+                color[2],
+            ];
+            values[base + stop_index * 2 + 1] = [color[3], 0, 0, 0];
         }
     }
     let mut bytes = Vec::with_capacity(PROGRAM_DATA_BYTES);
@@ -489,21 +618,21 @@ fn program_data(program: &PointRenderProgram) -> Result<Vec<u8>, LibraryError> {
     Ok(bytes)
 }
 
-fn packed_value(value: &PropertyValue) -> Result<[f32; 4], LibraryError> {
-    let kind = match value {
-        PropertyValue::Number(_) => crate::model::point::PointAttributeElementType::Number,
-        PropertyValue::ColorValue(_) => crate::model::point::PointAttributeElementType::Color,
-        _ => {
-            return Err(LibraryError::Validation(
-                "Point program value is neither Number nor Color".to_string(),
-            ));
-        }
-    };
+fn packed_value(value: &PropertyValue) -> Result<[u32; 4], LibraryError> {
+    let kind =
+        PointAttributeElementType::from_property_value(value).map_err(LibraryError::Validation)?;
     match kind.pack_value(value).map_err(LibraryError::Validation)? {
-        PointAttributeGpuDefault::Number(value) => Ok([value, 0.0, 0.0, 0.0]),
-        PointAttributeGpuDefault::Color(value) => Ok(value),
-        _ => Err(LibraryError::Validation(
-            "Point program packed an unexpected GPU value".to_string(),
-        )),
+        PointAttributeGpuDefault::Number(value) => Ok([value.to_bits(), 0, 0, 0]),
+        PointAttributeGpuDefault::Integer(value) => Ok([value as u32, 0, 0, 0]),
+        PointAttributeGpuDefault::Vec2(value) => Ok([value[0].to_bits(), value[1].to_bits(), 0, 0]),
+        PointAttributeGpuDefault::Vec3(value) => Ok([
+            value[0].to_bits(),
+            value[1].to_bits(),
+            value[2].to_bits(),
+            0,
+        ]),
+        PointAttributeGpuDefault::Vec4(value) | PointAttributeGpuDefault::Color(value) => {
+            Ok(value.map(f32::to_bits))
+        }
     }
 }

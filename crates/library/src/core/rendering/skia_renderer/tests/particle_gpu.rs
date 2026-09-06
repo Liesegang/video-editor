@@ -2,8 +2,9 @@ use super::point_support::{test_gradient, test_random};
 use super::*;
 use crate::model::frame::particle::ParticleForce;
 use crate::model::point::{
-    NumericBinaryOperation, PointAttributeDefinition, PointAttributeElementType, PointAttributeId,
-    PointAttributeSchema, PointInstruction, PointRenderProgram,
+    NumericBinaryOperation, PointAttributeDefinition, PointAttributeElementType,
+    PointAttributeGpuDefault, PointAttributeId, PointAttributeSchema, PointInstruction,
+    PointRenderProgram,
 };
 use crate::model::property::{GradientSpread, PropertyValue};
 
@@ -188,7 +189,7 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
         schema,
         instructions: vec![
             PointInstruction::NormalizedAge,
-            PointInstruction::StoreNumber {
+            PointInstruction::StoreAttribute {
                 attribute: 0,
                 value: 0,
             },
@@ -242,8 +243,11 @@ fn gpu_point_fields_store_math_random_ramp_and_checkpoint_exactly() {
     let field_seed = crate::rendering::scene_runtime::invocation_seed(&scene);
     for point in &first_fields {
         let normalized_age = (point.age.unwrap() / point.lifetime.unwrap()).clamp(0.0, 1.0);
-        assert!((point.attributes[0] - normalized_age).abs() <= 2.0e-6);
-        let factor = point.attributes[0] + test_random(field_seed, point.serial, 1) * 0.25;
+        let PointAttributeGpuDefault::Number(attribute) = point.attributes[0] else {
+            panic!("normalized age readback must remain Number")
+        };
+        assert!((attribute - normalized_age).abs() <= 2.0e-6);
+        let factor = attribute + test_random(field_seed, point.serial, 1) * 0.25;
         let expected = crate::color_management::sample_gradient_at(&ramp, f64::from(factor))
             .unwrap()
             .rgba();

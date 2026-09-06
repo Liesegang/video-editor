@@ -57,7 +57,7 @@ impl PointColumnLayout {
         let mut cursor = checked_column_size(capacity, POINT_SERIAL_STRIDE_BYTES)?;
         let mut attributes = Vec::with_capacity(schema.attributes().len());
         for attribute in schema.attributes() {
-            let (alignment, stride_bytes) = gpu_layout(attribute.element_type());
+            let (alignment, stride_bytes) = attribute.element_type().gpu_layout();
             cursor = align_up(cursor, alignment)?;
             let offset_bytes = cursor;
             cursor = cursor
@@ -89,6 +89,16 @@ impl PointColumnLayout {
 }
 
 impl PointAttributeElementType {
+    /// Physical column alignment and element stride in bytes. GPU codegen
+    /// uses this same contract; logical Vec3 components still occupy 16 bytes.
+    pub(crate) const fn gpu_layout(self) -> (u64, u32) {
+        match self {
+            Self::Number | Self::Integer => (4, 4),
+            Self::Vec2 => (8, 8),
+            Self::Vec3 | Self::Vec4 | Self::Color => (16, 16),
+        }
+    }
+
     /// Checked conversion shared by column defaults and sampled field uniforms.
     pub fn pack_value(self, value: &PropertyValue) -> Result<PointAttributeGpuDefault, String> {
         self.validate_authored_default(value)?;
@@ -127,16 +137,6 @@ impl PointAttributeElementType {
             }
             (expected, actual) => Err(default_type_mismatch(expected, actual)),
         }
-    }
-}
-
-fn gpu_layout(element_type: PointAttributeElementType) -> (u64, u32) {
-    match element_type {
-        PointAttributeElementType::Number | PointAttributeElementType::Integer => (4, 4),
-        PointAttributeElementType::Vec2 => (8, 8),
-        PointAttributeElementType::Vec3
-        | PointAttributeElementType::Vec4
-        | PointAttributeElementType::Color => (16, 16),
     }
 }
 

@@ -72,9 +72,18 @@ Info's **Random** output with Grid; Age and Normalized Age require particles.
 Lattice point identities survive axis-count changes, so surviving points keep
 their random values. Each axis supports up to 1,024 points, with 100,000 total.
 
-This execution slice supports Number attributes, computed on the GPU at each
-rendered frame (after simulation for particles). It does not yet accumulate
-attributes across simulation steps.
+Store Attribute Nodes support Number, Integer, Vec2, Vec3, Vec4, and Color.
+For example, connect a Color Ramp to **Store Color Attribute** and use its
+Attribute output as Sprite Color. **Point Info → Position** supplies a Vec3
+field in producer-local coordinates, before the Sprite transform; capture it
+with **Store Vec3 Attribute**. Typed Attribute outputs can feed later Stores
+without changing their type. Integer attributes preserve exact signed 32-bit
+values, and Color attributes use working-linear color through the GPU path.
+Arithmetic Nodes currently operate on Number fields; Vector/Integer field
+arithmetic and implicit per-point type conversions are not supported.
+
+Attributes are computed on the GPU at each rendered frame (after simulation
+for particles). They are not yet accumulated across simulation steps.
 Programs are bounded to 16 attributes, 64 instructions, and 8 Color Ramps with
 64 stops each. Invalid per-point arithmetic produces a transparent Sprite for
 that point. Runtime arrays and GPU programs are not saved into Projects.

@@ -4,7 +4,8 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
-use crate::model::property::PropertyValue;
+use crate::model::frame::color::Color;
+use crate::model::property::{ColorValue, PropertyValue, Vec2, Vec3, Vec4};
 
 pub const POINT_MAX_ATTRIBUTE_COUNT: usize = 16;
 pub const POINT_ATTRIBUTE_NAME_MAX_BYTES: usize = 128;
@@ -280,6 +281,50 @@ fn validate_display_name(display_name: &str) -> Result<(), String> {
 }
 
 impl PointAttributeElementType {
+    /// Canonical authored default shared by the Node catalog and compiler.
+    /// It is not an implicit conversion or a fallback for missing input data.
+    pub fn default_value(self) -> PropertyValue {
+        match self {
+            Self::Number => PropertyValue::Number(0.0.into()),
+            Self::Integer => PropertyValue::Integer(0),
+            Self::Vec2 => PropertyValue::Vec2(Vec2 {
+                x: 0.0.into(),
+                y: 0.0.into(),
+            }),
+            Self::Vec3 => PropertyValue::Vec3(Vec3 {
+                x: 0.0.into(),
+                y: 0.0.into(),
+                z: 0.0.into(),
+            }),
+            Self::Vec4 => PropertyValue::Vec4(Vec4 {
+                x: 0.0.into(),
+                y: 0.0.into(),
+                z: 0.0.into(),
+                w: 0.0.into(),
+            }),
+            Self::Color => {
+                PropertyValue::ColorValue(ColorValue::from_straight_srgba8(&Color::white()))
+            }
+        }
+    }
+
+    /// Recognize a canonical field constant without narrowing or coercing it.
+    /// Runtime values still require `pack_value` validation before GPU upload.
+    pub fn from_property_value(value: &PropertyValue) -> Result<Self, String> {
+        match value {
+            PropertyValue::Number(_) => Ok(Self::Number),
+            PropertyValue::Integer(_) => Ok(Self::Integer),
+            PropertyValue::Vec2(_) => Ok(Self::Vec2),
+            PropertyValue::Vec3(_) => Ok(Self::Vec3),
+            PropertyValue::Vec4(_) => Ok(Self::Vec4),
+            PropertyValue::ColorValue(_) => Ok(Self::Color),
+            _ => Err(format!(
+                "Point constants require canonical Number, Integer, Vec2/3/4 or ColorValue, received {}",
+                property_value_kind(value)
+            )),
+        }
+    }
+
     /// Validate the persisted value without requiring a runtime color backend.
     /// Color-space resolution is deferred to GPU layout derivation, allowing a
     /// structurally valid authored color reference to survive load/save even

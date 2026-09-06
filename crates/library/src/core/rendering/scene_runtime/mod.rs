@@ -5,6 +5,8 @@ mod gl_backend;
 mod point_fields;
 #[cfg(test)]
 mod readback;
+#[cfg(test)]
+pub(crate) use readback::PointFieldReadback;
 mod render;
 mod shaders;
 mod simulation;

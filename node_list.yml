@@ -2684,11 +2684,13 @@ Point Info:
   catalog_status: native
   catalog_id: native.point.info
   runtime_status: implemented
-  description: Read the current Point domain's age and stable random fields
+  description: Read the current Point domain's position, particle age, and stable random fields
   inputs:
     - name: points
       type: PointSource
   outputs:
+    - name: position
+      type: Vector3
     - name: age
       type: Scalar
     - name: normalized_age
@@ -2711,6 +2713,86 @@ Store Number Attribute:
       type: PointSource
     - name: attribute
       type: Scalar
+Store Integer Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-integer-attribute
+  runtime_status: implemented
+  description: Store one Integer field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Integer
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Integer
+Store Vec2 Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-vec2-attribute
+  runtime_status: implemented
+  description: Store one Vector2 field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Vector2
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Vector2
+Store Vec3 Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-vec3-attribute
+  runtime_status: implemented
+  description: Store one Vector3 field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Vector3
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Vector3
+Store Vec4 Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-vec4-attribute
+  runtime_status: implemented
+  description: Store one Vector4 field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Vector4
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Vector4
+Store Color Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-color-attribute
+  runtime_status: implemented
+  description: Store one Color field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Color
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Color
 
 # --- 3D ---
 Camera 3D:

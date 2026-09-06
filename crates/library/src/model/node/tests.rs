@@ -565,25 +565,101 @@ fn module_creation_capability_is_owned_by_semantic_catalog_factories() {
 }
 
 #[test]
-fn point_catalog_uses_node_identity_for_named_number_attributes() {
-    use crate::model::point::PointAttributeId;
+fn point_catalog_uses_node_identity_and_one_typed_store_contract() {
+    use crate::model::point::{PointAttributeElementType, PointAttributeId};
 
     let info = native_node_descriptor("native.point.info").unwrap();
     assert!(info.supports_general_module_creation());
     assert_eq!(info.factory(), NativeNodeFactory::NativeOperation);
     assert!(info.property_definitions().is_empty());
+    assert!(info.ports().iter().any(|port| {
+        port.direction == PortDirection::Output
+            && port.key == "position"
+            && port.data_type == PortDataType::Vec3
+    }));
 
-    let store = native_node_descriptor("native.point.store-number-attribute").unwrap();
-    assert!(store.supports_general_module_creation());
+    let stores = [
+        (
+            PointAttributeElementType::Number,
+            PortDataType::Number,
+            "native.point.store-number-attribute",
+            "node_editor.menu.create.point_store_number_attribute",
+        ),
+        (
+            PointAttributeElementType::Integer,
+            PortDataType::Integer,
+            "native.point.store-integer-attribute",
+            "node_editor.menu.create.point_store_integer_attribute",
+        ),
+        (
+            PointAttributeElementType::Vec2,
+            PortDataType::Vec2,
+            "native.point.store-vec2-attribute",
+            "node_editor.menu.create.point_store_vec2_attribute",
+        ),
+        (
+            PointAttributeElementType::Vec3,
+            PortDataType::Vec3,
+            "native.point.store-vec3-attribute",
+            "node_editor.menu.create.point_store_vec3_attribute",
+        ),
+        (
+            PointAttributeElementType::Vec4,
+            PortDataType::Vec4,
+            "native.point.store-vec4-attribute",
+            "node_editor.menu.create.point_store_vec4_attribute",
+        ),
+        (
+            PointAttributeElementType::Color,
+            PortDataType::Color,
+            "native.point.store-color-attribute",
+            "node_editor.menu.create.point_store_color_attribute",
+        ),
+    ];
+    for (element_type, port_type, catalog_id, qa_id) in stores {
+        let role = PointNodeRole::StoreAttribute(element_type);
+        assert_eq!(role.catalog_id(), catalog_id);
+        assert_eq!(PointNodeRole::from_catalog_id(catalog_id), Some(role));
+        assert_eq!(role.attribute_type(), Some(element_type));
+        let descriptor = native_node_descriptor(catalog_id).unwrap();
+        assert_eq!(descriptor.qa_id(), qa_id);
+        assert!(descriptor.supports_general_module_creation());
+        assert_eq!(descriptor.factory(), NativeNodeFactory::NativeOperation);
+        let node = Node::new_catalog_node(descriptor.catalog_id()).unwrap();
+        let expected_default = element_type.default_value();
+        assert_eq!(
+            node.properties().get("value").unwrap().get_static_value(),
+            Some(&expected_default)
+        );
+        for direction in [PortDirection::Input, PortDirection::Output] {
+            let port = descriptor
+                .ports()
+                .iter()
+                .find(|port| {
+                    port.direction == direction
+                        && port.key
+                            == if direction == PortDirection::Input {
+                                POINT_ATTRIBUTE_VALUE_PORT
+                            } else {
+                                POINT_ATTRIBUTE_OUTPUT_PORT
+                            }
+                })
+                .unwrap();
+            assert_eq!(port.data_type, port_type);
+        }
+    }
+
+    let store = native_node_descriptor(
+        PointNodeRole::StoreAttribute(PointAttributeElementType::Number).catalog_id(),
+    )
+    .unwrap();
     let mut node = Node::new_catalog_node(store.catalog_id()).unwrap();
-    assert_eq!(
-        node.properties().get("value").unwrap().get_static_value(),
-        Some(&PropertyValue::Number(OrderedFloat(0.0)))
-    );
     let attribute_id = PointAttributeId::from_uuid(node.id);
     node.name = "heat".to_string();
     assert_eq!(PointAttributeId::from_uuid(node.id), attribute_id);
     assert_eq!(node.name, "heat");
+    assert_eq!(PointNodeRole::Grid.attribute_type(), None);
+    assert_eq!(PointNodeRole::Info.attribute_type(), None);
     assert!(native_node_descriptor("native.particle.set-attribute").is_none());
 
     let sprite = native_node_descriptor("native.particle.sprite-renderer").unwrap();

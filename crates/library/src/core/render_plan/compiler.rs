@@ -783,7 +783,8 @@ pub(super) fn definition_fingerprint(definition: &ModuleDefinition) -> Result<[u
             node.content(),
             crate::model::node::NodeContent::NativeOperation(operation)
                 if crate::model::node::PointNodeRole::from_catalog_id(&operation.catalog_id)
-                    == Some(crate::model::node::PointNodeRole::StoreNumberAttribute)
+                    .and_then(crate::model::node::PointNodeRole::attribute_type)
+                    .is_some()
         );
         if !semantic_point_attribute_name {
             node.name.clear();

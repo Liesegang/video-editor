@@ -181,13 +181,14 @@ pub(crate) enum CompiledPointInstruction {
     },
     Age,
     NormalizedAge,
+    Position,
     Random {
         channel: u32,
     },
     LoadAttribute {
         attribute: u16,
     },
-    StoreNumber {
+    StoreAttribute {
         attribute: u16,
         value: u16,
     },

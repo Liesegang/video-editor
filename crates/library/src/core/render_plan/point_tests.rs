@@ -54,8 +54,11 @@ pub(super) fn point_fixture(count: usize) -> (ParticleFixture, PointNodes) {
     });
 
     let info_node = Node::new_catalog_node(PointNodeRole::Info.catalog_id()).unwrap();
-    let mut store_node =
-        Node::new_catalog_node(PointNodeRole::StoreNumberAttribute.catalog_id()).unwrap();
+    let mut store_node = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(crate::model::point::PointAttributeElementType::Number)
+            .catalog_id(),
+    )
+    .unwrap();
     store_node.name = "heat".to_string();
     let math_node = Node::new_multiply("Scale Heat");
     let ramp_node = Node::new_color("Heat Ramp", ColorContent::ColorRamp);
@@ -152,8 +155,11 @@ fn append_store(fixture: &mut ParticleFixture, nodes: &PointNodes, name: &str) -
             && connection.to.node_id == nodes.renderer
             && connection.to.port == PARTICLE_SYSTEM_PORT)
     });
-    let mut store =
-        Node::new_catalog_node(PointNodeRole::StoreNumberAttribute.catalog_id()).unwrap();
+    let mut store = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(crate::model::point::PointAttributeElementType::Number)
+            .catalog_id(),
+    )
+    .unwrap();
     store.name = name.to_string();
     let store_id = store.id;
     definition.graph.nodes.insert(store_id, store);
@@ -234,7 +240,7 @@ fn heat_field_compiles_store_before_load_and_color_ramp() {
         .position(|instruction| {
             matches!(
                 instruction,
-                super::CompiledPointInstruction::StoreNumber { .. }
+                super::CompiledPointInstruction::StoreAttribute { .. }
             )
         })
         .expect("Store instruction");
@@ -282,7 +288,7 @@ fn grid_random_uses_the_same_store_field_and_sprite_consumer() {
     );
     assert!(program.instructions.iter().any(|instruction| matches!(
         instruction,
-        super::CompiledPointInstruction::StoreNumber { .. }
+        super::CompiledPointInstruction::StoreAttribute { .. }
     )));
 }
 
@@ -613,7 +619,11 @@ fn store_with_uniform_published_sprite_color_still_uses_point_program() {
     definition.graph.connections.retain(|connection| {
         !(connection.to.node_id == renderer && connection.to.port == PARTICLE_SYSTEM_PORT)
     });
-    let store = Node::new_catalog_node(PointNodeRole::StoreNumberAttribute.catalog_id()).unwrap();
+    let store = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(crate::model::point::PointAttributeElementType::Number)
+            .catalog_id(),
+    )
+    .unwrap();
     let store_id = store.id;
     definition.graph.nodes.insert(store_id, store);
     definition.graph.connections.extend([

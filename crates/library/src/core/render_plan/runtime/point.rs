@@ -164,6 +164,7 @@ impl ModuleImageRuntime<'_> {
                     }
                     CompiledPointInstruction::Age => PointInstruction::Age,
                     CompiledPointInstruction::NormalizedAge => PointInstruction::NormalizedAge,
+                    CompiledPointInstruction::Position => PointInstruction::Position,
                     CompiledPointInstruction::Random { channel } => {
                         PointInstruction::Random { channel: *channel }
                     }
@@ -172,8 +173,8 @@ impl ModuleImageRuntime<'_> {
                             attribute: *attribute,
                         }
                     }
-                    CompiledPointInstruction::StoreNumber { attribute, value } => {
-                        PointInstruction::StoreNumber {
+                    CompiledPointInstruction::StoreAttribute { attribute, value } => {
+                        PointInstruction::StoreAttribute {
                             attribute: *attribute,
                             value: *value,
                         }

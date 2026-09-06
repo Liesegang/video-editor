@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::property::{GradientValue, PropertyValue};
+use crate::model::property::{GradientValue, PropertyValue, Vec2, Vec3, Vec4};
 use ordered_float::OrderedFloat;
 
 fn heat_program() -> PointRenderProgram {
@@ -16,7 +16,7 @@ fn heat_program() -> PointRenderProgram {
         .unwrap(),
         instructions: vec![
             PointInstruction::NormalizedAge,
-            PointInstruction::StoreNumber {
+            PointInstruction::StoreAttribute {
                 attribute: 0,
                 value: 0,
             },
@@ -52,7 +52,7 @@ fn render_stage_heat_program_is_typed_bounded_and_serializable_as_frame_command(
 #[test]
 fn point_program_rejects_forward_registers_wrong_types_and_unwritten_attributes() {
     let mut program = heat_program();
-    program.instructions[1] = PointInstruction::StoreNumber {
+    program.instructions[1] = PointInstruction::StoreAttribute {
         attribute: 0,
         value: 5,
     };
@@ -89,4 +89,234 @@ fn point_program_rejects_nonfinite_constants_and_out_of_range_resources() {
         .instructions
         .resize(POINT_MAX_INSTRUCTIONS + 1, PointInstruction::Age);
     assert!(program.validate().unwrap_err().contains("instructions"));
+}
+
+const ATTRIBUTE_TYPES: [PointAttributeElementType; 6] = [
+    PointAttributeElementType::Number,
+    PointAttributeElementType::Integer,
+    PointAttributeElementType::Vec2,
+    PointAttributeElementType::Vec3,
+    PointAttributeElementType::Vec4,
+    PointAttributeElementType::Color,
+];
+
+fn typed_program(kind: PointAttributeElementType, value: PropertyValue) -> PointRenderProgram {
+    PointRenderProgram {
+        schema: PointAttributeSchema::new(
+            ["source", "captured"]
+                .map(|name| {
+                    PointAttributeDefinition::new(
+                        PointAttributeId::new(),
+                        name,
+                        kind,
+                        kind.default_value(),
+                    )
+                    .unwrap()
+                })
+                .to_vec(),
+        )
+        .unwrap(),
+        instructions: vec![
+            PointInstruction::Constant { value },
+            PointInstruction::StoreAttribute {
+                attribute: 0,
+                value: 0,
+            },
+            PointInstruction::LoadAttribute { attribute: 0 },
+            PointInstruction::StoreAttribute {
+                attribute: 1,
+                value: 2,
+            },
+            PointInstruction::LoadAttribute { attribute: 1 },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        ramps: Vec::new(),
+        color_register: if kind == PointAttributeElementType::Color {
+            4
+        } else {
+            5
+        },
+    }
+}
+
+#[test]
+fn every_attribute_type_uses_one_typed_store_load_contract() {
+    for kind in ATTRIBUTE_TYPES {
+        let value = kind.default_value();
+        assert_eq!(
+            PointAttributeElementType::from_property_value(&value).unwrap(),
+            kind
+        );
+        kind.pack_value(&value).unwrap();
+        let program = typed_program(kind, value);
+        program.validate().unwrap();
+        let decoded: PointRenderProgram =
+            serde_json::from_str(&serde_json::to_string(&program).unwrap()).unwrap();
+        assert_eq!(decoded, program);
+        decoded.validate().unwrap();
+
+        for other_kind in ATTRIBUTE_TYPES {
+            if other_kind == kind {
+                continue;
+            }
+            let mut wrong_input = program.clone();
+            wrong_input.instructions[0] = PointInstruction::Constant {
+                value: other_kind.default_value(),
+            };
+            assert!(wrong_input.validate().unwrap_err().contains("requires"));
+
+            let mut wrong_load = program.clone();
+            wrong_load.schema = PointAttributeSchema::new(vec![
+                program.schema.attributes()[0].clone(),
+                PointAttributeDefinition::new(
+                    program.schema.attributes()[1].id(),
+                    "captured",
+                    other_kind,
+                    other_kind.default_value(),
+                )
+                .unwrap(),
+            ])
+            .unwrap();
+            assert!(wrong_load.validate().unwrap_err().contains("requires"));
+        }
+    }
+}
+
+#[test]
+fn typed_program_rejects_duplicate_missing_and_unwritten_stores() {
+    for kind in ATTRIBUTE_TYPES {
+        let program = typed_program(kind, kind.default_value());
+        let mut duplicate = program.clone();
+        duplicate.instructions[3] = PointInstruction::StoreAttribute {
+            attribute: 0,
+            value: 2,
+        };
+        assert!(
+            duplicate
+                .validate()
+                .unwrap_err()
+                .contains("multiple stores")
+        );
+
+        let mut missing = program.clone();
+        missing.instructions[3] = PointInstruction::StoreAttribute {
+            attribute: 2,
+            value: 2,
+        };
+        assert!(
+            missing
+                .validate()
+                .unwrap_err()
+                .contains("missing attribute")
+        );
+
+        let mut unwritten = program.clone();
+        unwritten.instructions[3] = PointInstruction::Constant {
+            value: kind.default_value(),
+        };
+        unwritten.instructions[4] = PointInstruction::Constant {
+            value: PointAttributeElementType::Color.default_value(),
+        };
+        assert!(
+            unwritten
+                .validate()
+                .unwrap_err()
+                .contains("without a Store")
+        );
+    }
+}
+
+#[test]
+fn integer_attributes_preserve_exact_i32_constants_without_number_coercion() {
+    for value in [i32::MIN, -16_777_217, 16_777_217, i32::MAX] {
+        let constant = PropertyValue::Integer(i64::from(value));
+        let program = typed_program(PointAttributeElementType::Integer, constant.clone());
+        program.validate().unwrap();
+        assert_eq!(
+            PointAttributeElementType::Integer
+                .pack_value(&constant)
+                .unwrap(),
+            PointAttributeGpuDefault::Integer(value)
+        );
+    }
+    for value in [i64::from(i32::MIN) - 1, i64::from(i32::MAX) + 1] {
+        let program = typed_program(
+            PointAttributeElementType::Integer,
+            PropertyValue::Integer(value),
+        );
+        assert!(program.validate().unwrap_err().contains("signed i32"));
+    }
+}
+
+#[test]
+fn vector_constants_validate_every_component_without_treating_vec4_as_color() {
+    for bad in [f64::NAN, f64::INFINITY, f64::MAX, f64::MIN_POSITIVE] {
+        let values = [
+            PropertyValue::Vec2(Vec2 {
+                x: 0.0.into(),
+                y: bad.into(),
+            }),
+            PropertyValue::Vec3(Vec3 {
+                x: 0.0.into(),
+                y: 0.0.into(),
+                z: bad.into(),
+            }),
+            PropertyValue::Vec4(Vec4 {
+                x: 0.0.into(),
+                y: 0.0.into(),
+                z: 0.0.into(),
+                w: bad.into(),
+            }),
+        ];
+        for value in values {
+            let kind = PointAttributeElementType::from_property_value(&value).unwrap();
+            assert!(typed_program(kind, value).validate().is_err());
+        }
+    }
+    let vector = PropertyValue::Vec4(Vec4 {
+        x: (-3.0).into(),
+        y: 2.0.into(),
+        z: 12.0.into(),
+        w: 42.0.into(),
+    });
+    typed_program(PointAttributeElementType::Vec4, vector)
+        .validate()
+        .unwrap();
+}
+
+#[test]
+fn point_position_is_vec3_and_remains_typed_through_capture() {
+    let mut program = typed_program(
+        PointAttributeElementType::Vec3,
+        PointAttributeElementType::Vec3.default_value(),
+    );
+    program.instructions[0] = PointInstruction::Position;
+    program.validate().unwrap();
+    program.color_register = 4;
+    assert!(
+        program
+            .validate()
+            .unwrap_err()
+            .contains("requires Color, got Vec3")
+    );
+}
+
+#[test]
+fn point_constants_reject_untyped_strings_maps_and_encoded_colors() {
+    for value in [
+        PropertyValue::String("custom".into()),
+        PropertyValue::Boolean(true),
+        PropertyValue::Map(Default::default()),
+        PropertyValue::Gradient(GradientValue::default()),
+        PropertyValue::Color(crate::model::frame::color::Color::white()),
+    ] {
+        assert!(PointAttributeElementType::from_property_value(&value).is_err());
+        assert!(
+            typed_program(PointAttributeElementType::Number, value)
+                .validate()
+                .is_err()
+        );
+    }
 }
