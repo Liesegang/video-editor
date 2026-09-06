@@ -625,7 +625,7 @@ fn apply_module_actions(
                 let result = result.and_then(|owner| {
                     service
                         .publish_module_parameter_keyframe(
-                            owner,
+                            &owner,
                             instance_id,
                             target,
                             property_context.exact_time,

@@ -188,20 +188,24 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
         definition_id,
         effect.output_id,
     );
-    let owner = ModuleAutomationOwner::Attachment(attachment_id);
+    let module_owner = ModuleAutomationOwner::Attachment(attachment_id);
+    let owner = ModuleParameterOwner::Invocation(module_owner);
     let baseline = service.snapshot().expect("baseline");
     assert_eq!(
-        owner.invocation(&baseline).expect("invocation").instance_id,
+        module_owner
+            .invocation(&baseline)
+            .expect("invocation")
+            .instance_id,
         instance_id
     );
     assert_eq!(
-        owner.timeline_id(&baseline).expect("Timeline"),
+        module_owner.timeline_id(&baseline).expect("Timeline"),
         baseline.root_timeline_id
     );
 
     service
         .upsert_module_parameter_keyframe(
-            owner,
+            &owner,
             parameter_id,
             MediaTime::zero(),
             PropertyValue::Number(OrderedFloat(0.0)),
@@ -210,7 +214,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
         .expect("first key");
     service
         .upsert_module_parameter_keyframe(
-            owner,
+            &owner,
             parameter_id,
             seconds(1),
             PropertyValue::Number(OrderedFloat(12.0)),
@@ -225,7 +229,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
     };
     let projected = TimelineEditorService::project_module_parameter_value(
         &before_projection,
-        owner,
+        &owner,
         instance_id,
         parameter_id,
         PropertyValue::Number(OrderedFloat(8.0)),
@@ -234,7 +238,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
     .expect("projection");
     service
         .apply_module_parameter_value(
-            owner,
+            &owner,
             instance_id,
             parameter_id,
             PropertyValue::Number(OrderedFloat(8.0)),
@@ -252,7 +256,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
     service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                owner,
+                owner: owner.clone(),
                 parameter_id,
             },
             second_key_id,
@@ -278,7 +282,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
     service.undo().expect("undo update").expect("change");
     assert_eq!(service.snapshot().expect("restored"), before_projection);
     service
-        .remove_module_parameter_keyframe(owner, parameter_id, second_key_id)
+        .remove_module_parameter_keyframe(&owner, parameter_id, second_key_id)
         .expect("remove attachment key");
     assert_eq!(
         attachment_invocation(&service.snapshot().expect("removed"), attachment_id)
@@ -291,7 +295,7 @@ fn attachment_parameter_automation_is_projected_committed_and_rendered_by_the_sa
     assert_eq!(service.snapshot().expect("restored"), before_projection);
     service
         .set_module_parameter_constant(
-            owner,
+            &owner,
             parameter_id,
             PropertyValue::Number(OrderedFloat(4.0)),
         )
@@ -357,7 +361,7 @@ fn attachment_publish_and_first_key_are_atomic_cow_and_reject_stale_state() {
     let revision = service.revision().expect("revision");
     let publication = service
         .publish_module_parameter_keyframe(
-            ModuleAutomationOwner::Attachment(attachment_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(attachment_id)),
             instance_id,
             effect.sigma_target,
             seconds(1),
@@ -390,7 +394,7 @@ fn attachment_publish_and_first_key_are_atomic_cow_and_reject_stale_state() {
     let stale_before = service.snapshot().expect("stale baseline");
     let error = service
         .publish_module_parameter_keyframe(
-            ModuleAutomationOwner::Attachment(attachment_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(attachment_id)),
             instance_id,
             ModulePortAddress {
                 node_id: uuid::Uuid::new_v4(),
@@ -443,16 +447,16 @@ fn attachment_owner_resolves_item_track_and_timeline_invalidations() {
                 input_bindings: HashMap::new(),
             })
             .expect("attachment");
-        let owner = ModuleAutomationOwner::Attachment(attachment_id);
+        let module_owner = ModuleAutomationOwner::Attachment(attachment_id);
         assert_eq!(
-            owner
+            module_owner
                 .timeline_id(&service.snapshot().expect("project"))
                 .expect("Timeline"),
             timeline_id
         );
         let (_, changes) = service
             .upsert_module_parameter_keyframe(
-                owner,
+                &ModuleParameterOwner::Invocation(module_owner),
                 parameter_id,
                 MediaTime::zero(),
                 PropertyValue::Number(OrderedFloat(2.0)),

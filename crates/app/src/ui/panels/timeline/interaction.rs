@@ -712,6 +712,23 @@ pub(super) fn run_item_actions(
                 super::documents::open_item(project, state, item_id);
                 Ok(())
             }
+            DeferredItemAction::CreatePrefab(item_id) => {
+                let Some(item) = project.items.get(&item_id) else {
+                    continue;
+                };
+                service.extract_item_to_composition(item_id, item.name.clone()).map(|_| {
+                    state.selection.replace(AuthoringSelection::Item(item_id));
+                    state.inspector.invalidate();
+                    state.status = "Created Clip Prefab in Assets / Compositions. Drag it onto the Timeline to reuse it.".to_string();
+                })
+            }
+            DeferredItemAction::MakeCompositionUnique(item_id) => {
+                service.make_composition_unique(item_id).map(|_| {
+                    state.selection.replace(AuthoringSelection::Item(item_id));
+                    state.inspector.invalidate();
+                    state.status = "Created an independent Composition copy. The original and other placements are unchanged.".to_string();
+                })
+            }
             DeferredItemAction::ConvertSourceToNodeClip(item_id) => service
                 .convert_source_to_node_clip(plugins, item_id)
                 .map(|conversion| {

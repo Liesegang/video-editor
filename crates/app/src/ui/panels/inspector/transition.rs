@@ -4,6 +4,7 @@ use library::model::authoring::{
     AuthoringProject, MediaTime, Transition, TransitionAlignment, TransitionId, TransitionMediaType,
 };
 use library::model::property::PropertyValue;
+use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 
 use crate::state::authoring::AuthoringUiState;
@@ -14,6 +15,7 @@ pub(super) fn transition_inspector(
     project: &AuthoringProject,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
+    plugins: &PluginManager,
     transition_id: TransitionId,
 ) {
     let Some(transition) = project.transitions.get(&transition_id) else {
@@ -54,7 +56,7 @@ pub(super) fn transition_inspector(
     participant_summary(ui, project, transition);
     ui.separator();
     timing_controls(ui, project, state, service, transition);
-    module_controls(ui, project, state, service, transition);
+    module_controls(ui, project, state, service, plugins, transition);
 }
 
 fn participant_summary(ui: &mut egui::Ui, project: &AuthoringProject, transition: &Transition) {
@@ -195,6 +197,7 @@ fn module_controls(
     project: &AuthoringProject,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
+    plugins: &PluginManager,
     transition: &Transition,
 ) {
     let Some(module) = transition.processor.module_processor() else {
@@ -256,21 +259,13 @@ fn module_controls(
         );
         return;
     };
-    let Some(local_time) = project
-        .timelines
-        .get(&state.active_timeline_id)
-        .and_then(|timeline| {
-            MediaTime::from_frame_index(state.timeline.current_frame, timeline.fps).ok()
-        })
-        .and_then(|time| {
-            crate::ui::automation_lanes::local_time_for_timeline(project, &automation_owner, time)
-        })
-    else {
-        ui.colored_label(
-            ui.visuals().error_fg_color,
-            "Transition local time is unavailable",
-        );
-        return;
+    let context = crate::ui::module_parameter_editor::ModuleParameterContext {
+        project,
+        service,
+        plugins,
+        owner: library::editor::ModuleParameterOwner::Transition(service_owner),
+        instance,
+        definition,
     };
     let progress_parameter_id = definition
         .host_contract
@@ -300,164 +295,7 @@ fn module_controls(
                 );
             }
             for parameter in parameters {
-                let nested_scope =
-                    edit_instance_path.is_some_and(|path| !path.composition_items.is_empty());
-                let placement_static_override = nested_scope
-                    && placement_overrides.is_some_and(|controls| {
-                        controls.parameter_overrides.contains_key(&parameter.id)
-                    });
-                let placement_automation_override = nested_scope
-                    && placement_overrides.is_some_and(|controls| {
-                        controls.automation_tracks.contains_key(&parameter.id)
-                    });
-                let overridden = if nested_scope {
-                    placement_static_override || placement_automation_override
-                } else {
-                    instance.parameter_overrides.contains_key(&parameter.id)
-                };
-                let static_value = effective_controls
-                    .as_ref()
-                    .map(|controls| &controls.parameter_overrides)
-                    .unwrap_or(&instance.parameter_overrides)
-                    .get(&parameter.id)
-                    .cloned()
-                    .unwrap_or_else(|| parameter.default_value.clone());
-                let automation = effective_controls.as_ref().map_or_else(
-                    || module.automation_tracks.get(&parameter.id),
-                    |controls| controls.automation_tracks.get(&parameter.id),
-                );
-                let model_value = automation
-                    .and_then(|track| track.evaluate_at(local_time).ok())
-                    .unwrap_or(static_value);
-                let mode_state = automation.map_or_else(
-                    || super::PropertyModeState::constant(local_time.to_seconds_f64()),
-                    |track| {
-                        super::PropertyModeState::from_keyframe_times(
-                            local_time.to_seconds_f64(),
-                            track
-                                .keyframes
-                                .iter()
-                                .map(|keyframe| keyframe.time.to_seconds_f64()),
-                        )
-                    },
-                );
-                let draft_key = format!(
-                    "transition:{}:module:{}:{:?}",
-                    transition.id, parameter.id, edit_instance_path
-                );
-                let control_id = format!(
-                    "transition:{}:module_parameter:{}",
-                    transition.id, parameter.id
-                );
-                let (allow_keyframe, keyframe_disabled_reason) =
-                    crate::ui::property_metadata::published_parameter_keyframe_capability(
-                        definition,
-                        parameter.id,
-                    );
-                let (row_result, edited_value, reset) = ui
-                    .horizontal(|ui| {
-                        let value = state
-                            .inspector
-                            .property_values
-                            .entry(draft_key)
-                            .or_insert_with(|| model_value.clone());
-                        let row_result = super::property_row(
-                            ui,
-                            value,
-                            &project.palette,
-                            super::PropertyRowSpec {
-                                control_id: &control_id,
-                                label: &parameter.name,
-                                definition: None,
-                                suffix: "",
-                                speed: 0.1,
-                                mode_state,
-                                allow_keyframe,
-                                keyframe_disabled_reason,
-                                allow_expression: false,
-                                pending_keyframe: None,
-                            },
-                        );
-                        let edited_value = value.clone();
-                        let reset = overridden
-                            && ui
-                                .small_button(icons::ARROW_COUNTER_CLOCKWISE)
-                                .on_hover_text("Reset to the inherited value")
-                                .clicked();
-                        (row_result, edited_value, reset)
-                    })
-                    .inner;
-                if row_result.finished && edited_value != model_value {
-                    let result = super::property_authoring::commit_transition_parameter_value(
-                        service,
-                        &service_owner,
-                        parameter.id,
-                        automation,
-                        edited_value.clone(),
-                        local_time,
-                    );
-                    match result {
-                        Ok(_) => state.status = format!("Updated {}", parameter.name),
-                        Err(error) => state.error = Some(error),
-                    }
-                }
-                if let Some(action) = row_result.mode_action {
-                    let result = super::property_authoring::apply_transition_parameter_mode_action(
-                        service,
-                        &service_owner,
-                        parameter.id,
-                        automation,
-                        edited_value,
-                        local_time,
-                        action,
-                    );
-                    match result {
-                        Ok(()) => {
-                            state.status =
-                                format!("{}: {}", parameter.name, super::mode_action_label(action));
-                        }
-                        Err(error) => state.error = Some(error),
-                    }
-                } else if reset {
-                    let result = match parameter_reset_action(
-                        edit_instance_path.is_some(),
-                        placement_static_override,
-                        placement_automation_override,
-                    ) {
-                        TransitionParameterResetAction::ClearConcreteParameter => {
-                            let Some(path) = edit_instance_path else {
-                                state.error =
-                                    Some("Transition instance path is unavailable".to_string());
-                                continue;
-                            };
-                            service.clear_transition_module_instance_parameter(
-                                path,
-                                transition.id,
-                                parameter.id,
-                            )
-                        }
-                        TransitionParameterResetAction::InheritConcreteAutomation => {
-                            let Some(path) = edit_instance_path else {
-                                state.error =
-                                    Some("Transition instance path is unavailable".to_string());
-                                continue;
-                            };
-                            service.inherit_transition_module_instance_parameter_automation(
-                                path,
-                                transition.id,
-                                parameter.id,
-                            )
-                        }
-                        TransitionParameterResetAction::ClearDefinitionParameter => {
-                            service.clear_module_parameter_override(instance.id, parameter.id)
-                        }
-                    };
-                    match result {
-                        Ok(_) => state.status = format!("Reset {}", parameter.name),
-                        Err(error) => state.error = Some(error.to_string()),
-                    }
-                }
-                super::value_provenance(ui, automation.is_some(), overridden);
+                super::property_authoring::published_parameter_row(ui, state, &context, parameter);
             }
             if has_additional_inputs {
                 ui.add_space(2.0);
@@ -543,27 +381,6 @@ fn module_controls(
         });
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TransitionParameterResetAction {
-    ClearDefinitionParameter,
-    ClearConcreteParameter,
-    InheritConcreteAutomation,
-}
-
-fn parameter_reset_action(
-    has_concrete_path: bool,
-    has_static_override: bool,
-    has_automation_override: bool,
-) -> TransitionParameterResetAction {
-    if !has_concrete_path {
-        TransitionParameterResetAction::ClearDefinitionParameter
-    } else if has_static_override || !has_automation_override {
-        TransitionParameterResetAction::ClearConcreteParameter
-    } else {
-        TransitionParameterResetAction::InheritConcreteAutomation
-    }
-}
-
 fn processor_name(project: &AuthoringProject, transition: &Transition) -> String {
     if let Some(name) = transition
         .processor
@@ -605,26 +422,5 @@ const fn alignment_name(alignment: TransitionAlignment) -> &'static str {
         TransitionAlignment::StartAtEdit => "Start at edit",
         TransitionAlignment::CenteredOnEdit => "Centered on edit",
         TransitionAlignment::EndAtEdit => "End at edit",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parameter_reset_action, TransitionParameterResetAction};
-
-    #[test]
-    fn automation_only_placement_reset_restores_inherited_track() {
-        assert_eq!(
-            parameter_reset_action(true, false, true),
-            TransitionParameterResetAction::InheritConcreteAutomation
-        );
-        assert_eq!(
-            parameter_reset_action(true, true, true),
-            TransitionParameterResetAction::ClearConcreteParameter
-        );
-        assert_eq!(
-            parameter_reset_action(false, false, false),
-            TransitionParameterResetAction::ClearDefinitionParameter
-        );
     }
 }

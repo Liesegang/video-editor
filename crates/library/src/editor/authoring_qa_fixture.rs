@@ -29,7 +29,7 @@ use crate::plugin::PluginManager;
 
 use super::{
     AppearanceOperationFactory, AuthoringPropertyOwner, ModuleAutomationOwner, ModuleItemPlacement,
-    ModuleNodeRequest, TimelineEditorService,
+    ModuleNodeRequest, ModuleParameterOwner, TimelineEditorService,
 };
 
 pub const AUTHORING_E2E_FIXTURE: &str = "authoring_e2e";
@@ -198,14 +198,14 @@ pub fn build_authoring_e2e_fixture(
     let module_color_b = color_value(rgba8(80, 220, 160, 255));
     service.set_module_parameter(module_instance_id, parameter_id, module_color_a.clone())?;
     let (module_key_a, _) = service.upsert_module_parameter_keyframe(
-        ModuleAutomationOwner::Item(node_clip_item_id),
+        &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(node_clip_item_id)),
         parameter_id,
         MediaTime::zero(),
         module_color_a,
         None,
     )?;
     let (module_key_b, _) = service.upsert_module_parameter_keyframe(
-        ModuleAutomationOwner::Item(node_clip_item_id),
+        &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(node_clip_item_id)),
         parameter_id,
         media_time(2, 1)?,
         module_color_b,

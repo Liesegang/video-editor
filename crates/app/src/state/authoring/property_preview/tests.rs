@@ -102,25 +102,27 @@ fn module_digest_includes_instance_parameter_and_time() {
     let instance_id = ModuleInstanceId::new();
     let edit = TransientPropertyEdit::module_parameter(
         ProjectRevision::initial(),
-        ModuleAutomationOwner::Item(item_id),
+        ModuleAutomationOwner::Item(item_id).into(),
         instance_id,
         parameter_id,
         PropertyValue::from(12.0),
         AuthoringPropertyValueTarget::Constant,
     );
-    assert!(edit.matches_module_parameter(ModuleAutomationOwner::Item(item_id), parameter_id));
+    assert!(
+        edit.matches_module_parameter(&ModuleAutomationOwner::Item(item_id).into(), parameter_id)
+    );
     assert!(!edit.matches_module_parameter(
-        ModuleAutomationOwner::Item(TimelineItemId::new()),
+        &ModuleAutomationOwner::Item(TimelineItemId::new()).into(),
         parameter_id
     ));
     for target in [
         PropertyTarget::ModuleParameter {
-            owner: ModuleAutomationOwner::Item(item_id),
+            owner: ModuleAutomationOwner::Item(item_id).into(),
             instance_id: ModuleInstanceId::new(),
             parameter_id,
         },
         PropertyTarget::ModuleParameter {
-            owner: ModuleAutomationOwner::Item(item_id),
+            owner: ModuleAutomationOwner::Item(item_id).into(),
             instance_id,
             parameter_id: PublishedParameterId::new(),
         },
@@ -135,6 +137,54 @@ fn module_digest_includes_instance_parameter_and_time() {
         insertion_id: KeyframeId::new(),
     };
     assert_ne!(edit.digest(), changed.digest());
+}
+
+#[test]
+fn nested_module_drafts_do_not_cross_placement_paths() {
+    use library::editor::TransitionAutomationOwner;
+    use library::model::authoring::{InstancePath, TimelineId, TransitionId};
+
+    let transition_id = TransitionId::new();
+    let root_timeline_id = TimelineId::new();
+    let instance_id = ModuleInstanceId::new();
+    let parameter_id = PublishedParameterId::new();
+    let owner = |item_id| {
+        ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+            transition_id,
+            instance_path: InstancePath {
+                root_timeline_id,
+                composition_items: vec![item_id],
+            },
+        })
+    };
+    let first_owner = owner(TimelineItemId::new());
+    let second_owner = owner(TimelineItemId::new());
+    let make_edit = |owner| {
+        TransientPropertyEdit::module_parameter(
+            ProjectRevision::initial(),
+            owner,
+            instance_id,
+            parameter_id,
+            PropertyValue::from(12.0),
+            AuthoringPropertyValueTarget::Keyframe {
+                local_time: MediaTime::new(1, 2).unwrap(),
+                insertion_id: KeyframeId::new(),
+            },
+        )
+    };
+    let mut first = make_edit(first_owner.clone());
+    let mut second = first.clone();
+    if let PropertyTarget::ModuleParameter { owner, .. } = &mut second.target {
+        *owner = second_owner.clone();
+    }
+    assert_ne!(first.digest(), second.digest());
+    assert!(!first.matches_module_parameter(&second_owner, parameter_id));
+    let second = make_edit(second_owner.clone());
+    let second_key = second.insertion_id();
+    first.update(second);
+    assert_eq!(first.insertion_id(), second_key);
+    assert!(first.matches_module_parameter(&second_owner, parameter_id));
+    assert!(!first.matches_module_parameter(&first_owner, parameter_id));
 }
 
 #[test]
@@ -221,7 +271,7 @@ fn module_parameter_projection_and_commit_use_the_same_typed_edit() {
     );
     let edit = TransientPropertyEdit::module_parameter(
         source_revision,
-        ModuleAutomationOwner::Item(item_id),
+        ModuleAutomationOwner::Item(item_id).into(),
         instance_id,
         parameter_id,
         replacement,
@@ -248,7 +298,7 @@ fn module_keyframe_projection_and_commit_update_the_existing_time() {
     );
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleAutomationOwner::Item(item_id).into(),
             parameter_id,
             MediaTime::zero(),
             initial,
@@ -265,7 +315,7 @@ fn module_keyframe_projection_and_commit_update_the_existing_time() {
     );
     let edit = TransientPropertyEdit::module_parameter(
         service.revision().unwrap(),
-        ModuleAutomationOwner::Item(item_id),
+        ModuleAutomationOwner::Item(item_id).into(),
         instance_id,
         parameter_id,
         replacement,

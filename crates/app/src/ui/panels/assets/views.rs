@@ -181,7 +181,7 @@ impl<'a> LibraryEntry<'a> {
             Self::Composition(timeline) if timeline.id == state.active_timeline_id => {
                 "Double-click to open. A Composition cannot contain itself.".to_string()
             }
-            Self::Composition(_) => "Drag to the Timeline, or double-click to open".to_string(),
+            Self::Composition(_) => "Drag to place a linked clip / prefab. Double-click to edit the shared contents for all linked placements.".to_string(),
             Self::NewNodeClip => "Drag to create a private Node Clip".to_string(),
             Self::NewParticleNodeClip => "Drag the Particle System to the Timeline".to_string(),
             Self::NewShaderNodeClip => "Drag the SkSL Shader to the Timeline".to_string(),
@@ -488,7 +488,11 @@ fn handle_entry_response(
         match entry {
             LibraryEntry::Composition(timeline) => {
                 if ui
-                    .button(format!("{} Open Composition", icons::ARROW_SQUARE_OUT))
+                    .button(format!(
+                        "{} Edit Shared Composition ({} references)",
+                        icons::ARROW_SQUARE_OUT,
+                        project.composition_reference_count(timeline.id)
+                    ))
                     .clicked()
                 {
                     super::open_timeline(project, state, timeline.id);

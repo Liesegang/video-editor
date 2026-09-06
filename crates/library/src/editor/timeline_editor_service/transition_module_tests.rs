@@ -200,9 +200,11 @@ fn nested_transition_fixture() -> NestedTransitionFixture {
         .unwrap();
     let instance_path = InstancePath::root(root_timeline_id).nested(composition_item_id);
     service
-        .set_transition_module_instance_parameter(
-            &instance_path,
-            transition_id,
+        .set_module_parameter_constant(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id,
+                instance_path: instance_path.clone(),
+            }),
             parameter_id,
             PropertyValue::Number(OrderedFloat(0.75)),
         )

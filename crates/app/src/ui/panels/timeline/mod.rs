@@ -60,6 +60,8 @@ enum DeferredItemAction {
     Duplicate(TimelineItemId),
     Delete(TimelineItemId),
     Open(TimelineItemId),
+    CreatePrefab(TimelineItemId),
+    MakeCompositionUnique(TimelineItemId),
     ConvertSourceToNodeClip(TimelineItemId),
     AddTransition(TransitionCreationCandidate),
     RemoveTransition(TransitionId),
@@ -258,15 +260,30 @@ fn timeline_header(
             } else {
                 "Back to root Timeline"
             };
-            if ui
+            let response = ui
                 .small_button(icons::CARET_LEFT)
-                .on_hover_text(tooltip)
-                .clicked()
-            {
+                .on_hover_text(tooltip);
+            crate::qa::register_component_with_metadata(
+                format!("timeline.navigate_parent:{}", state.active_timeline_id),
+                "timeline_navigation_action",
+                response.rect,
+                response.enabled(),
+                None,
+            );
+            if response.clicked() {
                 navigate_to_parent(project, state);
             }
         }
         ui.label(egui::RichText::new(format!("{} {name}", icons::FILM_STRIP)).strong());
+        let references = project.composition_reference_count(state.active_timeline_id);
+        if references > 0 {
+            let warning = ui.small(format!("{} Shared · {references} references", icons::LINK_SIMPLE))
+                .on_hover_text("Content edits change the shared template for every linked clip. Edit Instance controls on the outer clip for placement-only changes.");
+            crate::qa::register_component_with_metadata(
+                "timeline.shared_composition", "composition_sharing_notice", warning.rect, true,
+                Some(serde_json::json!({"timeline_id": state.active_timeline_id, "direct_references": references})),
+            );
+        }
         ui.separator();
         ui.label("Clips");
     });
@@ -410,7 +427,12 @@ fn draw_item(
         }
     }
     response.context_menu(|ui| {
-        if ui.button(format!("{} Open", open_icon(item))).clicked() {
+        let open_label = if let library::model::authoring::SourceRef::Composition(instance) = &item.source {
+            format!("{} Edit Shared Composition ({} references)", open_icon(item), project.composition_reference_count(instance.timeline_id))
+        } else {
+            format!("{} Open", open_icon(item))
+        };
+        if ui.button(open_label).clicked() {
             actions.push(DeferredItemAction::Open(item.id));
             ui.close();
         }
@@ -429,6 +451,22 @@ fn draw_item(
         );
         if duplicate.clicked() {
             actions.push(DeferredItemAction::Duplicate(item.id));
+            ui.close();
+        }
+        let (label, action_name, action, tooltip) = if matches!(item.source, library::model::authoring::SourceRef::Composition(_)) {
+            ("Make Independent Copy", "make_unique", DeferredItemAction::MakeCompositionUnique(item.id),
+             "Copy this Composition's contents and disconnect this placement from the original. Nested child templates remain linked.")
+        } else {
+            ("Create Clip Prefab", "create_prefab", DeferredItemAction::CreatePrefab(item.id),
+             "Keep this clip here and save its contents as a reusable Composition in Assets. Drag it from Assets to place linked copies.")
+        };
+        let reusable = ui.button(format!("{} {label}", icons::CUBE)).on_hover_text(tooltip);
+        crate::qa::register_component_with_metadata(
+            format!("timeline.item.{action_name}:{}", item.id), "timeline_context_menu_action",
+            reusable.rect, reusable.enabled(), Some(serde_json::json!({"item_id": item.id, "action": action_name})),
+        );
+        if reusable.clicked() {
+            actions.push(action);
             ui.close();
         }
         transitions::add_transition_menu(ui, project, item, actions);

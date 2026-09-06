@@ -28,8 +28,9 @@ pub(super) fn module_effect_controls(
         project: resources.project,
         service: resources.service,
         plugins: resources.plugins,
-        owner: library::editor::ModuleAutomationOwner::Attachment(attachment.id),
-        invocation,
+        owner: library::editor::ModuleParameterOwner::Invocation(
+            library::editor::ModuleAutomationOwner::Attachment(attachment.id),
+        ),
         instance,
         definition,
     };

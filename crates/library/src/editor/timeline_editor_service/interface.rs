@@ -73,13 +73,14 @@ pub struct ModuleParameterKeyframePublication {
 
 impl TimelineEditorService {
     /// Publishes one constant internal Node input and creates its first
-    /// Timeline-owned key in the owning Node Clip as one undoable edit.
+    /// Timeline-owned key in the owning invocation or Transition placement as
+    /// one undoable edit.
     ///
     /// Copy-on-writes shared topology to expose the input, but stores no keys
     /// in that Definition: animation belongs to the Timeline invocation.
     pub fn publish_module_parameter_keyframe(
         &self,
-        owner: ModuleAutomationOwner,
+        owner: &ModuleParameterOwner,
         expected_instance_id: ModuleInstanceId,
         target: ModulePortAddress,
         local_time: MediaTime,
@@ -94,9 +95,8 @@ impl TimelineEditorService {
             )));
         }
         let actual_instance_id = owner
-            .invocation(session.project())
-            .map_err(LibraryError::Validation)?
-            .instance_id;
+            .instance_id(session.project())
+            .map_err(LibraryError::Validation)?;
         if actual_instance_id != expected_instance_id {
             return Err(LibraryError::Validation(format!(
                 "Module automation owner changed Module instance from {expected_instance_id} to {actual_instance_id}"
@@ -222,15 +222,14 @@ impl TimelineEditorService {
 
 fn publishable_node_parameter(
     project: &AuthoringProject,
-    owner: ModuleAutomationOwner,
+    owner: &ModuleParameterOwner,
     expected_instance_id: ModuleInstanceId,
     target: &ModulePortAddress,
 ) -> Result<(String, PropertyValue), String> {
-    let invocation = owner.invocation(project)?;
-    if invocation.instance_id != expected_instance_id {
+    let actual_instance_id = owner.instance_id(project)?;
+    if actual_instance_id != expected_instance_id {
         return Err(format!(
-            "Module automation owner changed Module instance from {expected_instance_id} to {}",
-            invocation.instance_id
+            "Module automation owner changed Module instance from {expected_instance_id} to {actual_instance_id}"
         ));
     }
     let instance = project

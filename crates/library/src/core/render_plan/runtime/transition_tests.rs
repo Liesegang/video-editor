@@ -5,7 +5,10 @@ use super::*;
 use crate::animation::EasingFunction;
 use crate::cache::CacheManager;
 use crate::core::render_plan::RenderPlanCompiler;
-use crate::editor::{RenderDestination, RenderService, TimelineEditorService};
+use crate::editor::{
+    ModuleParameterOwner, RenderDestination, RenderService, TimelineEditorService,
+    TransitionAutomationOwner,
+};
 use crate::model::Asset;
 use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, CompositionInstance, DurationPolicy, InstanceLocator,
@@ -598,9 +601,11 @@ fn nested_transition_controls_are_isolated_by_concrete_instance_path() {
     let second_path = InstancePath::root(root_timeline_id).nested(second_item_id);
 
     let changes = service
-        .set_transition_module_instance_parameter(
-            &first_path,
-            transition_id,
+        .set_module_parameter_constant(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id,
+                instance_path: first_path.clone(),
+            }),
             parameter_id,
             PropertyValue::Number(OrderedFloat(1.0)),
         )
@@ -676,7 +681,13 @@ fn nested_transition_controls_are_isolated_by_concrete_instance_path() {
 
     drop(project);
     service
-        .clear_transition_module_instance_parameter(&first_path, transition_id, parameter_id)
+        .clear_module_parameter_override(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id,
+                instance_path: first_path.clone(),
+            }),
+            parameter_id,
+        )
         .unwrap();
     service
         .set_transition_module_parameter_automation(

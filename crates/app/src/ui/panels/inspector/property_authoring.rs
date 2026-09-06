@@ -5,10 +5,8 @@
 //! parameters, and Effect parameters cannot drift into different controls.
 
 use egui::{Align2, FontId, Response, Sense, TextStyle, Ui};
-use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionAutomationOwner};
-use library::model::authoring::{
-    AttachmentId, AutomationTrack, MediaTime, ProjectPalette, PublishedParameterId,
-};
+use library::editor::{AuthoringPropertyOwner, TimelineEditorService};
+use library::model::authoring::{AttachmentId, AutomationTrack, MediaTime, ProjectPalette};
 use library::model::property::{KeyframeId, Property, PropertyDefinition, PropertyValue};
 
 use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
@@ -353,77 +351,6 @@ pub(super) fn commit_expression_source(
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn commit_transition_parameter_value(
-    service: &TimelineEditorService,
-    owner: &TransitionAutomationOwner,
-    parameter_id: PublishedParameterId,
-    automation: Option<&AutomationTrack>,
-    value: PropertyValue,
-    local_time: MediaTime,
-) -> Result<(), String> {
-    if automation.is_some() {
-        service
-            .upsert_transition_parameter_keyframe(owner, parameter_id, local_time, value, None)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    } else {
-        service
-            .set_transition_parameter_constant(owner, parameter_id, value)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-}
-
-pub(super) fn apply_transition_parameter_mode_action(
-    service: &TimelineEditorService,
-    owner: &TransitionAutomationOwner,
-    parameter_id: PublishedParameterId,
-    automation: Option<&AutomationTrack>,
-    value: PropertyValue,
-    local_time: MediaTime,
-    action: PropertyModeAction,
-) -> Result<(), String> {
-    match action {
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Constant) => service
-            .set_transition_parameter_constant(owner, parameter_id, value)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Keyframe) => service
-            .upsert_transition_parameter_keyframe(owner, parameter_id, local_time, value, None)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Expression) => {
-            Err("Transition parameter expressions belong inside the Node Module".to_string())
-        }
-        PropertyModeAction::ToggleKeyframe => {
-            if let Some(keyframe_id) = keyframe_at(automation, local_time) {
-                if automation.is_some_and(|track| track.keyframes.len() == 1) {
-                    service
-                        .set_transition_parameter_constant(owner, parameter_id, value)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                } else {
-                    service
-                        .remove_transition_parameter_keyframe(owner, parameter_id, keyframe_id)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                }
-            } else {
-                service
-                    .upsert_transition_parameter_keyframe(
-                        owner,
-                        parameter_id,
-                        local_time,
-                        value,
-                        None,
-                    )
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            }
-        }
-    }
-}
-
 pub(super) fn commit_builtin_effect_value(
     service: &TimelineEditorService,
     attachment_id: AttachmentId,
@@ -535,22 +462,39 @@ pub(super) fn published_parameter_row(
     parameter: &PublishedParameter,
 ) -> egui::Response {
     let local_time = crate::ui::module_parameter_editor::parameter_local_time(context, state);
-    let automation = context.invocation.automation_tracks.get(&parameter.id);
+    let control_id = match &context.owner {
+        library::editor::ModuleParameterOwner::Transition(owner) => {
+            let transition_id = match owner {
+                library::editor::TransitionAutomationOwner::Definition(transition_id)
+                | library::editor::TransitionAutomationOwner::Instance { transition_id, .. } => {
+                    transition_id
+                }
+            };
+            format!(
+                "transition:{transition_id}:module_parameter:{}",
+                parameter.id
+            )
+        }
+        library::editor::ModuleParameterOwner::Invocation(_) => {
+            format!("module_instance:{}:{}", context.instance.id, parameter.id)
+        }
+    };
+    let mut has_automation = false;
+    let mut has_resettable_override = false;
     let outcome = edit_module_parameter(
         &mut state.inspector,
         context,
         parameter,
         local_time,
         |row| {
+            has_automation = row.has_automation;
+            has_resettable_override = row.has_resettable_override;
             let result = property_row(
                 ui,
                 row.value,
                 &context.project.palette,
                 PropertyRowSpec {
-                    control_id: &format!(
-                        "module_instance:{}:{}",
-                        context.instance.id, parameter.id
-                    ),
+                    control_id: &control_id,
                     label: &parameter.name,
                     definition: row.definition,
                     suffix: "",
@@ -566,13 +510,14 @@ pub(super) fn published_parameter_row(
             result.response.context_menu(|ui| {
                 let reset = ui
                     .add_enabled(
-                        context
-                            .instance
-                            .parameter_overrides
-                            .contains_key(&parameter.id),
-                        egui::Button::new("Reset base to Module default"),
+                        row.has_resettable_override,
+                        egui::Button::new(row.reset_label),
                     )
-                    .on_hover_text("Keep Timeline animation; reset only the base value");
+                    .on_hover_text(row.reset_label);
+                let owner = crate::ui::automation_lanes::module_parameter_owner(
+                    context.project,
+                    &context.owner,
+                );
                 crate::qa::register_component_with_metadata(
                     format!(
                         "inspector.module_parameter.reset:{}:{}",
@@ -581,7 +526,11 @@ pub(super) fn published_parameter_row(
                     "module_parameter_reset",
                     reset.rect,
                     reset.enabled(),
-                    None,
+                    Some(serde_json::json!({
+                        "owner": owner.as_ref().map(crate::ui::automation_lanes::owner_metadata),
+                        "parameter_id": parameter.id,
+                        "label": row.reset_label,
+                    })),
                 );
                 if reset.clicked() {
                     reset_to_default = true;
@@ -608,14 +557,7 @@ pub(super) fn published_parameter_row(
     if let Some(action) = mode_action {
         state.status = format!("{}: {}", parameter.name, super::mode_action_label(action));
     }
-    super::value_provenance(
-        ui,
-        automation.is_some(),
-        context
-            .instance
-            .parameter_overrides
-            .contains_key(&parameter.id),
-    );
+    super::value_provenance(ui, has_automation, has_resettable_override);
     response
 }
 

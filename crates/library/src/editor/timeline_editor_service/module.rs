@@ -6,8 +6,11 @@ mod output;
 mod parameter_automation;
 
 pub use clipboard::{ModuleSelectionClipboard, ModuleSelectionPasteReceipt};
+pub use parameter_automation::ResolvedModuleParameter;
 pub(super) use parameter_automation::{
-    require_module_parameter_automation, upsert_parameter_keyframe,
+    edit_module_parameter_track_in_project, module_parameter_controls,
+    require_module_parameter_automation, set_module_parameter_override_in_project,
+    upsert_parameter_keyframe,
 };
 pub(super) mod removal;
 
@@ -662,6 +665,62 @@ pub(super) fn private_definition_for_instance(
             .sharing = crate::model::authoring::ModuleDefinitionSharing::Private;
     }
     Ok(private_id)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ModuleInstanceCopyPolicy {
+    /// Both instances intentionally keep editing one definition. A formerly
+    /// private definition becomes project-local shared state.
+    Linked,
+    /// Isolate a copied private definition without mutating the source.
+    /// Already reusable definitions remain referenced by both instances.
+    Independent,
+}
+
+pub(super) fn copy_module_instance(
+    project: &mut AuthoringProject,
+    source_instance_id: ModuleInstanceId,
+    policy: ModuleInstanceCopyPolicy,
+) -> Result<ModuleInstanceId, String> {
+    let mut instance = project
+        .module_instances
+        .get(&source_instance_id)
+        .cloned()
+        .ok_or_else(|| format!("Missing Module instance {source_instance_id}"))?;
+    let definition = project
+        .module_definitions
+        .get(&instance.definition_id)
+        .cloned()
+        .ok_or_else(|| format!("Missing Module definition {}", instance.definition_id))?;
+    if matches!(
+        definition.sharing,
+        crate::model::authoring::ModuleDefinitionSharing::Private
+    ) {
+        match policy {
+            ModuleInstanceCopyPolicy::Linked => {
+                project
+                    .module_definitions
+                    .get_mut(&definition.id)
+                    .ok_or_else(|| format!("Missing Module definition {}", definition.id))?
+                    .sharing = crate::model::authoring::ModuleDefinitionSharing::SharedLocal;
+            }
+            ModuleInstanceCopyPolicy::Independent => {
+                let definition_id = ModuleDefinitionId::new();
+                project.module_definitions.insert(
+                    definition_id,
+                    ModuleDefinition {
+                        id: definition_id,
+                        ..definition
+                    },
+                );
+                instance.definition_id = definition_id;
+            }
+        }
+    }
+    instance.id = ModuleInstanceId::new();
+    let instance_id = instance.id;
+    project.module_instances.insert(instance_id, instance);
+    Ok(instance_id)
 }
 
 pub(super) fn remove_instance_and_private_definition(

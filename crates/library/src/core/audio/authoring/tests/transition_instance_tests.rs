@@ -88,9 +88,13 @@ fn audio_transition_parameter_uses_the_concrete_nested_instance_path() {
     let service = crate::editor::TimelineEditorService::new(project).unwrap();
     let first_path = InstancePath::root(root_timeline_id).nested(first_item);
     service
-        .set_transition_module_instance_parameter(
-            &first_path,
-            transition_id,
+        .set_module_parameter_constant(
+            &crate::editor::ModuleParameterOwner::Transition(
+                crate::editor::TransitionAutomationOwner::Instance {
+                    transition_id,
+                    instance_path: first_path,
+                },
+            ),
             parameter_id,
             PropertyValue::Number(OrderedFloat(1.0)),
         )

@@ -5,10 +5,13 @@
 //! transient Preview projection, and the single release-time commit.
 
 use egui::Response;
-use library::editor::{AuthoringPropertyValueTarget, ModuleAutomationOwner, TimelineEditorService};
+use library::editor::{
+    AuthoringPropertyValueTarget, ModuleParameterOwner, TimelineEditorService,
+    TransitionAutomationOwner,
+};
 use library::model::authoring::{
     AuthoringProject, AutomationTrack, MediaTime, ModuleDefinition, ModuleInstance,
-    ModuleInvocation, PublishedParameter, PublishedParameterId,
+    PublishedParameter, PublishedParameterId,
 };
 use library::model::property::{KeyframeId, PropertyDefinition, PropertyValue};
 use library::plugin::PluginManager;
@@ -28,8 +31,7 @@ pub(crate) struct ModuleParameterContext<'a> {
     pub(crate) project: &'a AuthoringProject,
     pub(crate) service: &'a TimelineEditorService,
     pub(crate) plugins: &'a PluginManager,
-    pub(crate) owner: ModuleAutomationOwner,
-    pub(crate) invocation: &'a ModuleInvocation,
+    pub(crate) owner: ModuleParameterOwner,
     pub(crate) instance: &'a ModuleInstance,
     pub(crate) definition: &'a ModuleDefinition,
 }
@@ -41,6 +43,17 @@ pub(crate) fn parameter_local_time(
     let timeline_id = context.owner.timeline_id(context.project)?;
     if timeline_id != state.active_timeline_id {
         return Err("Open the processor's Timeline to edit its animation".to_string());
+    }
+    if let ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+        instance_path,
+        ..
+    }) = &context.owner
+    {
+        if !instance_path.composition_items.is_empty()
+            && state.active_instance_path.as_ref() != Some(instance_path)
+        {
+            return Err("Open the processor's Composition placement to edit it".to_string());
+        }
     }
     let timeline = context
         .project
@@ -62,6 +75,9 @@ pub(crate) struct ModuleParameterRow<'a> {
     pub(crate) allow_keyframe: bool,
     pub(crate) keyframe_disabled_reason: Option<&'static str>,
     pub(crate) pending_keyframe: Option<PendingKeyframeMetadata>,
+    pub(crate) has_resettable_override: bool,
+    pub(crate) has_automation: bool,
+    pub(crate) reset_label: &'static str,
 }
 
 pub(crate) struct ModuleParameterRowInteraction {
@@ -87,25 +103,44 @@ pub(crate) fn edit_module_parameter(
     local_time: Result<MediaTime, String>,
     draw: impl FnOnce(ModuleParameterRow<'_>) -> ModuleParameterRowInteraction,
 ) -> ModuleParameterEditorOutcome {
-    let key = format!("module:{}:{}", context.instance.id, parameter.id);
-    let base_value = context
-        .instance
-        .parameter_overrides
-        .get(&parameter.id)
-        .cloned()
-        .unwrap_or_else(|| parameter.default_value.clone());
+    // A nested Timeline can expose the same Module instance in several
+    // placements. Its scoped owner is part of the draft's identity as well.
+    let key = format!(
+        "module:{:?}:{}:{}",
+        context.owner, context.instance.id, parameter.id
+    );
     let local_seconds = local_time
         .as_ref()
         .map_or(0.0, |time| time.to_seconds_f64());
-    let automation = context.invocation.automation_tracks.get(&parameter.id);
-    let initial = automation
-        .and_then(|track| {
-            local_time
-                .as_ref()
-                .ok()
-                .and_then(|time| track.evaluate_at(*time).ok())
-        })
-        .unwrap_or(base_value);
+    let resolved = TimelineEditorService::resolve_module_parameter(
+        context.project,
+        &context.owner,
+        parameter.id,
+        local_time.as_ref().copied().unwrap_or(MediaTime::zero()),
+    )
+    .map_err(|error| error.to_string())
+    .and_then(|resolved| {
+        if resolved.instance_id == context.instance.id
+            && resolved.definition_id == context.definition.id
+        {
+            Ok(resolved)
+        } else {
+            Err("The parameter editor's Module document is stale".to_string())
+        }
+    });
+    let resolution_error = resolved
+        .as_ref()
+        .err()
+        .cloned()
+        .or_else(|| local_time.as_ref().err().cloned());
+    let automation = resolved
+        .as_ref()
+        .ok()
+        .and_then(|resolved| resolved.automation.as_ref());
+    let initial = resolved.as_ref().map_or_else(
+        |_| parameter.default_value.clone(),
+        |resolved| resolved.value.clone(),
+    );
     let model_value = initial.clone();
     let mode_state = automation.map_or_else(
         || PropertyModeState::constant(local_seconds),
@@ -124,7 +159,7 @@ pub(crate) fn edit_module_parameter(
         published_parameter_keyframe_capability(context.definition, parameter.id);
     let pending_keyframe = pending_module_keyframe(
         view.transient_property_edit.as_ref(),
-        context.owner,
+        &context.owner,
         parameter.id,
     );
     let (interaction, edited_value) = {
@@ -136,12 +171,27 @@ pub(crate) fn edit_module_parameter(
             allow_keyframe,
             keyframe_disabled_reason,
             pending_keyframe,
+            has_resettable_override: resolved
+                .as_ref()
+                .is_ok_and(|resolved| resolved.has_resettable_override),
+            has_automation: automation.is_some(),
+            reset_label: match &context.owner {
+                ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                    instance_path,
+                    ..
+                }) if !instance_path.composition_items.is_empty() => {
+                    "Inherit Timeline value and animation"
+                }
+                _ => "Reset base to Module default",
+            },
         });
         (interaction, value.clone())
     };
-    let validation_error = definition
-        .as_ref()
-        .and_then(|definition| definition.validate_value(&edited_value).err());
+    let validation_error = resolution_error.clone().or_else(|| {
+        definition
+            .as_ref()
+            .and_then(|definition| definition.validate_value(&edited_value).err())
+    });
     let mut error = (interaction.changed || interaction.finished)
         .then(|| validation_error.clone())
         .flatten();
@@ -163,7 +213,7 @@ pub(crate) fn edit_module_parameter(
         && view
             .transient_property_edit
             .as_ref()
-            .is_some_and(|edit| edit.matches_module_parameter(context.owner, parameter.id))
+            .is_some_and(|edit| edit.matches_module_parameter(&context.owner, parameter.id))
     {
         view.transient_property_edit.take()
     } else {
@@ -199,11 +249,14 @@ pub(crate) fn edit_module_parameter(
     let mut applied_mode_action = None;
     if interaction.reset_to_default {
         view.transient_property_edit = None;
-        let result =
-            require_current_revision(context.service, view.synced_revision).and_then(|()| {
+        let result = resolution_error
+            .clone()
+            .map_or(Ok(()), Err)
+            .and_then(|()| require_current_revision(context.service, view.synced_revision))
+            .and_then(|()| {
                 context
                     .service
-                    .clear_module_parameter_override(context.instance.id, parameter.id)
+                    .clear_module_parameter_override(&context.owner, parameter.id)
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             });
@@ -213,20 +266,20 @@ pub(crate) fn edit_module_parameter(
     }
     if let Some(action) = interaction.mode_action {
         view.transient_property_edit = None;
-        let result =
-            require_current_revision(context.service, view.synced_revision).and_then(|()| {
-                match &local_time {
-                    Ok(time) => apply_module_parameter_mode_action(
-                        context.service,
-                        context.owner,
-                        parameter.id,
-                        automation,
-                        edited_value,
-                        *time,
-                        action,
-                    ),
-                    Err(time_error) => Err(time_error.clone()),
-                }
+        let result = resolution_error
+            .map_or(Ok(()), Err)
+            .and_then(|()| require_current_revision(context.service, view.synced_revision))
+            .and_then(|()| match &local_time {
+                Ok(time) => apply_module_parameter_mode_action(
+                    context.service,
+                    &context.owner,
+                    parameter.id,
+                    automation,
+                    edited_value,
+                    *time,
+                    action,
+                ),
+                Err(time_error) => Err(time_error.clone()),
             });
         match result {
             Ok(()) => applied_mode_action = Some(action),
@@ -278,7 +331,7 @@ fn module_parameter_edit(
     };
     Some(TransientPropertyEdit::module_parameter(
         source_revision,
-        context.owner,
+        context.owner.clone(),
         context.instance.id,
         parameter.id,
         value,
@@ -288,7 +341,7 @@ fn module_parameter_edit(
 
 fn pending_module_keyframe(
     edit: Option<&TransientPropertyEdit>,
-    owner: ModuleAutomationOwner,
+    owner: &ModuleParameterOwner,
     parameter_id: PublishedParameterId,
 ) -> Option<PendingKeyframeMetadata> {
     let edit = edit.filter(|edit| edit.matches_module_parameter(owner, parameter_id))?;
@@ -312,7 +365,7 @@ fn published_parameter_definition(
 
 fn apply_module_parameter_mode_action(
     service: &TimelineEditorService,
-    owner: ModuleAutomationOwner,
+    owner: &ModuleParameterOwner,
     parameter_id: PublishedParameterId,
     automation: Option<&AutomationTrack>,
     value: PropertyValue,

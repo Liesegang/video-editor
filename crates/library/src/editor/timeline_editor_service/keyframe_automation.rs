@@ -2,10 +2,7 @@
 
 use super::attachment::{attachment_owner, builtin_effect_parameter_mut, owner_invalidations};
 use super::authoring::{authored_properties_mut, property_owner_invalidations};
-use super::module::require_module_parameter_automation;
-use super::transition_parameter_automation::{
-    edit_transition_parameter_track_in_project, transition_parameter_invalidations,
-};
+use super::module::{edit_module_parameter_track_in_project, require_module_parameter_automation};
 use super::*;
 
 /// Identifies one authoritative automation Track without embedding a second
@@ -17,16 +14,12 @@ pub enum AuthoringKeyframeTarget {
         key: String,
     },
     ModuleParameter {
-        owner: ModuleAutomationOwner,
+        owner: ModuleParameterOwner,
         parameter_id: PublishedParameterId,
     },
     BuiltinEffectParameter {
         attachment_id: AttachmentId,
         key: String,
-    },
-    TransitionParameter {
-        owner: TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
     },
 }
 
@@ -90,17 +83,13 @@ fn keyframe_target_invalidations(
             owner,
             parameter_id,
         } => {
-            require_module_parameter_automation(project, *owner, *parameter_id)?;
+            require_module_parameter_automation(project, owner, *parameter_id)?;
             owner.invalidations(project)
         }
         AuthoringKeyframeTarget::BuiltinEffectParameter { attachment_id, .. } => {
             let owner = attachment_owner(project, *attachment_id)?;
             owner_invalidations(project, &owner)
         }
-        AuthoringKeyframeTarget::TransitionParameter {
-            owner,
-            parameter_id,
-        } => transition_parameter_invalidations(project, owner, *parameter_id),
     }
 }
 
@@ -130,12 +119,11 @@ fn apply_keyframe_update(
         AuthoringKeyframeTarget::ModuleParameter {
             owner,
             parameter_id,
-        } => owner
-            .invocation_mut(project)?
-            .automation_tracks
-            .get_mut(parameter_id)
-            .ok_or_else(|| format!("Missing automation for Published parameter {parameter_id}"))?
-            .update_keyframe(keyframe_id, update.time, update.value, update.easing),
+        } => {
+            edit_module_parameter_track_in_project(project, owner, *parameter_id, false, |track| {
+                track.update_keyframe(keyframe_id, update.time, update.value, update.easing)
+            })
+        }
         AuthoringKeyframeTarget::BuiltinEffectParameter { attachment_id, key } => {
             builtin_effect_parameter_mut(project, *attachment_id, key)?
                 .automation
@@ -143,11 +131,5 @@ fn apply_keyframe_update(
                 .ok_or_else(|| format!("Effect parameter '{key}' has no Automation"))?
                 .update_keyframe(keyframe_id, update.time, update.value, update.easing)
         }
-        AuthoringKeyframeTarget::TransitionParameter {
-            owner,
-            parameter_id,
-        } => edit_transition_parameter_track_in_project(project, owner, *parameter_id, |track| {
-            track.update_keyframe(keyframe_id, update.time, update.value, update.easing)
-        }),
     }
 }

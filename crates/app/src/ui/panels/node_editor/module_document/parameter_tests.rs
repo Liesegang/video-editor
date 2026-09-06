@@ -91,9 +91,7 @@ fn root_path_and_absent_path_are_the_same_parameter_scope() {
             Some(&root_path),
             &host(&fixture, None, fixture.instance_id),
         ),
-        Ok(library::editor::ModuleAutomationOwner::Item(
-            fixture.item_id
-        ))
+        Ok(library::editor::ModuleAutomationOwner::Item(fixture.item_id).into())
     );
     assert_eq!(
         module_parameter_owner(
@@ -102,9 +100,7 @@ fn root_path_and_absent_path_are_the_same_parameter_scope() {
             None,
             &host(&fixture, Some(root_path), fixture.instance_id),
         ),
-        Ok(library::editor::ModuleAutomationOwner::Item(
-            fixture.item_id
-        ))
+        Ok(library::editor::ModuleAutomationOwner::Item(fixture.item_id).into())
     );
 }
 

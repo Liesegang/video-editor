@@ -170,8 +170,8 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     let baseline = service.snapshot().expect("baseline");
 
     let (first_id, first_change) = service
-        .upsert_transition_parameter_keyframe(
-            &owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(owner.clone()),
             parameter_id,
             seconds(0),
             number(1.0),
@@ -182,8 +182,8 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     let after_first = service.snapshot().expect("first state");
 
     let (second_id, second_change) = service
-        .upsert_transition_parameter_keyframe(
-            &owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(owner.clone()),
             parameter_id,
             seconds(2),
             number(2.0),
@@ -204,8 +204,8 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
 
     let update_change = service
         .update_keyframe(
-            &AuthoringKeyframeTarget::TransitionParameter {
-                owner: owner.clone(),
+            &AuthoringKeyframeTarget::ModuleParameter {
+                owner: ModuleParameterOwner::Transition(owner.clone()),
                 parameter_id,
             },
             second_id,
@@ -229,7 +229,11 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     assert!(matches!(updated.easing, EasingFunction::Constant));
 
     let remove_change = service
-        .remove_transition_parameter_keyframe(&owner, parameter_id, first_id)
+        .remove_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(owner.clone()),
+            parameter_id,
+            first_id,
+        )
         .expect("remove Keyframe");
     assert_definition_invalidation(&after_update, transition_id, &remove_change);
     let after_remove = service.snapshot().expect("removed state");
@@ -244,7 +248,11 @@ fn definition_keyframe_commands_are_exact_and_each_is_one_undo_step() {
     );
 
     let constant_change = service
-        .set_transition_parameter_constant(&owner, parameter_id, number(9.0))
+        .set_module_parameter_constant(
+            &ModuleParameterOwner::Transition(owner),
+            parameter_id,
+            number(9.0),
+        )
         .expect("switch to constant");
     assert_definition_invalidation(&after_remove, transition_id, &constant_change);
     let constant = service.snapshot().expect("constant state");
@@ -348,6 +356,180 @@ pub(super) fn wrap_with_two_composition_instances(
     (root_timeline_id, first_item_id, second_item_id)
 }
 
+fn nested_parameter_service(
+    with_inherited_track: bool,
+) -> (
+    TimelineEditorService,
+    ModuleParameterOwner,
+    TransitionId,
+    PublishedParameterId,
+) {
+    let (project, transition_id, parameter_id) = transition_project();
+    let definition_service = TimelineEditorService::new(project).expect("definition service");
+    if with_inherited_track {
+        definition_service
+            .upsert_module_parameter_keyframe(
+                &ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(
+                    transition_id,
+                )),
+                parameter_id,
+                seconds(0),
+                number(1.0),
+                Some(EasingFunction::Linear),
+            )
+            .expect("inherited key");
+    }
+    let mut project = definition_service
+        .snapshot()
+        .expect("definition state")
+        .as_ref()
+        .clone();
+    let nested_timeline_id = project.root_timeline_id;
+    let (root_timeline_id, first_item_id, _) =
+        wrap_with_two_composition_instances(&mut project, nested_timeline_id);
+    project.validate().expect("nested parameter project");
+    (
+        TimelineEditorService::new(project).expect("nested service"),
+        ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+            transition_id,
+            instance_path: InstancePath::root(root_timeline_id).nested(first_item_id),
+        }),
+        transition_id,
+        parameter_id,
+    )
+}
+
+#[test]
+fn nested_parameter_reset_handles_value_track_mask_and_empty_states_atomically() {
+    let (service, owner, _, parameter_id) = nested_parameter_service(false);
+    service
+        .set_module_parameter_constant(&owner, parameter_id, number(4.0))
+        .expect("local constant");
+    service
+        .upsert_module_parameter_keyframe(
+            &owner,
+            parameter_id,
+            seconds(1),
+            number(5.0),
+            Some(EasingFunction::EaseInOutQuad),
+        )
+        .expect("local key");
+    let value_and_track = service.snapshot().expect("value and track");
+    assert!(
+        TimelineEditorService::resolve_module_parameter(
+            &value_and_track,
+            &owner,
+            parameter_id,
+            seconds(1),
+        )
+        .expect("resolved value and track")
+        .has_resettable_override
+    );
+    service
+        .clear_module_parameter_override(&owner, parameter_id)
+        .expect("reset value and track");
+    let reset = service.snapshot().expect("reset state");
+    let resolved =
+        TimelineEditorService::resolve_module_parameter(&reset, &owner, parameter_id, seconds(1))
+            .expect("resolved reset state");
+    assert!(!resolved.has_resettable_override);
+    assert!(resolved.automation.is_none());
+    service.undo().expect("undo reset").expect("reset edit");
+    assert_eq!(service.snapshot().expect("undo state"), value_and_track);
+
+    let (service, owner, transition_id, parameter_id) = nested_parameter_service(true);
+    let instance_path = match &owner {
+        ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+            instance_path,
+            ..
+        }) => instance_path,
+        _ => panic!("expected concrete Transition owner"),
+    };
+    service
+        .clear_transition_module_instance_parameter_automation(
+            instance_path,
+            transition_id,
+            parameter_id,
+        )
+        .expect("local automation mask");
+    let mask_only = service.snapshot().expect("mask-only state");
+    let masked = TimelineEditorService::resolve_module_parameter(
+        &mask_only,
+        &owner,
+        parameter_id,
+        seconds(0),
+    )
+    .expect("resolved mask");
+    assert!(masked.has_resettable_override);
+    assert!(masked.automation.is_none());
+    service
+        .clear_module_parameter_override(&owner, parameter_id)
+        .expect("reset mask-only state");
+    let inherited = service.snapshot().expect("inherited state");
+    let inherited = TimelineEditorService::resolve_module_parameter(
+        &inherited,
+        &owner,
+        parameter_id,
+        seconds(0),
+    )
+    .expect("resolved inherited track");
+    assert!(!inherited.has_resettable_override);
+    assert!(inherited.automation.is_some());
+    service
+        .undo()
+        .expect("undo mask reset")
+        .expect("reset edit");
+    assert_eq!(service.snapshot().expect("undo mask"), mask_only);
+
+    let (service, owner, _, parameter_id) = nested_parameter_service(false);
+    service
+        .upsert_module_parameter_keyframe(
+            &owner,
+            parameter_id,
+            seconds(1),
+            number(2.0),
+            Some(EasingFunction::Linear),
+        )
+        .expect("track-only override");
+    let track_only = service.snapshot().expect("track-only state");
+    let resolved = TimelineEditorService::resolve_module_parameter(
+        &track_only,
+        &owner,
+        parameter_id,
+        seconds(1),
+    )
+    .expect("resolved track-only state");
+    assert!(resolved.has_resettable_override);
+    assert!(resolved.automation.is_some());
+    service
+        .clear_module_parameter_override(&owner, parameter_id)
+        .expect("reset track-only state");
+    let reset = service.snapshot().expect("track reset");
+    assert!(
+        !TimelineEditorService::resolve_module_parameter(&reset, &owner, parameter_id, seconds(1),)
+            .expect("resolved track reset")
+            .has_resettable_override
+    );
+    service
+        .undo()
+        .expect("undo track reset")
+        .expect("reset edit");
+    assert_eq!(service.snapshot().expect("undo track"), track_only);
+
+    let (service, owner, _, parameter_id) = nested_parameter_service(false);
+    let before = service.snapshot().expect("empty state");
+    let revision = service.revision().expect("empty revision");
+    let error = service
+        .clear_module_parameter_override(&owner, parameter_id)
+        .expect_err("empty reset must be rejected");
+    assert!(
+        error.to_string().contains("no resettable override"),
+        "{error}"
+    );
+    assert_eq!(service.revision().expect("unchanged revision"), revision);
+    assert_eq!(service.snapshot().expect("unchanged state"), before);
+}
+
 #[test]
 fn transition_defaults_overrides_and_keyframes_obey_native_hard_bounds() {
     let (project, transition_id, parameter_id) = bounded_transition_project();
@@ -385,8 +567,8 @@ fn transition_defaults_overrides_and_keyframes_obey_native_hard_bounds() {
     let service = TimelineEditorService::new(project.clone()).expect("service");
     let owner = TransitionAutomationOwner::Definition(transition_id);
     let error = service
-        .upsert_transition_parameter_keyframe(
-            &owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(owner),
             parameter_id,
             seconds(0),
             number(-0.1),
@@ -403,8 +585,67 @@ fn transition_defaults_overrides_and_keyframes_obey_native_hard_bounds() {
     let service = TimelineEditorService::new(nested).expect("nested service");
     let before = service.snapshot().expect("before invalid override");
     let path = InstancePath::root(root_timeline_id).nested(first_item_id);
+    let owner = ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+        transition_id,
+        instance_path: path,
+    });
+    let projection_error = TimelineEditorService::project_module_parameter_value(
+        &before,
+        &owner,
+        instance_id,
+        parameter_id,
+        number(1.1),
+        AuthoringPropertyValueTarget::Constant,
+    )
+    .expect_err("projection must obey hard bounds");
+    assert!(
+        projection_error
+            .to_string()
+            .contains("cannot be greater than 1")
+    );
+    let negative_time = TimelineEditorService::project_module_parameter_value(
+        &before,
+        &owner,
+        instance_id,
+        parameter_id,
+        number(0.5),
+        AuthoringPropertyValueTarget::Keyframe {
+            local_time: MediaTime::new(-1, 1).expect("negative time"),
+            insertion_id: KeyframeId::new(),
+        },
+    )
+    .expect_err("negative Transition key time");
+    assert!(negative_time.to_string().contains("non-negative"));
+    let outside_interval_id = KeyframeId::new();
+    let outside_interval = TimelineEditorService::project_module_parameter_value(
+        &before,
+        &owner,
+        instance_id,
+        parameter_id,
+        number(0.5),
+        AuthoringPropertyValueTarget::Keyframe {
+            local_time: seconds(20),
+            insertion_id: outside_interval_id,
+        },
+    )
+    .expect("non-negative keys remain authored beyond the current Transition trim");
+    let outside_interval = TimelineEditorService::resolve_module_parameter(
+        &outside_interval,
+        &owner,
+        parameter_id,
+        seconds(20),
+    )
+    .expect("outside-interval key");
+    assert_eq!(
+        outside_interval
+            .automation
+            .expect("projected automation")
+            .keyframes[0]
+            .id,
+        outside_interval_id
+    );
     let error = service
-        .set_transition_module_instance_parameter(&path, transition_id, parameter_id, number(1.1))
+        .set_module_parameter_constant(&owner, parameter_id, number(1.1))
         .expect_err("concrete Transition override must obey hard bounds");
     assert!(error.to_string().contains("cannot be greater than 1"));
     assert_eq!(service.snapshot().expect("unchanged project"), before);
@@ -416,8 +657,8 @@ fn nested_instance_keyframes_copy_inherited_track_and_isolate_siblings() {
     let definition_service = TimelineEditorService::new(project).expect("definition service");
     let definition_owner = TransitionAutomationOwner::Definition(transition_id);
     let (inherited_id, _) = definition_service
-        .upsert_transition_parameter_keyframe(
-            &definition_owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(definition_owner),
             parameter_id,
             seconds(0),
             number(1.0),
@@ -444,8 +685,8 @@ fn nested_instance_keyframes_copy_inherited_track_and_isolate_siblings() {
     };
 
     let (placement_id, change) = service
-        .upsert_transition_parameter_keyframe(
-            &first_owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(first_owner.clone()),
             parameter_id,
             seconds(1),
             number(2.0),
@@ -523,8 +764,8 @@ fn nested_instance_keyframes_copy_inherited_track_and_isolate_siblings() {
 
     let update_change = service
         .update_keyframe(
-            &AuthoringKeyframeTarget::TransitionParameter {
-                owner: first_owner,
+            &AuthoringKeyframeTarget::ModuleParameter {
+                owner: ModuleParameterOwner::Transition(first_owner),
                 parameter_id,
             },
             placement_id,

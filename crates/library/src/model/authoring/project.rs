@@ -96,6 +96,22 @@ pub struct AuthoringProject {
 }
 
 impl AuthoringProject {
+    /// Counts direct placements of one reusable Timeline definition.
+    ///
+    /// This is an authoring reference count, not the number of concrete
+    /// runtime instances reached recursively from the Project root.
+    pub fn composition_reference_count(&self, timeline_id: TimelineId) -> usize {
+        self.items
+            .values()
+            .filter(|item| {
+                matches!(
+                    &item.source,
+                    SourceRef::Composition(instance) if instance.timeline_id == timeline_id
+                )
+            })
+            .count()
+    }
+
     pub fn new(
         name: impl Into<String>,
         width: u64,

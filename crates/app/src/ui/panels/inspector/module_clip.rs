@@ -58,8 +58,9 @@ pub(super) fn module_parameters(
         project,
         service,
         plugins,
-        owner: library::editor::ModuleAutomationOwner::Item(item.id),
-        invocation,
+        owner: library::editor::ModuleParameterOwner::Invocation(
+            library::editor::ModuleAutomationOwner::Item(item.id),
+        ),
         instance,
         definition,
     };

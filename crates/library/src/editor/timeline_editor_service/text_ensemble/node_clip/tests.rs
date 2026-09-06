@@ -151,7 +151,7 @@ fn remove_cleans_instance_values_and_timeline_automation_atomically() {
         .unwrap();
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)),
             parameter_id,
             time(1),
             default,

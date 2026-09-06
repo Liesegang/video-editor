@@ -15,7 +15,7 @@ mod item;
 mod keyframe_automation;
 mod module;
 mod module_asset;
-mod module_automation_owner;
+mod module_parameter_owner;
 mod module_structure;
 mod node_clip_conversion;
 mod palette;
@@ -30,6 +30,8 @@ mod transition_parameter_automation;
 mod appearance_tests;
 #[cfg(test)]
 mod attachment_tests;
+#[cfg(test)]
+mod composition_tests;
 #[cfg(test)]
 mod edit_plan_tests;
 #[cfg(test)]
@@ -83,8 +85,10 @@ pub use interface::{
     ModuleParameterKeyframePublication,
 };
 pub use keyframe_automation::AuthoringKeyframeTarget;
-pub use module::{ModuleSelectionClipboard, ModuleSelectionPasteReceipt};
-pub use module_automation_owner::ModuleAutomationOwner;
+pub use module::{ModuleSelectionClipboard, ModuleSelectionPasteReceipt, ResolvedModuleParameter};
+pub use module_parameter_owner::{
+    ModuleAutomationOwner, ModuleParameterOwner, TransitionAutomationOwner,
+};
 pub use text_ensemble::{
     NodeClipTextContent, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack,
 };
@@ -100,13 +104,14 @@ use crate::model::BlendMode;
 use crate::model::authoring::{
     Attachment, AttachmentId, AttachmentOwner, AttachmentProcessor, AttachmentStage,
     AuthoringProject, AuthoringSession, AutomationTrack, BuiltinEffectInstance, ChangeSet,
-    CompositionParameter, CompositionParameterId, CompositionParameterTarget, InstanceLocator,
-    InstancePath, MediaInputBinding, MediaTime, ModuleConnectionId, ModuleDefinition,
-    ModuleDefinitionId, ModuleInstance, ModuleInstanceId, ModuleInvocation, ModuleOutputId,
-    ProjectDocument, ProjectFileStore, ProjectInvalidation, ProjectRevision, PublishedMediaInputId,
-    PublishedParameterId, RationalRate, SourceRef, TRACK_VISIBILITY_PROPERTY, TimeMap, Timeline,
-    TimelineId, TimelineInterval, TimelineItem, TimelineItemId, TimelineTrack, TimelineTrackId,
-    TimelineTrackKind, TransitionId, ordered_track_item_ids, track_item_ids_after_placement,
+    CompositionInstance, CompositionParameter, CompositionParameterId, CompositionParameterTarget,
+    DurationPolicy, InstanceLocator, InstancePath, MediaInputBinding, MediaTime,
+    ModuleConnectionId, ModuleDefinition, ModuleDefinitionId, ModuleInstance, ModuleInstanceId,
+    ModuleInvocation, ModuleOutputId, ProjectDocument, ProjectFileStore, ProjectInvalidation,
+    ProjectRevision, PublishedMediaInputId, PublishedParameterId, RationalRate, SourceRef,
+    TRACK_VISIBILITY_PROPERTY, TimeMap, Timeline, TimelineId, TimelineInterval, TimelineItem,
+    TimelineItemId, TimelineTrack, TimelineTrackId, TimelineTrackKind, TransitionId,
+    ordered_track_item_ids, track_item_ids_after_placement,
 };
 use crate::model::frame::color::Color;
 use crate::model::node::Node;
@@ -169,18 +174,6 @@ pub struct PreparedModuleDefinitionEdit {
     pub definition_id: ModuleDefinitionId,
     pub cloned: bool,
     pub changes: Option<ChangeSet>,
-}
-
-/// Editor command scope for a Timeline-owned Transition Module parameter.
-/// Definition scope edits every placement; Instance scope persists a sparse
-/// copy-on-write difference on one concrete nested Composition placement.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum TransitionAutomationOwner {
-    Definition(TransitionId),
-    Instance {
-        transition_id: TransitionId,
-        instance_path: InstancePath,
-    },
 }
 
 #[derive(Clone, Debug)]

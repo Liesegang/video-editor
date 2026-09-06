@@ -115,7 +115,7 @@ fn module_curve_drag_compiles_projected_automation_without_recompiling_topology(
     let (keyframe_id, _) = fixture
         .service
         .upsert_module_parameter_keyframe(
-            library::editor::ModuleAutomationOwner::Item(fixture.item_id),
+            &library::editor::ModuleAutomationOwner::Item(fixture.item_id).into(),
             fixture.color_parameter_id,
             MediaTime::zero(),
             color(12, 24, 36),
@@ -184,7 +184,7 @@ fn module_curve_drag_compiles_projected_automation_without_recompiling_topology(
     assert_eq!(fixture.service.snapshot().expect("pure Project"), source);
 
     let target = AuthoringKeyframeTarget::ModuleParameter {
-        owner: library::editor::ModuleAutomationOwner::Item(fixture.item_id),
+        owner: library::editor::ModuleAutomationOwner::Item(fixture.item_id).into(),
         parameter_id: fixture.color_parameter_id,
     };
     fixture
@@ -213,7 +213,7 @@ fn stale_curve_drag_falls_through_to_current_inspector_projection() {
     let (keyframe_id, _) = fixture
         .service
         .upsert_module_parameter_keyframe(
-            library::editor::ModuleAutomationOwner::Item(fixture.item_id),
+            &library::editor::ModuleAutomationOwner::Item(fixture.item_id).into(),
             fixture.color_parameter_id,
             MediaTime::zero(),
             color(12, 24, 36),
@@ -287,7 +287,7 @@ fn missing_curve_keyframe_projection_errors_without_mutating_the_source() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            library::editor::ModuleAutomationOwner::Item(fixture.item_id),
+            &library::editor::ModuleAutomationOwner::Item(fixture.item_id).into(),
             fixture.color_parameter_id,
             MediaTime::zero(),
             color(12, 24, 36),

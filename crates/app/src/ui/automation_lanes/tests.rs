@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use library::editor::{
-    AuthoringPropertyOwner, ModuleAttachmentPlacement, ModuleAutomationOwner,
-    ParticleNodeClipPlacement, TextEnsembleOperationKind, TimelineEditorService,
+    AuthoringKeyframeTarget, AuthoringPropertyOwner, ModuleAttachmentPlacement,
+    ModuleAutomationOwner, ModuleParameterOwner, ParticleNodeClipPlacement,
+    TextEnsembleOperationKind, TimelineEditorService, TransitionAutomationOwner,
 };
 use library::model::authoring::{
     AttachmentId, AttachmentOwner, AttachmentStage, InstancePath, MediaTime, ModuleDefinition,
@@ -98,7 +99,7 @@ fn item_module_effect_keys_share_the_clip_dope_and_curve_lane() {
     let key_time = MediaTime::new(3, 2).unwrap();
     let (keyframe_id, _) = service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Attachment(attachment_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(attachment_id)),
             parameter_id,
             key_time,
             PropertyValue::from(7.0),
@@ -181,7 +182,7 @@ fn track_and_timeline_module_effects_use_timeline_time_and_distinct_owners() {
     ] {
         service
             .upsert_module_parameter_keyframe(
-                ModuleAutomationOwner::Attachment(attachment_id),
+                &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(attachment_id)),
                 parameter_id,
                 key_time,
                 PropertyValue::from(2.0),
@@ -239,14 +240,16 @@ fn track_and_timeline_module_effects_use_timeline_time_and_distinct_owners() {
     assert_eq!(
         module_parameter_owner(
             &project,
-            &ModuleAutomationOwner::Attachment(track_attachment)
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(track_attachment,))
         ),
         Some(track_owner)
     );
     assert_eq!(
         module_parameter_owner(
             &project,
-            &ModuleAutomationOwner::Attachment(timeline_attachment)
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(
+                timeline_attachment,
+            ))
         ),
         Some(timeline_owner)
     );
@@ -344,7 +347,10 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
     assert!(module[0].points.is_empty());
     assert!(collect_item_keyframed_lanes(&project, module_item).is_empty());
     assert_eq!(
-        module_parameter_owner(&project, &ModuleAutomationOwner::Item(module_item)),
+        module_parameter_owner(
+            &project,
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(module_item)),
+        ),
         Some(AutomationOwner::Item(module_item))
     );
 }
@@ -446,6 +452,47 @@ fn transition_time_is_interval_local_and_concrete_paths_are_distinct_owners() {
         }),
     );
     assert_ne!(first, second);
+}
+
+#[test]
+fn transition_lanes_map_to_the_unified_module_parameter_target() {
+    let transition_id = TransitionId::new();
+    let parameter_id = PublishedParameterId::new();
+    let instance_path = InstancePath {
+        root_timeline_id: library::model::authoring::TimelineId::new(),
+        composition_items: vec![TimelineItemId::new()],
+    };
+
+    assert_eq!(
+        keyframe_target(&AutomationLaneId {
+            owner: AutomationOwner::TransitionDefinition(transition_id),
+            target: AutomationTarget::ModuleParameter(parameter_id),
+        })
+        .unwrap(),
+        AuthoringKeyframeTarget::ModuleParameter {
+            owner: ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(
+                transition_id,
+            )),
+            parameter_id,
+        }
+    );
+    assert_eq!(
+        keyframe_target(&AutomationLaneId {
+            owner: AutomationOwner::TransitionInstance {
+                transition_id,
+                instance_path: instance_path.clone(),
+            },
+            target: AutomationTarget::ModuleParameter(parameter_id),
+        })
+        .unwrap(),
+        AuthoringKeyframeTarget::ModuleParameter {
+            owner: ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id,
+                instance_path,
+            }),
+            parameter_id,
+        }
+    );
 }
 
 #[test]

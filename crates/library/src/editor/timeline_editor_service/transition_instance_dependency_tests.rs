@@ -149,9 +149,11 @@ fn deep_path_fixture() -> DeepPathFixture {
         .nested(owner_item_id)
         .nested(nested_item_id);
     service
-        .set_transition_module_instance_parameter(
-            &instance_path,
-            transition_id,
+        .set_module_parameter_constant(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id,
+                instance_path,
+            }),
             parameter_id,
             PropertyValue::Number(OrderedFloat(0.5)),
         )

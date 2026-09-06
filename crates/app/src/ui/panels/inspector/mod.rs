@@ -137,7 +137,7 @@ pub fn inspector_panel(
             }
         }
         AuthoringSelection::Transition(id) => {
-            transition::transition_inspector(ui, project, state, service, id);
+            transition::transition_inspector(ui, project, state, service, plugins, id);
         }
         AuthoringSelection::Asset(id) => {
             if let Some(asset) = project.assets.iter().find(|asset| asset.id == id) {
@@ -348,6 +348,8 @@ fn item_inspector(
             .show(ui, |ui| {
                 if let Some(timeline) = project.timelines.get(&instance.timeline_id) {
                     ui.label(&timeline.name);
+                    ui.weak(format!("{} linked placements", project.composition_reference_count(timeline.id)))
+                        .on_hover_text("Direct references to this shared Composition. Editing its contents updates all linked clips; Instance controls below affect only this placement.");
                 }
                 ui.label(format!("Duration policy: {}", duration_policy_name(&instance.duration_policy)));
                 ui.weak("Animation uses local composition time; moving this clip does not move its inner keys.");

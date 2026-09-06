@@ -1,6 +1,6 @@
 //! Published Module parameter lanes shared by Node Clips and Module Effects.
 
-use library::editor::ModuleAutomationOwner;
+use library::editor::{ModuleAutomationOwner, ModuleParameterOwner, TransitionAutomationOwner};
 use library::model::authoring::{
     AttachmentId, AttachmentOwner, AuthoringProject, ModuleInvocation,
 };
@@ -79,19 +79,36 @@ pub(super) fn push_module_parameter_lanes(
 /// Sheet owner without rediscovering the host in each editor surface.
 pub(crate) fn module_parameter_owner(
     project: &AuthoringProject,
-    owner: &ModuleAutomationOwner,
+    owner: &ModuleParameterOwner,
 ) -> Option<AutomationOwner> {
-    owner.invocation(project).ok()?;
-    match *owner {
-        ModuleAutomationOwner::Item(item_id) => Some(AutomationOwner::Item(item_id)),
-        ModuleAutomationOwner::Attachment(attachment_id) => {
-            match &project.attachments.get(&attachment_id)?.owner {
+    match owner {
+        ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)) => {
+            owner.instance_id(project).ok()?;
+            Some(AutomationOwner::Item(*item_id))
+        }
+        ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(attachment_id)) => {
+            owner.instance_id(project).ok()?;
+            match &project.attachments.get(attachment_id)?.owner {
                 AttachmentOwner::Item { item_id } => Some(AutomationOwner::Item(*item_id)),
                 AttachmentOwner::Track { track_id } => Some(AutomationOwner::Track(*track_id)),
                 AttachmentOwner::Timeline { timeline_id } => {
                     Some(AutomationOwner::Timeline(*timeline_id))
                 }
             }
+        }
+        ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(transition_id)) => {
+            owner.instance_id(project).ok()?;
+            Some(AutomationOwner::TransitionDefinition(*transition_id))
+        }
+        ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+            transition_id,
+            instance_path,
+        }) => {
+            owner.instance_id(project).ok()?;
+            Some(AutomationOwner::TransitionInstance {
+                transition_id: *transition_id,
+                instance_path: instance_path.clone(),
+            })
         }
     }
 }

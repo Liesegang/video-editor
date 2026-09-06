@@ -112,7 +112,7 @@ fn module_key_insertion_projects_and_commits_the_reserved_id_without_changing_de
     };
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleAutomationOwner::Item(item_id).into(),
             parameter_id,
             MediaTime::zero(),
             color(10),
@@ -124,7 +124,7 @@ fn module_key_insertion_projects_and_commits_the_reserved_id_without_changing_de
     let edit_at = |r| {
         TransientPropertyEdit::module_parameter(
             revision,
-            ModuleAutomationOwner::Item(item_id),
+            ModuleAutomationOwner::Item(item_id).into(),
             instance_id,
             parameter_id,
             color(r),
@@ -170,7 +170,7 @@ fn module_constant_commit_cannot_silently_override_existing_automation() {
     );
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleAutomationOwner::Item(item_id).into(),
             parameter_id,
             MediaTime::zero(),
             color.clone(),
@@ -181,7 +181,7 @@ fn module_constant_commit_cannot_silently_override_existing_automation() {
     let revision = service.revision().unwrap();
     let edit = TransientPropertyEdit::module_parameter(
         revision,
-        ModuleAutomationOwner::Item(item_id),
+        ModuleAutomationOwner::Item(item_id).into(),
         instance_id,
         parameter_id,
         color,

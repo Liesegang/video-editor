@@ -20,6 +20,18 @@ The two advanced editors have distinct names and responsibilities:
 - **Curve Editor** edits keyframes, interpolation, and value-over-time curves.
 - **Node Editor** edits processing Nodes and their connections inside one bounded Module.
 
+### Reuse a clip
+
+Right-click a Timeline clip and choose **Create Clip Prefab**. Its contents appear
+under **Assets / Compositions**; drag that entry onto the Timeline to place linked
+copies. Edit **Instance controls** in the Inspector to change one placement's
+published values, or open the Composition to edit the shared contents. Direct Text
+clips publish their text automatically.
+
+Choose **Make Independent Copy** on a Composition clip to disconnect it from the
+original shared contents. It remains an editable nested Timeline; any nested child
+templates stay linked. Prefabs are currently reusable within the same Project.
+
 ## Repository layout
 
 All Cargo packages owned by the host application live under `crates/` and are

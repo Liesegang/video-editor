@@ -24,6 +24,8 @@ use crate::model::project::{
     TRANSITION_PROGRESS_PROPERTY,
 };
 
+mod composition_reuse_tests;
+
 fn frame_time(frame: i64) -> MediaTime {
     MediaTime::new(frame, AUTHORING_AUDIO_SAMPLE_RATE).unwrap()
 }

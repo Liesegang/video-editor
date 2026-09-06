@@ -177,35 +177,11 @@ fn duplicate_source(
 ) -> Result<SourceRef, String> {
     let mut source = source.clone();
     if let SourceRef::Module(invocation) = &mut source {
-        let original = project
-            .module_instances
-            .get(&invocation.instance_id)
-            .cloned()
-            .ok_or_else(|| format!("Missing Module instance {}", invocation.instance_id))?;
-        let definition = project
-            .module_definitions
-            .get(&original.definition_id)
-            .cloned()
-            .ok_or_else(|| format!("Missing Module definition {}", original.definition_id))?;
-        if matches!(
-            definition.sharing,
-            crate::model::authoring::ModuleDefinitionSharing::Private
-        ) {
-            project
-                .module_definitions
-                .get_mut(&original.definition_id)
-                .ok_or_else(|| format!("Missing Module definition {}", original.definition_id))?
-                .sharing = crate::model::authoring::ModuleDefinitionSharing::SharedLocal;
-        }
-        let instance_id = ModuleInstanceId::new();
-        project.module_instances.insert(
-            instance_id,
-            ModuleInstance {
-                id: instance_id,
-                ..original
-            },
-        );
-        invocation.instance_id = instance_id;
+        invocation.instance_id = super::module::copy_module_instance(
+            project,
+            invocation.instance_id,
+            super::module::ModuleInstanceCopyPolicy::Linked,
+        )?;
     }
     Ok(source)
 }
@@ -232,35 +208,11 @@ fn duplicate_item_attachments(
             item_id: target_item_id,
         };
         if let AttachmentProcessor::Module(invocation) = &mut attachment.processor {
-            let original = project
-                .module_instances
-                .get(&invocation.instance_id)
-                .cloned()
-                .ok_or_else(|| format!("Missing Module instance {}", invocation.instance_id))?;
-            let definition = project
-                .module_definitions
-                .get(&original.definition_id)
-                .cloned()
-                .ok_or_else(|| format!("Missing Module definition {}", original.definition_id))?;
-            if matches!(
-                definition.sharing,
-                crate::model::authoring::ModuleDefinitionSharing::Private
-            ) {
-                project
-                    .module_definitions
-                    .get_mut(&original.definition_id)
-                    .ok_or_else(|| format!("Missing Module definition {}", original.definition_id))?
-                    .sharing = crate::model::authoring::ModuleDefinitionSharing::SharedLocal;
-            }
-            let instance_id = ModuleInstanceId::new();
-            project.module_instances.insert(
-                instance_id,
-                ModuleInstance {
-                    id: instance_id,
-                    ..original
-                },
-            );
-            invocation.instance_id = instance_id;
+            invocation.instance_id = super::module::copy_module_instance(
+                project,
+                invocation.instance_id,
+                super::module::ModuleInstanceCopyPolicy::Linked,
+            )?;
         }
         project.attachments.insert(attachment.id, attachment);
     }
@@ -430,7 +382,7 @@ fn delete_item_and_dependents(
     Ok(())
 }
 
-fn item_input_dependencies(
+pub(super) fn item_input_dependencies(
     project: &AuthoringProject,
     item_id: TimelineItemId,
 ) -> Vec<TimelineItemDependency> {

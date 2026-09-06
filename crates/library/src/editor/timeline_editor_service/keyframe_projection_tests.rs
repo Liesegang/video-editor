@@ -343,7 +343,7 @@ fn promoted_tracking_projection_changes_pixels_and_isolates_the_sibling_instance
     let revision = fixture.service.revision().expect("revision");
     let parameter_id = tracking_parameter(&before, fixture.item_id, fixture.tracking_id);
     let target = AuthoringKeyframeTarget::ModuleParameter {
-        owner: ModuleAutomationOwner::Item(fixture.item_id),
+        owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
         parameter_id,
     };
     let definition_id =
@@ -475,8 +475,8 @@ fn transition_instance_projection_is_path_local_and_matches_commit() {
     let (project, transition_id, parameter_id) = transition_project();
     let definition_service = TimelineEditorService::new(project).expect("definition service");
     definition_service
-        .upsert_transition_parameter_keyframe(
-            &TransitionAutomationOwner::Definition(transition_id),
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(transition_id)),
             parameter_id,
             MediaTime::zero(),
             PropertyValue::from(1.0),
@@ -500,8 +500,8 @@ fn transition_instance_projection_is_path_local_and_matches_commit() {
         instance_path: first_path.clone(),
     };
     let (keyframe_id, _) = service
-        .upsert_transition_parameter_keyframe(
-            &first_owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(first_owner.clone()),
             parameter_id,
             time(1),
             PropertyValue::from(2.0),
@@ -518,8 +518,8 @@ fn transition_instance_projection_is_path_local_and_matches_commit() {
     let sibling_before = before
         .effective_transition_module_controls(&second_target)
         .expect("sibling controls");
-    let target = AuthoringKeyframeTarget::TransitionParameter {
-        owner: first_owner,
+    let target = AuthoringKeyframeTarget::ModuleParameter {
+        owner: ModuleParameterOwner::Transition(first_owner),
         parameter_id,
     };
     let update = AuthoringKeyframeUpdate {
@@ -633,7 +633,7 @@ fn missing_negative_duplicate_and_invalid_typed_updates_are_atomic_errors() {
     assert_rejected_atomically(
         &fixture.service,
         &AuthoringKeyframeTarget::ModuleParameter {
-            owner: ModuleAutomationOwner::Item(fixture.item_id),
+            owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             parameter_id,
         },
         fixture.tracking_key,

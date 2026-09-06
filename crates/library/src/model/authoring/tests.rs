@@ -5,8 +5,8 @@ use ordered_float::OrderedFloat;
 use super::*;
 use crate::editor::{
     AuthoringKeyframeTarget, AuthoringPropertyOwner, ModuleAutomationOwner, ModuleInterfaceCommand,
-    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodeRequest, TimelineEditorService,
-    TimelineSettingsUpdate,
+    ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodeRequest, ModuleParameterOwner,
+    TimelineEditorService, TimelineSettingsUpdate,
 };
 use crate::model::AssetKind;
 use crate::model::node::{GeneratorContent, Node, NodeContent, ValueContent};
@@ -434,7 +434,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         .expect("instance value");
     let (keyframe_id, _) = service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(first_item),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(first_item)),
             parameter_id,
             time(1, 2),
             PropertyValue::Number(OrderedFloat(3.0)),
@@ -444,7 +444,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
     service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                owner: ModuleAutomationOwner::Item(first_item),
+                owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(first_item)),
                 parameter_id,
             },
             keyframe_id,
@@ -457,7 +457,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         .expect("stable-id automation update");
     let (removable_id, _) = service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(first_item),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(first_item)),
             parameter_id,
             time(1, 1),
             PropertyValue::Number(OrderedFloat(5.0)),
@@ -466,7 +466,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         .expect("second automation key");
     service
         .remove_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(first_item),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(first_item)),
             parameter_id,
             removable_id,
         )
@@ -734,7 +734,7 @@ fn published_interface_edit_is_cow_and_cleans_instance_state_atomically() {
         .expect("override");
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)),
             parameter_id,
             time(1, 2),
             PropertyValue::Number(OrderedFloat(3.0)),

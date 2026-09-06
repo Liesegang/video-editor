@@ -140,7 +140,7 @@ fn fixture() -> Fixture {
         .expect("current override");
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)),
             parameter_id,
             MediaTime::zero(),
             PropertyValue::Number(OrderedFloat(2.0)),
@@ -149,7 +149,7 @@ fn fixture() -> Fixture {
         .expect("first key");
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)),
             parameter_id,
             seconds(1),
             PropertyValue::Number(OrderedFloat(9.0)),
@@ -584,8 +584,8 @@ fn nested_transition_clipboard_uses_only_the_concrete_sparse_controls() {
     let (project, transition_id, source_parameter_id) = transition_project();
     let definition_service = TimelineEditorService::new(project).expect("definition service");
     definition_service
-        .upsert_transition_parameter_keyframe(
-            &TransitionAutomationOwner::Definition(transition_id),
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(transition_id)),
             source_parameter_id,
             MediaTime::zero(),
             PropertyValue::Number(OrderedFloat(1.0)),
@@ -609,15 +609,15 @@ fn nested_transition_clipboard_uses_only_the_concrete_sparse_controls() {
         instance_path: first_path.clone(),
     };
     service
-        .set_transition_parameter_constant(
-            &first_owner,
+        .set_module_parameter_constant(
+            &ModuleParameterOwner::Transition(first_owner.clone()),
             source_parameter_id,
             PropertyValue::Number(OrderedFloat(7.0)),
         )
         .expect("concrete value");
     let (first_key_id, _) = service
-        .upsert_transition_parameter_keyframe(
-            &first_owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(first_owner.clone()),
             source_parameter_id,
             MediaTime::zero(),
             PropertyValue::Number(OrderedFloat(2.0)),
@@ -625,8 +625,8 @@ fn nested_transition_clipboard_uses_only_the_concrete_sparse_controls() {
         )
         .expect("first concrete key");
     let (second_key_id, _) = service
-        .upsert_transition_parameter_keyframe(
-            &first_owner,
+        .upsert_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(first_owner),
             source_parameter_id,
             seconds(1),
             PropertyValue::Number(OrderedFloat(9.0)),

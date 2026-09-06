@@ -2,10 +2,14 @@ use std::collections::HashMap;
 
 use ordered_float::OrderedFloat;
 
+use super::transition_parameter_automation_tests::{
+    transition_project, wrap_with_two_composition_instances,
+};
 use super::*;
 use crate::animation::EasingFunction;
 use crate::model::authoring::{
     ModuleConnection, ModuleDefinitionSharing, ModulePortAddress, ModuleTemplateOrigin,
+    TransitionAlignment, TransitionProcessor,
 };
 use crate::model::node::ValueContent;
 use crate::model::project::{
@@ -24,8 +28,24 @@ struct PublicationFixture {
     state_before_sibling: Arc<AuthoringProject>,
 }
 
+struct TransitionPublicationFixture {
+    service: TimelineEditorService,
+    transition_id: TransitionId,
+    instance_id: ModuleInstanceId,
+    reusable_definition_id: ModuleDefinitionId,
+    sibling_transition_id: TransitionId,
+    sibling_instance_id: ModuleInstanceId,
+    first_path: InstancePath,
+    second_path: InstancePath,
+    target: ModulePortAddress,
+}
+
 fn time(seconds: i64) -> MediaTime {
     MediaTime::new(seconds, 1).expect("fixture time")
+}
+
+fn item_owner(item_id: TimelineItemId) -> ModuleParameterOwner {
+    ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id))
 }
 
 fn placement(
@@ -119,6 +139,99 @@ fn clean_fixture() -> PublicationFixture {
     fixture(|_, _| {})
 }
 
+fn transition_publication_fixture() -> TransitionPublicationFixture {
+    let (mut project, transition_id, _) = transition_project();
+    let nested_timeline_id = project.root_timeline_id;
+    let instance_id = project.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("Module Transition")
+        .instance_id;
+    let reusable_definition_id = project.module_instances[&instance_id].definition_id;
+    let unpublished = Node::new_value("Unpublished Amount", ValueContent::Add);
+    let target = ModulePortAddress {
+        node_id: unpublished.id,
+        port: NUMERIC_B_INPUT_PORT.to_string(),
+    };
+    let definition = project
+        .module_definitions
+        .get_mut(&reusable_definition_id)
+        .expect("Transition definition");
+    definition.sharing = ModuleDefinitionSharing::ReusableTemplate(ModuleTemplateOrigin::Project);
+    definition.graph.nodes.insert(unpublished.id, unpublished);
+    definition.topology_revision += 1;
+    project.validate().expect("reusable Transition fixture");
+    let setup = TimelineEditorService::new(project).expect("Transition setup service");
+    let sibling_track_id = setup
+        .add_track(
+            nested_timeline_id,
+            "Sibling Transition".to_string(),
+            TimelineTrackKind::Visual,
+        )
+        .expect("sibling track")
+        .0;
+    let sibling_source = |red| SourceRef::Solid {
+        color: Color {
+            r: red,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+    };
+    let (sibling_from, _) = setup
+        .add_item(
+            sibling_track_id,
+            "Sibling From".to_string(),
+            sibling_source(48),
+            TimelineInterval::new(time(0), time(7)).expect("from interval"),
+            0,
+        )
+        .expect("sibling from");
+    let (sibling_to, _) = setup
+        .add_item(
+            sibling_track_id,
+            "Sibling To".to_string(),
+            sibling_source(208),
+            TimelineInterval::new(time(3), time(7)).expect("to interval"),
+            1,
+        )
+        .expect("sibling to");
+    let (sibling_transition_id, _) = setup
+        .add_transition(TransitionPlacement {
+            from_item_id: sibling_from,
+            to_item_id: sibling_to,
+            edit_point: time(5),
+            duration: time(4),
+            alignment: TransitionAlignment::CenteredOnEdit,
+            processor: TransitionProcessor::cross_dissolve(),
+            parameters: HashMap::new(),
+        })
+        .expect("sibling Transition");
+    let sibling_instance_id = setup
+        .assign_transition_module(sibling_transition_id, reusable_definition_id)
+        .expect("assign reusable Transition")
+        .0;
+    let mut project = setup
+        .snapshot()
+        .expect("shared Transition state")
+        .as_ref()
+        .clone();
+    let (root_timeline_id, first_item_id, second_item_id) =
+        wrap_with_two_composition_instances(&mut project, nested_timeline_id);
+    project.validate().expect("nested Transition fixture");
+    TransitionPublicationFixture {
+        service: TimelineEditorService::new(project).expect("Transition service"),
+        transition_id,
+        instance_id,
+        reusable_definition_id,
+        sibling_transition_id,
+        sibling_instance_id,
+        first_path: InstancePath::root(root_timeline_id).nested(first_item_id),
+        second_path: InstancePath::root(root_timeline_id).nested(second_item_id),
+        target,
+    }
+}
+
 fn invocation(project: &AuthoringProject, item_id: TimelineItemId) -> &ModuleInvocation {
     match &project.items[&item_id].source {
         SourceRef::Module(invocation) => invocation,
@@ -166,7 +279,7 @@ fn publish_and_first_key_are_one_cow_edit_with_stable_ids_and_sibling_isolation(
     let publication = fixture
         .service
         .publish_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &item_owner(fixture.item_id),
             fixture.instance_id,
             fixture.target.clone(),
             time(2),
@@ -254,7 +367,7 @@ fn published_key_uses_the_shared_curve_target_without_mutating_topology_or_sibli
     let publication = fixture
         .service
         .publish_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &item_owner(fixture.item_id),
             fixture.instance_id,
             fixture.target.clone(),
             time(1),
@@ -268,7 +381,7 @@ fn published_key_uses_the_shared_curve_target_without_mutating_topology_or_sibli
         .service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                owner: ModuleAutomationOwner::Item(fixture.item_id),
+                owner: item_owner(fixture.item_id),
                 parameter_id: publication.parameter_id,
             },
             publication.keyframe_id,
@@ -306,12 +419,150 @@ fn published_key_uses_the_shared_curve_target_without_mutating_topology_or_sibli
 }
 
 #[test]
+fn nested_transition_publication_cows_topology_and_keeps_keyframes_placement_local() {
+    let fixture = transition_publication_fixture();
+    let before = fixture.service.snapshot().expect("before publication");
+    let owner = ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+        transition_id: fixture.transition_id,
+        instance_path: fixture.first_path.clone(),
+    });
+    let publication = fixture
+        .service
+        .publish_module_parameter_keyframe(
+            &owner,
+            fixture.instance_id,
+            fixture.target.clone(),
+            time(1),
+            fixture.service.revision().expect("source revision"),
+        )
+        .expect("nested Transition publication");
+    let after = fixture.service.snapshot().expect("after publication");
+
+    assert_ne!(publication.definition_id, fixture.reusable_definition_id);
+    assert_eq!(
+        after.module_instances[&fixture.instance_id].definition_id,
+        publication.definition_id
+    );
+    assert_eq!(
+        after.module_definitions[&fixture.reusable_definition_id],
+        before.module_definitions[&fixture.reusable_definition_id],
+        "copy-on-write must retain the reusable Transition template"
+    );
+    assert_eq!(
+        after.module_instances[&fixture.sibling_instance_id].definition_id,
+        fixture.reusable_definition_id,
+        "another Transition instance must remain on the reusable definition"
+    );
+    assert!(
+        after.module_definitions[&fixture.reusable_definition_id]
+            .interface
+            .parameters
+            .iter()
+            .all(|parameter| parameter.id != publication.parameter_id),
+        "the reusable sibling interface must not gain the publication"
+    );
+    assert!(
+        !after.transitions[&fixture.sibling_transition_id]
+            .processor
+            .module_processor()
+            .expect("sibling Module Transition")
+            .automation_tracks
+            .contains_key(&publication.parameter_id),
+        "another Transition instance must not gain the placement key"
+    );
+    let parameter = after.module_definitions[&publication.definition_id]
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| parameter.id == publication.parameter_id)
+        .expect("published parameter");
+    assert_eq!(parameter.target, fixture.target);
+
+    let first = TimelineEditorService::resolve_module_parameter(
+        &after,
+        &owner,
+        publication.parameter_id,
+        time(1),
+    )
+    .expect("first placement controls");
+    let second_owner = ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+        transition_id: fixture.transition_id,
+        instance_path: fixture.second_path.clone(),
+    });
+    let second = TimelineEditorService::resolve_module_parameter(
+        &after,
+        &second_owner,
+        publication.parameter_id,
+        time(1),
+    )
+    .expect("sibling placement controls");
+    let first_track = first.automation.expect("placement-local automation");
+    assert_eq!(first_track.keyframes.len(), 1);
+    assert_eq!(first_track.keyframes[0].id, publication.keyframe_id);
+    assert_eq!(first_track.keyframes[0].time, time(1));
+    assert_eq!(first_track.keyframes[0].value, parameter.default_value);
+    assert_eq!(first_track.keyframes[0].easing, EasingFunction::Linear);
+    assert_eq!(first.base_value, parameter.default_value);
+    assert_eq!(second.base_value, parameter.default_value);
+    assert!(
+        second.automation.is_none(),
+        "sibling placement inherited a key"
+    );
+    assert!(
+        !after.transitions[&fixture.transition_id]
+            .processor
+            .module_processor()
+            .expect("Module Transition")
+            .automation_tracks
+            .contains_key(&publication.parameter_id),
+        "concrete publication must not leak into definition-scope automation"
+    );
+
+    fixture
+        .service
+        .undo()
+        .expect("undo publication")
+        .expect("single edit");
+    assert_eq!(fixture.service.snapshot().expect("undo state"), before);
+    fixture
+        .service
+        .redo()
+        .expect("redo publication")
+        .expect("single edit");
+    assert_eq!(fixture.service.snapshot().expect("redo state"), after);
+}
+
+#[test]
+fn nested_transition_publication_rejects_stale_path_without_cow_or_history() {
+    let fixture = transition_publication_fixture();
+    let before = fixture.service.snapshot().expect("before rejection");
+    let revision = fixture.service.revision().expect("source revision");
+    let wrong_path = InstancePath::root(before.root_timeline_id).nested(TimelineItemId::new());
+    let error = fixture
+        .service
+        .publish_module_parameter_keyframe(
+            &ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
+                transition_id: fixture.transition_id,
+                instance_path: wrong_path,
+            }),
+            fixture.instance_id,
+            fixture.target,
+            time(1),
+            revision,
+        )
+        .expect_err("missing placement path");
+    assert!(error.to_string().contains("missing item"), "{error}");
+    assert_eq!(fixture.service.revision().expect("revision"), revision);
+    assert_eq!(fixture.service.snapshot().expect("unchanged"), before);
+}
+
+#[test]
 fn stale_revision_and_wrong_owner_reject_without_state_or_history() {
     assert_rejected_without_state_or_history(
         clean_fixture(),
         |fixture, _revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -324,7 +575,7 @@ fn stale_revision_and_wrong_owner_reject_without_state_or_history() {
         clean_fixture(),
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.sibling_instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -341,7 +592,7 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
         clean_fixture(),
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: fixture
@@ -381,7 +632,7 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
         }),
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -409,7 +660,7 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
         missing_property,
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: fmod_id,
@@ -425,7 +676,7 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
         clean_fixture(),
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 MediaTime::new(-1, 1).expect("negative time"),
@@ -459,7 +710,7 @@ fn already_published_input_rejects_without_an_extra_edit() {
     let error = fixture
         .service
         .publish_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &item_owner(fixture.item_id),
             fixture.instance_id,
             fixture.target,
             time(1),
@@ -509,7 +760,7 @@ fn connected_and_constant_only_inputs_reject_atomically() {
         }),
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -538,7 +789,7 @@ fn connected_and_constant_only_inputs_reject_atomically() {
         particle,
         |fixture, revision| {
             fixture.service.publish_module_parameter_keyframe(
-                ModuleAutomationOwner::Item(fixture.item_id),
+                &item_owner(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: emitter_id,

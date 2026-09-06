@@ -6,8 +6,8 @@
 
 use library::animation::EasingFunction;
 use library::editor::{
-    AuthoringKeyframeUpdate, AuthoringPropertyOwner, ModuleAutomationOwner, TimelineEditorService,
-    TransitionAutomationOwner,
+    AuthoringKeyframeUpdate, AuthoringPropertyOwner, ModuleAutomationOwner, ModuleParameterOwner,
+    TimelineEditorService, TransitionAutomationOwner,
 };
 use library::model::authoring::{
     AttachmentOwner, AttachmentProcessor, AuthoringProject, InstancePath, MediaTime, SourceRef,
@@ -528,7 +528,7 @@ pub(crate) fn keyframe_target(
         }
         (AutomationOwner::Item(item_id), AutomationTarget::ModuleParameter(parameter_id)) => {
             Ok(AuthoringKeyframeTarget::ModuleParameter {
-                owner: ModuleAutomationOwner::Item(*item_id),
+                owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(*item_id)),
                 parameter_id: *parameter_id,
             })
         }
@@ -539,7 +539,9 @@ pub(crate) fn keyframe_target(
                 parameter_id,
             },
         ) => Ok(AuthoringKeyframeTarget::ModuleParameter {
-            owner: ModuleAutomationOwner::Attachment(*attachment_id),
+            owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Attachment(
+                *attachment_id,
+            )),
             parameter_id: *parameter_id,
         }),
         (
@@ -552,8 +554,10 @@ pub(crate) fn keyframe_target(
         (
             AutomationOwner::TransitionDefinition(transition_id),
             AutomationTarget::ModuleParameter(parameter_id),
-        ) => Ok(AuthoringKeyframeTarget::TransitionParameter {
-            owner: TransitionAutomationOwner::Definition(*transition_id),
+        ) => Ok(AuthoringKeyframeTarget::ModuleParameter {
+            owner: ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(
+                *transition_id,
+            )),
             parameter_id: *parameter_id,
         }),
         (
@@ -562,11 +566,11 @@ pub(crate) fn keyframe_target(
                 instance_path,
             },
             AutomationTarget::ModuleParameter(parameter_id),
-        ) => Ok(AuthoringKeyframeTarget::TransitionParameter {
-            owner: TransitionAutomationOwner::Instance {
+        ) => Ok(AuthoringKeyframeTarget::ModuleParameter {
+            owner: ModuleParameterOwner::Transition(TransitionAutomationOwner::Instance {
                 transition_id: *transition_id,
                 instance_path: instance_path.clone(),
-            },
+            }),
             parameter_id: *parameter_id,
         }),
         (AutomationOwner::TransitionDefinition(transition_id), target)

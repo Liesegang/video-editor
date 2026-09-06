@@ -1,120 +1,129 @@
-//! Atomic keyframe commands for Timeline-owned Transition Module parameters.
+//! Sparse placement storage for Timeline-owned Transition Module parameters.
 
+use super::module_parameter_owner::transition_id;
 use super::transition_module_controls::{
-    require_editable_parameter, require_transition_parameter_automation, transition_module_context,
-    transition_module_mut,
+    require_editable_parameter, transition_module_context, transition_module_mut,
 };
 use super::*;
 
-impl TimelineEditorService {
-    pub fn upsert_transition_parameter_keyframe(
-        &self,
-        owner: &TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
-        local_time: MediaTime,
-        value: PropertyValue,
-        easing: Option<EasingFunction>,
-    ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
-        self.edit_transition_parameter_track(owner, parameter_id, move |track| {
-            track.upsert(KeyframeId::new(), local_time, value, easing)
-        })
-    }
-
-    pub fn remove_transition_parameter_keyframe(
-        &self,
-        owner: &TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
-        keyframe_id: KeyframeId,
-    ) -> Result<ChangeSet, LibraryError> {
-        let (_, changes) =
-            self.edit_transition_parameter_track(owner, parameter_id, move |track| {
-                if track.remove_keyframe(keyframe_id) {
-                    Ok(track.keyframes.is_empty())
-                } else {
-                    Err(format!("Missing Automation Keyframe {keyframe_id}"))
-                }
-            })?;
-        Ok(changes)
-    }
-
-    pub fn set_transition_parameter_constant(
-        &self,
-        owner: &TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
-        value: PropertyValue,
-    ) -> Result<ChangeSet, LibraryError> {
-        match owner {
-            TransitionAutomationOwner::Definition(transition_id) => {
-                let mut session = self.write_session()?;
-                let (timeline_id, interval, contract) =
-                    transition_module_context(session.project(), *transition_id)?;
-                require_editable_parameter(*transition_id, &contract, parameter_id)?;
-                session
-                    .transact(
-                        vec![ProjectInvalidation::TimelineRange {
-                            timeline_id,
-                            start: interval.start,
-                            duration: interval.duration,
-                        }],
-                        |project| {
-                            let instance_id =
-                                transition_module_mut(project, *transition_id)?.instance_id;
-                            transition_module_mut(project, *transition_id)?
-                                .automation_tracks
-                                .remove(&parameter_id);
-                            project
-                                .module_instances
-                                .get_mut(&instance_id)
-                                .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                                .parameter_overrides
-                                .insert(parameter_id, value);
-                            Ok(())
-                        },
-                    )
-                    .map(|(_, changes)| changes)
-                    .map_err(LibraryError::Validation)
+pub(super) fn set_transition_parameter_constant_in_project(
+    project: &mut AuthoringProject,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+    value: PropertyValue,
+) -> Result<(), String> {
+    let transition_id = transition_id(owner);
+    let (_, _, contract) =
+        transition_module_context(project, transition_id).map_err(|error| error.to_string())?;
+    require_editable_parameter(transition_id, &contract, parameter_id)
+        .map_err(|error| error.to_string())?;
+    match owner {
+        TransitionAutomationOwner::Definition(_) => {
+            let instance_id = transition_module_mut(project, transition_id)?.instance_id;
+            transition_module_mut(project, transition_id)?
+                .automation_tracks
+                .remove(&parameter_id);
+            project
+                .module_instances
+                .get_mut(&instance_id)
+                .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
+                .parameter_overrides
+                .insert(parameter_id, value);
+        }
+        TransitionAutomationOwner::Instance { instance_path, .. } => {
+            let target =
+                project.resolve_transition_module_instance_target(instance_path, transition_id)?;
+            if instance_path.composition_items.is_empty() {
+                transition_module_mut(project, transition_id)?
+                    .automation_tracks
+                    .remove(&parameter_id);
+                project
+                    .module_instances
+                    .get_mut(&target.module_instance_id)
+                    .ok_or_else(|| {
+                        format!("Missing Module instance {}", target.module_instance_id)
+                    })?
+                    .parameter_overrides
+                    .insert(parameter_id, value);
+            } else {
+                project.edit_transition_module_instance_overrides(&target, |controls| {
+                    controls.parameter_overrides.insert(parameter_id, value);
+                    controls.automation_tracks.insert(parameter_id, None);
+                    Ok(())
+                })?;
             }
-            TransitionAutomationOwner::Instance {
-                transition_id,
-                instance_path,
-            } => self.set_transition_module_instance_parameter(
-                instance_path,
-                *transition_id,
-                parameter_id,
-                value,
-            ),
         }
     }
+    Ok(())
+}
 
-    fn edit_transition_parameter_track<T>(
-        &self,
-        owner: &TransitionAutomationOwner,
-        parameter_id: PublishedParameterId,
-        edit: impl FnOnce(&mut AutomationTrack) -> Result<T, String>,
-    ) -> Result<(T, ChangeSet), LibraryError> {
-        let mut session = self.write_session()?;
-        let invalidations =
-            transition_parameter_invalidations(session.project(), owner, parameter_id)?;
-        session
-            .transact(invalidations, |project| {
-                edit_transition_parameter_track_in_project(project, owner, parameter_id, edit)
-            })
-            .map_err(LibraryError::Validation)
+pub(super) fn clear_transition_parameter_override_in_project(
+    project: &mut AuthoringProject,
+    owner: &TransitionAutomationOwner,
+    parameter_id: PublishedParameterId,
+) -> Result<(), String> {
+    let transition_id = transition_id(owner);
+    let (_, _, contract) =
+        transition_module_context(project, transition_id).map_err(|error| error.to_string())?;
+    require_editable_parameter(transition_id, &contract, parameter_id)
+        .map_err(|error| error.to_string())?;
+    match owner {
+        TransitionAutomationOwner::Definition(_) => {
+            let instance_id = transition_module_mut(project, transition_id)?.instance_id;
+            project
+                .module_instances
+                .get_mut(&instance_id)
+                .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
+                .parameter_overrides
+                .remove(&parameter_id)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    format!(
+                        "Module instance {instance_id} has no override for Published parameter {parameter_id}"
+                    )
+                })
+        }
+        TransitionAutomationOwner::Instance { instance_path, .. } => {
+            let target =
+                project.resolve_transition_module_instance_target(instance_path, transition_id)?;
+            if instance_path.composition_items.is_empty() {
+                project
+                    .module_instances
+                    .get_mut(&target.module_instance_id)
+                    .ok_or_else(|| {
+                        format!("Missing Module instance {}", target.module_instance_id)
+                    })?
+                    .parameter_overrides
+                    .remove(&parameter_id)
+                    .map(|_| ())
+                    .ok_or_else(|| {
+                        format!(
+                            "Module instance {} has no override for Published parameter {parameter_id}",
+                            target.module_instance_id
+                        )
+                    })
+            } else {
+                project.edit_transition_module_instance_overrides(&target, |controls| {
+                    let removed_value = controls.parameter_overrides.remove(&parameter_id).is_some();
+                    let removed_automation =
+                        controls.automation_tracks.remove(&parameter_id).is_some();
+                    (removed_value || removed_automation).then_some(()).ok_or_else(|| {
+                        format!(
+                            "Transition {transition_id} concrete instance has no resettable override for Published parameter {parameter_id}"
+                        )
+                    })
+                })
+            }
+        }
     }
 }
 
-pub(super) fn transition_parameter_invalidations(
+pub(super) fn transition_owner_invalidations(
     project: &AuthoringProject,
     owner: &TransitionAutomationOwner,
-    parameter_id: PublishedParameterId,
 ) -> Result<Vec<ProjectInvalidation>, LibraryError> {
-    let transition_id = match owner {
-        TransitionAutomationOwner::Definition(transition_id)
-        | TransitionAutomationOwner::Instance { transition_id, .. } => *transition_id,
-    };
-    let (timeline_id, interval, contract) = transition_module_context(project, transition_id)?;
-    require_transition_parameter_automation(project, transition_id, parameter_id)?;
-    require_editable_parameter(transition_id, &contract, parameter_id)?;
+    let transition_id = transition_id(owner);
+    let (timeline_id, interval, _) = transition_module_context(project, transition_id)?;
 
     if let TransitionAutomationOwner::Instance { instance_path, .. } = owner {
         project
@@ -144,10 +153,7 @@ pub(super) fn edit_transition_parameter_track_in_project<T>(
     parameter_id: PublishedParameterId,
     edit: impl FnOnce(&mut AutomationTrack) -> Result<T, String>,
 ) -> Result<T, String> {
-    let transition_id = match owner {
-        TransitionAutomationOwner::Definition(transition_id)
-        | TransitionAutomationOwner::Instance { transition_id, .. } => *transition_id,
-    };
+    let transition_id = transition_id(owner);
     let target = match owner {
         TransitionAutomationOwner::Definition(_) => None,
         TransitionAutomationOwner::Instance { instance_path, .. } => Some((

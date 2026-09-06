@@ -1,7 +1,8 @@
 use super::*;
 use crate::animation::EasingFunction;
 use crate::editor::{
-    AuthoringKeyframeTarget, AuthoringKeyframeUpdate, ModuleAutomationOwner, ModuleInterfaceCommand,
+    AuthoringKeyframeTarget, AuthoringKeyframeUpdate, ModuleAutomationOwner,
+    ModuleInterfaceCommand, ModuleParameterOwner,
 };
 use crate::model::authoring::{
     AutomationKeyframe, AutomationTrack, MediaTime, ProjectDocument,
@@ -251,7 +252,7 @@ fn service_rejects_particle_simulation_keyframes_but_accepts_sprite_color() {
     let revision = service.revision().expect("revision");
     let error = service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(created.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(created.item_id)),
             created.parameters.emission_rate,
             MediaTime::zero(),
             PropertyValue::Number(OrderedFloat(240.0)),
@@ -265,7 +266,9 @@ fn service_rejects_particle_simulation_keyframes_but_accepts_sprite_color() {
     let update_error = service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                owner: ModuleAutomationOwner::Item(created.item_id),
+                owner: ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(
+                    created.item_id,
+                )),
                 parameter_id: created.parameters.emission_rate,
             },
             crate::model::project::property::KeyframeId::new(),
@@ -280,7 +283,7 @@ fn service_rejects_particle_simulation_keyframes_but_accepts_sprite_color() {
 
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(created.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(created.item_id)),
             created.parameters.color,
             MediaTime::zero(),
             PropertyValue::Color(Color::white()),

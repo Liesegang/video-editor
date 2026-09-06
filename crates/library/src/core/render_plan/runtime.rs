@@ -48,6 +48,8 @@ mod timeline;
 mod transition_module;
 
 #[cfg(test)]
+mod composition_reuse_tests;
+#[cfg(test)]
 mod instance_tests;
 #[cfg(test)]
 mod track_visibility_tests;

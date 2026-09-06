@@ -112,7 +112,7 @@ fn recognizes_adds_reorders_and_removes_real_style_nodes_atomically() {
         .expect("override");
     service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item_id)),
             parameter_id,
             time(1),
             default,

@@ -507,7 +507,7 @@ fn converted_tracking_automation_is_instance_local_for_duplicated_siblings() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             parameter_id,
             time(1),
             PropertyValue::from(48.0),
@@ -559,7 +559,7 @@ fn tracking_keyframe_projection_matches_commit_without_mutating_service_or_exist
 
     let projected = TimelineEditorService::project_module_parameter_value(
         &before,
-        ModuleAutomationOwner::Item(fixture.item_id),
+        &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
         instance_id,
         parameter_id,
         PropertyValue::from(42.0),
@@ -606,7 +606,7 @@ fn tracking_keyframe_projection_matches_commit_without_mutating_service_or_exist
     assert!(
         TimelineEditorService::project_module_parameter_value(
             &before,
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             ModuleInstanceId::new(),
             parameter_id,
             PropertyValue::from(42.0),
@@ -623,7 +623,7 @@ fn tracking_keyframe_projection_matches_commit_without_mutating_service_or_exist
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             parameter_id,
             time(1),
             PropertyValue::from(42.0),
@@ -655,7 +655,7 @@ fn tracking_constant_projection_is_instance_local_and_rejects_invalid_targets() 
     let target_id = tracking_parameter(&before, fixture.item_id, fixture.operation_id, "target");
     let projected = TimelineEditorService::project_module_parameter_value(
         &before,
-        ModuleAutomationOwner::Item(fixture.item_id),
+        &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
         instance_id,
         target_id,
         PropertyValue::String("Line".to_string()),
@@ -685,7 +685,7 @@ fn tracking_constant_projection_is_instance_local_and_rejects_invalid_targets() 
     assert!(
         TimelineEditorService::project_module_parameter_value(
             &before,
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             instance_id,
             amount_id,
             PropertyValue::from(42.0),
@@ -698,7 +698,7 @@ fn tracking_constant_projection_is_instance_local_and_rejects_invalid_targets() 
     assert!(
         TimelineEditorService::project_module_parameter_value(
             &before,
-            ModuleAutomationOwner::Item(fixture.item_id),
+            &ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(fixture.item_id)),
             instance_id,
             PublishedParameterId::new(),
             PropertyValue::from(42.0),

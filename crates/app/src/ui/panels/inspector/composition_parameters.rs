@@ -50,6 +50,15 @@ pub(super) fn publication_icon(
             ),
             None => "Publish this control to each Composition instance".to_string(),
         });
+    crate::qa::register_component_with_metadata(
+        format!("composition.publish:{}:{}", item.id, spec.suggested_name),
+        "composition_parameter_publication",
+        response.rect,
+        response.enabled(),
+        Some(
+            serde_json::json!({"item_id": item.id, "target": spec.target, "parameter_id": existing.map(|parameter| parameter.id)}),
+        ),
+    );
     if response.clicked() && existing.is_none() {
         match service.publish_composition_parameter(
             timeline_id,
@@ -108,11 +117,16 @@ pub(super) fn instance_parameters(
                     .cloned()
                     .unwrap_or_else(|| definition_value(project, parameter));
                 let model_value = initial.clone();
-                let draft_key = format!("composition:{}", parameter.id);
+                let draft_key = format!("composition:{}:{}", item.id, parameter.id);
                 let control_id = format!("composition_instance:{}:{}", item.id, parameter.id);
                 let (finished, edited_value, reset) = ui
                     .horizontal(|ui| {
                         let label = super::property_label(ui, &control_id, &parameter.name);
+                        crate::qa::register_component_with_metadata(
+                            format!("composition.instance:{}:{}", item.id, parameter.id),
+                            "composition_instance_parameter", label.rect, true,
+                            Some(serde_json::json!({"item_id": item.id, "parameter_id": parameter.id, "overridden": overridden, "value": model_value})),
+                        );
                         let (finished, edited_value) = {
                             let value = state
                                 .inspector
@@ -132,10 +146,15 @@ pub(super) fn instance_parameters(
                         };
                         let mut reset = false;
                         if overridden {
-                            reset = ui
+                            let reset_response = ui
                                 .small_button(icons::ARROW_COUNTER_CLOCKWISE)
-                                .on_hover_text("Use the current definition value")
-                                .clicked();
+                                .on_hover_text("Use the current definition value");
+                            crate::qa::register_component_with_metadata(
+                                format!("composition.instance.reset:{}:{}", item.id, parameter.id),
+                                "composition_instance_reset", reset_response.rect, reset_response.enabled(),
+                                Some(serde_json::json!({"item_id": item.id, "parameter_id": parameter.id})),
+                            );
+                            reset = reset_response.clicked();
                             label.context_menu(|ui| {
                                 if ui.button("Reset to definition").clicked() {
                                     reset = true;

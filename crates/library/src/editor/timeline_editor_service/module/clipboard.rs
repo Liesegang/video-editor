@@ -5,7 +5,11 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::output::require_insertable_processing_node;
-use super::{bump_interface_version, bump_topology_revision, private_definition_for_instance};
+use super::{
+    bump_interface_version, bump_topology_revision, edit_module_parameter_track_in_project,
+    module_parameter_controls, private_definition_for_instance,
+    set_module_parameter_override_in_project,
+};
 use crate::model::authoring::{
     AttachmentProcessor, AutomationTrack, ChangeSet, ModuleConnection, ModuleInstanceId,
     PublishedAction, PublishedActionId, PublishedParameter, PublishedParameterId, PublishedSignal,
@@ -16,7 +20,6 @@ use crate::model::node::NodeContent;
 use crate::model::property::PropertyValue;
 
 use super::super::module_asset::require_project_asset;
-use super::super::transition_parameter_automation::edit_transition_parameter_track_in_project;
 use super::super::*;
 
 const CLIPBOARD_VERSION: u32 = 1;
@@ -48,12 +51,6 @@ pub struct ModuleSelectionPasteReceipt {
     pub definition_id: ModuleDefinitionId,
     pub node_ids: Vec<uuid::Uuid>,
     pub changes: ChangeSet,
-}
-
-#[derive(Clone)]
-enum InvocationOwner {
-    Module(ModuleAutomationOwner),
-    Transition(TransitionAutomationOwner),
 }
 
 impl ModuleSelectionClipboard {
@@ -109,7 +106,7 @@ impl ModuleSelectionClipboard {
             .cloned()
             .collect();
         let owner = invocation_owner(project, instance_id, transition_instance_path)?;
-        let effective = effective_parameter_controls(project, instance_id, &owner)?;
+        let effective = module_parameter_controls(project, &owner)?;
         let parameters = definition
             .interface
             .parameters
@@ -117,8 +114,8 @@ impl ModuleSelectionClipboard {
             .filter(|parameter| selected.contains(&parameter.target.node_id))
             .map(|parameter| ClipboardParameter {
                 published: parameter.clone(),
-                current_override: effective.values.get(&parameter.id).cloned(),
-                automation: effective.automation.get(&parameter.id).cloned(),
+                current_override: effective.parameter_override(parameter.id).cloned(),
+                automation: effective.automation_track(parameter.id).cloned(),
             })
             .collect();
         let signals = definition
@@ -352,14 +349,14 @@ fn invocation_owner(
     project: &AuthoringProject,
     instance_id: ModuleInstanceId,
     transition_instance_path: Option<&InstancePath>,
-) -> Result<InvocationOwner, String> {
+) -> Result<ModuleParameterOwner, String> {
     let mut owners =
         project
             .items
             .values()
             .filter_map(|item| match &item.source {
                 SourceRef::Module(invocation) if invocation.instance_id == instance_id => Some(
-                    InvocationOwner::Module(ModuleAutomationOwner::Item(item.id)),
+                    ModuleParameterOwner::Invocation(ModuleAutomationOwner::Item(item.id)),
                 ),
                 _ => None,
             })
@@ -368,9 +365,9 @@ fn invocation_owner(
                     AttachmentProcessor::Module(invocation)
                         if invocation.instance_id == instance_id =>
                     {
-                        Some(InvocationOwner::Module(ModuleAutomationOwner::Attachment(
-                            attachment.id,
-                        )))
+                        Some(ModuleParameterOwner::Invocation(
+                            ModuleAutomationOwner::Attachment(attachment.id),
+                        ))
                     }
                     _ => None,
                 },
@@ -381,7 +378,7 @@ fn invocation_owner(
                     .module_processor()
                     .filter(|invocation| invocation.instance_id == instance_id)
                     .map(|_| {
-                        InvocationOwner::Transition(TransitionAutomationOwner::Definition(
+                        ModuleParameterOwner::Transition(TransitionAutomationOwner::Definition(
                             transition.id,
                         ))
                     })
@@ -395,12 +392,16 @@ fn invocation_owner(
         ));
     }
     match (owner, transition_instance_path) {
-        (InvocationOwner::Module(_), Some(_)) => Err(
+        (ModuleParameterOwner::Invocation(_), Some(_)) => Err(
             "A Transition instance path cannot address a Node Clip or Module Effect".to_string(),
         ),
-        (InvocationOwner::Module(owner), None) => Ok(InvocationOwner::Module(owner)),
-        (InvocationOwner::Transition(owner), None) => Ok(InvocationOwner::Transition(owner)),
-        (InvocationOwner::Transition(owner), Some(path)) => {
+        (ModuleParameterOwner::Invocation(owner), None) => {
+            Ok(ModuleParameterOwner::Invocation(owner))
+        }
+        (ModuleParameterOwner::Transition(owner), None) => {
+            Ok(ModuleParameterOwner::Transition(owner))
+        }
+        (ModuleParameterOwner::Transition(owner), Some(path)) => {
             let transition_id = match owner {
                 TransitionAutomationOwner::Definition(transition_id)
                 | TransitionAutomationOwner::Instance { transition_id, .. } => transition_id,
@@ -413,11 +414,11 @@ fn invocation_owner(
                 ));
             }
             if path.composition_items.is_empty() {
-                Ok(InvocationOwner::Transition(
+                Ok(ModuleParameterOwner::Transition(
                     TransitionAutomationOwner::Definition(transition_id),
                 ))
             } else {
-                Ok(InvocationOwner::Transition(
+                Ok(ModuleParameterOwner::Transition(
                     TransitionAutomationOwner::Instance {
                         transition_id,
                         instance_path: path.clone(),
@@ -428,98 +429,22 @@ fn invocation_owner(
     }
 }
 
-struct EffectiveParameterControls {
-    values: HashMap<PublishedParameterId, PropertyValue>,
-    automation: HashMap<PublishedParameterId, AutomationTrack>,
-}
-
-fn effective_parameter_controls(
-    project: &AuthoringProject,
-    instance_id: ModuleInstanceId,
-    owner: &InvocationOwner,
-) -> Result<EffectiveParameterControls, String> {
-    match owner {
-        InvocationOwner::Module(owner) => Ok(EffectiveParameterControls {
-            values: project
-                .module_instances
-                .get(&instance_id)
-                .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                .parameter_overrides
-                .clone(),
-            automation: owner.invocation(project)?.automation_tracks.clone(),
-        }),
-        InvocationOwner::Transition(TransitionAutomationOwner::Definition(transition_id)) => {
-            let transition = project
-                .transitions
-                .get(transition_id)
-                .ok_or_else(|| format!("Missing Transition {transition_id}"))?;
-            let processor = transition
-                .processor
-                .module_processor()
-                .ok_or_else(|| format!("Transition {transition_id} is not a Module Transition"))?;
-            Ok(EffectiveParameterControls {
-                values: project
-                    .module_instances
-                    .get(&instance_id)
-                    .ok_or_else(|| format!("Missing Module instance {instance_id}"))?
-                    .parameter_overrides
-                    .clone(),
-                automation: processor.automation_tracks.clone(),
-            })
-        }
-        InvocationOwner::Transition(TransitionAutomationOwner::Instance {
-            transition_id,
-            instance_path,
-        }) => {
-            let target =
-                project.resolve_transition_module_instance_target(instance_path, *transition_id)?;
-            let effective = project.effective_transition_module_controls(&target)?;
-            Ok(EffectiveParameterControls {
-                values: effective.parameter_overrides,
-                automation: effective.automation_tracks,
-            })
-        }
-    }
-}
-
 fn paste_parameter_controls(
     project: &mut AuthoringProject,
     instance_id: ModuleInstanceId,
-    owner: &InvocationOwner,
+    owner: &ModuleParameterOwner,
     clipboard: &ModuleSelectionClipboard,
     parameter_ids: &HashMap<PublishedParameterId, PublishedParameterId>,
 ) -> Result<(), String> {
-    match owner {
-        InvocationOwner::Module(_)
-        | InvocationOwner::Transition(TransitionAutomationOwner::Definition(_)) => {
-            let instance = project
-                .module_instances
-                .get_mut(&instance_id)
-                .ok_or_else(|| format!("Missing Module instance {instance_id}"))?;
-            for source in &clipboard.parameters {
-                if let Some(value) = &source.current_override {
-                    instance
-                        .parameter_overrides
-                        .insert(parameter_ids[&source.published.id], value.clone());
-                }
-            }
-        }
-        InvocationOwner::Transition(TransitionAutomationOwner::Instance {
-            transition_id,
-            instance_path,
-        }) => {
-            let target =
-                project.resolve_transition_module_instance_target(instance_path, *transition_id)?;
-            project.edit_transition_module_instance_overrides(&target, |controls| {
-                for source in &clipboard.parameters {
-                    if let Some(value) = &source.current_override {
-                        controls
-                            .parameter_overrides
-                            .insert(parameter_ids[&source.published.id], value.clone());
-                    }
-                }
-                Ok(())
-            })?;
+    for source in &clipboard.parameters {
+        if let Some(value) = &source.current_override {
+            set_module_parameter_override_in_project(
+                project,
+                owner,
+                instance_id,
+                parameter_ids[&source.published.id],
+                value.clone(),
+            )?;
         }
     }
 
@@ -531,25 +456,16 @@ fn paste_parameter_controls(
             keyframe.id = KeyframeId::new();
         }
         let parameter_id = parameter_ids[&source.published.id];
-        match owner {
-            InvocationOwner::Module(owner) => {
-                owner
-                    .invocation_mut(project)?
-                    .automation_tracks
-                    .insert(parameter_id, track);
-            }
-            InvocationOwner::Transition(owner) => {
-                edit_transition_parameter_track_in_project(
-                    project,
-                    owner,
-                    parameter_id,
-                    |destination| {
-                        *destination = track;
-                        Ok(())
-                    },
-                )?;
-            }
-        }
+        edit_module_parameter_track_in_project(
+            project,
+            owner,
+            parameter_id,
+            true,
+            |destination| {
+                *destination = track;
+                Ok(())
+            },
+        )?;
     }
     Ok(())
 }

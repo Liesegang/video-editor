@@ -102,10 +102,13 @@ pub(super) fn node_clip_appearance_section(
     stack: &library::editor::NodeClipAppearanceStack,
 ) {
     ui.separator();
-    let library::editor::ModuleAutomationOwner::Item(item_id) = context.owner else {
+    let library::editor::ModuleParameterOwner::Invocation(
+        library::editor::ModuleAutomationOwner::Item(item_id),
+    ) = &context.owner
+    else {
         return;
     };
-    let owner = AppearanceOwner::NodeClip(item_id);
+    let owner = AppearanceOwner::NodeClip(*item_id);
     let response = egui::CollapsingHeader::new("Appearance")
         .default_open(true)
         .show(ui, |ui| {
