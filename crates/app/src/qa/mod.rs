@@ -25,6 +25,7 @@ mod registry;
 mod server;
 mod ui_query;
 
+pub(crate) use registry::global_response_rect;
 pub use registry::{begin_frame, end_frame, register_component, register_component_with_metadata};
 
 /// True only while the opt-in QA runtime is alive. Preview rendering uses

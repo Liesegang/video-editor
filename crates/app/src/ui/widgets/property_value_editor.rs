@@ -207,10 +207,13 @@ pub(crate) fn property_value_editor(
         }
     }
 
+    let qa_rect = crate::qa::global_response_rect(ui.ctx(), &edit.response);
+    #[cfg(test)]
+    capture_qa_rect(qa_id, edit.response.rect, qa_rect);
     crate::qa::register_component_with_metadata(
         qa_id,
         "inspector_property_control",
-        edit.response.rect,
+        qa_rect,
         edit.response.enabled(),
         Some(serde_json::json!({
             "value": &*value,
@@ -334,7 +337,7 @@ fn vector2_editor(
         &mut [("X", &mut x), ("Y", &mut y)],
         ui.spacing().interact_size.y,
     );
-    register_vector_axes(qa_id, &group.axes);
+    register_vector_axes(ui.ctx(), qa_id, &group.axes);
     let reset = group.reset;
     let changed = group.changed || reset;
     if reset {
@@ -374,7 +377,7 @@ fn vector3_editor(
         &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z)],
         ui.spacing().interact_size.y,
     );
-    register_vector_axes(qa_id, &group.axes);
+    register_vector_axes(ui.ctx(), qa_id, &group.axes);
     let reset = group.reset;
     let changed = group.changed || reset;
     if reset {
@@ -416,7 +419,7 @@ fn vector4_editor(
         &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z), ("W", &mut w)],
         ui.spacing().interact_size.y,
     );
-    register_vector_axes(qa_id, &group.axes);
+    register_vector_axes(ui.ctx(), qa_id, &group.axes);
     let reset = group.reset;
     let changed = group.changed || reset;
     if reset {
@@ -453,12 +456,16 @@ fn float_config(
         })
 }
 
-fn register_vector_axes(qa_id: &str, axes: &[VectorAxisResponse]) {
+fn register_vector_axes(ctx: &egui::Context, qa_id: &str, axes: &[VectorAxisResponse]) {
     for axis in axes {
+        let id = format!("{qa_id}:{}", axis.axis.to_ascii_lowercase());
+        let qa_rect = crate::qa::global_response_rect(ctx, &axis.response);
+        #[cfg(test)]
+        capture_qa_rect(&id, axis.response.rect, qa_rect);
         crate::qa::register_component_with_metadata(
-            format!("{qa_id}:{}", axis.axis.to_ascii_lowercase()),
+            id,
             "inspector_vector_component_control",
-            axis.response.rect,
+            qa_rect,
             axis.response.enabled(),
             Some(serde_json::json!({
                 "axis": axis.axis,
@@ -466,6 +473,22 @@ fn register_vector_axes(qa_id: &str, axes: &[VectorAxisResponse]) {
             })),
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CAPTURED_QA_RECTS: std::cell::RefCell<
+        Option<Vec<(String, egui::Rect, egui::Rect)>>
+    > = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn capture_qa_rect(id: &str, local: egui::Rect, global: egui::Rect) {
+    CAPTURED_QA_RECTS.with(|captured| {
+        if let Some(captured) = captured.borrow_mut().as_mut() {
+            captured.push((id.to_string(), local, global));
+        }
+    });
 }
 
 #[cfg(test)]
@@ -507,5 +530,81 @@ mod tests {
                 y: OrderedFloat(20.0),
             })
         );
+    }
+
+    #[test]
+    fn vector_parent_and_axes_share_identity_and_zoomed_canvas_qa_transforms() {
+        let palette = ProjectPalette::default();
+        let cases = [
+            (
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(10.0),
+                    y: OrderedFloat(20.0),
+                }),
+                egui::emath::TSTransform::IDENTITY,
+                2,
+                std::cmp::Ordering::Equal,
+            ),
+            (
+                PropertyValue::Vec3(Vec3 {
+                    x: OrderedFloat(10.0),
+                    y: OrderedFloat(20.0),
+                    z: OrderedFloat(30.0),
+                }),
+                egui::emath::TSTransform::new(egui::vec2(700.0, 480.0), 0.58),
+                3,
+                std::cmp::Ordering::Less,
+            ),
+            (
+                PropertyValue::Vec4(Vec4 {
+                    x: OrderedFloat(10.0),
+                    y: OrderedFloat(20.0),
+                    z: OrderedFloat(30.0),
+                    w: OrderedFloat(40.0),
+                }),
+                egui::emath::TSTransform::new(egui::vec2(320.0, 180.0), 1.75),
+                4,
+                std::cmp::Ordering::Greater,
+            ),
+        ];
+        for (case, (mut value, transform, axis_count, width_order)) in cases.into_iter().enumerate()
+        {
+            CAPTURED_QA_RECTS.with(|captured| {
+                assert!(captured.borrow_mut().replace(Vec::new()).is_none());
+            });
+            let context = egui::Context::default();
+            drop(context.run(egui::RawInput::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    context.set_transform_layer(ui.layer_id(), transform);
+                    property_value_editor(
+                        ui,
+                        egui::Id::new(("node_vector", case)),
+                        &format!("node_editor.test.vector{axis_count}"),
+                        &mut value,
+                        PropertyValueEditorSpec {
+                            definition: None,
+                            fallback_suffix: " px",
+                            fallback_speed: 1.0,
+                            palette: &palette,
+                        },
+                    );
+                });
+            }));
+            let captured = CAPTURED_QA_RECTS.with(|captured| {
+                captured
+                    .borrow_mut()
+                    .take()
+                    .expect("opt-in QA geometry capture")
+            });
+            assert_eq!(captured.len(), axis_count + 1, "parent plus vector axes");
+            for (id, local, global) in captured {
+                assert_eq!(global, transform * local, "QA transform for {id}");
+                assert_eq!(
+                    global.width().partial_cmp(&local.width()).unwrap(),
+                    width_order,
+                    "scaled QA width for {id}"
+                );
+            }
+        }
     }
 }

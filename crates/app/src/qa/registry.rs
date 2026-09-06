@@ -228,6 +228,15 @@ pub fn register_component_with_metadata(
     REGISTRY.register(id, component_type, rect, enabled, metadata);
 }
 
+/// Resolve a widget response into the global coordinate space exposed by the
+/// QA bridge. Embedded canvases paint in transformed egui layers, while
+/// ordinary Inspector and popup layers resolve through the identity transform.
+pub(crate) fn global_response_rect(ctx: &egui::Context, response: &egui::Response) -> egui::Rect {
+    ctx.layer_transform_to_global(response.layer_id)
+        .unwrap_or_default()
+        * response.rect
+}
+
 pub fn end_frame() {
     if is_enabled() {
         REGISTRY.end_frame();
