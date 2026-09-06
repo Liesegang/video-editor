@@ -5,6 +5,7 @@ pub mod frame;
 pub mod node;
 pub(crate) mod numeric;
 pub mod path;
+pub mod point;
 pub mod project;
 pub mod vector;
 
