@@ -1,6 +1,6 @@
 """Shared production Node Editor document, port, and route assertions."""
 
-from qa_support import QaFailure, component_center, find_clear_canvas_point
+from qa_support import QaFailure, component_center, find_clear_canvas_point, media_seconds
 
 
 def component(snapshot, component_id):
@@ -12,6 +12,115 @@ def component(snapshot, component_id):
         ),
         None,
     )
+
+
+def enter_exact_numeric(client, component_id, value):
+    """Replace one production numeric editor value without losing integer precision."""
+
+    client.click_component(component_id)
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": str(value)})
+    client.key("enter", True)
+    client.key("enter", False)
+
+
+def place_private_node_clip_source(
+    client,
+    source_snapshot,
+    source,
+    requested_start_seconds,
+    description,
+):
+    """Drag one production Assets source into one exact private Module Item."""
+
+    initial = client.state()
+    project = initial["project"]
+    _, canvas = client.wait_component("timeline.canvas")
+    track = next(
+        (
+            candidate
+            for candidate in source_snapshot["components"]
+            if candidate.get("type") == "timeline_track"
+            and candidate.get("visible") is True
+            and candidate.get("enabled") is True
+            and float((candidate.get("rect_points") or {}).get("height", 0.0)) > 0.0
+        ),
+        None,
+    )
+    if track is None:
+        raise QaFailure("Timeline exposed no production Track drop target")
+    canvas_rect = canvas["rect_points"]
+    timeline = initial["editor"]["timeline"]
+    target = {
+        "x": canvas_rect["min_x"]
+        + requested_start_seconds * float(timeline["pixels_per_second"])
+        - float(timeline["horizontal_scroll"]),
+        "y": component_center(track)["y"],
+    }
+    if not canvas_rect["min_x"] < target["x"] < canvas_rect["max_x"]:
+        raise QaFailure(description + " drop target is outside the Timeline viewport")
+
+    before = {
+        collection: dict(project[collection])
+        for collection in ("items", "module_definitions", "module_instances")
+    }
+    before_revision = initial["history"]["revision"]
+    start = component_center(source)
+    client.drag(start, target, steps=18)
+
+    def placed():
+        state = client.state()
+        current = state["project"]
+        return (
+            state
+            if all(len(current[key]) == len(values) + 1 for key, values in before.items())
+            and state["history"]["revision"] == before_revision + 1
+            and state["editor"]["timeline"]["library_drag_active"] is False
+            else None
+        )
+
+    placed_state = client.wait_until(description + " placement", placed)
+    authored = placed_state["project"]
+    added = {
+        collection: set(authored[collection]) - set(previous)
+        for collection, previous in before.items()
+    }
+    if any(len(ids) != 1 for ids in added.values()):
+        raise QaFailure(description + " did not create one Item, Definition, and Instance")
+    item_id = next(iter(added["items"]))
+    definition_id = next(iter(added["module_definitions"]))
+    instance_id = next(iter(added["module_instances"]))
+    item = authored["items"][item_id]
+    invocation = item.get("source") or {}
+    if invocation.get("kind") != "module" or (invocation.get("value") or {}).get(
+        "instance_id"
+    ) != instance_id:
+        raise QaFailure(description + " Item and Module Instance identities disagree")
+    instance = authored["module_instances"][instance_id]
+    if instance.get("definition_id") != definition_id:
+        raise QaFailure(description + " Instance points at a different Definition")
+    definition = authored["module_definitions"][definition_id]
+    if definition.get("sharing") != {"kind": "private"}:
+        raise QaFailure(description + " Definition is not private to its Timeline Item")
+    for collection, previous in before.items():
+        for existing_id, existing in previous.items():
+            if authored[collection].get(existing_id) != existing:
+                raise QaFailure(description + " mutated existing " + collection)
+    if media_seconds(item["interval"]["start"]) != requested_start_seconds:
+        raise QaFailure(description + " changed its exact requested start")
+    return {
+        "initial": initial,
+        "state": placed_state,
+        "source": source,
+        "drag": {"from": start, "to": target},
+        "item_id": item_id,
+        "item": item,
+        "definition_id": definition_id,
+        "definition": definition,
+        "instance_id": instance_id,
+        "instance": instance,
+    }
 
 
 def active_definition(state, expected_host=None):

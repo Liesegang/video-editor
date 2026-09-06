@@ -263,6 +263,7 @@ class QaRunnerTests(unittest.TestCase):
             "color-ramp",
             "point-attributes",
             "point-grid",
+            "point-vector-fields",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",

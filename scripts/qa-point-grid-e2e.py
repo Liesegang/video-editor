@@ -10,6 +10,7 @@ from qa_node_module_support import (
     connect_nodes,
     create_node_from_menu,
     disconnect_node_connection,
+    enter_exact_numeric,
     node_content_type,
     place_created_node,
     unpublish_node_input_parameter,
@@ -58,15 +59,6 @@ def _constant(node, key):
     return property_value["value"]
 
 
-def _enter_exact_numeric(client, component_id, value):
-    client.click_component(component_id)
-    client.key("a", True, command=True)
-    client.key("a", False, command=True)
-    client.inject("text", {"text": str(value)})
-    client.key("enter", True)
-    client.key("enter", False)
-
-
 def _edit_typed_store_values(client, definition_id, integer_id, vec3_id, color_id):
     color_control = "node_editor.property.node:{}:value".format(color_id)
     _, color = client.wait_component_settled(color_control)
@@ -79,7 +71,7 @@ def _edit_typed_store_values(client, definition_id, integer_id, vec3_id, color_i
     if integer_metadata.get("editor_kind") != "integer":
         raise QaFailure("Store Integer bypassed the shared typed Integer editor")
     before_integer = client.state()
-    _enter_exact_numeric(client, integer_control, 16_777_217)
+    enter_exact_numeric(client, integer_control, 16_777_217)
 
     def integer_edited():
         state = client.state()
@@ -103,7 +95,7 @@ def _edit_typed_store_values(client, definition_id, integer_id, vec3_id, color_i
     if vec3_metadata.get("axis") != "X" or vec3_metadata.get("value") != 0.0:
         raise QaFailure("Store Vec3 bypassed the shared typed vector editor")
     before_vec3 = client.state()
-    _enter_exact_numeric(client, vec3_x_control, 12.5)
+    enter_exact_numeric(client, vec3_x_control, 12.5)
 
     def vec3_edited():
         state = client.state()
