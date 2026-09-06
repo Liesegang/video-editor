@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::TimelineEditorService;
-use library::model::authoring::MediaTime;
+use library::model::authoring::{MediaTime, ProjectRevision};
 
 use crate::state::authoring::{
     AuthoringUiState, AutomationOwner, CurveKeyDrag, CurveKeyframeEditor,
@@ -20,6 +20,7 @@ pub(super) fn paint_curve(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
+    source_revision: ProjectRevision,
     curve: &CurveSeries,
     color: Color32,
     transform: CurveTransform,
@@ -45,10 +46,7 @@ pub(super) fn paint_curve(
             Sense::click_and_drag(),
         );
         if response.drag_started_by(egui::PointerButton::Primary) {
-            if let (Some(pointer_origin), Ok(source_revision)) = (
-                ui.input(|input| input.pointer.press_origin()),
-                service.revision(),
-            ) {
+            if let Some(pointer_origin) = ui.input(|input| input.pointer.press_origin()) {
                 state.curve_editor.drag = Some(CurveKeyDrag {
                     source_revision,
                     lane: curve.id.clone(),

@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_phosphor::regular as icons;
 use library::editor::{AuthoringKeyframeUpdate, TimelineEditorService};
-use library::model::authoring::{AuthoringProject, MediaTime};
+use library::model::authoring::{AuthoringProject, MediaTime, ProjectRevision};
 use library::model::property::KeyframeId;
 use pan_zoom_ui::{
     AxisMask, CanvasState, CanvasTheme, CanvasTransform, GridAxis, GridConfig, GridLineKind,
@@ -39,10 +39,11 @@ mod tests;
 
 pub fn curve_editor_panel(
     ui: &mut egui::Ui,
-    project: &AuthoringProject,
+    project_frame: (&AuthoringProject, ProjectRevision),
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
 ) {
+    let (project, revision) = project_frame;
     let Some(owner) = selected_owner(state) else {
         state.curve_editor.drag = None;
         state.curve_editor.keyframe_editor = None;
@@ -69,7 +70,15 @@ pub fn curve_editor_panel(
 
     channel_list(ui, state, &series, channel_rect);
     series.retain(|candidate| series_visible(state, candidate));
-    curve_canvas(ui, project, state, service, &owner, &series, curve_rect);
+    curve_canvas(
+        ui,
+        (project, revision),
+        state,
+        service,
+        &owner,
+        &series,
+        curve_rect,
+    );
     show_keyframe_editor(ui.ctx(), state, service);
 }
 
@@ -155,13 +164,14 @@ fn channel_list(
 
 fn curve_canvas(
     ui: &mut egui::Ui,
-    project: &AuthoringProject,
+    project_frame: (&AuthoringProject, ProjectRevision),
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     owner: &AutomationOwner,
     series: &[CurveSeries],
     rect: Rect,
 ) {
+    let (project, revision) = project_frame;
     ui.painter()
         .rect_filled(rect, 0.0, CanvasTheme::default().background);
     let Some(interval) = automation_lanes::owner_interval(project, owner) else {
@@ -255,7 +265,15 @@ fn curve_canvas(
     }
 
     for (index, curve) in series.iter().enumerate() {
-        paint_curve(ui, state, service, curve, curve_color(index), transform);
+        paint_curve(
+            ui,
+            state,
+            service,
+            revision,
+            curve,
+            curve_color(index),
+            transform,
+        );
     }
     paint_playhead(ui, project, state, owner, transform, ruler_rect);
     finish_key_drag(ui, state, service);

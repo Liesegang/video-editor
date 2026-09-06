@@ -1,16 +1,13 @@
 //! Shared, descriptor-driven Appearance stack for direct Text and Shape clips.
 
 use egui_phosphor::regular as icons;
-use library::editor::{
-    AuthoringPropertyOwner, AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate,
-    TimelineEditorService,
-};
+use library::editor::{AuthoringPropertyOwner, TimelineEditorService};
 use library::model::authoring::{
     appearance_direct_contract_is_compatible, AppearanceOperation, AuthoringProject, TimelineItem,
 };
 use library::plugin::{OperationDescriptor, PluginManager, STYLE_APPLY_OPERATION, STYLE_CATEGORY};
 
-use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
+use crate::state::authoring::AuthoringUiState;
 use crate::ui::widgets::property_mode::PropertyModeState;
 use crate::ui::widgets::searchable_context_menu::{
     searchable_menu_button, show_searchable_items_with_qa, SearchableItem,
@@ -490,6 +487,11 @@ fn property_entry(
         item_id: item.id,
         operation_id: operation.id,
     };
+    let pending_keyframe = super::property_authoring::pending_authored_keyframe(
+        state.inspector.transient_property_edit.as_ref(),
+        owner,
+        definition.name(),
+    );
     let (changed, finished, mode_action, edited_value) = {
         let draft = state
             .inspector
@@ -510,6 +512,7 @@ fn property_entry(
                 allow_keyframe: true,
                 keyframe_disabled_reason: None,
                 allow_expression: definition.default_value().supports_expression(),
+                pending_keyframe,
             },
         );
         (
@@ -522,42 +525,64 @@ fn property_entry(
     if changed {
         if let Err(error) = definition.validate_value(&edited_value) {
             state.error = Some(error);
-        } else if let (Some(source_revision), Some(local_time)) =
-            (state.inspector.synced_revision, local_time)
-        {
-            if let Some(target) = direct_edit_target(property, local_time) {
-                state.inspector.transient_property_edit = Some(TransientPropertyEdit::authored(
-                    source_revision,
-                    owner,
-                    AuthoringPropertyValueUpdate {
-                        key: definition.name().to_string(),
-                        value: edited_value.clone(),
-                        target,
-                    },
-                ));
+        } else if let Some(local_time) = local_time {
+            if let Some(edit) = super::property_authoring::authored_transient_edit(
+                state.inspector.synced_revision,
+                owner,
+                definition.name(),
+                Some(property),
+                local_time,
+                edited_value.clone(),
+            ) {
+                super::property_authoring::update_transient_edit(
+                    &mut state.inspector.transient_property_edit,
+                    edit,
+                );
             }
         }
     }
     if finished {
-        if state
-            .inspector
-            .transient_property_edit
-            .as_ref()
-            .is_some_and(|edit| edit.matches(owner, definition.name()))
-        {
-            state.inspector.transient_property_edit = None;
-        }
+        let active_edit = super::property_authoring::take_matching_authored_edit(
+            &mut state.inspector.transient_property_edit,
+            owner,
+            definition.name(),
+        );
         match local_time {
             Some(local_time) if edited_value != model_value => {
-                if let Err(error) = service.set_appearance_property(
-                    plugins,
-                    item.id,
-                    operation.id,
-                    definition.name(),
-                    local_time,
-                    edited_value.clone(),
-                ) {
-                    state.error = Some(error.to_string());
+                let result = definition.validate_value(&edited_value).and_then(|()| {
+                    if property.evaluator == "expression" {
+                        service
+                            .set_appearance_property(
+                                plugins,
+                                item.id,
+                                operation.id,
+                                definition.name(),
+                                local_time,
+                                edited_value.clone(),
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    } else {
+                        active_edit
+                            .or_else(|| {
+                                super::property_authoring::authored_transient_edit(
+                                    state.inspector.synced_revision,
+                                    owner,
+                                    definition.name(),
+                                    Some(property),
+                                    local_time,
+                                    edited_value.clone(),
+                                )
+                            })
+                            .ok_or_else(|| {
+                                "Inspector has no synchronized Project revision".to_string()
+                            })?
+                            .commit(service)
+                            .map_err(|error| error.to_string())
+                    }
+                });
+                if let Err(error) = result {
+                    state.error = Some(error);
                 }
             }
             None => state.error = Some("Appearance has no valid clip-local time".to_string()),
@@ -670,16 +695,5 @@ fn move_button(
         if let Err(error) = result {
             state.error = Some(error.to_string());
         }
-    }
-}
-
-fn direct_edit_target(
-    property: &library::model::property::Property,
-    local_time: library::model::authoring::MediaTime,
-) -> Option<AuthoringPropertyValueTarget> {
-    match property.evaluator.as_str() {
-        "constant" => Some(AuthoringPropertyValueTarget::Constant),
-        "keyframe" => Some(AuthoringPropertyValueTarget::Keyframe { local_time }),
-        _ => None,
     }
 }

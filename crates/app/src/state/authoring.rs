@@ -332,11 +332,20 @@ pub enum PreviewTool {
     Zoom,
 }
 
+/// Captured Preview location shared by text and transform editing sessions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreviewEditContext {
+    pub timeline_id: TimelineId,
+    pub instance_path: Option<InstancePath>,
+    pub frame_number: i64,
+}
+
+#[derive(Clone, Debug)]
 /// Immutable authoring origin plus the current canvas-only transform preview.
 /// The Project is updated exactly once when the pointer is released.
-#[derive(Clone, Debug)]
 pub(crate) struct PreviewTransformGesture {
     pub item_id: TimelineItemId,
+    pub context: PreviewEditContext,
     /// `None` is body translation; `Some` identifies a production resize or
     /// rotation handle.
     pub handle: Option<GizmoHandle>,
@@ -356,9 +365,9 @@ pub(crate) struct PreviewTransformGesture {
     pub parent_transform: Affine2D,
     pub local_bounds: egui::Rect,
     pub local_time: MediaTime,
-    pub position_keyframed: bool,
-    pub scale_keyframed: bool,
-    pub rotation_keyframed: bool,
+    pub position_target: library::editor::AuthoringPropertyValueTarget,
+    pub scale_target: library::editor::AuthoringPropertyValueTarget,
+    pub rotation_target: library::editor::AuthoringPropertyValueTarget,
     pub project_revision: ProjectRevision,
 }
 
@@ -500,7 +509,7 @@ pub struct AuthoringInspectorView {
     pub synced_revision: Option<ProjectRevision>,
     /// Playhead used for the currently displayed effective automation values.
     /// Unlike a project revision, seeking changes this value every frame.
-    pub synced_frame: Option<i64>,
+    pub(crate) synced_context: Option<PreviewEditContext>,
     pub name: String,
     pub start_seconds: f64,
     pub duration_seconds: f64,
@@ -521,7 +530,7 @@ impl AuthoringInspectorView {
     pub fn invalidate(&mut self) {
         self.target = None;
         self.synced_revision = None;
-        self.synced_frame = None;
+        self.synced_context = None;
         self.property_values.clear();
         self.expression_sources.clear();
         self.effect_values.clear();
@@ -565,6 +574,14 @@ pub struct AuthoringUiState {
 }
 
 impl AuthoringUiState {
+    pub(crate) fn preview_edit_context(&self) -> PreviewEditContext {
+        PreviewEditContext {
+            timeline_id: self.active_timeline_id,
+            instance_path: self.active_instance_path.clone(),
+            frame_number: self.timeline.current_frame,
+        }
+    }
+
     pub fn new(root_timeline_id: TimelineId) -> Self {
         Self {
             active_timeline_id: root_timeline_id,

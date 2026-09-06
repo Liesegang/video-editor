@@ -49,22 +49,21 @@ fn inspector_scroll_area() -> egui::ScrollArea {
 
 pub fn inspector_panel(
     ui: &mut egui::Ui,
-    project: &Arc<AuthoringProject>,
+    project_frame: (
+        &Arc<AuthoringProject>,
+        library::model::authoring::ProjectRevision,
+    ),
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
     waveform: &AuthoringWaveformService,
     media_previews: &mut AuthoringMediaPreviewService,
 ) {
+    let (project, revision) = project_frame;
     let selection = state.selection.primary();
-    let revision = match service.revision() {
-        Ok(revision) => revision,
-        Err(error) => {
-            state.error = Some(error.to_string());
-            return;
-        }
-    };
-    sync_draft(project, state, selection, revision);
+    let discarded_transient = sync_draft(project, state, selection, revision);
+    stop_discarded_property_drag(ui, discarded_transient);
+    cancel_transient_property_edit(ui, state);
     let Some(selection) = selection else {
         empty_inspector(ui);
         return;
@@ -180,6 +179,29 @@ pub fn inspector_panel(
             "scroll_bar": INSPECTOR_SCROLL_SOURCE.scroll_bar,
         })),
     );
+}
+
+/// Escape cancels the one shared Inspector value gesture before any domain
+/// row can observe a release. Stopping egui's active drag is essential: merely
+/// dropping the projected edit would let the following pointer-up recreate
+/// and commit the same draft.
+fn cancel_transient_property_edit(ui: &egui::Ui, state: &mut AuthoringUiState) -> bool {
+    if state.inspector.transient_property_edit.is_none()
+        || !ui.input(|input| input.key_pressed(egui::Key::Escape))
+    {
+        return false;
+    }
+    ui.ctx().stop_dragging();
+    state.inspector.transient_property_edit = None;
+    state.inspector.property_values.clear();
+    state.status = "Cancelled property edit".to_string();
+    true
+}
+
+fn stop_discarded_property_drag(ui: &egui::Ui, discarded_transient: bool) {
+    if discarded_transient {
+        ui.ctx().stop_dragging();
+    }
 }
 
 fn empty_inspector(ui: &mut egui::Ui) {
@@ -477,11 +499,13 @@ fn sync_draft(
     state: &mut AuthoringUiState,
     selection: Option<AuthoringSelection>,
     revision: library::model::authoring::ProjectRevision,
-) {
-    let current_frame = state.timeline.current_frame;
+) -> bool {
+    let had_transient = state.inspector.transient_property_edit.is_some();
+    let current_context = state.preview_edit_context();
     if state.inspector.target == selection && state.inspector.synced_revision == Some(revision) {
-        if state.inspector.synced_frame != Some(current_frame) {
-            state.inspector.synced_frame = Some(current_frame);
+        let context_changed = state.inspector.synced_context.as_ref() != Some(&current_context);
+        if context_changed {
+            state.inspector.synced_context = Some(current_context);
             state
                 .inspector
                 .property_values
@@ -489,18 +513,18 @@ fn sync_draft(
             state.inspector.effect_values.clear();
             state.inspector.transient_property_edit = None;
         }
-        return;
+        return had_transient && context_changed;
     }
     state.inspector.target = selection;
     state.inspector.synced_revision = Some(revision);
-    state.inspector.synced_frame = Some(current_frame);
+    state.inspector.synced_context = Some(current_context);
     state.inspector.property_values.clear();
     state.inspector.expression_sources.clear();
     state.inspector.effect_values.clear();
     state.inspector.transient_property_edit = None;
     state.inspector.name.clear();
     let Some(selection) = selection else {
-        return;
+        return had_transient;
     };
     match selection {
         AuthoringSelection::Timeline(id) => {
@@ -544,6 +568,7 @@ fn sync_draft(
         | AuthoringSelection::Asset(_)
         | AuthoringSelection::ModuleDefinition(_) => {}
     }
+    had_transient
 }
 
 fn expression_source(

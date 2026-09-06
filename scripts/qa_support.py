@@ -38,6 +38,26 @@ def free_port() -> int:
         return int(listener.getsockname()[1])
 
 
+def write_json(path: pathlib.Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def collect_failure(client: QaClient, suite_dir: pathlib.Path) -> dict:
+    """Preserve live diagnostics before either a primary or reloaded app exits."""
+    artifacts = {}
+    for name, request in (("state", client.state), ("components", client.component_snapshot)):
+        try:
+            path = suite_dir / "failure-{}.json".format(name)
+            write_json(path, request())
+            artifacts[name] = str(path.resolve())
+        except Exception as error:
+            artifacts[name + "_error"] = str(error)
+    return artifacts
+
+
 def repository_git_commit() -> str | None:
     try:
         return subprocess.check_output(
@@ -270,22 +290,38 @@ class QaClient:
             else None,
         )
 
-    def wait_component_settled(self, component_id: str, consecutive_reads: int = 2):
+    def wait_component_settled(self, component_id: str, consecutive_frames: int = 2):
+        """Resolve geometry from distinct completed UI frames, not repeated cache reads."""
+        if consecutive_frames < 1:
+            raise ValueError("consecutive_frames must be positive")
         previous_geometry = None
+        previous_frame = None
         stable = 0
 
         def settled():
-            nonlocal previous_geometry, stable
-            snapshot, component = self.component(component_id)
+            nonlocal previous_geometry, previous_frame, stable
+            # Components are a passive registry snapshot. The existing read-only
+            # state query requests repaint so an idle UI can complete another frame.
+            self.state()
+            try:
+                snapshot, component = self.component(component_id)
+            except urllib.error.HTTPError:
+                previous_geometry, previous_frame, stable = None, None, 0
+                raise
             if not _interactable(component):
+                previous_geometry, previous_frame, stable = None, None, 0
                 return None
+            frame = snapshot["frame"]
+            if previous_frame is not None and frame <= previous_frame:
+                return None
+            previous_frame = frame
             geometry = component.get("rect_points")
             if geometry == previous_geometry:
                 stable += 1
             else:
                 previous_geometry = geometry
                 stable = 1
-            return (snapshot, component) if stable >= consecutive_reads else None
+            return (snapshot, component) if stable >= consecutive_frames else None
 
         return self.wait_until("settled " + component_id, settled)
 
@@ -315,7 +351,7 @@ class QaClient:
         return action_id
 
     def click_component(self, component_id: str, button: str = "primary"):
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         point = component_center(component)
         self.inject("click", {**point, "button": button, "coordinate_space": "points"})
         return snapshot, component, point
@@ -325,7 +361,7 @@ class QaClient:
     ):
         """Queue a click whose successful action is expected to stop the QA endpoint."""
 
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         point = component_center(component)
         payload = {**point, "button": button, "coordinate_space": "points"}
         action_id = self.queue_input("click", payload)
@@ -340,7 +376,7 @@ class QaClient:
         )
         return action_id, snapshot, component, point
     def double_click_component(self, component_id: str):
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         point = component_center(component)
         self.inject(
             "double-click", {**point, "button": "primary", "coordinate_space": "points"}
@@ -357,7 +393,7 @@ class QaClient:
         fraction_x: float = 0.5,
         fraction_y: float = 0.5,
     ):
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         start = component_point(component, fraction_x, fraction_y)
         end = {"x": start["x"] + delta_x, "y": start["y"] + delta_y}
         self.drag(start, end, steps=steps, button=button)
@@ -382,7 +418,7 @@ class QaClient:
         delta_y: float,
         modifiers: dict | None = None,
     ):
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         point = component_center(component)
         self.inject(
             "scroll",
@@ -403,7 +439,7 @@ class QaClient:
         fraction_x: float = 0.5,
         fraction_y: float = 0.5,
     ):
-        snapshot, component = self.wait_component(component_id)
+        snapshot, component = self.wait_component_settled(component_id)
         point = component_point(component, fraction_x, fraction_y)
         self.inject(
             "pinch",
@@ -487,6 +523,31 @@ def component_point(component: dict, fraction_x: float, fraction_y: float) -> di
     }
 
 
+def component_in_inspector(client: QaClient, component_id: str, attempts: int = 14):
+    """Reveal one registered Inspector control through its production scroll area."""
+
+    _, scroll = client.wait_component("inspector.scroll_area")
+    panel = scroll["rect_points"]
+    for _ in range(attempts):
+        snapshot = client.component_snapshot()
+        component = next(
+            (entry for entry in snapshot["components"] if entry["id"] == component_id),
+            None,
+        )
+        if component is not None:
+            rect = component["rect_points"]
+            if (
+                component.get("visible") is True
+                and panel["min_y"] <= rect["center_y"] <= panel["max_y"]
+            ):
+                return client.wait_component_settled(component_id)
+            delta = 300.0 if rect["center_y"] < panel["min_y"] else -300.0
+        else:
+            delta = -300.0
+        client.scroll_component("inspector.scroll_area", 0.0, delta)
+    raise QaFailure("could not bring {} into the Inspector".format(component_id))
+
+
 def bring_timeline_component(client: QaClient, component_id: str, direction: float):
     """Reveal an offscreen Timeline row through ordinary wheel navigation."""
     for _ in range(10):
@@ -507,15 +568,30 @@ def seek_timeline_seconds(client: QaClient, seconds: float, fps: float = 30.0):
     activate_dock_tab(
         client, "dock.tab:timeline", "Timeline", "Timeline seek panel activation"
     )
-    state = client.state()
-    timeline = state["editor"]["timeline"]
-    _, ruler = client.wait_component_settled("timeline.ruler")
-    rect = ruler["rect_points"]
-    x = (
-        float(rect["min_x"])
-        + float(seconds) * float(timeline["pixels_per_second"])
-        - float(timeline["horizontal_scroll"])
+    snapshot, ruler = client.wait_component_settled("timeline.ruler")
+    canvas = next(
+        (
+            component
+            for component in snapshot["components"]
+            if component.get("id") == "timeline.canvas"
+        ),
+        None,
     )
+    if canvas is None:
+        raise QaFailure("settled Timeline frame is missing its canvas transform")
+    metadata = canvas.get("metadata") or {}
+    try:
+        origin_x = float(metadata["screen_origin"]["x"])
+        pan_x = float(metadata["pan"]["x"])
+        zoom_x = float(metadata["zoom"]["x"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise QaFailure("Timeline canvas has an invalid transform") from error
+    rect = ruler["rect_points"]
+    x = origin_x + float(seconds) * zoom_x + pan_x
+    if not float(rect["min_x"]) <= x <= float(rect["max_x"]):
+        raise QaFailure(
+            "Timeline seek to {:.3f}s is outside the visible ruler".format(seconds)
+        )
     client.inject(
         "click",
         {
@@ -764,6 +840,15 @@ def spawned_authoring_app(
     )
     try:
         yield process
+    except Exception:
+        if artifact_dir := environment.get("RUVIE_QA_ARTIFACT_DIR"):
+            # The primary app may already be closed during persistence QA.
+            # Capture this child while its endpoint still exists, then re-raise.
+            collect_failure(
+                QaClient("http://127.0.0.1:{}".format(port)),
+                pathlib.Path(artifact_dir) / "child-{}".format(port),
+            )
+        raise
     finally:
         terminate_process(process)
 

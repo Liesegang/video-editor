@@ -105,14 +105,14 @@ impl AuthoringPreviewRuntime {
             },
         )?;
         let upstream_edit = combine_transient_edits(text_edit, property_edit);
-        let transform_digest = gizmo::transient_edit_digest(state);
+        let transform_digest = gizmo::transient_edit_digest(state, revision);
         let (projected, transform_edit) = self.transient_projections.project(
             TransientProjectionStage::Transform,
             revision,
             upstream_edit,
             transform_digest,
             &projected,
-            |source| Ok(gizmo::transient_render_project(source, state)),
+            |source| Ok(gizmo::transient_render_project(source, revision, state)),
         )?;
         Ok((
             projected,

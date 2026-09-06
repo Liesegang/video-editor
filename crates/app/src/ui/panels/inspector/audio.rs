@@ -31,7 +31,13 @@ pub(super) fn audio_section(
                 local_seconds,
             );
             let model_value = initial.clone();
-            let (finished, mode_action, edited_value) = {
+            let owner = library::editor::AuthoringPropertyOwner::Item(item.id);
+            let pending_keyframe = super::property_authoring::pending_authored_keyframe(
+                state.inspector.transient_property_edit.as_ref(),
+                owner,
+                key,
+            );
+            let (changed, finished, mode_action, edited_value) = {
                 let value = state
                     .inspector
                     .property_values
@@ -55,30 +61,84 @@ pub(super) fn audio_section(
                         allow_keyframe: true,
                         keyframe_disabled_reason: None,
                         allow_expression: true,
+                        pending_keyframe,
                     },
                 );
-                (result.finished, result.mode_action, value.clone())
+                (
+                    result.changed,
+                    result.finished,
+                    result.mode_action,
+                    value.clone(),
+                )
             };
-            if finished && edited_value != model_value {
-                let result = local_time.clone().and_then(|time| {
-                    super::property_authoring::commit_authored_value(
-                        service,
-                        library::editor::AuthoringPropertyOwner::Item(item.id),
+            if changed {
+                if let Ok(local_time) = &local_time {
+                    if let Some(edit) = super::property_authoring::authored_transient_edit(
+                        state.inspector.synced_revision,
+                        owner,
                         key,
                         authored,
+                        *local_time,
                         edited_value.clone(),
-                        time,
-                    )
+                    ) {
+                        super::property_authoring::update_transient_edit(
+                            &mut state.inspector.transient_property_edit,
+                            edit,
+                        );
+                    }
+                }
+            }
+            if finished && edited_value != model_value {
+                let active_edit = super::property_authoring::take_matching_authored_edit(
+                    &mut state.inspector.transient_property_edit,
+                    owner,
+                    key,
+                );
+                let result = local_time.clone().and_then(|time| {
+                    if authored.is_some_and(|property| property.evaluator == "expression") {
+                        super::property_authoring::commit_authored_value(
+                            service,
+                            owner,
+                            key,
+                            authored,
+                            edited_value.clone(),
+                            time,
+                        )
+                    } else {
+                        active_edit
+                            .or_else(|| {
+                                super::property_authoring::authored_transient_edit(
+                                    state.inspector.synced_revision,
+                                    owner,
+                                    key,
+                                    authored,
+                                    time,
+                                    edited_value.clone(),
+                                )
+                            })
+                            .ok_or_else(|| {
+                                "Inspector has no synchronized Project revision".to_string()
+                            })?
+                            .commit(service)
+                            .map_err(|error| error.to_string())
+                    }
                 });
                 if let Err(error) = result {
                     state.error = Some(error);
                 }
+            } else if finished {
+                let _ = super::property_authoring::take_matching_authored_edit(
+                    &mut state.inspector.transient_property_edit,
+                    owner,
+                    key,
+                );
             }
             if let Some(action) = mode_action {
+                state.inspector.transient_property_edit = None;
                 let result = local_time.and_then(|time| {
                     super::property_authoring::apply_authored_mode_action(
                         service,
-                        library::editor::AuthoringPropertyOwner::Item(item.id),
+                        owner,
                         key,
                         authored,
                         edited_value,

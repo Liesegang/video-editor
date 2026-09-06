@@ -16,7 +16,7 @@ impl TimelineEditorService {
         easing: Option<EasingFunction>,
     ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
         self.edit_transition_parameter_track(owner, parameter_id, move |track| {
-            track.upsert(local_time, value, easing)
+            track.upsert(KeyframeId::new(), local_time, value, easing)
         })
     }
 

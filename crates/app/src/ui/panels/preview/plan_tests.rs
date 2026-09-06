@@ -242,6 +242,7 @@ fn keyframed_module_preview_plan_matches_projection_and_release_commit() {
         transient_color.clone(),
         AuthoringPropertyValueTarget::Keyframe {
             local_time: MediaTime::zero(),
+            insertion_id: library::model::property::KeyframeId::new(),
         },
     );
     let projected = Arc::new(edit.project(&source).expect("project Color keyframe"));

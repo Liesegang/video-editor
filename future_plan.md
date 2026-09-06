@@ -104,11 +104,27 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     全体QAは25/25、workspace全targetは1,762 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 27 tests、831 filesの行数制限を通過した（`target/qa-workspace-test-20260906-node-clip-text-final.log`）。
     50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した。
     検証した通常の`target/release/app.exe`のSHA-256は`9EE990AB80E896B4958CF46C62AFE84E6A938CFACC8568022A1FBA5ECFF890A7`。
-  - [ ] キーがない時刻での一時編集にも、確定後と同じKeyframe IDを使う。
-    現行の共通upsertは投影と確定で別々に新しいIDを生成する。
-    既存時刻のキーはIDを維持するが、新規時刻では値と描画が一致してもProject全体の完全一致にはならない。
-    新規キーのIDを編集開始時に確保し、既存のauthored propertyと公開parameterのmutationへ渡す契約を整理する。
-    キーのない時刻での編集を制限して回避せず、投影、確定、UndoのIDを回帰テストで確認する。
+  - [x] キーがない時刻での一時編集にも、確定後と同じKeyframe IDを使う。
+    Inspector、Canvasの文字編集、Gizmoが新規キーのIDを編集セッションに保持し、PropertyとAutomationTrackの既存upsertへ渡す。
+    同時刻のキーがあれば既存IDと補間設定を保ち、別時刻のID衝突や不正な時刻は部分変更なしで拒否する。
+    公開parameterの投影と確定も同じmutationへ統一した。
+    複数回の値変更、投影と確定のProject完全一致、Undo/Redo、ModuleDefinitionの不変をRustの回帰テストで確認した。
+    通常のPositionとAudio GainのInspector編集も、既存の一時プレビューへ接続した。
+    Text、Gizmo、Inspectorの編集コンテキストを共有し、時刻、Timeline、Instance Path、revision、選択の変更による古い入力の再投影と確定を防ぐ。
+    InspectorとCurve Editorは、表示したProjectとそのrevisionを組で受け取る。
+    同一frameの先行パネルがProjectを変更しても、古い表示値へ新しいrevisionを付けて確定しないことを回帰テストで確認した。
+    実画面テストで見つかったEscape後の確定も、Inspector共通のドラッグ終了処理で修正した。
+    Inspectorの実画面QAでは、連続ドラッグ中の予約IDと確定キーIDの一致、描画一致、一回のUndo、別セッションの新規ID、Escapeによる復元を確認した（`target/qa-runs/20260906T-stable-key-id-green-r2/inspector-property-mode`）。
+    予約IDの観測契約がない旧releaseの記録は`20260906T-stable-key-id-red-r1`、Escapeで確定された初回の記録は`20260906T-stable-key-id-green-r1`に保持した。
+    QA共通の座標入力は、同じsnapshotの再読込みを安定判定に使わず、異なる完了frameで配置の一致を待つ。
+    Timelineのseekも、ルーラーと同じsnapshotにある既存Canvasのtransformから座標を計算し、領域外をクリックしない。
+    途中の全体QAでの配置待ち失敗は`20260906T-stable-key-id-final`、再起動後のseek失敗は`final-r2`に保持した。
+    後者と異なるframeの座標を混ぜる処理との因果は未確定で、単独再検査は通過した。
+    再起動したQA appで失敗した場合も、終了前に共通処理でstateとcomponentの記録を残すようにした。
+    最終releaseのnative HTTP QAは25/25で、通常Textと明示Node Clipのキー挿入中の実画面、確定後の画素一致、保存と再起動後の一致を確認した（`target/qa-runs/20260906T-stable-key-id-final-r3`）。
+    workspace全targetは1,777 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 35 tests、834 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-stable-key-id-final-r3.log`）。
+    全25シナリオのrun IDとfixture、captureの実ファイルhashが一致し、50本のapp/suite logに予期しないERRORやpanicはなく、QA appは終了した。
+    検証した通常の`target/release/app.exe`のSHA-256は`A6F7ACC7EA898C3A48941EB4682882D0CDF49E1A09C7F76D05CF3AF047EBECA5`。
   - 最終releaseのnative HTTP QAは25/25で、Text入力中の実画面も確認した（`target/qa-runs/20260906T-text-tool-final/preview/text-tool-draft.png`）。
     workspace全targetは1,745 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 27 tests、829 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-text-tool-final-r2.log`）。
     全25シナリオの記録が一致し、50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した。

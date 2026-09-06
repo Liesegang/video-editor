@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::property::Property;
+use crate::model::property::{KeyframeId, Property};
 use crate::plugin::PluginManager;
 
 fn operation_with_ports(ports: Vec<PortDefinition>) -> Node {
@@ -206,11 +206,12 @@ fn authored_edits_cannot_extend_a_factory_property_contract() {
     assert!(
         node.upsert_keyframe_with_id(
             "unknown",
+            KeyframeId::new(),
             0.0,
             PropertyValue::Number(OrderedFloat(2.0)),
             None,
         )
-        .is_none()
+        .is_err()
     );
     assert!(node.properties().get("unknown").is_none());
     assert!(node.properties().get(FMOD_DIVISOR_INPUT_PORT).is_some());

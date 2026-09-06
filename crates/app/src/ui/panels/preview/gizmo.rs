@@ -18,7 +18,7 @@ use library::model::authoring::{
     AuthoringProject, MediaTime, ProjectRevision, TimelineItem, TimelineItemId,
 };
 use library::model::frame::frame::FrameInfo;
-use library::model::property::{PropertyValue, Vec2 as PropertyVec2};
+use library::model::property::{KeyframeId, PropertyValue, Vec2 as PropertyVec2};
 use library::rendering::renderer::Affine2D;
 use ordered_float::OrderedFloat;
 use pan_zoom_ui::CanvasTransform;
@@ -47,9 +47,15 @@ struct HandlePlacement {
 /// RenderPlan topology remains valid because only authored values change.
 pub(super) fn transient_render_project(
     project: &Arc<AuthoringProject>,
+    revision: ProjectRevision,
     state: &AuthoringUiState,
 ) -> (Arc<AuthoringProject>, Option<u64>) {
-    let Some(gesture) = state.preview.transform_gesture.as_ref() else {
+    let Some(gesture) = state
+        .preview
+        .transform_gesture
+        .as_ref()
+        .filter(|gesture| gesture_matches(gesture, state, revision))
+    else {
         return (Arc::clone(project), None);
     };
     let updates = gesture_updates(gesture);
@@ -66,12 +72,27 @@ pub(super) fn transient_render_project(
     }
 }
 
-pub(super) fn transient_edit_digest(state: &AuthoringUiState) -> Option<u64> {
+pub(super) fn transient_edit_digest(
+    state: &AuthoringUiState,
+    revision: ProjectRevision,
+) -> Option<u64> {
     state
         .preview
         .transform_gesture
         .as_ref()
+        .filter(|gesture| gesture_matches(gesture, state, revision))
         .map(transform_digest)
+}
+
+fn gesture_matches(
+    gesture: &PreviewTransformGesture,
+    state: &AuthoringUiState,
+    revision: ProjectRevision,
+) -> bool {
+    gesture.project_revision == revision
+        && gesture.context == state.preview_edit_context()
+        && state.selection.primary() == Some(AuthoringSelection::Item(gesture.item_id))
+        && state.preview.active_tool == PreviewTool::Select
 }
 
 fn transform_digest(gesture: &PreviewTransformGesture) -> u64 {
@@ -79,9 +100,9 @@ fn transform_digest(gesture: &PreviewTransformGesture) -> u64 {
     gesture.item_id.hash(&mut hasher);
     gesture.handle.hash(&mut hasher);
     gesture.local_time.hash(&mut hasher);
-    gesture.position_keyframed.hash(&mut hasher);
-    gesture.scale_keyframed.hash(&mut hasher);
-    gesture.rotation_keyframed.hash(&mut hasher);
+    gesture.position_target.hash(&mut hasher);
+    gesture.scale_target.hash(&mut hasher);
+    gesture.rotation_target.hash(&mut hasher);
     gesture.projected_position.hash(&mut hasher);
     gesture.projected_scale.hash(&mut hasher);
     OrderedFloat(gesture.projected_rotation).hash(&mut hasher);
@@ -123,8 +144,7 @@ pub(super) fn handle_active_gesture(
         )
     });
     let stale = selected_item_id(project, state) != Some(active.item_id)
-        || active.project_revision != revision
-        || state.preview.active_tool != PreviewTool::Select;
+        || !gesture_matches(active, state, revision);
     if escape || stale || (!primary_down && !primary_released) {
         state.preview.transform_gesture = None;
         return true;
@@ -314,6 +334,7 @@ fn begin_gesture(
     state.error = None;
     state.preview.transform_gesture = Some(PreviewTransformGesture {
         item_id,
+        context: state.preview_edit_context(),
         handle,
         pointer_origin: pointer,
         canvas_origin: canvas,
@@ -328,9 +349,9 @@ fn begin_gesture(
         parent_transform: geometry.parent_transform,
         local_bounds: geometry.local_bounds,
         local_time,
-        position_keyframed,
-        scale_keyframed,
-        rotation_keyframed,
+        position_target: property_target(position_keyframed, local_time),
+        scale_target: property_target(scale_keyframed, local_time),
+        rotation_target: property_target(rotation_keyframed, local_time),
         project_revision: revision,
     });
 }
@@ -513,6 +534,19 @@ fn commit_gesture(
     service: &TimelineEditorService,
     gesture: PreviewTransformGesture,
 ) {
+    match service.revision() {
+        Ok(revision) if gesture_matches(&gesture, state, revision) => {}
+        Ok(_) => {
+            state.error = Some(
+                "Transform edit cancelled because its Project or Preview context changed".into(),
+            );
+            return;
+        }
+        Err(error) => {
+            state.error = Some(error.to_string());
+            return;
+        }
+    }
     let updates = gesture_updates(&gesture);
     if updates.is_empty() {
         return;
@@ -540,21 +574,21 @@ fn gesture_updates(gesture: &PreviewTransformGesture) -> Vec<AuthoringPropertyVa
         updates.push(AuthoringPropertyValueUpdate {
             key: "position".to_string(),
             value: PropertyValue::Vec2(gesture.projected_position),
-            target: property_target(gesture.position_keyframed, gesture.local_time),
+            target: gesture.position_target,
         });
     }
     if gesture.projected_scale != gesture.original_scale {
         updates.push(AuthoringPropertyValueUpdate {
             key: "scale".to_string(),
             value: PropertyValue::Vec2(gesture.projected_scale),
-            target: property_target(gesture.scale_keyframed, gesture.local_time),
+            target: gesture.scale_target,
         });
     }
     if OrderedFloat(gesture.projected_rotation) != OrderedFloat(gesture.original_rotation) {
         updates.push(AuthoringPropertyValueUpdate {
             key: "rotation".to_string(),
             value: PropertyValue::Number(OrderedFloat(gesture.projected_rotation)),
-            target: property_target(gesture.rotation_keyframed, gesture.local_time),
+            target: gesture.rotation_target,
         });
     }
     updates
@@ -562,7 +596,10 @@ fn gesture_updates(gesture: &PreviewTransformGesture) -> Vec<AuthoringPropertyVa
 
 fn property_target(keyframed: bool, local_time: MediaTime) -> AuthoringPropertyValueTarget {
     if keyframed {
-        AuthoringPropertyValueTarget::Keyframe { local_time }
+        AuthoringPropertyValueTarget::Keyframe {
+            local_time,
+            insertion_id: KeyframeId::new(),
+        }
     } else {
         AuthoringPropertyValueTarget::Constant
     }

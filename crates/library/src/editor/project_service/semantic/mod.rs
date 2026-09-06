@@ -113,8 +113,8 @@ impl ProjectManager {
             match property.evaluator.as_str() {
                 "keyframe" => {
                     if property
-                        .upsert_keyframe_with_id(time, value, easing)
-                        .is_none()
+                        .upsert_keyframe_with_id(KeyframeId::new(), time, value, easing)
+                        .is_err()
                     {
                         return Err("property cannot be keyframed".to_string());
                     }
@@ -163,7 +163,9 @@ impl ProjectManager {
     ) -> Result<KeyframeId, LibraryError> {
         let mut inserted = None;
         self.mutate_semantic_property(owner, property_key, |property| {
-            inserted = property.upsert_keyframe_with_id(time, value, easing);
+            inserted = property
+                .upsert_keyframe_with_id(KeyframeId::new(), time, value, easing)
+                .ok();
             inserted
                 .map(|_| ())
                 .ok_or_else(|| "property cannot be keyframed".to_string())

@@ -290,7 +290,7 @@ impl TimelineEditorService {
                 let track = parameter.automation.get_or_insert_with(|| AutomationTrack {
                     keyframes: Vec::new(),
                 });
-                track.upsert(local_time, value, easing)
+                track.upsert(KeyframeId::new(), local_time, value, easing)
             })
             .map_err(LibraryError::Validation)
     }

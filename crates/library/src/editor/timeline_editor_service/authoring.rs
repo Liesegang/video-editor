@@ -29,10 +29,13 @@ pub enum AuthoringPropertyOwner {
 
 /// The existing authored evaluator that one direct-manipulation value edit
 /// must preserve. Changing evaluator ownership is a separate explicit command.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum AuthoringPropertyValueTarget {
     Constant,
-    Keyframe { local_time: MediaTime },
+    Keyframe {
+        local_time: MediaTime,
+        insertion_id: KeyframeId,
+    },
 }
 
 /// One value in an atomic multi-property direct-manipulation edit.
@@ -379,6 +382,7 @@ impl TimelineEditorService {
                 "Keyframe time must be non-negative".to_string(),
             ));
         }
+        let insertion_id = KeyframeId::new();
         let mut session = self.write_session()?;
         let invalidations = property_owner_invalidations(session.project(), owner)?;
         session
@@ -394,10 +398,13 @@ impl TimelineEditorService {
                 }
                 properties
                     .get_mut(&key)
-                    .and_then(|property| {
-                        property.upsert_keyframe_with_id(local_time.to_seconds_f64(), value, easing)
-                    })
-                    .ok_or_else(|| format!("Property '{key}' does not support Keyframes"))
+                    .ok_or_else(|| format!("Missing authored Property '{key}'"))?
+                    .upsert_keyframe_with_id(
+                        insertion_id,
+                        local_time.to_seconds_f64(),
+                        value,
+                        easing,
+                    )
             })
             .map_err(LibraryError::Validation)
     }
@@ -482,7 +489,7 @@ fn validate_authored_property_updates(
         }
         if matches!(
             update.target,
-            AuthoringPropertyValueTarget::Keyframe { local_time } if local_time.is_negative()
+            AuthoringPropertyValueTarget::Keyframe { local_time, .. } if local_time.is_negative()
         ) {
             return Err("Keyframe time must be non-negative".to_string());
         }
@@ -509,7 +516,10 @@ fn apply_authored_property_updates(
                     properties.set(update.key, Property::constant(update.value));
                 }
             }
-            AuthoringPropertyValueTarget::Keyframe { local_time } => {
+            AuthoringPropertyValueTarget::Keyframe {
+                local_time,
+                insertion_id,
+            } => {
                 let property = properties.get_mut(&update.key).ok_or_else(|| {
                     format!(
                         "Authored Property '{}' disappeared during direct manipulation",
@@ -522,14 +532,12 @@ fn apply_authored_property_updates(
                         update.key, property.evaluator
                     ));
                 }
-                property
-                    .upsert_keyframe_with_id(local_time.to_seconds_f64(), update.value, None)
-                    .ok_or_else(|| {
-                        format!(
-                            "Authored Property '{}' no longer supports Keyframes",
-                            update.key
-                        )
-                    })?;
+                property.upsert_keyframe_with_id(
+                    insertion_id,
+                    local_time.to_seconds_f64(),
+                    update.value,
+                    None,
+                )?;
             }
         }
     }

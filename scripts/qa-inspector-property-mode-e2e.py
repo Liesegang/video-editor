@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """Verify the production Inspector property-authoring control in the native UI."""
 
+import os
+import pathlib
+
 from qa_support import (
     QaFailure,
+    capture_viewport,
     component_center,
     item_by_name,
+    rendered_current_revision,
     run_suite_main,
     seek_timeline_seconds,
+    settled_preview_state,
+)
+from qa_property_gesture_support import (
+    begin_reserved_keyframe_scrub,
+    release_property_scrub,
 )
 
 
@@ -28,6 +38,154 @@ def _required_component(client, component_id):
 
 def _semantic(component):
     return ((component.get("metadata") or {}).get("icon") or {}).get("semantic")
+
+
+def _authored_keys(state, item_id, key):
+    prop = state["project"]["items"][item_id]["authored_properties"][key]
+    if prop.get("type") != "keyframe":
+        raise QaFailure("{}.{} is not keyframed".format(item_id, key))
+    return prop["properties"]["keyframes"]
+
+
+def _key_time(keyframe):
+    value = keyframe["time"]
+    if isinstance(value, dict):
+        return float(value["value"]) / float(value["timescale"])
+    return float(value)
+
+
+def _undo(client):
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+
+
+def _row_has_no_reservation(client, row_id):
+    component = _component(client.component_snapshot(), row_id)
+    metadata = (component or {}).get("metadata") or {}
+    return component if metadata.get("pending_keyframe_insertion_id") is None else None
+
+
+def _exercise_inserted_key_identity(client, item_id, baseline):
+    control_id = "inspector.property:item:{}:position:x".format(item_id)
+    row_id = "inspector.property_row:item:{}:position".format(item_id)
+    before_project = baseline["project"]
+    before_revision = baseline["history"]["revision"]
+    before_frame = baseline["editor"]["timeline"]["current_frame"]
+    before_hash = baseline["editor"]["preview"]["pixel_hash"]
+    before_keys = _authored_keys(baseline, item_id, "position")
+    if len(before_keys) != 2 or any(abs(_key_time(key) - 1.0) < 0.001 for key in before_keys):
+        raise QaFailure("Position fixture must have two neighbors and no key at local 1s")
+
+    reservation = begin_reserved_keyframe_scrub(
+        client, control_id, row_id, 36.0, "held Position insertion"
+    )
+    if abs(reservation["time"] - 1.0) > 0.001:
+        raise QaFailure("Position reserved key used the wrong Clip-local time")
+    held = client.wait_until(
+        "held Position projection",
+        lambda: state
+        if (state := rendered_current_revision(client, before_hash))
+        and state["project"] == before_project
+        and state["history"]["revision"] == before_revision
+        and len(_authored_keys(state, item_id, "position")) == 2
+        else None,
+        30.0,
+    )
+    held_capture = capture_viewport(
+        client,
+        pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
+        / "position-keyframe-held.png",
+    )
+    release_property_scrub(client, reservation)
+
+    def inserted():
+        state = client.state()
+        keys = _authored_keys(state, item_id, "position")
+        inserted_key = next(
+            (key for key in keys if abs(_key_time(key) - 1.0) < 0.001), None
+        )
+        if (
+            len(keys) == 3
+            and inserted_key is not None
+            and state["history"]["revision"] == before_revision + 1
+        ):
+            return state, inserted_key
+        return None
+
+    committed, inserted_key = client.wait_until(
+        "one Position insertion command", inserted
+    )
+    if inserted_key["id"] != reservation["id"]:
+        raise QaFailure(
+            "held Position reserved KeyframeId {} became {} on release".format(
+                reservation["id"], inserted_key["id"]
+            )
+        )
+    client.wait_until(
+        "Position reservation cleared after release",
+        lambda: _row_has_no_reservation(client, row_id),
+    )
+    rendered = client.wait_until(
+        "committed Position insertion Preview",
+        lambda: state
+        if (state := settled_preview_state(client, committed["history"]["revision"], before_frame))
+        and state["editor"]["preview"]["pixel_hash"]
+        == held["editor"]["preview"]["pixel_hash"]
+        else None,
+        30.0,
+    )
+
+    _undo(client)
+    undone = client.wait_until(
+        "Position insertion Undo",
+        lambda: state
+        if (state := client.state())["project"] == before_project
+        and state["history"]["revision"] == committed["history"]["revision"] + 1
+        else None,
+    )
+    client.wait_until(
+        "Position insertion Undo Preview",
+        lambda: state
+        if (state := settled_preview_state(client, undone["history"]["revision"], before_frame))
+        and state["editor"]["preview"]["pixel_hash"] == before_hash
+        else None,
+        30.0,
+    )
+
+    second = begin_reserved_keyframe_scrub(
+        client, control_id, row_id, 24.0, "second held Position insertion"
+    )
+    if second["id"] == reservation["id"]:
+        raise QaFailure("a later Position gesture reused the prior reserved KeyframeId")
+    client.key("escape", True)
+    client.key("escape", False)
+    release_property_scrub(client, second)
+    cancelled = client.wait_until(
+        "second Position insertion cancelled",
+        lambda: state
+        if (state := client.state())["project"] == before_project
+        and state["history"]["revision"] == undone["history"]["revision"]
+        and _row_has_no_reservation(client, row_id)
+        else None,
+    )
+    client.wait_until(
+        "cancelled Position insertion Preview",
+        lambda: state
+        if (state := settled_preview_state(client, cancelled["history"]["revision"], before_frame))
+        and state["editor"]["preview"]["pixel_hash"] == before_hash
+        else None,
+        30.0,
+    )
+    return {
+        "reserved_id": reservation["id"],
+        "committed_id": inserted_key["id"],
+        "second_reserved_id": second["id"],
+        "local_time": reservation["time"],
+        "held_hash": held["editor"]["preview"]["pixel_hash"],
+        "held_capture": held_capture,
+        "committed_hash": rendered["editor"]["preview"]["pixel_hash"],
+        "restored_hash": before_hash,
+    }
 
 
 def _assert_semantic(client, component_id, expected):
@@ -90,6 +248,13 @@ def run_suite(client):
     if (key_away.get("metadata") or {}).get("key_at_current_time") is not False:
         raise QaFailure("outline keyframe icon incorrectly reports a key at the playhead")
 
+    baseline = client.wait_until(
+        "Position insertion baseline",
+        lambda: rendered_current_revision(client),
+        30.0,
+    )
+    inserted_key_identity = _exercise_inserted_key_identity(client, item_id, baseline)
+
     # Both an authored constant and an implicit default must remain timers.
     opacity = _assert_semantic(client, opacity_mode, "timer_constant")
     anchor = _assert_semantic(client, anchor_mode, "timer_constant")
@@ -126,6 +291,7 @@ def run_suite(client):
             "expression": expression.get("metadata"),
         },
         "row_geometry": row_geometry,
+        "inserted_key_identity": inserted_key_identity,
         "expression_editor": expression_editor,
         "history": after_expression["history"],
         "actions": client.evidence,

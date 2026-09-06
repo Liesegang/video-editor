@@ -133,7 +133,10 @@ impl TimelineEditorService {
                 vec![AuthoringPropertyValueUpdate {
                     key: key.to_string(),
                     value,
-                    target: AuthoringPropertyValueTarget::Keyframe { local_time },
+                    target: AuthoringPropertyValueTarget::Keyframe {
+                        local_time,
+                        insertion_id: KeyframeId::new(),
+                    },
                 }],
             ),
             _ => {

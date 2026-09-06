@@ -3,13 +3,13 @@
 
 from qa_support import (
     QaFailure,
+    component_in_inspector as _component_in_inspector,
     component_point,
     item_by_name,
     rendered_current_revision as _rendered_current_revision,
     run_suite_main,
 )
 from qa_text_ensemble_support import (
-    component_in_inspector as _component_in_inspector,
     constant_number as _constant_number,
     open_and_choose as _open_and_choose,
     operation as _operation,

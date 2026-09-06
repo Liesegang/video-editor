@@ -38,6 +38,75 @@ VIDEO_EXPORT = load("ruvie_qa_video_export", "qa-video-export-e2e.py")
 
 
 class QaRunnerTests(unittest.TestCase):
+    @staticmethod
+    def component_sample(frame, x=10.0, visible=True):
+        return {"frame": frame}, {
+            "id": "test.control",
+            "visible": visible,
+            "enabled": True,
+            "rect_points": {
+                "min_x": x,
+                "min_y": 20.0,
+                "width": 40.0,
+                "height": 20.0,
+                "center_x": x + 20.0,
+                "center_y": 30.0,
+            },
+        }
+
+    def assert_settles_on_last_sample(self, samples):
+        client = SUPPORT.QaClient("http://127.0.0.1:1")
+        with mock.patch.object(client, "state") as repaint, mock.patch.object(
+            client, "component", side_effect=samples
+        ) as component, mock.patch.object(SUPPORT.time, "sleep"):
+            result = client.wait_component_settled("test.control")
+        self.assertEqual(result, samples[-1])
+        self.assertEqual(component.call_count, len(samples))
+        self.assertEqual(repaint.call_count, len(samples))
+
+    def test_settling_requires_distinct_completed_frames(self):
+        self.assert_settles_on_last_sample([
+            self.component_sample(7), self.component_sample(7),
+            self.component_sample(8),
+        ])
+
+    def test_settling_restarts_when_geometry_changes(self):
+        self.assert_settles_on_last_sample([
+            self.component_sample(7), self.component_sample(8, x=100.0),
+            self.component_sample(9, x=100.0),
+        ])
+
+    def test_settling_restarts_when_control_is_not_interactable(self):
+        self.assert_settles_on_last_sample([
+            self.component_sample(7), self.component_sample(8, visible=False),
+            self.component_sample(9), self.component_sample(10),
+        ])
+
+    def test_component_actions_use_the_settled_geometry(self):
+        actions = [
+            ("click_component", ()),
+            ("click_component", ("secondary",)),
+            ("double_click_component", ()),
+            ("drag_component_by", (5.0, 10.0)),
+            ("scroll_component", (0.0, -100.0)),
+            ("pinch_component", (1.5,)),
+        ]
+        for method, arguments in actions:
+            with self.subTest(method=method, arguments=arguments):
+                client = SUPPORT.QaClient("http://127.0.0.1:1")
+                settled_sample = self.component_sample(12, x=100.0)
+                with mock.patch.object(
+                    client, "wait_component_settled", return_value=settled_sample
+                ) as settled, mock.patch.object(
+                    client, "wait_component", side_effect=AssertionError("unsettled")
+                ), mock.patch.object(client, "inject") as inject:
+                    result = getattr(client, method)("test.control", *arguments)
+                settled.assert_called_once_with("test.control")
+                self.assertEqual(result[:2], settled_sample)
+                payload = inject.call_args.args[1]
+                point = payload["from"] if method == "drag_component_by" else payload
+                self.assertEqual((point["x"], point["y"]), (120.0, 30.0))
+
     def test_timeline_reveal_scrolls_until_the_row_is_visible(self):
         client = mock.Mock()
         row = {"id": "timeline.item:target", "visible": True}
@@ -49,6 +118,65 @@ class QaRunnerTests(unittest.TestCase):
             SUPPORT.bring_timeline_component(client, row["id"], -100.0), row
         )
         client.scroll_component.assert_called_once_with("timeline.canvas", 0.0, -100.0)
+
+    @staticmethod
+    def timeline_seek_sample(ruler_max_x=500.0):
+        ruler = {
+            "id": "timeline.ruler",
+            "rect_points": {
+                "min_x": 300.0,
+                "max_x": ruler_max_x,
+                "center_y": 80.0,
+            },
+        }
+        canvas = {
+            "id": "timeline.canvas",
+            "metadata": {
+                "screen_origin": {"x": 300.0, "y": 100.0},
+                "pan": {"x": -20.0, "y": 0.0},
+                "zoom": {"x": 64.0, "y": 1.0},
+            },
+        }
+        return {"frame": 12, "components": [canvas, ruler]}, ruler
+
+    def test_timeline_seek_uses_canvas_transform_from_the_settled_frame(self):
+        client = mock.Mock()
+        sample = self.timeline_seek_sample()
+        client.wait_component_settled.return_value = sample
+        expected = {"editor": {"timeline": {"current_frame": 45}}}
+        client.wait_until.return_value = expected
+
+        with mock.patch.object(SUPPORT, "activate_dock_tab"):
+            result = SUPPORT.seek_timeline_seconds(client, 1.5)
+
+        self.assertIs(result, expected)
+        client.wait_component_settled.assert_called_once_with("timeline.ruler")
+        client.component_snapshot.assert_not_called()
+        client.state.assert_not_called()
+        client.inject.assert_called_once_with(
+            "click",
+            {
+                "x": 376.0,
+                "y": 80.0,
+                "button": "primary",
+                "coordinate_space": "points",
+            },
+        )
+
+    def test_timeline_seek_rejects_a_point_outside_the_settled_ruler(self):
+        client = mock.Mock()
+        client.wait_component_settled.return_value = self.timeline_seek_sample(
+            ruler_max_x=350.0
+        )
+
+        with mock.patch.object(SUPPORT, "activate_dock_tab"), self.assertRaisesRegex(
+            SUPPORT.QaFailure, "outside the visible ruler"
+        ):
+            SUPPORT.seek_timeline_seconds(client, 1.5)
+
+        client.inject.assert_not_called()
+        client.wait_until.assert_not_called()
+        client.state.assert_not_called()
 
     def test_timeline_reveal_cannot_succeed_for_an_absent_row(self):
         client = mock.Mock()
@@ -536,7 +664,7 @@ class QaRunnerTests(unittest.TestCase):
             "rect_points": {"center_x": 120.0, "center_y": 80.0},
         }
         with mock.patch.object(
-            client, "wait_component", return_value=({"frame": 9}, component)
+            client, "wait_component_settled", return_value=({"frame": 9}, component)
         ), mock.patch.object(
             client,
             "request",
@@ -577,6 +705,45 @@ class QaRunnerTests(unittest.TestCase):
             RUNNER.app_build_command("full"),
             ["cargo", "build", "-p", "app", "--locked", "--release"],
         )
+
+
+class QaFailureDiagnosticsTests(unittest.TestCase):
+    def test_failure_collection_keeps_available_diagnostics_if_one_query_fails(self):
+        client = mock.Mock()
+        client.state.side_effect = SUPPORT.QaFailure("state unavailable")
+        client.component_snapshot.return_value = {"frame": 42, "components": []}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            result = SUPPORT.collect_failure(client, directory)
+            self.assertEqual(result["state_error"], "state unavailable")
+            self.assertEqual(
+                RUNNER.read_json(pathlib.Path(result["components"])),
+                {"frame": 42, "components": []},
+            )
+            self.assertFalse((directory / "failure-state.json").exists())
+
+    def test_child_failure_is_captured_before_termination_without_masking_error(self):
+        process = mock.Mock()
+        order = []
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+            SUPPORT.subprocess, "Popen", return_value=process
+        ), mock.patch.object(
+            SUPPORT, "collect_failure", side_effect=lambda *_: order.append("capture")
+        ) as collect, mock.patch.object(
+            SUPPORT, "terminate_process", side_effect=lambda *_: order.append("terminate")
+        ):
+            failure = SUPPORT.QaFailure("fresh process seek failed")
+            with self.assertRaises(SUPPORT.QaFailure) as raised:
+                with SUPPORT.spawned_authoring_app(12345, {
+                    SUPPORT.QA_APP_BINARY_ENV: "test-app.exe",
+                    "RUVIE_QA_ARTIFACT_DIR": temporary,
+                }):
+                    raise failure
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(order, ["capture", "terminate"])
+            client, directory = collect.call_args.args
+            self.assertEqual(client.base_url, "http://127.0.0.1:12345")
+            self.assertEqual(directory, pathlib.Path(temporary) / "child-12345")
 
 
 if __name__ == "__main__":

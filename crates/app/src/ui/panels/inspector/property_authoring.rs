@@ -9,7 +9,9 @@ use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionA
 use library::model::authoring::{
     AttachmentId, AutomationTrack, MediaTime, ProjectPalette, PublishedParameterId, TimelineItemId,
 };
-use library::model::property::{Property, PropertyDefinition, PropertyValue};
+use library::model::property::{KeyframeId, Property, PropertyDefinition, PropertyValue};
+
+use crate::state::authoring::TransientPropertyEdit;
 
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
@@ -29,6 +31,13 @@ pub(super) struct PropertyRowSpec<'a> {
     pub(super) allow_keyframe: bool,
     pub(super) keyframe_disabled_reason: Option<&'a str>,
     pub(super) allow_expression: bool,
+    pub(super) pending_keyframe: Option<PendingKeyframeMetadata>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingKeyframeMetadata {
+    insertion_id: KeyframeId,
+    local_time: MediaTime,
 }
 
 pub(super) struct PropertyRowResult {
@@ -83,19 +92,101 @@ pub(super) fn property_row(
             capture_test_rect("value", value_edit.response.rect);
         }
     });
+    let mut metadata = serde_json::json!({
+        "control_id": spec.control_id,
+        "column_order": ["label", "property_mode", "value"],
+        "allow_keyframe": spec.allow_keyframe,
+        "keyframe_disabled_reason": spec.keyframe_disabled_reason,
+    });
+    if let Some(pending) = spec.pending_keyframe {
+        metadata["pending_keyframe_insertion_id"] =
+            serde_json::Value::String(pending.insertion_id.to_string());
+        metadata["pending_keyframe_time"] = serde_json::json!(pending.local_time.to_seconds_f64());
+    }
     crate::qa::register_component_with_metadata(
         format!("inspector.property_row:{}", spec.control_id),
         "inspector_property_row",
         row.response.rect,
         row.response.enabled(),
-        Some(serde_json::json!({
-            "control_id": spec.control_id,
-            "column_order": ["label", "property_mode", "value"],
-            "allow_keyframe": spec.allow_keyframe,
-            "keyframe_disabled_reason": spec.keyframe_disabled_reason,
-        })),
+        Some(metadata),
     );
     result
+}
+
+pub(super) fn authored_transient_edit(
+    source_revision: Option<library::model::authoring::ProjectRevision>,
+    owner: AuthoringPropertyOwner,
+    key: &str,
+    current: Option<&Property>,
+    local_time: MediaTime,
+    value: PropertyValue,
+) -> Option<TransientPropertyEdit> {
+    let source_revision = source_revision?;
+    let target = match current.map(|property| property.evaluator.as_str()) {
+        Some("keyframe") => library::editor::AuthoringPropertyValueTarget::Keyframe {
+            local_time,
+            insertion_id: KeyframeId::new(),
+        },
+        Some("expression") => return None,
+        _ => library::editor::AuthoringPropertyValueTarget::Constant,
+    };
+    Some(TransientPropertyEdit::authored(
+        source_revision,
+        owner,
+        library::editor::AuthoringPropertyValueUpdate {
+            key: key.to_string(),
+            value,
+            target,
+        },
+    ))
+}
+
+pub(super) fn update_transient_edit(
+    slot: &mut Option<TransientPropertyEdit>,
+    next: TransientPropertyEdit,
+) {
+    if let Some(current) = slot {
+        current.update(next);
+    } else {
+        *slot = Some(next);
+    }
+}
+
+pub(super) fn take_matching_authored_edit(
+    slot: &mut Option<TransientPropertyEdit>,
+    owner: AuthoringPropertyOwner,
+    key: &str,
+) -> Option<TransientPropertyEdit> {
+    slot.as_ref()
+        .is_some_and(|edit| edit.matches(owner, key))
+        .then(|| slot.take())
+        .flatten()
+}
+
+pub(super) fn pending_authored_keyframe(
+    edit: Option<&TransientPropertyEdit>,
+    owner: AuthoringPropertyOwner,
+    key: &str,
+) -> Option<PendingKeyframeMetadata> {
+    let edit = edit.filter(|edit| edit.matches(owner, key))?;
+    let (insertion_id, local_time) = edit.pending_keyframe()?;
+    Some(PendingKeyframeMetadata {
+        insertion_id,
+        local_time,
+    })
+}
+
+pub(super) fn pending_module_keyframe(
+    edit: Option<&TransientPropertyEdit>,
+    item_id: TimelineItemId,
+    parameter_id: PublishedParameterId,
+) -> Option<PendingKeyframeMetadata> {
+    let edit = edit.filter(|edit| edit.matches_module_parameter(item_id, parameter_id))?;
+    let (insertion_id, local_time) = edit.pending_keyframe()?;
+    Some(PendingKeyframeMetadata {
+        insertion_id,
+        local_time,
+    })
 }
 
 /// The same typed editor without a mode cell, for controls which do not own
@@ -559,6 +650,7 @@ mod tests {
                             allow_keyframe: true,
                             keyframe_disabled_reason: None,
                             allow_expression: true,
+                            pending_keyframe: None,
                         },
                     );
                 });
@@ -573,6 +665,45 @@ mod tests {
         assert!(label.right() <= mode.left());
         assert!(mode.right() <= value.left());
         Ok(())
+    }
+
+    #[test]
+    fn repeated_inspector_updates_keep_one_pending_keyframe_identity() {
+        let item_id = TimelineItemId::new();
+        let owner = AuthoringPropertyOwner::Item(item_id);
+        let property = Property {
+            evaluator: "keyframe".to_string(),
+            properties: Default::default(),
+        };
+        let local_time = MediaTime::new(3, 2).expect("time");
+        let mut slot = authored_transient_edit(
+            Some(library::model::authoring::ProjectRevision::initial()),
+            owner,
+            "position",
+            Some(&property),
+            local_time,
+            PropertyValue::from(10.0),
+        );
+        let first = pending_authored_keyframe(slot.as_ref(), owner, "position")
+            .expect("first pending keyframe");
+
+        update_transient_edit(
+            &mut slot,
+            authored_transient_edit(
+                Some(library::model::authoring::ProjectRevision::initial()),
+                owner,
+                "position",
+                Some(&property),
+                local_time,
+                PropertyValue::from(25.0),
+            )
+            .expect("next edit"),
+        );
+        let updated = pending_authored_keyframe(slot.as_ref(), owner, "position")
+            .expect("updated pending keyframe");
+
+        assert_eq!(updated.insertion_id, first.insertion_id);
+        assert_eq!(updated.local_time, local_time);
     }
 
     #[test]

@@ -1,6 +1,11 @@
 """Shared native-UI helpers for direct and promoted Text Ensemble authoring."""
 
-from qa_support import QaFailure, rendered_current_revision, seek_timeline_seconds
+from qa_support import (
+    QaFailure,
+    component_in_inspector,
+    rendered_current_revision,
+    seek_timeline_seconds,
+)
 
 
 def text_operations(state, item_id):
@@ -43,29 +48,6 @@ def constant_number(operation_value, property_name):
     if not isinstance(value, (int, float)):
         raise QaFailure("{} is not numeric: {!r}".format(property_name, value))
     return float(value)
-
-
-def component_in_inspector(client, component_id, attempts=14):
-    _, scroll = client.wait_component("inspector.scroll_area")
-    panel = scroll["rect_points"]
-    for _ in range(attempts):
-        snapshot = client.component_snapshot()
-        component = next(
-            (entry for entry in snapshot["components"] if entry["id"] == component_id),
-            None,
-        )
-        if component is not None:
-            rect = component["rect_points"]
-            if (
-                component.get("visible") is True
-                and panel["min_y"] <= rect["center_y"] <= panel["max_y"]
-            ):
-                return client.wait_component_settled(component_id)
-            delta = 300.0 if rect["center_y"] < panel["min_y"] else -300.0
-        else:
-            delta = -300.0
-        client.scroll_component("inspector.scroll_area", 0.0, delta)
-    raise QaFailure("could not bring {} into the Inspector".format(component_id))
 
 
 def open_and_choose(client, item_id, query, component_id):

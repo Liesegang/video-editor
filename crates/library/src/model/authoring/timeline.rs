@@ -556,10 +556,14 @@ impl AutomationTrack {
 
     pub fn upsert(
         &mut self,
+        insertion_id: KeyframeId,
         time: MediaTime,
         value: PropertyValue,
         easing: Option<EasingFunction>,
     ) -> Result<KeyframeId, String> {
+        if time.is_negative() {
+            return Err("Automation Keyframe time must be non-negative".to_string());
+        }
         if let Some(existing) = self
             .keyframes
             .iter_mut()
@@ -571,12 +575,24 @@ impl AutomationTrack {
             }
             return Ok(existing.id);
         }
-        let keyframe =
-            AutomationKeyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
-        let id = keyframe.id;
+        if self
+            .keyframes
+            .iter()
+            .any(|keyframe| keyframe.id == insertion_id)
+        {
+            return Err(format!(
+                "Automation Keyframe insertion identity {insertion_id} already belongs to a different time"
+            ));
+        }
+        let keyframe = AutomationKeyframe::with_id(
+            insertion_id,
+            time,
+            value,
+            easing.unwrap_or(EasingFunction::Linear),
+        );
         self.keyframes.push(keyframe);
         self.keyframes.sort_by_key(|keyframe| keyframe.time);
-        Ok(id)
+        Ok(insertion_id)
     }
 
     pub fn update_keyframe(
@@ -682,8 +698,17 @@ pub struct AutomationKeyframe {
 
 impl AutomationKeyframe {
     pub fn new(time: MediaTime, value: PropertyValue, easing: EasingFunction) -> Self {
+        Self::with_id(KeyframeId::new(), time, value, easing)
+    }
+
+    fn with_id(
+        id: KeyframeId,
+        time: MediaTime,
+        value: PropertyValue,
+        easing: EasingFunction,
+    ) -> Self {
         Self {
-            id: KeyframeId::new(),
+            id,
             time,
             value,
             easing,
@@ -695,6 +720,59 @@ impl AutomationKeyframe {
 mod automation_tests {
     use super::*;
     use ordered_float::OrderedFloat;
+
+    #[test]
+    fn supplied_insertion_identity_is_stable_and_collision_is_atomic() {
+        let first = KeyframeId::new();
+        let mut track = AutomationTrack { keyframes: vec![] };
+        let initial = track.clone();
+        assert!(
+            track
+                .upsert(
+                    KeyframeId::new(),
+                    MediaTime::new(-1, 1).expect("negative time"),
+                    PropertyValue::from(1.0),
+                    None,
+                )
+                .is_err()
+        );
+        assert_eq!(track, initial);
+        assert_eq!(
+            track
+                .upsert(
+                    first,
+                    MediaTime::zero(),
+                    PropertyValue::from(10.0),
+                    Some(EasingFunction::EaseInQuad),
+                )
+                .expect("insert supplied identity"),
+            first
+        );
+        assert_eq!(
+            track
+                .upsert(
+                    KeyframeId::new(),
+                    MediaTime::zero(),
+                    PropertyValue::from(20.0),
+                    None,
+                )
+                .expect("same-time update"),
+            first
+        );
+        assert_eq!(track.keyframes[0].easing, EasingFunction::EaseInQuad);
+        let before_collision = track.clone();
+        assert!(
+            track
+                .upsert(
+                    first,
+                    MediaTime::from_whole_seconds(1),
+                    PropertyValue::from(30.0),
+                    None,
+                )
+                .is_err()
+        );
+        assert_eq!(track, before_collision);
+    }
 
     #[test]
     fn automation_midpoint_uses_the_authoritative_interpolation() {

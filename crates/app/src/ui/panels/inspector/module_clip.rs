@@ -8,6 +8,7 @@ use library::model::authoring::{
     AuthoringProject, ModuleDefinition, ModuleInstance, ModuleInvocation, PublishedParameter,
     TimelineItem,
 };
+use library::model::property::KeyframeId;
 use library::plugin::PluginManager;
 
 use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
@@ -17,7 +18,8 @@ use crate::ui::property_metadata::{
 use crate::ui::widgets::property_mode::PropertyModeState;
 
 use super::property_authoring::{
-    apply_module_parameter_mode_action, property_row, PropertyRowSpec,
+    apply_module_parameter_mode_action, pending_module_keyframe, property_row,
+    update_transient_edit, PropertyRowSpec,
 };
 use super::{item_local_time, mode_action_label, value_provenance};
 
@@ -148,6 +150,11 @@ pub(super) fn published_parameter_row(
         published_parameter_definition(context.plugins, context.definition, parameter);
     let (allow_keyframe, keyframe_disabled_reason) =
         published_parameter_keyframe_capability(context.definition, parameter.id);
+    let pending_keyframe = pending_module_keyframe(
+        state.inspector.transient_property_edit.as_ref(),
+        context.item.id,
+        parameter.id,
+    );
     let (changed, finished, mode_action, edited_value) = {
         let value = state
             .inspector
@@ -168,6 +175,7 @@ pub(super) fn published_parameter_row(
                 allow_keyframe,
                 keyframe_disabled_reason,
                 allow_expression: false,
+                pending_keyframe,
             },
         );
         (
@@ -191,7 +199,7 @@ pub(super) fn published_parameter_row(
             &local_time,
             edited_value.clone(),
         ) {
-            state.inspector.transient_property_edit = Some(edit);
+            update_transient_edit(&mut state.inspector.transient_property_edit, edit);
         }
     }
     let active_edit = if finished
@@ -272,7 +280,10 @@ fn module_parameter_edit(
     let source_revision = source_revision?;
     let local_time = *local_time.as_ref().ok()?;
     let target = if automation.is_some() {
-        AuthoringPropertyValueTarget::Keyframe { local_time }
+        AuthoringPropertyValueTarget::Keyframe {
+            local_time,
+            insertion_id: KeyframeId::new(),
+        }
     } else {
         AuthoringPropertyValueTarget::Constant
     };

@@ -5,6 +5,10 @@ import os
 import pathlib
 
 from qa_curve_support import exercise_curve_key_live_preview
+from qa_property_gesture_support import (
+    begin_reserved_keyframe_scrub,
+    release_property_scrub,
+)
 from qa_tracking_geometry import (
     assert_expanded_from_neutral,
     assert_gizmo_parity,
@@ -19,6 +23,7 @@ from qa_support import (
     bring_timeline_component,
     capture_viewport,
     close_clean_native_app,
+    component_in_inspector,
     component_point,
     convert_timeline_item_to_node_clip,
     free_port,
@@ -31,7 +36,6 @@ from qa_support import (
     spawned_authoring_app,
 )
 from qa_text_ensemble_support import (
-    component_in_inspector,
     constant_number,
     constant_value,
     open_and_choose,
@@ -620,7 +624,18 @@ def run_suite(client):
     before_second = second_seek["project"]
     before_second_hash = second_seek["editor"]["preview"]["pixel_hash"]
     second_frame = second_seek["editor"]["timeline"]["current_frame"]
-    end = _press_horizontal_scrub(client, amount_control, 48.0)
+    direct_row = "inspector.property_row:text_ensemble:{}:{}:amount".format(
+        item_id, operation_id
+    )
+    direct_reservation = begin_reserved_keyframe_scrub(
+        client,
+        amount_control,
+        direct_row,
+        48.0,
+        "live keyframed Tracking insertion",
+    )
+    if abs(direct_reservation["time"] - 1.5) > 0.001:
+        raise QaFailure("direct Tracking reserved key used the wrong Clip-local time")
     held_key = client.wait_until(
         "live keyframed Tracking Preview",
         lambda: state
@@ -630,7 +645,10 @@ def run_suite(client):
         else None,
         30.0,
     )
-    _release_scrub(client, end)
+    direct_reserved_capture = capture_viewport(
+        client, _artifact_dir() / "direct-keyframe-reserved.png"
+    )
+    release_property_scrub(client, direct_reservation)
     second_key_state = client.wait_until(
         "second Tracking Amount key",
         lambda: state
@@ -650,6 +668,8 @@ def run_suite(client):
     direct_keys.sort(key=lambda key: _key_time_seconds(key["time"]))
     if abs(_key_time_seconds(direct_keys[1]["time"]) - 1.5) > 0.001:
         raise QaFailure("second Tracking key did not use Clip-local time")
+    if direct_keys[1]["id"] != direct_reservation["id"]:
+        raise QaFailure("direct Tracking changed its reserved KeyframeId on release")
     direct_target = {
         "kind": "authored_property",
         "owner": {
@@ -761,7 +781,7 @@ def run_suite(client):
         instance_id, amount_parameter["id"]
     )
     component_in_inspector(client, module_control)
-    module_baseline = seek_rendered(client, 2.5)
+    module_baseline = seek_rendered(client, 3.5)
     module_project = module_baseline["project"]
     module_hash = module_baseline["editor"]["preview"]["pixel_hash"]
     module_source_before, _, _, module_amount_before, _ = _module_tracking(
@@ -772,7 +792,18 @@ def run_suite(client):
             module_amount_before["id"]
         ]["keyframes"]
     )
-    end = _press_horizontal_scrub(client, module_control, 52.0)
+    module_row = "inspector.property_row:module_instance:{}:{}".format(
+        instance_id, amount_parameter["id"]
+    )
+    module_reservation = begin_reserved_keyframe_scrub(
+        client,
+        module_control,
+        module_row,
+        52.0,
+        "live promoted Tracking insertion",
+    )
+    if abs(module_reservation["time"] - 2.5) > 0.001:
+        raise QaFailure("promoted Tracking reserved key used the wrong Clip-local time")
     module_held = client.wait_until(
         "live promoted Tracking Preview",
         lambda: state
@@ -782,7 +813,10 @@ def run_suite(client):
         else None,
         30.0,
     )
-    _release_scrub(client, end)
+    module_reserved_capture = capture_viewport(
+        client, _artifact_dir() / "module-keyframe-reserved.png"
+    )
+    release_property_scrub(client, module_reservation)
     module_committed = client.wait_until(
         "one promoted Tracking scrub command",
         lambda: state
@@ -796,6 +830,19 @@ def run_suite(client):
         != module_keys_before
         else None,
     )
+    module_keys = _module_tracking(
+        module_committed["project"], item_id, operation_id
+    )[0]["value"]["automation_tracks"][amount_parameter["id"]]["keyframes"]
+    module_inserted = next(
+        (
+            key
+            for key in module_keys
+            if abs(_key_time_seconds(key["time"]) - 2.5) < 0.001
+        ),
+        None,
+    )
+    if module_inserted is None or module_inserted["id"] != module_reservation["id"]:
+        raise QaFailure("promoted Tracking changed its reserved KeyframeId on release")
     module_committed_render = client.wait_until(
         "committed promoted Tracking Preview",
         lambda: state
@@ -865,6 +912,8 @@ def run_suite(client):
             key: value for key, value in direct_live.items() if key != "restored"
         },
         "direct_keyframe_live_hash": held_key["editor"]["preview"]["pixel_hash"],
+        "direct_reserved_keyframe_id": direct_reservation["id"],
+        "direct_reserved_capture": direct_reserved_capture,
         "direct_keyframes": direct_signature,
         "direct_curve_drag": {
             key: value
@@ -885,6 +934,8 @@ def run_suite(client):
         "promoted_moved_letter_selection": promoted_selection,
         "promoted_curve_live": promoted_curve_live,
         "module_live_hash": module_held["editor"]["preview"]["pixel_hash"],
+        "module_reserved_keyframe_id": module_reservation["id"],
+        "module_reserved_capture": module_reserved_capture,
         "module_committed_hash": module_committed_render["editor"]["preview"][
             "pixel_hash"
         ],

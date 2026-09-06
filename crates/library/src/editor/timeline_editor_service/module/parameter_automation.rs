@@ -109,6 +109,7 @@ impl TimelineEditorService {
         value: PropertyValue,
         easing: Option<EasingFunction>,
     ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
+        let insertion_id = KeyframeId::new();
         let mut session = self.write_session()?;
         let timeline_id = timeline_for_item(session.project(), item_id)?;
         session
@@ -122,6 +123,7 @@ impl TimelineEditorService {
                         project,
                         item_id,
                         parameter_id,
+                        insertion_id,
                         local_time,
                         value,
                         easing,
@@ -143,36 +145,52 @@ impl TimelineEditorService {
         target: AuthoringPropertyValueTarget,
     ) -> Result<AuthoringProject, LibraryError> {
         let mut projected = project.clone();
-        let invocation = item_module_invocation_mut(&mut projected, item_id)
-            .map_err(LibraryError::Validation)?;
-        if invocation.instance_id != instance_id {
-            return Err(LibraryError::Validation(format!(
-                "Node Clip {item_id} changed Module instance during the edit"
-            )));
-        }
-        match target {
-            AuthoringPropertyValueTarget::Constant => {
-                if invocation.automation_tracks.contains_key(&parameter_id) {
-                    return Err(LibraryError::Validation(format!(
-                        "Published parameter {parameter_id} is controlled by Timeline automation"
-                    )));
-                }
-                set_instance_parameter_value(&mut projected, instance_id, parameter_id, value)
-                    .map_err(LibraryError::Validation)?;
-            }
-            AuthoringPropertyValueTarget::Keyframe { local_time } => {
-                upsert_parameter_keyframe(
-                    &mut projected,
-                    item_id,
-                    parameter_id,
-                    local_time,
-                    value,
-                    None,
-                )
-                .map_err(LibraryError::Validation)?;
-            }
-        }
+        apply_module_parameter_value_to_project(
+            &mut projected,
+            item_id,
+            instance_id,
+            parameter_id,
+            value,
+            target,
+        )
+        .map_err(LibraryError::Validation)?;
         Ok(projected)
+    }
+
+    /// Applies the exact typed value target used by transient projection in
+    /// one authoring transaction.
+    pub fn apply_module_parameter_value(
+        &self,
+        item_id: TimelineItemId,
+        instance_id: ModuleInstanceId,
+        parameter_id: PublishedParameterId,
+        value: PropertyValue,
+        target: AuthoringPropertyValueTarget,
+    ) -> Result<ChangeSet, LibraryError> {
+        let mut session = self.write_session()?;
+        let timeline_id = timeline_for_item(session.project(), item_id)?;
+        let invalidations = match target {
+            AuthoringPropertyValueTarget::Constant => {
+                vec![ProjectInvalidation::ModuleInstance { instance_id }]
+            }
+            AuthoringPropertyValueTarget::Keyframe { .. } => vec![ProjectInvalidation::Item {
+                timeline_id,
+                item_id,
+            }],
+        };
+        session
+            .transact(invalidations, |project| {
+                apply_module_parameter_value_to_project(
+                    project,
+                    item_id,
+                    instance_id,
+                    parameter_id,
+                    value,
+                    target,
+                )
+            })
+            .map(|(_, changes)| changes)
+            .map_err(LibraryError::Validation)
     }
 
     pub fn remove_module_parameter_keyframe(
@@ -237,6 +255,7 @@ fn upsert_parameter_keyframe(
     project: &mut AuthoringProject,
     item_id: TimelineItemId,
     parameter_id: PublishedParameterId,
+    insertion_id: KeyframeId,
     local_time: MediaTime,
     value: PropertyValue,
     easing: Option<EasingFunction>,
@@ -254,7 +273,46 @@ fn upsert_parameter_keyframe(
         .or_insert_with(|| AutomationTrack {
             keyframes: Vec::new(),
         });
-    track.upsert(local_time, value, easing)
+    track.upsert(insertion_id, local_time, value, easing)
+}
+
+fn apply_module_parameter_value_to_project(
+    project: &mut AuthoringProject,
+    item_id: TimelineItemId,
+    instance_id: ModuleInstanceId,
+    parameter_id: PublishedParameterId,
+    value: PropertyValue,
+    target: AuthoringPropertyValueTarget,
+) -> Result<(), String> {
+    let invocation = item_module_invocation_mut(project, item_id)?;
+    if invocation.instance_id != instance_id {
+        return Err(format!(
+            "Node Clip {item_id} changed Module instance during the edit"
+        ));
+    }
+    match target {
+        AuthoringPropertyValueTarget::Constant => {
+            if invocation.automation_tracks.contains_key(&parameter_id) {
+                return Err(format!(
+                    "Published parameter {parameter_id} is controlled by Timeline automation"
+                ));
+            }
+            set_instance_parameter_value(project, instance_id, parameter_id, value)
+        }
+        AuthoringPropertyValueTarget::Keyframe {
+            local_time,
+            insertion_id,
+        } => upsert_parameter_keyframe(
+            project,
+            item_id,
+            parameter_id,
+            insertion_id,
+            local_time,
+            value,
+            None,
+        )
+        .map(|_| ()),
+    }
 }
 
 pub(in crate::editor::timeline_editor_service) fn require_item_parameter_automation(
@@ -386,6 +444,94 @@ mod tests {
                 None,
             )
             .expect("keyframe");
+        let insertion_source = service.snapshot().expect("insertion source");
+        let insertion_revision = service.revision().expect("insertion revision");
+        let insertion_id = KeyframeId::new();
+        let target = AuthoringPropertyValueTarget::Keyframe {
+            local_time: MediaTime::new(2, 1).expect("new key time"),
+            insertion_id,
+        };
+        let projected = TimelineEditorService::project_module_parameter_value(
+            &insertion_source,
+            item_id,
+            instance_id,
+            parameter_id,
+            default_value.clone(),
+            target,
+        )
+        .expect("project stable key identity");
+        assert_eq!(
+            service.revision().expect("unchanged revision"),
+            insertion_revision
+        );
+        let SourceRef::Module(projected_invocation) = &projected.items[&item_id].source else {
+            panic!("expected projected Module item")
+        };
+        assert_eq!(
+            projected_invocation.automation_tracks[&parameter_id]
+                .keyframes
+                .last()
+                .expect("projected key")
+                .id,
+            insertion_id
+        );
+        service
+            .apply_module_parameter_value(
+                item_id,
+                instance_id,
+                parameter_id,
+                default_value.clone(),
+                target,
+            )
+            .expect("commit projected key identity");
+        assert_eq!(service.snapshot().expect("committed").as_ref(), &projected);
+        service
+            .undo()
+            .expect("undo insertion")
+            .expect("insertion change");
+        assert_eq!(
+            service.snapshot().expect("restored insertion source"),
+            insertion_source
+        );
+
+        let first_id = match &insertion_source.items[&item_id].source {
+            SourceRef::Module(invocation) => {
+                invocation.automation_tracks[&parameter_id].keyframes[0].id
+            }
+            _ => panic!("expected Module item"),
+        };
+        let collision = AuthoringPropertyValueTarget::Keyframe {
+            local_time: MediaTime::new(2, 1).expect("collision time"),
+            insertion_id: first_id,
+        };
+        let collision_revision = service.revision().expect("collision baseline revision");
+        TimelineEditorService::project_module_parameter_value(
+            &insertion_source,
+            item_id,
+            instance_id,
+            parameter_id,
+            default_value.clone(),
+            collision,
+        )
+        .expect_err("projection rejects an identity collision");
+        service
+            .apply_module_parameter_value(
+                item_id,
+                instance_id,
+                parameter_id,
+                default_value.clone(),
+                collision,
+            )
+            .expect_err("commit rejects an identity collision");
+        assert_eq!(
+            service.revision().expect("collision revision"),
+            collision_revision
+        );
+        assert_eq!(
+            service.snapshot().expect("collision snapshot"),
+            insertion_source
+        );
+
         let before = service.snapshot().expect("automated");
         let revision = service.revision().expect("revision");
         let constant = default_value;

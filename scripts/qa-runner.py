@@ -25,8 +25,10 @@ from qa_support import (
     QaClient,
     REPOSITORY_ROOT,
     capture_viewport,
+    collect_failure,
     process_group_options,
     terminate_process,
+    write_json,
 )
 
 
@@ -228,13 +230,6 @@ class ProcessRegistry:
             terminate_process(process)
 
 
-def write_json(path: pathlib.Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-
-
 def read_json(path: pathlib.Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -274,18 +269,6 @@ def run_logged(
         finally:
             registry.discard(process)
     return code, timed_out, time.monotonic() - started
-
-
-def collect_failure(client: QaClient, suite_dir: pathlib.Path) -> dict:
-    artifacts = {}
-    for name, request in (("state", client.state), ("components", client.component_snapshot)):
-        try:
-            path = suite_dir / "failure-{}.json".format(name)
-            write_json(path, request())
-            artifacts[name] = str(path.resolve())
-        except Exception as error:
-            artifacts[name + "_error"] = str(error)
-    return artifacts
 
 
 def run_one_suite(

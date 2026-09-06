@@ -16,6 +16,11 @@ fn gesture(handle: Option<GizmoHandle>) -> PreviewTransformGesture {
     };
     PreviewTransformGesture {
         item_id: TimelineItemId::new(),
+        context: crate::state::authoring::PreviewEditContext {
+            timeline_id: library::model::authoring::TimelineId::new(),
+            instance_path: None,
+            frame_number: 0,
+        },
         handle,
         pointer_origin: Pos2::ZERO,
         canvas_origin: CanvasTransform::new(Pos2::ZERO, CanvasState::uniform(Vec2::ZERO, 1.0)),
@@ -30,9 +35,9 @@ fn gesture(handle: Option<GizmoHandle>) -> PreviewTransformGesture {
         parent_transform: Affine2D::IDENTITY,
         local_bounds: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)),
         local_time: MediaTime::zero(),
-        position_keyframed: false,
-        scale_keyframed: false,
-        rotation_keyframed: false,
+        position_target: AuthoringPropertyValueTarget::Constant,
+        scale_target: AuthoringPropertyValueTarget::Constant,
+        rotation_target: AuthoringPropertyValueTarget::Constant,
         project_revision: ProjectRevision::initial(),
     }
 }
@@ -159,15 +164,22 @@ fn resize_position_and_scale_commit_as_one_revision() {
     let (service, mut state, item_id) = editable_item();
     let mut resize = gesture(Some(GizmoHandle::Right));
     resize.item_id = item_id;
+    resize.context = state.preview_edit_context();
     resize.project_revision = service.revision().unwrap();
     resize.projected_position = property_vec2(25.0, 0.0);
     resize.projected_scale = property_vec2(1.5, 1.0);
     let before = service.revision().unwrap();
 
+    let source = service.snapshot().unwrap();
+    state.preview.transform_gesture = Some(resize.clone());
+    let (projected, _) = transient_render_project(&source, service.revision().unwrap(), &state);
+    let (repeated, _) = transient_render_project(&source, service.revision().unwrap(), &state);
+    assert_eq!(projected, repeated);
     commit_gesture(&mut state, &service, resize);
 
     assert_eq!(service.revision().unwrap().get(), before.get() + 1);
     let project = service.snapshot().unwrap();
+    assert_eq!(project, projected);
     let item = &project.items[&item_id];
     assert_eq!(
         item.authored_properties
@@ -193,12 +205,14 @@ fn transform_gesture_renders_from_a_transient_project_without_mutating_source() 
     let source = service.snapshot().unwrap();
     let mut resize = gesture(Some(GizmoHandle::Right));
     resize.item_id = item_id;
+    resize.context = state.preview_edit_context();
     resize.project_revision = service.revision().unwrap();
     resize.projected_position = property_vec2(25.0, 0.0);
     resize.projected_scale = property_vec2(1.5, 1.0);
     state.preview.transform_gesture = Some(resize);
 
-    let (projected, digest) = transient_render_project(&source, &state);
+    let (projected, digest) =
+        transient_render_project(&source, service.revision().unwrap(), &state);
 
     assert!(digest.is_some());
     assert_eq!(
@@ -237,6 +251,7 @@ fn unchanged_transform_projection_reuses_the_same_project_arc() {
     let source = service.snapshot().unwrap();
     let mut resize = gesture(Some(GizmoHandle::Right));
     resize.item_id = item_id;
+    resize.context = state.preview_edit_context();
     resize.project_revision = service.revision().unwrap();
     resize.projected_scale = property_vec2(1.5, 1.0);
     state.preview.transform_gesture = Some(resize);
@@ -272,20 +287,47 @@ fn resize_preserves_keyframe_ownership_for_both_changed_properties() {
             )
             .unwrap();
     }
+    state.timeline.current_frame = 30;
     let mut resize = gesture(Some(GizmoHandle::Right));
     resize.item_id = item_id;
+    resize.context = state.preview_edit_context();
     resize.project_revision = service.revision().unwrap();
     resize.local_time = MediaTime::new(1, 1).unwrap();
-    resize.position_keyframed = true;
-    resize.scale_keyframed = true;
+    resize.position_target = property_target(true, resize.local_time);
+    resize.scale_target = property_target(true, resize.local_time);
     resize.projected_position = property_vec2(25.0, 0.0);
     resize.projected_scale = property_vec2(1.5, 1.0);
     let before = service.revision().unwrap();
 
+    let source = service.snapshot().unwrap();
+    assert_ne!(resize.position_target, resize.scale_target);
+    state.preview.transform_gesture = Some(resize.clone());
+    let (projected, _) = transient_render_project(&source, service.revision().unwrap(), &state);
+    resize.projected_position = property_vec2(30.0, 0.0);
+    state.preview.transform_gesture = Some(resize.clone());
+    let (updated, _) = transient_render_project(&source, service.revision().unwrap(), &state);
+    for key in ["position", "scale"] {
+        assert_eq!(
+            projected.items[&item_id]
+                .authored_properties
+                .get(key)
+                .unwrap()
+                .keyframes()[1]
+                .id,
+            updated.items[&item_id]
+                .authored_properties
+                .get(key)
+                .unwrap()
+                .keyframes()[1]
+                .id,
+        );
+    }
+    resize.projected_position = property_vec2(25.0, 0.0);
     commit_gesture(&mut state, &service, resize);
 
     assert_eq!(service.revision().unwrap().get(), before.get() + 1);
     let project = service.snapshot().unwrap();
+    assert_eq!(project, projected);
     for key in ["position", "scale"] {
         assert_eq!(
             project.items[&item_id]
@@ -314,6 +356,10 @@ fn resize_preserves_keyframe_ownership_for_both_changed_properties() {
             .unwrap(),
         PropertyValue::Vec2(property_vec2(1.5, 1.0))
     );
+    service.undo().unwrap();
+    assert_eq!(service.snapshot().unwrap(), source);
+    service.redo().unwrap();
+    assert_eq!(service.snapshot().unwrap(), projected);
 }
 
 fn resize_project_revision(state: &AuthoringUiState) -> ProjectRevision {
@@ -323,6 +369,76 @@ fn resize_project_revision(state: &AuthoringUiState) -> ProjectRevision {
         .as_ref()
         .unwrap()
         .project_revision
+}
+
+#[test]
+fn stale_transform_release_cannot_overwrite_a_newer_project_edit() {
+    let (service, mut state, item_id) = editable_item();
+    let mut movement = gesture(None);
+    movement.item_id = item_id;
+    movement.context = state.preview_edit_context();
+    movement.project_revision = service.revision().unwrap();
+    movement.projected_position = property_vec2(99.0, 0.0);
+    state.preview.transform_gesture = Some(movement.clone());
+    service
+        .set_authored_property_constant(
+            AuthoringPropertyOwner::Item(item_id),
+            "position".into(),
+            PropertyValue::Vec2(property_vec2(250.0, 80.0)),
+        )
+        .unwrap();
+    let latest = service.snapshot().unwrap();
+    let revision = service.revision().unwrap();
+    assert!(transient_edit_digest(&state, revision).is_none());
+    let (projected, digest) = transient_render_project(&latest, revision, &state);
+    assert!(Arc::ptr_eq(&projected, &latest));
+    assert!(digest.is_none());
+    commit_gesture(&mut state, &service, movement);
+    assert!(state
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("cancelled")));
+    assert_eq!(service.snapshot().unwrap(), latest);
+    assert_eq!(service.revision().unwrap(), revision);
+}
+
+#[test]
+fn changing_preview_context_cancels_transform_projection_and_release() {
+    let changes: [fn(&mut AuthoringUiState); 5] = [
+        |state| state.timeline.current_frame += 1,
+        |state| state.active_instance_path = None,
+        |state| state.active_timeline_id = library::model::authoring::TimelineId::new(),
+        |state| {
+            state
+                .selection
+                .replace(AuthoringSelection::Item(TimelineItemId::new()))
+        },
+        |state| state.preview.active_tool = PreviewTool::Pan,
+    ];
+    for change in changes {
+        let (service, mut state, item_id) = editable_item();
+        let before = service.snapshot().unwrap();
+        let revision = service.revision().unwrap();
+        let mut movement = gesture(None);
+        movement.item_id = item_id;
+        movement.context = state.preview_edit_context();
+        movement.project_revision = revision;
+        movement.projected_position = property_vec2(99.0, 0.0);
+        state.preview.transform_gesture = Some(movement.clone());
+        assert!(transient_edit_digest(&state, revision).is_some());
+        change(&mut state);
+        assert!(transient_edit_digest(&state, revision).is_none());
+        let (projected, digest) = transient_render_project(&before, revision, &state);
+        assert!(Arc::ptr_eq(&projected, &before));
+        assert!(digest.is_none());
+        commit_gesture(&mut state, &service, movement);
+        assert!(state
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cancelled")));
+        assert_eq!(service.snapshot().unwrap(), before);
+        assert_eq!(service.revision().unwrap(), revision);
+    }
 }
 
 #[test]

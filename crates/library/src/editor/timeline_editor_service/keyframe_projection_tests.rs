@@ -146,6 +146,49 @@ fn authored_property<'a>(
     properties.get(key).expect("authored Property")
 }
 
+#[test]
+fn authored_value_projection_and_commit_share_a_new_key_identity() {
+    let fixture = text_fixture();
+    let source = fixture.service.snapshot().expect("source Project");
+    let revision = fixture.service.revision().expect("source revision");
+    let owner = AuthoringPropertyOwner::Item(fixture.item_id);
+    let insertion_id = KeyframeId::new();
+    let update = AuthoringPropertyValueUpdate {
+        key: "size".to_string(),
+        value: PropertyValue::from(72.0),
+        target: AuthoringPropertyValueTarget::Keyframe {
+            local_time: time(1),
+            insertion_id,
+        },
+    };
+    let projected = TimelineEditorService::project_authored_property_values(
+        &source,
+        owner,
+        vec![update.clone()],
+    )
+    .expect("project new Size key");
+    assert_eq!(fixture.service.revision().expect("pure revision"), revision);
+    assert_eq!(fixture.service.snapshot().expect("pure snapshot"), source);
+    assert_eq!(
+        authored_property(&projected, &owner, "size")
+            .keyframe_by_id(insertion_id)
+            .expect("projected insertion")
+            .value,
+        PropertyValue::from(72.0)
+    );
+
+    fixture
+        .service
+        .apply_authored_property_values(owner, vec![update])
+        .expect("commit new Size key");
+    assert_eq!(
+        fixture.service.snapshot().expect("committed").as_ref(),
+        &projected
+    );
+    fixture.service.undo().expect("Undo").expect("change");
+    assert_eq!(fixture.service.snapshot().expect("restored"), source);
+}
+
 fn authored_keyframe(
     project: &AuthoringProject,
     owner: &AuthoringPropertyOwner,

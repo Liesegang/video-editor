@@ -375,6 +375,7 @@ fn module_controls(
                                 allow_keyframe,
                                 keyframe_disabled_reason,
                                 allow_expression: false,
+                                pending_keyframe: None,
                             },
                         );
                         let edited_value = value.clone();

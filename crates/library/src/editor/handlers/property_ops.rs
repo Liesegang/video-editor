@@ -75,6 +75,7 @@ pub(crate) fn upsert_keyframe_with_id(
     value: PropertyValue,
     easing: Option<crate::animation::EasingFunction>,
 ) -> Result<KeyframeId, LibraryError> {
+    let insertion_id = KeyframeId::new();
     let id = match owner {
         PropertyOwner::Clip(clip_id) => {
             let clip = project
@@ -84,14 +85,14 @@ pub(crate) fn upsert_keyframe_with_id(
                 return Err(missing_property(owner, property_key));
             }
             clip.properties
-                .upsert_keyframe_with_id(property_key, time, value, easing)
+                .upsert_keyframe_with_id(property_key, insertion_id, time, value, easing)
         }
         PropertyOwner::Node(node_id) => project
             .get_node_mut(node_id)
             .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .upsert_keyframe_with_id(property_key, time, value, easing),
+            .upsert_keyframe_with_id(property_key, insertion_id, time, value, easing),
     };
-    id.ok_or_else(|| LibraryError::Project(format!("Property {property_key} cannot be keyframed")))
+    id.map_err(LibraryError::Project)
 }
 
 pub(crate) fn update_keyframe_by_id(

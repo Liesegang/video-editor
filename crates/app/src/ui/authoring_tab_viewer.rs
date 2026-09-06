@@ -96,7 +96,7 @@ impl TabViewer for AuthoringTabViewer<'_> {
             ),
             Tab::Inspector => inspector_panel(
                 ui,
-                self.project,
+                (self.project, self.project_revision),
                 self.state,
                 self.service,
                 self.plugins.as_ref(),
@@ -112,7 +112,12 @@ impl TabViewer for AuthoringTabViewer<'_> {
                 &waveform,
                 self.media_previews,
             ),
-            Tab::CurveEditor => curve_editor_panel(ui, self.project, self.state, self.service),
+            Tab::CurveEditor => curve_editor_panel(
+                ui,
+                (self.project, self.project_revision),
+                self.state,
+                self.service,
+            ),
             Tab::NodeEditor => {
                 self.state.node_editor.panel_rect = Some(ui.max_rect().intersect(ui.clip_rect()));
                 crate::ui::panels::node_editor::node_editor_panel(

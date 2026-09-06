@@ -12,14 +12,14 @@ use library::model::authoring::{
     AuthoringProject, MediaTime, ProjectRevision, SourceRef, TimelineItem, TimelineItemId,
 };
 use library::model::frame::frame::FrameInfo;
-use library::model::property::PropertyValue;
+use library::model::property::{KeyframeId, PropertyValue};
 use library::plugin::PluginManager;
 use pan_zoom_ui::CanvasTransform;
 
 use crate::state::authoring::{
     AuthoringSelection, AuthoringUiState, AutomationOwner, PreviewTool, TransientPropertyEdit,
 };
-use crate::state::text_editor::{TextEditContext, TextParameterTarget, TextToolClick};
+use crate::state::text_editor::{TextParameterTarget, TextToolClick};
 use crate::ui::automation_lanes::local_time_for_timeline;
 use crate::ui::clip_creation::{create_basic_clip, BasicClipKind, BasicClipPlacement};
 
@@ -103,20 +103,15 @@ fn resolve_text(
             instance_id: content.instance_id,
             parameter_id: content.parameter_id,
             value_target: if automation.is_some() {
-                AuthoringPropertyValueTarget::Keyframe { local_time }
+                AuthoringPropertyValueTarget::Keyframe {
+                    local_time,
+                    insertion_id: KeyframeId::new(),
+                }
             } else {
                 AuthoringPropertyValueTarget::Constant
             },
         }),
     }))
-}
-
-fn edit_context(state: &AuthoringUiState) -> TextEditContext {
-    TextEditContext {
-        timeline_id: state.active_timeline_id,
-        instance_path: state.active_instance_path.clone(),
-        frame_number: state.timeline.current_frame,
-    }
 }
 
 fn begin_edit(
@@ -125,7 +120,7 @@ fn begin_edit(
     revision: ProjectRevision,
     content: EditableText,
 ) {
-    let context = edit_context(state);
+    let context = state.preview_edit_context();
     let editor = &mut state.preview.text_editor;
     editor.begin(item_id, revision, &content.text);
     editor.parameter_target = content.parameter_target;
@@ -138,7 +133,7 @@ fn context_matches(state: &AuthoringUiState) -> bool {
         .text_editor
         .context
         .as_ref()
-        .is_none_or(|context| *context == edit_context(state))
+        .is_none_or(|context| *context == state.preview_edit_context())
 }
 
 /// Route the Text tool through the rendered canvas: edit the top-most Text at

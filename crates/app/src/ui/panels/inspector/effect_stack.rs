@@ -449,6 +449,7 @@ fn effect_parameters(
                             allow_keyframe: true,
                             keyframe_disabled_reason: None,
                             allow_expression: false,
+                            pending_keyframe: None,
                         },
                     );
                     (result.finished, result.mode_action, draft.clone(), initial)

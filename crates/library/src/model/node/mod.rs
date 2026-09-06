@@ -701,16 +701,21 @@ impl Node {
     pub(crate) fn upsert_keyframe_with_id(
         &mut self,
         property_key: &str,
+        insertion_id: crate::model::property::KeyframeId,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
-    ) -> Option<crate::model::property::KeyframeId> {
-        self.properties.get(property_key)?;
+    ) -> Result<crate::model::property::KeyframeId, String> {
+        if self.properties.get(property_key).is_none() {
+            return Err(format!("Missing Node Property '{property_key}'"));
+        }
         if !self.accepts_authored_property_value(property_key, &value) {
-            return None;
+            return Err(format!(
+                "Value does not match Node Property '{property_key}'"
+            ));
         }
         self.properties
-            .upsert_keyframe_with_id(property_key, time, value, easing)
+            .upsert_keyframe_with_id(property_key, insertion_id, time, value, easing)
     }
 
     pub(crate) fn update_keyframe_by_id(

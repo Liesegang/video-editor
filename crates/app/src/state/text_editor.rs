@@ -10,7 +10,7 @@ use library::model::authoring::{
     TimelineItemId,
 };
 
-use super::authoring::AuthoringSelection;
+use super::authoring::{AuthoringSelection, PreviewEditContext};
 
 /// A Text-tool intent waiting for the matching Preview geometry. Keeping the
 /// Composition point preserves the click even if the camera moves meanwhile.
@@ -32,19 +32,12 @@ pub(crate) struct TextParameterTarget {
     pub value_target: AuthoringPropertyValueTarget,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TextEditContext {
-    pub timeline_id: TimelineId,
-    pub instance_path: Option<InstancePath>,
-    pub frame_number: i64,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TextEditorState {
     pub target_item: Option<TimelineItemId>,
     pub target_revision: Option<ProjectRevision>,
     pub parameter_target: Option<TextParameterTarget>,
-    pub context: Option<TextEditContext>,
+    pub context: Option<PreviewEditContext>,
     pub original: String,
     pub buffer: String,
     pub editing: bool,

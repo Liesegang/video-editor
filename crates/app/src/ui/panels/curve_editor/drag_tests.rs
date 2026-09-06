@@ -110,6 +110,17 @@ fn render_frame(
     frame: usize,
     events: Vec<egui::Event>,
 ) {
+    let revision = fixture.service.revision().expect("displayed revision");
+    render_frame_at_revision(context, fixture, revision, frame, events);
+}
+
+fn render_frame_at_revision(
+    context: &egui::Context,
+    fixture: &mut CurveDragFixture,
+    revision: library::model::authoring::ProjectRevision,
+    frame: usize,
+    events: Vec<egui::Event>,
+) {
     drop(context.run(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SCREEN_SIZE)),
@@ -124,6 +135,7 @@ fn render_frame(
                     ui,
                     &mut fixture.state,
                     &fixture.service,
+                    revision,
                     &fixture.curve,
                     Color32::LIGHT_BLUE,
                     fixture.transform,
@@ -140,7 +152,10 @@ fn render_curve_canvas(
     frame: usize,
     series: &[CurveSeries],
 ) {
-    let project = fixture.service.snapshot().expect("Project snapshot");
+    let (project, revision) = fixture
+        .service
+        .snapshot_with_revision()
+        .expect("Project snapshot");
     let owner = AutomationOwner::Item(fixture.item_id);
     drop(context.run(
         egui::RawInput {
@@ -152,7 +167,7 @@ fn render_curve_canvas(
             egui::CentralPanel::default().show(context, |ui| {
                 curve_canvas(
                     ui,
-                    &project,
+                    (&project, revision),
                     &mut fixture.state,
                     &fixture.service,
                     &owner,
@@ -162,6 +177,68 @@ fn render_curve_canvas(
             });
         },
     ));
+}
+
+#[test]
+fn drag_origin_uses_the_displayed_snapshot_revision_not_newer_service_state() {
+    let context = egui::Context::default();
+    let mut fixture = fixture();
+    let displayed_revision = fixture.service.revision().expect("displayed revision");
+    fixture
+        .service
+        .set_authored_property_constant(
+            AuthoringPropertyOwner::Item(fixture.item_id),
+            "opacity".into(),
+            PropertyValue::from(0.5),
+        )
+        .unwrap();
+    let current = fixture.service.snapshot().expect("newer Project");
+    let current_revision = fixture.service.revision().expect("newer revision");
+    let start = fixture
+        .transform
+        .point(fixture.original_time.to_seconds_f64(), 10.0);
+
+    render_frame_at_revision(&context, &mut fixture, displayed_revision, 0, Vec::new());
+    render_frame_at_revision(
+        &context,
+        &mut fixture,
+        displayed_revision,
+        1,
+        vec![
+            egui::Event::PointerMoved(start),
+            pointer_button(start, true),
+        ],
+    );
+    render_frame_at_revision(
+        &context,
+        &mut fixture,
+        displayed_revision,
+        2,
+        vec![egui::Event::PointerMoved(start + DRAG_DELTA * 0.25)],
+    );
+    assert!(fixture.state.curve_editor.drag.is_none());
+    assert_eq!(
+        fixture.state.status,
+        "Keyframe drag cancelled because the Project changed"
+    );
+    render_frame_at_revision(
+        &context,
+        &mut fixture,
+        displayed_revision,
+        3,
+        vec![
+            egui::Event::PointerMoved(start + DRAG_DELTA),
+            pointer_button(start + DRAG_DELTA, false),
+        ],
+    );
+
+    assert!(fixture.state.curve_editor.drag.is_none());
+    assert_eq!(fixture.service.revision().unwrap(), current_revision);
+    assert_eq!(
+        fixture.service.snapshot().unwrap().as_ref(),
+        current.as_ref()
+    );
+    assert_key_value(&fixture, 2.0, 10.0, 20.0);
 }
 
 fn key_value(fixture: &CurveDragFixture) -> (f64, PropertyValue) {

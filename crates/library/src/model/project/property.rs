@@ -101,8 +101,12 @@ pub struct Keyframe {
 
 impl Keyframe {
     pub fn new(time: f64, value: PropertyValue, easing: EasingFunction) -> Self {
+        Self::with_id(KeyframeId::new(), time, value, easing)
+    }
+
+    fn with_id(id: KeyframeId, time: f64, value: PropertyValue, easing: EasingFunction) -> Self {
         Self {
-            id: KeyframeId::new(),
+            id,
             time: OrderedFloat(time),
             value,
             easing,
@@ -278,25 +282,34 @@ impl Property {
         value: PropertyValue,
         easing: Option<EasingFunction>,
     ) -> bool {
-        self.upsert_keyframe_with_id(time, value, easing).is_some()
+        self.upsert_keyframe_with_id(KeyframeId::new(), time, value, easing)
+            .is_ok()
     }
 
     /// Add or update a keyframe and return the persistent identity of the
     /// affected key. A tolerance match keeps the existing identity.
     pub fn upsert_keyframe_with_id(
         &mut self,
+        insertion_id: KeyframeId,
         time: f64,
         value: PropertyValue,
         easing: Option<EasingFunction>,
-    ) -> Option<KeyframeId> {
+    ) -> Result<KeyframeId, String> {
         const TOLERANCE: f64 = 0.001;
+        if !time.is_finite() || time < 0.0 {
+            return Err("Keyframe time must be finite and non-negative".to_string());
+        }
 
         if self.evaluator == "constant" {
             // Convert to keyframe property
-            let kf = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
-            let id = kf.id;
+            let kf = Keyframe::with_id(
+                insertion_id,
+                time,
+                value,
+                easing.unwrap_or(EasingFunction::Linear),
+            );
             *self = Property::keyframe(vec![kf]);
-            return Some(id);
+            return Ok(insertion_id);
         }
 
         if self.evaluator == "keyframe" {
@@ -313,12 +326,21 @@ impl Property {
                 kfs[idx].easing = easing.unwrap_or(preserved_easing);
                 kfs[idx].id
             } else {
+                if kfs.iter().any(|keyframe| keyframe.id == insertion_id) {
+                    return Err(format!(
+                        "Keyframe insertion identity {insertion_id} already belongs to a different time"
+                    ));
+                }
                 // Add new keyframe
-                let keyframe = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
-                let id = keyframe.id;
+                let keyframe = Keyframe::with_id(
+                    insertion_id,
+                    time,
+                    value,
+                    easing.unwrap_or(EasingFunction::Linear),
+                );
                 kfs.push(keyframe);
                 kfs.sort_by_key(|k| k.time);
-                id
+                insertion_id
             };
 
             // Preserve existing property attributes (like interpolation mode)
@@ -329,11 +351,14 @@ impl Property {
                     self.properties.insert(k, v);
                 }
             }
-            return Some(id);
+            return Ok(id);
         }
 
         // Other evaluator types (expression, etc.) - cannot add keyframes
-        None
+        Err(format!(
+            "Property evaluator '{}' does not support Keyframes",
+            self.evaluator
+        ))
     }
 
     /// Update one keyframe without using its mutable sorted position as its
@@ -499,25 +524,25 @@ impl PropertyMap {
         value: PropertyValue,
         easing: Option<EasingFunction>,
     ) -> bool {
-        self.upsert_keyframe_with_id(key, time, value, easing)
-            .is_some()
+        self.upsert_keyframe_with_id(key, KeyframeId::new(), time, value, easing)
+            .is_ok()
     }
 
     pub fn upsert_keyframe_with_id(
         &mut self,
         key: &str,
+        insertion_id: KeyframeId,
         time: f64,
         value: PropertyValue,
         easing: Option<EasingFunction>,
-    ) -> Option<KeyframeId> {
+    ) -> Result<KeyframeId, String> {
         if let Some(property) = self.properties.get_mut(key) {
-            property.upsert_keyframe_with_id(time, value, easing)
+            property.upsert_keyframe_with_id(insertion_id, time, value, easing)
         } else {
-            let keyframe = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
-            let id = keyframe.id;
-            self.properties
-                .insert(key.to_string(), Property::keyframe(vec![keyframe]));
-            Some(id)
+            let mut property = Property::constant(value.clone());
+            let affected = property.upsert_keyframe_with_id(insertion_id, time, value, easing)?;
+            self.properties.insert(key.to_string(), property);
+            Ok(affected)
         }
     }
 

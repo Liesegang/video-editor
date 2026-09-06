@@ -93,7 +93,7 @@ fn converted_content_automation_edits_the_started_local_keyframe_without_clearin
     fixture.state.timeline.current_frame = (fps.to_f64() * 3.0).round() as i64;
     start_edit(&mut fixture);
     assert_eq!(fixture.state.preview.text_editor.original, "Later");
-    assert_eq!(
+    assert!(matches!(
         fixture
             .state
             .preview
@@ -101,10 +101,8 @@ fn converted_content_automation_edits_the_started_local_keyframe_without_clearin
             .parameter_target
             .unwrap()
             .value_target,
-        AuthoringPropertyValueTarget::Keyframe {
-            local_time: second_time
-        }
-    );
+        AuthoringPropertyValueTarget::Keyframe { local_time, .. } if local_time == second_time
+    ));
     let (before, revision) = fixture.current_project();
     fixture.state.preview.text_editor.buffer = "Edited later".to_string();
     let (projected, _) = transient_render_project(&before, revision, &fixture.state).unwrap();
@@ -130,6 +128,80 @@ fn converted_content_automation_edits_the_started_local_keyframe_without_clearin
     );
     fixture.service.undo().unwrap();
     assert_eq!(fixture.service.snapshot().unwrap(), before);
+}
+
+#[test]
+fn converted_typing_reserves_one_new_key_for_the_entire_canvas_session() {
+    let mut fixture = converted_fixture();
+    let (project, _) = fixture.current_project();
+    let content = TimelineEditorService::inspect_node_clip_text_content(&project, fixture.first)
+        .unwrap()
+        .unwrap();
+    fixture
+        .service
+        .upsert_module_parameter_keyframe(
+            fixture.first,
+            content.parameter_id,
+            MediaTime::zero(),
+            PropertyValue::String("Start".into()),
+            None,
+        )
+        .unwrap();
+    let fps = project.timelines[&fixture.state.active_timeline_id].fps;
+    fixture.state.timeline.current_frame = fps.to_f64().round() as i64;
+    start_edit(&mut fixture);
+    let value_target = fixture
+        .state
+        .preview
+        .text_editor
+        .parameter_target
+        .unwrap()
+        .value_target;
+    let AuthoringPropertyValueTarget::Keyframe {
+        local_time,
+        insertion_id,
+    } = value_target
+    else {
+        panic!()
+    };
+    assert_eq!(local_time, MediaTime::from_whole_seconds(1));
+    let (before, revision) = fixture.current_project();
+    for text in ["Draft one", "Draft two", "Final"] {
+        fixture.state.preview.text_editor.buffer = text.into();
+        let (projected, _) = transient_render_project(&before, revision, &fixture.state).unwrap();
+        let SourceRef::Module(invocation) = &projected.items[&fixture.first].source else {
+            panic!()
+        };
+        let keys = &invocation.automation_tracks[&content.parameter_id].keyframes;
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[1].id, insertion_id);
+        assert_eq!(keys[1].value, PropertyValue::String(text.into()));
+        assert_eq!(fixture.current_project(), (Arc::clone(&before), revision));
+    }
+    let (projected, _) = transient_render_project(&before, revision, &fixture.state).unwrap();
+    assert!(accept_if_active(&mut fixture.state, &fixture.service));
+    assert_eq!(fixture.service.snapshot().unwrap(), projected);
+    assert_eq!(
+        fixture.service.revision().unwrap().get(),
+        revision.get() + 1
+    );
+    fixture.service.undo().unwrap();
+    assert_eq!(fixture.service.snapshot().unwrap(), before);
+    start_edit(&mut fixture);
+    assert_ne!(
+        fixture
+            .state
+            .preview
+            .text_editor
+            .parameter_target
+            .unwrap()
+            .value_target,
+        value_target
+    );
+    fixture.state.preview.text_editor.finish();
+    assert_eq!(fixture.service.snapshot().unwrap(), before);
+    fixture.service.redo().unwrap();
+    assert_eq!(fixture.service.snapshot().unwrap(), projected);
 }
 
 #[test]

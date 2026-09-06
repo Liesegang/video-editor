@@ -4,6 +4,46 @@ fn number(value: f64) -> PropertyValue {
     PropertyValue::Number(OrderedFloat(value))
 }
 
+#[test]
+fn supplied_insertion_identity_is_stable_and_collision_is_atomic() {
+    let mut property = Property::constant(number(0.0));
+    let initial = property.clone();
+    assert!(
+        property
+            .upsert_keyframe_with_id(KeyframeId::new(), f64::NAN, number(1.0), None)
+            .is_err()
+    );
+    assert_eq!(property, initial);
+    assert!(
+        property
+            .upsert_keyframe_with_id(KeyframeId::new(), -1.0, number(1.0), None)
+            .is_err()
+    );
+    assert_eq!(property, initial);
+    let first = KeyframeId::new();
+    assert_eq!(
+        property
+            .upsert_keyframe_with_id(first, 1.0, number(10.0), None)
+            .expect("insert supplied identity"),
+        first
+    );
+    let same_time_candidate = KeyframeId::new();
+    assert_eq!(
+        property
+            .upsert_keyframe_with_id(same_time_candidate, 1.0005, number(20.0), None)
+            .expect("same-time update"),
+        first,
+        "an existing time keeps its identity"
+    );
+    let before_collision = property.clone();
+    assert!(
+        property
+            .upsert_keyframe_with_id(first, 2.0, number(30.0), None)
+            .is_err()
+    );
+    assert_eq!(property, before_collision);
+}
+
 fn zero_vec3() -> Vec3 {
     Vec3 {
         x: OrderedFloat(0.0),
@@ -16,8 +56,15 @@ fn zero_vec3() -> Vec3 {
 fn missing_property_is_promoted_from_the_supplied_default_value() {
     let mut properties = PropertyMap::new();
 
+    assert!(
+        properties
+            .upsert_keyframe_with_id("opacity", KeyframeId::new(), f64::NAN, number(100.0), None,)
+            .is_err()
+    );
+    assert!(properties.get("opacity").is_none());
+
     let id = properties
-        .upsert_keyframe_with_id("opacity", 1.25, number(100.0), None)
+        .upsert_keyframe_with_id("opacity", KeyframeId::new(), 1.25, number(100.0), None)
         .expect("a missing direct property should be keyframeable");
 
     let property = properties
@@ -39,11 +86,16 @@ fn missing_property_is_promoted_from_the_supplied_default_value() {
 fn tolerance_upsert_updates_one_key_and_preserves_identity_and_easing() {
     let mut property = Property::constant(number(10.0));
     let first_id = property
-        .upsert_keyframe_with_id(1.0, number(20.0), Some(EasingFunction::EaseInQuad))
+        .upsert_keyframe_with_id(
+            KeyframeId::new(),
+            1.0,
+            number(20.0),
+            Some(EasingFunction::EaseInQuad),
+        )
         .expect("constant should promote");
 
     let matched_id = property
-        .upsert_keyframe_with_id(1.0005, number(30.0), None)
+        .upsert_keyframe_with_id(KeyframeId::new(), 1.0005, number(30.0), None)
         .expect("keyframe should update");
     assert_eq!(matched_id, first_id);
     assert_eq!(property.keyframes().len(), 1);
@@ -51,7 +103,7 @@ fn tolerance_upsert_updates_one_key_and_preserves_identity_and_easing() {
     assert_eq!(property.keyframes()[0].easing, EasingFunction::EaseInQuad);
 
     let distinct_id = property
-        .upsert_keyframe_with_id(1.002, number(40.0), None)
+        .upsert_keyframe_with_id(KeyframeId::new(), 1.002, number(40.0), None)
         .expect("time outside tolerance should insert");
     assert_ne!(distinct_id, first_id);
     assert_eq!(property.keyframes().len(), 2);
@@ -65,7 +117,7 @@ fn removing_the_last_keyframe_restores_its_typed_value_as_a_constant() {
     });
     let mut property = Property::constant(value.clone());
     let id = property
-        .upsert_keyframe_with_id(2.0, value.clone(), None)
+        .upsert_keyframe_with_id(KeyframeId::new(), 2.0, value.clone(), None)
         .expect("constant should promote");
 
     assert!(property.remove_keyframe_by_id(id));
@@ -78,10 +130,10 @@ fn removing_the_last_keyframe_restores_its_typed_value_as_a_constant() {
 fn stable_identity_survives_crossing_and_continues_to_edit_the_same_key() {
     let mut property = Property::constant(number(0.0));
     let moving_id = property
-        .upsert_keyframe_with_id(1.0, number(10.0), None)
+        .upsert_keyframe_with_id(KeyframeId::new(), 1.0, number(10.0), None)
         .expect("first key should insert");
     let stationary_id = property
-        .upsert_keyframe_with_id(2.0, number(20.0), None)
+        .upsert_keyframe_with_id(KeyframeId::new(), 2.0, number(20.0), None)
         .expect("second key should insert");
 
     assert!(property.update_keyframe_by_id(

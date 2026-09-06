@@ -565,6 +565,7 @@ fn tracking_keyframe_projection_matches_commit_without_mutating_service_or_exist
         PropertyValue::from(42.0),
         AuthoringPropertyValueTarget::Keyframe {
             local_time: time(1),
+            insertion_id: KeyframeId::new(),
         },
     )
     .expect("project Tracking keyframe drag");
@@ -611,6 +612,7 @@ fn tracking_keyframe_projection_matches_commit_without_mutating_service_or_exist
             PropertyValue::from(42.0),
             AuthoringPropertyValueTarget::Keyframe {
                 local_time: time(1),
+                insertion_id: KeyframeId::new(),
             },
         )
         .unwrap_err()
