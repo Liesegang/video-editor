@@ -184,16 +184,34 @@ pub(in crate::ui::panels::node_editor) fn node_icon_for_node<'a>(
         }
         Some(NodeContent::NativeOperation(operation)) => {
             let descriptor = library::model::native_node_descriptor(&operation.catalog_id);
-            match descriptor.map(|item| item.category()) {
-                Some("3D") => NodeEditorIcon::new(icons::CUBE, "3D design placeholder"),
-                Some("Particles") => {
+            use library::model::NativeNodeRuntimeStatus::{DesignNeeded, Implemented};
+            match descriptor.map(|item| (item.category(), item.runtime_status())) {
+                Some(("3D", DesignNeeded)) => {
+                    NodeEditorIcon::new(icons::CUBE, "3D design placeholder")
+                }
+                Some(("Particles", DesignNeeded)) => {
                     NodeEditorIcon::new(icons::SPARKLE, "Particle design placeholder")
                 }
-                Some("Points") => NodeEditorIcon::new(icons::SPARKLE, "Point operation"),
-                Some("Transition") => {
+                Some((_, DesignNeeded)) | None => {
+                    NodeEditorIcon::new(icons::WARNING, "Native design placeholder")
+                }
+                Some(("3D", Implemented)) => NodeEditorIcon::new(icons::CUBE, "3D operation"),
+                Some(("Particles", Implemented)) => {
+                    NodeEditorIcon::new(icons::SPARKLE, "Particle operation")
+                }
+                Some(("Points", Implemented)) => {
+                    NodeEditorIcon::new(icons::SPARKLE, "Point operation")
+                }
+                Some(("Transition", Implemented)) => {
                     NodeEditorIcon::new(icons::ARROWS_MERGE, "Transition host operation")
                 }
-                _ => NodeEditorIcon::new(icons::WARNING, "Native design placeholder"),
+                Some(("Math", Implemented)) => {
+                    NodeEditorIcon::new(icons::FUNCTION, "Math operation")
+                }
+                Some(("Logic", Implemented)) => {
+                    NodeEditorIcon::new(icons::ARROWS_MERGE, "Logic operation")
+                }
+                Some((_, Implemented)) => NodeEditorIcon::new(icons::FUNCTION, "Native operation"),
             }
         }
         Some(NodeContent::Merge) => NodeEditorIcon::new(icons::ARROWS_MERGE, "Merge operation"),
@@ -262,4 +280,38 @@ pub(in crate::ui::panels::node_editor) fn pin_info(
         .with_stroke(visual.stroke)
         .with_wire_color(visual.wire_color)
         .with_wire_style(WireStyle::Bezier3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_icons_use_catalog_runtime_status_without_a_parallel_implementation_list() {
+        for descriptor in library::model::native_node_catalog() {
+            if descriptor.factory() != library::model::NativeNodeFactory::NativeOperation {
+                continue;
+            }
+            let node = Node::new_catalog_node(descriptor.catalog_id()).unwrap();
+            assert!(matches!(node.content(), NodeContent::NativeOperation(_)));
+            let icon = node_icon_for_node(Some(&node), |_| None);
+            match descriptor.runtime_status() {
+                library::model::NativeNodeRuntimeStatus::Implemented => {
+                    assert!(
+                        !icon.label.contains("placeholder"),
+                        "{}",
+                        descriptor.catalog_id()
+                    );
+                    assert_ne!(icon.glyph, icons::WARNING, "{}", descriptor.catalog_id());
+                }
+                library::model::NativeNodeRuntimeStatus::DesignNeeded => {
+                    assert!(
+                        icon.label.contains("placeholder"),
+                        "{}",
+                        descriptor.catalog_id()
+                    );
+                }
+            }
+        }
+    }
 }

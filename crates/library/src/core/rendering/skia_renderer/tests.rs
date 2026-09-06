@@ -49,6 +49,9 @@ mod particle_gpu;
 #[path = "tests/point_attribute_gpu.rs"]
 mod point_attribute_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]
+#[path = "tests/point_conditional_gpu.rs"]
+mod point_conditional_gpu;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[path = "tests/point_grid_gpu.rs"]
 mod point_grid_gpu;
 #[cfg(all(feature = "gl", target_os = "windows"))]

@@ -11,8 +11,9 @@ use crate::model::frame::entity::{
     FrameTransition, FrameTransitionKind, FrameTransitionSource, NormalizedProgress16,
 };
 use crate::model::node::{
-    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
-    NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, TRANSITION_IMAGE_INPUT_NODE_ID,
+    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, CONDITION_INPUT_PORT,
+    ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT,
+    SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT, TRANSITION_IMAGE_INPUT_NODE_ID,
     TRANSITION_IMAGE_MIX_NODE_ID, TRANSITION_PROGRESS_INPUT_NODE_ID,
 };
 use crate::model::project::{
@@ -753,6 +754,45 @@ impl ModuleImageRuntime<'_> {
                 ))
             })?;
             return self.value_input(node.id, input);
+        }
+        if let NodeContent::NativeOperation(operation) = &node.content
+            && source.port == NUMBER_RESULT_OUTPUT_PORT
+            && let Some(role) = ConditionalNodeRole::from_catalog_id(&operation.catalog_id)
+        {
+            let result = match role {
+                ConditionalNodeRole::Compare(operation) => {
+                    let left = self.value_input(node.id, "a")?;
+                    let right = self.value_input(node.id, "b")?;
+                    let (Some(left), Some(right)) = (left, right) else {
+                        return Ok(None);
+                    };
+                    crate::model::conditional::evaluate_comparison(operation, &left, &right)
+                }
+                ConditionalNodeRole::Select(data_type) => {
+                    // Eager, typed value selection: do not hide invalid or
+                    // missing values in the unselected branch.
+                    let condition = self.value_input(node.id, CONDITION_INPUT_PORT)?;
+                    let when_true = self.value_input(node.id, SELECT_TRUE_INPUT_PORT)?;
+                    let when_false = self.value_input(node.id, SELECT_FALSE_INPUT_PORT)?;
+                    let (Some(condition), Some(when_true), Some(when_false)) =
+                        (condition, when_true, when_false)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::model::conditional::evaluate_selection(
+                        data_type,
+                        &condition,
+                        &when_true,
+                        &when_false,
+                    )
+                }
+            };
+            return result.map(Some).map_err(|error| {
+                LibraryError::Render(format!(
+                    "Conditional Module Node {} failed: {error}",
+                    node.id
+                ))
+            });
         }
         match node.content {
             NodeContent::NativeOperation(operation)

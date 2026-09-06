@@ -578,19 +578,203 @@ Normalize:
       type: Vector
 
 # --- Logic ---
-Switch:
+Less Than:
   category: Logic
-  catalog_status: design-needed
+  catalog_status: native
+  catalog_id: native.logic.less
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Less Than or Equal:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.less-equal
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Greater Than:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.greater
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Greater Than or Equal:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.greater-equal
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Equal:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.equal
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Not Equal:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.not-equal
+  runtime_status: implemented
+  inputs:
+    - name: a
+      type: Scalar
+    - name: b
+      type: Scalar
+  outputs:
+    - name: result
+      type: Boolean
+Select Number:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-number
+  runtime_status: implemented
   inputs:
     - name: condition
       type: Boolean
-    - name: true_val
-      type: Any
-    - name: false_val
-      type: Any
+    - name: if_true
+      label: "True"
+      type: Scalar
+    - name: if_false
+      label: "False"
+      type: Scalar
   outputs:
-    - name: output
-      type: Any
+    - name: result
+      type: Scalar
+Select Integer:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-integer
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Integer
+    - name: if_false
+      label: "False"
+      type: Integer
+  outputs:
+    - name: result
+      type: Integer
+Select Vec2:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-vec2
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Vector2
+    - name: if_false
+      label: "False"
+      type: Vector2
+  outputs:
+    - name: result
+      type: Vector2
+Select Vec3:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-vec3
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Vector3
+    - name: if_false
+      label: "False"
+      type: Vector3
+  outputs:
+    - name: result
+      type: Vector3
+Select Vec4:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-vec4
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Vector4
+    - name: if_false
+      label: "False"
+      type: Vector4
+  outputs:
+    - name: result
+      type: Vector4
+Select Color:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-color
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Color
+    - name: if_false
+      label: "False"
+      type: Color
+  outputs:
+    - name: result
+      type: Color
+Select Boolean:
+  category: Logic
+  catalog_status: native
+  catalog_id: native.logic.select-boolean
+  runtime_status: implemented
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: if_true
+      label: "True"
+      type: Boolean
+    - name: if_false
+      label: "False"
+      type: Boolean
+  outputs:
+    - name: result
+      type: Boolean
 Make List:
   category: Logic
   catalog_status: native
@@ -2742,6 +2926,22 @@ Store Integer Attribute:
       type: PointSource
     - name: attribute
       type: Integer
+Store Boolean Attribute:
+  category: Points
+  catalog_status: native
+  catalog_id: native.point.store-boolean-attribute
+  runtime_status: implemented
+  description: Store one Boolean field under the stable identity derived from this Node
+  inputs:
+    - name: points
+      type: PointSource
+    - name: value
+      type: Boolean
+  outputs:
+    - name: points
+      type: PointSource
+    - name: attribute
+      type: Boolean
 Store Vec2 Attribute:
   category: Points
   catalog_status: native

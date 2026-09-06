@@ -627,6 +627,12 @@ fn point_catalog_uses_node_identity_and_one_typed_store_contract() {
             "node_editor.menu.create.point_store_integer_attribute",
         ),
         (
+            PointAttributeElementType::Boolean,
+            PortDataType::Boolean,
+            "native.point.store-boolean-attribute",
+            "node_editor.menu.create.point_store_boolean_attribute",
+        ),
+        (
             PointAttributeElementType::Vec2,
             PortDataType::Vec2,
             "native.point.store-vec2-attribute",
@@ -703,6 +709,64 @@ fn point_catalog_uses_node_identity_and_one_typed_store_contract() {
             && port.key == PARTICLE_SYSTEM_PORT
             && port.data_type == PortDataType::PointSource
     }));
+}
+
+#[test]
+fn conditional_catalog_has_exact_compare_and_typed_select_contracts() {
+    use crate::model::ComparisonOperation;
+
+    let greater = native_node_descriptor("native.logic.greater").unwrap();
+    assert_eq!(greater.qa_id(), "node_editor.menu.create.logic:greater");
+    assert_eq!(greater.factory(), NativeNodeFactory::NativeOperation);
+    assert_eq!(
+        ConditionalNodeRole::from_catalog_id(greater.catalog_id()),
+        Some(ConditionalNodeRole::Compare(ComparisonOperation::Greater))
+    );
+    for key in [NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT] {
+        assert!(greater.ports().iter().any(|port| {
+            port.direction == PortDirection::Input
+                && port.key == key
+                && port.data_type == PortDataType::Number
+        }));
+    }
+    assert!(greater.ports().iter().any(|port| {
+        port.direction == PortDirection::Output
+            && port.key == NUMBER_RESULT_OUTPUT_PORT
+            && port.data_type == PortDataType::Boolean
+    }));
+
+    for data_type in [
+        PortDataType::Number,
+        PortDataType::Integer,
+        PortDataType::Vec2,
+        PortDataType::Vec3,
+        PortDataType::Vec4,
+        PortDataType::Color,
+        PortDataType::Boolean,
+    ] {
+        let role = ConditionalNodeRole::Select(data_type);
+        let descriptor = native_node_descriptor(role.catalog_id()).unwrap();
+        assert_eq!(
+            ConditionalNodeRole::from_catalog_id(descriptor.catalog_id()),
+            Some(role)
+        );
+        for (key, expected) in [
+            (CONDITION_INPUT_PORT, PortDataType::Boolean),
+            (SELECT_TRUE_INPUT_PORT, data_type),
+            (SELECT_FALSE_INPUT_PORT, data_type),
+        ] {
+            assert!(descriptor.ports().iter().any(|port| {
+                port.direction == PortDirection::Input
+                    && port.key == key
+                    && port.data_type == expected
+            }));
+        }
+        assert!(descriptor.ports().iter().any(|port| {
+            port.direction == PortDirection::Output
+                && port.key == NUMBER_RESULT_OUTPUT_PORT
+                && port.data_type == data_type
+        }));
+    }
 }
 
 #[test]

@@ -10,6 +10,7 @@ use crate::model::authoring::{
     PublishedSignal, PublishedSignalId, TimeMap, TimelineId, TimelineInterval, TimelineItemId,
     TimelineTrackId, TransitionId, TransitionModuleInstanceTarget, TransitionProcessor,
 };
+use crate::model::conditional::ComparisonOperation;
 use crate::model::node::NodeContent;
 use crate::model::numeric::NumericBinaryOperation;
 use crate::model::point::{PointAttributeElementType, PointAttributeSchema};
@@ -249,6 +250,17 @@ pub(crate) enum CompiledPointInstruction {
     },
     Length {
         value: u16,
+    },
+    Compare {
+        operation: ComparisonOperation,
+        left: u16,
+        right: u16,
+    },
+    Select {
+        element_type: PointAttributeElementType,
+        condition: u16,
+        when_true: u16,
+        when_false: u16,
     },
     ColorRamp {
         gradient: ModulePortAddress,

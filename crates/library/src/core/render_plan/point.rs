@@ -8,9 +8,10 @@ use super::{
 };
 use crate::model::authoring::{ModuleDefinition, ModulePortAddress};
 use crate::model::node::{
-    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, ColorContent,
-    NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node, NodeContent, PARTICLE_SYSTEM_PORT,
-    POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT, POINT_SOURCE_PORT, PointNodeRole,
+    COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT, COLOR_VALUE_PORT, CONDITION_INPUT_PORT,
+    ColorContent, ConditionalNodeRole, NUMERIC_LENGTH_CATALOG_ID, NUMERIC_LENGTH_INPUT_PORT, Node,
+    NodeContent, PARTICLE_SYSTEM_PORT, POINT_ATTRIBUTE_OUTPUT_PORT, POINT_ATTRIBUTE_VALUE_PORT,
+    POINT_SOURCE_PORT, PointNodeRole, SELECT_FALSE_INPUT_PORT, SELECT_TRUE_INPUT_PORT,
 };
 use crate::model::point::{
     POINT_MAX_INSTRUCTIONS, POINT_MAX_RAMPS, PointAttributeDefinition, PointAttributeElementType,
@@ -254,19 +255,32 @@ pub(super) fn validate_point_field_consumers(
             NodeContent::Color(ColorContent::ColorRamp) => {
                 connection.to.port == COLOR_RAMP_FACTOR_PORT
             }
-            NodeContent::NativeOperation(operation)
-                if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID =>
-            {
-                connection.to.port == NUMERIC_LENGTH_INPUT_PORT
-            }
-            NodeContent::NativeOperation(_) => match point_role(target) {
-                Some(PointNodeRole::StoreAttribute(_)) => {
-                    connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
+            NodeContent::NativeOperation(operation) => {
+                if let Some(role) = ConditionalNodeRole::from_catalog_id(&operation.catalog_id) {
+                    match role {
+                        ConditionalNodeRole::Compare(_) => {
+                            matches!(connection.to.port.as_str(), "a" | "b")
+                        }
+                        ConditionalNodeRole::Select(_) => matches!(
+                            connection.to.port.as_str(),
+                            CONDITION_INPUT_PORT | SELECT_TRUE_INPUT_PORT | SELECT_FALSE_INPUT_PORT
+                        ),
+                    }
+                } else if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID {
+                    connection.to.port == NUMERIC_LENGTH_INPUT_PORT
+                } else {
+                    match point_role(target) {
+                        Some(PointNodeRole::StoreAttribute(_)) => {
+                            connection.to.port == POINT_ATTRIBUTE_VALUE_PORT
+                        }
+                        Some(PointNodeRole::Info) => false,
+                        Some(PointNodeRole::Grid) => false,
+                        None => {
+                            particle_sprite(target) && connection.to.port == SPRITE_COLOR_INPUT_PORT
+                        }
+                    }
                 }
-                Some(PointNodeRole::Info) => false,
-                Some(PointNodeRole::Grid) => false,
-                None => particle_sprite(target) && connection.to.port == SPRITE_COLOR_INPUT_PORT,
-            },
+            }
             _ => false,
         };
         if !supported {
@@ -425,96 +439,167 @@ impl<'a> PointProgramBuilder<'a> {
             return self.compile_input(&address(node.id, input), expected_type, context);
         }
 
-        let value = match node.content() {
-            NodeContent::NativeOperation(operation)
-                if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID
-                    && source.port == NUMBER_RESULT_OUTPUT_PORT =>
-            {
-                let input = self.compile_input(
-                    &address(node.id, NUMERIC_LENGTH_INPUT_PORT),
-                    CompiledPointValueType::Numeric,
-                    context,
-                )?;
-                let register = self.emit(CompiledPointInstruction::Length {
-                    value: input.register,
-                })?;
-                CompiledValue {
-                    register,
-                    value_type: PointAttributeElementType::Number.into(),
-                    dependencies: input.dependencies,
-                }
-            }
-            NodeContent::NativeOperation(_) => match point_role(&node) {
-                Some(PointNodeRole::Info) => self.compile_point_info(&node, source, context)?,
-                Some(PointNodeRole::StoreAttribute(_)) => {
-                    self.compile_attribute_load(&node, source, context)?
-                }
-                Some(PointNodeRole::Grid) | None => {
-                    return Err(unsupported_field_node(&node, source));
-                }
-            },
-            NodeContent::Value(operation) if source.port == NUMBER_RESULT_OUTPUT_PORT => {
-                let left = self.compile_input(
-                    &address(node.id, operation.primary_input()),
-                    CompiledPointValueType::Numeric,
-                    context,
-                )?;
-                let right = self.compile_input(
-                    &address(node.id, operation.secondary_input()),
-                    CompiledPointValueType::Numeric,
-                    context,
-                )?;
-                let value_type = left.value_type.binary_result(right.value_type)?;
-                let mut dependencies = left.dependencies.clone();
-                dependencies.merge(&right.dependencies);
-                let register = self.emit(CompiledPointInstruction::Binary {
-                    operation: operation.numeric_operation(),
-                    left: left.register,
-                    right: right.register,
-                })?;
-                CompiledValue {
-                    register,
-                    value_type,
-                    dependencies,
-                }
-            }
-            NodeContent::Color(ColorContent::ColorRamp) if source.port == COLOR_VALUE_PORT => {
-                let gradient = address(node.id, COLOR_RAMP_GRADIENT_PORT);
-                if single_input_source(self.definition, &gradient)
-                    .as_ref()
-                    .is_some_and(|source| self.depends_on_point(source))
+        let value = if let NodeContent::NativeOperation(operation) = node.content()
+            && source.port == NUMBER_RESULT_OUTPUT_PORT
+            && let Some(role) = ConditionalNodeRole::from_catalog_id(&operation.catalog_id)
+        {
+            self.compile_conditional(&node, role, context)?
+        } else {
+            match node.content() {
+                NodeContent::NativeOperation(operation)
+                    if operation.catalog_id == NUMERIC_LENGTH_CATALOG_ID
+                        && source.port == NUMBER_RESULT_OUTPUT_PORT =>
                 {
-                    return Err(format!(
-                        "Point Color Ramp Node {} requires a frame-uniform Gradient",
-                        node.id
-                    ));
+                    let input = self.compile_input(
+                        &address(node.id, NUMERIC_LENGTH_INPUT_PORT),
+                        CompiledPointValueType::Numeric,
+                        context,
+                    )?;
+                    let register = self.emit(CompiledPointInstruction::Length {
+                        value: input.register,
+                    })?;
+                    CompiledValue {
+                        register,
+                        value_type: PointAttributeElementType::Number.into(),
+                        dependencies: input.dependencies,
+                    }
                 }
-                self.ramp_count += 1;
-                if self.ramp_count > POINT_MAX_RAMPS {
-                    return Err(format!(
-                        "Point program exceeds the maximum of {POINT_MAX_RAMPS} Color Ramps"
-                    ));
+                NodeContent::NativeOperation(_) => match point_role(&node) {
+                    Some(PointNodeRole::Info) => self.compile_point_info(&node, source, context)?,
+                    Some(PointNodeRole::StoreAttribute(_)) => {
+                        self.compile_attribute_load(&node, source, context)?
+                    }
+                    Some(PointNodeRole::Grid) | None => {
+                        return Err(unsupported_field_node(&node, source));
+                    }
+                },
+                NodeContent::Value(operation) if source.port == NUMBER_RESULT_OUTPUT_PORT => {
+                    let left = self.compile_input(
+                        &address(node.id, operation.primary_input()),
+                        CompiledPointValueType::Numeric,
+                        context,
+                    )?;
+                    let right = self.compile_input(
+                        &address(node.id, operation.secondary_input()),
+                        CompiledPointValueType::Numeric,
+                        context,
+                    )?;
+                    let value_type = left.value_type.binary_result(right.value_type)?;
+                    let mut dependencies = left.dependencies.clone();
+                    dependencies.merge(&right.dependencies);
+                    let register = self.emit(CompiledPointInstruction::Binary {
+                        operation: operation.numeric_operation(),
+                        left: left.register,
+                        right: right.register,
+                    })?;
+                    CompiledValue {
+                        register,
+                        value_type,
+                        dependencies,
+                    }
                 }
-                let factor = self.compile_input(
-                    &address(node.id, COLOR_RAMP_FACTOR_PORT),
-                    PointAttributeElementType::Number,
-                    context,
-                )?;
-                let register = self.emit(CompiledPointInstruction::ColorRamp {
-                    gradient,
-                    factor: factor.register,
-                })?;
-                CompiledValue {
-                    register,
-                    value_type: PointAttributeElementType::Color.into(),
-                    dependencies: factor.dependencies,
+                NodeContent::Color(ColorContent::ColorRamp) if source.port == COLOR_VALUE_PORT => {
+                    let gradient = address(node.id, COLOR_RAMP_GRADIENT_PORT);
+                    if single_input_source(self.definition, &gradient)
+                        .as_ref()
+                        .is_some_and(|source| self.depends_on_point(source))
+                    {
+                        return Err(format!(
+                            "Point Color Ramp Node {} requires a frame-uniform Gradient",
+                            node.id
+                        ));
+                    }
+                    self.ramp_count += 1;
+                    if self.ramp_count > POINT_MAX_RAMPS {
+                        return Err(format!(
+                            "Point program exceeds the maximum of {POINT_MAX_RAMPS} Color Ramps"
+                        ));
+                    }
+                    let factor = self.compile_input(
+                        &address(node.id, COLOR_RAMP_FACTOR_PORT),
+                        PointAttributeElementType::Number,
+                        context,
+                    )?;
+                    let register = self.emit(CompiledPointInstruction::ColorRamp {
+                        gradient,
+                        factor: factor.register,
+                    })?;
+                    CompiledValue {
+                        register,
+                        value_type: PointAttributeElementType::Color.into(),
+                        dependencies: factor.dependencies,
+                    }
                 }
+                _ => return Err(unsupported_field_node(&node, source)),
             }
-            _ => return Err(unsupported_field_node(&node, source)),
         };
         value.dependencies.validate(context)?;
         self.values.insert(source.clone(), value.clone());
         Ok(value)
+    }
+
+    fn compile_conditional(
+        &mut self,
+        node: &Node,
+        role: ConditionalNodeRole,
+        context: &FieldContext<'_>,
+    ) -> Result<CompiledValue, String> {
+        let (instruction, value_type, inputs) = match role {
+            ConditionalNodeRole::Compare(operation) => {
+                let left = self.compile_input(
+                    &address(node.id, "a"),
+                    PointAttributeElementType::Number,
+                    context,
+                )?;
+                let right = self.compile_input(
+                    &address(node.id, "b"),
+                    PointAttributeElementType::Number,
+                    context,
+                )?;
+                (
+                    CompiledPointInstruction::Compare {
+                        operation,
+                        left: left.register,
+                        right: right.register,
+                    },
+                    PointAttributeElementType::Boolean,
+                    vec![left, right],
+                )
+            }
+            ConditionalNodeRole::Select(data_type) => {
+                let kind = PointAttributeElementType::from_port_data_type(data_type)?;
+                let condition = self.compile_input(
+                    &address(node.id, CONDITION_INPUT_PORT),
+                    PointAttributeElementType::Boolean,
+                    context,
+                )?;
+                // Select is eager value selection, not a control-flow branch.
+                // Both inputs belong to the same Point domain and must type-check.
+                let when_true =
+                    self.compile_input(&address(node.id, SELECT_TRUE_INPUT_PORT), kind, context)?;
+                let when_false =
+                    self.compile_input(&address(node.id, SELECT_FALSE_INPUT_PORT), kind, context)?;
+                (
+                    CompiledPointInstruction::Select {
+                        element_type: kind,
+                        condition: condition.register,
+                        when_true: when_true.register,
+                        when_false: when_false.register,
+                    },
+                    kind,
+                    vec![condition, when_true, when_false],
+                )
+            }
+        };
+        let mut dependencies = FieldDependencies::default();
+        for input in inputs {
+            dependencies.merge(&input.dependencies);
+        }
+        Ok(CompiledValue {
+            register: self.emit(instruction)?,
+            value_type: value_type.into(),
+            dependencies,
+        })
     }
 
     fn compile_point_info(
@@ -655,6 +740,7 @@ impl<'a> PointDependencyResolver<'a> {
         if !matches!(
             port.data_type,
             crate::model::project::PortDataType::Number
+                | crate::model::project::PortDataType::Boolean
                 | crate::model::project::PortDataType::Integer
                 | crate::model::project::PortDataType::Numeric
                 | crate::model::project::PortDataType::Vec2

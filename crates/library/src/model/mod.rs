@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod authoring;
 mod blend;
+pub(crate) mod conditional;
 pub mod frame;
 pub mod node;
 pub(crate) mod numeric;
@@ -10,6 +11,7 @@ pub mod project;
 pub mod vector;
 
 pub use blend::{BlendMode, BlendModeGroup, BlendModeInfo};
+pub use conditional::ComparisonOperation;
 pub use node::{
     COLOR_ALPHA_PORT, COLOR_BLUE_PORT, COLOR_GREEN_PORT, COLOR_MIX_FACTOR_PORT,
     COLOR_MIX_LEFT_PORT, COLOR_MIX_RIGHT_PORT, COLOR_RAMP_FACTOR_PORT, COLOR_RAMP_GRADIENT_PORT,

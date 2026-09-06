@@ -90,7 +90,9 @@ fn components(value: PointAttributeGpuDefault) -> Vec<f32> {
         PointAttributeGpuDefault::Vec2(value) => value.to_vec(),
         PointAttributeGpuDefault::Vec3(value) => value.to_vec(),
         PointAttributeGpuDefault::Vec4(value) => value.to_vec(),
-        PointAttributeGpuDefault::Integer(_) | PointAttributeGpuDefault::Color(_) => {
+        PointAttributeGpuDefault::Integer(_)
+        | PointAttributeGpuDefault::Boolean(_)
+        | PointAttributeGpuDefault::Color(_) => {
             panic!("numeric GPU test received a non-numeric field")
         }
     }

@@ -11,6 +11,7 @@ pub(crate) struct PointFieldReadback {
     pub age: Option<f32>,
     pub lifetime: Option<f32>,
     pub attributes: Vec<PointAttributeGpuDefault>,
+    pub attribute_words: Vec<[u32; 4]>,
     pub color: [f32; 4],
 }
 
@@ -83,6 +84,24 @@ impl SceneRuntime {
                     read_attribute(&columns, offset, attribute.element_type)
                 })
                 .collect();
+            let attribute_words = fields
+                .layout
+                .attributes
+                .iter()
+                .map(|attribute| {
+                    let offset =
+                        attribute.offset_bytes as usize + slot * attribute.stride_bytes as usize;
+                    let mut words = [0; 4];
+                    for (index, word) in words
+                        .iter_mut()
+                        .take(attribute.stride_bytes as usize / size_of::<u32>())
+                        .enumerate()
+                    {
+                        *word = read_u32(&columns, offset + index * size_of::<u32>());
+                    }
+                    words
+                })
+                .collect();
             let color_offset = slot * 16;
             let color =
                 std::array::from_fn(|component| read_f32(&colors, color_offset + component * 4));
@@ -91,6 +110,7 @@ impl SceneRuntime {
                 age,
                 lifetime,
                 attributes,
+                attribute_words,
                 color,
             });
         }
@@ -122,6 +142,9 @@ fn read_attribute(
         }
         PointAttributeElementType::Integer => {
             PointAttributeGpuDefault::Integer(read_u32(bytes, offset) as i32)
+        }
+        PointAttributeElementType::Boolean => {
+            PointAttributeGpuDefault::Boolean(read_u32(bytes, offset) != 0)
         }
         PointAttributeElementType::Vec2 => {
             PointAttributeGpuDefault::Vec2([read_f32(bytes, offset), read_f32(bytes, offset + 4)])

@@ -192,6 +192,26 @@ impl ModuleImageRuntime<'_> {
                     CompiledPointInstruction::Length { value } => {
                         PointInstruction::Length { value: *value }
                     }
+                    CompiledPointInstruction::Compare {
+                        operation,
+                        left,
+                        right,
+                    } => PointInstruction::Compare {
+                        operation: *operation,
+                        left: *left,
+                        right: *right,
+                    },
+                    CompiledPointInstruction::Select {
+                        element_type,
+                        condition,
+                        when_true,
+                        when_false,
+                    } => PointInstruction::Select {
+                        element_type: *element_type,
+                        condition: *condition,
+                        when_true: *when_true,
+                        when_false: *when_false,
+                    },
                     CompiledPointInstruction::ColorRamp { gradient, factor } => {
                         let index = if let Some(index) = ramp_addresses.get(gradient) {
                             *index

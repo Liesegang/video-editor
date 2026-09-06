@@ -32,6 +32,9 @@ impl PointNodeRole {
             Self::StoreAttribute(PointAttributeElementType::Integer) => {
                 "native.point.store-integer-attribute"
             }
+            Self::StoreAttribute(PointAttributeElementType::Boolean) => {
+                "native.point.store-boolean-attribute"
+            }
             Self::StoreAttribute(PointAttributeElementType::Vec2) => {
                 "native.point.store-vec2-attribute"
             }
@@ -62,9 +65,10 @@ impl PointNodeRole {
     }
 }
 
-const STORE_ATTRIBUTE_TYPES: [PointAttributeElementType; 6] = [
+const STORE_ATTRIBUTE_TYPES: [PointAttributeElementType; 7] = [
     PointAttributeElementType::Number,
     PointAttributeElementType::Integer,
+    PointAttributeElementType::Boolean,
     PointAttributeElementType::Vec2,
     PointAttributeElementType::Vec3,
     PointAttributeElementType::Vec4,
@@ -103,17 +107,19 @@ const fn store_attribute_outputs(data_type: PortDataType) -> [PortSpec; 2] {
     ]
 }
 
-static STORE_ATTRIBUTE_INPUTS: [[PortSpec; 2]; 6] = [
+static STORE_ATTRIBUTE_INPUTS: [[PortSpec; 2]; 7] = [
     store_attribute_inputs(PortDataType::Number),
     store_attribute_inputs(PortDataType::Integer),
+    store_attribute_inputs(PortDataType::Boolean),
     store_attribute_inputs(PortDataType::Vec2),
     store_attribute_inputs(PortDataType::Vec3),
     store_attribute_inputs(PortDataType::Vec4),
     store_attribute_inputs(PortDataType::Color),
 ];
-static STORE_ATTRIBUTE_OUTPUTS: [[PortSpec; 2]; 6] = [
+static STORE_ATTRIBUTE_OUTPUTS: [[PortSpec; 2]; 7] = [
     store_attribute_outputs(PortDataType::Number),
     store_attribute_outputs(PortDataType::Integer),
+    store_attribute_outputs(PortDataType::Boolean),
     store_attribute_outputs(PortDataType::Vec2),
     store_attribute_outputs(PortDataType::Vec3),
     store_attribute_outputs(PortDataType::Vec4),
@@ -187,6 +193,14 @@ const SPECS: &[DescriptorSpec] = &[
     ),
     store_attribute_spec!(
         2,
+        Boolean,
+        "Store Boolean Attribute",
+        "node_editor.menu.create.point_store_boolean_attribute",
+        "boolean",
+        store_boolean_properties
+    ),
+    store_attribute_spec!(
+        3,
         Vec2,
         "Store Vec2 Attribute",
         "node_editor.menu.create.point_store_vec2_attribute",
@@ -194,7 +208,7 @@ const SPECS: &[DescriptorSpec] = &[
         store_vec2_properties
     ),
     store_attribute_spec!(
-        3,
+        4,
         Vec3,
         "Store Vec3 Attribute",
         "node_editor.menu.create.point_store_vec3_attribute",
@@ -202,7 +216,7 @@ const SPECS: &[DescriptorSpec] = &[
         store_vec3_properties
     ),
     store_attribute_spec!(
-        4,
+        5,
         Vec4,
         "Store Vec4 Attribute",
         "node_editor.menu.create.point_store_vec4_attribute",
@@ -210,7 +224,7 @@ const SPECS: &[DescriptorSpec] = &[
         store_vec4_properties
     ),
     store_attribute_spec!(
-        5,
+        6,
         Color,
         "Store Color Attribute",
         "node_editor.menu.create.point_store_color_attribute",
@@ -312,6 +326,7 @@ fn store_attribute_properties(element_type: PointAttributeElementType) -> Vec<Pr
             min_hard_limit: true,
             max_hard_limit: true,
         },
+        PointAttributeElementType::Boolean => PropertyUiType::Bool,
         PointAttributeElementType::Vec2 => {
             PropertyUiType::vec2_with_range(-1_000_000.0, 1_000_000.0, 0.1, "", true, true)
         }
@@ -341,6 +356,7 @@ macro_rules! store_property_factory {
 
 store_property_factory!(store_number_properties, Number);
 store_property_factory!(store_integer_properties, Integer);
+store_property_factory!(store_boolean_properties, Boolean);
 store_property_factory!(store_vec2_properties, Vec2);
 store_property_factory!(store_vec3_properties, Vec3);
 store_property_factory!(store_vec4_properties, Vec4);

@@ -2,6 +2,7 @@ use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use super::*;
+use crate::model::project::PortDataType;
 use crate::model::property::{ColorSpaceRef, ColorValue, PropertyValue, Vec2, Vec3, Vec4};
 
 fn definition(
@@ -161,6 +162,37 @@ fn typed_defaults_enforce_exact_integer_and_finite_gpu_values() {
                 x: OrderedFloat(f64::NAN),
                 y: OrderedFloat(0.0),
             }),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn boolean_schema_and_port_mapping_use_one_exact_column_contract() {
+    let schema = PointAttributeSchema::new(vec![definition(
+        1,
+        "mask",
+        PointAttributeElementType::Boolean,
+        PropertyValue::Boolean(true),
+    )])
+    .unwrap();
+    let layout = PointColumnLayout::derive(&schema, 3).unwrap();
+    assert_eq!(layout.attributes[0].stride_bytes, 4);
+    assert_eq!(
+        layout.attributes[0].default_value,
+        PointAttributeGpuDefault::Boolean(true)
+    );
+    assert_eq!(
+        PointAttributeElementType::from_port_data_type(PortDataType::Boolean),
+        Ok(PointAttributeElementType::Boolean)
+    );
+    assert!(PointAttributeElementType::from_port_data_type(PortDataType::Numeric).is_err());
+    assert!(
+        PointAttributeDefinition::new(
+            PointAttributeId::new(),
+            "mask",
+            PointAttributeElementType::Boolean,
+            PropertyValue::Integer(1),
         )
         .is_err()
     );

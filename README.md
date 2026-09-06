@@ -72,7 +72,7 @@ Info's **Random** output with Grid; Age and Normalized Age require particles.
 Lattice point identities survive axis-count changes, so surviving points keep
 their random values. Each axis supports up to 1,024 points, with 100,000 total.
 
-Store Attribute Nodes support Number, Integer, Vec2, Vec3, Vec4, and Color.
+Store Attribute Nodes support Number, Integer, Boolean, Vec2, Vec3, Vec4, and Color.
 For example, connect a Color Ramp to **Store Color Attribute** and use its
 Attribute output as Sprite Color. **Point Info → Position** supplies a Vec3
 field in producer-local coordinates, before the Sprite transform; capture it
@@ -89,6 +89,19 @@ or calculating a position attribute does not move the source points.
 Frame-uniform inputs retain their shared editors, published parameters, and
 Timeline keyframes. Integer field arithmetic and implicit per-point type
 conversions are not supported.
+
+The **Logic** menu provides Less Than, Less Than or Equal, Greater Than, Greater
+Than or Equal, Equal, and Not Equal comparisons of scalar numbers. Their result is a
+Boolean, not a numeric 0/1. Capture it with **Store Boolean Attribute** to reuse
+a per-point mask. **Select Number/Integer/Boolean/Vec2/Vec3/Vec4/Color** chooses
+between two values of the indicated type using its Boolean Condition input.
+For example, `heat` → Greater Than → Store Boolean Attribute → Select Color
+colors points differently above and below a threshold. Uniform inputs retain
+the same shared editors and published Timeline keyframes.
+Select evaluates both inputs; it is value selection, not short-circuit control
+flow. An invalid unselected input still invalidates the result, so Select is
+not a guard for zero division. Comparisons use exact finite-number relations,
+with no implicit epsilon, and varying Integer-to-Number conversion is rejected.
 
 Attributes are computed on the GPU at each rendered frame (after simulation
 for particles). They are not yet accumulated across simulation steps.

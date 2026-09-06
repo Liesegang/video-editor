@@ -91,9 +91,10 @@ fn point_program_rejects_nonfinite_constants_and_out_of_range_resources() {
     assert!(program.validate().unwrap_err().contains("instructions"));
 }
 
-const ATTRIBUTE_TYPES: [PointAttributeElementType; 6] = [
+const ATTRIBUTE_TYPES: [PointAttributeElementType; 7] = [
     PointAttributeElementType::Number,
     PointAttributeElementType::Integer,
+    PointAttributeElementType::Boolean,
     PointAttributeElementType::Vec2,
     PointAttributeElementType::Vec3,
     PointAttributeElementType::Vec4,
@@ -307,7 +308,6 @@ fn point_position_is_vec3_and_remains_typed_through_capture() {
 fn point_constants_reject_untyped_strings_maps_and_encoded_colors() {
     for value in [
         PropertyValue::String("custom".into()),
-        PropertyValue::Boolean(true),
         PropertyValue::Map(Default::default()),
         PropertyValue::Gradient(GradientValue::default()),
         PropertyValue::Color(crate::model::frame::color::Color::white()),
@@ -319,6 +319,120 @@ fn point_constants_reject_untyped_strings_maps_and_encoded_colors() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn compare_returns_boolean_and_select_requires_exact_eager_branch_types() {
+    let program = value_program(
+        vec![
+            PointInstruction::NormalizedAge,
+            PointInstruction::Constant {
+                value: PropertyValue::Number(0.5.into()),
+            },
+            PointInstruction::Compare {
+                operation: crate::model::ComparisonOperation::Greater,
+                left: 0,
+                right: 1,
+            },
+            PointInstruction::Constant {
+                value: PropertyValue::Vec3(Vec3 {
+                    x: 1.0.into(),
+                    y: 2.0.into(),
+                    z: 3.0.into(),
+                }),
+            },
+            PointInstruction::Constant {
+                value: PropertyValue::Vec3(Vec3 {
+                    x: 4.0.into(),
+                    y: 5.0.into(),
+                    z: 6.0.into(),
+                }),
+            },
+            PointInstruction::Select {
+                element_type: PointAttributeElementType::Vec3,
+                condition: 2,
+                when_true: 3,
+                when_false: 4,
+            },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        6,
+    );
+    assert_eq!(
+        program.register_types().unwrap(),
+        vec![
+            PointAttributeElementType::Number,
+            PointAttributeElementType::Number,
+            PointAttributeElementType::Boolean,
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Vec3,
+            PointAttributeElementType::Color,
+        ]
+    );
+
+    let mut wrong_condition = program.clone();
+    wrong_condition.instructions[5] = PointInstruction::Select {
+        element_type: PointAttributeElementType::Vec3,
+        condition: 0,
+        when_true: 3,
+        when_false: 4,
+    };
+    assert!(wrong_condition.validate().unwrap_err().contains("Boolean"));
+
+    let mut wrong_branch = program;
+    wrong_branch.instructions[4] = PointInstruction::Constant {
+        value: PropertyValue::Vec2(Vec2 {
+            x: 4.0.into(),
+            y: 5.0.into(),
+        }),
+    };
+    assert!(
+        wrong_branch
+            .validate()
+            .unwrap_err()
+            .contains("requires Vec3")
+    );
+
+    let wrong_declared_type = value_program(
+        vec![
+            PointInstruction::Constant {
+                value: PropertyValue::Boolean(true),
+            },
+            PointInstruction::Constant {
+                value: PropertyValue::Vec3(Vec3 {
+                    x: 1.0.into(),
+                    y: 2.0.into(),
+                    z: 3.0.into(),
+                }),
+            },
+            PointInstruction::Constant {
+                value: PropertyValue::Vec3(Vec3 {
+                    x: 4.0.into(),
+                    y: 5.0.into(),
+                    z: 6.0.into(),
+                }),
+            },
+            PointInstruction::Select {
+                element_type: PointAttributeElementType::Number,
+                condition: 0,
+                when_true: 1,
+                when_false: 2,
+            },
+            PointInstruction::Constant {
+                value: PointAttributeElementType::Color.default_value(),
+            },
+        ],
+        4,
+    );
+    assert!(
+        wrong_declared_type
+            .validate()
+            .unwrap_err()
+            .contains("requires Number")
+    );
 }
 
 fn value_program(instructions: Vec<PointInstruction>, color_register: u16) -> PointRenderProgram {

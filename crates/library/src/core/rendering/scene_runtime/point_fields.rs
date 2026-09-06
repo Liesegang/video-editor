@@ -4,6 +4,7 @@ use glow::HasContext;
 use sha2::{Digest, Sha256};
 
 use crate::error::LibraryError;
+use crate::model::ComparisonOperation;
 use crate::model::point::{
     NumericBinaryOperation, POINT_MAX_ATTRIBUTE_COUNT, POINT_MAX_INSTRUCTIONS,
     POINT_MAX_RAMP_STOPS, POINT_MAX_RAMPS, PointAttributeElementType, PointAttributeGpuDefault,
@@ -380,6 +381,28 @@ fn compute_source(
                 *value,
                 register_types[usize::from(*value)],
             )?),
+            PointInstruction::Compare {
+                operation,
+                left,
+                right,
+            } => body.push_str(&compare_register_source(
+                &register,
+                *operation,
+                *left,
+                *right,
+            )),
+            PointInstruction::Select {
+                condition,
+                when_true,
+                when_false,
+                element_type: _,
+            } => body.push_str(&select_register_source(
+                &register,
+                *condition,
+                *when_true,
+                *when_false,
+                register_types[index],
+            )),
             PointInstruction::ColorRamp { gradient, factor } => body.push_str(&format!(
                 "    vec4 {register} = valid ? sample_point_ramp({gradient}u, r{factor}) : vec4(0.0);\n"
             )),
@@ -421,6 +444,7 @@ fn glsl_type(kind: PointAttributeElementType) -> &'static str {
     match kind {
         PointAttributeElementType::Number => "float",
         PointAttributeElementType::Integer => "int",
+        PointAttributeElementType::Boolean => "bool",
         PointAttributeElementType::Vec2 => "vec2",
         PointAttributeElementType::Vec3 => "vec3",
         PointAttributeElementType::Vec4 | PointAttributeElementType::Color => "vec4",
@@ -429,7 +453,9 @@ fn glsl_type(kind: PointAttributeElementType) -> &'static str {
 
 fn component_count(kind: PointAttributeElementType) -> usize {
     match kind {
-        PointAttributeElementType::Number | PointAttributeElementType::Integer => 1,
+        PointAttributeElementType::Number
+        | PointAttributeElementType::Integer
+        | PointAttributeElementType::Boolean => 1,
         PointAttributeElementType::Vec2 => 2,
         PointAttributeElementType::Vec3 => 3,
         PointAttributeElementType::Vec4 | PointAttributeElementType::Color => 4,
@@ -442,7 +468,9 @@ fn zero_literal(kind: PointAttributeElementType) -> Result<String, LibraryError>
         PointAttributeElementType::Vec2
         | PointAttributeElementType::Vec3
         | PointAttributeElementType::Vec4 => format!("{}(0.0)", glsl_type(kind)),
-        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+        PointAttributeElementType::Integer
+        | PointAttributeElementType::Color
+        | PointAttributeElementType::Boolean => {
             return Err(LibraryError::Validation(
                 "Point arithmetic lowering received a non-numeric type".to_string(),
             ));
@@ -458,7 +486,9 @@ fn any_zero(expression: &str, kind: PointAttributeElementType) -> Result<String,
         | PointAttributeElementType::Vec4 => {
             format!("any(equal({expression}, {}(0.0)))", glsl_type(kind))
         }
-        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+        PointAttributeElementType::Integer
+        | PointAttributeElementType::Color
+        | PointAttributeElementType::Boolean => {
             return Err(LibraryError::Validation(
                 "Point divisor lowering received a non-numeric type".to_string(),
             ));
@@ -476,7 +506,9 @@ fn non_finite(expression: &str, kind: PointAttributeElementType) -> Result<Strin
         | PointAttributeElementType::Vec4 => {
             format!("any(isnan({expression})) || any(isinf({expression}))")
         }
-        PointAttributeElementType::Integer | PointAttributeElementType::Color => {
+        PointAttributeElementType::Integer
+        | PointAttributeElementType::Color
+        | PointAttributeElementType::Boolean => {
             return Err(LibraryError::Validation(
                 "Point arithmetic lowering received a non-numeric type".to_string(),
             ));
@@ -544,7 +576,8 @@ fn length_register_source(
         ),
         PointAttributeElementType::Number
         | PointAttributeElementType::Integer
-        | PointAttributeElementType::Color => {
+        | PointAttributeElementType::Color
+        | PointAttributeElementType::Boolean => {
             return Err(LibraryError::Validation(
                 "Point Length lowering received a non-numeric type".to_string(),
             ));
@@ -553,6 +586,45 @@ fn length_register_source(
     Ok(format!(
         "    float {register}_scale = valid ? {scale} : 0.0;\n    float {register}_value = {register}_scale == 0.0 ? 0.0 : {register}_scale * length(r{value} / {register}_scale);\n    if (isnan({register}_value) || isinf({register}_value)) valid = false;\n    float {register} = valid ? {register}_value : 0.0;\n"
     ))
+}
+
+fn compare_register_source(
+    register: &str,
+    operation: ComparisonOperation,
+    left: u16,
+    right: u16,
+) -> String {
+    let operation = match operation {
+        ComparisonOperation::Less => "<",
+        ComparisonOperation::LessEqual => "<=",
+        ComparisonOperation::Greater => ">",
+        ComparisonOperation::GreaterEqual => ">=",
+        ComparisonOperation::Equal => "==",
+        ComparisonOperation::NotEqual => "!=",
+    };
+    format!("    bool {register} = valid && r{left} {operation} r{right};\n")
+}
+
+fn select_register_source(
+    register: &str,
+    condition: u16,
+    when_true: u16,
+    when_false: u16,
+    kind: PointAttributeElementType,
+) -> String {
+    let zero = match kind {
+        PointAttributeElementType::Number => "0.0".to_string(),
+        PointAttributeElementType::Integer => "0".to_string(),
+        PointAttributeElementType::Boolean => "false".to_string(),
+        PointAttributeElementType::Vec2
+        | PointAttributeElementType::Vec3
+        | PointAttributeElementType::Vec4
+        | PointAttributeElementType::Color => format!("{}(0.0)", glsl_type(kind)),
+    };
+    format!(
+        "    {} {register} = valid ? (r{condition} ? r{when_true} : r{when_false}) : {zero};\n",
+        glsl_type(kind)
+    )
 }
 
 fn constant_register_source(
@@ -567,6 +639,7 @@ fn constant_register_source(
         // section 8.3 permits NaN encodings to become unspecified.
         // https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.30.pdf
         PointAttributeElementType::Integer => format!("int(pointData[{index}].x)"),
+        PointAttributeElementType::Boolean => format!("pointData[{index}].x != 0u"),
         PointAttributeElementType::Vec2 => format!("uintBitsToFloat(pointData[{index}].xy)"),
         PointAttributeElementType::Vec3 => format!("uintBitsToFloat(pointData[{index}].xyz)"),
         PointAttributeElementType::Vec4 | PointAttributeElementType::Color => {
@@ -584,7 +657,9 @@ fn load_attribute_source(
     let stride_words = kind.gpu_layout().1 / 4;
     let base = format!("uAttributeOffsets[{attribute}] + slot * {stride_words}u");
     let raw = match kind {
-        PointAttributeElementType::Number | PointAttributeElementType::Integer => {
+        PointAttributeElementType::Number
+        | PointAttributeElementType::Integer
+        | PointAttributeElementType::Boolean => {
             format!("pointColumns[{base}]")
         }
         PointAttributeElementType::Vec2 => {
@@ -597,10 +672,10 @@ fn load_attribute_source(
             "uvec4(pointColumns[{base}], pointColumns[{base} + 1u], pointColumns[{base} + 2u], pointColumns[{base} + 3u])"
         ),
     };
-    let expression = if kind == PointAttributeElementType::Integer {
-        format!("int({raw})")
-    } else {
-        format!("uintBitsToFloat({raw})")
+    let expression = match kind {
+        PointAttributeElementType::Integer => format!("int({raw})"),
+        PointAttributeElementType::Boolean => format!("{raw} != 0u"),
+        _ => format!("uintBitsToFloat({raw})"),
     };
     format!("    {} {register} = {expression};\n", glsl_type(kind))
 }
@@ -618,6 +693,8 @@ fn store_attribute_source(
     for (index, component) in components.iter().take(component_count(kind)).enumerate() {
         let value = if kind == PointAttributeElementType::Integer {
             format!("uint(valid ? {register} : 0)")
+        } else if kind == PointAttributeElementType::Boolean {
+            format!("valid && {register} ? 1u : 0u")
         } else {
             let access = if component_count(kind) == 1 {
                 register.to_string()
@@ -725,6 +802,7 @@ fn packed_value(value: &PropertyValue) -> Result<[u32; 4], LibraryError> {
     match kind.pack_value(value).map_err(LibraryError::Validation)? {
         PointAttributeGpuDefault::Number(value) => Ok([value.to_bits(), 0, 0, 0]),
         PointAttributeGpuDefault::Integer(value) => Ok([value as u32, 0, 0, 0]),
+        PointAttributeGpuDefault::Boolean(value) => Ok([u32::from(value), 0, 0, 0]),
         PointAttributeGpuDefault::Vec2(value) => Ok([value[0].to_bits(), value[1].to_bits(), 0, 0]),
         PointAttributeGpuDefault::Vec3(value) => Ok([
             value[0].to_bits(),

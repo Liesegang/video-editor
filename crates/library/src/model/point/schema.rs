@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::model::frame::color::Color;
+use crate::model::project::PortDataType;
 use crate::model::property::{ColorValue, PropertyValue, Vec2, Vec3, Vec4};
 
 pub const POINT_MAX_ATTRIBUTE_COUNT: usize = 16;
@@ -91,6 +92,7 @@ impl PointId {
 pub enum PointAttributeElementType {
     Number,
     Integer,
+    Boolean,
     Vec2,
     Vec3,
     Vec4,
@@ -287,6 +289,7 @@ impl PointAttributeElementType {
         match self {
             Self::Number => PropertyValue::Number(0.0.into()),
             Self::Integer => PropertyValue::Integer(0),
+            Self::Boolean => PropertyValue::Boolean(false),
             Self::Vec2 => PropertyValue::Vec2(Vec2 {
                 x: 0.0.into(),
                 y: 0.0.into(),
@@ -314,13 +317,32 @@ impl PointAttributeElementType {
         match value {
             PropertyValue::Number(_) => Ok(Self::Number),
             PropertyValue::Integer(_) => Ok(Self::Integer),
+            PropertyValue::Boolean(_) => Ok(Self::Boolean),
             PropertyValue::Vec2(_) => Ok(Self::Vec2),
             PropertyValue::Vec3(_) => Ok(Self::Vec3),
             PropertyValue::Vec4(_) => Ok(Self::Vec4),
             PropertyValue::ColorValue(_) => Ok(Self::Color),
             _ => Err(format!(
-                "Point constants require canonical Number, Integer, Vec2/3/4 or ColorValue, received {}",
+                "Point constants require canonical Number, Integer, Boolean, Vec2/3/4 or ColorValue, received {}",
                 property_value_kind(value)
+            )),
+        }
+    }
+
+    /// Map an exact graph port to the corresponding Point column type.
+    /// Dynamic constraints such as `Numeric` are intentionally rejected;
+    /// they must be resolved to a concrete sampled type first.
+    pub fn from_port_data_type(data_type: PortDataType) -> Result<Self, String> {
+        match data_type {
+            PortDataType::Number => Ok(Self::Number),
+            PortDataType::Integer => Ok(Self::Integer),
+            PortDataType::Boolean => Ok(Self::Boolean),
+            PortDataType::Vec2 => Ok(Self::Vec2),
+            PortDataType::Vec3 => Ok(Self::Vec3),
+            PortDataType::Vec4 => Ok(Self::Vec4),
+            PortDataType::Color => Ok(Self::Color),
+            other => Err(format!(
+                "Point attributes require an exact Number, Integer, Boolean, Vec2/3/4 or Color port, received {other:?}"
             )),
         }
     }
@@ -342,6 +364,7 @@ impl PointAttributeElementType {
                 })?;
                 Ok(())
             }
+            (Self::Boolean, PropertyValue::Boolean(_)) => Ok(()),
             (Self::Vec2, PropertyValue::Vec2(value)) => validate_vector_components(&[
                 ("x", value.x.into_inner()),
                 ("y", value.y.into_inner()),

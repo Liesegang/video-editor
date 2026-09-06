@@ -15,6 +15,7 @@ const POINT_SERIAL_STRIDE_BYTES: u32 = size_of::<u32>() as u32;
 pub enum PointAttributeGpuDefault {
     Number(f32),
     Integer(i32),
+    Boolean(bool),
     Vec2([f32; 2]),
     Vec3([f32; 3]),
     Vec4([f32; 4]),
@@ -93,7 +94,7 @@ impl PointAttributeElementType {
     /// uses this same contract; logical Vec3 components still occupy 16 bytes.
     pub(crate) const fn gpu_layout(self) -> (u64, u32) {
         match self {
-            Self::Number | Self::Integer => (4, 4),
+            Self::Number | Self::Integer | Self::Boolean => (4, 4),
             Self::Vec2 => (8, 8),
             Self::Vec3 | Self::Vec4 | Self::Color => (16, 16),
         }
@@ -109,6 +110,9 @@ impl PointAttributeElementType {
             (Self::Integer, PropertyValue::Integer(value)) => i32::try_from(*value)
                 .map(PointAttributeGpuDefault::Integer)
                 .map_err(|_| "Point Integer default must fit exactly in signed i32".to_string()),
+            (Self::Boolean, PropertyValue::Boolean(value)) => {
+                Ok(PointAttributeGpuDefault::Boolean(*value))
+            }
             (Self::Vec2, PropertyValue::Vec2(value)) => Ok(PointAttributeGpuDefault::Vec2([
                 value.x.into_inner() as f32,
                 value.y.into_inner() as f32,

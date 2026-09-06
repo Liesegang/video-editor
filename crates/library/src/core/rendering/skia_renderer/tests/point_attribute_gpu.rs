@@ -11,7 +11,7 @@ use crate::model::property::{
 
 const INTEGER_CASES: [i32; 6] = [1, -1, i32::MAX, i32::MIN, 16_777_217, -16_777_217];
 
-fn definition(index: u128, kind: PointAttributeElementType) -> PointAttributeDefinition {
+pub(super) fn definition(index: u128, kind: PointAttributeElementType) -> PointAttributeDefinition {
     PointAttributeDefinition::new(
         PointAttributeId::from_uuid(Uuid::from_u128(index)),
         format!("attribute-{index}"),

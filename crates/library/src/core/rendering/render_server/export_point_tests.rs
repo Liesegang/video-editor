@@ -276,3 +276,143 @@ fn vector_fields_export_uses_the_shared_numeric_point_program() {
 fn authoring_vector_fields_point_png_export_matches_preview_and_is_nontransparent() {
     assert_point_png_export_matches_preview(vector_fields_export_project());
 }
+
+fn conditional_fields_export_project() -> Arc<AuthoringProject> {
+    use crate::model::conditional::ComparisonOperation;
+    use crate::model::node::ConditionalNodeRole;
+    use crate::model::property::{Property, PropertyValue};
+
+    let mut project = typed_color_export_project().as_ref().clone();
+    let definition = project.module_definitions.values_mut().next().unwrap();
+    let store_id = definition.graph.nodes.values().find(|node| {
+        matches!(node.content(), NodeContent::NativeOperation(op)
+            if op.catalog_id == PointNodeRole::StoreAttribute(PointAttributeElementType::Color).catalog_id())
+    }).unwrap().id;
+    let color_input = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| edge.to.node_id == store_id && edge.to.port == "value")
+        .unwrap()
+        .from
+        .clone();
+    let random_input = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| edge.to.node_id == color_input.node_id && edge.to.port == "factor")
+        .unwrap()
+        .from
+        .clone();
+    let point_input = definition
+        .graph
+        .connections
+        .iter()
+        .find(|edge| edge.to.node_id == store_id && edge.to.port == "points")
+        .unwrap()
+        .from
+        .clone();
+    let mut compare = Node::new_catalog_node(
+        ConditionalNodeRole::Compare(ComparisonOperation::Greater).catalog_id(),
+    )
+    .unwrap();
+    compare
+        .set_property(
+            "b".into(),
+            Property::constant(PropertyValue::Number(0.5.into())),
+        )
+        .unwrap();
+    let mask = Node::new_catalog_node(
+        PointNodeRole::StoreAttribute(PointAttributeElementType::Boolean).catalog_id(),
+    )
+    .unwrap();
+    let mut select =
+        Node::new_catalog_node(ConditionalNodeRole::Select(PortDataType::Color).catalog_id())
+            .unwrap();
+    // False points become red; true points retain their ramp-generated color.
+    select
+        .set_property(
+            "if_false".into(),
+            Property::constant(PropertyValue::ColorValue(
+                crate::model::property::ColorValue::from_straight_srgba8(&Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            )),
+        )
+        .unwrap();
+    let (compare_id, mask_id, select_id) = (compare.id, mask.id, select.id);
+    for node in [compare, mask, select] {
+        definition.graph.nodes.insert(node.id, node);
+    }
+    definition.graph.connections.retain(|edge| {
+        !(edge.to.node_id == store_id && matches!(edge.to.port.as_str(), "value" | "points"))
+    });
+    for (source, output, target, input) in [
+        (
+            point_input.node_id,
+            point_input.port.as_str(),
+            mask_id,
+            "points",
+        ),
+        (
+            random_input.node_id,
+            random_input.port.as_str(),
+            compare_id,
+            "a",
+        ),
+        (compare_id, "result", mask_id, "value"),
+        (mask_id, "points", store_id, "points"),
+        (mask_id, "attribute", select_id, "condition"),
+        (
+            color_input.node_id,
+            color_input.port.as_str(),
+            select_id,
+            "if_true",
+        ),
+        (select_id, "result", store_id, "value"),
+    ] {
+        definition.graph.connections.push(ModuleConnection {
+            id: ModuleConnectionId::new(),
+            from: ModulePortAddress {
+                node_id: source,
+                port: output.into(),
+            },
+            to: ModulePortAddress {
+                node_id: target,
+                port: input.into(),
+            },
+            order: 0,
+            blend_mode: crate::model::BlendMode::Normal,
+        });
+    }
+    definition.topology_revision += 1;
+    project.validate().unwrap();
+    Arc::new(project)
+}
+
+#[test]
+fn conditional_fields_export_uses_boolean_capture_and_color_selection() {
+    let project = conditional_fields_export_project();
+    let plan = RenderPlanCompiler::compile(&project).unwrap();
+    let definition = plan.module_definitions.values().next().unwrap();
+    let renderer = definition.point_renderers.values().next().unwrap();
+    let program = renderer.point_program.as_ref().unwrap();
+    assert_eq!(
+        program.schema.attributes()[0].element_type(),
+        PointAttributeElementType::Boolean
+    );
+    assert!(program.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::core::render_plan::CompiledPointInstruction::Select { .. }
+    )));
+}
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[test]
+#[ignore = "requires an idle desktop OpenGL 4.3 GPU"]
+fn authoring_conditional_fields_point_png_export_matches_preview_and_is_nontransparent() {
+    assert_point_png_export_matches_preview(conditional_fields_export_project());
+}

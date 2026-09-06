@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{NumericBinaryOperation, PointAttributeElementType, PointAttributeSchema};
+use crate::model::ComparisonOperation;
 use crate::model::numeric::NumericShape;
 use crate::model::property::{GradientValue, PropertyValue};
 
@@ -39,6 +40,17 @@ pub enum PointInstruction {
     },
     Length {
         value: u16,
+    },
+    Compare {
+        operation: ComparisonOperation,
+        left: u16,
+        right: u16,
+    },
+    Select {
+        element_type: PointAttributeElementType,
+        condition: u16,
+        when_true: u16,
+        when_false: u16,
     },
     ColorRamp {
         gradient: u16,
@@ -141,6 +153,22 @@ impl PointRenderProgram {
                     register_type(&registers, *value)?.numeric_shape()?;
                     PointAttributeElementType::Number
                 }
+                PointInstruction::Compare { left, right, .. } => {
+                    require_register(&registers, *left, PointAttributeElementType::Number)?;
+                    require_register(&registers, *right, PointAttributeElementType::Number)?;
+                    PointAttributeElementType::Boolean
+                }
+                PointInstruction::Select {
+                    element_type,
+                    condition,
+                    when_true,
+                    when_false,
+                } => {
+                    require_register(&registers, *condition, PointAttributeElementType::Boolean)?;
+                    require_register(&registers, *when_true, *element_type)?;
+                    require_register(&registers, *when_false, *element_type)?;
+                    *element_type
+                }
                 PointInstruction::ColorRamp { gradient, factor } => {
                     require_register(&registers, *factor, PointAttributeElementType::Number)?;
                     if usize::from(*gradient) >= self.ramps.len() {
@@ -170,7 +198,7 @@ impl PointAttributeElementType {
             Self::Vec2 => Ok(NumericShape::Vec2),
             Self::Vec3 => Ok(NumericShape::Vec3),
             Self::Vec4 => Ok(NumericShape::Vec4),
-            Self::Integer | Self::Color => {
+            Self::Integer | Self::Boolean | Self::Color => {
                 Err(format!("Point numeric operation does not accept {self:?}"))
             }
         }
