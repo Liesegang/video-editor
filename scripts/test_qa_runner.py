@@ -2,6 +2,7 @@ import importlib.util
 import contextlib
 import hashlib
 import io
+import copy
 import pathlib
 import subprocess
 import sys
@@ -37,6 +38,9 @@ PARTICLE_PERSISTENCE = load(
 VIDEO_EXPORT = load("ruvie_qa_video_export", "qa-video-export-e2e.py")
 TRACKING_BIDI = load(
     "ruvie_qa_text_tracking_bidi", "qa-text-tracking-bidi-e2e.py"
+)
+TEXT_FONT_FALLBACK = load(
+    "ruvie_qa_text_font_fallback", "qa-text-font-fallback-e2e.py"
 )
 
 
@@ -215,6 +219,7 @@ class QaRunnerTests(unittest.TestCase):
             "text-ensemble",
             "text-tracking",
             "text-tracking-bidi",
+            "text-font-fallback",
             "video-export",
         ]
         full = RUNNER.suite_specs("full")
@@ -239,6 +244,11 @@ class QaRunnerTests(unittest.TestCase):
         bidi = next(suite for suite in full if suite.name == "text-tracking-bidi")
         self.assertTrue(bidi.project_file)
         self.assertTrue(bidi.expects_exit)
+        font_fallback = next(
+            suite for suite in full if suite.name == "text-font-fallback"
+        )
+        self.assertTrue(font_fallback.project_file)
+        self.assertTrue(font_fallback.expects_exit)
         video_export = next(suite for suite in full if suite.name == "video-export")
         self.assertTrue(video_export.export_file)
         self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)
@@ -261,6 +271,60 @@ class QaRunnerTests(unittest.TestCase):
         keys[2]["id"] = "key-1"
         with self.assertRaises(TRACKING_BIDI.QaFailure):
             TRACKING_BIDI._assert_key_contract(keys)
+
+    def test_font_fallback_matrix_covers_each_required_script(self):
+        samples = dict(TEXT_FONT_FALLBACK.SAMPLES)
+        self.assertEqual(samples["japanese"], "日本語 かな カナ")
+        self.assertEqual(samples["greek-cyrillic"], "Ελληνικά Привет")
+        self.assertEqual(samples["hebrew"], "אבגד")
+        self.assertEqual(samples["arabic"], "سلام")
+        self.assertEqual(samples["emoji"], "🙂")
+        self.assertEqual(
+            TEXT_FONT_FALLBACK.SAVED_MATRIX,
+            "\n".join(text for _, text in TEXT_FONT_FALLBACK.SAMPLES),
+        )
+
+    def test_text_content_lookup_requires_one_exact_published_parameter(self):
+        parameter = {
+            "id": "content-parameter",
+            "name": "Content",
+            "data_type": "String",
+            "default_value": "default",
+            "target": {"node_id": "text-node", "port": "text"},
+        }
+        project = {
+            "items": {
+                "item": {
+                    "source": {
+                        "kind": "module",
+                        "value": {"instance_id": "instance"},
+                    }
+                }
+            },
+            "module_instances": {
+                "instance": {
+                    "id": "instance",
+                    "definition_id": "definition",
+                    "parameter_overrides": {"content-parameter": "authored"},
+                }
+            },
+            "module_definitions": {
+                "definition": {
+                    "id": "definition",
+                    "interface": {"parameters": [parameter]},
+                }
+            },
+        }
+        context = TEXT_FONT_FALLBACK.module_text_content(project, "item")
+        self.assertEqual(context["value"], "authored")
+        self.assertEqual(context["parameter"], parameter)
+
+        ambiguous = copy.deepcopy(project)
+        ambiguous["module_definitions"]["definition"]["interface"][
+            "parameters"
+        ].append(copy.deepcopy(parameter))
+        with self.assertRaises(TEXT_FONT_FALLBACK.QaFailure):
+            TEXT_FONT_FALLBACK.module_text_content(ambiguous, "item")
 
     def test_suite_files_do_not_use_removed_project_fixture_or_ambiguous_editor_name(self):
         for suite in RUNNER.suite_specs("full"):

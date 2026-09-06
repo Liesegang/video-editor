@@ -4,6 +4,7 @@ pub(crate) mod clip_creation;
 pub mod command_palette;
 pub mod dialogs;
 pub mod easing_menus;
+pub(crate) mod fonts;
 pub(crate) mod media_preview;
 pub(crate) mod module_media_input;
 pub(crate) mod panel_layout;

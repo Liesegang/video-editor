@@ -11,7 +11,6 @@ mod project_palette;
 mod startup;
 mod timeline_runtime;
 
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,7 +21,6 @@ use library::editor::TimelineEditorService;
 use library::model::authoring::{AuthoringProject, ProjectRevision};
 use library::plugin::PluginManager;
 use library::{LibraryError, RenderServer};
-use log::warn;
 
 use crate::command::{CommandContext, CommandId, CommandRegistry, CommandScope};
 use crate::config;
@@ -82,7 +80,7 @@ impl RuViEApp {
         library::initialize_python_runtime()?;
         let app_config = config::load_config();
         setup_theme(&cc.egui_ctx, &app_config);
-        setup_fonts(&cc.egui_ctx);
+        crate::ui::fonts::install(&cc.egui_ctx);
 
         let plugins = setup_plugin_manager(&app_config);
         let (service, fixture_timeline) = startup_service(plugins.as_ref())?;
@@ -887,33 +885,6 @@ fn setup_theme(context: &egui::Context, app_config: &config::AppConfig) {
     context.set_visuals(visuals);
     crate::ui::theme::apply_theme(context, app_config);
     crate::ui::theme::disable_display_text_selection(context);
-}
-
-fn setup_fonts(context: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    let font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
-    if let Ok(font_data) = fs::read(font_path) {
-        fonts.font_data.insert(
-            "ui_font".to_owned(),
-            egui::FontData::from_owned(font_data)
-                .tweak(egui::FontTweak {
-                    scale: 1.2,
-                    ..Default::default()
-                })
-                .into(),
-        );
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .insert(0, "ui_font".to_owned());
-        }
-    } else {
-        warn!("Failed to load {font_path}; using the bundled UI font");
-    }
-    context.set_fonts(fonts);
 }
 
 fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<PluginManager> {

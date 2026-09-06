@@ -29,6 +29,7 @@ from qa_text_ensemble_support import (
     seek_rendered,
     text_operations,
 )
+from qa_text_content_support import edit_direct_text as set_multiline_text
 from qa_tracking_geometry import assert_gizmo_parity, observe_gizmos, selected_gizmo
 from qa_tracking_support import (
     enter_tracking_amount,
@@ -37,7 +38,6 @@ from qa_tracking_support import (
     module_tracking,
     maybe_tracking_property_keys,
     observe_tracking_times,
-    set_multiline_text,
     tracking_property_keys,
 )
 

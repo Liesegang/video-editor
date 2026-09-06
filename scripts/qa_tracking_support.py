@@ -27,33 +27,6 @@ def key_time_seconds(value):
     return media_seconds(value) if isinstance(value, dict) else float(value)
 
 
-def text_content(state, item_id):
-    source = state["project"]["items"][item_id]["source"]
-    if source.get("kind") != "text":
-        raise QaFailure("Tracking source is no longer direct Text")
-    return source["value"]["text"]
-
-
-def set_multiline_text(client, item_id, content):
-    control_id = "inspector.property:item:{}:text".format(item_id)
-    component_in_inspector(client, control_id)
-    before = client.state()
-    client.click_component(control_id)
-    client.key("a", True, command=True)
-    client.key("a", False, command=True)
-    client.inject("text", {"text": content})
-    client.key("enter", True, command=True)
-    client.key("enter", False, command=True)
-    return client.wait_until(
-        "multiline Tracking Text commit",
-        lambda: state
-        if (state := client.state())["history"]["revision"]
-        == before["history"]["revision"] + 1
-        and text_content(state, item_id) == content
-        else None,
-    )
-
-
 def enter_tracking_amount(client, item_id, operation_id, amount):
     control_id = "inspector.property:text_ensemble:{}:{}:amount".format(
         item_id, operation_id

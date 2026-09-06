@@ -10,6 +10,11 @@ from qa_support import (
     run_suite_main,
     settled_preview_state,
 )
+from qa_text_content_support import (
+    direct_text_content,
+    edit_direct_text,
+    module_parameter as _module_parameter,
+)
 
 
 def _component(snapshot, component_id):
@@ -124,32 +129,12 @@ def _constant_item_property(state, item_id, key):
     return (property_value.get("properties") or {}).get("value")
 
 
-def _direct_text_content(state, item_id):
-    source = state["project"]["items"][item_id]["source"]
-    if source.get("kind") != "text":
-        raise QaFailure("direct Text content target is no longer a Text source")
-    return source["value"]["text"]
-
-
 def _edit_direct_text_content_and_undo(client, item_id):
-    control_id = "inspector.property:item:{}:text".format(item_id)
-    _bring_into_inspector(client, control_id, -280.0)
     before = client.state()
-    original = _direct_text_content(before, item_id)
+    original = direct_text_content(before["project"], item_id)
     edited_text = "Inspector common Content"
-    client.click_component(control_id)
-    client.key("a", True, command=True)
-    client.key("a", False, command=True)
-    client.inject("text", {"text": edited_text})
-    client.key("enter", True, command=True)
-    client.key("enter", False, command=True)
-    edited = client.wait_until(
-        "direct Text common Content edit",
-        lambda: state
-        if (state := client.state())["history"]["revision"]
-        == before["history"]["revision"] + 1
-        and _direct_text_content(state, item_id) == edited_text
-        else None,
+    edited = edit_direct_text(
+        client, item_id, edited_text, "direct Text common Content edit"
     )
     if "text" in (edited["project"]["items"][item_id].get("authored_properties") or {}):
         raise QaFailure("Text Content was duplicated into authored properties")
@@ -161,7 +146,7 @@ def _edit_direct_text_content_and_undo(client, item_id):
     undone = client.wait_until(
         "direct Text common Content Undo",
         lambda: state
-        if _direct_text_content((state := client.state()), item_id) == original
+        if direct_text_content((state := client.state())["project"], item_id) == original
         else None,
     )
     return {
@@ -224,21 +209,6 @@ def _edit_direct_text_size(client, item_id):
         )
 
     return client.wait_until("direct Text Font Size edit", edited), metadata
-
-
-def _module_parameter(definition, name):
-    matches = [
-        parameter
-        for parameter in definition["interface"]["parameters"]
-        if parameter.get("name") == name
-    ]
-    if len(matches) != 1:
-        raise QaFailure(
-            "converted Text expected one published {!r} parameter, got {}".format(
-                name, len(matches)
-            )
-        )
-    return matches[0]
 
 
 def _module_style_parameter(definition, component_id, property_key):

@@ -42,13 +42,13 @@ from qa_text_ensemble_support import (
     seek_rendered,
     text_operations,
 )
+from qa_text_content_support import edit_direct_text as _set_multiline_text
 from qa_tracking_support import (
     key_time_seconds as _key_time_seconds,
     keyframe_signature as _keyframe_signature,
     maybe_tracking_property_keys as _maybe_property_keys,
     module_tracking as _module_tracking,
     observe_tracking_times as _observe_times,
-    set_multiline_text as _set_multiline_text,
     tracking_property as _property,
     tracking_property_keys as _property_keys,
 )

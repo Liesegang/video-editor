@@ -172,9 +172,22 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     実画面を確認し、52本のapp/suite logにERROR、panic、描画失敗はなく、QA appも終了済み。
     検証した`target/release/app.exe`のSHA-256は`181718477C34D58DF00E762271765AA1F04388374027992EB98F96C9C08FB7C2`。
     Kashidaによる接続部の伸長、縦書き、段落方向と揃え位置の編集、全フォントの網羅、60fpsはこの検証に含めない。
-  - [ ] 共通UIのfont fallbackを調べ、Inspectorの内容欄でHebrew等が「□」表示になる問題を修正する。
-    Tracking QAの再読込み画面で確認した。
-    Previewの組版と描画は正しく、UIの文字表示は別の未完了項目として扱う。
+  - [x] Windowsの共通UIで、Inspectorの内容欄のHebrew、Arabic、絵文字が「□」になる問題を修正した。
+    既存の全体font設定を`ui::fonts`へ移し、SkiaのOS font検索から必要なfaceだけを既定font列の末尾へ追加する。
+    MS Gothicの先頭配置、scale 1.2、既定fontとPhosphorの順序を保持し、同じfaceを重複登録しない。
+    TTC indexを保持し、eguiが使用する既存parserで読めることを登録前に確認する。
+    全system fontの走査、fontファイルの同梱、独自TextEditは追加しない。
+    旧設定ではHebrew U+05D0のglyph検査が失敗し、修正後は実glyphと描画mesh、旧英字と日本語と時計iconのGalley完全一致、非0 TTC index、fallback列の5 testsが通過した。
+    OS fontに依存する検査はWindowsを対象とし、列の順序と上限と重複排除は全OSのgateに残す。
+    通常releaseのnative HTTP QAは27/27で、追加シナリオでは日本語、Greek/Cyrillic、Hebrew、Arabic、🙂を実Inspectorで編集し、Undo/Redo、Node Clip化、保存後の新プロセス再読込みまで確認した（`target/qa-runs/20260906T-ui-fonts-final`）。
+    内容欄の実画面でglyph表示を確認し、通常TextとNode Clipの各Preview画素、および複数行の保存前後のProjectと画素が一致した。
+    workspace全targetは1,797 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 38 tests、843 filesの行数制限が通過した（`target/qa-workspace-test-20260906-ui-fonts-final.log`）。
+    54本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了済み。
+    検証した通常releaseのSHA-256は`06F76A842B7BC6529A3145882DB60D1BF38549F973A7E52B76B46A88677C901B`。
+  - [ ] 共通UIのRTL表示順、Arabicの接続字形、caret移動と範囲選択を組版に対応させる。
+    今回の修正はglyphの不足を補うもので、Previewと同じ組版をInspectorに実装したものではない。
+    現行[egui 0.33.3の文字layout](https://github.com/emilk/egui/blob/0.33.3/crates/epaint/src/text/text_layout.rs)は文字単位で配置しており、[BiDi対応の課題](https://github.com/emilk/egui/issues/1016)と区別して追跡する。
+    文字列の反転や描画だけの差し替えは使わず、共通文字編集の選択範囲、IME、Undo、保存する論理順も一緒に検証する。
   - 今回のworkspace全targetは1,706 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 26 tests、819 filesの1,000行制限も通過した（`target/qa-workspace-test-20260906-tracking-verified.log`）。最終release appのnative HTTP QAは25/25で、実画面を確認し、app/suite logにERROR/panic/描画失敗はなく、QA appは終了済み（`target/qa-runs/20260906T-tracking-final`）。途中の実UI検査が検出したlane非表示と古いRenderPlanによる一時値の描画漏れは修正し、失敗記録を`20260906T-tracking-targeted-r1`と`r3`に保持した。移動量とRTLを含むTracking全体の完了や60fpsの証明ではない。
   - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。この時点で残った neutral Ensemble と空 stack の文字描画差は、次項で修正した。
   - [x] 通常 Text と Ensemble を、同じ SkParagraph の実描画用 glyph、Font、位置、行原点を使う一つの本体描画へ統合した。
