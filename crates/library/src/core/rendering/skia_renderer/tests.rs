@@ -47,6 +47,8 @@ mod neutral_ensemble_text;
 mod particle_gpu;
 #[path = "tests/render_target.rs"]
 mod render_target;
+#[path = "tests/tracking_text.rs"]
+mod tracking_text;
 #[path = "tests/vector_layer_geometry.rs"]
 mod vector_layer_geometry;
 #[path = "tests/vector_layer_native.rs"]

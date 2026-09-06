@@ -35,6 +35,9 @@ PARTICLE_PERSISTENCE = load(
     "ruvie_qa_particle_persistence", "qa-particle-persistence-e2e.py"
 )
 VIDEO_EXPORT = load("ruvie_qa_video_export", "qa-video-export-e2e.py")
+TRACKING_BIDI = load(
+    "ruvie_qa_text_tracking_bidi", "qa-text-tracking-bidi-e2e.py"
+)
 
 
 class QaRunnerTests(unittest.TestCase):
@@ -211,6 +214,7 @@ class QaRunnerTests(unittest.TestCase):
             "audio-playback",
             "text-ensemble",
             "text-tracking",
+            "text-tracking-bidi",
             "video-export",
         ]
         full = RUNNER.suite_specs("full")
@@ -232,12 +236,31 @@ class QaRunnerTests(unittest.TestCase):
         tracking = next(suite for suite in full if suite.name == "text-tracking")
         self.assertTrue(tracking.project_file)
         self.assertTrue(tracking.expects_exit)
+        bidi = next(suite for suite in full if suite.name == "text-tracking-bidi")
+        self.assertTrue(bidi.project_file)
+        self.assertTrue(bidi.expects_exit)
         video_export = next(suite for suite in full if suite.name == "video-export")
         self.assertTrue(video_export.export_file)
         self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)
         self.assertEqual([suite.name for suite in RUNNER.suite_specs("smoke")], ["smoke"])
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("blend")
+
+    def test_bidi_tracking_key_contract_requires_stable_unique_ids(self):
+        easing = {"kind": "linear"}
+        keys = [
+            {"id": "key-3", "time": 2.5, "value": -3.0, "easing": easing},
+            {"id": "key-1", "time": 0.5, "value": 0.0, "easing": easing},
+            {"id": "key-2", "time": 1.5, "value": 12.0, "easing": easing},
+        ]
+        ordered = TRACKING_BIDI._assert_key_contract(keys)
+        self.assertEqual(
+            [key["id"] for key in ordered], ["key-1", "key-2", "key-3"]
+        )
+
+        keys[2]["id"] = "key-1"
+        with self.assertRaises(TRACKING_BIDI.QaFailure):
+            TRACKING_BIDI._assert_key_contract(keys)
 
     def test_suite_files_do_not_use_removed_project_fixture_or_ambiguous_editor_name(self):
         for suite in RUNNER.suite_specs("full"):

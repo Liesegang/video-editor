@@ -2425,6 +2425,7 @@ dependencies = [
  "glow",
  "glutin",
  "half",
+ "icu_properties",
  "image",
  "libc",
  "libloading 0.9.0",

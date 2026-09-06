@@ -153,7 +153,28 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     最終gateはworkspace全target 1,724 passed / 0 failed / 17 ignored、strict Clippy、fmt、QA runner 27 tests、827 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-curve-preview-release-r2.log`）。
     通常のrelease appによるnative HTTP QAは25/25で、実画面を確認し、50本のapp/suite logにERROR/panic/描画失敗はなく、QA appも終了した（`target/qa-runs/20260906T-curve-live-preview-user-release-final-r3`）。
     検証した`target/release/app.exe`のSHA-256は`936FBC013D7370BBA1715533FA9B2F8BC4BF094F9DE2BE56D239AB0DF58574F4`。
-  - [ ] RTLと左右混在の文字列で、正のTrackingが文字間隔を広げることを検証する。現行処理は論理順のindexに応じて+Xへ移動するため、右から左へ並ぶrunでは逆方向に働く可能性がある。既存の組版結果を使う回帰テストで再現し、固定する端と行間の意味を定めてから共通runtimeを修正する。
+  - [x] RTLと左右混在のTrackingを既存の組版結果から計算し、通常TextとNode Clip化後の描画を検証した。
+    論理順のindexを+Xへ移動する旧処理では、Hebrewの正のTrackingで文字が重なることを独立した画素テストで再現した（`target/qa-tracking-bidi-render-red-900917a.log`）。
+    Trackingには表示順の間隔単位を渡し、いちばん左の単位を固定して後続を移動する。
+    Lineは行ごとに再開、Blockは行順に継続する。
+    文字の論理順、source range、個別patchの対象、Step Delayの出現順は変えない。
+    接続文字は同じscriptの単語内で相対位置を維持し、数字は独立した間隔単位、不可視のゼロ幅制御文字は間隔を増やさないものとして扱う。
+    接続部を伸長しない場合に単語内のspacingを抑える方針は[W3C CSS Text](https://www.w3.org/TR/css-text-3/#cursive-tracking)を参照した。
+    Unicodeのscript、文字分類、joining typeは既存lock内のICU propertiesを参照し、別のshaperや手書き文字範囲は追加しない。
+    CPUではsigned Tracking、左右混在の複数行、合字、アラビア語の非接続文字と数字、ゼロ幅文字の8件を、明示した個別patchまたはneutral描画の画素と比較した。
+    発音記号を含む単語、数字によるrunの分割、表示順と論理順の分離も共通runtimeの7件で確認した。
+    workspace全targetは1,792 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、839 filesの行数制限を通過した（`target/qa-workspace-test-20260906-tracking-bidi-final.log`）。
+    通常releaseのnative HTTP QAは26/26、QA runnerのテストは36/36が通過した（`target/qa-runs/20260906T-tracking-bidi-final`）。
+    追加シナリオでは正負の幅変化と左端、Arabic単語の画素不変、Undo、local 0.5/1.5/2.5秒のキー、Node Clip化前後と新プロセスでの再読込みの画素とGizmoの一致を確認した。
+    nativeの検査対象は全体の画素とGizmoであり、内部の文字ごとの移動量は独立したCPU描画テストで検証する。
+    最初のQAはドラッグ距離を数値差と仮定して停止したため、厳密な符号付きの値は既存DragValueのテキスト入力で設定するよう修正した。
+    失敗記録は`20260906T-tracking-bidi-targeted-r1`、修正後の単独通過は`r2`へ保持し、既存LTRシナリオのドラッグ検証は維持した。
+    実画面を確認し、52本のapp/suite logにERROR、panic、描画失敗はなく、QA appも終了済み。
+    検証した`target/release/app.exe`のSHA-256は`181718477C34D58DF00E762271765AA1F04388374027992EB98F96C9C08FB7C2`。
+    Kashidaによる接続部の伸長、縦書き、段落方向と揃え位置の編集、全フォントの網羅、60fpsはこの検証に含めない。
+  - [ ] 共通UIのfont fallbackを調べ、Inspectorの内容欄でHebrew等が「□」表示になる問題を修正する。
+    Tracking QAの再読込み画面で確認した。
+    Previewの組版と描画は正しく、UIの文字表示は別の未完了項目として扱う。
   - 今回のworkspace全targetは1,706 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 26 tests、819 filesの1,000行制限も通過した（`target/qa-workspace-test-20260906-tracking-verified.log`）。最終release appのnative HTTP QAは25/25で、実画面を確認し、app/suite logにERROR/panic/描画失敗はなく、QA appは終了済み（`target/qa-runs/20260906T-tracking-final`）。途中の実UI検査が検出したlane非表示と古いRenderPlanによる一時値の描画漏れは修正し、失敗記録を`20260906T-tracking-targeted-r1`と`r3`に保持した。移動量とRTLを含むTracking全体の完了や60fpsの証明ではない。
   - Step Delay は実 UI で Duration を 0.2→1.5 秒へ変更し、local 0.7667 秒の有効/削除/Undo と local 2.1667 秒の完了状態を実画素で確認した（`target/qa-runs/step-delay-native-r4`）。この時点で残った neutral Ensemble と空 stack の文字描画差は、次項で修正した。
   - [x] 通常 Text と Ensemble を、同じ SkParagraph の実描画用 glyph、Font、位置、行原点を使う一つの本体描画へ統合した。

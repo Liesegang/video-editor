@@ -4,6 +4,13 @@ use super::types::{EffectorContext, TransformData};
 use crate::error::LibraryError;
 use skia_safe::Point;
 
+/// Position in a layout-derived spacing sequence, independent of source order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpacingSequence {
+    pub index: usize,
+    pub total: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EffectorElementContext {
     pub global_index: usize,
@@ -15,6 +22,8 @@ pub struct EffectorElementContext {
     pub total_chars: usize,
     pub line_char_count: usize,
     pub line_count: usize,
+    pub line_spacing: SpacingSequence,
+    pub block_spacing: SpacingSequence,
     pub char_center: Point,
     pub line_center: Point,
     pub block_center: Point,
@@ -68,17 +77,17 @@ pub fn evaluate_configured_transform(
                 ));
             }
         };
-        // Target grouping and Step Delay sequencing are related but distinct.
-        // A Block sequences every character, a Line restarts that sequence for
-        // each line, and a Char is an independent one-element sequence. Other
-        // effectors use the addressed group itself for their context.
-        let (index, total) = if matches!(
-            config,
-            EffectorConfig::StepDelay { .. } | EffectorConfig::Tracking { .. }
-        ) {
-            (sequence_index, sequence_total)
-        } else {
-            (group_index, group_total)
+        // Step Delay retains logical source order. Spacing follows shaped visual
+        // order instead, keeping cursive words atomic and ignoring empty controls.
+        let (index, total) = match config {
+            EffectorConfig::StepDelay { .. } => (sequence_index, sequence_total),
+            EffectorConfig::Tracking { .. } => match target {
+                EffectorTarget::Block => (element.block_spacing.index, element.block_spacing.total),
+                EffectorTarget::Line => (element.line_spacing.index, element.line_spacing.total),
+                // Parts is rejected by target validation above.
+                EffectorTarget::Char | EffectorTarget::Parts => (0, 1),
+            },
+            _ => (group_index, group_total),
         };
         let context = EffectorContext {
             time,
@@ -147,9 +156,9 @@ pub fn evaluate_configured_transform(
     Ok(transform)
 }
 
-/// Adds horizontal space between consecutive elements in the addressed
-/// sequence. Block continues across the whole text, Line restarts at each
-/// line, and Char addresses a one-element sequence and is therefore neutral.
+/// Adds horizontal space between visually ordered spacing units, anchored at
+/// the physical left edge. Block continues across lines, Line restarts at each
+/// line, and Char is neutral. Logical animation order is not reordered.
 pub struct TrackingEffector {
     pub amount: f32,
 }
@@ -438,6 +447,14 @@ mod tests {
     fn element(global_index: usize, line_char_index: usize) -> EffectorElementContext {
         EffectorElementContext {
             global_index,
+            block_spacing: SpacingSequence {
+                index: global_index,
+                total: 6,
+            },
+            line_spacing: SpacingSequence {
+                index: line_char_index,
+                total: 3,
+            },
             stable_id: 0x1000 + global_index as u64,
             block_group_id: 0x10,
             line_group_id: 0x11,
@@ -620,6 +637,35 @@ mod tests {
     }
 
     #[test]
+    fn tracking_visual_order_does_not_reorder_step_delay() {
+        let mut scoped = element(4, 2);
+        scoped.line_spacing = SpacingSequence { index: 0, total: 3 };
+        let result = evaluate_configured_transform(
+            &[
+                EffectorConfig::Tracking {
+                    amount: 12.0,
+                    target: EffectorTarget::Line,
+                },
+                EffectorConfig::StepDelay {
+                    delay_per_element: 0.25,
+                    duration: 1.0,
+                    from_opacity: 0.0,
+                    to_opacity: 100.0,
+                    target: EffectorTarget::Line,
+                },
+            ],
+            0.75,
+            scoped,
+        )
+        .unwrap();
+        assert_eq!(result.translate, (0.0, 0.0));
+        assert_eq!(
+            result.opacity, 0.25,
+            "Step Delay must use logical index 2, not visual index 0"
+        );
+    }
+
+    #[test]
     fn transform_target_uses_group_pivot_and_independent_axes() {
         let evaluate = |target, translate, scale, rotate| {
             evaluate_configured_transform(
@@ -762,6 +808,14 @@ mod tests {
         let scoped_element =
             |global_index, line_index, line_char_index, stable_id| EffectorElementContext {
                 global_index,
+                block_spacing: SpacingSequence {
+                    index: global_index,
+                    total: 4,
+                },
+                line_spacing: SpacingSequence {
+                    index: line_char_index,
+                    total: 2,
+                },
                 stable_id,
                 block_group_id: 0x10,
                 line_group_id: 0x11 + line_index as u64,

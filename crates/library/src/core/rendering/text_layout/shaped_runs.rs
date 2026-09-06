@@ -34,13 +34,14 @@ impl ShapedTextLayout {
         let mut paragraph = build_text_paragraph(text, primary_font_name, size, None);
         let runs = extract_shaped_runs(&mut paragraph);
         let source_starts = distinct_glyph_source_starts(&runs);
-        let metadata = runtime_text_shape_from_paragraph(
+        let mut metadata = runtime_text_shape_from_paragraph(
             &paragraph,
             text,
             primary_font_name,
             size,
             &source_starts,
         );
+        super::spacing::assign_spacing_sequences(&mut metadata, &runs);
         Self { metadata, runs }
     }
 }

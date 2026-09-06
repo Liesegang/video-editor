@@ -13,8 +13,8 @@ use crate::core::ensemble::target::EffectorTarget;
 use crate::core::ensemble::types::{EffectorConfig, EnsembleData};
 use crate::model::frame::draw_type::{CapType, JoinType};
 
-const WIDTH: u32 = 640;
-const HEIGHT: u32 = 220;
+pub(super) const WIDTH: u32 = 640;
+pub(super) const HEIGHT: u32 = 220;
 
 fn style(style: DrawStyle) -> StyleConfig {
     StyleConfig {
@@ -23,7 +23,7 @@ fn style(style: DrawStyle) -> StyleConfig {
     }
 }
 
-fn fill() -> StyleConfig {
+pub(super) fn fill() -> StyleConfig {
     style(DrawStyle::Fill {
         color: Color {
             r: 232,
@@ -35,7 +35,7 @@ fn fill() -> StyleConfig {
     })
 }
 
-fn neutral_ensemble() -> EnsembleData {
+pub(super) fn neutral_ensemble() -> EnsembleData {
     EnsembleData {
         enabled: true,
         effector_configs: Vec::new(),
@@ -44,7 +44,7 @@ fn neutral_ensemble() -> EnsembleData {
     }
 }
 
-fn render_raster(
+pub(super) fn render_raster(
     text: &str,
     styles: &[StyleConfig],
     ensemble: Option<&EnsembleData>,
@@ -110,7 +110,7 @@ fn render_paragraph_reference(
     output.pixels().pixels().to_vec()
 }
 
-fn assert_pixels_exact(context: &str, plain: &[[f32; 4]], ensemble: &[[f32; 4]]) {
+pub(super) fn assert_pixels_exact(context: &str, plain: &[[f32; 4]], ensemble: &[[f32; 4]]) {
     assert_eq!(plain.len(), ensemble.len());
     if let Some((index, (plain, ensemble))) = plain
         .iter()
@@ -126,7 +126,7 @@ fn assert_pixels_exact(context: &str, plain: &[[f32; 4]], ensemble: &[[f32; 4]])
     }
 }
 
-fn alpha_bounds(pixels: &[[f32; 4]]) -> (u32, u32, u32, u32) {
+pub(super) fn alpha_bounds(pixels: &[[f32; 4]]) -> (u32, u32, u32, u32) {
     let mut left = WIDTH;
     let mut top = HEIGHT;
     let mut right = 0;

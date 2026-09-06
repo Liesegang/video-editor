@@ -103,6 +103,12 @@ FULL_SUITES = (
         expects_exit=True,
     ),
     SuiteSpec(
+        "text-tracking-bidi",
+        "qa-text-tracking-bidi-e2e.py",
+        project_file=True,
+        expects_exit=True,
+    ),
+    SuiteSpec(
         "video-export",
         "qa-video-export-e2e.py",
         AUTHORING_AUDIO_FIXTURE,

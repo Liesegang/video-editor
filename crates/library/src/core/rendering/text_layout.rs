@@ -11,6 +11,7 @@ use crate::model::frame::runtime_shape::{
 };
 
 mod shaped_runs;
+mod spacing;
 
 pub(crate) use shaped_runs::ShapedTextLayout;
 
@@ -213,6 +214,8 @@ pub(super) fn runtime_text_shape_from_paragraph(
             line_index: source.line_index,
             line_element_index: source.line_element_index,
             block_element_index,
+            line_spacing: Default::default(),
+            block_spacing: Default::default(),
             block_group_id,
             line_group_id,
             element_group_id,

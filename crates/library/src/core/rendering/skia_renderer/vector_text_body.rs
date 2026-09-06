@@ -80,21 +80,11 @@ impl TextBody {
                 .take(run.glyphs.len())
                 .map(|start| {
                     let start = *start as usize;
-                    let index = layout
-                        .metadata
-                        .elements
-                        .partition_point(|element| element.utf8_range.end <= start);
-                    layout
-                        .metadata
-                        .elements
-                        .get(index)
-                        .filter(|element| element.utf8_range.contains(&start))
-                        .map(|_| index)
-                        .ok_or_else(|| {
-                            LibraryError::Render(format!(
-                                "Shaped glyph at UTF-8 byte {start} has no Text element"
-                            ))
-                        })
+                    layout.metadata.element_index_at_utf8(start).ok_or_else(|| {
+                        LibraryError::Render(format!(
+                            "Shaped glyph at UTF-8 byte {start} has no Text element"
+                        ))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             for ((bounds, position), element) in
