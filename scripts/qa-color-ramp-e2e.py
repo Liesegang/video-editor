@@ -6,18 +6,18 @@ import pathlib
 
 from qa_node_module_support import (
     active_definition,
-    connection,
+    connect_nodes,
     create_node_from_menu,
+    disconnect_node_connection,
     node_content_type,
+    place_created_node,
     place_node_for_inline_edit,
-    port,
 )
 from qa_support import (
     QaFailure,
     activate_dock_tab,
     bring_timeline_component,
     capture_viewport,
-    component_center,
     item_by_name,
     media_seconds,
     run_suite_main,
@@ -47,30 +47,6 @@ def _constant(node, key):
     return (prop.get("properties") or {}).get("value")
 
 
-def _connect(client, source_id, source_port, target_id, target_port, description):
-    def visible_ports():
-        snapshot = client.component_snapshot()
-        source = port(snapshot, "output", source_id, port_key=source_port)
-        target = port(snapshot, "input", target_id, port_key=target_port)
-        return (source, target) if source and target else None
-
-    source, target = client.wait_until(description + " ports", visible_ports)
-    client.drag(component_center(source), component_center(target), steps=10)
-
-    def connected():
-        definition = active_definition(client.state(), "node_clip")[1]
-        candidate = connection(definition, source_id, target_id)
-        return (
-            candidate
-            if candidate is not None
-            and candidate["from"]["port"] == source_port
-            and candidate["to"]["port"] == target_port
-            else None
-        )
-
-    return client.wait_until(description + " connection", connected)
-
-
 def _enter_exact_numeric(client, component_id, value):
     client.click_component(component_id)
     client.key("a", True, command=True)
@@ -78,22 +54,6 @@ def _enter_exact_numeric(client, component_id, value):
     client.inject("text", {"text": format(float(value), "g")})
     client.key("enter", True)
     client.key("enter", False)
-
-
-def _place_created_node(client, node_id, horizontal_fraction):
-    _, canvas = client.wait_component_settled("node_editor.canvas")
-    _, header = client.wait_component_settled("node_editor.node_header:" + node_id)
-    bounds = canvas["rect_points"]
-    target = {
-        "x": float(bounds["min_x"])
-        + float(bounds["width"]) * horizontal_fraction,
-        "y": float(bounds["min_y"]) + 26.0,
-    }
-    client.drag(component_center(header), target, steps=10)
-    _, moved = client.wait_component_settled("node_editor.node_header:" + node_id)
-    if abs(float(moved["rect_points"]["center_x"]) - target["x"]) > 3.0:
-        raise QaFailure("created Node did not follow its production header drag")
-    return moved
 
 
 def _rendered(client, revision, frame):
@@ -144,21 +104,21 @@ def run_suite(client):
         "Gradient",
         "node_editor.menu.create.data:gradient",
     )
-    _place_created_node(client, gradient_id, 0.64)
+    place_created_node(client, gradient_id, 0.64)
     _, ramp_id = create_node_from_menu(
         client,
         "node_clip",
         "Color Ramp",
         "node_editor.menu.create.color:ramp",
     )
-    _place_created_node(client, ramp_id, 0.78)
+    place_created_node(client, ramp_id, 0.78)
     _, solid_id = create_node_from_menu(
         client,
         "node_clip",
         "Solid",
         "node_editor.menu.create.solid",
     )
-    _place_created_node(client, solid_id, 0.92)
+    place_created_node(client, solid_id, 0.92)
 
     current = active_definition(client.state(), "node_clip")[1]
     expected_catalogs = {
@@ -171,28 +131,30 @@ def run_suite(client):
 
     route = output_routes[0]
     output_input_port = route["to"]["port"]
-    client.click_component("node_editor.connection:" + route["id"], button="secondary")
-    client.wait_component_settled("node_editor.wire_menu.disconnect")
-    client.click_component("node_editor.wire_menu.disconnect")
-    client.wait_until(
-        "starter Image route disconnected",
-        lambda: state
-        if connection(
-            active_definition((state := client.state()), "node_clip")[1],
-            route["from"]["node_id"],
-            output_id,
-        )
-        is None
-        else None,
+    disconnect_node_connection(
+        client, "node_clip", route["id"], "starter Image route"
     )
-    gradient_link = _connect(
-        client, gradient_id, "value", ramp_id, "gradient", "Gradient to Color Ramp"
-    )
-    ramp_link = _connect(
-        client, ramp_id, "color", solid_id, "color", "Color Ramp to Solid"
-    )
-    image_link = _connect(
+    gradient_link = connect_nodes(
         client,
+        "node_clip",
+        gradient_id,
+        "value",
+        ramp_id,
+        "gradient",
+        "Gradient to Color Ramp",
+    )
+    ramp_link = connect_nodes(
+        client,
+        "node_clip",
+        ramp_id,
+        "color",
+        solid_id,
+        "color",
+        "Color Ramp to Solid",
+    )
+    image_link = connect_nodes(
+        client,
+        "node_clip",
         solid_id,
         "image",
         output_id,

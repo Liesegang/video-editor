@@ -2,8 +2,10 @@
 """Verify the production Particle System authoring path end to end."""
 
 from qa_particle_force_support import (
+    PARTICLE_PUBLISHED_PARAMETERS,
     assert_same_frame_particle_delta as _assert_same_frame_particle_delta,
     constant_property as _constant_property,
+    create_particle_node_clip,
     edit_turbulence_and_assert_history as _edit_turbulence_and_assert_history,
     parameter as _parameter,
     reveal_inspector_control as _reveal_inspector_control,
@@ -21,34 +23,11 @@ from qa_support import (
 )
 
 
-SOURCE_ID = "assets.particle_node_clip_source"
 INSPECTOR_TAB_ID = "dock.tab:inspector"
 TIMELINE_TAB_ID = "dock.tab:timeline"
 NODE_EDITOR_TAB_ID = "dock.tab:node_editor"
 NODE_EDITOR_CANVAS_ID = "node_editor.canvas"
-PUBLISHED_PARAMETERS = [
-    "Capacity",
-    "Emission Rate",
-    "Lifetime",
-    "Seed",
-    "Emitter Shape",
-    "Emitter Position",
-    "Emitter Radius",
-    "Emitter Size",
-    "Emitter Surface Only",
-    "Birth Velocity Min",
-    "Birth Velocity Max",
-    "Birth Size Min",
-    "Birth Size Max",
-    "Gravity",
-    "Turbulence Strength",
-    "Turbulence Frequency",
-    "Turbulence Octaves",
-    "Turbulence Evolution",
-    "Turbulence Seed",
-    "Drag",
-    "Color",
-]
+PUBLISHED_PARAMETERS = PARTICLE_PUBLISHED_PARAMETERS
 CONSTANT_ONLY_PARAMETERS = set(PUBLISHED_PARAMETERS) - {"Color"}
 PARTICLE_CATALOG_IDS = {
     "native.particle.emitter",
@@ -59,16 +38,6 @@ PARTICLE_CATALOG_IDS = {
     "native.particle.drag-force",
     "native.particle.sprite-renderer",
 }
-
-
-def _is_interactable(component):
-    rect = component.get("rect_points") or {}
-    return (
-        component.get("visible") is True
-        and component.get("enabled") is True
-        and float(rect.get("width", 0.0)) > 0.0
-        and float(rect.get("height", 0.0)) > 0.0
-    )
 
 
 def _component(snapshot, component_id):
@@ -97,15 +66,6 @@ def _wait_registered_component(client, component_id, visible=False):
         return component
 
     return client.wait_until(component_id + " registration", registered)
-
-
-def _reveal_source(client):
-    _, source = client.wait_until(
-        "Particle Assets source registration", lambda: client.component(SOURCE_ID)
-    )
-    if not _is_interactable(source):
-        client.scroll_component("assets.node_clip_source", delta_x=0.0, delta_y=-180.0)
-    return client.wait_component_settled(SOURCE_ID)
 
 
 def _native_catalog_id(node):
@@ -577,109 +537,20 @@ def _assert_inspector_capabilities(client, instance_id, parameters):
 
 def run_suite(client):
     client.wait_health()
-    initial = client.state()
-    project = initial["project"]
-    if project.get("name") != "Authoring QA":
-        raise QaFailure("Particle System QA requires authoring_e2e")
-    if initial["editor"]["assets"].get("view_mode") != "list":
-        raise QaFailure("Particle source must be reachable from the production Assets list")
-
-    source_snapshot, source = _reveal_source(client)
-    source_metadata = source.get("metadata") or {}
-    expected_metadata = {
-        "kind": "particle_system",
-        "creation_kind": "particle_node_clip",
-        "private_definition": True,
-        "draggable_to_timeline": True,
-        "view_mode": "list",
-    }
-    for key, expected in expected_metadata.items():
-        if source_metadata.get(key) != expected:
-            raise QaFailure(
-                "Particle Assets source omitted {}={!r}".format(key, expected)
-            )
-
-    _, canvas = client.wait_component("timeline.canvas")
-    track = next(
-        (
-            component
-            for component in source_snapshot["components"]
-            if component.get("type") == "timeline_track" and _is_interactable(component)
-        ),
-        None,
-    )
-    if track is None:
-        raise QaFailure("Timeline exposed no production Track drop target")
-
-    start = component_center(source)
-    canvas_rect = canvas["rect_points"]
     # At 6.5s the fixture's remaining background clips are static through the
     # 200ms sample window. This lets the hash delta isolate Particle emission
     # while landing on an exact frame at the fixture's 30fps rate.
     requested_start_seconds = 6.5
-    timeline_view = initial["editor"]["timeline"]
-    target = {
-        "x": canvas_rect["min_x"]
-        + requested_start_seconds * float(timeline_view["pixels_per_second"])
-        - float(timeline_view["horizontal_scroll"]),
-        "y": component_center(track)["y"],
-    }
-    if not canvas_rect["min_x"] < target["x"] < canvas_rect["max_x"]:
-        raise QaFailure("6.5s Particle drop target is outside the Timeline viewport")
-    before_items = dict(project["items"])
-    before_definitions = dict(project["module_definitions"])
-    before_instances = dict(project["module_instances"])
-    before_revision = initial["history"]["revision"]
-    client.drag(start, target, steps=18)
-
-    def placed():
-        state = client.state()
-        current = state["project"]
-        if (
-            len(current["items"]) == len(before_items) + 1
-            and len(current["module_definitions"]) == len(before_definitions) + 1
-            and len(current["module_instances"]) == len(before_instances) + 1
-            and state["history"]["revision"] == before_revision + 1
-            and state["editor"]["timeline"]["library_drag_active"] is False
-        ):
-            return state
-        return None
-
-    final = client.wait_until("Particle Node Clip placement", placed)
-    final_project = final["project"]
-    new_item_ids = set(final_project["items"]) - set(before_items)
-    new_definition_ids = set(final_project["module_definitions"]) - set(before_definitions)
-    new_instance_ids = set(final_project["module_instances"]) - set(before_instances)
-    if not (
-        len(new_item_ids) == 1
-        and len(new_definition_ids) == 1
-        and len(new_instance_ids) == 1
-    ):
-        raise QaFailure("Particle drag did not create one Item, Definition, and Instance")
-
-    item_id = new_item_ids.pop()
-    definition_id = new_definition_ids.pop()
-    instance_id = new_instance_ids.pop()
-    item = final_project["items"][item_id]
-    invocation = item.get("source") or {}
-    if invocation.get("kind") != "module":
-        raise QaFailure("Particle Timeline item is not a production Module invocation")
-    invocation_value = invocation.get("value") or {}
-    if invocation_value.get("instance_id") != instance_id:
-        raise QaFailure("Particle Item and Module Instance identities do not agree")
-
-    instance = final_project["module_instances"][instance_id]
-    if instance.get("definition_id") != definition_id:
-        raise QaFailure("Particle Instance does not own the new Definition")
-    definition = final_project["module_definitions"][definition_id]
-    if definition.get("sharing") != {"kind": "private"}:
-        raise QaFailure("Particle Definition is not private to its Timeline Item")
+    created = create_particle_node_clip(client, requested_start_seconds)
+    final = created["state"]
+    source = created["source"]
+    item_id = created["item_id"]
+    item = created["item"]
+    definition_id = created["definition_id"]
+    definition = created["definition"]
+    instance_id = created["instance_id"]
     graph = definition.get("graph") or {}
-    parameters = (definition.get("interface") or {}).get("parameters") or []
-    if len(graph.get("nodes") or {}) != 8 or len(graph.get("connections") or []) != 7:
-        raise QaFailure("Particle Definition omitted its authoritative eight-node topology")
-    if [parameter.get("name") for parameter in parameters] != PUBLISHED_PARAMETERS:
-        raise QaFailure("Particle Definition omitted its curated published parameters")
+    parameters = created["parameters"]
     turbulence = _parameter(parameters, "Turbulence Strength")
     turbulence_node = graph["nodes"][turbulence["target"]["node_id"]]
     turbulence_strength = _constant_property(turbulence_node, "strength")
@@ -698,16 +569,6 @@ def run_suite(client):
     )
     if duration != 5.0:
         raise QaFailure("Particle Timeline item did not use the five-second clip default")
-    for existing_id, before in before_items.items():
-        if final_project["items"].get(existing_id) != before:
-            raise QaFailure("Particle creation mutated ordinary clip {}".format(existing_id))
-    for existing_id, before in before_definitions.items():
-        if final_project["module_definitions"].get(existing_id) != before:
-            raise QaFailure("Particle creation mutated Module {}".format(existing_id))
-    for existing_id, before in before_instances.items():
-        if final_project["module_instances"].get(existing_id) != before:
-            raise QaFailure("Particle creation mutated Instance {}".format(existing_id))
-
     expected_selection = {"kind": "timeline_item", "id": item_id}
     if final["editor"]["selection"].get("primary") != expected_selection:
         raise QaFailure("Particle placement did not select the new Timeline Item")
@@ -721,8 +582,6 @@ def run_suite(client):
         raise QaFailure("rendered Particle clip metadata disagrees with Project state")
 
     start_seconds = media_seconds((item.get("interval") or {})["start"])
-    if abs(start_seconds - requested_start_seconds) > 0.02:
-        raise QaFailure("Particle drop did not preserve its requested Timeline start")
 
     activate_dock_tab(
         client, INSPECTOR_TAB_ID, "Inspector", "Particle Node Clip Inspector"
@@ -800,7 +659,7 @@ def run_suite(client):
     return {
         "suite": "particle-node-clip-authoring",
         "source": source,
-        "drag": {"from": start, "to": target},
+        "drag": created["drag"],
         "created_item": item,
         "created_instance_id": instance_id,
         "created_definition_id": definition_id,

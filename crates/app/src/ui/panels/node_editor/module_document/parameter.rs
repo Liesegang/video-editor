@@ -97,10 +97,12 @@ pub(super) fn show_published_input(
     parameter: &PublishedParameter,
     clock: ModulePropertyContext,
     transform: egui::emath::TSTransform,
-) -> egui::Response {
+) -> (egui::Response, Vec<ModuleEditorAction>) {
     let owner = match &host.owner {
         Ok(id) => id.clone(),
-        Err(reason) => return ui.weak(&port.label).on_hover_text(reason),
+        Err(reason) => {
+            return (ui.weak(&port.label).on_hover_text(reason), Vec::new());
+        }
     };
     let context = ModuleParameterContext {
         project: host.project,
@@ -115,6 +117,7 @@ pub(super) fn show_published_input(
     let mut pending = None;
     let mut edited_value = None;
     let mut has_automation = false;
+    let mut interface_actions = Vec::new();
     let outcome = edit_module_parameter(
         host.inspector,
         &context,
@@ -143,18 +146,43 @@ pub(super) fn show_published_input(
                 )
             }).inner;
             let mut reset_to_default = false;
-            edit.response.context_menu(|ui| {
-                if ui
-                    .add_enabled(
+            interface_actions.extend(super::interface::input_port_interface_actions(
+                &edit.response,
+                transform * edit.response.rect,
+                definition,
+                node.id,
+                port,
+                |ui| {
+                    ui.separator();
+                    let reset = ui.add_enabled(
                         row.has_resettable_override,
                         egui::Button::new(row.reset_label),
-                    )
-                    .clicked()
-                {
-                    reset_to_default = true;
-                    ui.close();
-                }
-            });
+                    );
+                    crate::qa::register_component_with_metadata(
+                        super::interface::interface_action_qa_id(
+                            node.id,
+                            PortDirection::Input,
+                            &port.key,
+                            "reset_parameter",
+                        ),
+                        "node_editor_interface_action",
+                        reset.rect,
+                        reset.enabled(),
+                        Some(serde_json::json!({
+                            "action": "reset_parameter",
+                            "node_id": node.id,
+                            "port": port.key,
+                            "parameter_id": parameter.id,
+                            "instance_id": host.instance.id,
+                            "label": row.reset_label,
+                        })),
+                    );
+                    if reset.clicked() {
+                        reset_to_default = true;
+                        ui.close();
+                    }
+                },
+            ));
             edited_value = Some(row.value.clone());
             ModuleParameterRowInteraction {
                 response: edit.response,
@@ -224,5 +252,5 @@ pub(super) fn show_published_input(
         outcome.response.enabled(),
         Some(metadata),
     );
-    outcome.response
+    (outcome.response, interface_actions)
 }

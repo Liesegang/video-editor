@@ -2,7 +2,175 @@
 
 from qa_node_module_support import place_node_for_inline_edit
 from qa_automation_support import history_shortcut
-from qa_support import QaFailure, activate_dock_tab, component_in_inspector
+from qa_support import (
+    QaFailure,
+    activate_dock_tab,
+    component_center,
+    component_in_inspector,
+    media_seconds,
+)
+
+
+PARTICLE_SOURCE_ID = "assets.particle_node_clip_source"
+PARTICLE_PUBLISHED_PARAMETERS = [
+    "Capacity",
+    "Emission Rate",
+    "Lifetime",
+    "Seed",
+    "Emitter Shape",
+    "Emitter Position",
+    "Emitter Radius",
+    "Emitter Size",
+    "Emitter Surface Only",
+    "Birth Velocity Min",
+    "Birth Velocity Max",
+    "Birth Size Min",
+    "Birth Size Max",
+    "Gravity",
+    "Turbulence Strength",
+    "Turbulence Frequency",
+    "Turbulence Octaves",
+    "Turbulence Evolution",
+    "Turbulence Seed",
+    "Drag",
+    "Color",
+]
+
+
+def _is_interactable(component):
+    rect = component.get("rect_points") or {}
+    return (
+        component.get("visible") is True
+        and component.get("enabled") is True
+        and float(rect.get("width", 0.0)) > 0.0
+        and float(rect.get("height", 0.0)) > 0.0
+    )
+
+
+def _reveal_particle_source(client):
+    _, source = client.wait_until(
+        "Particle Assets source registration",
+        lambda: client.component(PARTICLE_SOURCE_ID),
+    )
+    if not _is_interactable(source):
+        client.scroll_component("assets.node_clip_source", delta_x=0.0, delta_y=-180.0)
+    return client.wait_component_settled(PARTICLE_SOURCE_ID)
+
+
+def create_particle_node_clip(client, requested_start_seconds=6.5):
+    """Place the production Particle source and return its exact authored owners."""
+
+    initial = client.state()
+    project = initial["project"]
+    if project.get("name") != "Authoring QA":
+        raise QaFailure("Particle System QA requires authoring_e2e")
+    source_snapshot, source = _reveal_particle_source(client)
+    expected_metadata = {
+        "kind": "particle_system",
+        "creation_kind": "particle_node_clip",
+        "private_definition": True,
+        "draggable_to_timeline": True,
+        "view_mode": "list",
+    }
+    metadata = source.get("metadata") or {}
+    for key, expected in expected_metadata.items():
+        if metadata.get(key) != expected:
+            raise QaFailure("Particle Assets source omitted {}={!r}".format(key, expected))
+
+    _, canvas = client.wait_component("timeline.canvas")
+    track = next(
+        (
+            component
+            for component in source_snapshot["components"]
+            if component.get("type") == "timeline_track" and _is_interactable(component)
+        ),
+        None,
+    )
+    if track is None:
+        raise QaFailure("Timeline exposed no production Track drop target")
+    canvas_rect = canvas["rect_points"]
+    timeline = initial["editor"]["timeline"]
+    target = {
+        "x": canvas_rect["min_x"]
+        + requested_start_seconds * float(timeline["pixels_per_second"])
+        - float(timeline["horizontal_scroll"]),
+        "y": component_center(track)["y"],
+    }
+    if not canvas_rect["min_x"] < target["x"] < canvas_rect["max_x"]:
+        raise QaFailure("Particle drop target is outside the Timeline viewport")
+
+    before_items = dict(project["items"])
+    before_definitions = dict(project["module_definitions"])
+    before_instances = dict(project["module_instances"])
+    before_revision = initial["history"]["revision"]
+    start = component_center(source)
+    client.drag(start, target, steps=18)
+
+    def placed():
+        state = client.state()
+        current = state["project"]
+        return (
+            state
+            if len(current["items"]) == len(before_items) + 1
+            and len(current["module_definitions"]) == len(before_definitions) + 1
+            and len(current["module_instances"]) == len(before_instances) + 1
+            and state["history"]["revision"] == before_revision + 1
+            and state["editor"]["timeline"]["library_drag_active"] is False
+            else None
+        )
+
+    placed_state = client.wait_until("Particle Node Clip placement", placed)
+    authored = placed_state["project"]
+    item_ids = set(authored["items"]) - set(before_items)
+    definition_ids = set(authored["module_definitions"]) - set(before_definitions)
+    instance_ids = set(authored["module_instances"]) - set(before_instances)
+    if len(item_ids) != 1 or len(definition_ids) != 1 or len(instance_ids) != 1:
+        raise QaFailure("Particle drag did not create one Item, Definition, and Instance")
+    item_id = next(iter(item_ids))
+    definition_id = next(iter(definition_ids))
+    instance_id = next(iter(instance_ids))
+    item = authored["items"][item_id]
+    invocation = item.get("source") or {}
+    if invocation.get("kind") != "module" or (invocation.get("value") or {}).get(
+        "instance_id"
+    ) != instance_id:
+        raise QaFailure("Particle Item and Module Instance identities do not agree")
+    instance = authored["module_instances"][instance_id]
+    if instance.get("definition_id") != definition_id:
+        raise QaFailure("Particle Instance points at a different Definition")
+    definition = authored["module_definitions"][definition_id]
+    if definition.get("sharing") != {"kind": "private"}:
+        raise QaFailure("Particle Definition is not private to its Timeline Item")
+    parameters = (definition.get("interface") or {}).get("parameters") or []
+    if [entry.get("name") for entry in parameters] != PARTICLE_PUBLISHED_PARAMETERS:
+        raise QaFailure("Particle Definition omitted its curated published parameters")
+    if len(definition["graph"]["nodes"]) != 8 or len(
+        definition["graph"]["connections"]
+    ) != 7:
+        raise QaFailure("Particle Definition omitted its authoritative topology")
+    for collection, before in (
+        ("items", before_items),
+        ("module_definitions", before_definitions),
+        ("module_instances", before_instances),
+    ):
+        for existing_id, existing in before.items():
+            if authored[collection].get(existing_id) != existing:
+                raise QaFailure("Particle creation mutated existing " + collection)
+    if media_seconds(item["interval"]["start"]) != requested_start_seconds:
+        raise QaFailure("Particle placement changed its exact requested start")
+    return {
+        "initial": initial,
+        "state": placed_state,
+        "source": source,
+        "drag": {"from": start, "to": target},
+        "item_id": item_id,
+        "item": item,
+        "definition_id": definition_id,
+        "definition": definition,
+        "instance_id": instance_id,
+        "instance": instance,
+        "parameters": parameters,
+    }
 
 
 def wait_particle_preview(client, revision, frame):

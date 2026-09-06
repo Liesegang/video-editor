@@ -59,6 +59,65 @@ def connection(definition, from_node, to_node):
     )
 
 
+def connect_nodes(
+    client,
+    expected_host,
+    source_id,
+    source_port,
+    target_id,
+    target_port,
+    description,
+):
+    """Connect two exact typed ports through the production Node surface."""
+
+    def visible_ports():
+        snapshot = client.component_snapshot()
+        source = port(snapshot, "output", source_id, port_key=source_port)
+        target = port(snapshot, "input", target_id, port_key=target_port)
+        return (source, target) if source and target else None
+
+    source, target = client.wait_until(description + " ports", visible_ports)
+    client.drag(component_center(source), component_center(target), steps=10)
+
+    def connected():
+        definition = active_definition(client.state(), expected_host)[1]
+        return next(
+            (
+                candidate
+                for candidate in definition["graph"]["connections"]
+                if candidate["from"]
+                == {"node_id": source_id, "port": source_port}
+                and candidate["to"]
+                == {"node_id": target_id, "port": target_port}
+            ),
+            None,
+        )
+
+    return client.wait_until(description + " connection", connected)
+
+
+def disconnect_node_connection(client, expected_host, connection_id, description):
+    """Disconnect one exact production wire and wait for its authored removal."""
+
+    client.click_component("node_editor.connection:" + connection_id, button="secondary")
+    client.wait_component_settled("node_editor.wire_menu.disconnect")
+    client.click_component("node_editor.wire_menu.disconnect")
+
+    def disconnected():
+        state = client.state()
+        definition = active_definition(state, expected_host)[1]
+        return (
+            state
+            if all(
+                candidate.get("id") != connection_id
+                for candidate in definition["graph"]["connections"]
+            )
+            else None
+        )
+
+    return client.wait_until(description + " disconnected", disconnected)
+
+
 def node_content_type(node):
     return str((node.get("content") or {}).get("type", "")).replace("_", "").lower()
 
@@ -104,6 +163,47 @@ def create_node_from_menu(client, expected_host, query, choice_id):
         return (definition, next(iter(added))) if len(added) == 1 else None
 
     return client.wait_until(query + " Node creation", created)
+
+
+def place_created_node(client, node_id, horizontal_fraction, vertical_offset=26.0):
+    """Move a just-created Node to a stable visible canvas fraction."""
+
+    _, canvas = client.wait_component_settled("node_editor.canvas")
+    snapshot, header = client.wait_component_settled(
+        "node_editor.node_header:" + node_id
+    )
+    bounds = canvas["rect_points"]
+    target = {
+        "x": float(bounds["min_x"])
+        + float(bounds["width"]) * horizontal_fraction,
+        "y": float(bounds["min_y"]) + vertical_offset,
+    }
+    origin = component_center(header)
+    blocked = []
+    for candidate in snapshot["components"]:
+        candidate_id = candidate.get("id", "")
+        rect = candidate.get("rect_points") or {}
+        if (
+            candidate_id.startswith("node_editor.node:")
+            and candidate_id != "node_editor.node:" + node_id
+            and candidate.get("visible")
+            and float(rect.get("min_x", origin["x"] + 1.0)) <= origin["x"]
+            <= float(rect.get("max_x", origin["x"] - 1.0))
+            and float(rect.get("min_y", origin["y"] + 1.0)) <= origin["y"]
+            <= float(rect.get("max_y", origin["y"] - 1.0))
+        ):
+            blocked.append({"id": candidate_id, "rect_points": rect})
+    if blocked:
+        raise QaFailure(
+            "Node header drag origin is occluded: node={!r}, origin={!r}, blockers={!r}".format(
+                node_id, origin, blocked
+            )
+        )
+    client.drag(origin, target, steps=10)
+    _, moved = client.wait_component_settled("node_editor.node_header:" + node_id)
+    if abs(float(moved["rect_points"]["center_x"]) - target["x"]) > 3.0:
+        raise QaFailure("created Node did not follow its production header drag")
+    return moved
 
 
 def insert_image_opacity_in_primary_route(client, expected_host):

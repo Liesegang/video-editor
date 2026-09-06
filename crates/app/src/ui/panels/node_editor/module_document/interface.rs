@@ -62,6 +62,7 @@ pub(super) fn input_port_interface_actions(
     definition: &ModuleDefinition,
     node_id: Uuid,
     port: &library::model::project::PortDefinition,
+    additional_menu: impl FnOnce(&mut egui::Ui),
 ) -> Vec<ModuleEditorAction> {
     let visual = PortVisual {
         id: ModuleEditorPortId {
@@ -91,6 +92,7 @@ pub(super) fn input_port_interface_actions(
     let mut actions = Vec::new();
     response.context_menu(|ui| {
         show_interface_menu(ui, definition, &visual, &mut actions);
+        additional_menu(ui);
     });
     actions
 }
@@ -117,7 +119,27 @@ fn show_interface_menu(
             return;
         }
         ui.label(format!("Published parameter: {}", parameter.name));
-        if ui.button("Unpublish parameter").clicked() {
+        let unpublish = ui.button("Unpublish parameter");
+        crate::qa::register_component_with_metadata(
+            interface_action_qa_id(
+                port.id.address.node_id,
+                port.id.direction,
+                &port.id.address.port,
+                "unpublish_parameter",
+            ),
+            "node_editor_interface_action",
+            unpublish.rect,
+            unpublish.enabled(),
+            Some(serde_json::json!({
+                "action": "unpublish_parameter",
+                "node_id": port.id.address.node_id,
+                "port": port.id.address.port,
+                "parameter_id": parameter.id,
+                "label": port.label,
+                "data_type": port.data_type,
+            })),
+        );
+        if unpublish.clicked() {
             actions.push(ModuleEditorAction::EditInterface(
                 ModuleInterfaceCommand::UnpublishParameter {
                     parameter_id: parameter.id,
@@ -212,7 +234,12 @@ fn show_interface_menu(
                 egui::Button::new("Publish as parameter"),
             );
             crate::qa::register_component_with_metadata(
-                interface_action_qa_id(port, "publish_parameter"),
+                interface_action_qa_id(
+                    port.id.address.node_id,
+                    port.id.direction,
+                    &port.id.address.port,
+                    "publish_parameter",
+                ),
                 "node_editor_interface_action",
                 publish.rect,
                 publish.enabled(),
@@ -335,12 +362,15 @@ fn interface_port_qa_id(port: &PortVisual) -> String {
     )
 }
 
-fn interface_action_qa_id(port: &PortVisual, action: &str) -> String {
+pub(super) fn interface_action_qa_id(
+    node_id: Uuid,
+    direction: PortDirection,
+    port: &str,
+    action: &str,
+) -> String {
     format!(
-        "node_editor.interface_action.node:{}.{}:{}:{action}",
-        port.id.address.node_id,
-        direction_qa_key(port.id.direction),
-        port.id.address.port
+        "node_editor.interface_action.node:{node_id}.{}:{port}:{action}",
+        direction_qa_key(direction),
     )
 }
 

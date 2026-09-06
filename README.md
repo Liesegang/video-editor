@@ -52,7 +52,10 @@ from the context menu. Connect the final Force's Particles output to both
 Points inputs; connect Store's Points output to Sprite Renderer's Particles
 input. Feed Normalized Age, Age, or Random from Point Info into Store's Value.
 Store's Attribute output can then drive ordinary arithmetic Nodes and a
-**Color Ramp**, whose Color output connects to Sprite Renderer's Color input.
+**Color Ramp**. The factory Sprite Color is initially published to the Inspector:
+right-click its Color value and choose **Unpublish parameter** before connecting
+the Color Ramp's Color output to it. This replaces the single Inspector color
+control with per-point color logic explicitly.
 Gradient values and frame-uniform arithmetic inputs retain their usual editors
 and published Timeline keyframes.
 

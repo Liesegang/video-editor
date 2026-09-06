@@ -481,10 +481,9 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                                 .host_contract
                                 .protects_parameter(parameter.id)
                     });
-                let interface_response = if let Some(parameter) =
-                    published.filter(|_| self.parameter_host.owner.is_ok())
-                {
-                    let response = super::parameter::show_published_input(
+                let inline_published = published.filter(|_| self.parameter_host.owner.is_ok());
+                let interface_response = if let Some(parameter) = inline_published {
+                    let (response, interface_actions) = super::parameter::show_published_input(
                         ui,
                         self.parameter_host,
                         self.plugins,
@@ -495,6 +494,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                         self.property_context,
                         self.canvas_transform,
                     );
+                    self.actions.extend(interface_actions);
                     self.capture_response(&response);
                     response
                 } else if ownership.is_externally_driven() {
@@ -560,14 +560,17 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                         );
                     }
                 }
-                self.actions
-                    .extend(super::interface::input_port_interface_actions(
-                        &interface_response,
-                        self.canvas_transform * interface_response.rect,
-                        self.definition,
-                        node.id,
-                        port,
-                    ));
+                if inline_published.is_none() {
+                    self.actions
+                        .extend(super::interface::input_port_interface_actions(
+                            &interface_response,
+                            self.canvas_transform * interface_response.rect,
+                            self.definition,
+                            node.id,
+                            port,
+                            |_| {},
+                        ));
+                }
             }
         } else {
             ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH + 80.0, PORT_ROW_HEIGHT));
