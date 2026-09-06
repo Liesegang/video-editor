@@ -29,6 +29,7 @@ pub enum QaPointerButton {
 #[serde(rename_all = "snake_case")]
 pub enum QaKey {
     A,
+    C,
     E,
     L,
     N,
@@ -37,6 +38,7 @@ pub enum QaKey {
     Q,
     S,
     T,
+    V,
     Z,
     Comma,
     Space,
@@ -50,6 +52,7 @@ impl From<QaKey> for egui::Key {
     fn from(value: QaKey) -> Self {
         match value {
             QaKey::A => Self::A,
+            QaKey::C => Self::C,
             QaKey::E => Self::E,
             QaKey::L => Self::L,
             QaKey::N => Self::N,
@@ -58,6 +61,7 @@ impl From<QaKey> for egui::Key {
             QaKey::Q => Self::Q,
             QaKey::S => Self::S,
             QaKey::T => Self::T,
+            QaKey::V => Self::V,
             QaKey::Z => Self::Z,
             QaKey::Comma => Self::Comma,
             QaKey::Space => Self::Space,

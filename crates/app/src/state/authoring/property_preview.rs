@@ -6,10 +6,11 @@ use std::hash::{Hash, Hasher};
 
 use library::editor::{
     AuthoringKeyframeTarget, AuthoringKeyframeUpdate, AuthoringPropertyOwner,
-    AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate, TimelineEditorService,
+    AuthoringPropertyValueTarget, AuthoringPropertyValueUpdate, ModuleAutomationOwner,
+    TimelineEditorService,
 };
 use library::model::authoring::{
-    AuthoringProject, ModuleInstanceId, ProjectRevision, PublishedParameterId, TimelineItemId,
+    AuthoringProject, ModuleInstanceId, ProjectRevision, PublishedParameterId,
 };
 use library::model::property::{KeyframeId, PropertyValue};
 use library::LibraryError;
@@ -25,7 +26,7 @@ enum PropertyTarget {
         key: String,
     },
     ModuleParameter {
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         instance_id: ModuleInstanceId,
         parameter_id: PublishedParameterId,
     },
@@ -79,7 +80,7 @@ impl TransientPropertyEdit {
 
     pub(crate) fn module_parameter(
         source_revision: ProjectRevision,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         instance_id: ModuleInstanceId,
         parameter_id: PublishedParameterId,
         value: PropertyValue,
@@ -88,7 +89,7 @@ impl TransientPropertyEdit {
         Self {
             source_revision,
             target: PropertyTarget::ModuleParameter {
-                item_id,
+                owner,
                 instance_id,
                 parameter_id,
             },
@@ -159,12 +160,12 @@ impl TransientPropertyEdit {
 
     pub(crate) fn matches_module_parameter(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         parameter_id: PublishedParameterId,
     ) -> bool {
         matches!(self.target, PropertyTarget::ModuleParameter {
-            item_id: current_item, parameter_id: current_parameter, ..
-        } if current_item == item_id && current_parameter == parameter_id)
+            owner: current_owner, parameter_id: current_parameter, ..
+        } if current_owner == owner && current_parameter == parameter_id)
     }
 
     pub(crate) fn project(
@@ -205,12 +206,12 @@ impl TransientPropertyEdit {
                 )
             }
             PropertyTarget::ModuleParameter {
-                item_id,
+                owner,
                 instance_id,
                 parameter_id,
             } => TimelineEditorService::project_module_parameter_value(
                 project,
-                *item_id,
+                *owner,
                 *instance_id,
                 *parameter_id,
                 self.value.clone(),
@@ -264,12 +265,12 @@ impl TransientPropertyEdit {
                 )
                 .map(|_| ()),
             PropertyTarget::ModuleParameter {
-                item_id,
+                owner,
                 instance_id,
                 parameter_id,
             } => service
                 .apply_module_parameter_value(
-                    *item_id,
+                    *owner,
                     *instance_id,
                     *parameter_id,
                     self.value.clone(),

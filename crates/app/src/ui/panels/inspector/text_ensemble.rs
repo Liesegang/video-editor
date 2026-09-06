@@ -181,7 +181,10 @@ pub(super) fn node_clip_text_ensemble_section(
     context: &crate::ui::module_parameter_editor::ModuleParameterContext<'_>,
     stack: &library::editor::NodeClipTextEnsembleStack,
 ) {
-    let owner = EnsembleOwner::NodeClip(context.item.id);
+    let library::editor::ModuleAutomationOwner::Item(item_id) = context.owner else {
+        return;
+    };
+    let owner = EnsembleOwner::NodeClip(item_id);
     let response = ensemble_section(
         ui,
         state,
@@ -204,14 +207,14 @@ pub(super) fn node_clip_text_ensemble_section(
         },
     );
     crate::qa::register_component_with_metadata(
-        format!("inspector.text_ensemble:{}", context.item.id),
+        format!("inspector.text_ensemble:{}", item_id),
         "inspector_text_ensemble",
         response.rect,
         true,
         Some(serde_json::json!({
-            "item_id": context.item.id,
+            "item_id": item_id,
             "operation_count": stack.operations.len(),
-            "owner_model": EnsembleOwner::NodeClip(context.item.id).model_name(),
+            "owner_model": EnsembleOwner::NodeClip(item_id).model_name(),
             "operations": stack.operations.iter().map(|operation| serde_json::json!({
                 "id": operation.node_id,
                 "category": operation.category,
@@ -732,7 +735,10 @@ fn node_clip_operation_entry(
     let title = descriptor
         .as_ref()
         .map_or(operation.component_id.as_str(), OperationDescriptor::label);
-    let owner = EnsembleOwner::NodeClip(context.item.id);
+    let library::editor::ModuleAutomationOwner::Item(item_id) = context.owner else {
+        return;
+    };
+    let owner = EnsembleOwner::NodeClip(item_id);
     let property_keys = descriptor.as_ref().map_or_else(Vec::new, |descriptor| {
         descriptor
             .properties()
@@ -778,7 +784,7 @@ fn node_clip_operation_entry(
                     );
                     continue;
                 };
-                super::module_clip::published_parameter_row(ui, state, context, parameter);
+                super::property_authoring::published_parameter_row(ui, state, context, parameter);
             }
         },
     );

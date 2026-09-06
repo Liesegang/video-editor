@@ -472,6 +472,10 @@ pub(super) fn property_component_id(item_id: TimelineItemId, lane: &AutomationLa
         crate::state::authoring::AutomationTarget::ModuleParameter(id) => {
             format!("parameter:{id}")
         }
+        crate::state::authoring::AutomationTarget::AttachmentModuleParameter {
+            attachment_id,
+            parameter_id,
+        } => format!("attachment_module:{attachment_id}:{parameter_id}"),
         crate::state::authoring::AutomationTarget::AttachmentParameter { attachment_id, key } => {
             format!("attachment:{attachment_id}:{key}")
         }
@@ -487,6 +491,12 @@ fn select_lane_owner(
     let selection = match owner {
         crate::state::authoring::AutomationOwner::Item(_) => {
             AuthoringSelection::Item(anchor_item_id)
+        }
+        crate::state::authoring::AutomationOwner::Track(track_id) => {
+            AuthoringSelection::Track(*track_id)
+        }
+        crate::state::authoring::AutomationOwner::Timeline(timeline_id) => {
+            AuthoringSelection::Timeline(*timeline_id)
         }
         crate::state::authoring::AutomationOwner::TransitionDefinition(transition_id)
         | crate::state::authoring::AutomationOwner::TransitionInstance { transition_id, .. } => {
@@ -505,6 +515,12 @@ fn lane_owner_selected(
         crate::state::authoring::AutomationOwner::Item(_) => state
             .selection
             .contains(AuthoringSelection::Item(anchor_item_id)),
+        crate::state::authoring::AutomationOwner::Track(track_id) => state
+            .selection
+            .contains(AuthoringSelection::Track(*track_id)),
+        crate::state::authoring::AutomationOwner::Timeline(timeline_id) => state
+            .selection
+            .contains(AuthoringSelection::Timeline(*timeline_id)),
         crate::state::authoring::AutomationOwner::TransitionDefinition(transition_id)
         | crate::state::authoring::AutomationOwner::TransitionInstance { transition_id, .. } => {
             state

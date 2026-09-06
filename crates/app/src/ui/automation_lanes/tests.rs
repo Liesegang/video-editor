@@ -2,21 +2,255 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use library::editor::{
-    AuthoringPropertyOwner, ParticleNodeClipPlacement, TextEnsembleOperationKind,
-    TimelineEditorService,
+    AuthoringPropertyOwner, ModuleAttachmentPlacement, ModuleAutomationOwner,
+    ParticleNodeClipPlacement, TextEnsembleOperationKind, TimelineEditorService,
 };
 use library::model::authoring::{
-    InstancePath, MediaTime, ModuleDefinition, ModuleDefinitionSharing, ModuleInstance,
-    ModuleInstanceId, ModuleInvocation, PublishedParameterId, SourceRef, TimelineInterval,
-    TimelineItem, TimelineItemId, Transition, TransitionAlignment, TransitionId,
-    TransitionProcessor,
+    AttachmentId, AttachmentOwner, AttachmentStage, InstancePath, MediaTime, ModuleDefinition,
+    ModuleDefinitionSharing, ModuleInstance, ModuleInstanceId, ModuleInvocation, ModulePortAddress,
+    PublishedMediaInput, PublishedMediaInputId, PublishedParameter, PublishedParameterId,
+    SourceRef, TimelineInterval, TimelineItem, TimelineItemId, Transition, TransitionAlignment,
+    TransitionId, TransitionProcessor,
 };
 use library::model::frame::color::Color;
+use library::model::project::{PortDataType, NUMERIC_A_INPUT_PORT};
 use library::model::property::PropertyValue;
 use library::model::Node;
 use library::plugin::PluginManager;
 
 use super::*;
+
+fn add_module_effect(
+    service: &TimelineEditorService,
+    owner: AttachmentOwner,
+    stage: AttachmentStage,
+    name: &str,
+) -> (AttachmentId, PublishedParameterId) {
+    let (mut definition, output_id) =
+        ModuleDefinition::new_image(name, ModuleDefinitionSharing::Private);
+    let image_target = definition
+        .output(output_id)
+        .expect("Image Output")
+        .target(PortDataType::Image)
+        .expect("Image target");
+    definition.interface.media_inputs.push(PublishedMediaInput {
+        id: PublishedMediaInputId::new(),
+        name: "Input".to_string(),
+        data_type: PortDataType::Image,
+        target: image_target,
+        required: true,
+        primary: true,
+    });
+    let control = Node::new_add("Amount");
+    let control_id = control.id;
+    definition.graph.nodes.insert(control_id, control);
+    let parameter_id = PublishedParameterId::new();
+    definition.interface.parameters.push(PublishedParameter {
+        id: parameter_id,
+        name: "Amount".to_string(),
+        data_type: PortDataType::Number,
+        default_value: PropertyValue::from(1.0),
+        target: ModulePortAddress {
+            node_id: control_id,
+            port: NUMERIC_A_INPUT_PORT.to_string(),
+        },
+    });
+    let definition_id = definition.id;
+    let (attachment_id, _, _) = service
+        .create_private_module_attachment(
+            definition,
+            ModuleAttachmentPlacement {
+                owner,
+                stage,
+                definition_id,
+                output_id,
+                parameter_overrides: HashMap::new(),
+                input_bindings: HashMap::new(),
+            },
+        )
+        .expect("Module Effect");
+    (attachment_id, parameter_id)
+}
+
+#[test]
+fn item_module_effect_keys_share_the_clip_dope_and_curve_lane() {
+    let service = TimelineEditorService::create_default("Item Module Effect lanes").unwrap();
+    let initial = service.snapshot().unwrap();
+    let track_id = initial.timelines[&initial.root_timeline_id].track_order[0];
+    drop(initial);
+    let (item_id, _) = service
+        .add_item(
+            track_id,
+            "Solid".to_string(),
+            SourceRef::Solid {
+                color: Color::black(),
+            },
+            TimelineInterval::new(MediaTime::zero(), MediaTime::from_whole_seconds(5)).unwrap(),
+            0,
+        )
+        .unwrap();
+    let (attachment_id, parameter_id) = add_module_effect(
+        &service,
+        AttachmentOwner::Item { item_id },
+        AttachmentStage::ItemPostTransform,
+        "Custom Effect",
+    );
+    let key_time = MediaTime::new(3, 2).unwrap();
+    let (keyframe_id, _) = service
+        .upsert_module_parameter_keyframe(
+            ModuleAutomationOwner::Attachment(attachment_id),
+            parameter_id,
+            key_time,
+            PropertyValue::from(7.0),
+            None,
+        )
+        .unwrap();
+    let project = service.snapshot().unwrap();
+    let target = AutomationTarget::AttachmentModuleParameter {
+        attachment_id,
+        parameter_id,
+    };
+    let lane = collect_item_lanes(&project, item_id)
+        .into_iter()
+        .find(|lane| lane.id.target == target)
+        .expect("Item Module Effect lane");
+
+    assert_eq!(lane.id.owner, AutomationOwner::Item(item_id));
+    assert_eq!(lane.label, "Custom Effect \u{b7} Amount");
+    assert_eq!(lane.points[0].id, keyframe_id);
+    assert_eq!(lane.points[0].time, key_time);
+    assert!(collect_item_keyframed_lanes(&project, item_id)
+        .iter()
+        .any(|dope_lane| dope_lane.id == lane.id));
+    assert!(numeric_channels(std::slice::from_ref(&lane))
+        .iter()
+        .any(|channel| channel.id == lane.id));
+    assert_eq!(
+        target_metadata(&target),
+        serde_json::json!({
+            "kind": "attachment_module_parameter",
+            "attachment_id": attachment_id,
+            "id": parameter_id,
+        })
+    );
+
+    update_keyframe(
+        &service,
+        &lane.id,
+        keyframe_id,
+        AuthoringKeyframeUpdate {
+            time: Some(MediaTime::new(7, 4).unwrap()),
+            value: Some(PropertyValue::from(9.0)),
+            easing: None,
+        },
+    )
+    .expect("shared Attachment Module keyframe update");
+    let updated = collect_item_lanes(&service.snapshot().unwrap(), item_id)
+        .into_iter()
+        .find(|candidate| candidate.id == lane.id)
+        .expect("updated Item Module Effect lane");
+    assert_eq!(updated.points[0].id, keyframe_id);
+    assert_eq!(updated.points[0].time, MediaTime::new(7, 4).unwrap());
+    assert_eq!(updated.points[0].value, PropertyValue::from(9.0));
+}
+
+#[test]
+fn track_and_timeline_module_effects_use_timeline_time_and_distinct_owners() {
+    let service = TimelineEditorService::create_default("Stage Module Effect lanes").unwrap();
+    let initial = service.snapshot().unwrap();
+    let timeline_id = initial.root_timeline_id;
+    let track_id = initial.timelines[&timeline_id].track_order[0];
+    let duration = initial.timelines[&timeline_id].duration;
+    drop(initial);
+    let (track_attachment, track_parameter) = add_module_effect(
+        &service,
+        AttachmentOwner::Track { track_id },
+        AttachmentStage::TrackPostComposite,
+        "Track Effect",
+    );
+    let (timeline_attachment, timeline_parameter) = add_module_effect(
+        &service,
+        AttachmentOwner::Timeline { timeline_id },
+        AttachmentStage::TimelinePostComposite,
+        "Composition Effect",
+    );
+    let key_time = MediaTime::new(1001, 30000).unwrap();
+    for (attachment_id, parameter_id) in [
+        (track_attachment, track_parameter),
+        (timeline_attachment, timeline_parameter),
+    ] {
+        service
+            .upsert_module_parameter_keyframe(
+                ModuleAutomationOwner::Attachment(attachment_id),
+                parameter_id,
+                key_time,
+                PropertyValue::from(2.0),
+                None,
+            )
+            .unwrap();
+    }
+    let project = service.snapshot().unwrap();
+
+    let track_owner = AutomationOwner::Track(track_id);
+    let track_lane = collect_lanes(&project, &track_owner)
+        .into_iter()
+        .find(|lane| {
+            lane.id.target
+                == (AutomationTarget::AttachmentModuleParameter {
+                    attachment_id: track_attachment,
+                    parameter_id: track_parameter,
+                })
+        })
+        .expect("Track Module Effect lane");
+    assert_eq!(track_lane.id.owner, track_owner);
+    assert_eq!(track_lane.points[0].time, key_time);
+
+    let timeline_owner = AutomationOwner::Timeline(timeline_id);
+    let timeline_lane = collect_lanes(&project, &timeline_owner)
+        .into_iter()
+        .find(|lane| {
+            lane.id.target
+                == (AutomationTarget::AttachmentModuleParameter {
+                    attachment_id: timeline_attachment,
+                    parameter_id: timeline_parameter,
+                })
+        })
+        .expect("Timeline Module Effect lane");
+    assert_eq!(timeline_lane.id.owner, timeline_owner);
+    assert_eq!(timeline_lane.points[0].time, key_time);
+    assert!(!collect_lanes(&project, &AutomationOwner::Track(track_id))
+        .iter()
+        .any(|lane| lane.id.target == timeline_lane.id.target));
+
+    for owner in [&track_owner, &timeline_owner] {
+        assert_eq!(
+            timeline_time_for_local(&project, owner, key_time),
+            Some(key_time)
+        );
+        assert_eq!(
+            local_time_for_timeline(&project, owner, key_time),
+            Some(key_time)
+        );
+        assert_eq!(
+            owner_interval(&project, owner),
+            TimelineInterval::new(MediaTime::zero(), duration).ok()
+        );
+    }
+    assert_eq!(
+        module_parameter_owner(
+            &project,
+            &ModuleAutomationOwner::Attachment(track_attachment)
+        ),
+        Some(track_owner)
+    );
+    assert_eq!(
+        module_parameter_owner(
+            &project,
+            &ModuleAutomationOwner::Attachment(timeline_attachment)
+        ),
+        Some(timeline_owner)
+    );
+}
 
 #[test]
 fn authored_and_empty_published_lanes_share_one_discovery_contract() {
@@ -109,6 +343,10 @@ fn authored_and_empty_published_lanes_share_one_discovery_contract() {
     );
     assert!(module[0].points.is_empty());
     assert!(collect_item_keyframed_lanes(&project, module_item).is_empty());
+    assert_eq!(
+        module_parameter_owner(&project, &ModuleAutomationOwner::Item(module_item)),
+        Some(AutomationOwner::Item(module_item))
+    );
 }
 
 #[test]

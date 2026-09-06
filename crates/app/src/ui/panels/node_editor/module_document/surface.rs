@@ -99,7 +99,10 @@ pub(super) fn show_module_document(
 
     let mut snarl = build_module_snarl(definition, &state.node_drag_offsets);
     let capture = Arc::new(Mutex::new(ModuleSurfaceCapture::default()));
-    let mut actions = Vec::new();
+    // Consume a requested native paste before Node TextEdits see the payload.
+    // Ordinary text editing still owns clipboard input through the focus guard.
+    let mut actions =
+        super::clipboard::keyboard_actions(ui, state, viewport, authoritative_transform);
     let mut transform = authoritative_transform;
     let mut canvas_clip = viewport;
     {
@@ -204,7 +207,7 @@ pub(super) fn show_module_document(
         actions.push(ModuleEditorAction::Disconnect(connection_id));
     }
     if !opened_wire_menu && !wire_menu_was_open && !popup_was_open {
-        if let Some((request, graph_position)) = show_module_create_menu(
+        if let Some(action) = show_module_create_menu(
             ui,
             state,
             plugins,
@@ -213,10 +216,7 @@ pub(super) fn show_module_document(
             transform,
             &projection.node_rects,
         ) {
-            actions.push(ModuleEditorAction::CreateNode {
-                request,
-                graph_position,
-            });
+            actions.push(action);
         }
     }
 

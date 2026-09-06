@@ -72,7 +72,7 @@ implicitly create Module Definitions or Nodes.
 - Removing an interface or referenced source reports affected invocations and requires remapping or
   explicit cascading; references are never silently discarded.
 
-## Inline Node Clip animation authoring
+## Inline Module animation authoring
 
 The Node Clip input clock exposes an unconnected constant input as a Published Parameter and
 creates its first Invocation-owned automation key in one transaction. The existing instance
@@ -88,10 +88,23 @@ Curve Editor address the same Published Parameter and Keyframe IDs. The host sup
 `MediaTime`; floating-point seconds are only an evaluation/display projection. Revision and host
 checks prevent a retained document from authoring against a different Timeline or nested path.
 
-This inline authoring slice targets Node Clips. Attachment and Transition inline input editing
-remain separate follow-up work using their existing Invocation owners, not parallel graphs.
+The same controller serves Node Clips and Module Effect Attachments through `ModuleAutomationOwner`.
+Item Attachments use their owning Clip's local clock; Track and Timeline Attachments use Timeline
+time. The owner resolves the authoritative Invocation and invalidation scope for both Inspector
+and Node edits. Item Attachment keys appear in the existing Dope Sheet; Track and Timeline keys
+are available in Curve Editor without manufacturing a Clip row. Track/Timeline Dope Sheet headers
+and Transition inline input editing remain follow-up work.
 Keys inside a nested Timeline are owned by that Timeline definition and affect all its concrete
 Composition placements; these controls do not create per-placement sparse overrides.
+
+## Node selection clipboard
+
+Copy captures selected processing Nodes and internal connections, not Timeline placement or a
+second editable graph. Paste remaps Node, connection, published parameter and keyframe identities
+through one instance-definition transaction. It preserves instance values and Invocation animation
+without changing siblings. Required Output and host boundary nodes are excluded. External graph
+connections and bindings are not cloned. Unsupported hosts fail explicitly rather than losing
+automation. Native clipboard events and context menus use this same service operation.
 
 ## Project format and transition
 

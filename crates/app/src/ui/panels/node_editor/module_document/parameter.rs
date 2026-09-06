@@ -1,14 +1,15 @@
 //! Published inputs use the same Timeline parameter controller as Inspector.
 
+use library::editor::ModuleAutomationOwner;
 use library::model::authoring::{
-    InstancePath, ModuleInstance, PublishedParameter, SourceRef, TimelineId, TimelineItemId,
+    AttachmentOwner, InstancePath, ModuleInstance, PublishedParameter, TimelineId,
 };
 use library::model::project::PortDefinition;
 
 use super::*;
 use crate::state::authoring::AuthoringInspectorView;
 use crate::ui::module_parameter_editor::{
-    edit_node_clip_parameter, ModuleParameterContext, ModuleParameterRowInteraction,
+    edit_module_parameter, ModuleParameterContext, ModuleParameterRowInteraction,
 };
 use crate::ui::panels::node_editor::property_label;
 use crate::ui::widgets::property_mode::property_mode_control_for_state;
@@ -18,7 +19,7 @@ pub(super) struct NodeParameterHost<'a> {
     pub(super) project: &'a AuthoringProject,
     pub(super) service: &'a TimelineEditorService,
     pub(super) instance: &'a ModuleInstance,
-    pub(super) item: Result<TimelineItemId, String>,
+    pub(super) owner: Result<ModuleAutomationOwner, String>,
     pub(super) inspector: &'a mut AuthoringInspectorView,
     pub(super) status: &'a mut String,
     pub(super) error: &'a mut Option<String>,
@@ -26,30 +27,37 @@ pub(super) struct NodeParameterHost<'a> {
 
 /// A document retained while navigating elsewhere must not use that other
 /// Timeline's playhead to write keys into its original Node Clip.
-pub(super) fn node_clip_parameter_item(
+pub(super) fn module_parameter_owner(
     project: &AuthoringProject,
     active_timeline: TimelineId,
     active_path: Option<&InstancePath>,
     host: &ModuleEditorHost,
-) -> Result<TimelineItemId, String> {
-    let ModuleEditorHost::NodeClip {
-        timeline_item_id,
-        instance_path,
-        module_instance_id,
-    } = host
-    else {
-        return Err("Timeline input keyframes are currently available in Node Clips".to_string());
+) -> Result<ModuleAutomationOwner, String> {
+    let (owner, instance_path) = match host {
+        ModuleEditorHost::NodeClip {
+            timeline_item_id,
+            instance_path,
+            ..
+        } => (
+            ModuleAutomationOwner::Item(*timeline_item_id),
+            instance_path,
+        ),
+        ModuleEditorHost::Attachment {
+            attachment_id,
+            instance_path,
+            ..
+        } => (
+            ModuleAutomationOwner::Attachment(*attachment_id),
+            instance_path,
+        ),
+        ModuleEditorHost::Transition { .. } => {
+            return Err(
+                "Edit Transition input animation in its Inspector or Curve Editor".to_string(),
+            )
+        }
     };
-    let item = project
-        .items
-        .get(timeline_item_id)
-        .ok_or_else(|| "The Node Clip is no longer available".to_string())?;
-    let track = project
-        .tracks
-        .get(&item.track_id)
-        .ok_or_else(|| "The Node Clip's Track is no longer available".to_string())?;
-    if track.timeline_id != active_timeline {
-        return Err("Open the Node Clip's Timeline to edit its input animation".to_string());
+    if owner.timeline_id(project)? != active_timeline {
+        return Err("Open the processor's Timeline to edit its input animation".to_string());
     }
     let nested_path = |path: Option<&InstancePath>| {
         path.filter(|path| !path.composition_items.is_empty())
@@ -61,11 +69,10 @@ pub(super) fn node_clip_parameter_item(
                 .to_string(),
         );
     }
-    if !matches!(&item.source, SourceRef::Module(invocation) if invocation.instance_id == *module_instance_id)
-    {
-        return Err("The Node Clip's Module instance has changed".to_string());
+    if owner.invocation(project)?.instance_id != host.module_instance_id() {
+        return Err("The processor's Module instance has changed".to_string());
     }
-    Ok(*timeline_item_id)
+    Ok(owner)
 }
 
 #[allow(
@@ -83,19 +90,19 @@ pub(super) fn show_published_input(
     clock: ModulePropertyContext,
     transform: egui::emath::TSTransform,
 ) -> egui::Response {
-    let item_id = match &host.item {
+    let owner = match &host.owner {
         Ok(id) => *id,
         Err(reason) => return ui.weak(&port.label).on_hover_text(reason),
     };
-    let item = &host.project.items[&item_id];
-    let SourceRef::Module(invocation) = &item.source else {
-        return ui.weak(&port.label);
+    let invocation = match owner.invocation(host.project) {
+        Ok(invocation) => invocation,
+        Err(error) => return ui.weak(&port.label).on_hover_text(error),
     };
     let context = ModuleParameterContext {
         project: host.project,
         service: host.service,
         plugins,
-        item,
+        owner,
         invocation,
         instance: host.instance,
         definition,
@@ -104,7 +111,7 @@ pub(super) fn show_published_input(
     let qa_id = format!("node_editor.property.node:{}:{property_key}", node.id);
     let mut pending = None;
     let mut edited_value = None;
-    let outcome = edit_node_clip_parameter(
+    let outcome = edit_module_parameter(
         host.inspector,
         &context,
         parameter,
@@ -136,6 +143,7 @@ pub(super) fn show_published_input(
                 changed: edit.changed,
                 finished: edit.finished,
                 mode_action,
+                reset_to_default: false,
             }
         },
     );
@@ -145,9 +153,34 @@ pub(super) fn show_published_input(
     if outcome.mode_action.is_some() {
         *host.status = format!("Updated {} animation", parameter.name);
     }
+    let (item_id, attachment_id, target) = match owner {
+        ModuleAutomationOwner::Item(item_id) => (
+            Some(item_id),
+            None,
+            crate::state::authoring::AutomationTarget::ModuleParameter(parameter.id),
+        ),
+        ModuleAutomationOwner::Attachment(attachment_id) => {
+            let item_id =
+                host.project.attachments.get(&attachment_id).and_then(
+                    |attachment| match attachment.owner {
+                        AttachmentOwner::Item { item_id } => Some(item_id),
+                        _ => None,
+                    },
+                );
+            (
+                item_id,
+                Some(attachment_id),
+                crate::state::authoring::AutomationTarget::AttachmentModuleParameter {
+                    attachment_id,
+                    parameter_id: parameter.id,
+                },
+            )
+        }
+    };
     let mut metadata = serde_json::json!({
         "property_scope": "module_instance",
-        "target": {"kind": "module_parameter", "id": parameter.id},
+        "target": crate::ui::automation_lanes::target_metadata(&target),
+        "attachment_id": attachment_id,
         "item_id": item_id, "instance_id": host.instance.id, "parameter_id": parameter.id,
         "node_id": node.id, "property": property_key, "current_time": clock.time,
         "timeline_owned": true,

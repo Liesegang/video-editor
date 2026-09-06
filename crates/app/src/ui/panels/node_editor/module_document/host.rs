@@ -89,7 +89,7 @@ pub fn node_editor_panel(
     );
     let canvas_rect = ui.available_rect_before_wrap();
     crate::ui::panels::inspector::prepare_property_authoring_frame(ui, project, revision, state);
-    let parameter_item = super::parameter::node_clip_parameter_item(
+    let parameter_owner = super::parameter::module_parameter_owner(
         project,
         state.active_timeline_id,
         state.active_instance_path.as_ref(),
@@ -99,7 +99,7 @@ pub fn node_editor_panel(
         project,
         service,
         instance,
-        item: parameter_item,
+        owner: parameter_owner,
         inspector: &mut state.inspector,
         status: &mut state.status,
         error: &mut state.error,
@@ -138,7 +138,13 @@ pub fn node_editor_panel(
         state,
         service,
         plugins,
-        (project, &host, revision, property_context),
+        ModuleActionContext {
+            project,
+            host: &host,
+            revision,
+            clock: property_context,
+            ui: ui.ctx(),
+        },
     );
 }
 
@@ -582,6 +588,14 @@ fn set_active_definition(
     }
 }
 
+struct ModuleActionContext<'a> {
+    project: &'a AuthoringProject,
+    host: &'a ModuleEditorHost,
+    revision: library::model::authoring::ProjectRevision,
+    clock: ModulePropertyContext,
+    ui: &'a egui::Context,
+}
+
 fn apply_module_actions(
     actions: Vec<ModuleEditorAction>,
     definition: &ModuleDefinition,
@@ -589,28 +603,29 @@ fn apply_module_actions(
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
     plugins: &PluginManager,
-    authoring_context: (
-        &AuthoringProject,
-        &ModuleEditorHost,
-        library::model::authoring::ProjectRevision,
-        ModulePropertyContext,
-    ),
+    authoring_context: ModuleActionContext<'_>,
 ) {
-    let canvas_size = authoring_context.3.resolution;
+    let canvas_size = authoring_context.clock.resolution;
     for action in actions {
         match action {
             ModuleEditorAction::PublishParameterKeyframe { target } => {
-                let (project, host, revision, property_context) = authoring_context;
-                let result = super::parameter::node_clip_parameter_item(
+                let ModuleActionContext {
+                    project,
+                    host,
+                    revision,
+                    clock: property_context,
+                    ..
+                } = authoring_context;
+                let result = super::parameter::module_parameter_owner(
                     project,
                     state.active_timeline_id,
                     state.active_instance_path.as_ref(),
                     host,
                 );
-                let result = result.and_then(|item_id| {
+                let result = result.and_then(|owner| {
                     service
-                        .publish_node_clip_parameter_keyframe(
-                            item_id,
+                        .publish_module_parameter_keyframe(
+                            owner,
                             instance_id,
                             target,
                             property_context.exact_time,
@@ -625,6 +640,37 @@ fn apply_module_actions(
                     }
                     Err(error) => state.error = Some(error),
                 }
+            }
+            ModuleEditorAction::CopyNodes(node_ids) => {
+                super::clipboard::copy_selection(
+                    authoring_context.ui,
+                    service,
+                    instance_id,
+                    &node_ids,
+                    state,
+                );
+            }
+            ModuleEditorAction::RequestPaste(graph_position) => {
+                state.node_editor.pending_paste = Some((
+                    authoring_context.host.clone(),
+                    graph_position,
+                    authoring_context.ui.input(|input| input.time) + 2.0,
+                ));
+                authoring_context
+                    .ui
+                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+            ModuleEditorAction::PasteNodes {
+                text,
+                graph_position,
+            } => {
+                super::clipboard::paste_selection(
+                    service,
+                    instance_id,
+                    &text,
+                    graph_position,
+                    state,
+                );
             }
             ModuleEditorAction::MoveNodes { node_ids, delta } => {
                 for node_id in node_ids {

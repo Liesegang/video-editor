@@ -102,7 +102,10 @@ pub(super) fn node_clip_appearance_section(
     stack: &library::editor::NodeClipAppearanceStack,
 ) {
     ui.separator();
-    let owner = AppearanceOwner::NodeClip(context.item.id);
+    let library::editor::ModuleAutomationOwner::Item(item_id) = context.owner else {
+        return;
+    };
+    let owner = AppearanceOwner::NodeClip(item_id);
     let response = egui::CollapsingHeader::new("Appearance")
         .default_open(true)
         .show(ui, |ui| {
@@ -165,7 +168,7 @@ pub(super) fn node_clip_appearance_section(
                                 );
                                 continue;
                             };
-                            super::module_clip::published_parameter_row(
+                            super::property_authoring::published_parameter_row(
                                 ui, state, context, parameter,
                             );
                         }
@@ -175,12 +178,12 @@ pub(super) fn node_clip_appearance_section(
         })
         .header_response;
     crate::qa::register_component_with_metadata(
-        format!("inspector.appearance:{}", context.item.id),
+        format!("inspector.appearance:{}", item_id),
         "inspector_appearance",
         response.rect,
         true,
         Some(serde_json::json!({
-            "item_id": context.item.id,
+            "item_id": item_id,
             "owner_model": owner.model_name(),
             "operation_count": stack.operations.len(),
             "operations": stack.operations.iter().enumerate().map(|(index, operation)| serde_json::json!({

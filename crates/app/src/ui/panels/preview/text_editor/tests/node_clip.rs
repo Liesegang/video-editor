@@ -71,7 +71,7 @@ fn converted_content_automation_edits_the_started_local_keyframe_without_clearin
     let (first_key, _) = fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.first,
+            library::editor::ModuleAutomationOwner::Item(fixture.first),
             content.parameter_id,
             first_time,
             PropertyValue::String("First".to_string()),
@@ -81,7 +81,7 @@ fn converted_content_automation_edits_the_started_local_keyframe_without_clearin
     let (second_key, _) = fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.first,
+            library::editor::ModuleAutomationOwner::Item(fixture.first),
             content.parameter_id,
             second_time,
             PropertyValue::String("Later".to_string()),
@@ -140,7 +140,7 @@ fn converted_typing_reserves_one_new_key_for_the_entire_canvas_session() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.first,
+            library::editor::ModuleAutomationOwner::Item(fixture.first),
             content.parameter_id,
             MediaTime::zero(),
             PropertyValue::String("Start".into()),

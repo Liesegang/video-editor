@@ -5,18 +5,14 @@
 
 use library::editor::TimelineEditorService;
 use library::model::authoring::{
-    AuthoringProject, ModuleDefinition, ModuleInvocation, PublishedParameter, TimelineItem,
+    AuthoringProject, ModuleDefinition, ModuleInvocation, TimelineItem,
 };
 use library::plugin::PluginManager;
 
 use crate::state::authoring::AuthoringUiState;
-use crate::ui::module_parameter_editor::{
-    edit_node_clip_parameter, ModuleParameterContext, ModuleParameterEditorOutcome,
-    ModuleParameterRowInteraction,
-};
+use crate::ui::module_parameter_editor::ModuleParameterContext;
 
-use super::property_authoring::{property_row, PropertyRowSpec};
-use super::{item_local_time, mode_action_label, value_provenance};
+use super::property_authoring::published_parameter_row;
 
 pub(super) fn module_parameters(
     ui: &mut egui::Ui,
@@ -62,7 +58,7 @@ pub(super) fn module_parameters(
         project,
         service,
         plugins,
-        item,
+        owner: library::editor::ModuleAutomationOwner::Item(item.id),
         invocation,
         instance,
         definition,
@@ -90,70 +86,6 @@ pub(super) fn module_parameters(
         super::text_ensemble::node_clip_text_ensemble_section(ui, state, &context, stack);
     }
     module_media_inputs(ui, project, state, service, item, invocation, definition);
-}
-
-pub(super) fn published_parameter_row(
-    ui: &mut egui::Ui,
-    state: &mut AuthoringUiState,
-    context: &ModuleParameterContext<'_>,
-    parameter: &PublishedParameter,
-) -> egui::Response {
-    let local_time = item_local_time(context.project, state, context.item);
-    let automation = context.invocation.automation_tracks.get(&parameter.id);
-    let outcome = edit_node_clip_parameter(
-        &mut state.inspector,
-        context,
-        parameter,
-        local_time,
-        |row| {
-            let result = property_row(
-                ui,
-                row.value,
-                &context.project.palette,
-                PropertyRowSpec {
-                    control_id: &format!(
-                        "module_instance:{}:{}",
-                        context.instance.id, parameter.id
-                    ),
-                    label: &parameter.name,
-                    definition: row.definition,
-                    suffix: "",
-                    speed: 0.1,
-                    mode_state: row.mode_state,
-                    allow_keyframe: row.allow_keyframe,
-                    keyframe_disabled_reason: row.keyframe_disabled_reason,
-                    allow_expression: false,
-                    pending_keyframe: row.pending_keyframe,
-                },
-            );
-            ModuleParameterRowInteraction {
-                response: result.response,
-                changed: result.changed,
-                finished: result.finished,
-                mode_action: result.mode_action,
-            }
-        },
-    );
-    let ModuleParameterEditorOutcome {
-        response,
-        mode_action,
-        error,
-    } = outcome;
-    if let Some(error) = error {
-        state.error = Some(error);
-    }
-    if let Some(action) = mode_action {
-        state.status = format!("{}: {}", parameter.name, mode_action_label(action));
-    }
-    value_provenance(
-        ui,
-        automation.is_some(),
-        context
-            .instance
-            .parameter_overrides
-            .contains_key(&parameter.id),
-    );
-    response
 }
 
 fn module_media_inputs(

@@ -111,7 +111,7 @@ impl ParameterHostFixture {
             project: &self.project,
             service: &self.service,
             instance: &self.project.module_instances[&self.instance_id],
-            item: Ok(self.item_id),
+            owner: Ok(library::editor::ModuleAutomationOwner::Item(self.item_id)),
             inspector: &mut self.inspector,
             status: &mut self.status,
             error: &mut self.error,

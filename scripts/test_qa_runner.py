@@ -276,6 +276,8 @@ class QaRunnerTests(unittest.TestCase):
             "curve-editor",
             "node-editor",
             "node-parameter-automation",
+            "node-copy-paste",
+            "module-effect-automation",
             "node-clip-conversion",
             "audio-playback",
             "text-ensemble",
@@ -311,6 +313,11 @@ class QaRunnerTests(unittest.TestCase):
         )
         self.assertTrue(font_fallback.project_file)
         self.assertTrue(font_fallback.expects_exit)
+        effect_automation = next(
+            suite for suite in full if suite.name == "module-effect-automation"
+        )
+        self.assertTrue(effect_automation.project_file)
+        self.assertTrue(effect_automation.expects_exit)
         video_export = next(suite for suite in full if suite.name == "video-export")
         self.assertTrue(video_export.export_file)
         self.assertEqual(video_export.fixture, SUPPORT.AUTHORING_AUDIO_FIXTURE)

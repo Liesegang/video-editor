@@ -1,6 +1,7 @@
 use super::*;
 use library::animation::EasingFunction;
-use library::model::authoring::{MediaTime, SourceRef, TimelineInterval};
+use library::editor::ModuleAutomationOwner;
+use library::model::authoring::{MediaTime, SourceRef, TimelineInterval, TimelineItemId};
 use library::model::frame::color::Color;
 use library::plugin::PluginManager;
 
@@ -101,22 +102,25 @@ fn module_digest_includes_instance_parameter_and_time() {
     let instance_id = ModuleInstanceId::new();
     let edit = TransientPropertyEdit::module_parameter(
         ProjectRevision::initial(),
-        item_id,
+        ModuleAutomationOwner::Item(item_id),
         instance_id,
         parameter_id,
         PropertyValue::from(12.0),
         AuthoringPropertyValueTarget::Constant,
     );
-    assert!(edit.matches_module_parameter(item_id, parameter_id));
-    assert!(!edit.matches_module_parameter(TimelineItemId::new(), parameter_id));
+    assert!(edit.matches_module_parameter(ModuleAutomationOwner::Item(item_id), parameter_id));
+    assert!(!edit.matches_module_parameter(
+        ModuleAutomationOwner::Item(TimelineItemId::new()),
+        parameter_id
+    ));
     for target in [
         PropertyTarget::ModuleParameter {
-            item_id,
+            owner: ModuleAutomationOwner::Item(item_id),
             instance_id: ModuleInstanceId::new(),
             parameter_id,
         },
         PropertyTarget::ModuleParameter {
-            item_id,
+            owner: ModuleAutomationOwner::Item(item_id),
             instance_id,
             parameter_id: PublishedParameterId::new(),
         },
@@ -217,7 +221,7 @@ fn module_parameter_projection_and_commit_use_the_same_typed_edit() {
     );
     let edit = TransientPropertyEdit::module_parameter(
         source_revision,
-        item_id,
+        ModuleAutomationOwner::Item(item_id),
         instance_id,
         parameter_id,
         replacement,
@@ -244,7 +248,7 @@ fn module_keyframe_projection_and_commit_update_the_existing_time() {
     );
     service
         .upsert_module_parameter_keyframe(
-            item_id,
+            ModuleAutomationOwner::Item(item_id),
             parameter_id,
             MediaTime::zero(),
             initial,
@@ -261,7 +265,7 @@ fn module_keyframe_projection_and_commit_update_the_existing_time() {
     );
     let edit = TransientPropertyEdit::module_parameter(
         service.revision().unwrap(),
-        item_id,
+        ModuleAutomationOwner::Item(item_id),
         instance_id,
         parameter_id,
         replacement,

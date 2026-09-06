@@ -23,6 +23,7 @@ use crate::state::authoring::AuthoringUiState;
 use crate::state::node_editor::{
     ModuleEditorHost, ModuleEditorPortId, NodeEditorDocument, NodeEditorState,
 };
+mod clipboard;
 mod clock;
 mod context_menu;
 mod host;
@@ -64,6 +65,12 @@ enum ModuleEditorAction {
     Disconnect(ModuleConnectionId),
     DeleteNodes(Vec<Uuid>),
     DeleteConnections(Vec<ModuleConnectionId>),
+    CopyNodes(Vec<Uuid>),
+    RequestPaste(egui::Pos2),
+    PasteNodes {
+        text: String,
+        graph_position: egui::Pos2,
+    },
     SetNodeState {
         node_id: Uuid,
         name: String,

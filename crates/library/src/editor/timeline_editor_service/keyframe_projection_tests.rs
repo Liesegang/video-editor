@@ -343,7 +343,7 @@ fn promoted_tracking_projection_changes_pixels_and_isolates_the_sibling_instance
     let revision = fixture.service.revision().expect("revision");
     let parameter_id = tracking_parameter(&before, fixture.item_id, fixture.tracking_id);
     let target = AuthoringKeyframeTarget::ModuleParameter {
-        item_id: fixture.item_id,
+        owner: ModuleAutomationOwner::Item(fixture.item_id),
         parameter_id,
     };
     let definition_id =
@@ -633,7 +633,7 @@ fn missing_negative_duplicate_and_invalid_typed_updates_are_atomic_errors() {
     assert_rejected_atomically(
         &fixture.service,
         &AuthoringKeyframeTarget::ModuleParameter {
-            item_id: fixture.item_id,
+            owner: ModuleAutomationOwner::Item(fixture.item_id),
             parameter_id,
         },
         fixture.tracking_key,

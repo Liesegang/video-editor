@@ -65,7 +65,7 @@ fn direct_converted_and_animated_text_share_evaluated_caret_size() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.first,
+            library::editor::ModuleAutomationOwner::Item(fixture.first),
             size_parameter,
             MediaTime::zero(),
             PropertyValue::from(64.0),
@@ -75,7 +75,7 @@ fn direct_converted_and_animated_text_share_evaluated_caret_size() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.first,
+            library::editor::ModuleAutomationOwner::Item(fixture.first),
             size_parameter,
             one_second,
             PropertyValue::from(96.0),

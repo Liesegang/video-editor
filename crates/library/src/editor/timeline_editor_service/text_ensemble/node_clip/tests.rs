@@ -150,7 +150,13 @@ fn remove_cleans_instance_values_and_timeline_automation_atomically() {
         .set_module_parameter(instance_id, parameter_id, default.clone())
         .unwrap();
     service
-        .upsert_module_parameter_keyframe(item_id, parameter_id, time(1), default, None)
+        .upsert_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(item_id),
+            parameter_id,
+            time(1),
+            default,
+            None,
+        )
         .unwrap();
     let before_remove = service.snapshot().unwrap();
 

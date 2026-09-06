@@ -4,7 +4,7 @@ use ordered_float::OrderedFloat;
 
 use super::*;
 use crate::editor::{
-    AuthoringKeyframeTarget, AuthoringPropertyOwner, ModuleInterfaceCommand,
+    AuthoringKeyframeTarget, AuthoringPropertyOwner, ModuleAutomationOwner, ModuleInterfaceCommand,
     ModuleInterfaceEditResult, ModuleItemPlacement, ModuleNodeRequest, TimelineEditorService,
     TimelineSettingsUpdate,
 };
@@ -434,7 +434,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         .expect("instance value");
     let (keyframe_id, _) = service
         .upsert_module_parameter_keyframe(
-            first_item,
+            ModuleAutomationOwner::Item(first_item),
             parameter_id,
             time(1, 2),
             PropertyValue::Number(OrderedFloat(3.0)),
@@ -444,7 +444,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
     service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                item_id: first_item,
+                owner: ModuleAutomationOwner::Item(first_item),
                 parameter_id,
             },
             keyframe_id,
@@ -457,7 +457,7 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         .expect("stable-id automation update");
     let (removable_id, _) = service
         .upsert_module_parameter_keyframe(
-            first_item,
+            ModuleAutomationOwner::Item(first_item),
             parameter_id,
             time(1, 1),
             PropertyValue::Number(OrderedFloat(5.0)),
@@ -465,7 +465,11 @@ fn node_clip_parameters_automation_split_and_graph_edits_are_instance_local() {
         )
         .expect("second automation key");
     service
-        .remove_module_parameter_keyframe(first_item, parameter_id, removable_id)
+        .remove_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(first_item),
+            parameter_id,
+            removable_id,
+        )
         .expect("stable-id automation remove");
     let before_logic = service.snapshot().expect("snapshot");
     assert!(
@@ -730,7 +734,7 @@ fn published_interface_edit_is_cow_and_cleans_instance_state_atomically() {
         .expect("override");
     service
         .upsert_module_parameter_keyframe(
-            item_id,
+            ModuleAutomationOwner::Item(item_id),
             parameter_id,
             time(1, 2),
             PropertyValue::Number(OrderedFloat(3.0)),

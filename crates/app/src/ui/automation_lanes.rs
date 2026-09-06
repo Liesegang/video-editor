@@ -6,18 +6,22 @@
 
 use library::animation::EasingFunction;
 use library::editor::{
-    AuthoringKeyframeUpdate, AuthoringPropertyOwner, TimelineEditorService,
+    AuthoringKeyframeUpdate, AuthoringPropertyOwner, ModuleAutomationOwner, TimelineEditorService,
     TransitionAutomationOwner,
 };
 use library::model::authoring::{
     AttachmentOwner, AttachmentProcessor, AuthoringProject, InstancePath, MediaTime, SourceRef,
-    TimelineItemId, TransitionId,
+    TimelineId, TimelineInterval, TimelineItemId, TimelineTrackId, TransitionId,
 };
 use library::model::property::{KeyframeId, Property, PropertyMap, PropertyValue};
 
 use crate::state::authoring::{
     AutomationLaneId, AutomationOwner, AutomationTarget, CurveValueComponent,
 };
+
+mod module;
+pub(crate) use module::module_parameter_owner;
+use module::{push_module_parameter_lanes, ModuleLaneTarget};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AutomationPoint {
@@ -125,85 +129,123 @@ pub(crate) fn collect_item_lanes(
     }
 
     if let SourceRef::Module(invocation) = &item.source {
-        if let Some((instance, definition)) = project
-            .module_instances
-            .get(&invocation.instance_id)
-            .and_then(|instance| {
-                project
-                    .module_definitions
-                    .get(&instance.definition_id)
-                    .map(|definition| (instance, definition))
-            })
-        {
-            for parameter in definition.interface.parameters.iter().filter(|parameter| {
-                matches!(
-                    definition.parameter_automation_capability(parameter.id),
-                    Ok(library::model::authoring::PublishedParameterAutomationCapability::FrameSampled)
-                )
-            }) {
-                let mut points = invocation
-                    .automation_tracks
-                    .get(&parameter.id)
-                    .map(|track| automation_points(&track.keyframes))
-                    .unwrap_or_default();
-                points.sort_by_key(|point| point.time);
-                lanes.push(AutomationLane {
-                    id: AutomationLaneId {
-                        owner: AutomationOwner::Item(item_id),
-                        target: AutomationTarget::ModuleParameter(parameter.id),
-                    },
-                    label: parameter.name.clone(),
-                    base_value: instance
-                        .parameter_overrides
-                        .get(&parameter.id)
-                        .cloned()
-                        .or_else(|| Some(parameter.default_value.clone())),
-                    points,
-                });
-            }
-        }
+        push_module_parameter_lanes(
+            &mut lanes,
+            project,
+            AutomationOwner::Item(item_id),
+            ModuleLaneTarget::Item,
+            invocation,
+        );
     }
 
+    push_attachment_lanes(
+        &mut lanes,
+        project,
+        AutomationOwner::Item(item_id),
+        &AttachmentOwner::Item { item_id },
+    );
+    lanes
+}
+
+fn collect_track_lanes(
+    project: &AuthoringProject,
+    track_id: TimelineTrackId,
+) -> Vec<AutomationLane> {
+    let Some(track) = project.tracks.get(&track_id) else {
+        return Vec::new();
+    };
+    let mut lanes = Vec::new();
+    push_authored_property_lanes(
+        &mut lanes,
+        AutomationOwner::Track(track_id),
+        AuthoringPropertyOwner::Track(track_id),
+        None,
+        &track.authored_properties,
+    );
+    push_attachment_lanes(
+        &mut lanes,
+        project,
+        AutomationOwner::Track(track_id),
+        &AttachmentOwner::Track { track_id },
+    );
+    lanes
+}
+
+fn collect_timeline_lanes(
+    project: &AuthoringProject,
+    timeline_id: TimelineId,
+) -> Vec<AutomationLane> {
+    let Some(timeline) = project.timelines.get(&timeline_id) else {
+        return Vec::new();
+    };
+    let mut lanes = Vec::new();
+    push_authored_property_lanes(
+        &mut lanes,
+        AutomationOwner::Timeline(timeline_id),
+        AuthoringPropertyOwner::Timeline(timeline_id),
+        None,
+        &timeline.authored_properties,
+    );
+    push_attachment_lanes(
+        &mut lanes,
+        project,
+        AutomationOwner::Timeline(timeline_id),
+        &AttachmentOwner::Timeline { timeline_id },
+    );
+    lanes
+}
+
+fn push_attachment_lanes(
+    lanes: &mut Vec<AutomationLane>,
+    project: &AuthoringProject,
+    lane_owner: AutomationOwner,
+    attachment_owner: &AttachmentOwner,
+) {
     let mut attachments = project
         .attachments
         .values()
-        .filter(|attachment| {
-            matches!(attachment.owner, AttachmentOwner::Item { item_id: id } if id == item_id)
-        })
+        .filter(|attachment| &attachment.owner == attachment_owner)
         .collect::<Vec<_>>();
     attachments.sort_by_key(|attachment| (attachment.stage, attachment.order, attachment.id));
     for attachment in attachments {
-        let AttachmentProcessor::BuiltinEffect(effect) = &attachment.processor else {
-            continue;
-        };
-        for contract in &effect.contract.parameters {
-            let Some(parameter) = effect.parameters.get(&contract.key) else {
-                continue;
-            };
-            let points = parameter
-                .automation
-                .as_ref()
-                .map(|track| automation_points(&track.keyframes))
-                .unwrap_or_default();
-            lanes.push(AutomationLane {
-                id: AutomationLaneId {
-                    owner: AutomationOwner::Item(item_id),
-                    target: AutomationTarget::AttachmentParameter {
-                        attachment_id: attachment.id,
-                        key: contract.key.clone(),
-                    },
-                },
-                label: format!(
-                    "{} \u{b7} {}",
-                    humanize_label(&effect.operation.component_id),
-                    humanize_label(&contract.key)
-                ),
-                base_value: Some(parameter.value.clone()),
-                points,
-            });
+        match &attachment.processor {
+            AttachmentProcessor::BuiltinEffect(effect) => {
+                for contract in &effect.contract.parameters {
+                    let Some(parameter) = effect.parameters.get(&contract.key) else {
+                        continue;
+                    };
+                    let points = parameter
+                        .automation
+                        .as_ref()
+                        .map(|track| automation_points(&track.keyframes))
+                        .unwrap_or_default();
+                    lanes.push(AutomationLane {
+                        id: AutomationLaneId {
+                            owner: lane_owner.clone(),
+                            target: AutomationTarget::AttachmentParameter {
+                                attachment_id: attachment.id,
+                                key: contract.key.clone(),
+                            },
+                        },
+                        label: format!(
+                            "{} \u{b7} {}",
+                            humanize_label(&effect.operation.component_id),
+                            humanize_label(&contract.key)
+                        ),
+                        base_value: Some(parameter.value.clone()),
+                        points,
+                    });
+                }
+            }
+            AttachmentProcessor::Module(invocation) => push_module_parameter_lanes(
+                lanes,
+                project,
+                lane_owner.clone(),
+                ModuleLaneTarget::Attachment(attachment.id),
+                invocation,
+            ),
         }
     }
-    lanes
 }
 
 fn push_authored_property_lanes(
@@ -272,6 +314,8 @@ pub(crate) fn collect_lanes(
 ) -> Vec<AutomationLane> {
     match owner {
         AutomationOwner::Item(item_id) => collect_item_lanes(project, *item_id),
+        AutomationOwner::Track(track_id) => collect_track_lanes(project, *track_id),
+        AutomationOwner::Timeline(timeline_id) => collect_timeline_lanes(project, *timeline_id),
         AutomationOwner::TransitionDefinition(transition_id)
         | AutomationOwner::TransitionInstance { transition_id, .. } => {
             collect_transition_lanes(project, owner, *transition_id)
@@ -315,7 +359,9 @@ fn collect_transition_lanes(
             };
             (controls.parameter_overrides, controls.automation_tracks)
         }
-        AutomationOwner::Item(_) => return Vec::new(),
+        AutomationOwner::Item(_) | AutomationOwner::Track(_) | AutomationOwner::Timeline(_) => {
+            return Vec::new();
+        }
     };
     definition
         .interface
@@ -458,22 +504,21 @@ pub(crate) fn keyframe_target(
 ) -> Result<library::editor::AuthoringKeyframeTarget, library::LibraryError> {
     use library::editor::AuthoringKeyframeTarget;
     match (&lane.owner, &lane.target) {
-        (AutomationOwner::Item(item_id), AutomationTarget::AuthoredProperty { owner, key }) => {
-            let target_item_id = match owner {
-                AuthoringPropertyOwner::Item(target_item_id)
-                | AuthoringPropertyOwner::TextEnsemble {
-                    item_id: target_item_id,
-                    ..
+        (lane_owner, AutomationTarget::AuthoredProperty { owner, key }) => {
+            let property_lane_owner = match owner {
+                AuthoringPropertyOwner::Item(item_id)
+                | AuthoringPropertyOwner::TextEnsemble { item_id, .. }
+                | AuthoringPropertyOwner::Appearance { item_id, .. } => {
+                    AutomationOwner::Item(*item_id)
                 }
-                | AuthoringPropertyOwner::Appearance {
-                    item_id: target_item_id,
-                    ..
-                } => Some(*target_item_id),
-                AuthoringPropertyOwner::Timeline(_) | AuthoringPropertyOwner::Track(_) => None,
+                AuthoringPropertyOwner::Track(track_id) => AutomationOwner::Track(*track_id),
+                AuthoringPropertyOwner::Timeline(timeline_id) => {
+                    AutomationOwner::Timeline(*timeline_id)
+                }
             };
-            if target_item_id != Some(*item_id) {
+            if property_lane_owner != *lane_owner {
                 return Err(library::LibraryError::Validation(format!(
-                    "Item {item_id} automation lane cannot edit {owner:?}"
+                    "Automation owner {lane_owner:?} cannot edit {owner:?}"
                 )));
             }
             Ok(AuthoringKeyframeTarget::AuthoredProperty {
@@ -483,12 +528,22 @@ pub(crate) fn keyframe_target(
         }
         (AutomationOwner::Item(item_id), AutomationTarget::ModuleParameter(parameter_id)) => {
             Ok(AuthoringKeyframeTarget::ModuleParameter {
-                item_id: *item_id,
+                owner: ModuleAutomationOwner::Item(*item_id),
                 parameter_id: *parameter_id,
             })
         }
         (
-            AutomationOwner::Item(_),
+            AutomationOwner::Item(_) | AutomationOwner::Track(_) | AutomationOwner::Timeline(_),
+            AutomationTarget::AttachmentModuleParameter {
+                attachment_id,
+                parameter_id,
+            },
+        ) => Ok(AuthoringKeyframeTarget::ModuleParameter {
+            owner: ModuleAutomationOwner::Attachment(*attachment_id),
+            parameter_id: *parameter_id,
+        }),
+        (
+            AutomationOwner::Item(_) | AutomationOwner::Track(_) | AutomationOwner::Timeline(_),
             AutomationTarget::AttachmentParameter { attachment_id, key },
         ) => Ok(AuthoringKeyframeTarget::BuiltinEffectParameter {
             attachment_id: *attachment_id,
@@ -520,6 +575,12 @@ pub(crate) fn keyframe_target(
                 "Transition {transition_id} automation does not support {target:?}"
             )))
         }
+        (AutomationOwner::Track(track_id), target) => Err(library::LibraryError::Validation(
+            format!("Track {track_id} automation does not support {target:?}"),
+        )),
+        (AutomationOwner::Timeline(timeline_id), target) => Err(library::LibraryError::Validation(
+            format!("Timeline {timeline_id} automation does not support {target:?}"),
+        )),
     }
 }
 
@@ -537,7 +598,7 @@ pub(crate) fn transition_service_owner(
             transition_id: *transition_id,
             instance_path: instance_path.clone(),
         }),
-        AutomationOwner::Item(_) => None,
+        AutomationOwner::Item(_) | AutomationOwner::Track(_) | AutomationOwner::Timeline(_) => None,
     }
 }
 
@@ -559,6 +620,7 @@ pub(crate) fn timeline_time_for_local(
                     / rate;
             MediaTime::from_seconds_f64(seconds, 1_000_000).ok()
         }
+        AutomationOwner::Track(_) | AutomationOwner::Timeline(_) => Some(local_time),
         AutomationOwner::TransitionDefinition(transition_id)
         | AutomationOwner::TransitionInstance { transition_id, .. } => project
             .transitions
@@ -585,6 +647,7 @@ pub(crate) fn local_time_for_timeline(
             let timeline_time = timeline_time.clamp(item.interval.start, end);
             item.time_map.local_time(item.interval, timeline_time).ok()
         }
+        AutomationOwner::Track(_) | AutomationOwner::Timeline(_) => Some(timeline_time),
         AutomationOwner::TransitionDefinition(transition_id)
         | AutomationOwner::TransitionInstance { transition_id, .. } => {
             let interval = project.transitions.get(transition_id)?.interval().ok()?;
@@ -603,6 +666,15 @@ pub(crate) fn owner_interval(
 ) -> Option<library::model::authoring::TimelineInterval> {
     match owner {
         AutomationOwner::Item(item_id) => project.items.get(item_id).map(|item| item.interval),
+        AutomationOwner::Track(track_id) => {
+            let timeline_id = project.tracks.get(track_id)?.timeline_id;
+            let timeline = project.timelines.get(&timeline_id)?;
+            TimelineInterval::new(MediaTime::zero(), timeline.duration).ok()
+        }
+        AutomationOwner::Timeline(timeline_id) => {
+            let timeline = project.timelines.get(timeline_id)?;
+            TimelineInterval::new(MediaTime::zero(), timeline.duration).ok()
+        }
         AutomationOwner::TransitionDefinition(transition_id)
         | AutomationOwner::TransitionInstance { transition_id, .. } => project
             .transitions
@@ -676,6 +748,14 @@ pub(crate) fn target_metadata(target: &AutomationTarget) -> serde_json::Value {
         AutomationTarget::ModuleParameter(id) => {
             serde_json::json!({"kind": "module_parameter", "id": id})
         }
+        AutomationTarget::AttachmentModuleParameter {
+            attachment_id,
+            parameter_id,
+        } => serde_json::json!({
+            "kind": "attachment_module_parameter",
+            "attachment_id": attachment_id,
+            "id": parameter_id,
+        }),
         AutomationTarget::AttachmentParameter { attachment_id, key } => serde_json::json!({
             "kind": "attachment_parameter",
             "attachment_id": attachment_id,
@@ -729,6 +809,14 @@ pub(crate) fn owner_metadata(owner: &AutomationOwner) -> serde_json::Value {
         AutomationOwner::Item(item_id) => serde_json::json!({
             "kind": "item",
             "item_id": item_id,
+        }),
+        AutomationOwner::Track(track_id) => serde_json::json!({
+            "kind": "track",
+            "track_id": track_id,
+        }),
+        AutomationOwner::Timeline(timeline_id) => serde_json::json!({
+            "kind": "timeline",
+            "timeline_id": timeline_id,
         }),
         AutomationOwner::TransitionDefinition(transition_id) => serde_json::json!({
             "kind": "transition_definition",

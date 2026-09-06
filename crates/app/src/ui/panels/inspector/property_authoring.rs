@@ -11,8 +11,12 @@ use library::model::authoring::{
 };
 use library::model::property::{KeyframeId, Property, PropertyDefinition, PropertyValue};
 
-use crate::state::authoring::TransientPropertyEdit;
-use crate::ui::module_parameter_editor::keyframe_at;
+use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
+use crate::ui::module_parameter_editor::{
+    edit_module_parameter, keyframe_at, ModuleParameterContext, ModuleParameterEditorOutcome,
+    ModuleParameterRowInteraction,
+};
+use library::model::authoring::PublishedParameter;
 
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
@@ -522,6 +526,97 @@ pub(crate) fn property_label(ui: &mut Ui, control_id: &str, text: &str) -> Respo
 
 fn property_label_anchor(rect: egui::Rect) -> egui::Pos2 {
     rect.left_center()
+}
+
+pub(super) fn published_parameter_row(
+    ui: &mut egui::Ui,
+    state: &mut AuthoringUiState,
+    context: &ModuleParameterContext<'_>,
+    parameter: &PublishedParameter,
+) -> egui::Response {
+    let local_time = crate::ui::module_parameter_editor::parameter_local_time(context, state);
+    let automation = context.invocation.automation_tracks.get(&parameter.id);
+    let outcome = edit_module_parameter(
+        &mut state.inspector,
+        context,
+        parameter,
+        local_time,
+        |row| {
+            let result = property_row(
+                ui,
+                row.value,
+                &context.project.palette,
+                PropertyRowSpec {
+                    control_id: &format!(
+                        "module_instance:{}:{}",
+                        context.instance.id, parameter.id
+                    ),
+                    label: &parameter.name,
+                    definition: row.definition,
+                    suffix: "",
+                    speed: 0.1,
+                    mode_state: row.mode_state,
+                    allow_keyframe: row.allow_keyframe,
+                    keyframe_disabled_reason: row.keyframe_disabled_reason,
+                    allow_expression: false,
+                    pending_keyframe: row.pending_keyframe,
+                },
+            );
+            let mut reset_to_default = false;
+            result.response.context_menu(|ui| {
+                let reset = ui
+                    .add_enabled(
+                        context
+                            .instance
+                            .parameter_overrides
+                            .contains_key(&parameter.id),
+                        egui::Button::new("Reset base to Module default"),
+                    )
+                    .on_hover_text("Keep Timeline animation; reset only the base value");
+                crate::qa::register_component_with_metadata(
+                    format!(
+                        "inspector.module_parameter.reset:{}:{}",
+                        context.instance.id, parameter.id
+                    ),
+                    "module_parameter_reset",
+                    reset.rect,
+                    reset.enabled(),
+                    None,
+                );
+                if reset.clicked() {
+                    reset_to_default = true;
+                    ui.close();
+                }
+            });
+            ModuleParameterRowInteraction {
+                response: result.response,
+                changed: result.changed,
+                finished: result.finished,
+                mode_action: result.mode_action,
+                reset_to_default,
+            }
+        },
+    );
+    let ModuleParameterEditorOutcome {
+        response,
+        mode_action,
+        error,
+    } = outcome;
+    if let Some(error) = error {
+        state.error = Some(error);
+    }
+    if let Some(action) = mode_action {
+        state.status = format!("{}: {}", parameter.name, super::mode_action_label(action));
+    }
+    super::value_provenance(
+        ui,
+        automation.is_some(),
+        context
+            .instance
+            .parameter_overrides
+            .contains_key(&parameter.id),
+    );
+    response
 }
 
 #[cfg(test)]

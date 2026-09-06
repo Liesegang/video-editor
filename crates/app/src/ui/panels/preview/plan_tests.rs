@@ -132,7 +132,7 @@ fn constant_module_preview_request_compiles_matching_plan_and_reuses_it_for_navi
     let transient_color = color(220, 40, 70);
     let edit = TransientPropertyEdit::module_parameter(
         revision,
-        fixture.item_id,
+        library::editor::ModuleAutomationOwner::Item(fixture.item_id),
         fixture.instance_id,
         fixture.color_parameter_id,
         transient_color.clone(),
@@ -221,7 +221,7 @@ fn keyframed_module_preview_plan_matches_projection_and_release_commit() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.item_id,
+            library::editor::ModuleAutomationOwner::Item(fixture.item_id),
             fixture.color_parameter_id,
             MediaTime::zero(),
             color(12, 24, 36),
@@ -236,7 +236,7 @@ fn keyframed_module_preview_plan_matches_projection_and_release_commit() {
     let transient_color = color(40, 190, 230);
     let edit = TransientPropertyEdit::module_parameter(
         revision,
-        fixture.item_id,
+        library::editor::ModuleAutomationOwner::Item(fixture.item_id),
         fixture.instance_id,
         fixture.color_parameter_id,
         transient_color.clone(),
@@ -283,7 +283,7 @@ fn keyframed_module_preview_plan_matches_projection_and_release_commit() {
     fixture
         .service
         .upsert_module_parameter_keyframe(
-            fixture.item_id,
+            library::editor::ModuleAutomationOwner::Item(fixture.item_id),
             fixture.color_parameter_id,
             MediaTime::zero(),
             transient_color,

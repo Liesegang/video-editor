@@ -239,3 +239,24 @@ fn changing_curve_owner_resets_only_owner_local_visibility_and_navigation() {
         CanvasState::uniform(Vec2::ZERO, 1.0)
     );
 }
+
+#[test]
+fn track_and_timeline_selection_open_their_existing_curve_owner() {
+    let timeline_id = library::model::authoring::TimelineId::new();
+    let track_id = library::model::authoring::TimelineTrackId::new();
+    let mut state = AuthoringUiState::new(timeline_id);
+
+    state.selection.replace(AuthoringSelection::Track(track_id));
+    assert_eq!(
+        selected_owner(&state),
+        Some(AutomationOwner::Track(track_id))
+    );
+
+    state
+        .selection
+        .replace(AuthoringSelection::Timeline(timeline_id));
+    assert_eq!(
+        selected_owner(&state),
+        Some(AutomationOwner::Timeline(timeline_id))
+    );
+}

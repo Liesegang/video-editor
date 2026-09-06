@@ -131,7 +131,7 @@ fn assert_rejected_without_state_or_history(
     publish: impl FnOnce(
         &PublicationFixture,
         ProjectRevision,
-    ) -> Result<NodeParameterKeyframePublication, LibraryError>,
+    ) -> Result<ModuleParameterKeyframePublication, LibraryError>,
     expected_message: &str,
 ) {
     let before = fixture.service.snapshot().expect("before rejection");
@@ -165,8 +165,8 @@ fn publish_and_first_key_are_one_cow_edit_with_stable_ids_and_sibling_isolation(
     let revision = fixture.service.revision().expect("source revision");
     let publication = fixture
         .service
-        .publish_node_clip_parameter_keyframe(
-            fixture.item_id,
+        .publish_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(fixture.item_id),
             fixture.instance_id,
             fixture.target.clone(),
             time(2),
@@ -253,8 +253,8 @@ fn published_key_uses_the_shared_curve_target_without_mutating_topology_or_sibli
     let fixture = clean_fixture();
     let publication = fixture
         .service
-        .publish_node_clip_parameter_keyframe(
-            fixture.item_id,
+        .publish_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(fixture.item_id),
             fixture.instance_id,
             fixture.target.clone(),
             time(1),
@@ -268,7 +268,7 @@ fn published_key_uses_the_shared_curve_target_without_mutating_topology_or_sibli
         .service
         .update_keyframe(
             &AuthoringKeyframeTarget::ModuleParameter {
-                item_id: fixture.item_id,
+                owner: ModuleAutomationOwner::Item(fixture.item_id),
                 parameter_id: publication.parameter_id,
             },
             publication.keyframe_id,
@@ -310,8 +310,8 @@ fn stale_revision_and_wrong_owner_reject_without_state_or_history() {
     assert_rejected_without_state_or_history(
         clean_fixture(),
         |fixture, _revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -323,8 +323,8 @@ fn stale_revision_and_wrong_owner_reject_without_state_or_history() {
     assert_rejected_without_state_or_history(
         clean_fixture(),
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.sibling_instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -340,8 +340,8 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
     assert_rejected_without_state_or_history(
         clean_fixture(),
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: fixture
@@ -380,8 +380,8 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
                 .expect("expression fixture");
         }),
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -408,8 +408,8 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
     assert_rejected_without_state_or_history(
         missing_property,
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: fmod_id,
@@ -424,8 +424,8 @@ fn invalid_target_modes_and_times_roll_back_cow_publication() {
     assert_rejected_without_state_or_history(
         clean_fixture(),
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 MediaTime::new(-1, 1).expect("negative time"),
@@ -458,8 +458,8 @@ fn already_published_input_rejects_without_an_extra_edit() {
     let revision = fixture.service.revision().expect("published revision");
     let error = fixture
         .service
-        .publish_node_clip_parameter_keyframe(
-            fixture.item_id,
+        .publish_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(fixture.item_id),
             fixture.instance_id,
             fixture.target,
             time(1),
@@ -508,8 +508,8 @@ fn connected_and_constant_only_inputs_reject_atomically() {
             });
         }),
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 fixture.target.clone(),
                 time(1),
@@ -537,8 +537,8 @@ fn connected_and_constant_only_inputs_reject_atomically() {
     assert_rejected_without_state_or_history(
         particle,
         |fixture, revision| {
-            fixture.service.publish_node_clip_parameter_keyframe(
-                fixture.item_id,
+            fixture.service.publish_module_parameter_keyframe(
+                ModuleAutomationOwner::Item(fixture.item_id),
                 fixture.instance_id,
                 ModulePortAddress {
                     node_id: emitter_id,

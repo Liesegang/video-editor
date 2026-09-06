@@ -13,7 +13,7 @@ pub(super) fn show_module_create_menu(
     viewport: egui::Rect,
     transform: egui::emath::TSTransform,
     node_rects: &[egui::Rect],
-) -> Option<(ModuleNodeCreateRequest, egui::Pos2)> {
+) -> Option<ModuleEditorAction> {
     let (secondary_clicked, pointer_position, open_time) = ui.input(|input| {
         (
             input.pointer.secondary_clicked(),
@@ -46,6 +46,17 @@ pub(super) fn show_module_create_menu(
             .constrain(false)
             .show(ui.ctx(), |ui| {
                 show_searchable_popup_frame(ui, popup, |ui| {
+                    if let Some(action) = super::clipboard::menu_actions(
+                        ui,
+                        definition,
+                        &state.selected_nodes,
+                        None,
+                        graph_position,
+                    ) {
+                        selected = Some(action);
+                        should_close = true;
+                    }
+                    ui.separator();
                     let items =
                         super::menu::module_node_menu_items(plugins, &definition.host_contract);
                     if let Some(request) = show_searchable_items_with_qa(
@@ -54,7 +65,10 @@ pub(super) fn show_module_create_menu(
                         Some("node_editor.menu.search"),
                         &items,
                     ) {
-                        selected = Some((request, graph_position));
+                        selected = Some(ModuleEditorAction::CreateNode {
+                            request,
+                            graph_position,
+                        });
                         should_close = true;
                     }
                 })

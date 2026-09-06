@@ -21,7 +21,7 @@ use crate::ui::widgets::searchable_context_menu::{
     searchable_menu_button, show_searchable_items_with_qa, SearchableItem,
 };
 
-use super::{property_control, property_label, property_row, PropertyRowSpec};
+use super::{property_row, PropertyRowSpec};
 
 mod drag_drop;
 mod module_controls;

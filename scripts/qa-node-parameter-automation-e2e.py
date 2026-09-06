@@ -4,34 +4,27 @@
 import os
 import pathlib
 
-from qa_automation_support import wait_item_automation_surfaces, require_exact_item_times
+from qa_automation_support import (
+    assert_module_instance_unchanged,
+    history_shortcut,
+    require_exact_item_times,
+    sample_pixel_hashes,
+    seek_rendered,
+    wait_item_automation_surfaces,
+)
 from qa_curve_support import exercise_curve_key_live_preview
-from qa_node_module_support import active_definition, port, connection, place_node_for_inline_edit
+from qa_node_module_support import (
+    active_definition,
+    insert_image_opacity_in_primary_route,
+    place_node_for_inline_edit,
+)
 from qa_property_gesture_support import begin_reserved_keyframe_scrub, release_property_scrub
 from qa_support import (
     QaClient, QaFailure, activate_dock_tab, bring_timeline_component,
-    capture_viewport, close_clean_native_app, component_center,
-    find_clear_canvas_point, free_port, item_by_name, media_seconds,
+    capture_viewport, close_clean_native_app, free_port, item_by_name, media_seconds,
     request_clean_native_close, run_suite_main, save_project_to_disk,
-    seek_timeline_seconds, settled_preview_state, spawned_authoring_app,
+    settled_preview_state, spawned_authoring_app,
 )
-
-
-def _seek(client, seconds):
-    sought = seek_timeline_seconds(client, seconds)
-    return client.wait_until(
-        "rendered Node automation at {}s".format(seconds),
-        lambda: settled_preview_state(
-            client, sought["history"]["revision"],
-            sought["editor"]["timeline"]["current_frame"],
-        ),
-        30.0,
-    )
-
-
-def _samples(client, times):
-    return [{"seconds": time, "pixel_hash": _seek(client, time)["editor"]["preview"]["pixel_hash"]}
-            for time in times]
 
 
 def _invocation(project, item_id):
@@ -47,42 +40,12 @@ def _node_panel(client):
     activate_dock_tab(client, "dock.tab:node_editor", "Node Editor", "Node input animation")
 
 
-def _history(client, redo=False):
-    client.key("z", True, command=True, shift=redo)
-    client.key("z", False, command=True, shift=redo)
-
-
 def _unchanged_sibling(project, before, item_id):
     invocation = _invocation(before, item_id)
-    instance_id = invocation["instance_id"]
-    definition_id = before["module_instances"][instance_id]["definition_id"]
-    for collection, identity in (("items", item_id), ("module_instances", instance_id)):
-        if project[collection][identity] != before[collection][identity]:
-            raise QaFailure("Node input edit changed sibling " + collection)
-    expected_definition = dict(before["module_definitions"][definition_id])
-    # The existing COW owner normalizes the sole remaining SharedLocal instance.
-    # Graph, interface, default values and all versions must remain identical.
-    if expected_definition["sharing"] == {"kind": "shared_local"}:
-        remaining = sum(instance["definition_id"] == definition_id
-                        for instance in project["module_instances"].values())
-        if remaining != 1:
-            raise QaFailure("sibling definition did not become exclusively owned")
-        expected_definition["sharing"] = {"kind": "private"}
-    if project["module_definitions"][definition_id] != expected_definition:
-        raise QaFailure("Node input edit changed sibling definition beyond COW ownership")
-
-
-def _connect(client, from_node, to_node):
-    def ports():
-        snapshot = client.component_snapshot()
-        source = port(snapshot, "output", from_node, "image")
-        target = port(snapshot, "input", to_node, "image")
-        return (source, target) if source and target else None
-    source, target = client.wait_until("Image ports for Node automation", ports)
-    client.drag(component_center(source), component_center(target), steps=10)
-    client.wait_until(
-        "Image connection for Node automation",
-        lambda: connection(active_definition(client.state())[1], from_node, to_node),
+    if project["items"][item_id] != before["items"][item_id]:
+        raise QaFailure("Node input edit changed sibling item")
+    assert_module_instance_unchanged(
+        project, before, invocation["instance_id"], "Node input sibling"
     )
 
 
@@ -90,33 +53,7 @@ def _create_opacity(client, item_id):
     bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
     client.double_click_component("timeline.item:" + item_id)
     client.wait_component_settled("node_editor.canvas")
-    _, before = active_definition(client.state(), "node_clip")
-    nodes = before["graph"]["nodes"]
-    output = next(key for key, node in nodes.items()
-                  if node["content"]["type"].replace("_", "").lower() == "moduleoutput")
-    source = next(key for key in nodes if key != output)
-    point = find_clear_canvas_point(client.component_snapshot(), "node_editor.canvas",
-                                   ("node_editor.node:", "node_editor.node_header:"))
-    client.inject("click", {**point, "button": "secondary", "coordinate_space": "points"})
-    client.wait_component_settled("node_editor.menu.search")
-    client.click_component("node_editor.menu.search")
-    client.inject("text", {"text": "Image Opacity"})
-    client.wait_component_settled("node_editor.menu.create.image_opacity")
-    client.click_component("node_editor.menu.create.image_opacity")
-    created = client.wait_until(
-        "Image Opacity Node creation",
-        lambda: current if len((current := active_definition(client.state())[1])["graph"]["nodes"])
-        == len(nodes) + 1 else None,
-    )
-    opacity = next(iter(set(created["graph"]["nodes"]) - set(nodes)))
-    original_edge = before["graph"]["connections"][0]["id"]
-    client.click_component("node_editor.connection:" + original_edge, button="secondary")
-    client.wait_component_settled("node_editor.wire_menu.disconnect")
-    client.click_component("node_editor.wire_menu.disconnect")
-    client.wait_until("disconnect original Image route", lambda: not connection(
-        active_definition(client.state())[1], source, output))
-    _connect(client, source, opacity)
-    _connect(client, opacity, output)
+    opacity = insert_image_opacity_in_primary_route(client, "node_clip")
     place_node_for_inline_edit(client, opacity, "node_editor.property.node:{}:opacity".format(opacity))
     return opacity
 
@@ -143,9 +80,9 @@ def run_suite(client):
     )
     sibling_id = next(iter(set(duplicated["project"]["items"]) - set(before_duplicate["project"]["items"])))
     sibling_times = [start + duration + 0.5, start + duration + 2.0]
-    sibling_before = _samples(client, sibling_times)
+    sibling_before = sample_pixel_hashes(client, sibling_times, "Node automation sibling")
     original_times = [start + 0.5, start + 2.0]
-    first = _seek(client, original_times[0])
+    first = seek_rendered(client, original_times[0], "Node automation")
     bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
     client.double_click_component("timeline.item:" + item_id)
     mode_id = "node_editor.property_mode.node:{}:opacity".format(node_id)
@@ -175,12 +112,12 @@ def run_suite(client):
     if abs(media_seconds(keys[0]["time"]) - 0.5) > 1e-9:
         raise QaFailure("first Node key used absolute Timeline time")
     _unchanged_sibling(published["project"], before_publish["project"], sibling_id)
-    _history(client)
+    history_shortcut(client)
     client.wait_until("atomic publication Undo", lambda: client.state()["project"] == before_publish["project"])
-    _history(client, redo=True)
+    history_shortcut(client, redo=True)
     client.wait_until("stable publication Redo", lambda: client.state()["project"] == published["project"])
 
-    baseline = _seek(client, original_times[1])
+    baseline = seek_rendered(client, original_times[1], "Node automation")
     _node_panel(client)
     reservation = begin_reserved_keyframe_scrub(
         client, control_id, control_id, -36.0, "Node opacity key insertion",
@@ -214,9 +151,9 @@ def run_suite(client):
         lambda: state if (state := settled_preview_state(client, committed["history"]["revision"], frame))
         and state["editor"]["preview"]["pixel_hash"] == held["editor"]["preview"]["pixel_hash"] else None,
     )
-    _history(client)
+    history_shortcut(client)
     client.wait_until("Node value Undo", lambda: client.state()["project"] == baseline["project"])
-    _history(client, redo=True)
+    history_shortcut(client, redo=True)
     client.wait_until("Node value Redo", lambda: client.state()["project"] == committed["project"])
 
     inspector_mode = "inspector.property_mode:module_instance:{}:{}".format(instance_id, parameter_id)
@@ -228,20 +165,22 @@ def run_suite(client):
     client.click_component(mode_id + ".toggle_keyframe")
     client.wait_until("remove current Node input key", lambda: len(
         _keys(client.state()["project"], item_id, parameter_id)) == 1)
-    _history(client)
+    history_shortcut(client)
     client.wait_until("Node key removal Undo", lambda: client.state()["project"] == committed["project"])
 
     surfaces = wait_item_automation_surfaces(client, item_id,
         {"kind": "module_parameter", "id": parameter_id}, [key["id"] for key in keys], "Node input")
     require_exact_item_times(surfaces, [0.5, 2.0], original_times)
-    curve_baseline = _seek(client, start + 1.5)
+    curve_baseline = seek_rendered(client, start + 1.5, "Node automation")
     activate_dock_tab(client, "dock.tab:curve_editor", "Curve Editor", "Node input curve")
     curve = exercise_curve_key_live_preview(client, surfaces["curve_keys"][1]["id"], curve_baseline,
                                            "Node input curve", delta_x=16.0, delta_y=18.0)
     curve_capture = capture_viewport(client, artifact_dir / "node-input-curve.png")
-    if _samples(client, sibling_times) != sibling_before:
+    if sample_pixel_hashes(client, sibling_times, "Node automation sibling") != sibling_before:
         raise QaFailure("Node input automation changed sibling Preview pixels")
-    previews = _samples(client, original_times + sibling_times)
+    previews = sample_pixel_hashes(
+        client, original_times + sibling_times, "Node automation"
+    )
     project_file = pathlib.Path(os.environ["RUVIE_QA_PROJECT_PATH"])
     saved, file_evidence = save_project_to_disk(client, project_file, "Node input animation")
     initial_close = request_clean_native_close(client, "Node input animation", client.timeout)
@@ -255,7 +194,9 @@ def run_suite(client):
         fresh.wait_health()
         if fresh.state()["project"] != saved["project"]:
             raise QaFailure("fresh process changed Node input keys/IDs/values/easing")
-        if _samples(fresh, original_times + sibling_times) != previews:
+        if sample_pixel_hashes(
+            fresh, original_times + sibling_times, "reloaded Node automation"
+        ) != previews:
             raise QaFailure("fresh process changed Node input multi-time pixels")
         bring_timeline_component(fresh, "timeline.item:" + item_id, -120.0)
         fresh.double_click_component("timeline.item:" + item_id)

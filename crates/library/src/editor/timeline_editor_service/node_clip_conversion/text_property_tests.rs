@@ -223,7 +223,7 @@ fn text_conversion_publishes_the_direct_surface_in_stable_semantic_order() {
 
     let projected = TimelineEditorService::project_module_parameter_value(
         &converted,
-        item_id,
+        ModuleAutomationOwner::Item(item_id),
         content_control.instance_id,
         content_control.parameter_id,
         PropertyValue::String("Edited Node Clip content".to_string()),
@@ -241,7 +241,7 @@ fn text_conversion_publishes_the_direct_surface_in_stable_semantic_order() {
 
     service
         .set_module_parameter_constant(
-            item_id,
+            ModuleAutomationOwner::Item(item_id),
             content_id,
             PropertyValue::String("Edited Node Clip content".to_string()),
         )

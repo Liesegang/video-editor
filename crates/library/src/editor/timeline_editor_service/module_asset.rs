@@ -101,13 +101,9 @@ impl TimelineEditorService {
             ));
         }
         let mut session = self.write_session()?;
-        let asset = session
-            .project()
-            .assets
-            .iter()
-            .find(|asset| asset.id == asset_id)
-            .cloned()
-            .ok_or_else(|| LibraryError::Validation(format!("Missing Asset {asset_id}")))?;
+        let asset = require_project_asset(session.project(), asset_id)
+            .map_err(LibraryError::Validation)?
+            .clone();
         let mut node = crate::editor::AuthoringNodeFactory::create_asset_media(
             plugins,
             &asset,
@@ -130,4 +126,15 @@ impl TimelineEditorService {
             .map(|((node_id, definition_id), changes)| (node_id, definition_id, changes))
             .map_err(LibraryError::Validation)
     }
+}
+
+pub(super) fn require_project_asset(
+    project: &AuthoringProject,
+    asset_id: uuid::Uuid,
+) -> Result<&crate::model::project::asset::Asset, String> {
+    project
+        .assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .ok_or_else(|| format!("Missing Asset {asset_id}"))
 }

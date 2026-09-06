@@ -233,9 +233,24 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
   分数fpsの時刻は正確なMediaTimeのまま渡し、別Timelineや別InstancePathで開いたままのdocumentによる誤編集を拒否する。
   通常releaseのnative HTTP QAは28/28で、追加シナリオはNode入力の自動公開、キーの追加と削除、ドラッグ中の画素、Curveの時刻と値のドラッグ、Undo/Redo、兄弟Clipの不変、保存後の新プロセスでのProjectと複数時刻の画素一致を確認した（`target/qa-runs/20260906T-node-input-final`）。
   Rust全targetは1,809 passed、0 failed、17 ignored、QA runnerは39 tests、strict Clippyとfmt、851 filesの1,000行制限が通過した。
-- [ ] AttachmentとTransitionのNode本文にも、各hostの既存automation ownerを使って入力の時計と数値編集を接続する。
+- [x] Module Effectの入力をNode本文とInspectorの共通controllerへ接続し、TimelineとCurve Editorで同じキーを編集できるようにした。
+  Item AttachmentはClipのlocal time、TrackとTimelineのAttachmentはTimelineの時刻を使う。
+  ItemのDope Sheet表示とTrack/TimelineのCurve表示を実装した。
+  実画面ではItem Attachmentの自動公開、NodeとInspectorの値、held Previewとcommitの画素一致、Curveのキー移動、兄弟Clipの不変、保存と新プロセス再読込みを確認した。
+  Track/Timelineのowner、時刻、lane、RenderPlanへのキー保持はRustテストで確認し、これらの実画面シナリオは後続で追加する。
+- [ ] Track/TimelineのModule Effectを実画面で操作するシナリオと、ヘッダーのDope Sheet表示を追加する。
+- [ ] TransitionのNode本文にも、既存のTransition automation ownerを使って入力の時計と数値編集を接続する。
   今回のNode ClipのキーはTimeline定義内のInvocationに属するため、Nested Timelineを複数配置した場合は各配置に共通である。
   Composition配置ごとの疎なoverrideは別途実装と実画面検証を行い、今回の兄弟Node Clipの独立性と混同しない。
+- [x] NodeのCtrl+C/Ctrl+Vと右クリックのコピー、貼り付けを実装し、native HTTP QAで確認した。
+  選択した処理Nodeと内部接続を一括で複製し、値、公開入力、Invocationのキーを保持する。
+  貼り付けは既存のcopy-on-writeと1回のUndoを使い、Outputとhost境界を複製しない。
+  Node Clip、Module Effect、TransitionのInvocationを扱い、選択Nodeの公開SignalとActionもIDを振り直す。
+  外部接続とBindingは複製対象外とする。
+  貼り付け先にMedia Nodeの参照Assetがなければ、正本と履歴を変更せず拒否する。
+  実画面では接続した2つのNode、公開入力の定数値と2つのキー、相対配置、貼り付け後の選択、兄弟Clipの不変、1回のUndoを確認した。
+  最終通常releaseのnative HTTP QAは30/30、ログにERROR/panic/Failed to renderはなく、実画面も確認した（`target/qa-runs/20260906T-module-clipboard-final`）。
+  Rust全targetは1,825 passed、0 failed、17 ignored、QA runnerは39 tests、strict Clippyとfmt、860 filesの1,000行制限が通過した。
 - [x] Node header の enabled / bypass 操作を復旧し、状態表示だけのチェックマークにしない。native QA で bypass による画素変化と resume 後の元画素への一致を確認した。
 - [ ] Node header 全域の drag、選択しても動かない pin geometry、接続中 wire preview、marquee selection rectangle を共通 Node Editor surface で修正する。
 - [x] Edge の右クリック切断メニュー、選択後 Delete/Backspace、Ctrl+右ドラッグ切断と Alt+右ドラッグ接続を共通 Node Editor の実画面操作で検証した。Blender Node Wrangler 全機能の互換実装ではない。

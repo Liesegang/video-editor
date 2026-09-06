@@ -278,6 +278,17 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
         let node_id = node.id;
         let is_output = is_module_output_node(self.definition, node_id);
         let is_protected = self.definition.is_protected_host_boundary_node(node_id);
+        if let Some(action) = super::clipboard::menu_actions(
+            ui,
+            self.definition,
+            self.selected_nodes,
+            Some(node_id),
+            egui::pos2(node.ui_position[0] + 32.0, node.ui_position[1] + 32.0),
+        ) {
+            self.actions.push(action);
+            ui.close();
+        }
+        ui.separator();
         const OUTPUT_STATE_REASON: &str =
             "Module Output is a required render terminal and cannot be disabled or bypassed.";
         const OUTPUT_DELETE_REASON: &str =
@@ -451,7 +462,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                                 .protects_parameter(parameter.id)
                     });
                 let interface_response = if let Some(parameter) =
-                    published.filter(|_| self.parameter_host.item.is_ok())
+                    published.filter(|_| self.parameter_host.owner.is_ok())
                 {
                     let response = super::parameter::show_published_input(
                         ui,
@@ -485,7 +496,7 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
                         self.palette,
                         &port.key,
                         self.parameter_host
-                            .item
+                            .owner
                             .as_ref()
                             .map(|_| ())
                             .map_err(String::as_str),

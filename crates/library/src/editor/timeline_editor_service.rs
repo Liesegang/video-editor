@@ -15,6 +15,7 @@ mod item;
 mod keyframe_automation;
 mod module;
 mod module_asset;
+mod module_automation_owner;
 mod module_structure;
 mod node_clip_conversion;
 mod palette;
@@ -37,6 +38,8 @@ mod item_tests;
 mod keyframe_projection_tests;
 #[cfg(test)]
 mod module_asset_tests;
+#[cfg(test)]
+mod module_parameter_attachment_tests;
 #[cfg(test)]
 mod module_parameter_publication_tests;
 #[cfg(test)]
@@ -77,9 +80,11 @@ pub use edit_plan::{
 };
 pub use interface::{
     ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult,
-    NodeParameterKeyframePublication,
+    ModuleParameterKeyframePublication,
 };
 pub use keyframe_automation::AuthoringKeyframeTarget;
+pub use module::{ModuleSelectionClipboard, ModuleSelectionPasteReceipt};
+pub use module_automation_owner::ModuleAutomationOwner;
 pub use text_ensemble::{
     NodeClipTextContent, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack,
 };

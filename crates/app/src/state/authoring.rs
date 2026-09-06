@@ -450,6 +450,10 @@ pub enum AutomationTarget {
         key: String,
     },
     ModuleParameter(library::model::authoring::PublishedParameterId),
+    AttachmentModuleParameter {
+        attachment_id: AttachmentId,
+        parameter_id: library::model::authoring::PublishedParameterId,
+    },
     AttachmentParameter {
         attachment_id: AttachmentId,
         key: String,
@@ -461,6 +465,8 @@ pub enum AutomationTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AutomationOwner {
     Item(TimelineItemId),
+    Track(TimelineTrackId),
+    Timeline(TimelineId),
     TransitionDefinition(TransitionId),
     TransitionInstance {
         transition_id: TransitionId,
@@ -731,6 +737,8 @@ fn automation_owner_exists(
 ) -> bool {
     match owner {
         AutomationOwner::Item(item_id) => project.items.contains_key(item_id),
+        AutomationOwner::Track(track_id) => project.tracks.contains_key(track_id),
+        AutomationOwner::Timeline(timeline_id) => project.timelines.contains_key(timeline_id),
         AutomationOwner::TransitionDefinition(transition_id) => {
             project.transitions.contains_key(transition_id)
         }

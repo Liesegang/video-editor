@@ -1,11 +1,13 @@
 use super::*;
 
+mod clipboard;
 mod connections;
 mod output;
 mod parameter_automation;
 
+pub use clipboard::{ModuleSelectionClipboard, ModuleSelectionPasteReceipt};
 pub(super) use parameter_automation::{
-    require_item_parameter_automation, upsert_parameter_keyframe,
+    require_module_parameter_automation, upsert_parameter_keyframe,
 };
 pub(super) mod removal;
 

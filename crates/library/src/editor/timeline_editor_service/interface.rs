@@ -64,7 +64,7 @@ pub enum ModuleInterfaceEditResult {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct NodeParameterKeyframePublication {
+pub struct ModuleParameterKeyframePublication {
     pub parameter_id: PublishedParameterId,
     pub keyframe_id: KeyframeId,
     pub definition_id: ModuleDefinitionId,
@@ -77,14 +77,14 @@ impl TimelineEditorService {
     ///
     /// Copy-on-writes shared topology to expose the input, but stores no keys
     /// in that Definition: animation belongs to the Timeline invocation.
-    pub fn publish_node_clip_parameter_keyframe(
+    pub fn publish_module_parameter_keyframe(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         expected_instance_id: ModuleInstanceId,
         target: ModulePortAddress,
         local_time: MediaTime,
         source_revision: ProjectRevision,
-    ) -> Result<NodeParameterKeyframePublication, LibraryError> {
+    ) -> Result<ModuleParameterKeyframePublication, LibraryError> {
         let mut session = self.write_session()?;
         if session.revision() != source_revision {
             return Err(LibraryError::Validation(format!(
@@ -93,36 +93,23 @@ impl TimelineEditorService {
                 session.revision().get()
             )));
         }
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        let actual_instance_id = session
-            .project()
-            .items
-            .get(&item_id)
-            .and_then(|item| match &item.source {
-                SourceRef::Module(invocation) => Some(invocation.instance_id),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                LibraryError::Validation(format!("Timeline item {item_id} is not a Node Clip"))
-            })?;
+        let actual_instance_id = owner
+            .invocation(session.project())
+            .map_err(LibraryError::Validation)?
+            .instance_id;
         if actual_instance_id != expected_instance_id {
             return Err(LibraryError::Validation(format!(
-                "Node Clip {item_id} changed Module instance from {expected_instance_id} to {actual_instance_id}"
+                "Module automation owner changed Module instance from {expected_instance_id} to {actual_instance_id}"
             )));
         }
-        let invalidations = vec![
-            ProjectInvalidation::Item {
-                timeline_id,
-                item_id,
-            },
-            ProjectInvalidation::ModuleInstance {
-                instance_id: expected_instance_id,
-            },
-        ];
+        let mut invalidations = owner.invalidations(session.project())?;
+        invalidations.push(ProjectInvalidation::ModuleInstance {
+            instance_id: expected_instance_id,
+        });
         let ((parameter_id, keyframe_id, definition_id), changes) = session
             .transact(invalidations, |project| {
                 let (name, default_value) =
-                    publishable_node_parameter(project, item_id, expected_instance_id, &target)?;
+                    publishable_node_parameter(project, owner, expected_instance_id, &target)?;
                 let definition_id = private_definition_for_instance(project, expected_instance_id)?;
                 let result = apply_interface_command(
                     project,
@@ -147,7 +134,7 @@ impl TimelineEditorService {
                 let insertion_id = KeyframeId::new();
                 let keyframe_id = upsert_parameter_keyframe(
                     project,
-                    item_id,
+                    owner,
                     parameter_id,
                     insertion_id,
                     local_time,
@@ -157,7 +144,7 @@ impl TimelineEditorService {
                 Ok((parameter_id, keyframe_id, definition_id))
             })
             .map_err(LibraryError::Validation)?;
-        Ok(NodeParameterKeyframePublication {
+        Ok(ModuleParameterKeyframePublication {
             parameter_id,
             keyframe_id,
             definition_id,
@@ -235,21 +222,14 @@ impl TimelineEditorService {
 
 fn publishable_node_parameter(
     project: &AuthoringProject,
-    item_id: TimelineItemId,
+    owner: ModuleAutomationOwner,
     expected_instance_id: ModuleInstanceId,
     target: &ModulePortAddress,
 ) -> Result<(String, PropertyValue), String> {
-    let invocation = project
-        .items
-        .get(&item_id)
-        .and_then(|item| match &item.source {
-            SourceRef::Module(invocation) => Some(invocation),
-            _ => None,
-        })
-        .ok_or_else(|| format!("Timeline item {item_id} is not a Node Clip"))?;
+    let invocation = owner.invocation(project)?;
     if invocation.instance_id != expected_instance_id {
         return Err(format!(
-            "Node Clip {item_id} changed Module instance from {expected_instance_id} to {}",
+            "Module automation owner changed Module instance from {expected_instance_id} to {}",
             invocation.instance_id
         ));
     }

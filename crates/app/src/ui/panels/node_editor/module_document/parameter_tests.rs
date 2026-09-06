@@ -6,7 +6,7 @@ use library::model::authoring::{
     ModuleTemplateOrigin, TimelineId, TimelineInterval, TimelineItemId,
 };
 
-use super::parameter::node_clip_parameter_item;
+use super::parameter::module_parameter_owner;
 use crate::state::node_editor::ModuleEditorHost;
 
 struct Fixture {
@@ -85,22 +85,26 @@ fn root_path_and_absent_path_are_the_same_parameter_scope() {
     let root_path = InstancePath::root(fixture.root_timeline_id);
 
     assert_eq!(
-        node_clip_parameter_item(
+        module_parameter_owner(
             &fixture.project,
             fixture.root_timeline_id,
             Some(&root_path),
             &host(&fixture, None, fixture.instance_id),
         ),
-        Ok(fixture.item_id)
+        Ok(library::editor::ModuleAutomationOwner::Item(
+            fixture.item_id
+        ))
     );
     assert_eq!(
-        node_clip_parameter_item(
+        module_parameter_owner(
             &fixture.project,
             fixture.root_timeline_id,
             None,
             &host(&fixture, Some(root_path), fixture.instance_id),
         ),
-        Ok(fixture.item_id)
+        Ok(library::editor::ModuleAutomationOwner::Item(
+            fixture.item_id
+        ))
     );
 }
 
@@ -108,7 +112,7 @@ fn root_path_and_absent_path_are_the_same_parameter_scope() {
 fn a_different_active_timeline_cannot_edit_the_retained_document() {
     let fixture = fixture();
 
-    let error = node_clip_parameter_item(
+    let error = module_parameter_owner(
         &fixture.project,
         fixture.other_timeline_id,
         None,
@@ -116,7 +120,7 @@ fn a_different_active_timeline_cannot_edit_the_retained_document() {
     )
     .expect_err("another Timeline must not own this Node Clip's keys");
 
-    assert!(error.contains("Open the Node Clip's Timeline"));
+    assert!(error.contains("Open the processor's Timeline"));
 }
 
 #[test]
@@ -125,7 +129,7 @@ fn a_different_nested_placement_path_cannot_edit_the_document() {
     let host_path = InstancePath::root(fixture.root_timeline_id).nested(TimelineItemId::new());
     let active_path = InstancePath::root(fixture.root_timeline_id).nested(TimelineItemId::new());
 
-    let error = node_clip_parameter_item(
+    let error = module_parameter_owner(
         &fixture.project,
         fixture.root_timeline_id,
         Some(&active_path),
@@ -140,7 +144,7 @@ fn a_different_nested_placement_path_cannot_edit_the_document() {
 fn a_replaced_module_instance_invalidates_the_retained_document() {
     let fixture = fixture();
 
-    let error = node_clip_parameter_item(
+    let error = module_parameter_owner(
         &fixture.project,
         fixture.root_timeline_id,
         None,

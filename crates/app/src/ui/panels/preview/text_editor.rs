@@ -338,7 +338,7 @@ fn parameter_edit(state: &AuthoringUiState) -> Option<TransientPropertyEdit> {
     let target = editor.parameter_target?;
     Some(TransientPropertyEdit::module_parameter(
         editor.target_revision?,
-        editor.target_item?,
+        library::editor::ModuleAutomationOwner::Item(editor.target_item?),
         target.instance_id,
         target.parameter_id,
         PropertyValue::String(editor.buffer.clone()),

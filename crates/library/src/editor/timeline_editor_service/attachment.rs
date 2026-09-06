@@ -507,7 +507,7 @@ fn ordered_attachment_ids_excluding(
     entries.into_iter().map(|(_, id)| id).collect()
 }
 
-fn attachment_module_invocation_mut(
+pub(super) fn attachment_module_invocation_mut(
     project: &mut AuthoringProject,
     attachment_id: AttachmentId,
 ) -> Result<&mut ModuleInvocation, String> {

@@ -730,6 +730,8 @@ fn visible_playhead_x(transform: CurveTransform, local_seconds: f64) -> Option<f
 fn selected_owner(state: &AuthoringUiState) -> Option<AutomationOwner> {
     match state.selection.primary()? {
         AuthoringSelection::Item(item_id) => Some(AutomationOwner::Item(item_id)),
+        AuthoringSelection::Track(track_id) => Some(AutomationOwner::Track(track_id)),
+        AuthoringSelection::Timeline(timeline_id) => Some(AutomationOwner::Timeline(timeline_id)),
         AuthoringSelection::Transition(transition_id) => Some(automation_lanes::transition_owner(
             transition_id,
             state.active_instance_path.as_ref(),

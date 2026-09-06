@@ -24,72 +24,17 @@ pub(super) fn module_effect_controls(
         return;
     };
 
+    let context = crate::ui::module_parameter_editor::ModuleParameterContext {
+        project: resources.project,
+        service: resources.service,
+        plugins: resources.plugins,
+        owner: library::editor::ModuleAutomationOwner::Attachment(attachment.id),
+        invocation,
+        instance,
+        definition,
+    };
     for parameter in &definition.interface.parameters {
-        let is_overridden = instance.parameter_overrides.contains_key(&parameter.id);
-        let current = instance
-            .parameter_overrides
-            .get(&parameter.id)
-            .unwrap_or(&parameter.default_value);
-        let draft_key = format!("module:{}", parameter.id);
-        let mut edited = None;
-        let mut reset = false;
-        ui.horizontal(|ui| {
-            property_label(
-                ui,
-                &format!(
-                    "attachment:{}:module_parameter:{}",
-                    attachment.id, parameter.id
-                ),
-                &parameter.name,
-            );
-            let draft = state
-                .inspector
-                .effect_values
-                .entry((attachment.id, draft_key))
-                .or_insert_with(|| current.clone());
-            if property_control(
-                ui,
-                &format!(
-                    "attachment:{}:module_parameter:{}",
-                    attachment.id, parameter.id
-                ),
-                draft,
-                None,
-                "",
-                0.1,
-                &resources.project.palette,
-            ) {
-                edited = Some(draft.clone());
-            }
-            if is_overridden {
-                reset = ui
-                    .small_button(icons::ARROW_COUNTER_CLOCKWISE)
-                    .on_hover_text("Reset to the Module default")
-                    .clicked();
-            }
-        });
-        if let Some(value) = edited {
-            match resources
-                .service
-                .set_module_parameter(instance.id, parameter.id, value)
-            {
-                Ok(_) => state.status = format!("Updated {}", parameter.name),
-                Err(error) => state.error = Some(error.to_string()),
-            }
-        } else if reset {
-            match resources
-                .service
-                .clear_module_parameter_override(instance.id, parameter.id)
-            {
-                Ok(_) => state.status = format!("Reset {}", parameter.name),
-                Err(error) => state.error = Some(error.to_string()),
-            }
-        }
-        super::super::value_provenance(
-            ui,
-            invocation.automation_tracks.contains_key(&parameter.id),
-            is_overridden,
-        );
+        super::super::property_authoring::published_parameter_row(ui, state, &context, parameter);
     }
 
     let additional_inputs = definition

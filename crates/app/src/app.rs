@@ -614,6 +614,8 @@ impl eframe::App for RuViEApp {
             Ok((project, revision)) => {
                 self.state.reconcile(&project);
                 self.update_playback(Arc::clone(&project), revision);
+                self.state.node_editor.keyboard_focused =
+                    self.command_context().scope == CommandScope::NodeEditor;
                 egui::TopBottomPanel::bottom("status_bar")
                     .exact_height(24.0)
                     .show(context, |ui| status_bar(ui, &project, self));

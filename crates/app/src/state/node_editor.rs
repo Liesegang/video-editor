@@ -24,6 +24,10 @@ pub struct NodeEditorState {
     pub panel_rect: Option<egui::Rect>,
     pub focus_requested: bool,
     pub pending_command: Option<CommandId>,
+    /// Dock focus, not pointer hover, routes clipboard keyboard events.
+    pub keyboard_focused: bool,
+    /// An asynchronous native paste request stays scoped to its originating host.
+    pub pending_paste: Option<(ModuleEditorHost, egui::Pos2, f64)>,
     pub active_document: Option<NodeEditorDocument>,
     pub surface_interaction:
         node_editor_ui::InteractionState<Uuid, ModuleEditorPortId, ModuleConnectionId, Uuid>,
@@ -50,6 +54,8 @@ impl Default for NodeEditorState {
             panel_rect: None,
             focus_requested: false,
             pending_command: None,
+            keyboard_focused: false,
+            pending_paste: None,
             active_document: None,
             surface_interaction: node_editor_ui::InteractionState::default(),
             selected_nodes: HashSet::new(),

@@ -111,7 +111,13 @@ fn recognizes_adds_reorders_and_removes_real_style_nodes_atomically() {
         .set_module_parameter(instance_id, parameter_id, default.clone())
         .expect("override");
     service
-        .upsert_module_parameter_keyframe(item_id, parameter_id, time(1), default, None)
+        .upsert_module_parameter_keyframe(
+            ModuleAutomationOwner::Item(item_id),
+            parameter_id,
+            time(1),
+            default,
+            None,
+        )
         .expect("automation");
     let before_remove = service.snapshot().expect("before remove");
 

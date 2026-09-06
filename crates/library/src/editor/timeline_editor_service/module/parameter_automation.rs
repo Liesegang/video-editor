@@ -1,7 +1,6 @@
 //! Instance values and Timeline-owned automation for published Module parameters.
 
 use super::super::*;
-use super::item_module_invocation_mut;
 
 impl TimelineEditorService {
     pub fn set_module_parameter(
@@ -25,46 +24,32 @@ impl TimelineEditorService {
     /// left disagreeing across two user-visible transactions.
     pub fn set_module_parameter_constant(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         parameter_id: PublishedParameterId,
         value: PropertyValue,
     ) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
-        let instance_id = session
-            .project()
-            .items
-            .get(&item_id)
-            .and_then(|item| match &item.source {
-                SourceRef::Module(invocation) => Some(invocation.instance_id),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                LibraryError::Validation(format!("Timeline item {item_id} is not a Node Clip"))
-            })?;
+        let instance_id = owner
+            .invocation(session.project())
+            .map_err(LibraryError::Validation)?
+            .instance_id;
+        let mut invalidations = owner.invalidations(session.project())?;
+        invalidations.push(ProjectInvalidation::ModuleInstance { instance_id });
         session
-            .transact(
-                vec![
-                    ProjectInvalidation::Item {
-                        timeline_id,
-                        item_id,
-                    },
-                    ProjectInvalidation::ModuleInstance { instance_id },
-                ],
-                |project| {
-                    let authored_instance_id = {
-                        let invocation = item_module_invocation_mut(project, item_id)?;
-                        invocation.automation_tracks.remove(&parameter_id);
-                        invocation.instance_id
-                    };
-                    if authored_instance_id != instance_id {
-                        return Err(format!(
-                            "Node Clip {item_id} changed Module instance during the edit"
-                        ));
-                    }
-                    set_instance_parameter_value(project, instance_id, parameter_id, value)
-                },
-            )
+            .transact(invalidations, |project| {
+                let authored_instance_id = {
+                    let invocation = owner.invocation_mut(project)?;
+                    invocation.automation_tracks.remove(&parameter_id);
+                    invocation.instance_id
+                };
+                if authored_instance_id != instance_id {
+                    return Err(
+                        "Module automation owner changed Module instance during the edit"
+                            .to_string(),
+                    );
+                }
+                set_instance_parameter_value(project, instance_id, parameter_id, value)
+            })
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
@@ -103,7 +88,7 @@ impl TimelineEditorService {
 
     pub fn upsert_module_parameter_keyframe(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         parameter_id: PublishedParameterId,
         local_time: MediaTime,
         value: PropertyValue,
@@ -111,25 +96,19 @@ impl TimelineEditorService {
     ) -> Result<(KeyframeId, ChangeSet), LibraryError> {
         let insertion_id = KeyframeId::new();
         let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
+        let invalidations = owner.invalidations(session.project())?;
         session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    upsert_parameter_keyframe(
-                        project,
-                        item_id,
-                        parameter_id,
-                        insertion_id,
-                        local_time,
-                        value,
-                        easing,
-                    )
-                },
-            )
+            .transact(invalidations, |project| {
+                upsert_parameter_keyframe(
+                    project,
+                    owner,
+                    parameter_id,
+                    insertion_id,
+                    local_time,
+                    value,
+                    easing,
+                )
+            })
             .map_err(LibraryError::Validation)
     }
 
@@ -138,7 +117,7 @@ impl TimelineEditorService {
     /// retaining Timeline automation ownership and instance-local constants.
     pub fn project_module_parameter_value(
         project: &AuthoringProject,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         instance_id: ModuleInstanceId,
         parameter_id: PublishedParameterId,
         value: PropertyValue,
@@ -147,7 +126,7 @@ impl TimelineEditorService {
         let mut projected = project.clone();
         apply_module_parameter_value_to_project(
             &mut projected,
-            item_id,
+            owner,
             instance_id,
             parameter_id,
             value,
@@ -161,28 +140,26 @@ impl TimelineEditorService {
     /// one authoring transaction.
     pub fn apply_module_parameter_value(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         instance_id: ModuleInstanceId,
         parameter_id: PublishedParameterId,
         value: PropertyValue,
         target: AuthoringPropertyValueTarget,
     ) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
         let invalidations = match target {
             AuthoringPropertyValueTarget::Constant => {
                 vec![ProjectInvalidation::ModuleInstance { instance_id }]
             }
-            AuthoringPropertyValueTarget::Keyframe { .. } => vec![ProjectInvalidation::Item {
-                timeline_id,
-                item_id,
-            }],
+            AuthoringPropertyValueTarget::Keyframe { .. } => {
+                owner.invalidations(session.project())?
+            }
         };
         session
             .transact(invalidations, |project| {
                 apply_module_parameter_value_to_project(
                     project,
-                    item_id,
+                    owner,
                     instance_id,
                     parameter_id,
                     value,
@@ -195,38 +172,32 @@ impl TimelineEditorService {
 
     pub fn remove_module_parameter_keyframe(
         &self,
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         parameter_id: PublishedParameterId,
         keyframe_id: KeyframeId,
     ) -> Result<ChangeSet, LibraryError> {
         let mut session = self.write_session()?;
-        let timeline_id = timeline_for_item(session.project(), item_id)?;
+        let invalidations = owner.invalidations(session.project())?;
         session
-            .transact(
-                vec![ProjectInvalidation::Item {
-                    timeline_id,
-                    item_id,
-                }],
-                |project| {
-                    let invocation = item_module_invocation_mut(project, item_id)?;
-                    let remove_track = {
-                        let track = invocation
-                            .automation_tracks
-                            .get_mut(&parameter_id)
-                            .ok_or_else(|| {
-                                format!("Missing automation for Published parameter {parameter_id}")
-                            })?;
-                        if !track.remove_keyframe(keyframe_id) {
-                            return Err(format!("Missing Automation Keyframe {keyframe_id}"));
-                        }
-                        track.keyframes.is_empty()
-                    };
-                    if remove_track {
-                        invocation.automation_tracks.remove(&parameter_id);
+            .transact(invalidations, |project| {
+                let invocation = owner.invocation_mut(project)?;
+                let remove_track = {
+                    let track = invocation
+                        .automation_tracks
+                        .get_mut(&parameter_id)
+                        .ok_or_else(|| {
+                            format!("Missing automation for Published parameter {parameter_id}")
+                        })?;
+                    if !track.remove_keyframe(keyframe_id) {
+                        return Err(format!("Missing Automation Keyframe {keyframe_id}"));
                     }
-                    Ok(())
-                },
-            )
+                    track.keyframes.is_empty()
+                };
+                if remove_track {
+                    invocation.automation_tracks.remove(&parameter_id);
+                }
+                Ok(())
+            })
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
@@ -253,20 +224,20 @@ fn set_instance_parameter_value(
 
 pub(in crate::editor::timeline_editor_service) fn upsert_parameter_keyframe(
     project: &mut AuthoringProject,
-    item_id: TimelineItemId,
+    owner: ModuleAutomationOwner,
     parameter_id: PublishedParameterId,
     insertion_id: KeyframeId,
     local_time: MediaTime,
     value: PropertyValue,
     easing: Option<EasingFunction>,
 ) -> Result<KeyframeId, String> {
-    let definition = require_item_parameter_automation(project, item_id, parameter_id)
+    let definition = require_module_parameter_automation(project, owner, parameter_id)
         .map_err(|error| error.to_string())?;
     definition.validate_parameter_value(parameter_id, &value)?;
     if local_time.is_negative() {
         return Err("Automation Keyframe time must be non-negative".to_string());
     }
-    let invocation = item_module_invocation_mut(project, item_id)?;
+    let invocation = owner.invocation_mut(project)?;
     let track = invocation
         .automation_tracks
         .entry(parameter_id)
@@ -278,17 +249,15 @@ pub(in crate::editor::timeline_editor_service) fn upsert_parameter_keyframe(
 
 fn apply_module_parameter_value_to_project(
     project: &mut AuthoringProject,
-    item_id: TimelineItemId,
+    owner: ModuleAutomationOwner,
     instance_id: ModuleInstanceId,
     parameter_id: PublishedParameterId,
     value: PropertyValue,
     target: AuthoringPropertyValueTarget,
 ) -> Result<(), String> {
-    let invocation = item_module_invocation_mut(project, item_id)?;
+    let invocation = owner.invocation(project)?;
     if invocation.instance_id != instance_id {
-        return Err(format!(
-            "Node Clip {item_id} changed Module instance during the edit"
-        ));
+        return Err("Module automation owner changed Module instance during the edit".to_string());
     }
     match target {
         AuthoringPropertyValueTarget::Constant => {
@@ -304,7 +273,7 @@ fn apply_module_parameter_value_to_project(
             insertion_id,
         } => upsert_parameter_keyframe(
             project,
-            item_id,
+            owner,
             parameter_id,
             insertion_id,
             local_time,
@@ -315,20 +284,14 @@ fn apply_module_parameter_value_to_project(
     }
 }
 
-pub(in crate::editor::timeline_editor_service) fn require_item_parameter_automation(
+pub(in crate::editor::timeline_editor_service) fn require_module_parameter_automation(
     project: &AuthoringProject,
-    item_id: TimelineItemId,
+    owner: ModuleAutomationOwner,
     parameter_id: PublishedParameterId,
 ) -> Result<&ModuleDefinition, LibraryError> {
-    let item = project
-        .items
-        .get(&item_id)
-        .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline item {item_id}")))?;
-    let SourceRef::Module(invocation) = &item.source else {
-        return Err(LibraryError::Validation(format!(
-            "Timeline item {item_id} is not a Node Clip"
-        )));
-    };
+    let invocation = owner
+        .invocation(project)
+        .map_err(LibraryError::Validation)?;
     let instance = project
         .module_instances
         .get(&invocation.instance_id)
@@ -437,7 +400,7 @@ mod tests {
             .expect("Node Clip");
         service
             .upsert_module_parameter_keyframe(
-                item_id,
+                ModuleAutomationOwner::Item(item_id),
                 parameter_id,
                 MediaTime::new(1, 1).expect("time"),
                 default_value.clone(),
@@ -453,7 +416,7 @@ mod tests {
         };
         let projected = TimelineEditorService::project_module_parameter_value(
             &insertion_source,
-            item_id,
+            ModuleAutomationOwner::Item(item_id),
             instance_id,
             parameter_id,
             default_value.clone(),
@@ -477,7 +440,7 @@ mod tests {
         );
         service
             .apply_module_parameter_value(
-                item_id,
+                ModuleAutomationOwner::Item(item_id),
                 instance_id,
                 parameter_id,
                 default_value.clone(),
@@ -507,7 +470,7 @@ mod tests {
         let collision_revision = service.revision().expect("collision baseline revision");
         TimelineEditorService::project_module_parameter_value(
             &insertion_source,
-            item_id,
+            ModuleAutomationOwner::Item(item_id),
             instance_id,
             parameter_id,
             default_value.clone(),
@@ -516,7 +479,7 @@ mod tests {
         .expect_err("projection rejects an identity collision");
         service
             .apply_module_parameter_value(
-                item_id,
+                ModuleAutomationOwner::Item(item_id),
                 instance_id,
                 parameter_id,
                 default_value.clone(),
@@ -537,7 +500,11 @@ mod tests {
         let constant = default_value;
 
         let change = service
-            .set_module_parameter_constant(item_id, parameter_id, constant.clone())
+            .set_module_parameter_constant(
+                ModuleAutomationOwner::Item(item_id),
+                parameter_id,
+                constant.clone(),
+            )
             .expect("constant");
         assert_eq!(change.revision.get(), revision.get() + 1);
         assert!(change.invalidations.contains(&ProjectInvalidation::Item {

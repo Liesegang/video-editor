@@ -2,7 +2,7 @@
 
 use super::attachment::{attachment_owner, builtin_effect_parameter_mut, owner_invalidations};
 use super::authoring::{authored_properties_mut, property_owner_invalidations};
-use super::module::{item_module_invocation_mut, require_item_parameter_automation};
+use super::module::require_module_parameter_automation;
 use super::transition_parameter_automation::{
     edit_transition_parameter_track_in_project, transition_parameter_invalidations,
 };
@@ -17,7 +17,7 @@ pub enum AuthoringKeyframeTarget {
         key: String,
     },
     ModuleParameter {
-        item_id: TimelineItemId,
+        owner: ModuleAutomationOwner,
         parameter_id: PublishedParameterId,
     },
     BuiltinEffectParameter {
@@ -87,14 +87,11 @@ fn keyframe_target_invalidations(
             property_owner_invalidations(project, *owner)
         }
         AuthoringKeyframeTarget::ModuleParameter {
-            item_id,
+            owner,
             parameter_id,
         } => {
-            require_item_parameter_automation(project, *item_id, *parameter_id)?;
-            Ok(vec![ProjectInvalidation::Item {
-                timeline_id: timeline_for_item(project, *item_id)?,
-                item_id: *item_id,
-            }])
+            require_module_parameter_automation(project, *owner, *parameter_id)?;
+            owner.invalidations(project)
         }
         AuthoringKeyframeTarget::BuiltinEffectParameter { attachment_id, .. } => {
             let owner = attachment_owner(project, *attachment_id)?;
@@ -131,9 +128,10 @@ fn apply_keyframe_update(
                 .ok_or_else(|| format!("Missing Keyframe {keyframe_id}"))
         }
         AuthoringKeyframeTarget::ModuleParameter {
-            item_id,
+            owner,
             parameter_id,
-        } => item_module_invocation_mut(project, *item_id)?
+        } => owner
+            .invocation_mut(project)?
             .automation_tracks
             .get_mut(parameter_id)
             .ok_or_else(|| format!("Missing automation for Published parameter {parameter_id}"))?
