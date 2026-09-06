@@ -1,7 +1,9 @@
 use super::*;
 
+use crate::core::render_plan::{RenderPlanCompiler, evaluate_render_plan_frame};
 use crate::editor::TextEnsembleOperationKind;
 use crate::editor::timeline_editor_service::node_clip_conversion_tests::{small_service, time};
+use crate::model::frame::entity::{FrameContent, FrameItem};
 use crate::model::node::GeneratorContent;
 use crate::plugin::DECORATOR_CATEGORY;
 use ordered_float::OrderedFloat;
@@ -11,6 +13,40 @@ fn vec2(x: f64, y: f64) -> PropertyValue {
         x: OrderedFloat(x),
         y: OrderedFloat(y),
     })
+}
+
+fn first_text(items: &[FrameItem]) -> Option<&str> {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                if let FrameContent::Text { text, .. } = &object.content {
+                    return Some(text);
+                }
+            }
+            FrameItem::Group(group) => {
+                if let Some(text) = first_text(&group.items) {
+                    return Some(text);
+                }
+            }
+            FrameItem::Transition(transition) => {
+                if let Some(text) = first_text(std::slice::from_ref(&transition.from.item))
+                    .or_else(|| first_text(std::slice::from_ref(&transition.to.item)))
+                {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn evaluated_text(project: &AuthoringProject, plugins: &PluginManager) -> String {
+    let plan = RenderPlanCompiler::compile(project).expect("Text RenderPlan");
+    let frame = evaluate_render_plan_frame(project, &plan, plugins, 0, 1.0, None)
+        .expect("evaluated Text frame");
+    first_text(&frame.items)
+        .expect("Text FrameObject")
+        .to_string()
 }
 
 #[test]
@@ -169,4 +205,36 @@ fn text_conversion_publishes_the_direct_surface_in_stable_semantic_order() {
             "First line\nSecond line".to_string()
         ))
     );
+    let content_id = content.id;
+    let converted = after.clone();
+    let revision = service.revision().unwrap();
+    assert!(
+        service
+            .set_text(item_id, "Direct API must reject".to_string())
+            .is_err()
+    );
+    assert_eq!(service.revision().unwrap(), revision);
+    assert_eq!(service.snapshot().unwrap().as_ref(), converted.as_ref());
+
+    service
+        .set_module_parameter(
+            result.instance_id,
+            content_id,
+            PropertyValue::String("Edited Node Clip content".to_string()),
+        )
+        .expect("edit the published Content parameter");
+    let edited = service.snapshot().unwrap();
+    assert_eq!(
+        edited.module_instances[&result.instance_id].parameter_overrides[&content_id],
+        PropertyValue::String("Edited Node Clip content".to_string())
+    );
+    assert_eq!(
+        evaluated_text(&edited, &plugins),
+        "Edited Node Clip content"
+    );
+    assert_eq!(edited.module_definitions, converted.module_definitions);
+    assert_eq!(edited.items[&sibling_id], converted.items[&sibling_id]);
+
+    service.undo().unwrap().expect("one Node Clip Content undo");
+    assert_eq!(service.snapshot().unwrap().as_ref(), converted.as_ref());
 }

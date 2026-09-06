@@ -67,6 +67,13 @@ impl<'a> AuthoringTabViewer<'a> {
 impl TabViewer for AuthoringTabViewer<'_> {
     type Tab = Tab;
 
+    fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
+        // Each panel owns its scrolling or pan/zoom viewport. A second dock
+        // ScrollArea would move fixed toolbars/footers when a nested TextEdit
+        // asks to reveal its caret (and steal ordinary canvas navigation).
+        [false, false]
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         let waveform = AuthoringWaveformService::new(Arc::clone(self.cache));
         match tab {

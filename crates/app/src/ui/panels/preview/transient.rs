@@ -79,14 +79,14 @@ impl AuthoringPreviewRuntime {
         revision: ProjectRevision,
         state: &AuthoringUiState,
     ) -> ProjectedEdit {
-        let text_digest = text_editor::transient_edit_digest(state);
+        let text_digest = text_editor::transient_edit_digest(state, revision);
         let (projected, text_edit) = self.transient_projections.project(
             TransientProjectionStage::Text,
             revision,
             None,
             text_digest,
             project,
-            |source| Ok(text_editor::transient_render_project(source, state)),
+            |source| text_editor::transient_render_project(source, revision, state),
         )?;
         let property = property_edit(revision, state)?;
         let property_digest = property.as_ref().map(TransientPropertyEdit::digest);

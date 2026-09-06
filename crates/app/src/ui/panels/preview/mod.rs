@@ -440,6 +440,7 @@ pub fn preview_panel(
         .filter(|displayed| {
             displayed.key.revision == revision
                 && displayed.key.timeline_id == timeline.id
+                && displayed.key.instance_path == state.active_instance_path
                 && displayed.key.frame_number == state.timeline.current_frame
         })
         .and(runtime.displayed_frame_info.as_ref());
@@ -525,6 +526,7 @@ pub fn preview_panel(
         .filter(|displayed| {
             displayed.key.revision == revision
                 && displayed.key.timeline_id == timeline.id
+                && displayed.key.instance_path == state.active_instance_path
                 && displayed.key.frame_number == state.timeline.current_frame
         })
         .and(runtime.displayed_frame_info.as_ref());
@@ -536,7 +538,7 @@ pub fn preview_panel(
         project.as_ref(),
         state,
     );
-    let created_text = text_editor::handle_tool_click(
+    let defer_text_overlay = text_editor::handle_tool_click(
         ui,
         &viewport_response,
         content_rect,
@@ -548,7 +550,7 @@ pub fn preview_panel(
         service,
         plugins,
     );
-    if !created_text {
+    if !defer_text_overlay {
         text_editor::text_editor_overlay(
             ui,
             viewport,

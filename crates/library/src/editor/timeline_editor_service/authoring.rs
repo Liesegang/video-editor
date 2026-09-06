@@ -226,13 +226,25 @@ impl TimelineEditorService {
         item_id: TimelineItemId,
         text: String,
     ) -> Result<ChangeSet, LibraryError> {
-        self.edit_item(item_id, |item| {
-            let SourceRef::Text { text: authored, .. } = &mut item.source else {
-                return Err(format!("Timeline item {item_id} is not Text"));
-            };
-            *authored = text;
-            Ok(())
-        })
+        self.edit_item(item_id, |item| set_item_text(item, item_id, text))
+    }
+
+    /// Projects the same direct Text source edit used by [`Self::set_text`]
+    /// onto an immutable Project snapshot. Typing previews never own a second
+    /// Text value or mutate the authoritative session before acceptance.
+    pub fn project_text(
+        project: &AuthoringProject,
+        item_id: TimelineItemId,
+        text: String,
+    ) -> Result<AuthoringProject, LibraryError> {
+        let mut projected = project.clone();
+        let item = projected
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing Timeline item {item_id}")))?;
+        set_item_text(item, item_id, text).map_err(LibraryError::Validation)?;
+        projected.validate().map_err(LibraryError::Validation)?;
+        Ok(projected)
     }
 
     pub fn set_authored_property(
@@ -437,6 +449,18 @@ impl TimelineEditorService {
             .map(|(_, changes)| changes)
             .map_err(LibraryError::Validation)
     }
+}
+
+fn set_item_text(
+    item: &mut TimelineItem,
+    item_id: TimelineItemId,
+    text: String,
+) -> Result<(), String> {
+    let SourceRef::Text { text: authored, .. } = &mut item.source else {
+        return Err(format!("Timeline item {item_id} is not Text"));
+    };
+    *authored = text;
+    Ok(())
 }
 
 fn validate_authored_property_updates(

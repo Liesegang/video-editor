@@ -76,6 +76,24 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
   旧binaryが拡張row計測を持たず止まったQAは`20260906T-track-header-block-red-r1`へ保持し、これを実際のrow移動失敗とは扱わない。
 - [ ] Assets と Timeline の footer は共通 panel allocation を使い、panel 外への漏れ・不要な scrollbar・縦位置の不揃いを修正する。Preview toolbar も既存 tool 群を整列し、頂点種類は右クリックから選べるようにする。
 - [ ] Text tool は未選択でも有効にし、Canvas 上の既存 Text をクリックすれば編集し、それ以外はその位置へ新規 Text を作る。Content は別枠専用UIではなく既存 property row に統合し、Source と authored property に二重保存しない。
+  - [x] 通常Textの空文字からの再入力と、未選択Canvasからの作成を既存Textツールで復旧した。
+    編集中だけ最後の描画外形をComposition座標で保持し、共通pan/zoomで投影する。
+    空文字の通常Gizmoやhit-testへ仮の外形は追加していない。
+    描画待ち中のクリックは元の座標で一度だけ処理し、別クリック、ツール、選択、時刻、Instance Path、revisionの変更で破棄する。
+    古い入力は新しいProject編集を上書きせず、別ツールへの切替も保持する。
+  - [x] Textの一時投影と確定を同じserviceのmutationへ統一した。
+    Contentの正本は通常TextのSource、明示Node Clipでは公開parameterのinstance値に置き、Inspectorは既存の共通property rowを使う。
+    投影と確定のProject一致、AppearanceとEnsembleの不変、兄弟Itemの独立性、一回のUndoを検証した。
+    Canvas新規作成と、その後の文字入力はそれぞれ一回のUndoで戻る。
+  - [x] Dockの二重スクロールを無効にし、各パネルが持つScrollAreaまたはpan/zoomへスクロールの責務を統一した。
+    Canvas下側で長い文字を入力してもPreviewのtoolbarとcanvasの座標が変わらないことをnative HTTP QAで確認した。
+    通常Textの既存クリック、未選択からの作成、空文字からの再入力、入力中のProjectと履歴の不変、確定前後の画素一致、EscapeとUndoによる画素復元も通過した（`target/qa-runs/20260906T-text-tool-preview-r2/preview`）。
+    空文字で編集欄が消える修正前の再現は`20260906T-preview-text-tool-red-r1`、親Dockが動く再現は`20260906T-text-tool-preview-r1`に保持した。
+    明示Node Clip内のTextをCanvasから編集する対応は、後段のText編集能力の項目と併せて継続する。
+  - 最終releaseのnative HTTP QAは25/25で、Text入力中の実画面も確認した（`target/qa-runs/20260906T-text-tool-final/preview/text-tool-draft.png`）。
+    workspace全targetは1,745 passed / 0 failed / 17 ignoredで、strict Clippy、fmt、QA runner 27 tests、829 filesの1,000行制限を通過した（`target/qa-workspace-test-20260906-text-tool-final-r2.log`）。
+    全25シナリオの記録が一致し、50本のapp/suite logにERROR、panic、描画失敗はなく、QA appは終了した。
+    検証した通常の`target/release/app.exe`のSHA-256は`CFB815B025764B1B08DA33710BBD9E70BDBB52F543746F5CC21D91D0E3171B4D`。
 - [ ] Path/Vector は既存正本を拡張し、線分への頂点追加、Pen 新規描画、Rectangle/Ellipse の drag 作成、頂点の Corner/Smooth/Symmetric を右クリックで編集する。既存 Path の移動だけで Illustrator 相当の完成扱いにせず、M2 の全 Vector 要件を継続する。
 - [ ] Ensemble Tracking（文字間隔）を bundled descriptor と共通 runtime へ追加し、Target・keyframe・明示 Node Clip 化前後・実画素を検証する。Step Delay は clip-local time の描画テストだけで修正済みとせず、native UI で発生条件を再現して解消する。
   - [x] 通常TextのEnsembleとText/ShapeのAppearanceを、既存のProperty ownerを参照する共通automation laneへ接続した。TimelineとCurveで同じkeyframe IDを使い、明示Node Clip化後は公開parameterへ参照先を切り替える。Curveの表示状態は明示的に隠したlaneだけを保持し、新しいlaneが非表示のまま残る不具合を修正した。
@@ -115,6 +133,9 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
     初回の記録は `target/qa-runs/20260906T-shaped-text-final` に保持し、検査条件や描画の許容差は緩めていない。
     最終 run の実画面を確認し、app/suite log に ERROR/panic/Failed to render はなく、QA app は終了済み。
 - [x] Drop Shadowが文字本体の上へ描かれる不具合を修正した。Shape / Text / Ensemble Text共通で影と外側光彩を背面、本体を中間、OverlayとInner系を前面に描く。同一phase内の順序、隣接文字の影、角度120°の右下方向、透明度、Node Clip化前後を実画素とnative QAで確認した。
+  - [ ] 最新の再報告について、問題が出るProjectまたは設定付き画面から追加の再現条件を特定する。
+    現行通常releaseではCPUの3 tests、実GPUの3 tests、Appearanceのnative HTTP QAが通過し、文字本体の背面と右下に影が出た（`target/qa-runs/20260906T-drop-shadow-current-release/appearance/drop-shadow.png`）。
+    前面への重なりと画面上方向への位置ずれを区別する情報を依頼済みで、再報告が解消したとは判定していない。
   - [x] 作業ツリーの共通 renderer で描画順と本体 alpha mask を修正し、CPU working-linear 描画テスト 12件を通した。Stroke-only の空洞、Fill offset、半透明・透明 Fill、非等方変形、隣接文字の影を検証済み。Picture と source filter は1回構築して共有し、Fill/Stroke-only の直接描画経路は維持する。GPU のキャッシュ効果や 60 fps は未計測。
   - [x] 明示 Node Clip 変換を型付き Style 出力と Appearance Stack に統一した。Stroke-only + Shadow、Fill offset + Shadow、半透明 Fill + Shadow の変換前後の画素一致を 3件で検証した。汎用 Image Merge の意味と単独 Style の Image 出力は変更しない。
   - [x] Backplate などの複数 Path part を既存 Shape 描画要求へ保持し、一つの FrameObject と本体 mask から影を生成するよう修正した。part の opacity は Fill/Stroke 全体へ一回だけ適用し、ImageEffect も一回だけ実行する。半透明 part の重なり、後続 part の影と先行本体、複数の水平 Stroke、RenderService の実呼出回数を回帰テストで確認した。単一 opaque part の直接描画経路は維持する。

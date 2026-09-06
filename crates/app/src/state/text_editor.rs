@@ -4,7 +4,21 @@
 //! changes once, when the edit is accepted, so one typing session is one Undo
 //! step and never creates a parallel persisted model.
 
-use library::model::authoring::{ProjectRevision, TimelineItemId};
+use library::model::authoring::{InstancePath, ProjectRevision, TimelineId, TimelineItemId};
+
+use super::authoring::AuthoringSelection;
+
+/// A Text-tool intent waiting for the matching Preview geometry. Keeping the
+/// Composition point preserves the click even if the camera moves meanwhile.
+#[derive(Clone, Debug)]
+pub(crate) struct TextToolClick {
+    pub position: egui::Pos2,
+    pub revision: ProjectRevision,
+    pub timeline_id: TimelineId,
+    pub instance_path: Option<InstancePath>,
+    pub frame_number: i64,
+    pub selection: Option<AuthoringSelection>,
+}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TextEditorState {
@@ -14,6 +28,10 @@ pub(crate) struct TextEditorState {
     pub buffer: String,
     pub editing: bool,
     pub request_focus: bool,
+    /// Last evaluated edit region in Composition coordinates. This belongs
+    /// only to the typing session, not the object's visual bounds or picking.
+    pub layout_bounds: Option<egui::Rect>,
+    pub pending_click: Option<TextToolClick>,
 }
 
 impl TextEditorState {
@@ -26,6 +44,8 @@ impl TextEditorState {
         self.buffer.push_str(text);
         self.editing = true;
         self.request_focus = true;
+        self.layout_bounds = None;
+        self.pending_click = None;
     }
 
     pub fn changed(&self) -> bool {
@@ -39,5 +59,7 @@ impl TextEditorState {
         self.buffer.clear();
         self.editing = false;
         self.request_focus = false;
+        self.layout_bounds = None;
+        self.pending_click = None;
     }
 }

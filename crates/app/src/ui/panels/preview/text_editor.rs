@@ -16,6 +16,7 @@ use library::plugin::PluginManager;
 use pan_zoom_ui::CanvasTransform;
 
 use crate::state::authoring::{AuthoringSelection, AuthoringUiState, PreviewTool};
+use crate::state::text_editor::TextToolClick;
 use crate::ui::clip_creation::{create_basic_clip, BasicClipKind, BasicClipPlacement};
 
 use super::gizmo_geometry::{hit_test_item, item_gizmo_geometry};
@@ -56,21 +57,71 @@ pub(super) fn handle_tool_click(
     service: &TimelineEditorService,
     plugins: &PluginManager,
 ) -> bool {
+    let canvas_clicked = response.clicked_by(egui::PointerButton::Primary);
+    if ui.input(|input| {
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            || (input.pointer.button_clicked(egui::PointerButton::Primary) && !canvas_clicked)
+    }) {
+        // A newer click anywhere in the workspace supersedes a deferred
+        // canvas intent, including returning to this panel through its tab.
+        state.preview.text_editor.pending_click = None;
+    }
     if state.preview.active_tool != PreviewTool::Text
-        || state.preview.text_editor.editing
-        || !response.clicked_by(egui::PointerButton::Primary)
         || egui::Popup::is_any_open(ui.ctx())
+        || ui.input(|input| input.key_pressed(egui::Key::Escape))
     {
+        state.preview.text_editor.pending_click = None;
         return false;
     }
-    let Some(pointer) = response.interact_pointer_pos() else {
+    if canvas_clicked {
+        state.preview.text_editor.pending_click = response
+            .interact_pointer_pos()
+            .filter(|pointer| content_rect.contains(*pointer))
+            .and_then(|pointer| canvas.screen_to_world(pointer))
+            .map(|position| TextToolClick {
+                position,
+                revision,
+                timeline_id: state.active_timeline_id,
+                instance_path: state.active_instance_path.clone(),
+                frame_number: state.timeline.current_frame,
+                selection: state.selection.primary(),
+            });
+    }
+    let Some(click) = state.preview.text_editor.pending_click.as_ref() else {
         return false;
     };
-    if !content_rect.contains(pointer) {
+    if click.revision != revision
+        || click.timeline_id != state.active_timeline_id
+        || click.instance_path != state.active_instance_path
+        || click.frame_number != state.timeline.current_frame
+        || click.selection != state.selection.primary()
+        || service.revision().ok() != Some(revision)
+    {
+        state.preview.text_editor.pending_click = None;
         return false;
     }
-    let Some(world) = canvas.screen_to_world(pointer) else {
-        return false;
+    // A frame without evaluated geometry cannot distinguish a blank click
+    // from a hit on existing Text. Retain the intent until the normal Preview
+    // result arrives, without reinterpreting it through a later camera.
+    let Some(frame) = frame else {
+        ui.ctx().request_repaint();
+        return true;
+    };
+    let world = click.position;
+    state.preview.text_editor.pending_click = None;
+    let defer_overlay = state.preview.text_editor.editing;
+    let refreshed;
+    let (project, revision) = if defer_overlay {
+        if !accept_if_active(state, service) {
+            return true;
+        }
+        let Ok((snapshot, revision)) = service.snapshot_with_revision() else {
+            return true;
+        };
+        refreshed = snapshot;
+        (refreshed.as_ref(), revision)
+    } else {
+        (project, revision)
     };
     let selectable = project
         .items
@@ -85,14 +136,14 @@ pub(super) fn handle_tool_click(
         })
         .map(|item| item.id)
         .collect::<HashSet<_>>();
-    if let Some(item_id) = frame.and_then(|frame| hit_test_item(frame, &selectable, world)) {
+    if let Some(item_id) = hit_test_item(frame, &selectable, world) {
         state.selection.replace(AuthoringSelection::Item(item_id));
         if let Some(SourceRef::Text { text, .. }) =
             project.items.get(&item_id).map(|item| &item.source)
         {
             state.preview.text_editor.begin(item_id, revision, text);
         }
-        return false;
+        return defer_overlay;
     }
     match create_basic_clip(
         project,
@@ -128,39 +179,37 @@ pub(super) fn handle_tool_click(
 /// change. The returned digest participates in Preview request identity.
 pub(super) fn transient_render_project(
     project: &Arc<AuthoringProject>,
+    revision: ProjectRevision,
     state: &AuthoringUiState,
-) -> (Arc<AuthoringProject>, Option<u64>) {
+) -> Result<(Arc<AuthoringProject>, Option<u64>), String> {
     let editor = &state.preview.text_editor;
-    let Some(digest) = transient_edit_digest(state) else {
-        return (Arc::clone(project), None);
+    let Some(digest) = transient_edit_digest(state, revision) else {
+        return Ok((Arc::clone(project), None));
     };
     let Some(item_id) = editor.target_item else {
-        return (Arc::clone(project), None);
+        return Ok((Arc::clone(project), None));
     };
     let Some(item) = project.items.get(&item_id) else {
-        return (Arc::clone(project), None);
+        return Ok((Arc::clone(project), None));
     };
     let SourceRef::Text { text, .. } = &item.source else {
-        return (Arc::clone(project), None);
+        return Ok((Arc::clone(project), None));
     };
     if *text == editor.buffer {
-        return (Arc::clone(project), Some(digest));
+        return Ok((Arc::clone(project), Some(digest)));
     }
 
-    let mut projected = project.as_ref().clone();
-    let Some(item) = projected.items.get_mut(&item_id) else {
-        return (Arc::clone(project), None);
-    };
-    let SourceRef::Text { text, .. } = &mut item.source else {
-        return (Arc::clone(project), None);
-    };
-    text.clone_from(&editor.buffer);
-    (Arc::new(projected), Some(digest))
+    TimelineEditorService::project_text(project, item_id, editor.buffer.clone())
+        .map(|projected| (Arc::new(projected), Some(digest)))
+        .map_err(|error| format!("Preview Text: {error}"))
 }
 
-pub(super) fn transient_edit_digest(state: &AuthoringUiState) -> Option<u64> {
+pub(super) fn transient_edit_digest(
+    state: &AuthoringUiState,
+    revision: ProjectRevision,
+) -> Option<u64> {
     let editor = &state.preview.text_editor;
-    if !editor.editing {
+    if !editor.editing || editor.target_revision != Some(revision) {
         return None;
     }
     let item_id = editor.target_item?;
@@ -185,33 +234,60 @@ pub(super) fn text_editor_overlay(
     state: &mut AuthoringUiState,
     service: &TimelineEditorService,
 ) {
-    if state.preview.active_tool != PreviewTool::Text {
-        accept_if_active(state, service);
+    if !state.preview.text_editor.editing {
         return;
     }
-
-    let Some((item_id, _)) = selected_text(project, state) else {
-        state.preview.text_editor.finish();
-        return;
-    };
-    if state.preview.text_editor.editing
-        && (state.preview.text_editor.target_item != Some(item_id)
-            || state.preview.text_editor.target_revision != Some(revision))
-    {
+    if state.preview.text_editor.target_revision != Some(revision) {
         cancel(
             state,
             "Text edit was cancelled because its Timeline source changed",
         );
         return;
     }
-    if !state.preview.text_editor.editing {
+    let selected = selected_text(project, state).map(|(item_id, _)| item_id);
+    if state.preview.active_tool != PreviewTool::Text
+        || selected != state.preview.text_editor.target_item
+    {
+        accept_if_active(state, service);
+        ui.ctx().request_repaint();
         return;
     }
-
-    let Some(rect) = frame
-        .and_then(|frame| item_gizmo_geometry(frame, item_id))
-        .and_then(|geometry| editor_rect(&geometry.outlines, canvas, viewport))
-    else {
+    let Some(item_id) = selected else { return };
+    let (escape, accept_shortcut) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::Escape),
+            input.key_pressed(egui::Key::Enter)
+                && (input.modifiers.command || input.modifiers.ctrl),
+        )
+    });
+    if escape {
+        state.preview.text_editor.finish();
+        state.preview.active_tool = PreviewTool::Select;
+        state.status = "Cancelled Text edit".to_string();
+        state.error = None;
+        ui.ctx().request_repaint();
+        return;
+    }
+    if let Some(geometry) = frame.and_then(|frame| item_gizmo_geometry(frame, item_id)) {
+        let points = geometry
+            .outlines
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        state.preview.text_editor.layout_bounds = Some(egui::Rect::from_points(&points));
+    }
+    let rect = state
+        .preview
+        .text_editor
+        .layout_bounds
+        .and_then(|bounds| editor_rect(bounds, canvas, viewport));
+    let Some(rect) = rect else {
+        if accept_shortcut {
+            accept_if_active(state, service);
+            state.preview.active_tool = PreviewTool::Select;
+            ui.ctx().request_repaint();
+        }
         return;
     };
 
@@ -245,53 +321,55 @@ pub(super) fn text_editor_overlay(
         })),
     );
 
-    let (escape, accept_shortcut) = ui.input(|input| {
-        (
-            input.key_pressed(egui::Key::Escape),
-            input.key_pressed(egui::Key::Enter)
-                && (input.modifiers.command || input.modifiers.ctrl),
-        )
-    });
-    if escape {
-        state.preview.text_editor.finish();
-        state.preview.active_tool = PreviewTool::Select;
-        state.status = "Cancelled Text edit".to_string();
-        state.error = None;
-    } else if accept_shortcut || (response.lost_focus() && !response.changed()) {
+    if accept_shortcut || response.lost_focus() {
         accept_if_active(state, service);
         state.preview.active_tool = PreviewTool::Select;
+        ui.ctx().request_repaint();
     } else if response.changed() {
         ui.ctx().request_repaint();
     }
 }
 
-fn accept_if_active(state: &mut AuthoringUiState, service: &TimelineEditorService) {
+fn accept_if_active(state: &mut AuthoringUiState, service: &TimelineEditorService) -> bool {
     if !state.preview.text_editor.editing {
-        return;
+        return true;
+    }
+    if service.revision().ok() != state.preview.text_editor.target_revision {
+        cancel(
+            state,
+            "Text edit was cancelled because its Timeline source changed",
+        );
+        return false;
     }
     let target = state.preview.text_editor.target_item;
     let changed = state.preview.text_editor.changed();
     let text = state.preview.text_editor.buffer.clone();
     state.preview.text_editor.finish();
     if !changed {
-        return;
+        return true;
     }
     let Some(item_id) = target else {
-        return;
+        return false;
     };
     match service.set_text(item_id, text) {
         Ok(_) => {
             state.inspector.invalidate();
             state.error = None;
             state.status = "Edited Text".to_string();
+            true
         }
-        Err(error) => state.error = Some(error.to_string()),
+        Err(error) => {
+            state.error = Some(error.to_string());
+            false
+        }
     }
 }
 
 fn cancel(state: &mut AuthoringUiState, message: &str) {
     state.preview.text_editor.finish();
-    state.preview.active_tool = PreviewTool::Select;
+    if state.preview.active_tool == PreviewTool::Text {
+        state.preview.active_tool = PreviewTool::Select;
+    }
     state.error = Some(message.to_string());
 }
 
@@ -310,19 +388,14 @@ fn item_is_at_playhead(
 }
 
 fn editor_rect(
-    outlines: &[[egui::Pos2; 4]],
+    bounds: egui::Rect,
     canvas: CanvasTransform,
     viewport: egui::Rect,
 ) -> Option<egui::Rect> {
-    let points = outlines
-        .iter()
-        .flatten()
-        .map(|point| canvas.world_to_screen(*point))
-        .collect::<Vec<_>>();
-    if points.is_empty() {
-        return None;
-    }
-    let mut rect = egui::Rect::from_points(&points);
+    let mut rect = egui::Rect::from_min_max(
+        canvas.world_to_screen(bounds.min),
+        canvas.world_to_screen(bounds.max),
+    );
     if rect.width() < 48.0 {
         rect.max.x = rect.min.x + 48.0;
     }
@@ -348,21 +421,4 @@ fn editor_font_size(item: Option<&TimelineItem>, rect: egui::Rect) -> f32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_digest_includes_the_target_identity() {
-        let mut state = AuthoringUiState::new(library::model::authoring::TimelineId::new());
-        let first = TimelineItemId::new();
-        let second = TimelineItemId::new();
-        state.preview.text_editor.editing = true;
-        state.preview.text_editor.target_item = Some(first);
-        state.preview.text_editor.buffer = "same".to_string();
-        let first_digest = transient_edit_digest(&state).expect("first digest");
-        state.preview.text_editor.target_item = Some(second);
-        let second_digest = transient_edit_digest(&state).expect("second digest");
-
-        assert_ne!(first_digest, second_digest);
-    }
-}
+mod tests;

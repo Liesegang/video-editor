@@ -425,3 +425,125 @@ fn direct_manipulation_does_not_replace_expression_ownership() {
         "expression"
     );
 }
+
+#[test]
+fn direct_text_content_edit_preserves_every_other_owner_in_one_undo_step() {
+    let plugins = crate::plugin::PluginManager::default();
+    let service = TimelineEditorService::create_default("Text content ownership").unwrap();
+    let project = service.snapshot().unwrap();
+    let timeline_id = project.root_timeline_id;
+    let track_id = project.timelines[&timeline_id].track_order[0];
+    drop(project);
+    let fill = crate::editor::AppearanceOperationFactory::create(&plugins, "fill").unwrap();
+    let tracking = crate::editor::TextEnsembleOperationFactory::create(
+        &plugins,
+        crate::editor::TextEnsembleOperationKind::Effector,
+        "tracking",
+    )
+    .unwrap();
+    let (text_id, _) = service
+        .add_item(
+            track_id,
+            "Title".to_string(),
+            SourceRef::Text {
+                text: "Before".to_string(),
+                appearance_operations: vec![fill],
+                ensemble_operations: vec![tracking],
+            },
+            TimelineInterval::new(seconds(1), seconds(3)).unwrap(),
+            2,
+        )
+        .unwrap();
+    service
+        .set_authored_property_constant(
+            AuthoringPropertyOwner::Item(text_id),
+            "size".to_string(),
+            PropertyValue::from(72.0),
+        )
+        .unwrap();
+    let (sibling_id, _) = service
+        .add_item(
+            track_id,
+            "Sibling".to_string(),
+            solid(64),
+            TimelineInterval::new(seconds(0), seconds(2)).unwrap(),
+            0,
+        )
+        .unwrap();
+    let original = service.snapshot().unwrap();
+    let original_revision = service.revision().unwrap();
+    let original_item = original.items[&text_id].clone();
+    let original_sibling = original.items[&sibling_id].clone();
+    let edited_text = "After\nSecond line".to_string();
+    let projected = TimelineEditorService::project_text(&original, text_id, edited_text.clone())
+        .expect("project direct Text typing");
+    assert_eq!(service.revision().unwrap(), original_revision);
+    assert_eq!(service.snapshot().unwrap().as_ref(), original.as_ref());
+
+    let changes = service.set_text(text_id, edited_text).unwrap();
+    assert_eq!(
+        changes.invalidations,
+        vec![ProjectInvalidation::Item {
+            timeline_id,
+            item_id: text_id,
+        }]
+    );
+    assert_eq!(
+        service.revision().unwrap().get(),
+        original_revision.get() + 1
+    );
+    let changed = service.snapshot().unwrap();
+    assert_eq!(
+        changed.as_ref(),
+        &projected,
+        "typing projection and accepted Text command must produce the same Project"
+    );
+    let SourceRef::Text {
+        text,
+        appearance_operations,
+        ensemble_operations,
+    } = &changed.items[&text_id].source
+    else {
+        panic!("edited item must remain direct Text")
+    };
+    let SourceRef::Text {
+        appearance_operations: original_appearance,
+        ensemble_operations: original_ensemble,
+        ..
+    } = &original_item.source
+    else {
+        panic!("fixture must be direct Text")
+    };
+    assert_eq!(text, "After\nSecond line");
+    assert_eq!(appearance_operations, original_appearance);
+    assert_eq!(ensemble_operations, original_ensemble);
+    assert_eq!(
+        changed.items[&text_id].authored_properties,
+        original_item.authored_properties
+    );
+    assert_eq!(changed.items[&sibling_id], original_sibling);
+
+    service.undo().unwrap().expect("one Text content undo");
+    assert_eq!(service.snapshot().unwrap().as_ref(), original.as_ref());
+
+    let revision = service.revision().unwrap();
+    let before_invalid = service.snapshot().unwrap();
+    assert!(service.set_text(sibling_id, "Invalid".to_string()).is_err());
+    assert!(
+        TimelineEditorService::project_text(&before_invalid, sibling_id, "Invalid".to_string())
+            .is_err()
+    );
+    assert!(
+        TimelineEditorService::project_text(
+            &before_invalid,
+            TimelineItemId::new(),
+            "Missing".to_string(),
+        )
+        .is_err()
+    );
+    assert_eq!(service.revision().unwrap(), revision);
+    assert_eq!(
+        service.snapshot().unwrap().as_ref(),
+        before_invalid.as_ref()
+    );
+}
