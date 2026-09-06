@@ -262,6 +262,7 @@ class QaRunnerTests(unittest.TestCase):
             "particle-node-clip",
             "color-ramp",
             "point-attributes",
+            "point-grid",
             "inspector-asset-preview",
             "timeline-edit",
             "timeline-transition",

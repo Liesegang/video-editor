@@ -118,6 +118,77 @@ def disconnect_node_connection(client, expected_host, connection_id, description
     return client.wait_until(description + " disconnected", disconnected)
 
 
+def unpublish_node_input_parameter(
+    client,
+    definition_id,
+    instance_id,
+    node_id,
+    port_key,
+    parameter,
+    before,
+):
+    """Unpublish one exact Node input through its shared production row menu."""
+
+    port_id = "node_editor.interface_port.node:{}.input:{}".format(node_id, port_key)
+    action_id = (
+        "node_editor.interface_action.node:{}.input:{}:unpublish_parameter".format(
+            node_id, port_key
+        )
+    )
+    client.click_component(port_id, button="secondary")
+    _, action = client.wait_component_settled(action_id)
+    metadata = action.get("metadata") or {}
+    if (
+        metadata.get("action") != "unpublish_parameter"
+        or metadata.get("node_id") != node_id
+        or metadata.get("port") != port_key
+        or metadata.get("parameter_id") != parameter["id"]
+    ):
+        raise QaFailure("Unpublish action lost its exact Node input identity")
+
+    reset_id = "node_editor.interface_action.node:{}.input:{}:reset_parameter".format(
+        node_id, port_key
+    )
+    reset = component(client.component_snapshot(), reset_id)
+    reset_metadata = (reset or {}).get("metadata") or {}
+    if (
+        reset is None
+        or reset.get("visible") is not True
+        or reset.get("enabled") is not False
+        or reset_metadata.get("action") != "reset_parameter"
+        or reset_metadata.get("node_id") != node_id
+        or reset_metadata.get("port") != port_key
+        or reset_metadata.get("parameter_id") != parameter["id"]
+        or reset_metadata.get("instance_id") != instance_id
+    ):
+        raise QaFailure("Published Node input menu lost its disabled exact Reset action")
+    client.click_component(action_id)
+
+    expected = [
+        candidate
+        for candidate in before["interface"]["parameters"]
+        if candidate["id"] != parameter["id"]
+    ]
+
+    def unpublished():
+        state = client.state()
+        definition = state["project"]["module_definitions"][definition_id]
+        return state if definition["interface"]["parameters"] == expected else None
+
+    state = client.wait_until("unpublish exact Node input parameter", unpublished)
+    _, socket = client.wait_component_settled(
+        "node_editor.port.node:{}.input:{}".format(node_id, port_key)
+    )
+    socket_metadata = socket.get("metadata") or {}
+    if (
+        socket_metadata.get("input_ownership") != "internal"
+        or socket_metadata.get("connectable") is not True
+        or socket_metadata.get("connected") is not False
+    ):
+        raise QaFailure("Unpublished Node input socket did not become internal")
+    return state
+
+
 def node_content_type(node):
     return str((node.get("content") or {}).get("type", "")).replace("_", "").lower()
 

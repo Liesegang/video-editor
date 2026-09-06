@@ -68,6 +68,7 @@ FULL_SUITES = (
     SuiteSpec("particle-node-clip", "qa-particle-node-clip-e2e.py"),
     SuiteSpec("color-ramp", "qa-color-ramp-e2e.py"),
     SuiteSpec("point-attributes", "qa-point-attributes-e2e.py", project_file=True, expects_exit=True),
+    SuiteSpec("point-grid", "qa-point-grid-e2e.py", project_file=True, expects_exit=True),
     SuiteSpec("inspector-asset-preview", "qa-inspector-asset-preview-e2e.py"),
     SuiteSpec("timeline-edit", "qa-timeline-edit-e2e.py"),
     SuiteSpec("timeline-transition", "qa-transition-e2e.py"),
