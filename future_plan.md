@@ -251,6 +251,17 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
   実画面では接続した2つのNode、公開入力の定数値と2つのキー、相対配置、貼り付け後の選択、兄弟Clipの不変、1回のUndoを確認した。
   最終通常releaseのnative HTTP QAは30/30、ログにERROR/panic/Failed to renderはなく、実画面も確認した（`target/qa-runs/20260906T-module-clipboard-final`）。
   Rust全targetは1,825 passed、0 failed、17 ignored、QA runnerは39 tests、strict Clippyとfmt、860 filesの1,000行制限が通過した。
+- [x] Nodeの貼り付けをUndo/Redoし、保存したNodeと接続と公開入力とキーを新プロセスで再読込みする実画面QAを追加した。
+  テキスト入力中のコピーと貼り付けのショートカットがNode操作へ漏れないことも確認した。
+  HTTPのキー入力はwinitのclipboard変換を通らないため、TextEditへの実Pasteイベントは既存eguiテストで確認し、実画面QAでは入力focusとProjectと履歴の不変を確認する。
+  最終releaseのnative HTTP QAは30/30、Rust全targetは1,827 passed、0 failed、17 ignored、QA runnerは39 testsが通過した。
+  strict Clippy、fmt、860 filesの1,000行制限も通過し、ログにERROR/panic/Failed to renderはない（`target/qa-runs/20260906T-node-clipboard-scope-final-r2`）。
+- [x] Nested Composition内のTransitionでも、Nodeのコピーと貼り付けに配置のInstancePathを渡す。
+  コピー元の配置で有効な値とキーを取得し、貼り付け先の配置の疎なoverrideへ保存する。
+  Node構造と公開Interfaceの追加は従来のTimeline定義scopeに属し、他配置の値とキーを書き換えない。
+  2配置の独立性、キーのID再採番、時刻と値と補間の保持、無効pathの拒否、Undo/Redoをコアテストで確認した。
+- [ ] Nested Transitionの配置別Nodeコピーと貼り付けを実画面で検証する。
+  既存のnative fixtureはNested Timelineが空なので、上記の配置別検証は現時点ではコアテストに限る。
 - [x] Node header の enabled / bypass 操作を復旧し、状態表示だけのチェックマークにしない。native QA で bypass による画素変化と resume 後の元画素への一致を確認した。
 - [ ] Node header 全域の drag、選択しても動かない pin geometry、接続中 wire preview、marquee selection rectangle を共通 Node Editor surface で修正する。
 - [x] Edge の右クリック切断メニュー、選択後 Delete/Backspace、Ctrl+右ドラッグ切断と Alt+右ドラッグ接続を共通 Node Editor の実画面操作で検証した。Blender Node Wrangler 全機能の互換実装ではない。

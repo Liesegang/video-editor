@@ -12,7 +12,7 @@ mod tests;
 pub(super) fn copy_selection(
     context: &egui::Context,
     service: &TimelineEditorService,
-    instance_id: ModuleInstanceId,
+    host: &ModuleEditorHost,
     nodes: &[Uuid],
     state: &mut AuthoringUiState,
 ) {
@@ -20,7 +20,12 @@ pub(super) fn copy_selection(
         .snapshot()
         .map_err(|error| error.to_string())
         .and_then(|project| {
-            library::editor::ModuleSelectionClipboard::capture(&project, instance_id, nodes)
+            library::editor::ModuleSelectionClipboard::capture(
+                &project,
+                host.module_instance_id(),
+                host.transition_id().and(host.captured_instance_path()),
+                nodes,
+            )
         })
         .and_then(|selection| serde_json::to_string(&selection).map_err(|error| error.to_string()));
     match result {
@@ -34,7 +39,7 @@ pub(super) fn copy_selection(
 
 pub(super) fn paste_selection(
     service: &TimelineEditorService,
-    instance_id: ModuleInstanceId,
+    host: &ModuleEditorHost,
     text: &str,
     position: egui::Pos2,
     state: &mut AuthoringUiState,
@@ -47,7 +52,12 @@ pub(super) fn paste_selection(
         .map_err(|error| format!("Invalid node clipboard: {error}"))
         .and_then(|selection| {
             service
-                .paste_instance_module_selection(instance_id, &selection, [position.x, position.y])
+                .paste_instance_module_selection(
+                    host.module_instance_id(),
+                    host.transition_id().and(host.captured_instance_path()),
+                    &selection,
+                    [position.x, position.y],
+                )
                 .map_err(|error| error.to_string())
         });
     match result {

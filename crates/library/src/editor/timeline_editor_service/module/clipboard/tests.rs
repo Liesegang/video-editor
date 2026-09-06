@@ -264,6 +264,7 @@ fn paste_is_one_cow_edit_with_fresh_topology_interface_and_automation_ids() {
     let clipboard = ModuleSelectionClipboard::capture(
         &before,
         fixture.instance_id,
+        None,
         &[
             fixture.output_node_id,
             fixture.first_node_id,
@@ -277,7 +278,7 @@ fn paste_is_one_cow_edit_with_fresh_topology_interface_and_automation_ids() {
     let revision = fixture.service.revision().expect("revision");
     let receipt = fixture
         .service
-        .paste_instance_module_selection(fixture.instance_id, &clipboard, [500.0, 600.0])
+        .paste_instance_module_selection(fixture.instance_id, None, &clipboard, [500.0, 600.0])
         .expect("paste");
     assert_eq!(receipt.changes.revision.get(), revision.get() + 1);
     assert_eq!(receipt.node_ids.len(), 2);
@@ -382,13 +383,14 @@ fn malformed_clipboard_is_rejected_without_cow_or_history() {
     let mut clipboard = ModuleSelectionClipboard::capture(
         &before,
         fixture.instance_id,
+        None,
         &[fixture.first_node_id, fixture.second_node_id],
     )
     .expect("capture");
     clipboard.connections[0].to.node_id = uuid::Uuid::new_v4();
     let error = fixture
         .service
-        .paste_instance_module_selection(fixture.instance_id, &clipboard, [40.0, 60.0])
+        .paste_instance_module_selection(fixture.instance_id, None, &clipboard, [40.0, 60.0])
         .expect_err("foreign endpoint");
     assert!(error.to_string().contains("escapes"));
     assert_eq!(fixture.service.revision().expect("revision"), revision);
@@ -420,7 +422,7 @@ fn media_clipboard_missing_from_destination_assets_rolls_back_atomically() {
     let before = service.snapshot().expect("before");
     let revision = service.revision().expect("revision");
     let error = service
-        .paste_instance_module_selection(instance_id, &clipboard, [40.0, 60.0])
+        .paste_instance_module_selection(instance_id, None, &clipboard, [40.0, 60.0])
         .expect_err("missing Asset");
     assert!(error.to_string().contains(&missing_asset_id.to_string()));
     assert_eq!(service.revision().expect("revision"), revision);
@@ -434,6 +436,7 @@ fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts()
     let clipboard = ModuleSelectionClipboard::capture(
         &source_project,
         source.instance_id,
+        None,
         &[source.first_node_id, source.second_node_id],
     )
     .expect("capture");
@@ -446,7 +449,7 @@ fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts()
     let service = TimelineEditorService::create_default("Cross-document paste").expect("service");
     let (item_id, item_instance_id) = paste_target_item(&service);
     let item_receipt = service
-        .paste_instance_module_selection(item_instance_id, &clipboard, [40.0, 60.0])
+        .paste_instance_module_selection(item_instance_id, None, &clipboard, [40.0, 60.0])
         .expect("paste into unrelated Node Clip");
     let project = service.snapshot().expect("item paste");
     let item_parameter =
@@ -476,7 +479,7 @@ fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts()
         )
         .expect("target Module Effect");
     let attachment_receipt = service
-        .paste_instance_module_selection(attachment_instance_id, &clipboard, [80.0, 100.0])
+        .paste_instance_module_selection(attachment_instance_id, None, &clipboard, [80.0, 100.0])
         .expect("paste into Module Effect");
     let project = service.snapshot().expect("attachment paste");
     let attachment_parameter = pasted_parameter(
@@ -552,7 +555,7 @@ fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts()
         .expect("Transition Module")
         .0;
     let transition_receipt = service
-        .paste_instance_module_selection(transition_instance_id, &clipboard, [120.0, 140.0])
+        .paste_instance_module_selection(transition_instance_id, None, &clipboard, [120.0, 140.0])
         .expect("paste into Transition Module");
     let project = service.snapshot().expect("transition paste");
     let transition_parameter = pasted_parameter(
@@ -570,4 +573,259 @@ fn serde_clipboard_pastes_automation_into_item_attachment_and_transition_hosts()
             .len(),
         2
     );
+}
+
+#[test]
+fn nested_transition_clipboard_uses_only_the_concrete_sparse_controls() {
+    use crate::editor::timeline_editor_service::transition_parameter_automation_tests::{
+        transition_project, wrap_with_two_composition_instances,
+    };
+
+    let (project, transition_id, source_parameter_id) = transition_project();
+    let definition_service = TimelineEditorService::new(project).expect("definition service");
+    definition_service
+        .upsert_transition_parameter_keyframe(
+            &TransitionAutomationOwner::Definition(transition_id),
+            source_parameter_id,
+            MediaTime::zero(),
+            PropertyValue::Number(OrderedFloat(1.0)),
+            Some(EasingFunction::Linear),
+        )
+        .expect("inherited key");
+    let mut nested = definition_service
+        .snapshot()
+        .expect("definition project")
+        .as_ref()
+        .clone();
+    let nested_timeline_id = nested.root_timeline_id;
+    let (root_timeline_id, first_item_id, second_item_id) =
+        wrap_with_two_composition_instances(&mut nested, nested_timeline_id);
+    nested.validate().expect("nested project");
+    let service = TimelineEditorService::new(nested).expect("nested service");
+    let first_path = InstancePath::root(root_timeline_id).nested(first_item_id);
+    let second_path = InstancePath::root(root_timeline_id).nested(second_item_id);
+    let first_owner = TransitionAutomationOwner::Instance {
+        transition_id,
+        instance_path: first_path.clone(),
+    };
+    service
+        .set_transition_parameter_constant(
+            &first_owner,
+            source_parameter_id,
+            PropertyValue::Number(OrderedFloat(7.0)),
+        )
+        .expect("concrete value");
+    let (first_key_id, _) = service
+        .upsert_transition_parameter_keyframe(
+            &first_owner,
+            source_parameter_id,
+            MediaTime::zero(),
+            PropertyValue::Number(OrderedFloat(2.0)),
+            Some(EasingFunction::Linear),
+        )
+        .expect("first concrete key");
+    let (second_key_id, _) = service
+        .upsert_transition_parameter_keyframe(
+            &first_owner,
+            source_parameter_id,
+            seconds(1),
+            PropertyValue::Number(OrderedFloat(9.0)),
+            Some(EasingFunction::EaseInOutQuad),
+        )
+        .expect("second concrete key");
+
+    let before = service.snapshot().expect("before paste");
+    let instance_id = before.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("Module Transition")
+        .instance_id;
+    let definition_id = before.module_instances[&instance_id].definition_id;
+    let source_node_id = before.module_definitions[&definition_id]
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| parameter.id == source_parameter_id)
+        .expect("source parameter")
+        .target
+        .node_id;
+    let clipboard = ModuleSelectionClipboard::capture(
+        &before,
+        instance_id,
+        Some(&first_path),
+        &[source_node_id],
+    )
+    .expect("capture concrete controls");
+    let sibling_target = before
+        .resolve_transition_module_instance_target(&second_path, transition_id)
+        .expect("sibling target");
+    let source_target = before
+        .resolve_transition_module_instance_target(&first_path, transition_id)
+        .expect("source target");
+    let source_effective = before
+        .effective_transition_module_controls(&source_target)
+        .expect("source controls");
+    let source_track = &source_effective.automation_tracks[&source_parameter_id];
+    let sibling_before = before
+        .effective_transition_module_controls(&sibling_target)
+        .expect("sibling controls");
+
+    let receipt = service
+        .paste_instance_module_selection(instance_id, Some(&first_path), &clipboard, [700.0, 500.0])
+        .expect("paste concrete controls");
+    let after = service.snapshot().expect("after paste");
+    let pasted_parameter = pasted_parameter(&after, receipt.definition_id, &receipt.node_ids);
+    let first_target = after
+        .resolve_transition_module_instance_target(&first_path, transition_id)
+        .expect("first target");
+    let first_effective = after
+        .effective_transition_module_controls(&first_target)
+        .expect("first controls");
+    assert_eq!(
+        first_effective.parameter_overrides[&pasted_parameter.id],
+        PropertyValue::Number(OrderedFloat(7.0))
+    );
+    let pasted_track = &first_effective.automation_tracks[&pasted_parameter.id];
+    assert_eq!(pasted_track.keyframes.len(), source_track.keyframes.len());
+    for (source, pasted) in source_track.keyframes.iter().zip(&pasted_track.keyframes) {
+        assert_ne!(source.id, pasted.id);
+        assert_eq!(source.time, pasted.time);
+        assert_eq!(source.value, pasted.value);
+        assert_eq!(source.easing, pasted.easing);
+    }
+    assert!(
+        pasted_track
+            .keyframes
+            .iter()
+            .all(|keyframe| keyframe.id != first_key_id && keyframe.id != second_key_id)
+    );
+    let sibling_after = after
+        .effective_transition_module_controls(&sibling_target)
+        .expect("sibling controls");
+    assert_eq!(sibling_after, sibling_before);
+    assert!(
+        !sibling_after
+            .parameter_overrides
+            .contains_key(&pasted_parameter.id)
+    );
+    assert!(
+        !sibling_after
+            .automation_tracks
+            .contains_key(&pasted_parameter.id)
+    );
+    let persisted = after
+        .transition_module_instance_overrides(&first_target)
+        .expect("override lookup")
+        .expect("first sparse controls");
+    assert!(
+        persisted
+            .parameter_overrides
+            .contains_key(&pasted_parameter.id)
+    );
+    assert!(matches!(
+        persisted.automation_tracks.get(&pasted_parameter.id),
+        Some(Some(track)) if track.keyframes.len() == 2
+    ));
+    assert!(
+        after
+            .transition_module_instance_overrides(&sibling_target)
+            .expect("sibling lookup")
+            .is_none()
+    );
+
+    service.undo().expect("Undo").expect("paste transaction");
+    assert_eq!(service.snapshot().expect("Undo state"), before);
+    service.redo().expect("Redo").expect("paste transaction");
+    assert_eq!(service.snapshot().expect("Redo state"), after);
+}
+
+#[test]
+fn transition_clipboard_rejects_wrong_host_and_stale_path_atomically() {
+    let fixture = fixture();
+    let item_project = fixture.service.snapshot().expect("item project");
+    let unrelated_path = InstancePath::root(item_project.root_timeline_id);
+    let error = ModuleSelectionClipboard::capture(
+        &item_project,
+        fixture.instance_id,
+        Some(&unrelated_path),
+        &[fixture.first_node_id],
+    )
+    .expect_err("Node Clip cannot accept a Transition path");
+    assert!(error.contains("Transition instance path"), "{error}");
+
+    use crate::editor::timeline_editor_service::transition_parameter_automation_tests::{
+        transition_project, wrap_with_two_composition_instances,
+    };
+    let (mut project, transition_id, parameter_id) = transition_project();
+    let root_instance_id = project.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("root Module Transition")
+        .instance_id;
+    let root_definition_id = project.module_instances[&root_instance_id].definition_id;
+    let root_node_id = project.module_definitions[&root_definition_id]
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| parameter.id == parameter_id)
+        .expect("root parameter")
+        .target
+        .node_id;
+    let root_path = InstancePath::root(project.root_timeline_id);
+    let definition_clipboard =
+        ModuleSelectionClipboard::capture(&project, root_instance_id, None, &[root_node_id])
+            .expect("definition capture");
+    let root_path_clipboard = ModuleSelectionClipboard::capture(
+        &project,
+        root_instance_id,
+        Some(&root_path),
+        &[root_node_id],
+    )
+    .expect("validated root-path capture");
+    assert_eq!(root_path_clipboard, definition_clipboard);
+
+    let nested_timeline_id = project.root_timeline_id;
+    let (root_timeline_id, first_item_id, _) =
+        wrap_with_two_composition_instances(&mut project, nested_timeline_id);
+    let instance_id = project.transitions[&transition_id]
+        .processor
+        .module_processor()
+        .expect("Module Transition")
+        .instance_id;
+    let definition_id = project.module_instances[&instance_id].definition_id;
+    let node_id = project.module_definitions[&definition_id]
+        .interface
+        .parameters
+        .iter()
+        .find(|parameter| parameter.id == parameter_id)
+        .expect("parameter")
+        .target
+        .node_id;
+    let valid_path = InstancePath::root(root_timeline_id).nested(first_item_id);
+    let clipboard =
+        ModuleSelectionClipboard::capture(&project, instance_id, Some(&valid_path), &[node_id])
+            .expect("valid concrete capture");
+    let service = TimelineEditorService::new(project).expect("service");
+    let stale_path = InstancePath::root(root_timeline_id).nested(TimelineItemId::new());
+    let before = service.snapshot().expect("before rejected paste");
+    let revision = service.revision().expect("revision");
+    let wrong_root_path = InstancePath::root(root_timeline_id);
+    let error = service
+        .paste_instance_module_selection(
+            instance_id,
+            Some(&wrong_root_path),
+            &clipboard,
+            [300.0, 400.0],
+        )
+        .expect_err("root-only path cannot address a nested Transition");
+    assert!(error.to_string().contains("does not belong"), "{error}");
+    assert_eq!(service.revision().expect("unchanged revision"), revision);
+    assert_eq!(service.snapshot().expect("unchanged project"), before);
+
+    let error = service
+        .paste_instance_module_selection(instance_id, Some(&stale_path), &clipboard, [300.0, 400.0])
+        .expect_err("stale path");
+    assert!(error.to_string().contains("missing item"), "{error}");
+    assert_eq!(service.revision().expect("unchanged revision"), revision);
+    assert_eq!(service.snapshot().expect("unchanged project"), before);
 }

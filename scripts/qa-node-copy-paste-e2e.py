@@ -30,11 +30,17 @@ from qa_support import (
     activate_dock_tab,
     bring_timeline_component,
     capture_viewport,
+    close_clean_native_app,
     component_center,
+    component_point,
     find_clear_canvas_point,
+    free_port,
     item_by_name,
     media_seconds,
+    request_clean_native_close,
     run_suite_main,
+    save_project_to_disk,
+    spawned_authoring_app,
 )
 
 
@@ -418,8 +424,24 @@ def _keyboard_copy_paste(client, item_id, sibling_id, originals):
         lambda: client.state()["project"] == after["project"],
     )
     history_shortcut(client)
-    client.wait_until(
+    paste_undone = client.wait_until(
         "Undo keyboard Node paste",
+        lambda: (
+            state if (state := client.state())["project"] == before["project"] else None
+        ),
+    )
+    history_shortcut(client, redo=True)
+    redone = client.wait_until(
+        "Redo keyboard Node paste",
+        lambda: (
+            state if (state := client.state())["project"] == after["project"] else None
+        ),
+    )
+    if redone["history"]["revision"] != paste_undone["history"]["revision"] + 1:
+        raise QaFailure("Node paste Redo was not one history command")
+    history_shortcut(client)
+    client.wait_until(
+        "Undo keyboard Node paste after Redo",
         lambda: client.state()["project"] == before["project"],
     )
     return result
@@ -468,11 +490,204 @@ def _context_copy_paste(client, item_id, sibling_id, originals):
     )
     result = _assert_paste(before, after, item_id, sibling_id, originals)
     history_shortcut(client)
-    client.wait_until(
+    paste_undone = client.wait_until(
         "Undo context Node paste",
-        lambda: client.state()["project"] == before["project"],
+        lambda: (
+            state if (state := client.state())["project"] == before["project"] else None
+        ),
     )
+    history_shortcut(client, redo=True)
+    redone = client.wait_until(
+        "Redo context Node paste",
+        lambda: (
+            state if (state := client.state())["project"] == after["project"] else None
+        ),
+    )
+    if redone["history"]["revision"] != paste_undone["history"]["revision"] + 1:
+        raise QaFailure("context Node paste Redo was not one history command")
     return result
+
+
+def _focused_text_edit_owns_clipboard(client):
+    """A Node TextEdit must keep native copy/paste away from graph actions."""
+
+    _, text_node_id = create_node_from_menu(
+        client,
+        "node_clip",
+        "Text",
+        "node_editor.menu.create.text",
+    )
+    control_id = "node_editor.property.node:{}:text".format(text_node_id)
+    place_node_for_inline_edit(client, text_node_id, control_id)
+    client.click_component("node_editor.node_header:" + text_node_id)
+    client.wait_until(
+        "Text Node selected before Content focus",
+        lambda: (
+            component
+            if (
+                component := next(
+                    (
+                        candidate
+                        for candidate in client.component_snapshot()["components"]
+                        if candidate.get("id")
+                        == "node_editor.node_header:" + text_node_id
+                    ),
+                    None,
+                )
+            )
+            and (component.get("metadata") or {}).get("selected") is True
+            else None
+        ),
+    )
+    _, control = client.wait_component_settled(control_id)
+    before = client.state()
+    text_node = active_definition(before, "node_clip")[1]["graph"]["nodes"][
+        text_node_id
+    ]
+    original_text = text_node["properties"]["text"]["properties"]["value"]
+    if not isinstance(original_text, str) or not original_text:
+        raise QaFailure("Text Node did not expose its real editable Content")
+    node_ids = set(active_definition(before, "node_clip")[1]["graph"]["nodes"])
+
+    focus_point = component_point(control, fraction_x=0.75, fraction_y=0.5)
+    client.inject(
+        "click", {**focus_point, "button": "primary", "coordinate_space": "points"}
+    )
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    copied_text = "Node TextEdit clipboard sentinel"
+    client.inject("text", {"text": copied_text})
+
+    def text_edit_focused():
+        state = client.state()
+        value = active_definition(state, "node_clip")[1]["graph"]["nodes"][
+            text_node_id
+        ]["properties"]["text"]["properties"]["value"]
+        return state if value == copied_text else None
+
+    focused = client.wait_until("focused Node TextEdit input", text_edit_focused)
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.key("c", True, command=True)
+    client.key("c", False, command=True)
+    after_copy = client.state()
+    if set(active_definition(after_copy, "node_clip")[1]["graph"]["nodes"]) != node_ids:
+        raise QaFailure("focused TextEdit copy was routed into the Node graph")
+    if (
+        after_copy["project"] != focused["project"]
+        or after_copy["history"] != focused["history"]
+    ):
+        raise QaFailure("focused TextEdit copy changed Project history")
+    if after_copy["editor"].get("status") != focused["editor"].get("status"):
+        raise QaFailure(
+            "focused TextEdit copy was captured by the Node clipboard router"
+        )
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.key("backspace", True)
+    client.key("backspace", False)
+
+    def cleared_text():
+        state = client.state()
+        value = active_definition(state, "node_clip")[1]["graph"]["nodes"][
+            text_node_id
+        ]["properties"]["text"]["properties"]["value"]
+        return state if value == "" else None
+
+    cleared = client.wait_until("focused Node TextEdit clear", cleared_text)
+    client.key("v", True, command=True)
+    client.key("v", False, command=True)
+    after_paste_shortcut = client.state()
+    if (
+        after_paste_shortcut["project"] != cleared["project"]
+        or after_paste_shortcut["history"] != cleared["history"]
+    ):
+        raise QaFailure("focused TextEdit paste shortcut changed Project history")
+    if (
+        set(active_definition(after_paste_shortcut, "node_clip")[1]["graph"]["nodes"])
+        != node_ids
+    ):
+        raise QaFailure("focused TextEdit paste was routed into the Node graph")
+    current_text = active_definition(after_paste_shortcut, "node_clip")[1]["graph"][
+        "nodes"
+    ][text_node_id]["properties"]["text"]["properties"]["value"]
+    if current_text != "":
+        raise QaFailure("raw QA paste shortcut unexpectedly supplied Text content")
+    # Loopback key injection enters egui after winit's native clipboard
+    # translation, so Ctrl+V normally has no Paste payload here. The production
+    # Event::Paste path has a focused-TextEdit unit test; restore through the
+    # existing real Text input action without adding QA transport.
+    paste_payload_observed = False
+    client.key("a", True, command=True)
+    client.key("a", False, command=True)
+    client.inject("text", {"text": original_text})
+    client.click_component("node_editor.node_header:" + text_node_id)
+
+    def restored_after_focus_out():
+        state = client.state()
+        current_text = active_definition(state, "node_clip")[1]["graph"]["nodes"][
+            text_node_id
+        ]["properties"]["text"]["properties"]["value"]
+        return state if current_text == original_text else None
+
+    restored = client.wait_until(
+        "focused Node TextEdit restored and committed", restored_after_focus_out
+    )
+    return {
+        "node_id": text_node_id,
+        "value": original_text,
+        "paste_payload_observed": paste_payload_observed,
+        "revision": restored["history"]["revision"],
+    }
+
+
+def _save_and_reload(client, item_id, persisted_paste, artifact_dir):
+    project_file = pathlib.Path(os.environ["RUVIE_QA_PROJECT_PATH"])
+    saved, file_evidence = save_project_to_disk(client, project_file, "Node clipboard")
+    initial_close = request_clean_native_close(
+        client, "saved Node clipboard app", client.timeout
+    )
+    reload_port = free_port()
+    with spawned_authoring_app(
+        reload_port,
+        {
+            "RUVIE_QA_PROJECT_PATH": str(project_file),
+            "RUVIE_QA_OPEN_EXISTING_PROJECT": "1",
+            "RUVIE_QA_PORT_FILE": None,
+            "RUVIE_QA_RUN_ID": os.environ.get("RUVIE_QA_RUN_ID", "node-copy-paste")
+            + ":reload",
+        },
+    ) as process:
+        fresh = QaClient("http://127.0.0.1:{}".format(reload_port), client.timeout)
+        fresh.wait_health()
+        reloaded = fresh.state()
+        if reloaded["project"] != saved["project"]:
+            raise QaFailure(
+                "fresh process changed pasted Nodes, edges, parameters, or automation"
+            )
+        bring_timeline_component(fresh, "timeline.item:" + item_id, -120.0)
+        fresh.double_click_component("timeline.item:" + item_id)
+        fresh.wait_component_settled("node_editor.canvas")
+        definition = active_definition(fresh.state(), "node_clip")[1]
+        if not set(persisted_paste["nodes"]).issubset(definition["graph"]["nodes"]):
+            raise QaFailure("fresh process omitted the pasted Node identities")
+        if all(
+            connection["id"] != persisted_paste["connection_id"]
+            for connection in definition["graph"]["connections"]
+        ):
+            raise QaFailure("fresh process omitted the pasted internal edge")
+        capture = capture_viewport(client=fresh, path=artifact_dir / "capture.png")
+        reload_actions = list(fresh.evidence)
+        reload_close = close_clean_native_app(
+            fresh, process, "reloaded Node clipboard app", client.timeout
+        )
+    return {
+        "saved": file_evidence,
+        "initial_close": initial_close,
+        "reload_close": reload_close,
+        "capture": capture,
+        "actions": reload_actions,
+    }
 
 
 def run_suite(client):
@@ -501,9 +716,12 @@ def run_suite(client):
         raise QaFailure("clipboard source lacks the current instance override")
     keyboard = _keyboard_copy_paste(client, item_id, sibling_id, (first, second))
     context = _context_copy_paste(client, item_id, sibling_id, (first, second))
-    capture = capture_viewport(
-        client, pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"]) / "capture.png"
+    text_edit = _focused_text_edit_owns_clipboard(client)
+    artifact_dir = pathlib.Path(os.environ["RUVIE_QA_ARTIFACT_DIR"])
+    before_save_capture = capture_viewport(
+        client, artifact_dir / "clipboard-before-save.png"
     )
+    reload = _save_and_reload(client, item_id, context, artifact_dir)
     return {
         "suite": "node-copy-paste",
         "item_id": item_id,
@@ -511,8 +729,14 @@ def run_suite(client):
         "source_nodes": [first, second],
         "keyboard": keyboard,
         "context": context,
-        "capture": capture,
+        "text_edit": text_edit,
+        "before_save_capture": before_save_capture,
+        "saved": reload["saved"],
+        "initial_close": reload["initial_close"],
+        "reload_close": reload["reload_close"],
+        "capture": reload["capture"],
         "actions": client.evidence,
+        "reload_actions": reload["actions"],
     }
 
 

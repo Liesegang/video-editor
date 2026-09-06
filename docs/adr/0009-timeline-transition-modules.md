@@ -58,6 +58,14 @@ built-in transition to a private starter Module containing finite A, B, Progress
 Nodes. Timeline Items are not expanded. Published parameters are edited through the normal
 Inspector, Dope Sheet, and Curve Editor automation path in transition-local time.
 
+Node Copy/Paste carries the document's captured `InstancePath` into the same Transition control
+resolver. Copy includes the effective placement-local values and automation; Paste remaps their
+identities and writes them to that placement's sparse controls in the topology transaction. Node
+topology and published interface additions still belong to the Timeline definition. Copy/Paste
+does not change the authored parameter values or keys of sibling placements, and Undo/Redo covers
+the graph and sparse controls together. A path that does not resolve to the document's Transition
+Module instance is rejected before mutation.
+
 An Image Transition replaces both participants with one processed image at the B (`to`) item's
 schedule slot. A and B are rendered as isolated processor inputs with `Normal` blend; their item
 blend modes are not applied against the transparent input surfaces. The completed Transition image

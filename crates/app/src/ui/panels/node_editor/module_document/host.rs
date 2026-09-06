@@ -645,7 +645,7 @@ fn apply_module_actions(
                 super::clipboard::copy_selection(
                     authoring_context.ui,
                     service,
-                    instance_id,
+                    authoring_context.host,
                     &node_ids,
                     state,
                 );
@@ -666,7 +666,7 @@ fn apply_module_actions(
             } => {
                 super::clipboard::paste_selection(
                     service,
-                    instance_id,
+                    authoring_context.host,
                     &text,
                     graph_position,
                     state,

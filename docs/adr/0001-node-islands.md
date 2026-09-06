@@ -106,6 +106,14 @@ without changing siblings. Required Output and host boundary nodes are excluded.
 connections and bindings are not cloned. Unsupported hosts fail explicitly rather than losing
 automation. Native clipboard events and context menus use this same service operation.
 
+A Transition document also supplies its captured `InstancePath`. Copy resolves the effective
+parameter overrides and automation at that placement. Paste retains the existing Timeline-definition
+scope for topology and new interface IDs, but stores copied values and keys in the selected
+placement's sparse Transition controls. Other placements retain their inherited values and keys;
+the clipboard does not implicitly publish a placement override as a definition-wide value. Root
+paths are validated before canonicalizing to definition scope, and mismatched paths fail without
+changing the Project or history.
+
 ## Project format and transition
 
 This repository is pre-v1. The new versioned document is the first supported project format. No
