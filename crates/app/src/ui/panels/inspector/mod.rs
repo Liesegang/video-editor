@@ -61,9 +61,7 @@ pub fn inspector_panel(
 ) {
     let (project, revision) = project_frame;
     let selection = state.selection.primary();
-    let discarded_transient = sync_draft(project, state, selection, revision);
-    stop_discarded_property_drag(ui, discarded_transient);
-    cancel_transient_property_edit(ui, state);
+    prepare_property_authoring_frame(ui, project, revision, state);
     let Some(selection) = selection else {
         empty_inspector(ui);
         return;
@@ -492,6 +490,17 @@ fn transform_section(
                 );
             }
         });
+}
+
+pub(crate) fn prepare_property_authoring_frame(
+    ui: &egui::Ui,
+    project: &AuthoringProject,
+    revision: library::model::authoring::ProjectRevision,
+    state: &mut AuthoringUiState,
+) {
+    let discarded = sync_draft(project, state, state.selection.primary(), revision);
+    stop_discarded_property_drag(ui, discarded);
+    cancel_transient_property_edit(ui, state);
 }
 
 fn sync_draft(

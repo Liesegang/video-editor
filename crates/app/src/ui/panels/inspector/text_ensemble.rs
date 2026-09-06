@@ -178,7 +178,7 @@ pub(super) fn text_ensemble_section(
 pub(super) fn node_clip_text_ensemble_section(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
-    context: &super::module_clip::ModuleParameterContext<'_>,
+    context: &crate::ui::module_parameter_editor::ModuleParameterContext<'_>,
     stack: &library::editor::NodeClipTextEnsembleStack,
 ) {
     let owner = EnsembleOwner::NodeClip(context.item.id);
@@ -717,7 +717,7 @@ fn operation_entry(
 fn node_clip_operation_entry(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
-    context: &super::module_clip::ModuleParameterContext<'_>,
+    context: &crate::ui::module_parameter_editor::ModuleParameterContext<'_>,
     operation: &library::editor::NodeClipTextEnsembleEntry,
     model_index: usize,
     phase_index: usize,

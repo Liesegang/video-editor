@@ -251,7 +251,7 @@ fn set_instance_parameter_value(
     definition.validate_parameter_overrides(&instance.parameter_overrides)
 }
 
-fn upsert_parameter_keyframe(
+pub(in crate::editor::timeline_editor_service) fn upsert_parameter_keyframe(
     project: &mut AuthoringProject,
     item_id: TimelineItemId,
     parameter_id: PublishedParameterId,

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::module::{
     bump_interface_version, module_definition_mut, private_definition_for_instance,
+    upsert_parameter_keyframe,
 };
 use super::*;
 use crate::model::authoring::{
@@ -62,7 +63,108 @@ pub enum ModuleInterfaceEditResult {
     Unpublished(ModuleInterfaceEditImpact),
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct NodeParameterKeyframePublication {
+    pub parameter_id: PublishedParameterId,
+    pub keyframe_id: KeyframeId,
+    pub definition_id: ModuleDefinitionId,
+    pub changes: ChangeSet,
+}
+
 impl TimelineEditorService {
+    /// Publishes one constant internal Node input and creates its first
+    /// Timeline-owned key in the owning Node Clip as one undoable edit.
+    ///
+    /// Copy-on-writes shared topology to expose the input, but stores no keys
+    /// in that Definition: animation belongs to the Timeline invocation.
+    pub fn publish_node_clip_parameter_keyframe(
+        &self,
+        item_id: TimelineItemId,
+        expected_instance_id: ModuleInstanceId,
+        target: ModulePortAddress,
+        local_time: MediaTime,
+        source_revision: ProjectRevision,
+    ) -> Result<NodeParameterKeyframePublication, LibraryError> {
+        let mut session = self.write_session()?;
+        if session.revision() != source_revision {
+            return Err(LibraryError::Validation(format!(
+                "Node parameter publication revision {} is stale; current revision is {}",
+                source_revision.get(),
+                session.revision().get()
+            )));
+        }
+        let timeline_id = timeline_for_item(session.project(), item_id)?;
+        let actual_instance_id = session
+            .project()
+            .items
+            .get(&item_id)
+            .and_then(|item| match &item.source {
+                SourceRef::Module(invocation) => Some(invocation.instance_id),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                LibraryError::Validation(format!("Timeline item {item_id} is not a Node Clip"))
+            })?;
+        if actual_instance_id != expected_instance_id {
+            return Err(LibraryError::Validation(format!(
+                "Node Clip {item_id} changed Module instance from {expected_instance_id} to {actual_instance_id}"
+            )));
+        }
+        let invalidations = vec![
+            ProjectInvalidation::Item {
+                timeline_id,
+                item_id,
+            },
+            ProjectInvalidation::ModuleInstance {
+                instance_id: expected_instance_id,
+            },
+        ];
+        let ((parameter_id, keyframe_id, definition_id), changes) = session
+            .transact(invalidations, |project| {
+                let (name, default_value) =
+                    publishable_node_parameter(project, item_id, expected_instance_id, &target)?;
+                let definition_id = private_definition_for_instance(project, expected_instance_id)?;
+                let result = apply_interface_command(
+                    project,
+                    definition_id,
+                    &[expected_instance_id],
+                    ModuleInterfaceCommand::PublishParameter {
+                        name,
+                        default_value: default_value.clone(),
+                        target,
+                    },
+                )?;
+                let ModuleInterfaceEditResult::PublishedParameter(parameter_id) = result else {
+                    return Err(
+                        "Node parameter publication returned an unexpected result".to_string()
+                    );
+                };
+                project
+                    .module_definitions
+                    .get(&definition_id)
+                    .ok_or_else(|| format!("Missing Module definition {definition_id}"))?
+                    .require_parameter_automation(parameter_id)?;
+                let insertion_id = KeyframeId::new();
+                let keyframe_id = upsert_parameter_keyframe(
+                    project,
+                    item_id,
+                    parameter_id,
+                    insertion_id,
+                    local_time,
+                    default_value,
+                    None,
+                )?;
+                Ok((parameter_id, keyframe_id, definition_id))
+            })
+            .map_err(LibraryError::Validation)?;
+        Ok(NodeParameterKeyframePublication {
+            parameter_id,
+            keyframe_id,
+            definition_id,
+            changes,
+        })
+    }
+
     /// Ordinary Node Editor path. Shared-local and reusable definitions are
     /// copy-on-write before the interface edit, so sibling instances retain
     /// both their public IDs and authored values.
@@ -129,6 +231,90 @@ impl TimelineEditorService {
             changes,
         })
     }
+}
+
+fn publishable_node_parameter(
+    project: &AuthoringProject,
+    item_id: TimelineItemId,
+    expected_instance_id: ModuleInstanceId,
+    target: &ModulePortAddress,
+) -> Result<(String, PropertyValue), String> {
+    let invocation = project
+        .items
+        .get(&item_id)
+        .and_then(|item| match &item.source {
+            SourceRef::Module(invocation) => Some(invocation),
+            _ => None,
+        })
+        .ok_or_else(|| format!("Timeline item {item_id} is not a Node Clip"))?;
+    if invocation.instance_id != expected_instance_id {
+        return Err(format!(
+            "Node Clip {item_id} changed Module instance from {expected_instance_id} to {}",
+            invocation.instance_id
+        ));
+    }
+    let instance = project
+        .module_instances
+        .get(&expected_instance_id)
+        .ok_or_else(|| format!("Missing Module instance {expected_instance_id}"))?;
+    let definition = project
+        .module_definitions
+        .get(&instance.definition_id)
+        .ok_or_else(|| format!("Missing Module definition {}", instance.definition_id))?;
+    if definition
+        .input_port_ownership(target)
+        .is_externally_driven()
+    {
+        return Err(format!(
+            "Module input {}:{} is already published",
+            target.node_id, target.port
+        ));
+    }
+    if definition
+        .graph
+        .connections
+        .iter()
+        .any(|connection| connection.to == *target)
+    {
+        return Err(format!(
+            "Module input {}:{} is connected and cannot be published as a parameter",
+            target.node_id, target.port
+        ));
+    }
+    let port = definition
+        .graph
+        .port_definition(target, PortDirection::Input)?;
+    if !port.data_type.is_property_value_family() {
+        return Err(format!(
+            "Module input {}:{} is not a Property value",
+            target.node_id, target.port
+        ));
+    }
+    let node = definition
+        .graph
+        .nodes
+        .get(&target.node_id)
+        .ok_or_else(|| format!("Missing Module Node {}", target.node_id))?;
+    let property_key = crate::plugin::property_name_from_port(&target.port).unwrap_or(&target.port);
+    let property = node.properties().get(property_key).ok_or_else(|| {
+        format!(
+            "Module input {}:{} has no authored Property",
+            target.node_id, target.port
+        )
+    })?;
+    if property.evaluator != "constant" {
+        return Err(format!(
+            "Module input {}:{} must have a constant authored Property before it can move to Timeline automation",
+            target.node_id, target.port
+        ));
+    }
+    let default_value = property.value().cloned().ok_or_else(|| {
+        format!(
+            "Module input {}:{} has no constant authored value",
+            target.node_id, target.port
+        )
+    })?;
+    Ok((port.label, default_value))
 }
 
 #[derive(Clone, Copy)]

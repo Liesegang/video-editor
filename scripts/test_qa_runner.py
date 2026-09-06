@@ -42,6 +42,9 @@ TRACKING_BIDI = load(
 TEXT_FONT_FALLBACK = load(
     "ruvie_qa_text_font_fallback", "qa-text-font-fallback-e2e.py"
 )
+PROPERTY_GESTURE = load(
+    "ruvie_qa_property_gesture", "qa_property_gesture_support.py"
+)
 
 
 class QaRunnerTests(unittest.TestCase):
@@ -88,6 +91,64 @@ class QaRunnerTests(unittest.TestCase):
             self.component_sample(7), self.component_sample(8, visible=False),
             self.component_sample(9), self.component_sample(10),
         ])
+
+    def test_reserved_keyframe_scrub_accepts_node_control_locator(self):
+        client = mock.Mock()
+        control = {
+            "id": "node.property",
+            "rect_points": {
+                "min_x": 20.0,
+                "min_y": 30.0,
+                "width": 40.0,
+                "height": 20.0,
+            },
+        }
+        locator = mock.Mock(return_value=control)
+        client.component_snapshot.side_effect = [
+            {
+                "frame": 7,
+                "components": [
+                    {
+                        "id": "node.row",
+                        "metadata": {
+                            "pending_keyframe_insertion_id": "key-1",
+                            "pending_keyframe_time": 0.5,
+                        },
+                    },
+                    {"id": "node.property", "metadata": {"value": 0.7}},
+                ],
+            },
+            {
+                "frame": 8,
+                "components": [
+                    {
+                        "id": "node.row",
+                        "metadata": {
+                            "pending_keyframe_insertion_id": "key-1",
+                            "pending_keyframe_time": 0.5,
+                        },
+                    },
+                    {"id": "node.property", "metadata": {"value": 0.4}},
+                ],
+            },
+        ]
+        client.wait_until.side_effect = lambda _description, predicate: predicate()
+
+        reservation = PROPERTY_GESTURE.begin_reserved_keyframe_scrub(
+            client,
+            "node.property",
+            "node.row",
+            -12.0,
+            "Node Opacity scrub",
+            control_locator=locator,
+        )
+
+        locator.assert_called_once_with(client, "node.property")
+        self.assertEqual(reservation["id"], "key-1")
+        self.assertEqual(reservation["time"], 0.5)
+        self.assertEqual(reservation["first_value"], 0.7)
+        self.assertEqual(reservation["value"], 0.4)
+        self.assertEqual(reservation["endpoint"], {"x": 28.0, "y": 40.0})
 
     def test_component_actions_use_the_settled_geometry(self):
         actions = [
@@ -214,6 +275,7 @@ class QaRunnerTests(unittest.TestCase):
             "timeline-dopesheet",
             "curve-editor",
             "node-editor",
+            "node-parameter-automation",
             "node-clip-conversion",
             "audio-playback",
             "text-ensemble",

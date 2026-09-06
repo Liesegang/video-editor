@@ -93,6 +93,8 @@ FULL_SUITES = (
     SuiteSpec("timeline-dopesheet", "qa-timeline-dopesheet-e2e.py"),
     SuiteSpec("curve-editor", "qa-curve-editor-e2e.py"),
     SuiteSpec("node-editor", "qa-node-editor-e2e.py", AUTHORING_AUDIO_FIXTURE),
+    SuiteSpec("node-parameter-automation", "qa-node-parameter-automation-e2e.py",
+              project_file=True, expects_exit=True),
     SuiteSpec("node-clip-conversion", "qa-node-clip-conversion-e2e.py"),
     SuiteSpec("audio-playback", "qa-audio-playback-e2e.py", AUTHORING_AUDIO_FIXTURE),
     SuiteSpec("text-ensemble", "qa-text-ensemble-e2e.py"),

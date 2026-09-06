@@ -236,7 +236,10 @@ pub(crate) fn property_mode_control_for_state(
     crate::qa::register_component_with_metadata(
         qa_id,
         "property_mode_control",
-        button.rect,
+        ui.ctx()
+            .layer_transform_to_global(button.layer_id)
+            .unwrap_or_default()
+            * button.rect,
         button.enabled(),
         Some(serde_json::json!({
             "mode": presentation.mode.map(PropertyAuthoringMode::qa_key),
@@ -286,7 +289,10 @@ pub(crate) fn property_mode_control_for_state(
                 crate::qa::register_component_with_metadata(
                     option_id,
                     "property_mode_option",
-                    option.rect,
+                    ui.ctx()
+                        .layer_transform_to_global(option.layer_id)
+                        .unwrap_or_default()
+                        * option.rect,
                     option.enabled(),
                     Some(serde_json::json!({
                         "mode": mode.qa_key(),
@@ -320,7 +326,10 @@ pub(crate) fn property_mode_control_for_state(
                 crate::qa::register_component_with_metadata(
                     format!("{qa_id}.toggle_keyframe"),
                     "property_keyframe_toggle",
-                    toggle.rect,
+                    ui.ctx()
+                        .layer_transform_to_global(toggle.layer_id)
+                        .unwrap_or_default()
+                        * toggle.rect,
                     toggle.enabled(),
                     Some(serde_json::json!({
                         "action": if presentation.key_at_current_time {"remove"} else {"add"},

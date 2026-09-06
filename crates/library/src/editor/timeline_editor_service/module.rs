@@ -4,7 +4,9 @@ mod connections;
 mod output;
 mod parameter_automation;
 
-pub(super) use parameter_automation::require_item_parameter_automation;
+pub(super) use parameter_automation::{
+    require_item_parameter_automation, upsert_parameter_keyframe,
+};
 pub(super) mod removal;
 
 use connections::{

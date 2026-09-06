@@ -35,6 +35,7 @@ pub(super) fn module_property_context(
         .unwrap_or_else(MediaTime::zero);
     let property_time = module_property_time(project, host, timeline_time).unwrap_or(timeline_time);
     ModulePropertyContext {
+        exact_time: property_time,
         time: property_time.to_seconds_f64(),
         fps,
         resolution,
@@ -182,6 +183,43 @@ mod tests {
             let context = module_property_context(&project, timeline_id, frame, &host);
             assert_eq!(context.time, expected);
         }
+    }
+
+    #[test]
+    fn fractional_frame_rate_keeps_the_exact_timeline_key_time() {
+        let fps = RationalRate::new(30_000, 1_001).expect("fractional frame rate");
+        let duration = MediaTime::from_whole_seconds(12);
+        let project = AuthoringProject::new("fractional clock", 320, 180, fps, duration).unwrap();
+        let service = TimelineEditorService::new(project).unwrap();
+        let project = service.snapshot().unwrap();
+        let timeline_id = project.root_timeline_id;
+        let track_id = project.timelines[&timeline_id].track_order[0];
+        let (item_id, _) = service
+            .add_item(
+                track_id,
+                "Node host".to_string(),
+                SourceRef::Solid {
+                    color: Color::black(),
+                },
+                TimelineInterval::new(MediaTime::zero(), MediaTime::from_whole_seconds(5)).unwrap(),
+                0,
+            )
+            .unwrap();
+        let project = service.snapshot().unwrap();
+        let host = ModuleEditorHost::NodeClip {
+            timeline_item_id: item_id,
+            instance_path: None,
+            module_instance_id: ModuleInstanceId::new(),
+        };
+        let expected = MediaTime::from_frame_index(1, fps).expect("exact frame time");
+        let context = module_property_context(&project, timeline_id, 1, &host);
+
+        assert_eq!(context.exact_time, expected);
+        assert_ne!(
+            MediaTime::from_seconds_f64(context.time, 1_000_000).expect("quantized old path"),
+            expected,
+            "the regression fixture must distinguish exact MediaTime from a microsecond round-trip"
+        );
     }
 
     #[test]

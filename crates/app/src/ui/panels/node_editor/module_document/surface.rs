@@ -57,12 +57,13 @@ pub(super) fn fit_module_document_canvas(
 pub(super) fn show_module_document(
     ui: &mut egui::Ui,
     definition: &ModuleDefinition,
-    assets: &[Asset],
-    palette: &library::model::authoring::ProjectPalette,
     state: &mut NodeEditorState,
     plugins: &PluginManager,
     property_context: ModulePropertyContext,
+    parameter_host: &mut super::parameter::NodeParameterHost<'_>,
 ) -> Vec<ModuleEditorAction> {
+    let assets = &parameter_host.project.assets;
+    let palette = &parameter_host.project.palette;
     let viewport = ui.available_rect_before_wrap();
     if !viewport.is_positive() {
         return Vec::new();
@@ -108,6 +109,7 @@ pub(super) fn show_module_document(
             palette,
             plugins,
             property_context,
+            parameter_host,
             selected_nodes: &state.selected_nodes,
             actions: &mut actions,
             canvas_transform: authoritative_transform,

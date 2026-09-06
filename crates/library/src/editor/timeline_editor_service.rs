@@ -38,6 +38,8 @@ mod keyframe_projection_tests;
 #[cfg(test)]
 mod module_asset_tests;
 #[cfg(test)]
+mod module_parameter_publication_tests;
+#[cfg(test)]
 mod module_presentation_tests;
 #[cfg(test)]
 mod module_removal_tests;
@@ -73,7 +75,10 @@ pub use edit_plan::{
     EditPlan, EditPlanValidationScope, EditProjection, TimelineEditError, TimelineEditOperation,
     TimelineEditRequest, TimelineItemEditState, plan_timeline_edit, project_edit_plan,
 };
-pub use interface::{ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult};
+pub use interface::{
+    ModuleInterfaceCommand, ModuleInterfaceEditImpact, ModuleInterfaceEditResult,
+    NodeParameterKeyframePublication,
+};
 pub use keyframe_automation::AuthoringKeyframeTarget;
 pub use text_ensemble::{
     NodeClipTextContent, NodeClipTextEnsembleEntry, NodeClipTextEnsembleStack,

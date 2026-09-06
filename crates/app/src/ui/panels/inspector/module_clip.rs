@@ -3,35 +3,20 @@
 //! The Timeline owns parameter automation and external media bindings. The
 //! Module Definition supplies the finite graph and its published interface.
 
-use library::editor::{AuthoringPropertyValueTarget, TimelineEditorService};
+use library::editor::TimelineEditorService;
 use library::model::authoring::{
-    AuthoringProject, ModuleDefinition, ModuleInstance, ModuleInvocation, PublishedParameter,
-    TimelineItem,
+    AuthoringProject, ModuleDefinition, ModuleInvocation, PublishedParameter, TimelineItem,
 };
-use library::model::property::KeyframeId;
 use library::plugin::PluginManager;
 
-use crate::state::authoring::{AuthoringUiState, TransientPropertyEdit};
-use crate::ui::property_metadata::{
-    node_property_definition, published_parameter_keyframe_capability,
+use crate::state::authoring::AuthoringUiState;
+use crate::ui::module_parameter_editor::{
+    edit_node_clip_parameter, ModuleParameterContext, ModuleParameterEditorOutcome,
+    ModuleParameterRowInteraction,
 };
-use crate::ui::widgets::property_mode::PropertyModeState;
 
-use super::property_authoring::{
-    apply_module_parameter_mode_action, pending_module_keyframe, property_row,
-    update_transient_edit, PropertyRowSpec,
-};
+use super::property_authoring::{property_row, PropertyRowSpec};
 use super::{item_local_time, mode_action_label, value_provenance};
-
-pub(super) struct ModuleParameterContext<'a> {
-    pub(super) project: &'a AuthoringProject,
-    pub(super) service: &'a TimelineEditorService,
-    pub(super) plugins: &'a PluginManager,
-    pub(super) item: &'a TimelineItem,
-    pub(super) invocation: &'a ModuleInvocation,
-    pub(super) instance: &'a ModuleInstance,
-    pub(super) definition: &'a ModuleDefinition,
-}
 
 pub(super) fn module_parameters(
     ui: &mut egui::Ui,
@@ -112,152 +97,53 @@ pub(super) fn published_parameter_row(
     state: &mut AuthoringUiState,
     context: &ModuleParameterContext<'_>,
     parameter: &PublishedParameter,
-) {
-    let key = format!("module:{}", parameter.id);
-    let base_value = context
-        .instance
-        .parameter_overrides
-        .get(&parameter.id)
-        .cloned()
-        .unwrap_or_else(|| parameter.default_value.clone());
+) -> egui::Response {
     let local_time = item_local_time(context.project, state, context.item);
-    let local_seconds = local_time
-        .as_ref()
-        .map_or(0.0, |time| time.to_seconds_f64());
     let automation = context.invocation.automation_tracks.get(&parameter.id);
-    let initial = automation
-        .and_then(|track| {
-            local_time
-                .as_ref()
-                .ok()
-                .and_then(|time| track.evaluate_at(*time).ok())
-        })
-        .unwrap_or(base_value);
-    let model_value = initial.clone();
-    let mode_state = automation.map_or_else(
-        || PropertyModeState::constant(local_seconds),
-        |track| {
-            PropertyModeState::from_keyframe_times(
-                local_seconds,
-                track
-                    .keyframes
-                    .iter()
-                    .map(|keyframe| keyframe.time.to_seconds_f64()),
-            )
+    let outcome = edit_node_clip_parameter(
+        &mut state.inspector,
+        context,
+        parameter,
+        local_time,
+        |row| {
+            let result = property_row(
+                ui,
+                row.value,
+                &context.project.palette,
+                PropertyRowSpec {
+                    control_id: &format!(
+                        "module_instance:{}:{}",
+                        context.instance.id, parameter.id
+                    ),
+                    label: &parameter.name,
+                    definition: row.definition,
+                    suffix: "",
+                    speed: 0.1,
+                    mode_state: row.mode_state,
+                    allow_keyframe: row.allow_keyframe,
+                    keyframe_disabled_reason: row.keyframe_disabled_reason,
+                    allow_expression: false,
+                    pending_keyframe: row.pending_keyframe,
+                },
+            );
+            ModuleParameterRowInteraction {
+                response: result.response,
+                changed: result.changed,
+                finished: result.finished,
+                mode_action: result.mode_action,
+            }
         },
     );
-    let property_definition =
-        published_parameter_definition(context.plugins, context.definition, parameter);
-    let (allow_keyframe, keyframe_disabled_reason) =
-        published_parameter_keyframe_capability(context.definition, parameter.id);
-    let pending_keyframe = pending_module_keyframe(
-        state.inspector.transient_property_edit.as_ref(),
-        context.item.id,
-        parameter.id,
-    );
-    let (changed, finished, mode_action, edited_value) = {
-        let value = state
-            .inspector
-            .property_values
-            .entry(key)
-            .or_insert(initial);
-        let result = property_row(
-            ui,
-            value,
-            &context.project.palette,
-            PropertyRowSpec {
-                control_id: &format!("module_instance:{}:{}", context.instance.id, parameter.id),
-                label: &parameter.name,
-                definition: property_definition.as_ref(),
-                suffix: "",
-                speed: 0.1,
-                mode_state,
-                allow_keyframe,
-                keyframe_disabled_reason,
-                allow_expression: false,
-                pending_keyframe,
-            },
-        );
-        (
-            result.changed,
-            result.finished,
-            result.mode_action,
-            value.clone(),
-        )
-    };
-    if changed {
-        let validation = property_definition.as_ref().map_or(Ok(()), |definition| {
-            definition.validate_value(&edited_value)
-        });
-        if let Err(error) = validation {
-            state.error = Some(error);
-        } else if let Some(edit) = module_parameter_edit(
-            state.inspector.synced_revision,
-            context,
-            parameter,
-            automation,
-            &local_time,
-            edited_value.clone(),
-        ) {
-            update_transient_edit(&mut state.inspector.transient_property_edit, edit);
-        }
-    }
-    let active_edit = if finished
-        && state
-            .inspector
-            .transient_property_edit
-            .as_ref()
-            .is_some_and(|edit| edit.matches_module_parameter(context.item.id, parameter.id))
-    {
-        state.inspector.transient_property_edit.take()
-    } else {
-        None
-    };
-    if finished && edited_value != model_value {
-        let result =
-            active_edit
-                .or_else(|| {
-                    module_parameter_edit(
-                        state.inspector.synced_revision,
-                        context,
-                        parameter,
-                        automation,
-                        &local_time,
-                        edited_value.clone(),
-                    )
-                })
-                .ok_or_else(|| {
-                    local_time.as_ref().err().cloned().unwrap_or_else(|| {
-                        "Inspector has no synchronized Project revision".to_string()
-                    })
-                })
-                .and_then(|edit| {
-                    edit.commit(context.service)
-                        .map_err(|error| error.to_string())
-                });
-        if let Err(error) = result {
-            state.error = Some(error);
-        }
+    let ModuleParameterEditorOutcome {
+        response,
+        mode_action,
+        error,
+    } = outcome;
+    if let Some(error) = error {
+        state.error = Some(error);
     }
     if let Some(action) = mode_action {
-        state.inspector.transient_property_edit = None;
-        let result = match &local_time {
-            Ok(time) => apply_module_parameter_mode_action(
-                context.service,
-                context.item.id,
-                parameter.id,
-                automation,
-                edited_value,
-                *time,
-                action,
-            ),
-            Err(error) => Err(error.clone()),
-        };
-        if let Err(error) = result {
-            state.error = Some(error);
-        } else {
-            state.status = format!("{}: {}", parameter.name, mode_action_label(action));
-        }
+        state.status = format!("{}: {}", parameter.name, mode_action_label(action));
     }
     value_provenance(
         ui,
@@ -267,45 +153,7 @@ pub(super) fn published_parameter_row(
             .parameter_overrides
             .contains_key(&parameter.id),
     );
-}
-
-fn module_parameter_edit(
-    source_revision: Option<library::model::authoring::ProjectRevision>,
-    context: &ModuleParameterContext<'_>,
-    parameter: &PublishedParameter,
-    automation: Option<&library::model::authoring::AutomationTrack>,
-    local_time: &Result<library::model::authoring::MediaTime, String>,
-    value: library::model::property::PropertyValue,
-) -> Option<TransientPropertyEdit> {
-    let source_revision = source_revision?;
-    let local_time = *local_time.as_ref().ok()?;
-    let target = if automation.is_some() {
-        AuthoringPropertyValueTarget::Keyframe {
-            local_time,
-            insertion_id: KeyframeId::new(),
-        }
-    } else {
-        AuthoringPropertyValueTarget::Constant
-    };
-    Some(TransientPropertyEdit::module_parameter(
-        source_revision,
-        context.item.id,
-        context.instance.id,
-        parameter.id,
-        value,
-        target,
-    ))
-}
-
-fn published_parameter_definition(
-    plugins: &PluginManager,
-    definition: &ModuleDefinition,
-    parameter: &library::model::authoring::PublishedParameter,
-) -> Option<library::model::property::PropertyDefinition> {
-    let node = definition.graph.nodes.get(&parameter.target.node_id)?;
-    let property_name = library::plugin::property_name_from_port(&parameter.target.port)
-        .unwrap_or(parameter.target.port.as_str());
-    node_property_definition(plugins, node, property_name)
+    response
 }
 
 fn module_media_inputs(
@@ -365,7 +213,7 @@ fn module_media_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::ui::property_metadata::published_parameter_keyframe_capability;
     use library::editor::ParticleNodeClipFactory;
 
     #[test]

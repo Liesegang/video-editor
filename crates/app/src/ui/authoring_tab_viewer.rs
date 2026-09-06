@@ -122,7 +122,7 @@ impl TabViewer for AuthoringTabViewer<'_> {
                 self.state.node_editor.panel_rect = Some(ui.max_rect().intersect(ui.clip_rect()));
                 crate::ui::panels::node_editor::node_editor_panel(
                     ui,
-                    self.project,
+                    (self.project, self.project_revision),
                     self.state,
                     self.service,
                     self.plugins.as_ref(),

@@ -226,7 +226,16 @@ Rust workspace は 1,651 件成功、16 件 ignored、失敗 0 件で、strict C
 - [ ] Text の明示 Node Clip 化前後で Content / Font / Font Size / Fill と Ensemble の編集能力を維持する。共通 descriptor と元の Ensemble UI を使い、認識可能な Text chain では構造操作を一つの graph transaction / Undo にする。
 - [x] Node Editor に Assets の Image / Video / Audio を drag-and-drop で追加し、Asset identity と既存 media factory/runtime を共有する。
   - Image / Audio / Video の native drag/drop、同一 Asset 参照、選択した stream と出力 port、Timeline 不変、1回の Undo を確認した（`target/qa-runs/20260906T-integrated-authoring-final/node-editor`）。出力種別は明示し、stream index の `None` は選択した出力の既定 stream とする。
-- [ ] Node parameter の時計から Timeline 所有の keyframe を編集できるようにし、Inspector / Curve Editor と同じ automation を表示・編集する。
+- [x] Node Clipの入力の時計からTimeline所有のkeyframeを作り、Inspector、Timeline、Curve Editorで同じautomationを編集できるようにした。
+  未接続の定数入力は、既存のPublished Parameterへの公開と最初のキー作成を1回のtransactionとUndoにまとめる。
+  共有Definitionは既存のcopy-on-writeで分離し、キーはInvocationだけが所有する。
+  Node本文とInspectorは既存の数値入力、時計、transient Preview、release時の1回commitを共通controllerで使う。
+  分数fpsの時刻は正確なMediaTimeのまま渡し、別Timelineや別InstancePathで開いたままのdocumentによる誤編集を拒否する。
+  通常releaseのnative HTTP QAは28/28で、追加シナリオはNode入力の自動公開、キーの追加と削除、ドラッグ中の画素、Curveの時刻と値のドラッグ、Undo/Redo、兄弟Clipの不変、保存後の新プロセスでのProjectと複数時刻の画素一致を確認した（`target/qa-runs/20260906T-node-input-final`）。
+  Rust全targetは1,809 passed、0 failed、17 ignored、QA runnerは39 tests、strict Clippyとfmt、851 filesの1,000行制限が通過した。
+- [ ] AttachmentとTransitionのNode本文にも、各hostの既存automation ownerを使って入力の時計と数値編集を接続する。
+  今回のNode ClipのキーはTimeline定義内のInvocationに属するため、Nested Timelineを複数配置した場合は各配置に共通である。
+  Composition配置ごとの疎なoverrideは別途実装と実画面検証を行い、今回の兄弟Node Clipの独立性と混同しない。
 - [x] Node header の enabled / bypass 操作を復旧し、状態表示だけのチェックマークにしない。native QA で bypass による画素変化と resume 後の元画素への一致を確認した。
 - [ ] Node header 全域の drag、選択しても動かない pin geometry、接続中 wire preview、marquee selection rectangle を共通 Node Editor surface で修正する。
 - [x] Edge の右クリック切断メニュー、選択後 Delete/Backspace、Ctrl+右ドラッグ切断と Alt+右ドラッグ接続を共通 Node Editor の実画面操作で検証した。Blender Node Wrangler 全機能の互換実装ではない。

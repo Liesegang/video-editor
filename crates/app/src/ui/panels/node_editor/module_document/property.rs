@@ -27,6 +27,8 @@ pub(super) fn show_property_input(
     context: ModulePropertyContext,
     qa_transform: egui::emath::TSTransform,
     palette: &library::model::authoring::ProjectPalette,
+    port_key: &str,
+    timeline_authoring: Result<(), &str>,
 ) -> (egui::Response, Option<ModuleEditorAction>) {
     let evaluator_context =
         EvaluationContext::new(node.properties(), context.fps, context.resolution);
@@ -52,7 +54,14 @@ pub(super) fn show_property_input(
     let qa_id = format!("node_editor.property.node:{}:{key}", node.id);
     let mut action = None;
     let dynamic_value_disabled_reason = node_property_dynamic_value_disabled_reason(node, key);
-    let allow_expression = dynamic_value_disabled_reason.is_none()
+    let keyframe_disabled_reason = dynamic_value_disabled_reason
+        .or_else(|| timeline_authoring.err())
+        .or(connected.then_some("Disconnect this input before authoring Timeline keyframes"))
+        .or((property.evaluator != "constant").then_some(
+            "Choose Constant before creating a Timeline input; expressions are not flattened",
+        ));
+    let allow_expression = !connected
+        && dynamic_value_disabled_reason.is_none()
         && definition.map_or_else(
             || {
                 mode_value
@@ -70,25 +79,38 @@ pub(super) fn show_property_input(
             ui,
             &format!("node_editor.property_mode.node:{}:{key}", node.id),
             mode_state,
-            false,
-            dynamic_value_disabled_reason,
+            keyframe_disabled_reason.is_none(),
+            keyframe_disabled_reason,
             allow_expression,
         );
         if let (Some(mode_action), Some(current_value)) = (mode_action, mode_value.clone()) {
-            let replacement = match mode_action {
-                PropertyModeAction::SetMode(mode) => {
-                    property_for_mode(Some(property), mode, current_value, context.time).ok()
-                }
-                PropertyModeAction::ToggleKeyframe => {
-                    toggled_keyframe_property(property, current_value, context.time)
-                }
-            };
-            if let Some(property) = replacement {
-                action = Some(ModuleEditorAction::SetNodeProperty {
-                    node_id: node.id,
-                    key: key.to_string(),
-                    property,
+            if mode_action
+                == PropertyModeAction::SetMode(
+                    crate::ui::widgets::property_mode::PropertyAuthoringMode::Keyframe,
+                )
+            {
+                action = Some(ModuleEditorAction::PublishParameterKeyframe {
+                    target: ModulePortAddress {
+                        node_id: node.id,
+                        port: port_key.to_string(),
+                    },
                 });
+            } else {
+                let replacement = match mode_action {
+                    PropertyModeAction::SetMode(mode) => {
+                        property_for_mode(Some(property), mode, current_value, context.time).ok()
+                    }
+                    PropertyModeAction::ToggleKeyframe => {
+                        toggled_keyframe_property(property, current_value, context.time)
+                    }
+                };
+                if let Some(property) = replacement {
+                    action = Some(ModuleEditorAction::SetNodeProperty {
+                        node_id: node.id,
+                        key: key.to_string(),
+                        property,
+                    });
+                }
             }
         }
 

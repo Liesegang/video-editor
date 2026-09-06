@@ -7,11 +7,12 @@
 use egui::{Align2, FontId, Response, Sense, TextStyle, Ui};
 use library::editor::{AuthoringPropertyOwner, TimelineEditorService, TransitionAutomationOwner};
 use library::model::authoring::{
-    AttachmentId, AutomationTrack, MediaTime, ProjectPalette, PublishedParameterId, TimelineItemId,
+    AttachmentId, AutomationTrack, MediaTime, ProjectPalette, PublishedParameterId,
 };
 use library::model::property::{KeyframeId, Property, PropertyDefinition, PropertyValue};
 
 use crate::state::authoring::TransientPropertyEdit;
+use crate::ui::module_parameter_editor::keyframe_at;
 
 use crate::ui::widgets::property_mode::{
     property_for_mode, property_mode_control_for_state, PropertyAuthoringMode, PropertyModeAction,
@@ -35,12 +36,13 @@ pub(super) struct PropertyRowSpec<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct PendingKeyframeMetadata {
-    insertion_id: KeyframeId,
-    local_time: MediaTime,
+pub(crate) struct PendingKeyframeMetadata {
+    pub(crate) insertion_id: KeyframeId,
+    pub(crate) local_time: MediaTime,
 }
 
 pub(super) struct PropertyRowResult {
+    pub(super) response: Response,
     pub(super) changed: bool,
     pub(super) finished: bool,
     pub(super) mode_action: Option<PropertyModeAction>,
@@ -54,14 +56,12 @@ pub(super) fn property_row(
     palette: &ProjectPalette,
     spec: PropertyRowSpec<'_>,
 ) -> PropertyRowResult {
-    let mut result = PropertyRowResult {
-        changed: false,
-        finished: false,
-        mode_action: None,
-    };
+    let mut changed = false;
+    let mut finished = false;
+    let mut mode_action = None;
     let row = ui.horizontal(|ui| {
         let _label = property_label(ui, spec.control_id, spec.label);
-        let (mode_action, _mode) = property_mode_control_for_state(
+        let (row_mode_action, _mode) = property_mode_control_for_state(
             ui,
             &format!("inspector.property_mode:{}", spec.control_id),
             spec.mode_state,
@@ -81,9 +81,9 @@ pub(super) fn property_row(
                 palette,
             },
         );
-        result.changed = value_edit.changed;
-        result.finished = value_edit.finished;
-        result.mode_action = mode_action;
+        changed = value_edit.changed;
+        finished = value_edit.finished;
+        mode_action = row_mode_action;
 
         #[cfg(test)]
         {
@@ -110,7 +110,12 @@ pub(super) fn property_row(
         row.response.enabled(),
         Some(metadata),
     );
-    result
+    PropertyRowResult {
+        response: row.response,
+        changed,
+        finished,
+        mode_action,
+    }
 }
 
 pub(super) fn authored_transient_edit(
@@ -141,7 +146,7 @@ pub(super) fn authored_transient_edit(
     ))
 }
 
-pub(super) fn update_transient_edit(
+pub(crate) fn update_transient_edit(
     slot: &mut Option<TransientPropertyEdit>,
     next: TransientPropertyEdit,
 ) {
@@ -169,19 +174,6 @@ pub(super) fn pending_authored_keyframe(
     key: &str,
 ) -> Option<PendingKeyframeMetadata> {
     let edit = edit.filter(|edit| edit.matches(owner, key))?;
-    let (insertion_id, local_time) = edit.pending_keyframe()?;
-    Some(PendingKeyframeMetadata {
-        insertion_id,
-        local_time,
-    })
-}
-
-pub(super) fn pending_module_keyframe(
-    edit: Option<&TransientPropertyEdit>,
-    item_id: TimelineItemId,
-    parameter_id: PublishedParameterId,
-) -> Option<PendingKeyframeMetadata> {
-    let edit = edit.filter(|edit| edit.matches_module_parameter(item_id, parameter_id))?;
     let (insertion_id, local_time) = edit.pending_keyframe()?;
     Some(PendingKeyframeMetadata {
         insertion_id,
@@ -357,56 +349,6 @@ pub(super) fn commit_expression_source(
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn apply_module_parameter_mode_action(
-    service: &TimelineEditorService,
-    item_id: TimelineItemId,
-    parameter_id: PublishedParameterId,
-    automation: Option<&AutomationTrack>,
-    value: PropertyValue,
-    local_time: MediaTime,
-    action: PropertyModeAction,
-) -> Result<(), String> {
-    match action {
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Constant) => service
-            .set_module_parameter_constant(item_id, parameter_id, value)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Keyframe) => service
-            .upsert_module_parameter_keyframe(item_id, parameter_id, local_time, value, None)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        PropertyModeAction::SetMode(PropertyAuthoringMode::Expression) => {
-            Err("Module parameter expressions belong inside the Node Module".to_string())
-        }
-        PropertyModeAction::ToggleKeyframe => {
-            if let Some(keyframe_id) = keyframe_at(automation, local_time) {
-                if automation.is_some_and(|track| track.keyframes.len() == 1) {
-                    service
-                        .set_module_parameter_constant(item_id, parameter_id, value)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                } else {
-                    service
-                        .remove_module_parameter_keyframe(item_id, parameter_id, keyframe_id)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                }
-            } else {
-                service
-                    .upsert_module_parameter_keyframe(
-                        item_id,
-                        parameter_id,
-                        local_time,
-                        value,
-                        None,
-                    )
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            }
-        }
-    }
-}
-
 pub(super) fn commit_transition_parameter_value(
     service: &TimelineEditorService,
     owner: &TransitionAutomationOwner,
@@ -549,20 +491,6 @@ pub(super) fn apply_builtin_effect_mode_action(
     }
 }
 
-fn keyframe_at(
-    track: Option<&AutomationTrack>,
-    local_time: MediaTime,
-) -> Option<library::model::property::KeyframeId> {
-    let seconds = local_time.to_seconds_f64();
-    track.and_then(|track| {
-        track
-            .keyframes
-            .iter()
-            .find(|keyframe| (keyframe.time.to_seconds_f64() - seconds).abs() < 0.001)
-            .map(|keyframe| keyframe.id)
-    })
-}
-
 pub(crate) fn property_label(ui: &mut Ui, control_id: &str, text: &str) -> Response {
     let desired_size = egui::vec2(PROPERTY_LABEL_WIDTH, ui.spacing().interact_size.y.max(20.0));
     let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
@@ -617,7 +545,7 @@ fn test_rect(id: &str) -> Option<egui::Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::model::authoring::{SourceRef, TimelineInterval};
+    use library::model::authoring::{SourceRef, TimelineInterval, TimelineItemId};
     use library::model::frame::color::Color;
     use ordered_float::OrderedFloat;
     use std::io;

@@ -18,6 +18,7 @@ use super::*;
 
 const fn property_context() -> ModulePropertyContext {
     ModulePropertyContext {
+        exact_time: MediaTime::zero(),
         time: 0.0,
         fps: 30.0,
         resolution: (1920, 1080),
@@ -60,6 +61,64 @@ fn fixture(plugins: &PluginManager) -> (ModuleDefinition, Uuid, Uuid) {
     (definition, source_id, output_node_id)
 }
 
+struct ParameterHostFixture {
+    service: TimelineEditorService,
+    project: Arc<AuthoringProject>,
+    instance_id: ModuleInstanceId,
+    item_id: library::model::authoring::TimelineItemId,
+    inspector: crate::state::authoring::AuthoringInspectorView,
+    status: String,
+    error: Option<String>,
+}
+
+impl ParameterHostFixture {
+    fn new(definition: &ModuleDefinition) -> Self {
+        let service = TimelineEditorService::create_default("Node surface host").unwrap();
+        let project = service.snapshot().unwrap();
+        let track_id = project.timelines[&project.root_timeline_id].track_order[0];
+        let (item_id, instance_id, _) = service
+            .create_private_module_item(
+                definition.clone(),
+                ModuleItemPlacement {
+                    track_id,
+                    name: "Node surface host".to_string(),
+                    output_id: definition.outputs().next().unwrap().id,
+                    interval: TimelineInterval::new(
+                        MediaTime::zero(),
+                        MediaTime::from_whole_seconds(5),
+                    )
+                    .unwrap(),
+                    layer: 0,
+                    parameter_overrides: HashMap::new(),
+                    input_bindings: HashMap::new(),
+                },
+            )
+            .unwrap();
+        let project = service.snapshot().unwrap();
+        Self {
+            service,
+            project,
+            instance_id,
+            item_id,
+            inspector: Default::default(),
+            status: String::new(),
+            error: None,
+        }
+    }
+
+    fn host(&mut self) -> super::parameter::NodeParameterHost<'_> {
+        super::parameter::NodeParameterHost {
+            project: &self.project,
+            service: &self.service,
+            instance: &self.project.module_instances[&self.instance_id],
+            item: Ok(self.item_id),
+            inspector: &mut self.inspector,
+            status: &mut self.status,
+            error: &mut self.error,
+        }
+    }
+}
+
 #[test]
 fn module_definition_builds_the_production_snarl_without_container_nodes() {
     let plugins = PluginManager::default();
@@ -79,10 +138,10 @@ fn module_definition_builds_the_production_snarl_without_container_nodes() {
 fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
     let plugins = PluginManager::default();
     let (definition, _, _) = fixture(&plugins);
+    let mut parameter_fixture = ParameterHostFixture::new(&definition);
     let context = egui::Context::default();
     let actions = std::cell::RefCell::new(Vec::new());
     let mut state = NodeEditorState::default();
-    let palette = ProjectPalette::default();
     drop(context.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -97,11 +156,10 @@ fn module_surface_keeps_timeline_graph_expansion_out_of_the_document() {
                 *actions.borrow_mut() = show_module_document(
                     ui,
                     &definition,
-                    &[],
-                    &palette,
                     &mut state,
                     &plugins,
                     property_context(),
+                    &mut parameter_fixture.host(),
                 );
             });
         },
@@ -130,13 +188,13 @@ fn selected_module_wire_paints_normal_and_highlight_on_one_shared_curve() {
 
     let plugins = PluginManager::default();
     let (definition, _, _) = fixture(&plugins);
+    let mut parameter_fixture = ParameterHostFixture::new(&definition);
     let connection_id = definition.graph.connections[0].id;
     let context = egui::Context::default();
     let mut state = NodeEditorState {
         selected_connection: Some(connection_id),
         ..NodeEditorState::default()
     };
-    let palette = ProjectPalette::default();
     let full = context.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -151,11 +209,10 @@ fn selected_module_wire_paints_normal_and_highlight_on_one_shared_curve() {
                 show_module_document(
                     ui,
                     &definition,
-                    &[],
-                    &palette,
                     &mut state,
                     &plugins,
                     property_context(),
+                    &mut parameter_fixture.host(),
                 );
             });
         },
@@ -281,6 +338,7 @@ fn opening_a_module_fits_every_node_inside_the_visible_canvas() {
 fn snarl_is_layout_and_paint_only_for_connection_gestures() {
     let plugins = PluginManager::default();
     let (mut definition, source_id, target_id) = fixture(&plugins);
+    let mut parameter_fixture = ParameterHostFixture::new(&definition);
     definition.graph.connections.clear();
     let mut snarl = surface::build_module_snarl(&definition, &HashMap::new());
     let source = snarl
@@ -323,6 +381,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
             palette: &palette,
             plugins: &plugins,
             property_context: property_context(),
+            parameter_host: &mut parameter_fixture.host(),
             selected_nodes: &selected,
             actions: &mut actions,
             canvas_transform: egui::emath::TSTransform::IDENTITY,
@@ -341,6 +400,7 @@ fn snarl_is_layout_and_paint_only_for_connection_gestures() {
 fn production_snarl_consumes_the_authoritative_application_transform() {
     let plugins = PluginManager::default();
     let (definition, _, _) = fixture(&plugins);
+    let mut parameter_fixture = ParameterHostFixture::new(&definition);
     let mut snarl = surface::build_module_snarl(&definition, &HashMap::new());
     let selected = HashSet::new();
     let mut actions = Vec::new();
@@ -354,6 +414,7 @@ fn production_snarl_consumes_the_authoritative_application_transform() {
         palette: &palette,
         plugins: &plugins,
         property_context: property_context(),
+        parameter_host: &mut parameter_fixture.host(),
         selected_nodes: &selected,
         actions: &mut actions,
         canvas_transform: authoritative,

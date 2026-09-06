@@ -1,14 +1,25 @@
-"""Shared native-UI observation for held Inspector keyframe insertions."""
+"""Shared native-UI observation for held property keyframe insertions."""
 
-from qa_support import QaFailure, component_in_inspector, component_point
+from qa_support import QaFailure, component_in_inspector, component_point, finite_number
 
 
 def begin_reserved_keyframe_scrub(
-    client, control_id, row_id, delta_x, description
+    client,
+    control_id,
+    row_id,
+    delta_x,
+    description,
+    control_locator=None,
 ):
     """Hold a multi-frame scrub and prove its reserved identity remains stable."""
 
-    _, control = component_in_inspector(client, control_id)
+    control = (
+        component_in_inspector(client, control_id)[1]
+        if control_locator is None
+        else control_locator(client, control_id)
+    )
+    if not isinstance(control, dict):
+        raise QaFailure(description + " control locator returned no component")
     start = component_point(control, 0.5, 0.5)
     midpoint = {"x": start["x"] + delta_x * 0.5, "y": start["y"]}
     end = {"x": start["x"] + delta_x, "y": start["y"]}
@@ -43,7 +54,7 @@ def begin_reserved_keyframe_scrub(
             "id": insertion_id,
             "time": float(insertion_time),
             "row_metadata": metadata,
-            "value": value,
+            "value": finite_number(value, description + " property value"),
             "frame": snapshot["frame"],
         }
 

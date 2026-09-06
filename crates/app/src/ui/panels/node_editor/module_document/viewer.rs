@@ -45,12 +45,13 @@ impl ModuleSurfaceCapture {
     }
 }
 
-pub(super) struct ModuleNodeViewer<'a> {
+pub(super) struct ModuleNodeViewer<'a, 'host> {
     pub(super) definition: &'a ModuleDefinition,
     pub(super) assets: &'a [Asset],
     pub(super) palette: &'a library::model::authoring::ProjectPalette,
     pub(super) plugins: &'a PluginManager,
     pub(super) property_context: ModulePropertyContext,
+    pub(super) parameter_host: &'a mut super::parameter::NodeParameterHost<'host>,
     pub(super) selected_nodes: &'a HashSet<Uuid>,
     pub(super) actions: &'a mut Vec<ModuleEditorAction>,
     pub(super) canvas_transform: egui::emath::TSTransform,
@@ -59,7 +60,7 @@ pub(super) struct ModuleNodeViewer<'a> {
     pub(super) capture: Arc<Mutex<ModuleSurfaceCapture>>,
 }
 
-impl ModuleNodeViewer<'_> {
+impl ModuleNodeViewer<'_, '_> {
     fn node(&self, snarl: &Snarl<Uuid>, node_id: egui_snarl::NodeId) -> Option<&Node> {
         snarl
             .get_node(node_id)
@@ -89,7 +90,7 @@ impl ModuleNodeViewer<'_> {
     }
 }
 
-impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
+impl SnarlViewer<Uuid> for ModuleNodeViewer<'_, '_> {
     fn title(&mut self, node_id: &Uuid) -> String {
         self.definition
             .graph
@@ -436,7 +437,36 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                     .then(|| authored_property_key_for_port(node, &port.key))
                     .flatten()
                     .and_then(|key| node.properties().get(key).map(|value| (key, value)));
-                let interface_response = if ownership.is_externally_driven() {
+                let published = self
+                    .definition
+                    .interface
+                    .parameters
+                    .iter()
+                    .find(|parameter| {
+                        parameter.target.node_id == node.id
+                            && parameter.target.port == port.key
+                            && !self
+                                .definition
+                                .host_contract
+                                .protects_parameter(parameter.id)
+                    });
+                let interface_response = if let Some(parameter) =
+                    published.filter(|_| self.parameter_host.item.is_ok())
+                {
+                    let response = super::parameter::show_published_input(
+                        ui,
+                        self.parameter_host,
+                        self.plugins,
+                        self.definition,
+                        node,
+                        port,
+                        parameter,
+                        self.property_context,
+                        self.canvas_transform,
+                    );
+                    self.capture_response(&response);
+                    response
+                } else if ownership.is_externally_driven() {
                     let response = show_externally_driven_input(ui, port, ownership);
                     self.capture_response(&response);
                     response
@@ -453,6 +483,12 @@ impl SnarlViewer<Uuid> for ModuleNodeViewer<'_> {
                         self.property_context,
                         self.canvas_transform,
                         self.palette,
+                        &port.key,
+                        self.parameter_host
+                            .item
+                            .as_ref()
+                            .map(|_| ())
+                            .map_err(String::as_str),
                     );
                     self.capture_response(&response);
                     if let Some(action) = action {

@@ -5,6 +5,7 @@ import os
 import pathlib
 
 from qa_curve_support import exercise_curve_key_live_preview
+from qa_automation_support import wait_item_automation_surfaces
 from qa_property_gesture_support import (
     begin_reserved_keyframe_scrub,
     release_property_scrub,
@@ -55,7 +56,6 @@ from qa_tracking_support import (
 
 
 TIMELINE_TAB = "dock.tab:timeline"
-CURVE_TAB = "dock.tab:curve_editor"
 INSPECTOR_TAB = "dock.tab:inspector"
 OPEN_EXISTING_PROJECT_ENV = "RUVIE_QA_OPEN_EXISTING_PROJECT"
 
@@ -180,79 +180,6 @@ def _live_direct_scrub(client, item_id, operation_id, control_id, baseline):
         "held_hash": held["editor"]["preview"]["pixel_hash"],
         "committed_hash": rendered["editor"]["preview"]["pixel_hash"],
         "restored": restored,
-    }
-
-
-def _find_component(client, component_type, predicate):
-    client.state()
-    return next(
-        (
-            component
-            for component in client.component_snapshot()["components"]
-            if component.get("type") == component_type
-            and component.get("visible")
-            and predicate(component.get("metadata") or {})
-        ),
-        None,
-    )
-
-
-def _wait_automation_surfaces(client, item_id, target, keyframe_ids):
-    activate_dock_tab(client, TIMELINE_TAB, "Timeline", "Tracking Dope Sheet")
-    bring_timeline_component(client, "timeline.item:" + item_id, -120.0)
-    expand_id = "timeline.item_expand:" + item_id
-    client.wait_component_settled(expand_id)
-    state = client.state()
-    if item_id not in state["editor"]["timeline"]["expanded_items"]:
-        client.click_component(expand_id)
-    lane = client.wait_until(
-        "Tracking Timeline lane",
-        lambda: _find_component(
-            client,
-            "timeline_property_label",
-            lambda metadata: metadata.get("item_id") == item_id
-            and metadata.get("target") == target,
-        ),
-    )
-    timeline_keys = [
-        client.wait_until(
-            "Tracking Timeline key {}".format(keyframe_id),
-            lambda keyframe_id=keyframe_id: _find_component(
-                client,
-                "timeline_property_keyframe",
-                lambda metadata: metadata.get("item_id") == item_id
-                and metadata.get("target") == target
-                and metadata.get("keyframe_id") == keyframe_id,
-            ),
-        )
-        for keyframe_id in keyframe_ids
-    ]
-    activate_dock_tab(client, CURVE_TAB, "Curve Editor", "Tracking Curve Editor")
-    client.click_component("curve_editor.fit")
-    curve_keys = [
-        client.wait_until(
-            "Tracking Curve key {}".format(keyframe_id),
-            lambda keyframe_id=keyframe_id: _find_component(
-                client,
-                "curve_editor_keyframe",
-                lambda metadata: metadata.get("item_id") == item_id
-                and metadata.get("target") == target
-                and metadata.get("component") == "value"
-                and metadata.get("keyframe_id") == keyframe_id,
-            ),
-        )
-        for keyframe_id in keyframe_ids
-    ]
-    return {
-        "lane": lane.get("metadata"),
-        "timeline_keys": [
-            {"id": key["id"], "metadata": key.get("metadata")}
-            for key in timeline_keys
-        ],
-        "curve_keys": [
-            {"id": key["id"], "metadata": key.get("metadata")}
-            for key in curve_keys
-        ],
     }
 
 
@@ -580,8 +507,12 @@ def run_suite(client):
         },
         "key": "amount",
     }
-    direct_surfaces = _wait_automation_surfaces(
-        client, item_id, direct_target, [key["id"] for key in direct_keys]
+    direct_surfaces = wait_item_automation_surfaces(
+        client,
+        item_id,
+        direct_target,
+        [key["id"] for key in direct_keys],
+        "Tracking",
     )
     direct_curve_drag = _drag_direct_curve_key_and_undo(
         client,
@@ -655,8 +586,12 @@ def run_suite(client):
         "promoted Tracking",
     )
     module_target = {"kind": "module_parameter", "id": amount_parameter["id"]}
-    converted_surfaces = _wait_automation_surfaces(
-        client, item_id, module_target, [key["id"] for key in direct_keys]
+    converted_surfaces = wait_item_automation_surfaces(
+        client,
+        item_id,
+        module_target,
+        [key["id"] for key in direct_keys],
+        "Tracking",
     )
     promoted_curve_baseline = client.wait_until(
         "promoted Tracking Curve Preview baseline",

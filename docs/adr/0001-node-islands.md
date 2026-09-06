@@ -72,6 +72,27 @@ implicitly create Module Definitions or Nodes.
 - Removing an interface or referenced source reports affected invocations and requires remapping or
   explicit cascading; references are never silently discarded.
 
+## Inline Node Clip animation authoring
+
+The Node Clip input clock exposes an unconnected constant input as a Published Parameter and
+creates its first Invocation-owned automation key in one transaction. The existing instance
+copy-on-write operation isolates shared Definitions before publication. Undo removes the public
+input and first key together; Redo restores their stable identities. No keyframes are stored in
+Node properties, and connected, protected, expression-driven, or runtime constant-only inputs
+cannot be silently converted to Timeline animation.
+
+After publication, the Node body and Inspector use one parameter editing controller. It resolves
+the Invocation's automation and Instance defaults, maintains an Instance-qualified draft, projects
+held edits through the existing transient Preview path, and commits once on release. Timeline and
+Curve Editor address the same Published Parameter and Keyframe IDs. The host supplies exact
+`MediaTime`; floating-point seconds are only an evaluation/display projection. Revision and host
+checks prevent a retained document from authoring against a different Timeline or nested path.
+
+This inline authoring slice targets Node Clips. Attachment and Transition inline input editing
+remain separate follow-up work using their existing Invocation owners, not parallel graphs.
+Keys inside a nested Timeline are owned by that Timeline definition and affect all its concrete
+Composition placements; these controls do not create per-placement sparse overrides.
+
 ## Project format and transition
 
 This repository is pre-v1. The new versioned document is the first supported project format. No

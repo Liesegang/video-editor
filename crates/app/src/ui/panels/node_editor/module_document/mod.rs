@@ -29,10 +29,13 @@ mod host;
 mod interface;
 mod layout;
 mod menu;
+mod parameter;
 mod property;
 mod surface;
 mod viewer;
 
+#[cfg(test)]
+mod parameter_tests;
 #[cfg(test)]
 mod tests;
 
@@ -72,6 +75,9 @@ enum ModuleEditorAction {
         key: String,
         property: Property,
     },
+    PublishParameterKeyframe {
+        target: ModulePortAddress,
+    },
     CreateNode {
         request: ModuleNodeCreateRequest,
         graph_position: egui::Pos2,
@@ -93,6 +99,9 @@ struct PortVisual {
 
 #[derive(Clone, Copy, Debug)]
 struct ModulePropertyContext {
+    /// Exact runtime-aligned host time used for Timeline-owned automation.
+    exact_time: library::model::authoring::MediaTime,
+    /// Seconds projection used only by Property evaluators and UI metadata.
     time: f64,
     fps: f64,
     resolution: (u64, u64),

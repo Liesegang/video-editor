@@ -7,6 +7,7 @@ pub mod easing_menus;
 pub(crate) mod fonts;
 pub(crate) mod media_preview;
 pub(crate) mod module_media_input;
+pub(crate) mod module_parameter_editor;
 pub(crate) mod panel_layout;
 pub mod panels;
 pub(crate) mod property_metadata;

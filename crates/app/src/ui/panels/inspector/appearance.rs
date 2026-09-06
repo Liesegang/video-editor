@@ -98,7 +98,7 @@ pub(super) fn appearance_section(
 pub(super) fn node_clip_appearance_section(
     ui: &mut egui::Ui,
     state: &mut AuthoringUiState,
-    context: &super::module_clip::ModuleParameterContext<'_>,
+    context: &crate::ui::module_parameter_editor::ModuleParameterContext<'_>,
     stack: &library::editor::NodeClipAppearanceStack,
 ) {
     ui.separator();
